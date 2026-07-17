@@ -1,0 +1,11 @@
+# Rust build output
+/target/
+
+# Local dependency and bundle build work
+/.build/
+
+# Generated application bundles
+/dist/
+
+# macOS metadata
+.DS_Store

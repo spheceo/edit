@@ -3,6 +3,9 @@ name = "kuro"
 version = "0.0.1"
 edition = "2021"
 
+[workspace]
+members = ["xtask"]
+
 [dependencies]
 cpal = "0.18"
 eframe = "0.31"

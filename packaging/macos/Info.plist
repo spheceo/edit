@@ -26,7 +26,5 @@
     <string>12.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Unclip uses on-device speech recognition to transcribe audio in your edited sequence.</string>
 </dict>
 </plist>

@@ -60,25 +60,6 @@ pub struct TranscriptWord {
     pub end_secs: f64,
 }
 
-impl TranscriptWord {
-    /// A short fade at word boundaries keeps the playhead highlight from
-    /// snapping between words while retaining exact sequence-time sync.
-    pub fn highlight_strength(&self, sequence_time: f64) -> f32 {
-        const FADE_SECS: f64 = 0.10;
-        let fade_in = ((sequence_time - self.start_secs + FADE_SECS) / FADE_SECS).clamp(0.0, 1.0);
-        let fade_out = ((self.end_secs + FADE_SECS - sequence_time) / FADE_SECS).clamp(0.0, 1.0);
-        smoothstep(fade_in.min(fade_out)) as f32
-    }
-
-    pub fn contains(&self, sequence_time: f64) -> bool {
-        sequence_time >= self.start_secs && sequence_time < self.end_secs
-    }
-}
-
-fn smoothstep(value: f64) -> f64 {
-    value * value * (3.0 - 2.0 * value)
-}
-
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Transcript {
     pub words: Vec<TranscriptWord>,

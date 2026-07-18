@@ -1,6 +1,5 @@
 //! User interface surfaces and reusable presentation components.
 
-use crate::media::transcription::{self, TranscriptionStage};
 use eframe::egui::{
     self, epaint::Vertex, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin,
     Mesh, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, Vec2,
@@ -939,7 +938,7 @@ pub fn properties_panel(ctx: &egui::Context, app: &mut VideoEditor) {
             ui.add_space(10.0);
 
             if app.properties_tab == PropertiesTab::Transcription {
-                transcription_panel(ui, app, ctx);
+                transcription_panel(ui);
                 return;
             }
 
@@ -1044,96 +1043,14 @@ pub fn properties_panel(ctx: &egui::Context, app: &mut VideoEditor) {
         });
 }
 
-fn transcription_panel(ui: &mut egui::Ui, app: &mut VideoEditor, ctx: &egui::Context) {
-    if !transcription::supported() {
-        ui.label(
-            RichText::new("Transcription on Windows is coming soon.")
-                .size(12.0)
-                .color(theme::MUTED),
-        );
-        return;
-    }
-
-    if let Some(job) = &app.transcription_job {
-        let stage = match job.stage() {
-            TranscriptionStage::Preparing => "Preparing sequence audio…",
-            TranscriptionStage::Recognizing => "Transcribing on this Mac…",
-        };
-        ui.label(RichText::new(stage).size(12.0).color(theme::TEXT));
-        ui.add_space(6.0);
-        ui.add(
-            egui::ProgressBar::new(job.progress())
-                .animate(true)
-                .show_percentage(),
-        );
-        ui.add_space(8.0);
-        if ui.button("Cancel").clicked() {
-            app.cancel_transcription();
-        }
-        return;
-    }
-
-    let transcript = app.transcript().cloned();
-    if let Some(transcript) = &transcript {
-        if ui.button("Re-transcribe entire sequence").clicked() {
-            app.start_transcription(ctx);
-        }
-        if let Some(language) = &transcript.language {
-            ui.add_space(5.0);
-            ui.label(
-                RichText::new(format!("On-device · {language}"))
-                    .size(10.0)
-                    .color(theme::MUTED),
-            );
-        }
-        ui.add_space(10.0);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
-                ui.horizontal_wrapped(|ui| {
-                    for word in &transcript.words {
-                        let strength = word.highlight_strength(app.current_time);
-                        let alpha = (strength * 255.0).round() as u8;
-                        let background = Color32::from_rgba_unmultiplied(
-                            theme::SELECTION.r(),
-                            theme::SELECTION.g(),
-                            theme::SELECTION.b(),
-                            alpha,
-                        );
-                        let color = if strength > 0.42 {
-                            theme::BLACK
-                        } else {
-                            theme::TEXT
-                        };
-                        let response = ui.label(
-                            RichText::new(&word.text)
-                                .size(13.0)
-                                .color(color)
-                                .background_color(background),
-                        );
-                        if word.contains(app.current_time) {
-                            response.scroll_to_me(Some(Align::Center));
-                        }
-                    }
-                });
-            });
-    } else {
-        ui.label(
-            RichText::new("Create a word-timed transcript from the edited sequence audio.")
-                .size(12.0)
-                .color(theme::MUTED),
-        );
-        ui.add_space(8.0);
-        if ui.button("Transcribe").clicked() {
-            app.start_transcription(ctx);
-        }
-    }
-
-    if let Some(message) = &app.transcription_message {
-        ui.add_space(8.0);
-        ui.label(RichText::new(message).size(11.0).color(theme::MUTED));
-    }
+fn transcription_panel(ui: &mut egui::Ui) {
+    // A future integration will send sequence audio to an HTTP endpoint and
+    // populate the project transcript from the response.
+    ui.label(
+        RichText::new("HTTP transcription is coming soon.")
+            .size(12.0)
+            .color(theme::MUTED),
+    );
 }
 
 fn property_sections(lane: ClipLane) -> (bool, bool) {

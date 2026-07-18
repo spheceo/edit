@@ -14,7 +14,6 @@ use eframe::egui::{self, ColorImage, Pos2, TextureHandle, TextureOptions};
 
 use crate::{
     media::{
-        transcription::{self, TranscriptionJob, TranscriptionResult},
         audio::SequenceAudioOutput,
         export::{ExportJob, ExportResult, ExportSettings, SequenceFormat},
         playback::{DecodedFrame, PlaybackEngine},
@@ -28,7 +27,7 @@ use crate::{
             frame_duration, ClipAudio, ClipColor, ClipId, ClipMotion, MediaId, SequenceClip,
         },
         EditTool, EditorProjectState, EditorSnapshot, MediaFolder, MediaReference, NewProjectDraft,
-        ProjectDocument, ProjectSession, RecentProject, Sequence, Transcript, DEFAULT_TIMELINE_HEIGHT,
+        ProjectDocument, ProjectSession, RecentProject, Sequence, DEFAULT_TIMELINE_HEIGHT,
         MAX_HISTORY, MAX_TIMELINE_HEIGHT, MIN_TIMELINE_HEIGHT,
     },
     ui::{self, timeline},
@@ -136,8 +135,6 @@ pub struct VideoEditor {
     pub export_job: Option<ExportJob>,
     pub export_destination: Option<PathBuf>,
     pub export_message: Option<String>,
-    pub transcription_job: Option<TranscriptionJob>,
-    pub transcription_message: Option<String>,
     export_message_shown_at: Option<Instant>,
     pub properties_tab: PropertiesTab,
     pub media_info_clip: Option<ClipId>,
@@ -203,8 +200,6 @@ impl VideoEditor {
             export_job: None,
             export_destination: None,
             export_message: None,
-            transcription_job: None,
-            transcription_message: None,
             export_message_shown_at: None,
             properties_tab: PropertiesTab::default(),
             media_info_clip: None,
@@ -1791,81 +1786,13 @@ impl VideoEditor {
             .map(|shown_at| shown_at.elapsed())
     }
 
-    pub fn transcript(&self) -> Option<&Transcript> {
-        self.project_session
-            .as_ref()
-            .and_then(|session| session.document.transcript.as_ref())
-    }
 
-    pub fn start_transcription(&mut self, ctx: &egui::Context) {
-        if self.transcription_job.is_some() {
-            return;
-        }
-        if !transcription::supported() {
-            self.transcription_message =
-                Some("Transcription on Windows is coming soon.".to_owned());
-            return;
-        }
-        let Some(sequence) = self.sequence.clone() else {
-            self.transcription_message = Some("Add media to the timeline first.".to_owned());
-            return;
-        };
-        let has_sequence_audio = sequence.clips.iter().any(|clip| {
-            clip.lane.shows_audio()
-                && self
-                    .media_asset(clip.media_id)
-                    .is_some_and(|asset| asset.has_audio)
-        });
-        if !has_sequence_audio {
-            self.transcription_message =
-                Some("The sequence does not contain any audio to transcribe.".to_owned());
-            return;
-        }
-        if !self.ensure_media_available(ctx) {
-            return;
-        }
-        let sources = self
-            .media_library
-            .iter()
-            .map(|media| (media.id, media.asset.path.clone()))
-            .collect();
-        self.transcription_message = None;
-        self.transcription_job = Some(TranscriptionJob::start(sources, sequence, ctx.clone()));
-    }
 
-    pub fn cancel_transcription(&self) {
-        if let Some(job) = &self.transcription_job {
-            job.cancel();
-        }
-    }
 
-    fn poll_transcription(&mut self) {
-        let result = self
-            .transcription_job
-            .as_ref()
-            .and_then(TranscriptionJob::poll);
-        let Some(result) = result else { return };
-        self.transcription_job = None;
-        match result {
-            TranscriptionResult::Finished(transcript) => {
-                let word_count = transcript.words.len();
-                if let Some(session) = &mut self.project_session {
-                    session.document.transcript = Some(transcript);
-                    session.mark_dirty();
-                }
-                self.transcription_message = Some(format!(
-                    "Transcription complete · {word_count} {}",
-                    if word_count == 1 { "word" } else { "words" }
-                ));
-            }
-            TranscriptionResult::Cancelled => {
-                self.transcription_message = Some("Transcription cancelled.".to_owned());
-            }
-            TranscriptionResult::Failed(error) => {
-                self.transcription_message = Some(error);
-            }
-        }
-    }
+
+
+
+
     fn poll_export(&mut self) {
         let result = self.export_job.as_ref().and_then(ExportJob::poll);
         if let Some(result) = result {
@@ -2296,7 +2223,6 @@ impl eframe::App for VideoEditor {
             }
             self.pump_waveform_queue(ctx);
         }
-        self.poll_transcription();
         self.poll_export();
         self.handle_shortcuts(ctx);
 

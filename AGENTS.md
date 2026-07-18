@@ -1,5 +1,9 @@
 # Agent notes
 
+## Git commits
+
+Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as the user only: `git add`, `git commit`, and `git push` with a normal message body — no co-authors, no extra attribution trailers.
+
 ## macOS packaging (xtask)
 
 There is no `.cargo` alias. Invoke the packager directly:

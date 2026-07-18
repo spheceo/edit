@@ -11,10 +11,9 @@ where
     Ok(match value {
         None | Some(serde_json::Value::Null) => Vec::new(),
         Some(serde_json::Value::Number(n)) => n.as_u64().into_iter().collect(),
-        Some(serde_json::Value::Array(items)) => items
-            .into_iter()
-            .filter_map(|item| item.as_u64())
-            .collect(),
+        Some(serde_json::Value::Array(items)) => {
+            items.into_iter().filter_map(|item| item.as_u64()).collect()
+        }
         _ => Vec::new(),
     })
 }
@@ -68,6 +67,35 @@ fn legacy_media_id() -> MediaId {
     1
 }
 
+fn default_track() -> u8 {
+    1
+}
+
+/// Which timeline lane(s) a clip occupies.
+/// Linked clips use [`ClipLane::Both`]; Unlink splits them into Video + Audio.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipLane {
+    #[default]
+    Both,
+    Video,
+    Audio,
+}
+
+impl ClipLane {
+    pub fn shows_video(self) -> bool {
+        matches!(self, Self::Both | Self::Video)
+    }
+
+    pub fn shows_audio(self) -> bool {
+        matches!(self, Self::Both | Self::Audio)
+    }
+
+    pub fn conflicts_with(self, other: Self) -> bool {
+        (self.shows_video() && other.shows_video()) || (self.shows_audio() && other.shows_audio())
+    }
+}
+
 fn default_scale() -> f32 {
     100.0
 }
@@ -117,6 +145,11 @@ pub struct SequenceClip {
     pub media_id: MediaId,
     #[serde(default)]
     pub color: ClipColor,
+    #[serde(default)]
+    pub lane: ClipLane,
+    /// One-based Premiere-style track number. Linked clips occupy matching Vn/An.
+    #[serde(default = "default_track")]
+    pub track: u8,
     pub timeline_start: f64,
     pub timeline_end: f64,
     pub source_in: f64,
@@ -128,6 +161,10 @@ pub struct SequenceClip {
 }
 
 impl SequenceClip {
+    pub fn track(&self) -> u8 {
+        self.track.max(1)
+    }
+
     pub fn contains(&self, time: f64) -> bool {
         time >= self.timeline_start && time < self.timeline_end
     }
@@ -169,6 +206,8 @@ impl Sequence {
                 id: 1,
                 media_id,
                 color: ClipColor::default(),
+                lane: ClipLane::Both,
+                track: 1,
                 timeline_start: 0.0,
                 timeline_end: duration,
                 source_in: 0.0,
@@ -182,8 +221,13 @@ impl Sequence {
         }
     }
 
+    /// Returns the clip that supplies picture at `time`.
+    /// Audio-only clips deliberately do not qualify.
     pub fn clip_at(&self, time: f64) -> Option<&SequenceClip> {
-        self.clips.iter().find(|clip| clip.contains(time))
+        self.clips
+            .iter()
+            .filter(|clip| clip.contains(time) && clip.lane.shows_video())
+            .max_by_key(|clip| clip.track())
     }
 
     pub fn clip(&self, id: ClipId) -> Option<&SequenceClip> {
@@ -215,15 +259,15 @@ impl Sequence {
             fps,
             snap_threshold,
         );
-        if self.overlaps(None, start, start + clip_duration) {
-            return None;
-        }
+        let track = self.free_track_for(start, start + clip_duration, ClipLane::Both)?;
         let id = self.next_id;
         self.next_id += 1;
         self.clips.push(SequenceClip {
             id,
             media_id,
             color: ClipColor::default(),
+            lane: ClipLane::Both,
+            track,
             timeline_start: start,
             timeline_end: start + clip_duration,
             source_in: 0.0,
@@ -235,6 +279,106 @@ impl Sequence {
         self.recompute_duration();
         self.selected = vec![id];
         Some(id)
+    }
+
+    /// Lowest 1-based track that can hold `lane` for `[start, end)` without overlap.
+    pub fn free_track_for(&self, start: f64, end: f64, lane: ClipLane) -> Option<u8> {
+        const MAX_TRACK: u8 = 32;
+        (1..=MAX_TRACK).find(|&track| !self.overlaps_on_track(None, start, end, lane, track))
+    }
+
+    /// Split a linked AV clip into independent video and audio clips.
+    pub fn unlink(&mut self, id: ClipId) -> Option<ClipId> {
+        let index = self.clips.iter().position(|clip| clip.id == id)?;
+        if self.clips[index].lane != ClipLane::Both {
+            return None;
+        }
+        self.clips[index].lane = ClipLane::Video;
+        let video = self.clips[index].clone();
+        let audio_id = self.next_id;
+        self.next_id += 1;
+        self.clips.insert(
+            index + 1,
+            SequenceClip {
+                id: audio_id,
+                media_id: video.media_id,
+                color: video.color,
+                lane: ClipLane::Audio,
+                track: video.track(),
+                timeline_start: video.timeline_start,
+                timeline_end: video.timeline_end,
+                source_in: video.source_in,
+                source_out: video.source_out,
+                motion: ClipMotion::default(),
+                audio: video.audio,
+            },
+        );
+        self.selected = vec![id];
+        Some(audio_id)
+    }
+
+    /// Whether the current selection contains at least one losslessly linkable
+    /// video/audio pair.
+    pub fn can_link_selected(&self) -> bool {
+        !self.selected_link_pairs().is_empty()
+    }
+
+    /// Merge every losslessly matched selected Video + Audio pair back into a
+    /// single linked AV clip. Pairs must share media, track, timeline range,
+    /// and source range so linking never changes either component's timing.
+    ///
+    /// The video clip keeps its id, motion, and label; audio settings are taken
+    /// from the matched audio clip. Unmatched selected clips stay selected.
+    pub fn link_selected(&mut self) -> Vec<ClipId> {
+        let pairs = self.selected_link_pairs();
+        if pairs.is_empty() {
+            return Vec::new();
+        }
+
+        let mut audio_ids = Vec::with_capacity(pairs.len());
+        let mut linked_ids = Vec::with_capacity(pairs.len());
+        for (video_id, audio_id) in pairs {
+            let Some(audio) = self.clip(audio_id).cloned() else {
+                continue;
+            };
+            let Some(video) = self.clips.iter_mut().find(|clip| clip.id == video_id) else {
+                continue;
+            };
+            video.lane = ClipLane::Both;
+            video.audio = audio.audio;
+            audio_ids.push(audio_id);
+            linked_ids.push(video_id);
+        }
+
+        self.clips.retain(|clip| !audio_ids.contains(&clip.id));
+        self.selected.retain(|id| !audio_ids.contains(id));
+        linked_ids
+    }
+
+    fn selected_link_pairs(&self) -> Vec<(ClipId, ClipId)> {
+        let videos = self
+            .clips
+            .iter()
+            .filter(|clip| clip.lane == ClipLane::Video && self.selected.contains(&clip.id));
+        let audios = self
+            .clips
+            .iter()
+            .filter(|clip| clip.lane == ClipLane::Audio && self.selected.contains(&clip.id))
+            .collect::<Vec<_>>();
+        let mut used_audio = Vec::new();
+        let mut pairs = Vec::new();
+
+        for video in videos {
+            if let Some(audio) = audios
+                .iter()
+                .copied()
+                .find(|audio| !used_audio.contains(&audio.id) && clips_are_linkable(video, audio))
+            {
+                used_audio.push(audio.id);
+                pairs.push((video.id, audio.id));
+            }
+        }
+        pairs
     }
 
     pub fn preview_media_placement(
@@ -252,7 +396,11 @@ impl Sequence {
             fps,
             snap_threshold,
         );
-        (start, !self.overlaps(None, start, start + duration))
+        (
+            start,
+            self.free_track_for(start, start + duration, ClipLane::Both)
+                .is_some(),
+        )
     }
 
     pub fn duplicate(&mut self, id: ClipId) -> Option<ClipId> {
@@ -272,7 +420,20 @@ impl Sequence {
         fps: f64,
         snap_threshold: f64,
     ) -> Option<f64> {
+        let track = self.clip(id)?.track();
+        self.move_clip_to_track(id, requested_start, track, fps, snap_threshold)
+    }
+
+    pub fn move_clip_to_track(
+        &mut self,
+        id: ClipId,
+        requested_start: f64,
+        track: u8,
+        fps: f64,
+        snap_threshold: f64,
+    ) -> Option<f64> {
         let clip = self.clip(id)?.clone();
+        let track = track.max(1);
         let duration = clip.timeline_end - clip.timeline_start;
         let start = self.snapped_start(
             Some(id),
@@ -281,12 +442,13 @@ impl Sequence {
             fps,
             snap_threshold,
         );
-        if self.overlaps(Some(id), start, start + duration) {
+        if self.overlaps_on_track(Some(id), start, start + duration, clip.lane, track) {
             return None;
         }
         let clip = self.clips.iter_mut().find(|clip| clip.id == id)?;
         clip.timeline_start = start;
         clip.timeline_end = start + duration;
+        clip.track = track;
         self.sort_clips();
         self.recompute_duration();
         Some(start)
@@ -301,6 +463,21 @@ impl Sequence {
         }
         clip.color = color;
         true
+    }
+
+    /// Apply a label color to the whole selection when `id` is selected,
+    /// otherwise apply it only to `id`.
+    pub fn set_color_for_selection(&mut self, id: ClipId, color: ClipColor) -> bool {
+        let ids = if self.is_selected(id) {
+            self.selected.clone()
+        } else {
+            vec![id]
+        };
+        let mut changed = false;
+        for id in ids {
+            changed |= self.set_color(id, color);
+        }
+        changed
     }
 
     fn snapped_start(
@@ -332,18 +509,36 @@ impl Sequence {
         snap_to_frame(best.0.max(0.0), fps)
     }
 
-    fn overlaps(&self, excluded: Option<ClipId>, start: f64, end: f64) -> bool {
+    fn overlaps_on_track(
+        &self,
+        excluded: Option<ClipId>,
+        start: f64,
+        end: f64,
+        lane: ClipLane,
+        track: u8,
+    ) -> bool {
         self.clips.iter().any(|clip| {
             Some(clip.id) != excluded
+                && lane.conflicts_with(clip.lane)
+                && clip.track() == track.max(1)
                 && start < clip.timeline_end - 0.000_001
                 && end > clip.timeline_start + 0.000_001
         })
     }
 
     pub fn has_overlaps(&self) -> bool {
-        self.clips
-            .windows(2)
-            .any(|pair| pair[0].timeline_end > pair[1].timeline_start + 0.000_001)
+        for (index, left) in self.clips.iter().enumerate() {
+            for right in &self.clips[index + 1..] {
+                if left.lane.conflicts_with(right.lane)
+                    && left.track() == right.track()
+                    && left.timeline_start < right.timeline_end - 0.000_001
+                    && left.timeline_end > right.timeline_start + 0.000_001
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn sort_clips(&mut self) {
@@ -374,6 +569,8 @@ impl Sequence {
             id: self.next_id,
             media_id: clip.media_id,
             color: clip.color,
+            lane: clip.lane,
+            track: clip.track(),
             timeline_start: time,
             timeline_end: clip.timeline_end,
             source_in: source_split,
@@ -470,17 +667,35 @@ impl Sequence {
         self.selected.first().copied()
     }
 
-    pub fn trim_left(&mut self, id: ClipId, requested: f64, fps: f64) -> Option<f64> {
+    pub fn trim_left_snapped(
+        &mut self,
+        id: ClipId,
+        requested: f64,
+        fps: f64,
+        snap_threshold: f64,
+    ) -> Option<f64> {
         let index = self.clips.iter().position(|clip| clip.id == id)?;
         let clip = &self.clips[index];
         let min_duration = frame_duration(fps);
-        let previous_end = index
-            .checked_sub(1)
-            .and_then(|previous| self.clips.get(previous))
-            .map_or(0.0, |previous| previous.timeline_end);
+        let previous_end = self
+            .clips
+            .iter()
+            .filter(|other| {
+                other.id != id
+                    && other.lane.conflicts_with(clip.lane)
+                    && other.track() == clip.track()
+            })
+            .filter(|other| other.timeline_end <= clip.timeline_start + 0.000_001)
+            .map(|other| other.timeline_end)
+            .fold(0.0, f64::max);
         let earliest_from_source = clip.timeline_start - clip.source_in;
         let minimum = previous_end.max(earliest_from_source).max(0.0);
         let maximum = clip.timeline_end - min_duration;
+        let requested = snap_to_nearby_edge(
+            requested,
+            self.clips.iter().filter(|other| other.id != id),
+            snap_threshold,
+        );
         let new_start = snap_to_frame(requested, fps).clamp(minimum, maximum);
         let delta = new_start - clip.timeline_start;
         let clip = &mut self.clips[index];
@@ -489,23 +704,36 @@ impl Sequence {
         Some(new_start)
     }
 
-    pub fn trim_right(
+    pub fn trim_right_snapped(
         &mut self,
         id: ClipId,
         requested: f64,
         fps: f64,
         source_duration: f64,
+        snap_threshold: f64,
     ) -> Option<f64> {
         let index = self.clips.iter().position(|clip| clip.id == id)?;
         let clip = &self.clips[index];
         let min_duration = frame_duration(fps);
         let next_start = self
             .clips
-            .get(index + 1)
-            .map_or(f64::INFINITY, |next| next.timeline_start);
+            .iter()
+            .filter(|other| {
+                other.id != id
+                    && other.lane.conflicts_with(clip.lane)
+                    && other.track() == clip.track()
+            })
+            .filter(|other| other.timeline_start >= clip.timeline_end - 0.000_001)
+            .map(|other| other.timeline_start)
+            .fold(f64::INFINITY, f64::min);
         let latest_from_source = clip.timeline_end + (source_duration - clip.source_out).max(0.0);
         let minimum = clip.timeline_start + min_duration;
         let maximum = next_start.min(latest_from_source);
+        let requested = snap_to_nearby_edge(
+            requested,
+            self.clips.iter().filter(|other| other.id != id),
+            snap_threshold,
+        );
         let new_end = snap_to_frame(requested, fps).clamp(minimum, maximum);
         let delta = new_end - clip.timeline_end;
         let clip = &mut self.clips[index];
@@ -514,6 +742,34 @@ impl Sequence {
         self.recompute_duration();
         Some(new_end)
     }
+}
+
+fn clips_are_linkable(video: &SequenceClip, audio: &SequenceClip) -> bool {
+    const EPSILON: f64 = 0.000_001;
+    video.lane == ClipLane::Video
+        && audio.lane == ClipLane::Audio
+        && video.media_id == audio.media_id
+        && video.track() == audio.track()
+        && (video.timeline_start - audio.timeline_start).abs() <= EPSILON
+        && (video.timeline_end - audio.timeline_end).abs() <= EPSILON
+        && (video.source_in - audio.source_in).abs() <= EPSILON
+        && (video.source_out - audio.source_out).abs() <= EPSILON
+}
+
+fn snap_to_nearby_edge<'a>(
+    requested: f64,
+    clips: impl Iterator<Item = &'a SequenceClip>,
+    threshold: f64,
+) -> f64 {
+    let threshold = threshold.max(0.0);
+    let mut best = (requested, threshold + f64::EPSILON);
+    for edge in clips.flat_map(|clip| [clip.timeline_start, clip.timeline_end]) {
+        let distance = (edge - requested).abs();
+        if distance <= best.1 {
+            best = (edge, distance);
+        }
+    }
+    best.0
 }
 
 pub fn frame_duration(fps: f64) -> f64 {
@@ -527,7 +783,130 @@ pub fn snap_to_frame(time: f64, fps: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClipColor, Sequence};
+    use super::{ClipColor, ClipLane, Sequence};
+
+    #[test]
+    fn audio_only_clip_does_not_supply_preview_media() {
+        let mut sequence = Sequence::from_media(42, 5.0);
+        sequence.clips[0].lane = ClipLane::Audio;
+
+        assert!(sequence.clip_at(2.0).is_none());
+        assert!(sequence.source_time_at(2.0).is_none());
+        assert!(sequence.media_source_at(2.0).is_none());
+    }
+
+    #[test]
+    fn legacy_clips_default_to_track_one() {
+        let sequence = Sequence::from_media(42, 5.0);
+        let mut json = serde_json::to_value(&sequence).expect("sequence should serialize");
+        json["clips"][0]
+            .as_object_mut()
+            .expect("clip should be an object")
+            .remove("track");
+
+        let loaded: Sequence = serde_json::from_value(json).expect("legacy sequence should load");
+        assert_eq!(loaded.clips[0].track(), 1);
+    }
+
+    #[test]
+    fn overlaps_are_scoped_to_matching_tracks() {
+        let mut sequence = Sequence::from_media(1, 2.0);
+        let duplicate = sequence.duplicate(1).expect("duplicate should be created");
+        assert!(sequence.has_overlaps());
+
+        sequence
+            .move_clip_to_track(duplicate, 0.0, 2, 30.0, 0.0)
+            .expect("same-time placement on another track should succeed");
+        assert!(!sequence.has_overlaps());
+        assert_eq!(sequence.clip(duplicate).unwrap().track(), 2);
+        assert_eq!(sequence.clip_at(1.0).unwrap().id, duplicate);
+    }
+
+    #[test]
+    fn unlink_preserves_matching_video_and_audio_track_numbers() {
+        let mut sequence = Sequence::from_media(1, 2.0);
+        sequence.clips[0].track = 3;
+        let audio = sequence.unlink(1).expect("linked clip should unlink");
+
+        assert_eq!(sequence.clip(1).unwrap().lane, ClipLane::Video);
+        assert_eq!(sequence.clip(1).unwrap().track(), 3);
+        assert_eq!(sequence.clip(audio).unwrap().lane, ClipLane::Audio);
+        assert_eq!(sequence.clip(audio).unwrap().track(), 3);
+    }
+
+    #[test]
+    fn link_selected_rejoins_every_matching_unlinked_pair() {
+        let mut sequence = Sequence::from_media(1, 2.0);
+        let second_video = sequence.duplicate(1).expect("duplicate should be created");
+        sequence
+            .move_clip(second_video, 2.0, 30.0, 0.0)
+            .expect("duplicate should move after the original");
+        let first_audio = sequence.unlink(1).expect("first clip should unlink");
+        let second_audio = sequence
+            .unlink(second_video)
+            .expect("second clip should unlink");
+        sequence
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == first_audio)
+            .unwrap()
+            .audio
+            .volume_db = -3.0;
+        sequence
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == second_audio)
+            .unwrap()
+            .audio
+            .volume_db = -6.0;
+        sequence.select_many([1, first_audio, second_video, second_audio]);
+
+        assert!(sequence.can_link_selected());
+        assert_eq!(sequence.link_selected(), vec![1, second_video]);
+        assert_eq!(sequence.clips.len(), 2);
+        assert_eq!(sequence.clip(1).unwrap().lane, ClipLane::Both);
+        assert_eq!(sequence.clip(1).unwrap().audio.volume_db, -3.0);
+        assert_eq!(sequence.clip(second_video).unwrap().lane, ClipLane::Both);
+        assert_eq!(sequence.clip(second_video).unwrap().audio.volume_db, -6.0);
+        assert_eq!(sequence.selected, vec![1, second_video]);
+    }
+
+    #[test]
+    fn link_selected_refuses_timing_mismatches() {
+        let mut sequence = Sequence::from_media(1, 2.0);
+        let audio = sequence.unlink(1).expect("clip should unlink");
+        sequence
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == audio)
+            .unwrap()
+            .timeline_start = 0.25;
+        sequence.select_many([1, audio]);
+
+        assert!(!sequence.can_link_selected());
+        assert!(sequence.link_selected().is_empty());
+        assert_eq!(sequence.clip(1).unwrap().lane, ClipLane::Video);
+        assert_eq!(sequence.clip(audio).unwrap().lane, ClipLane::Audio);
+    }
+
+    #[test]
+    fn trim_edge_snap_engages_and_releases_past_threshold() {
+        let mut sequence = Sequence::from_media(1, 2.0);
+        let other = sequence.duplicate(1).expect("duplicate should be created");
+        sequence
+            .move_clip_to_track(other, 3.0, 2, 30.0, 0.0)
+            .expect("other-track clip should move");
+
+        let snapped = sequence
+            .trim_right_snapped(1, 2.94, 30.0, 10.0, 0.1)
+            .expect("trim should succeed");
+        assert_eq!(snapped, 3.0);
+
+        let released = sequence
+            .trim_right_snapped(1, 3.2, 30.0, 10.0, 0.1)
+            .expect("trim should continue after leaving snap range");
+        assert_eq!(released, 3.2);
+    }
 
     #[test]
     fn inserts_multiple_media_and_snaps_clip_edges() {
@@ -541,9 +920,11 @@ mod tests {
         assert_eq!(sequence.clip(first).unwrap().media_id, 10);
         assert_eq!(sequence.clip(second).unwrap().timeline_start, 2.0);
         assert_eq!(sequence.clip(second).unwrap().media_id, 20);
+        // Overlapping V1/A1 still places validly on the next free track.
         let (overlap_start, overlap_valid) = sequence.preview_media_placement(0.5, 1.0, 30.0, 0.05);
         assert_eq!(overlap_start, 0.5);
-        assert!(!overlap_valid);
+        assert!(overlap_valid);
+        assert_eq!(sequence.free_track_for(0.5, 1.5, ClipLane::Both), Some(2));
         let (snapped_start, snapped_valid) =
             sequence.preview_media_placement(3.04, 1.0, 30.0, 0.05);
         assert_eq!(snapped_start, 3.0);
@@ -564,6 +945,22 @@ mod tests {
     }
 
     #[test]
+    fn label_color_applies_to_every_selected_clip() {
+        let mut sequence = Sequence::empty();
+        let first = sequence.insert_media(4, 0.0, 1.0, 30.0, 0.0).unwrap();
+        let second = sequence.duplicate(first).unwrap();
+        sequence.move_clip(second, 1.0, 30.0, 0.0).unwrap();
+        let third = sequence.duplicate(second).unwrap();
+        sequence.move_clip(third, 2.0, 30.0, 0.0).unwrap();
+        sequence.select_many([first, third]);
+
+        assert!(sequence.set_color_for_selection(first, ClipColor::Purple));
+        assert_eq!(sequence.clip(first).unwrap().color, ClipColor::Purple);
+        assert_eq!(sequence.clip(second).unwrap().color, ClipColor::Blue);
+        assert_eq!(sequence.clip(third).unwrap().color, ClipColor::Purple);
+    }
+
+    #[test]
     fn duration_always_tracks_the_end_of_the_last_clip() {
         let mut sequence = Sequence::empty();
         let first = sequence.insert_media(1, 0.0, 2.0, 30.0, 0.0).unwrap();
@@ -573,7 +970,7 @@ mod tests {
         sequence.delete(second);
         assert_eq!(sequence.duration, 2.0);
 
-        sequence.trim_right(first, 1.0, 30.0, 2.0);
+        sequence.trim_right_snapped(first, 1.0, 30.0, 2.0, 0.0);
         assert_eq!(sequence.duration, 1.0);
 
         sequence.move_clip(first, 3.0, 30.0, 0.0).unwrap();
@@ -613,7 +1010,7 @@ mod tests {
         sequence.delete_selected();
 
         let left = sequence.clips[0].id;
-        sequence.trim_right(left, 6.0, 25.0, 10.0);
+        sequence.trim_right_snapped(left, 6.0, 25.0, 10.0, 0.0);
         assert_eq!(sequence.clip(left).expect("left clip").timeline_end, 6.0);
         assert_eq!(sequence.clip(left).expect("left clip").source_out, 6.0);
     }

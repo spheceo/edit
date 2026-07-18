@@ -1,4 +1,6 @@
-use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, Response, Sense, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, CornerRadius, FontId, Rect, Response, Sense, Stroke, Vec2,
+};
 
 use super::theme;
 
@@ -11,10 +13,10 @@ pub enum Icon {
     Previous,
     Next,
     Import,
-    Undo,
-    Redo,
     Info,
     Duplicate,
+    Link,
+    Unlink,
     Delete,
 }
 
@@ -28,10 +30,10 @@ impl Icon {
             Self::Previous => egui::include_image!("../../assets/icons/previous.svg"),
             Self::Next => egui::include_image!("../../assets/icons/next.svg"),
             Self::Import => egui::include_image!("../../assets/icons/import.svg"),
-            Self::Undo => egui::include_image!("../../assets/icons/undo.svg"),
-            Self::Redo => egui::include_image!("../../assets/icons/redo.svg"),
             Self::Info => egui::include_image!("../../assets/icons/info.svg"),
             Self::Duplicate => egui::include_image!("../../assets/icons/duplicate.svg"),
+            Self::Link => egui::include_image!("../../assets/icons/link.svg"),
+            Self::Unlink => egui::include_image!("../../assets/icons/unlink.svg"),
             Self::Delete => egui::include_image!("../../assets/icons/delete.svg"),
         }
     }
@@ -54,7 +56,7 @@ pub fn menu_item(ui: &mut egui::Ui, icon: Icon, label: &str) -> Response {
             icon_rect,
             egui::Image::new(icon.source())
                 .fit_to_exact_size(icon_rect.size())
-                .tint(theme::TEXT)
+                .tint(Color32::WHITE)
                 .sense(Sense::hover()),
         );
         ui.painter().text(
@@ -96,32 +98,38 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, tooltip: &str, selected: bool) -> R
     }
 }
 
-pub fn import_button(ui: &mut egui::Ui) -> Response {
-    let size = Vec2::new(116.0, 34.0);
+/// Borderless plus trigger for the project media panel header (top-right).
+/// Opens a dropdown whose first option is "Import".
+pub fn import_menu_button(ui: &mut egui::Ui) -> Response {
+    let size = Vec2::splat(28.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    if response.hovered() || response.is_pointer_button_down_on() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(9), theme::SURFACE_HOVER);
+    let hot = response.hovered() || response.is_pointer_button_down_on() || response.has_focus();
+    if ui.is_rect_visible(rect) {
+        if hot {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(6), theme::SURFACE_HOVER);
+        }
+        let center = rect.center();
+        let arm = 6.0;
+        let stroke = Stroke::new(1.5, theme::TEXT);
+        ui.painter().line_segment(
+            [
+                egui::pos2(center.x - arm, center.y),
+                egui::pos2(center.x + arm, center.y),
+            ],
+            stroke,
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(center.x, center.y - arm),
+                egui::pos2(center.x, center.y + arm),
+            ],
+            stroke,
+        );
     }
-    paint(
-        ui,
-        Icon::Import,
-        Rect::from_center_size(
-            egui::pos2(rect.left() + 18.0, rect.center().y),
-            Vec2::splat(18.0),
-        ),
-        theme::TEXT,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + 34.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        "Import video",
-        FontId::proportional(13.0),
-        Color32::WHITE,
-    );
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text_at_pointer("Import video")
+        .on_hover_text_at_pointer("Import")
 }
 
 pub fn paint(ui: &egui::Ui, icon: Icon, rect: Rect, tint: Color32) {

@@ -6,9 +6,15 @@ use eframe::egui::{
 };
 
 use crate::{
-    app::VideoEditor,
-    media::export::{ExportQuality, ExportResolution},
-    project::{sequence::ClipMotion, EditTool},
+    app::{PropertiesTab, VideoEditor},
+    media::{
+        export::{ExportQuality, ExportResolution},
+        transcription::{self, TranscriptionStage},
+    },
+    project::{
+        sequence::{ClipLane, ClipMotion},
+        EditTool,
+    },
 };
 
 pub mod icons;
@@ -44,28 +50,29 @@ pub fn startup(ctx: &egui::Context, app: &mut VideoEditor) {
                 ui.add_space(28.0);
 
                 ui.horizontal(|ui| {
-                    let actions_width = 228.0;
+                    let actions_width = 236.0;
                     ui.add_space(((ui.available_width() - actions_width) * 0.5).max(0.0));
                     if ui
                         .add(
                             egui::Button::new(RichText::new("New Project").strong())
                                 .fill(theme::ACCENT)
                                 .stroke(Stroke::NONE)
-                                .corner_radius(CornerRadius::same(8))
-                                .min_size(Vec2::new(132.0, 32.0)),
+                                .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+                                .min_size(Vec2::new(132.0, 34.0)),
                         )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
                         app.open_new_project_dialog();
                     }
+                    // Secondary control — still a real button, not plain text.
                     if ui
                         .add(
-                            egui::Button::new(RichText::new("Open").color(theme::MUTED))
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(CornerRadius::same(8))
-                                .min_size(Vec2::new(72.0, 32.0)),
+                            egui::Button::new(RichText::new("Open").color(theme::TEXT))
+                                .fill(theme::SURFACE)
+                                .stroke(Stroke::new(1.0, theme::BORDER))
+                                .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+                                .min_size(Vec2::new(84.0, 34.0)),
                         )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
@@ -80,11 +87,7 @@ pub fn startup(ctx: &egui::Context, app: &mut VideoEditor) {
                     Vec2::new(column_width, ui.available_height()),
                     Layout::top_down(Align::Min),
                     |ui| {
-                        ui.label(
-                            RichText::new("Recent")
-                                .size(11.0)
-                                .color(theme::MUTED),
-                        );
+                        ui.label(RichText::new("Recent").size(11.0).color(theme::MUTED));
                         ui.add_space(10.0);
 
                         if app.recent_projects.is_empty() {
@@ -98,9 +101,7 @@ pub fn startup(ctx: &egui::Context, app: &mut VideoEditor) {
                             for project in recent {
                                 let path = project.path.clone();
                                 let opened = format_relative_opened(project.opened_unix_ms);
-                                if recent_project_row(ui, &project.name, &opened, &path)
-                                    .clicked()
-                                {
+                                if recent_project_row(ui, &project.name, &opened, &path).clicked() {
                                     app.open_project_path(path, ctx);
                                 }
                             }
@@ -123,10 +124,8 @@ fn recent_project_row(
     path: &std::path::Path,
 ) -> egui::Response {
     let height = 40.0;
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), height),
-        Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::click());
 
     if ui.is_rect_visible(rect) {
         if response.hovered() {
@@ -138,11 +137,7 @@ fn recent_project_row(
         }
 
         let time_galley = ui.fonts(|fonts| {
-            fonts.layout_no_wrap(
-                opened.to_owned(),
-                FontId::proportional(12.0),
-                theme::MUTED,
-            )
+            fonts.layout_no_wrap(opened.to_owned(), FontId::proportional(12.0), theme::MUTED)
         });
         let time_width = time_galley.size().x;
         let gap = 16.0;
@@ -215,6 +210,15 @@ pub fn new_project_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
     let mut open = true;
     let mut close_requested = false;
     let mut create_requested = false;
+    let mut choose_directory = false;
+
+    let name_trimmed = app.new_project_draft.name.trim().to_owned();
+    let project_path =
+        crate::project::project_path(&app.new_project_draft.directory, &name_trimmed);
+    let name_empty = name_trimmed.is_empty();
+    let name_conflict = !name_empty && project_path.exists();
+    let can_create = !name_empty && !name_conflict;
+
     egui::Window::new("new-project-dialog")
         .title_bar(false)
         .collapsible(false)
@@ -228,26 +232,66 @@ pub fn new_project_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
             style_dialog_controls(ui);
             dialog_header(ui, "New Project", &mut close_requested);
             ui.add_space(14.0);
+
             ui.label(RichText::new("Project name").small().color(theme::MUTED));
-            ui.add_sized(
+            let name_edit = ui.add_sized(
                 [ui.available_width(), 34.0],
-                egui::TextEdit::singleline(&mut app.new_project_draft.name),
+                egui::TextEdit::singleline(&mut app.new_project_draft.name)
+                    .vertical_align(Align::Center)
+                    .margin(Margin::symmetric(10, 0))
+                    .frame(true),
             );
+            if name_edit.changed() {
+                app.status = None;
+            }
+            if name_empty {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Enter a project name.")
+                        .size(12.0)
+                        .color(theme::PLAYHEAD),
+                );
+            } else if name_conflict {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("A project with that name already exists in this folder.")
+                        .size(12.0)
+                        .color(theme::PLAYHEAD),
+                );
+            }
+
             ui.add_space(10.0);
             ui.label(RichText::new("Location").small().color(theme::MUTED));
             ui.horizontal(|ui| {
-                ui.add_sized(
-                    [ui.available_width() - 92.0, 34.0],
-                    egui::Label::new(
-                        RichText::new(app.new_project_draft.directory.display().to_string())
-                            .color(theme::MUTED),
-                    )
-                    .truncate(),
-                );
+                let path_width = (ui.available_width() - 100.0).max(120.0);
+                let path_height = 34.0;
+                let (path_rect, _) =
+                    ui.allocate_exact_size(Vec2::new(path_width, path_height), Sense::hover());
+                if ui.is_rect_visible(path_rect) {
+                    ui.painter().rect(
+                        path_rect,
+                        CornerRadius::same(theme::CONTROL_RADIUS),
+                        Color32::from_rgb(18, 18, 20),
+                        Stroke::new(1.0, Color32::from_rgb(52, 52, 56)),
+                        StrokeKind::Inside,
+                    );
+                    let path_text = app.new_project_draft.directory.display().to_string();
+                    let font = FontId::proportional(13.0);
+                    let max_text_w = (path_rect.width() - 20.0).max(1.0);
+                    let display = truncate_to_width(ui.painter(), &path_text, &font, max_text_w);
+                    ui.painter().text(
+                        Pos2::new(path_rect.left() + 10.0, path_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        display,
+                        font,
+                        theme::MUTED,
+                    );
+                }
                 if ui.add(dialog_secondary_button("Choose…")).clicked() {
-                    app.choose_project_directory();
+                    choose_directory = true;
                 }
             });
+
             ui.add_space(10.0);
             ui.columns(2, |columns| {
                 columns[0].label(RichText::new("Aspect ratio").small().color(theme::MUTED));
@@ -255,6 +299,7 @@ pub fn new_project_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
                     .selected_text(app.new_project_draft.settings.aspect_label())
                     .width(columns[0].available_width())
                     .show_ui(&mut columns[0], |ui| {
+                        style_combo_menu(ui);
                         for (label, width, height) in [
                             ("16:9", 16, 9),
                             ("9:16", 9, 16),
@@ -288,6 +333,7 @@ pub fn new_project_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
                     .selected_text(format!("{} fps", app.new_project_draft.settings.frame_rate))
                     .width(columns[1].available_width())
                     .show_ui(&mut columns[1], |ui| {
+                        style_combo_menu(ui);
                         for fps in [23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0] {
                             ui.selectable_value(
                                 &mut app.new_project_draft.settings.frame_rate,
@@ -312,28 +358,42 @@ pub fn new_project_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     egui::ComboBox::from_id_salt("project-resolution-preset")
                         .selected_text("Presets")
+                        .width(112.0)
                         .show_ui(ui, |ui| {
+                            style_combo_menu(ui);
+                            let portrait = app.new_project_draft.settings.aspect_height
+                                > app.new_project_draft.settings.aspect_width;
                             for (label, width, height) in [
                                 ("720p", 1280, 720),
                                 ("1080p", 1920, 1080),
                                 ("1440p", 2560, 1440),
                                 ("4K", 3840, 2160),
                             ] {
-                                if ui.button(label).clicked() {
-                                    let portrait = app.new_project_draft.settings.aspect_height
-                                        > app.new_project_draft.settings.aspect_width;
-                                    app.new_project_draft.settings.width =
-                                        if portrait { height } else { width };
-                                    app.new_project_draft.settings.height =
-                                        if portrait { width } else { height };
+                                let (w, h) = if portrait {
+                                    (height, width)
+                                } else {
+                                    (width, height)
+                                };
+                                let selected = app.new_project_draft.settings.width == w
+                                    && app.new_project_draft.settings.height == h;
+                                if ui.selectable_label(selected, label).clicked() {
+                                    app.new_project_draft.settings.width = w;
+                                    app.new_project_draft.settings.height = h;
                                 }
                             }
                         });
                 });
             });
+
+            if let Some(status) = &app.status {
+                ui.add_space(12.0);
+                ui.label(RichText::new(status).size(12.0).color(theme::PLAYHEAD));
+            }
+
             ui.add_space(20.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(dialog_primary_button("Create Project")).clicked() {
+                let create = ui.add_enabled(can_create, dialog_primary_button("Create Project"));
+                if create.clicked() {
                     create_requested = true;
                 }
                 if ui.add(dialog_secondary_button("Cancel")).clicked() {
@@ -342,6 +402,9 @@ pub fn new_project_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
             });
         });
     app.new_project_dialog_open &= open && !close_requested;
+    if choose_directory {
+        app.choose_project_directory();
+    }
     if create_requested {
         app.create_project(ctx);
     }
@@ -403,51 +466,6 @@ pub fn title_bar(ctx: &egui::Context) {
         });
 }
 
-pub fn toolbar(ctx: &egui::Context, app: &mut VideoEditor) {
-    egui::TopBottomPanel::top("toolbar")
-        .exact_height(52.0)
-        .frame(
-            Frame::new()
-                .fill(theme::BLACK)
-                .inner_margin(Margin::symmetric(16, 8)),
-        )
-        .show(ctx, |ui| {
-            ui.horizontal_centered(|ui| {
-                if icons::import_button(ui).clicked() {
-                    app.import_video(ctx);
-                }
-                ui.add_space(10.0);
-                ui.add_enabled_ui(app.can_undo(), |ui| {
-                    if icons::button(ui, Icon::Undo, "Undo (⌘Z)", false).clicked() {
-                        app.undo(ctx);
-                    }
-                });
-                ui.add_enabled_ui(app.can_redo(), |ui| {
-                    if icons::button(ui, Icon::Redo, "Redo (⇧⌘Z)", false).clicked() {
-                        app.redo(ctx);
-                    }
-                });
-                ui.add_space(10.0);
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if let Some(progress) = app.export_job.as_ref().map(|job| job.progress()) {
-                        if ui.button("Cancel").clicked() {
-                            app.cancel_export();
-                        }
-                        ui.add(
-                            egui::ProgressBar::new(progress)
-                                .desired_width(180.0)
-                                .show_percentage(),
-                        );
-                    }
-                    if let Some(message) = &app.export_message {
-                        ui.label(RichText::new(message).small().color(theme::MUTED));
-                    }
-                });
-            });
-        });
-}
-
 pub fn export_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
     if !app.export_dialog_open {
         return;
@@ -483,6 +501,7 @@ pub fn export_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
                 .selected_text(app.export_settings.resolution.label())
                 .width(ui.available_width())
                 .show_ui(ui, |ui| {
+                    style_combo_menu(ui);
                     for resolution in ExportResolution::ALL {
                         ui.selectable_value(
                             &mut app.export_settings.resolution,
@@ -507,6 +526,7 @@ pub fn export_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
                 .selected_text(app.export_settings.quality.label())
                 .width(ui.available_width())
                 .show_ui(ui, |ui| {
+                    style_combo_menu(ui);
                     for quality in ExportQuality::ALL {
                         ui.selectable_value(
                             &mut app.export_settings.quality,
@@ -542,6 +562,103 @@ pub fn export_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
     app.export_dialog_open &= open && !close_requested;
     if choose_destination {
         app.choose_export_destination(ctx);
+    }
+}
+
+pub fn export_progress_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
+    let Some(progress) = app.export_job.as_ref().map(|job| job.progress()) else {
+        return;
+    };
+
+    let destination = app
+        .export_destination
+        .as_deref()
+        .and_then(std::path::Path::file_name)
+        .and_then(|name| name.to_str())
+        .unwrap_or("video.mp4")
+        .to_owned();
+    let (width, height) = app
+        .video
+        .as_ref()
+        .map(|video| {
+            app.export_settings
+                .resolution
+                .dimensions(video, app.sequence_format())
+        })
+        .unwrap_or((0, 0));
+
+    // Intentionally do not call `should_close`: this remains open through Escape,
+    // click-away, and any window-close affordance until `poll_export` clears the job.
+    egui::Modal::new(egui::Id::new("export-progress-dialog"))
+        .frame(dialog_frame())
+        .show(ctx, |ui| {
+            style_dialog_controls(ui);
+            ui.heading(RichText::new("Exporting…").strong());
+            ui.add_space(10.0);
+            ui.label(RichText::new(destination).size(12.0).color(theme::TEXT));
+            ui.label(
+                RichText::new(format!(
+                    "{width} × {height} · {}",
+                    app.export_settings.quality.label()
+                ))
+                .size(11.0)
+                .color(theme::MUTED),
+            );
+            ui.add_space(14.0);
+            ui.add(
+                egui::ProgressBar::new(progress)
+                    .desired_width(300.0)
+                    .show_percentage(),
+            );
+            ui.add_space(16.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(dialog_secondary_button("Cancel"))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    app.cancel_export();
+                }
+            });
+        });
+}
+
+pub fn export_notice(ctx: &egui::Context, app: &mut VideoEditor) {
+    if app.export_job.is_some() {
+        return;
+    }
+    let Some(message) = app.export_message.clone() else {
+        return;
+    };
+    const AUTO_HIDE: std::time::Duration = std::time::Duration::from_secs(2);
+    if app.export_message_age().is_some_and(|age| age >= AUTO_HIDE) {
+        app.clear_export_message();
+        return;
+    }
+    if let Some(age) = app.export_message_age() {
+        ctx.request_repaint_after(AUTO_HIDE.saturating_sub(age));
+    }
+
+    let mut dismiss = false;
+    egui::Area::new(egui::Id::new("export-notice"))
+        .anchor(Align2::RIGHT_TOP, Vec2::new(-16.0, 48.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            dialog_frame().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(message).size(12.0).color(theme::TEXT));
+                    if ui
+                        .add(egui::Button::new("×").frame(false))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        dismiss = true;
+                    }
+                });
+            });
+        });
+    if dismiss {
+        app.clear_export_message();
     }
 }
 
@@ -640,25 +757,60 @@ fn dialog_frame() -> Frame {
 }
 
 fn style_dialog_controls(ui: &mut egui::Ui) {
+    let radius = CornerRadius::same(theme::CONTROL_RADIUS);
+    let field_stroke = Stroke::new(1.0, Color32::from_rgb(52, 52, 56));
     let visuals = ui.visuals_mut();
     visuals.widgets.inactive.bg_fill = Color32::from_rgb(18, 18, 20);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(52, 52, 56));
-    visuals.widgets.inactive.corner_radius = CornerRadius::same(8);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(30, 30, 34);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(78, 78, 84));
-    visuals.widgets.hovered.corner_radius = CornerRadius::same(8);
-    visuals.widgets.active.bg_fill = Color32::from_rgb(38, 38, 42);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, theme::ACCENT);
-    visuals.widgets.active.corner_radius = CornerRadius::same(8);
-    ui.spacing_mut().button_padding = Vec2::new(14.0, 8.0);
-    ui.spacing_mut().combo_height = 34.0;
+    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(18, 18, 20);
+    visuals.widgets.inactive.bg_stroke = field_stroke;
+    visuals.widgets.inactive.corner_radius = radius;
+    visuals.widgets.inactive.expansion = 0.0;
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(26, 26, 30);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(26, 26, 30);
+    visuals.widgets.hovered.bg_stroke = field_stroke;
+    visuals.widgets.hovered.corner_radius = radius;
+    visuals.widgets.hovered.expansion = 0.0;
+    visuals.widgets.active.bg_fill = Color32::from_rgb(30, 30, 34);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(30, 30, 34);
+    visuals.widgets.active.bg_stroke = field_stroke;
+    visuals.widgets.active.corner_radius = radius;
+    visuals.widgets.active.expansion = 0.0;
+    visuals.widgets.open.bg_fill = Color32::from_rgb(26, 26, 30);
+    visuals.widgets.open.weak_bg_fill = Color32::from_rgb(26, 26, 30);
+    visuals.widgets.open.bg_stroke = field_stroke;
+    visuals.widgets.open.corner_radius = radius;
+    visuals.widgets.open.expansion = 0.0;
+    visuals.menu_corner_radius = CornerRadius::same(theme::MENU_RADIUS);
+    ui.spacing_mut().button_padding = Vec2::new(12.0, 8.0);
+    ui.spacing_mut().combo_height = 220.0;
+}
+
+/// Flat menu rows for ComboBox popups — fill hover, no border/expansion ring.
+fn style_combo_menu(ui: &mut egui::Ui) {
+    let visuals = ui.visuals_mut();
+    visuals.widgets.hovered.bg_fill = theme::SURFACE_HOVER;
+    visuals.widgets.hovered.weak_bg_fill = theme::SURFACE_HOVER;
+    visuals.widgets.hovered.bg_stroke = Stroke::NONE;
+    visuals.widgets.hovered.expansion = 0.0;
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(6);
+    visuals.widgets.active.bg_fill = theme::SURFACE_HOVER;
+    visuals.widgets.active.weak_bg_fill = theme::SURFACE_HOVER;
+    visuals.widgets.active.bg_stroke = Stroke::NONE;
+    visuals.widgets.active.expansion = 0.0;
+    visuals.widgets.active.corner_radius = CornerRadius::same(6);
+    visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+    visuals.widgets.inactive.expansion = 0.0;
+    visuals.selection.bg_fill = Color32::from_rgb(32, 48, 78);
+    visuals.selection.stroke = Stroke::NONE;
+    ui.spacing_mut().button_padding = Vec2::new(10.0, 6.0);
+    ui.spacing_mut().item_spacing.y = 2.0;
 }
 
 fn dialog_primary_button(label: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(label).strong())
         .fill(theme::ACCENT)
         .stroke(Stroke::NONE)
-        .corner_radius(CornerRadius::same(9))
+        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
         .min_size(Vec2::new(154.0, 34.0))
 }
 
@@ -666,7 +818,7 @@ fn dialog_secondary_button(label: &str) -> egui::Button<'_> {
     egui::Button::new(label)
         .fill(Color32::from_rgb(20, 20, 22))
         .stroke(Stroke::new(1.0, Color32::from_rgb(55, 55, 60)))
-        .corner_radius(CornerRadius::same(9))
+        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
         .min_size(Vec2::new(82.0, 34.0))
 }
 
@@ -758,14 +910,35 @@ fn truncate_to_width(painter: &egui::Painter, text: &str, font: &FontId, max_wid
 pub fn properties_panel(ctx: &egui::Context, app: &mut VideoEditor) {
     egui::SidePanel::right("clip-properties")
         .exact_width(268.0)
+        .resizable(false)
+        .show_separator_line(true)
         .frame(
             Frame::new()
                 .fill(theme::BLACK)
                 .inner_margin(Margin::same(14)),
         )
         .show(ctx, |ui| {
-            ui.label(RichText::new("Properties").strong());
+            ui.horizontal(|ui| {
+                properties_tab(
+                    ui,
+                    &mut app.properties_tab,
+                    PropertiesTab::Properties,
+                    "Properties",
+                );
+                ui.add_space(14.0);
+                properties_tab(
+                    ui,
+                    &mut app.properties_tab,
+                    PropertiesTab::Transcription,
+                    "Transcription",
+                );
+            });
             ui.add_space(10.0);
+
+            if app.properties_tab == PropertiesTab::Transcription {
+                transcription_panel(ui, app, ctx);
+                return;
+            }
 
             let selected_count = app
                 .sequence
@@ -795,7 +968,7 @@ pub fn properties_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                 return;
             }
 
-            let (mut motion, mut audio, name) = {
+            let (mut motion, mut audio, lane, name) = {
                 let Some(clip) = app.selected_clip() else {
                     return;
                 };
@@ -803,49 +976,201 @@ pub fn properties_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                     .media_asset(clip.media_id)
                     .map(|asset| asset.name.clone())
                     .unwrap_or_else(|| "Offline media".to_owned());
-                (clip.motion, clip.audio, name)
+                (clip.motion, clip.audio, clip.lane, name)
             };
 
             ui.label(RichText::new(name).size(12.0).color(theme::TEXT));
             ui.add_space(14.0);
+            let (show_motion, show_audio) = property_sections(lane);
 
-            ui.label(RichText::new("Motion").size(11.0).color(theme::MUTED));
-            ui.add_space(6.0);
-            let mut commit_motion = false;
-            commit_motion |= edit_property(
-                ui,
-                app,
-                "Position X",
-                &mut motion.position_x,
-                -4000.0..=4000.0,
-                1.0,
-            );
-            commit_motion |= edit_property(
-                ui,
-                app,
-                "Position Y",
-                &mut motion.position_y,
-                -4000.0..=4000.0,
-                1.0,
-            );
-            commit_motion |= edit_property(ui, app, "Scale", &mut motion.scale, 1.0..=1000.0, 0.1);
-            commit_motion |=
-                edit_property(ui, app, "Rotation", &mut motion.rotation, -3600.0..=3600.0, 0.1);
-            app.update_selected_clip_motion(motion);
-            if commit_motion {
-                app.commit_history_transaction();
+            if show_motion {
+                ui.label(RichText::new("Motion").size(11.0).color(theme::MUTED));
+                ui.add_space(6.0);
+                let mut commit_motion = false;
+                commit_motion |= edit_property(
+                    ui,
+                    app,
+                    "Position X",
+                    &mut motion.position_x,
+                    -4000.0..=4000.0,
+                    1.0,
+                );
+                commit_motion |= edit_property(
+                    ui,
+                    app,
+                    "Position Y",
+                    &mut motion.position_y,
+                    -4000.0..=4000.0,
+                    1.0,
+                );
+                commit_motion |=
+                    edit_property(ui, app, "Scale", &mut motion.scale, 1.0..=1000.0, 0.1);
+                commit_motion |= edit_property(
+                    ui,
+                    app,
+                    "Rotation",
+                    &mut motion.rotation,
+                    -3600.0..=3600.0,
+                    0.1,
+                );
+                app.update_selected_clip_motion(motion);
+                if commit_motion {
+                    app.commit_history_transaction();
+                }
             }
 
-            ui.add_space(16.0);
-            ui.label(RichText::new("Audio").size(11.0).color(theme::MUTED));
-            ui.add_space(6.0);
-            let commit_audio =
-                edit_property(ui, app, "Level (dB)", &mut audio.volume_db, -60.0..=12.0, 0.1);
-            app.update_selected_clip_audio(audio);
-            if commit_audio {
-                app.commit_history_transaction();
+            if show_audio {
+                if show_motion {
+                    ui.add_space(16.0);
+                }
+                ui.label(RichText::new("Audio").size(11.0).color(theme::MUTED));
+                ui.add_space(6.0);
+                let commit_audio = edit_property(
+                    ui,
+                    app,
+                    "Level (dB)",
+                    &mut audio.volume_db,
+                    -60.0..=12.0,
+                    0.1,
+                );
+                app.update_selected_clip_audio(audio);
+                if commit_audio {
+                    app.commit_history_transaction();
+                }
             }
         });
+}
+
+fn transcription_panel(ui: &mut egui::Ui, app: &mut VideoEditor, ctx: &egui::Context) {
+    if !transcription::supported() {
+        ui.label(
+            RichText::new("Transcription on Windows is coming soon.")
+                .size(12.0)
+                .color(theme::MUTED),
+        );
+        return;
+    }
+
+    if let Some(job) = &app.transcription_job {
+        let stage = match job.stage() {
+            TranscriptionStage::Preparing => "Preparing sequence audio…",
+            TranscriptionStage::Recognizing => "Transcribing on this Mac…",
+        };
+        ui.label(RichText::new(stage).size(12.0).color(theme::TEXT));
+        ui.add_space(6.0);
+        ui.add(
+            egui::ProgressBar::new(job.progress())
+                .animate(true)
+                .show_percentage(),
+        );
+        ui.add_space(8.0);
+        if ui.button("Cancel").clicked() {
+            app.cancel_transcription();
+        }
+        return;
+    }
+
+    let transcript = app.transcript().cloned();
+    if let Some(transcript) = &transcript {
+        if ui.button("Re-transcribe entire sequence").clicked() {
+            app.start_transcription(ctx);
+        }
+        if let Some(language) = &transcript.language {
+            ui.add_space(5.0);
+            ui.label(
+                RichText::new(format!("On-device · {language}"))
+                    .size(10.0)
+                    .color(theme::MUTED),
+            );
+        }
+        ui.add_space(10.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
+                ui.horizontal_wrapped(|ui| {
+                    for word in &transcript.words {
+                        let strength = word.highlight_strength(app.current_time);
+                        let alpha = (strength * 255.0).round() as u8;
+                        let background = Color32::from_rgba_unmultiplied(
+                            theme::SELECTION.r(),
+                            theme::SELECTION.g(),
+                            theme::SELECTION.b(),
+                            alpha,
+                        );
+                        let color = if strength > 0.42 {
+                            theme::BLACK
+                        } else {
+                            theme::TEXT
+                        };
+                        let response = ui.label(
+                            RichText::new(&word.text)
+                                .size(13.0)
+                                .color(color)
+                                .background_color(background),
+                        );
+                        if word.contains(app.current_time) {
+                            response.scroll_to_me(Some(Align::Center));
+                        }
+                    }
+                });
+            });
+    } else {
+        ui.label(
+            RichText::new("Create a word-timed transcript from the edited sequence audio.")
+                .size(12.0)
+                .color(theme::MUTED),
+        );
+        ui.add_space(8.0);
+        if ui.button("Transcribe").clicked() {
+            app.start_transcription(ctx);
+        }
+    }
+
+    if let Some(message) = &app.transcription_message {
+        ui.add_space(8.0);
+        ui.label(RichText::new(message).size(11.0).color(theme::MUTED));
+    }
+}
+
+fn property_sections(lane: ClipLane) -> (bool, bool) {
+    (lane.shows_video(), lane.shows_audio())
+}
+
+fn properties_tab(
+    ui: &mut egui::Ui,
+    current: &mut PropertiesTab,
+    value: PropertiesTab,
+    label: &str,
+) {
+    let active = *current == value;
+    let galley = ui.fonts(|fonts| {
+        fonts.layout_no_wrap(
+            label.to_owned(),
+            FontId::proportional(13.0),
+            if active { theme::TEXT } else { theme::MUTED },
+        )
+    });
+    let size = Vec2::new(galley.size().x, 22.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        ui.painter().galley(
+            egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5),
+            galley,
+            if active { theme::TEXT } else { theme::MUTED },
+        );
+        if active {
+            let y = rect.bottom() - 1.0;
+            ui.painter().line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                Stroke::new(1.5, Color32::WHITE),
+            );
+        }
+    }
+    if response.clicked() {
+        *current = value;
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand);
 }
 
 /// Returns true when the edit should be committed to undo history this frame.
@@ -962,7 +1287,15 @@ pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
                 .rect_filled(project_frame, CornerRadius::ZERO, Color32::BLACK);
 
             if let (Some(video), Some(texture)) = (&app.video, &app.texture) {
-                let image_rect = aspect_fit(project_frame, video.aspect_ratio());
+                // Premiere-style 100%: one source pixel = one sequence pixel, so
+                // lower-resolution clips sit smaller inside the project frame.
+                let image_rect = sequence_pixel_rect(
+                    project_frame,
+                    format.width,
+                    format.height,
+                    video.source_width,
+                    video.source_height,
+                );
                 let motion = app
                     .sequence
                     .as_ref()
@@ -1057,8 +1390,11 @@ pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
 
 pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
     let mut delete_requested = None;
+    let mut import_requested = false;
     egui::SidePanel::left("project-media")
-        .exact_width(270.0)
+        .exact_width(300.0)
+        .resizable(false)
+        .show_separator_line(true)
         .frame(
             Frame::new()
                 .fill(theme::BLACK)
@@ -1067,11 +1403,34 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Project media").strong());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if !app.media_library.is_empty() {
                     ui.label(
                         RichText::new(app.media_library.len().to_string())
                             .small()
                             .color(theme::MUTED),
+                    );
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let response = icons::import_menu_button(ui);
+                    let popup_id = ui.make_persistent_id("media-import-menu");
+                    if response.clicked() {
+                        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+                    }
+                    egui::popup::popup_below_widget(
+                        ui,
+                        popup_id,
+                        &response,
+                        egui::popup::PopupCloseBehavior::CloseOnClick,
+                        |ui| {
+                            ui.set_min_width(148.0);
+                            ui.visuals_mut().panel_fill = theme::BLACK;
+                            ui.visuals_mut().window_fill = theme::BLACK;
+                            style_combo_menu(ui);
+                            if icons::menu_item(ui, Icon::Import, "Import").clicked() {
+                                import_requested = true;
+                                ui.memory_mut(|mem| mem.close_popup());
+                            }
+                        },
                     );
                 });
             });
@@ -1142,14 +1501,21 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                             StrokeKind::Inside,
                         );
                     }
-                    let thumb =
-                        Rect::from_min_size(rect.min + Vec2::new(7.0, 7.0), Vec2::new(88.0, 58.0));
+                    // Fixed 16:9 frame; media keeps its native aspect (letterbox / pillarbox).
+                    let thumb_h = 50.0;
+                    let thumb_w = thumb_h * 16.0 / 9.0;
+                    let thumb = Rect::from_min_size(
+                        rect.min + Vec2::new(7.0, (rect.height() - thumb_h) * 0.5),
+                        Vec2::new(thumb_w, thumb_h),
+                    );
                     ui.painter()
                         .rect_filled(thumb, CornerRadius::same(5), theme::SURFACE);
                     if let Some(texture) = thumbnail {
-                        ui.painter().image(
+                        let image_rect =
+                            aspect_fit(thumb, width.max(1) as f32 / height.max(1) as f32);
+                        ui.painter().with_clip_rect(thumb).image(
                             texture,
-                            thumb,
+                            image_rect,
                             Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                             Color32::WHITE,
                         );
@@ -1195,6 +1561,9 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                 }
             });
         });
+    if import_requested {
+        app.import_video(ctx);
+    }
     if let Some(id) = delete_requested {
         app.delete_library_media(id, ctx);
     }
@@ -1289,6 +1658,24 @@ fn aspect_fit(bounds: Rect, aspect: f32) -> Rect {
     Rect::from_center_size(bounds.center(), size)
 }
 
+/// Map source pixels into the project frame. At 100% scale, a 960×540 clip on a
+/// 1920×1080 sequence occupies half the frame (centered), not the full frame.
+fn sequence_pixel_rect(
+    project_frame: Rect,
+    format_width: usize,
+    format_height: usize,
+    source_width: usize,
+    source_height: usize,
+) -> Rect {
+    let width = project_frame.width() * (source_width.max(1) as f32 / format_width.max(1) as f32);
+    let height =
+        project_frame.height() * (source_height.max(1) as f32 / format_height.max(1) as f32);
+    Rect::from_center_size(
+        project_frame.center(),
+        Vec2::new(width.max(1.0), height.max(1.0)),
+    )
+}
+
 pub fn timecode(seconds: f64, fps: f64) -> String {
     let nominal_fps = fps.round().clamp(1.0, 99.0) as u64;
     let total_frames = (seconds.max(0.0) * fps.max(1.0)).round() as u64;
@@ -1323,7 +1710,11 @@ pub fn parse_timecode(value: &str, fps: f64) -> Option<f64> {
 mod tests {
     use eframe::egui::{Pos2, Rect};
 
-    use super::{aspect_fit, format_relative_opened, parse_timecode, timecode};
+    use super::{
+        aspect_fit, format_relative_opened, parse_timecode, property_sections, sequence_pixel_rect,
+        timecode,
+    };
+    use crate::project::sequence::ClipLane;
 
     #[test]
     fn portrait_media_is_fitted_without_stretching() {
@@ -1335,8 +1726,24 @@ mod tests {
     }
 
     #[test]
+    fn lower_resolution_clips_occupy_native_pixel_size_in_the_project_frame() {
+        let frame = Rect::from_min_max(Pos2::ZERO, Pos2::new(1920.0, 1080.0));
+        let half = sequence_pixel_rect(frame, 1920, 1080, 960, 540);
+        assert!((half.width() - 960.0).abs() < 0.001);
+        assert!((half.height() - 540.0).abs() < 0.001);
+        assert!((half.center() - frame.center()).length() < 0.001);
+    }
+
+    #[test]
     fn formats_editor_timecode_as_colon_separated_pairs() {
         assert_eq!(timecode(65.5, 30.0), "00:01:05:15");
+    }
+
+    #[test]
+    fn property_sections_follow_the_clip_lane() {
+        assert_eq!(property_sections(ClipLane::Both), (true, true));
+        assert_eq!(property_sections(ClipLane::Video), (true, false));
+        assert_eq!(property_sections(ClipLane::Audio), (false, true));
     }
 
     #[test]
@@ -1353,7 +1760,10 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
         assert_eq!(format_relative_opened(now_ms), "Just now");
-        assert_eq!(format_relative_opened(now_ms.saturating_sub(5 * 60 * 1000)), "5m ago");
+        assert_eq!(
+            format_relative_opened(now_ms.saturating_sub(5 * 60 * 1000)),
+            "5m ago"
+        );
         assert_eq!(
             format_relative_opened(now_ms.saturating_sub(3 * 60 * 60 * 1000)),
             "3h ago"

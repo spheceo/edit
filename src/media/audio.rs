@@ -1,5 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
+    fs::{self, File},
+    io::{BufWriter, Seek, SeekFrom, Write},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -22,6 +24,25 @@ use crate::{
 
 const MAX_BUFFER_SECONDS: usize = 3;
 const PREBUFFER_FRAMES: usize = 2_048;
+const TRANSCRIPTION_RATE: u32 = 16_000;
+const TRANSCRIPTION_DECODE_CHANNELS: usize = 2;
+
+#[derive(Clone, Copy, Debug)]
+pub struct RenderedAudioStats {
+    pub duration_secs: f64,
+    pub peak: f32,
+    pub rms: f32,
+}
+
+impl RenderedAudioStats {
+    pub fn has_audible_signal(self) -> bool {
+        self.peak >= 0.002 && self.rms >= 0.0001
+    }
+
+    pub fn rms_dbfs(self) -> f32 {
+        20.0 * self.rms.max(f32::MIN_POSITIVE).log10()
+    }
+}
 
 pub struct SequenceAudioOutput {
     _stream: Stream,
@@ -127,6 +148,154 @@ impl Drop for SequenceAudioOutput {
     }
 }
 
+/// Render the same edited audio timeline used for playback to a mono PCM WAV.
+/// Gaps become silence and clip trims/gain are applied before recognition.
+pub fn render_sequence_audio_wav(
+    sources: HashMap<MediaId, PathBuf>,
+    sequence: &Sequence,
+    destination: PathBuf,
+    cancel: Arc<AtomicBool>,
+) -> Result<RenderedAudioStats, String> {
+    initialize_ffmpeg()?;
+    if sequence.duration <= 0.0 {
+        return Err("The sequence is empty.".to_owned());
+    }
+    if let Some(path) = sources.values().find(|path| !path.is_file()) {
+        return Err(format!(
+            "The source media is unavailable: {}",
+            path.display()
+        ));
+    }
+
+    let queue = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+    let finished = Arc::new(AtomicBool::new(false));
+    let writer_queue = Arc::clone(&queue);
+    let writer_finished = Arc::clone(&finished);
+    let writer_cancel = Arc::clone(&cancel);
+    let writer_destination = destination.clone();
+    let writer = thread::spawn(move || {
+        let result = write_pcm_wav(
+            writer_destination,
+            TRANSCRIPTION_RATE,
+            TRANSCRIPTION_DECODE_CHANNELS,
+            writer_queue,
+            writer_finished,
+            Arc::clone(&writer_cancel),
+        );
+        if result.is_err() {
+            writer_cancel.store(true, Ordering::Release);
+        }
+        result
+    });
+
+    let decode_result = decode_sequence_audio(
+        sources,
+        sequence,
+        0.0,
+        TRANSCRIPTION_RATE,
+        TRANSCRIPTION_DECODE_CHANNELS,
+        queue,
+        Arc::clone(&cancel),
+    );
+    finished.store(true, Ordering::Release);
+    let write_result = writer
+        .join()
+        .map_err(|_| "The transcription audio writer stopped unexpectedly.".to_owned())?;
+
+    let stats = write_result.map_err(|error| {
+        let _ = fs::remove_file(&destination);
+        error
+    })?;
+    if cancel.load(Ordering::Acquire) {
+        let _ = fs::remove_file(&destination);
+        return Err("cancelled".to_owned());
+    }
+    if let Err(error) = decode_result {
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
+    Ok(stats)
+}
+
+fn write_pcm_wav(
+    destination: PathBuf,
+    sample_rate: u32,
+    input_channels: usize,
+    queue: Arc<Mutex<VecDeque<f32>>>,
+    finished: Arc<AtomicBool>,
+    cancel: Arc<AtomicBool>,
+) -> Result<RenderedAudioStats, String> {
+    if input_channels == 0 {
+        return Err("Transcription audio has no channels.".to_owned());
+    }
+    let file = File::create(&destination)
+        .map_err(|error| format!("Could not create transcription audio: {error}"))?;
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(&[0; 44])
+        .map_err(|error| format!("Could not write transcription audio: {error}"))?;
+    let mut sample_count = 0_u32;
+    let mut peak = 0.0_f32;
+    let mut sum_squares = 0.0_f64;
+
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return Err("cancelled".to_owned());
+        }
+        let samples = {
+            let mut queue = queue
+                .lock()
+                .map_err(|_| "The transcription audio queue was interrupted.".to_owned())?;
+            let frames = (queue.len() / input_channels).min(4_096);
+            let count = frames * input_channels;
+            queue.drain(..count).collect::<Vec<_>>()
+        };
+        if samples.is_empty() {
+            if finished.load(Ordering::Acquire) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(3));
+            continue;
+        }
+        for frame in samples.chunks_exact(input_channels) {
+            // Decode to the source's normal stereo presentation first, then
+            // average channels ourselves. FFmpeg's default stereo-to-mono
+            // matrix adds gain and badly clipped loud sequence audio.
+            let sample = frame.iter().copied().sum::<f32>() / input_channels as f32;
+            peak = peak.max(sample.abs());
+            sum_squares += f64::from(sample) * f64::from(sample);
+            let pcm = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+            writer
+                .write_all(&pcm.to_le_bytes())
+                .map_err(|error| format!("Could not write transcription audio: {error}"))?;
+            sample_count = sample_count.saturating_add(1);
+        }
+    }
+
+    let data_bytes = sample_count.saturating_mul(2);
+    writer
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| writer.write_all(b"RIFF"))
+        .and_then(|_| writer.write_all(&(36_u32.saturating_add(data_bytes)).to_le_bytes()))
+        .and_then(|_| writer.write_all(b"WAVEfmt "))
+        .and_then(|_| writer.write_all(&16_u32.to_le_bytes()))
+        .and_then(|_| writer.write_all(&1_u16.to_le_bytes()))
+        .and_then(|_| writer.write_all(&1_u16.to_le_bytes()))
+        .and_then(|_| writer.write_all(&sample_rate.to_le_bytes()))
+        .and_then(|_| writer.write_all(&(sample_rate * 2).to_le_bytes()))
+        .and_then(|_| writer.write_all(&2_u16.to_le_bytes()))
+        .and_then(|_| writer.write_all(&16_u16.to_le_bytes()))
+        .and_then(|_| writer.write_all(b"data"))
+        .and_then(|_| writer.write_all(&data_bytes.to_le_bytes()))
+        .and_then(|_| writer.flush())
+        .map_err(|error| format!("Could not finish transcription audio: {error}"))?;
+    Ok(RenderedAudioStats {
+        duration_secs: sample_count as f64 / sample_rate.max(1) as f64,
+        peak,
+        rms: (sum_squares / f64::from(sample_count.max(1))).sqrt() as f32,
+    })
+}
+
 fn build_output_stream(
     device: &Device,
     config: &StreamConfig,
@@ -224,7 +393,7 @@ fn decode_sequence_audio(
     stop: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut cursor = at.clamp(0.0, sequence.duration);
-    for clip in &sequence.clips {
+    for clip in sequence.clips.iter().filter(|clip| clip.lane.shows_audio()) {
         if clip.timeline_end <= cursor {
             continue;
         }
@@ -580,7 +749,7 @@ mod tests {
         sync::{atomic::AtomicBool, Arc, Mutex},
     };
 
-    use super::{decode_audio, decode_sequence_audio};
+    use super::{decode_audio, decode_sequence_audio, write_pcm_wav};
     use crate::project::Sequence;
 
     #[test]
@@ -624,6 +793,66 @@ mod tests {
         assert!(samples.iter().any(|sample| sample.abs() > 0.01));
 
         drop(samples);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn transcription_wav_is_mono_16_bit_pcm() {
+        let path = std::env::temp_dir().join(format!(
+            "kuro-transcription-wav-test-{}.wav",
+            std::process::id()
+        ));
+        let queue = Arc::new(Mutex::new(VecDeque::from([0.0, 0.5, -0.5])));
+        write_pcm_wav(
+            path.clone(),
+            16_000,
+            1,
+            queue,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("WAV should be written");
+        let bytes = fs::read(&path).expect("WAV should be readable");
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..16], b"WAVEfmt ");
+        assert_eq!(u16::from_le_bytes([bytes[22], bytes[23]]), 1);
+        assert_eq!(
+            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+            16_000
+        );
+        assert_eq!(u16::from_le_bytes([bytes[34], bytes[35]]), 16);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 6);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn transcription_wav_averages_stereo_without_added_gain() {
+        let path = std::env::temp_dir().join(format!(
+            "kuro-transcription-downmix-test-{}.wav",
+            std::process::id()
+        ));
+        let queue = Arc::new(Mutex::new(VecDeque::from([
+            0.75, 0.75, 0.75, -0.75, 0.5, 0.25,
+        ])));
+        let stats = write_pcm_wav(
+            path.clone(),
+            16_000,
+            2,
+            queue,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("WAV should be written");
+        let bytes = fs::read(&path).expect("WAV should be readable");
+        let samples = bytes[44..]
+            .chunks_exact(2)
+            .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
+            .collect::<Vec<_>>();
+        assert_eq!(samples.len(), 3);
+        assert!((samples[0] as f32 / i16::MAX as f32 - 0.75).abs() < 0.001);
+        assert_eq!(samples[1], 0);
+        assert!((samples[2] as f32 / i16::MAX as f32 - 0.375).abs() < 0.001);
+        assert!((stats.peak - 0.75).abs() < 0.001);
         let _ = fs::remove_file(path);
     }
 
@@ -713,6 +942,22 @@ mod tests {
             .any(|sample| sample.abs() > 0.01));
 
         drop(gap_start_samples);
+        let transcription_path = std::env::temp_dir().join(format!(
+            "kuro-sequence-transcription-test-{}.wav",
+            std::process::id()
+        ));
+        let stats = super::render_sequence_audio_wav(
+            std::iter::once((1, path.clone())).collect(),
+            &sequence,
+            transcription_path.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("transcription audio should render");
+        assert!(stats.has_audible_signal());
+        assert!(stats.duration_secs >= 0.59);
+        assert!(fs::metadata(&transcription_path).unwrap().len() > 44);
+
+        let _ = fs::remove_file(transcription_path);
         let _ = fs::remove_file(path);
     }
 }

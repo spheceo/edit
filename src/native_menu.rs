@@ -233,7 +233,13 @@ mod platform {
         pub fn poll(&self) -> Option<NativeMenuAction> {
             let event = MenuEvent::receiver().try_recv().ok()?;
             match_id(&event.id, &self.new_project, NativeMenuAction::NewProject)
-                .or_else(|| match_id(&event.id, &self.close_project, NativeMenuAction::CloseProject))
+                .or_else(|| {
+                    match_id(
+                        &event.id,
+                        &self.close_project,
+                        NativeMenuAction::CloseProject,
+                    )
+                })
                 .or_else(|| match_id(&event.id, &self.import, NativeMenuAction::Import))
                 .or_else(|| match_id(&event.id, &self.export, NativeMenuAction::Export))
                 .or_else(|| match_id(&event.id, &self.undo, NativeMenuAction::Undo))

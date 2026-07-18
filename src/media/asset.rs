@@ -142,6 +142,7 @@ impl VideoAsset {
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn aspect_ratio(&self) -> f32 {
         self.source_width as f32 / self.source_height.max(1) as f32
     }

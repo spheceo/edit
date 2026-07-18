@@ -15,8 +15,15 @@ use crate::media::export::ExportSettings;
 pub mod sequence;
 pub use sequence::{EditTool, Sequence};
 
-pub const PROJECT_VERSION: u32 = 2;
+pub const PROJECT_VERSION: u32 = 3;
 pub const MAX_HISTORY: usize = 100;
+pub const DEFAULT_TIMELINE_HEIGHT: f32 = 340.0;
+pub const MIN_TIMELINE_HEIGHT: f32 = 150.0;
+pub const MAX_TIMELINE_HEIGHT: f32 = 520.0;
+
+fn default_timeline_height() -> f32 {
+    DEFAULT_TIMELINE_HEIGHT
+}
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -47,6 +54,41 @@ impl ProjectSettings {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TranscriptWord {
+    pub text: String,
+    pub start_secs: f64,
+    pub end_secs: f64,
+}
+
+impl TranscriptWord {
+    /// A short fade at word boundaries keeps the playhead highlight from
+    /// snapping between words while retaining exact sequence-time sync.
+    pub fn highlight_strength(&self, sequence_time: f64) -> f32 {
+        const FADE_SECS: f64 = 0.10;
+        let fade_in = ((sequence_time - self.start_secs + FADE_SECS) / FADE_SECS).clamp(0.0, 1.0);
+        let fade_out = ((self.end_secs + FADE_SECS - sequence_time) / FADE_SECS).clamp(0.0, 1.0);
+        smoothstep(fade_in.min(fade_out)) as f32
+    }
+
+    pub fn contains(&self, sequence_time: f64) -> bool {
+        sequence_time >= self.start_secs && sequence_time < self.end_secs
+    }
+}
+
+fn smoothstep(value: f64) -> f64 {
+    value * value * (3.0 - 2.0 * value)
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct Transcript {
+    pub words: Vec<TranscriptWord>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub generated_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct MediaReference {
     pub id: u64,
     pub path: PathBuf,
@@ -59,6 +101,8 @@ pub struct MediaReference {
 pub struct EditorProjectState {
     pub current_time: f64,
     pub timeline_zoom: f32,
+    #[serde(default = "default_timeline_height")]
+    pub timeline_height: f32,
     pub tool: EditTool,
     pub export_settings: ExportSettings,
 }
@@ -68,6 +112,7 @@ impl Default for EditorProjectState {
         Self {
             current_time: 0.0,
             timeline_zoom: 1.0,
+            timeline_height: DEFAULT_TIMELINE_HEIGHT,
             tool: EditTool::Select,
             export_settings: ExportSettings::default(),
         }
@@ -83,6 +128,8 @@ pub struct ProjectDocument {
     pub media: Vec<MediaReference>,
     pub active_media_id: Option<u64>,
     pub sequence: Option<Sequence>,
+    #[serde(default)]
+    pub transcript: Option<Transcript>,
     pub editor: EditorProjectState,
 }
 
@@ -96,6 +143,7 @@ impl ProjectDocument {
             media: Vec::new(),
             active_media_id: None,
             sequence: None,
+            transcript: None,
             editor: EditorProjectState::default(),
         }
     }
@@ -245,6 +293,7 @@ pub struct EditorSnapshot {
     pub sequence: Option<Sequence>,
     pub current_time: f64,
     pub timeline_zoom: f32,
+    pub timeline_height: f32,
     pub tool: EditTool,
     pub export_settings: ExportSettings,
 }
@@ -375,6 +424,50 @@ mod tests {
         )
         .expect("legacy media reference should load");
         assert!(!media.managed);
+    }
+
+    #[test]
+    fn legacy_editor_state_defaults_timeline_height() {
+        let document = ProjectDocument::empty("Legacy".to_owned(), ProjectSettings::default());
+        let mut json = serde_json::to_value(document).expect("project should serialize");
+        json["editor"]
+            .as_object_mut()
+            .expect("editor state should be an object")
+            .remove("timeline_height");
+
+        let loaded: ProjectDocument =
+            serde_json::from_value(json).expect("legacy project should load");
+        assert_eq!(
+            loaded.editor.timeline_height,
+            super::DEFAULT_TIMELINE_HEIGHT
+        );
+    }
+
+    #[test]
+    fn legacy_project_defaults_to_no_transcript() {
+        let document = ProjectDocument::empty("Legacy".to_owned(), ProjectSettings::default());
+        let mut json = serde_json::to_value(document).expect("project should serialize");
+        json.as_object_mut()
+            .expect("project should be an object")
+            .remove("transcript");
+
+        let loaded: ProjectDocument =
+            serde_json::from_value(json).expect("legacy project should load");
+        assert!(loaded.transcript.is_none());
+    }
+
+    #[test]
+    fn transcript_word_highlight_fades_at_time_boundaries() {
+        let word = super::TranscriptWord {
+            text: "hello".to_owned(),
+            start_secs: 1.0,
+            end_secs: 1.5,
+        };
+        assert_eq!(word.highlight_strength(0.8), 0.0);
+        assert!(word.highlight_strength(0.95) > 0.0);
+        assert_eq!(word.highlight_strength(1.2), 1.0);
+        assert!(word.highlight_strength(1.55) > 0.0);
+        assert_eq!(word.highlight_strength(1.7), 0.0);
     }
 
     #[test]

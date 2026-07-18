@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     media::{rational_value, VideoAsset},
     project::{
-        sequence::{MediaId, SequenceClip},
+        sequence::{ClipLane, MediaId, SequenceClip},
         Sequence,
     },
 };
@@ -222,12 +222,17 @@ fn render_media_sequence(
             cancel,
         );
     }
+    for media_id in &distinct {
+        if !videos.iter().any(|(id, _)| id == media_id) {
+            return Err(format!("Media {media_id} is offline."));
+        }
+    }
 
-    let mut segments = Vec::new();
+    let mut video_segments = Vec::new();
     let mut cursor = 0.0;
-    for clip in &sequence.clips {
+    for clip in topmost_video_segments(sequence) {
         if clip.timeline_start > cursor + 0.000_001 {
-            segments.push((first.1.clone(), gap_sequence(clip.timeline_start - cursor)));
+            video_segments.push((first.1.clone(), gap_sequence(clip.timeline_start - cursor)));
         }
         let video = videos
             .iter()
@@ -237,27 +242,32 @@ fn render_media_sequence(
         let mut part = Sequence::empty();
         let mut part_clip = clip.clone();
         let duration = clip.timeline_end - clip.timeline_start;
+        part_clip.lane = ClipLane::Video;
         part_clip.timeline_start = 0.0;
         part_clip.timeline_end = duration;
         part.clips.push(part_clip);
         part.duration = duration;
-        segments.push((video, part));
+        video_segments.push((video, part));
         cursor = clip.timeline_end;
     }
     if cursor < sequence.duration - 0.000_001 {
-        segments.push((first.1.clone(), gap_sequence(sequence.duration - cursor)));
+        video_segments.push((first.1.clone(), gap_sequence(sequence.duration - cursor)));
     }
 
     let token = TEMP_EXPORT_ID.fetch_add(1, Ordering::Relaxed);
-    let mut files = Vec::new();
+    let mut video_files = Vec::new();
     let mut segment_settings = settings.clone();
     if segment_settings.resolution == ExportResolution::Source {
         // A mixed-source sequence needs one stable encoded frame size so its
         // independently rendered pieces can be joined without re-encoding.
         segment_settings.resolution = ExportResolution::Sequence;
     }
-    for (index, (video, part)) in segments.iter().enumerate() {
+    // Audio is rendered as its own timeline below because an unlinked audio
+    // clip can come from a different source than the visible video clip.
+    segment_settings.include_audio = false;
+    for (index, (video, part)) in video_segments.iter().enumerate() {
         if cancel.load(Ordering::Acquire) {
+            remove_files(&video_files);
             return Err("cancelled".to_owned());
         }
         let path = std::env::temp_dir().join(format!(
@@ -274,21 +284,117 @@ fn render_media_sequence(
             &segment_progress,
             cancel,
         ) {
-            for file in &files {
-                let _ = std::fs::remove_file(file);
-            }
+            remove_files(&video_files);
             return Err(error);
         }
-        files.push(path);
+        video_files.push(path);
         progress.store(
-            (((index + 1) as f32 / (segments.len() + 1) as f32) * 1_000.0) as u32,
+            (((index + 1) as f32 / (video_segments.len() + 1) as f32) * 700.0) as u32,
             Ordering::Release,
         );
     }
-    let result = concatenate_segments(&files, destination, cancel);
-    for file in files {
-        let _ = std::fs::remove_file(file);
+
+    let render_audio = settings.include_audio
+        && sequence.clips.iter().any(|clip| {
+            clip.lane.shows_audio()
+                && videos
+                    .iter()
+                    .find(|(id, _)| *id == clip.media_id)
+                    .is_some_and(|(_, video)| video.has_audio)
+        });
+    if !render_audio {
+        let result = concatenate_segments(&video_files, destination, cancel);
+        remove_files(&video_files);
+        if result.is_ok() {
+            progress.store(1_000, Ordering::Release);
+        }
+        return result;
     }
+
+    let audio_fallback = videos
+        .iter()
+        .find(|(_, video)| video.has_audio)
+        .unwrap_or(first);
+    let mut audio_segments = Vec::new();
+    cursor = 0.0;
+    for clip in sequence.clips.iter().filter(|clip| clip.lane.shows_audio()) {
+        if clip.timeline_start > cursor + 0.000_001 {
+            audio_segments.push((
+                audio_fallback.1.clone(),
+                gap_sequence(clip.timeline_start - cursor),
+            ));
+        }
+        let video = videos
+            .iter()
+            .find(|(id, _)| *id == clip.media_id)
+            .map(|(_, video)| video.clone())
+            .ok_or_else(|| format!("Media {} is offline.", clip.media_id))?;
+        let mut part = Sequence::empty();
+        let mut part_clip = clip.clone();
+        let duration = clip.timeline_end - clip.timeline_start;
+        part_clip.lane = ClipLane::Audio;
+        part_clip.timeline_start = 0.0;
+        part_clip.timeline_end = duration;
+        part.clips.push(part_clip);
+        part.duration = duration;
+        audio_segments.push((video, part));
+        cursor = clip.timeline_end;
+    }
+    if cursor < sequence.duration - 0.000_001 {
+        audio_segments.push((
+            audio_fallback.1.clone(),
+            gap_sequence(sequence.duration - cursor),
+        ));
+    }
+
+    let mut audio_files = Vec::new();
+    let mut audio_settings = segment_settings.clone();
+    audio_settings.include_audio = true;
+    for (index, (video, part)) in audio_segments.iter().enumerate() {
+        if cancel.load(Ordering::Acquire) {
+            remove_files(&video_files);
+            remove_files(&audio_files);
+            return Err("cancelled".to_owned());
+        }
+        let path = std::env::temp_dir().join(format!(
+            "kuro-export-audio-{}-{token}-{index}.mp4",
+            std::process::id()
+        ));
+        let segment_progress = AtomicU32::new(0);
+        if let Err(error) = render_sequence(
+            video,
+            part,
+            &audio_settings,
+            format,
+            &path,
+            &segment_progress,
+            cancel,
+        ) {
+            remove_files(&video_files);
+            remove_files(&audio_files);
+            return Err(error);
+        }
+        audio_files.push(path);
+        progress.store(
+            700 + (((index + 1) as f32 / (audio_segments.len() + 1) as f32) * 200.0) as u32,
+            Ordering::Release,
+        );
+    }
+
+    let joined_video = std::env::temp_dir().join(format!(
+        "kuro-export-video-{}-{token}.mp4",
+        std::process::id()
+    ));
+    let joined_audio = std::env::temp_dir().join(format!(
+        "kuro-export-audio-{}-{token}.mp4",
+        std::process::id()
+    ));
+    let result = concatenate_segments(&video_files, &joined_video, cancel)
+        .and_then(|()| concatenate_segments(&audio_files, &joined_audio, cancel))
+        .and_then(|()| mux_video_and_audio(&joined_video, &joined_audio, destination, cancel));
+    remove_files(&video_files);
+    remove_files(&audio_files);
+    remove_files(&[joined_video, joined_audio]);
     if result.is_ok() {
         progress.store(1_000, Ordering::Release);
     }
@@ -301,6 +407,55 @@ fn gap_sequence(duration: f64) -> Sequence {
     let mut sequence = Sequence::empty();
     sequence.duration = duration.max(0.0);
     sequence
+}
+
+/// Flatten overlapping video tracks into the picture that is actually visible:
+/// the highest numbered video track wins for every interval.
+fn topmost_video_segments(sequence: &Sequence) -> Vec<SequenceClip> {
+    let mut edges = sequence
+        .clips
+        .iter()
+        .filter(|clip| clip.lane.shows_video())
+        .flat_map(|clip| [clip.timeline_start, clip.timeline_end])
+        .collect::<Vec<_>>();
+    edges.sort_by(|left, right| left.total_cmp(right));
+    edges.dedup_by(|left, right| (*left - *right).abs() < 0.000_001);
+
+    let mut segments: Vec<SequenceClip> = Vec::new();
+    for window in edges.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if end <= start + 0.000_001 {
+            continue;
+        }
+        let Some(visible) = sequence.clip_at((start + end) * 0.5) else {
+            continue;
+        };
+        let mut segment = visible.clone();
+        segment.lane = ClipLane::Video;
+        segment.timeline_start = start;
+        segment.timeline_end = end;
+        segment.source_in = visible.source_time(start);
+        segment.source_out = visible.source_time(end);
+
+        if let Some(previous) = segments.last_mut().filter(|previous| {
+            previous.id == segment.id
+                && (previous.timeline_end - segment.timeline_start).abs() < 0.000_001
+                && (previous.source_out - segment.source_in).abs() < 0.000_001
+        }) {
+            previous.timeline_end = segment.timeline_end;
+            previous.source_out = segment.source_out;
+        } else {
+            segments.push(segment);
+        }
+    }
+    segments
+}
+
+fn remove_files(files: &[PathBuf]) {
+    for file in files {
+        let _ = std::fs::remove_file(file);
+    }
 }
 
 fn concatenate_segments(
@@ -376,6 +531,120 @@ fn concatenate_segments(
     output
         .write_trailer()
         .map_err(|error| format!("Could not finish the final export: {error}"))
+}
+
+fn mux_video_and_audio(
+    video_path: &PathBuf,
+    audio_path: &PathBuf,
+    destination: &PathBuf,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let mut video_input = ffmpeg::format::input(video_path)
+        .map_err(|error| format!("Could not reopen the rendered video: {error}"))?;
+    let mut audio_input = ffmpeg::format::input(audio_path)
+        .map_err(|error| format!("Could not reopen the rendered audio: {error}"))?;
+    let video_stream = video_input
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or_else(|| "The rendered timeline has no video stream.".to_owned())?;
+    let audio_stream = audio_input
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .ok_or_else(|| "The rendered timeline has no audio stream.".to_owned())?;
+    let video_input_index = video_stream.index();
+    let audio_input_index = audio_stream.index();
+    let video_time_base = video_stream.time_base();
+    let audio_time_base = audio_stream.time_base();
+
+    let mut output = ffmpeg::format::output(destination)
+        .map_err(|error| format!("Could not create the final export: {error}"))?;
+    let video_codec = ffmpeg::encoder::find(video_stream.parameters().id())
+        .ok_or_else(|| "Could not identify the rendered video codec.".to_owned())?;
+    let video_output_index = {
+        let mut stream = output
+            .add_stream(video_codec)
+            .map_err(|error| format!("Could not create the final video stream: {error}"))?;
+        stream.set_parameters(video_stream.parameters());
+        stream.set_time_base(video_time_base);
+        stream.index()
+    };
+    let audio_codec = ffmpeg::encoder::find(audio_stream.parameters().id())
+        .ok_or_else(|| "Could not identify the rendered audio codec.".to_owned())?;
+    let audio_output_index = {
+        let mut stream = output
+            .add_stream(audio_codec)
+            .map_err(|error| format!("Could not create the final audio stream: {error}"))?;
+        stream.set_parameters(audio_stream.parameters());
+        stream.set_time_base(audio_time_base);
+        stream.index()
+    };
+    output
+        .write_header()
+        .map_err(|error| format!("Could not write the final export header: {error}"))?;
+    let video_output_time_base = output
+        .stream(video_output_index)
+        .ok_or_else(|| "The final video stream disappeared.".to_owned())?
+        .time_base();
+    let audio_output_time_base = output
+        .stream(audio_output_index)
+        .ok_or_else(|| "The final audio stream disappeared.".to_owned())?
+        .time_base();
+    let mut video_packet = read_stream_packet(&mut video_input, video_input_index)?;
+    let mut audio_packet = read_stream_packet(&mut audio_input, audio_input_index)?;
+    while video_packet.is_some() || audio_packet.is_some() {
+        if cancel.load(Ordering::Acquire) {
+            return Err("cancelled".to_owned());
+        }
+        let take_video = match (&video_packet, &audio_packet) {
+            (Some(video), Some(audio)) => {
+                packet_time(video, video_time_base) <= packet_time(audio, audio_time_base)
+            }
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => break,
+        };
+        if take_video {
+            let mut packet = video_packet.take().expect("video packet is available");
+            packet.rescale_ts(video_time_base, video_output_time_base);
+            packet.set_stream(video_output_index);
+            packet.set_position(-1);
+            packet
+                .write_interleaved(&mut output)
+                .map_err(|error| format!("Could not write final video data: {error}"))?;
+            video_packet = read_stream_packet(&mut video_input, video_input_index)?;
+        } else {
+            let mut packet = audio_packet.take().expect("audio packet is available");
+            packet.rescale_ts(audio_time_base, audio_output_time_base);
+            packet.set_stream(audio_output_index);
+            packet.set_position(-1);
+            packet
+                .write_interleaved(&mut output)
+                .map_err(|error| format!("Could not write final audio data: {error}"))?;
+            audio_packet = read_stream_packet(&mut audio_input, audio_input_index)?;
+        }
+    }
+    output
+        .write_trailer()
+        .map_err(|error| format!("Could not finish the final export: {error}"))
+}
+
+fn read_stream_packet(
+    input: &mut ffmpeg::format::context::Input,
+    stream_index: usize,
+) -> Result<Option<ffmpeg::Packet>, String> {
+    loop {
+        let mut packet = ffmpeg::Packet::empty();
+        match packet.read(input) {
+            Ok(()) if packet.stream() == stream_index => return Ok(Some(packet)),
+            Ok(()) => {}
+            Err(ffmpeg::Error::Eof) => return Ok(None),
+            Err(error) => return Err(format!("Could not read a rendered stream: {error}")),
+        }
+    }
+}
+
+fn packet_time(packet: &ffmpeg::Packet, time_base: Rational) -> f64 {
+    packet.pts().or(packet.dts()).unwrap_or(0) as f64 * rational_value(time_base)
 }
 
 fn render_sequence(
@@ -773,7 +1042,9 @@ fn video_filter_graph(
 ) -> Result<ffmpeg::filter::Graph, String> {
     let mut graph = ffmpeg::filter::Graph::new();
     let pixel_format: ffmpeg::ffi::AVPixelFormat = decoder.format().into();
-    let colorspace = decoder.color_space().name().unwrap_or("bt709");
+    let colorspace = export_color_space(decoder.color_space())
+        .name()
+        .expect("the export color space is specified");
     let color_range = decoder.color_range().name().unwrap_or("tv");
     let args = format!(
         "video_size={}x{}:pix_fmt={}:time_base={}:pixel_aspect={}:colorspace={colorspace}:range={color_range}",
@@ -863,7 +1134,7 @@ fn build_video_filter(
     height: u32,
     rate: Rational,
 ) -> String {
-    let clips = &sequence.clips;
+    let clips = topmost_video_segments(sequence);
     let mut filters = Vec::new();
     if clips.is_empty() {
         filters.push("nullsink".to_owned());
@@ -903,7 +1174,8 @@ fn build_video_filter(
         };
         let fg = format!("fg{}", pieces.len());
         let bg = format!("bg{}", pieces.len());
-        let transform = clip_video_transform(clip, width, height, rotation);
+        let transform =
+            clip_video_transform(clip, video.source_width, video.source_height, rotation);
         filters.push(format!(
             "{input}=start={:.9}:end={:.9},setpts=PTS-STARTPTS,{transform}[{fg}]",
             clip.source_in, clip.source_out
@@ -948,18 +1220,17 @@ fn build_video_filter(
 
 fn clip_video_transform(
     clip: &SequenceClip,
-    width: u32,
-    height: u32,
+    source_width: usize,
+    source_height: usize,
     rotation: &str,
 ) -> String {
     let user_scale = (clip.motion.scale / 100.0).max(0.01);
-    let scaled_w = even(((width as f32) * user_scale).round().max(2.0) as usize);
-    let scaled_h = even(((height as f32) * user_scale).round().max(2.0) as usize);
+    // Match preview: 100% keeps native source pixels inside the sequence canvas.
+    let scaled_w = even((source_width as f32 * user_scale).round().max(2.0) as usize);
+    let scaled_h = even((source_height as f32 * user_scale).round().max(2.0) as usize);
     let angle = clip.motion.rotation.to_radians() as f64;
     let rotate = if angle.abs() > 0.000_1 {
-        format!(
-            "rotate={angle:.8}:c=black:ow=rotw({angle:.8}):oh=roth({angle:.8}),"
-        )
+        format!("rotate={angle:.8}:c=black:ow=rotw({angle:.8}):oh=roth({angle:.8}),")
     } else {
         String::new()
     };
@@ -969,7 +1240,11 @@ fn clip_video_transform(
 }
 
 fn build_audio_filter(sequence: &Sequence, sample_format: &str) -> String {
-    let clips = &sequence.clips;
+    let clips = sequence
+        .clips
+        .iter()
+        .filter(|clip| clip.lane.shows_audio())
+        .collect::<Vec<_>>();
     let mut filters = Vec::new();
     if clips.is_empty() {
         filters.push("anullsink".to_owned());
@@ -1044,11 +1319,7 @@ fn drain_video_decoder(
     progress: &AtomicU32,
     last_dts: &mut Option<i64>,
 ) -> Result<bool, String> {
-    let expected_colorspace = if decoder.color_space() == ffmpeg::color::Space::Unspecified {
-        ffmpeg::color::Space::BT709
-    } else {
-        decoder.color_space()
-    };
+    let expected_colorspace = export_color_space(decoder.color_space());
     let expected_color_range = if decoder.color_range() == ffmpeg::color::Range::Unspecified {
         ffmpeg::color::Range::MPEG
     } else {
@@ -1362,11 +1633,7 @@ fn open_video_encoder(
         // VideoToolbox can otherwise return reordered packets with PTS < DTS.
         encoder.set_max_b_frames(0);
         encoder.set_bit_rate(bit_rate);
-        encoder.set_colorspace(if source_colorspace == ffmpeg::color::Space::Unspecified {
-            ffmpeg::color::Space::BT709
-        } else {
-            source_colorspace
-        });
+        encoder.set_colorspace(export_color_space(source_colorspace));
         encoder.set_color_range(if source_color_range == ffmpeg::color::Range::Unspecified {
             ffmpeg::color::Range::MPEG
         } else {
@@ -1436,6 +1703,16 @@ fn is_again_or_eof(error: ffmpeg::Error) -> bool {
     error == ffmpeg::Error::Eof || is_again(error)
 }
 
+fn export_color_space(source: ffmpeg::color::Space) -> ffmpeg::color::Space {
+    if source == ffmpeg::color::Space::Unspecified {
+        // Preview uses libswscale's default matrix for unspecified sources,
+        // which is ITU-R BT.601. SMPTE 170M is FFmpeg's matching stream tag.
+        ffmpeg::color::Space::SMPTE170M
+    } else {
+        source
+    }
+}
+
 fn is_again(error: ffmpeg::Error) -> bool {
     error
         == ffmpeg::Error::Other {
@@ -1493,8 +1770,9 @@ fn even(value: usize) -> u32 {
 mod tests {
     use super::SequenceFormat;
     use super::{
-        build_audio_filter, normalize_video_packet_timestamps, render_media_sequence,
-        render_sequence, ExportResolution, ExportSettings,
+        build_audio_filter, export_color_space, normalize_video_packet_timestamps,
+        render_media_sequence, render_sequence, topmost_video_segments, ExportResolution,
+        ExportSettings,
     };
     use crate::{media::VideoAsset, project::Sequence};
     use ffmpeg_next::Packet;
@@ -1528,6 +1806,54 @@ mod tests {
         assert_eq!(
             ExportResolution::Hd1080.dimensions(&video, SequenceFormat::from_video(&video)),
             (608, 1080)
+        );
+    }
+
+    #[test]
+    fn unspecified_export_color_space_matches_preview_scaling_default() {
+        assert_eq!(
+            export_color_space(ffmpeg_next::color::Space::Unspecified),
+            ffmpeg_next::color::Space::SMPTE170M
+        );
+        assert_eq!(
+            export_color_space(ffmpeg_next::color::Space::BT709),
+            ffmpeg_next::color::Space::BT709
+        );
+    }
+
+    #[test]
+    fn export_video_segments_follow_the_topmost_track() {
+        let mut sequence = Sequence::from_media(1, 4.0);
+        let upper = sequence.duplicate(1).expect("upper clip should duplicate");
+        sequence
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == upper)
+            .unwrap()
+            .media_id = 2;
+        sequence
+            .move_clip_to_track(upper, 1.0, 2, 30.0, 0.0)
+            .expect("upper clip should move to V2");
+        sequence
+            .trim_right_snapped(upper, 3.0, 30.0, 4.0, 0.0)
+            .expect("upper clip should trim");
+
+        let segments = topmost_video_segments(&sequence);
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0].media_id, 1);
+        assert_eq!(
+            (segments[0].timeline_start, segments[0].timeline_end),
+            (0.0, 1.0)
+        );
+        assert_eq!(segments[1].media_id, 2);
+        assert_eq!(
+            (segments[1].timeline_start, segments[1].timeline_end),
+            (1.0, 3.0)
+        );
+        assert_eq!(segments[2].media_id, 1);
+        assert_eq!(
+            (segments[2].timeline_start, segments[2].timeline_end),
+            (3.0, 4.0)
         );
     }
 
@@ -1641,5 +1967,149 @@ mod tests {
         let _ = fs::remove_file(source);
         let _ = fs::remove_file(output);
         let _ = fs::remove_file(mixed_output);
+    }
+
+    #[test]
+    fn exports_audio_from_a_different_media_than_video() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            return;
+        }
+        let temp = std::env::temp_dir();
+        let video_source = temp.join(format!(
+            "kuro-export-foreign-audio-video-{}.mkv",
+            std::process::id()
+        ));
+        let audio_source = temp.join(format!(
+            "kuro-export-foreign-audio-source-{}.mkv",
+            std::process::id()
+        ));
+        let output = temp.join(format!(
+            "kuro-export-foreign-audio-result-{}.mp4",
+            std::process::id()
+        ));
+        let same_media_output = temp.join(format!(
+            "kuro-export-unlinked-same-media-result-{}.mp4",
+            std::process::id()
+        ));
+
+        let generated_video = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=180x320:rate=24",
+                "-t",
+                "1.2",
+                "-c:v",
+                "ffv1",
+            ])
+            .arg(&video_source)
+            .status()
+            .expect("video-only test media should be generated");
+        assert!(generated_video.success());
+        let generated_audio = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:size=180x320:rate=24",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=880:sample_rate=48000",
+                "-t",
+                "1.2",
+                "-c:v",
+                "ffv1",
+                "-c:a",
+                "pcm_s16le",
+            ])
+            .arg(&audio_source)
+            .status()
+            .expect("audio test media should be generated");
+        assert!(generated_audio.success());
+
+        let video = VideoAsset::load(video_source.clone()).expect("video source should load");
+        let audio = VideoAsset::load(audio_source.clone()).expect("audio source should load");
+        let mut same_media = Sequence::from_media(2, audio.duration);
+        same_media.unlink(1).expect("same-media clip should unlink");
+        render_media_sequence(
+            &[(2, audio.clone())],
+            &same_media,
+            &ExportSettings::default(),
+            SequenceFormat::from_video(&audio),
+            &same_media_output,
+            &AtomicU32::new(0),
+            &AtomicBool::new(false),
+        )
+        .expect("same-media unlinked video and audio should export");
+        assert!(
+            VideoAsset::load(same_media_output.clone())
+                .expect("same-media export should be readable")
+                .has_audio
+        );
+
+        let mut sequence = Sequence::from_media(1, video.duration);
+        let audio_clip = sequence.unlink(1).expect("linked clip should unlink");
+        sequence
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == audio_clip)
+            .expect("unlinked audio clip should exist")
+            .media_id = 2;
+
+        render_media_sequence(
+            &[(1, video.clone()), (2, audio)],
+            &sequence,
+            &ExportSettings {
+                resolution: ExportResolution::Source,
+                ..ExportSettings::default()
+            },
+            SequenceFormat::from_video(&video),
+            &output,
+            &AtomicU32::new(0),
+            &AtomicBool::new(false),
+        )
+        .expect("cross-media video and audio should export");
+
+        let exported = VideoAsset::load(output.clone()).expect("export should be readable");
+        assert!(exported.has_audio);
+        assert!((exported.duration - sequence.duration).abs() < 0.1);
+        let color_input = ffmpeg_next::format::input(&output).expect("export should open");
+        let color_stream = color_input
+            .streams()
+            .best(ffmpeg_next::media::Type::Video)
+            .expect("export should contain video");
+        let color_decoder =
+            ffmpeg_next::codec::context::Context::from_parameters(color_stream.parameters())
+                .and_then(|context| context.decoder().video())
+                .expect("exported video metadata should decode");
+        assert_eq!(
+            color_decoder.color_space(),
+            ffmpeg_next::color::Space::SMPTE170M
+        );
+        let decoded_audio = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&output)
+            .args(["-map", "0:a:0", "-ac", "1", "-f", "f32le", "-"])
+            .output()
+            .expect("exported audio should decode");
+        assert!(decoded_audio.status.success());
+        assert!(decoded_audio.stdout.chunks_exact(4).any(|sample| {
+            f32::from_le_bytes(sample.try_into().expect("a float sample")).abs() > 0.001
+        }));
+
+        let _ = fs::remove_file(video_source);
+        let _ = fs::remove_file(audio_source);
+        let _ = fs::remove_file(output);
+        let _ = fs::remove_file(same_media_output);
     }
 }

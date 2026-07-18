@@ -4,6 +4,10 @@
 
 Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as the user only: `git add`, `git commit`, and `git push` with a normal message body — no co-authors, no extra attribution trailers.
 
+## Auto-update (later)
+
+Candidate for later: [Velopack](https://velopack.io/) — cross-platform installer / auto-update for desktop apps. Not integrated yet; keep in mind when we add shipping updates.
+
 ## macOS packaging (xtask)
 
 There is no `.cargo` alias. Invoke the packager directly:

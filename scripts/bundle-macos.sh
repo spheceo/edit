@@ -81,6 +81,19 @@ cp "$PROJECT_DIR/assets/icons/LICENSE-HUGEICONS.md" "$RESOURCES_DIR/LICENSE-HUGE
 cp "$FFMPEG_SOURCE/COPYING.LGPLv2.1" "$RESOURCES_DIR/COPYING.LGPLv2.1"
 chmod 755 "$MACOS_DIR/Kuro"
 
+# App icon (.icns) from the brand PNG.
+ICON_SOURCE="$PROJECT_DIR/assets/brand/kuro-icon.png"
+ICONSET="$BUILD_ROOT/Kuro.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET"
+for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    double=$((size * 2))
+    sips -z "$double" "$double" "$ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$RESOURCES_DIR/Kuro.icns"
+rm -rf "$ICONSET"
+
 bundle_dependencies() {
     local binary="$1"
     local dependency

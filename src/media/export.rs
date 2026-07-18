@@ -12,7 +12,13 @@ use ffmpeg::{Rational, Rescale};
 use ffmpeg_next as ffmpeg;
 use serde::{Deserialize, Serialize};
 
-use crate::{media::VideoAsset, sequence::Sequence};
+use crate::{
+    media::{rational_value, VideoAsset},
+    project::{
+        sequence::{MediaId, SequenceClip},
+        Sequence,
+    },
+};
 
 const AUDIO_RATE: u32 = 48_000;
 
@@ -130,7 +136,7 @@ pub struct ExportJob {
 
 impl ExportJob {
     pub fn start(
-        video: VideoAsset,
+        videos: Vec<(MediaId, VideoAsset)>,
         sequence: Sequence,
         settings: ExportSettings,
         format: SequenceFormat,
@@ -144,8 +150,8 @@ impl ExportJob {
         let worker_cancel = Arc::clone(&cancel);
         let worker_destination = destination.clone();
         thread::spawn(move || {
-            let result = render_sequence(
-                &video,
+            let result = render_media_sequence(
+                &videos,
                 &sequence,
                 &settings,
                 format,
@@ -180,6 +186,196 @@ impl ExportJob {
     pub fn poll(&self) -> Option<ExportResult> {
         self.receiver.try_recv().ok()
     }
+}
+
+fn render_media_sequence(
+    videos: &[(MediaId, VideoAsset)],
+    sequence: &Sequence,
+    settings: &ExportSettings,
+    format: SequenceFormat,
+    destination: &PathBuf,
+    progress: &AtomicU32,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let first = videos
+        .first()
+        .ok_or_else(|| "There is no source media to export.".to_owned())?;
+    let distinct = sequence
+        .clips
+        .iter()
+        .map(|clip| clip.media_id)
+        .collect::<std::collections::HashSet<_>>();
+    if distinct.len() <= 1 {
+        let id = distinct.iter().next().copied().unwrap_or(first.0);
+        let video = videos
+            .iter()
+            .find(|(media_id, _)| *media_id == id)
+            .map(|(_, video)| video)
+            .unwrap_or(&first.1);
+        return render_sequence(
+            video,
+            sequence,
+            settings,
+            format,
+            destination,
+            progress,
+            cancel,
+        );
+    }
+
+    let mut segments = Vec::new();
+    let mut cursor = 0.0;
+    for clip in &sequence.clips {
+        if clip.timeline_start > cursor + 0.000_001 {
+            segments.push((first.1.clone(), gap_sequence(clip.timeline_start - cursor)));
+        }
+        let video = videos
+            .iter()
+            .find(|(id, _)| *id == clip.media_id)
+            .map(|(_, video)| video.clone())
+            .ok_or_else(|| format!("Media {} is offline.", clip.media_id))?;
+        let mut part = Sequence::empty();
+        let mut part_clip = clip.clone();
+        let duration = clip.timeline_end - clip.timeline_start;
+        part_clip.timeline_start = 0.0;
+        part_clip.timeline_end = duration;
+        part.clips.push(part_clip);
+        part.duration = duration;
+        segments.push((video, part));
+        cursor = clip.timeline_end;
+    }
+    if cursor < sequence.duration - 0.000_001 {
+        segments.push((first.1.clone(), gap_sequence(sequence.duration - cursor)));
+    }
+
+    let token = TEMP_EXPORT_ID.fetch_add(1, Ordering::Relaxed);
+    let mut files = Vec::new();
+    let mut segment_settings = settings.clone();
+    if segment_settings.resolution == ExportResolution::Source {
+        // A mixed-source sequence needs one stable encoded frame size so its
+        // independently rendered pieces can be joined without re-encoding.
+        segment_settings.resolution = ExportResolution::Sequence;
+    }
+    for (index, (video, part)) in segments.iter().enumerate() {
+        if cancel.load(Ordering::Acquire) {
+            return Err("cancelled".to_owned());
+        }
+        let path = std::env::temp_dir().join(format!(
+            "kuro-export-{}-{token}-{index}.mp4",
+            std::process::id()
+        ));
+        let segment_progress = AtomicU32::new(0);
+        if let Err(error) = render_sequence(
+            video,
+            part,
+            &segment_settings,
+            format,
+            &path,
+            &segment_progress,
+            cancel,
+        ) {
+            for file in &files {
+                let _ = std::fs::remove_file(file);
+            }
+            return Err(error);
+        }
+        files.push(path);
+        progress.store(
+            (((index + 1) as f32 / (segments.len() + 1) as f32) * 1_000.0) as u32,
+            Ordering::Release,
+        );
+    }
+    let result = concatenate_segments(&files, destination, cancel);
+    for file in files {
+        let _ = std::fs::remove_file(file);
+    }
+    if result.is_ok() {
+        progress.store(1_000, Ordering::Release);
+    }
+    result
+}
+
+static TEMP_EXPORT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn gap_sequence(duration: f64) -> Sequence {
+    let mut sequence = Sequence::empty();
+    sequence.duration = duration.max(0.0);
+    sequence
+}
+
+fn concatenate_segments(
+    files: &[PathBuf],
+    destination: &PathBuf,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let first_path = files
+        .iter()
+        .max_by_key(|path| ffmpeg::format::input(path).map_or(0, |input| input.streams().count()))
+        .ok_or_else(|| "Nothing was rendered.".to_owned())?;
+    let first = ffmpeg::format::input(first_path)
+        .map_err(|error| format!("Could not open an export segment: {error}"))?;
+    let mut output = ffmpeg::format::output(destination)
+        .map_err(|error| format!("Could not create the final export: {error}"))?;
+    let mut output_streams = Vec::new();
+    for input_stream in first.streams() {
+        let medium = input_stream.parameters().medium();
+        let codec = ffmpeg::encoder::find(input_stream.parameters().id())
+            .ok_or_else(|| "Could not identify an export stream codec.".to_owned())?;
+        let mut stream = output
+            .add_stream(codec)
+            .map_err(|error| format!("Could not create a final export stream: {error}"))?;
+        stream.set_parameters(input_stream.parameters());
+        stream.set_time_base(input_stream.time_base());
+        output_streams.push((medium, stream.index()));
+    }
+    drop(first);
+    output
+        .write_header()
+        .map_err(|error| format!("Could not write the final export header: {error}"))?;
+    let mut elapsed = 0.0_f64;
+    let mut last_dts = vec![None; output_streams.len()];
+    for path in files {
+        let mut input = ffmpeg::format::input(path)
+            .map_err(|error| format!("Could not reopen an export segment: {error}"))?;
+        let segment_duration = input.duration().max(0) as f64 / 1_000_000.0;
+        for (stream, mut packet) in input.packets() {
+            if cancel.load(Ordering::Acquire) {
+                return Err("cancelled".to_owned());
+            }
+            let Some(index) = output_streams
+                .iter()
+                .find(|(medium, _)| *medium == stream.parameters().medium())
+                .map(|(_, index)| *index)
+            else {
+                continue;
+            };
+            let output_time_base = output
+                .stream(index)
+                .ok_or_else(|| "A final export stream disappeared.".to_owned())?
+                .time_base();
+            packet.rescale_ts(stream.time_base(), output_time_base);
+            let offset = (elapsed / rational_value(output_time_base)).round() as i64;
+            packet.set_pts(packet.pts().map(|pts| pts + offset));
+            packet.set_dts(packet.dts().map(|dts| dts + offset));
+            if let (Some(previous), Some(current)) = (last_dts[index], packet.dts()) {
+                if current <= previous {
+                    let correction = previous.saturating_add(1) - current;
+                    packet.set_dts(Some(current + correction));
+                    packet.set_pts(packet.pts().map(|pts| pts + correction));
+                }
+            }
+            last_dts[index] = packet.dts();
+            packet.set_position(-1);
+            packet.set_stream(index);
+            packet
+                .write_interleaved(&mut output)
+                .map_err(|error| format!("Could not join export segments: {error}"))?;
+        }
+        elapsed += segment_duration;
+    }
+    output
+        .write_trailer()
+        .map_err(|error| format!("Could not finish the final export: {error}"))
 }
 
 fn render_sequence(
@@ -338,9 +534,35 @@ fn render_sequence_inner(
             return Err("cancelled".to_owned());
         }
         if stream.index() == video_index {
-            video_decoder
-                .send_packet(&packet)
-                .map_err(|error| format!("Video decoding failed during export: {error}"))?;
+            let mut backpressure_waits = 0;
+            loop {
+                match video_decoder.send_packet(&packet) {
+                    Ok(()) => break,
+                    Err(error) if is_again(error) => {
+                        let drained = drain_video_decoder(
+                            &mut video_decoder,
+                            &mut video_filter,
+                            &mut encoded_video,
+                            &mut output,
+                            video_output_index,
+                            video_encoder_time_base,
+                            video_output_time_base,
+                            video_time_base,
+                            video.duration,
+                            progress,
+                            &mut last_video_dts,
+                        )?;
+                        if drained {
+                            backpressure_waits = 0;
+                        } else {
+                            wait_for_decoder("Video", &mut backpressure_waits)?;
+                        }
+                    }
+                    Err(error) => {
+                        return Err(format!("Video decoding failed during export: {error}"));
+                    }
+                }
+            }
             drain_video_decoder(
                 &mut video_decoder,
                 &mut video_filter,
@@ -361,9 +583,30 @@ fn render_sequence_inner(
                 encoded_audio.as_mut(),
                 audio_output_time_base,
             ) {
-                decoder
-                    .send_packet(&packet)
-                    .map_err(|error| format!("Audio decoding failed during export: {error}"))?;
+                let mut backpressure_waits = 0;
+                loop {
+                    match decoder.send_packet(&packet) {
+                        Ok(()) => break,
+                        Err(error) if is_again(error) => {
+                            let drained = drain_audio_decoder(
+                                decoder,
+                                filter,
+                                encoder,
+                                &mut output,
+                                *index,
+                                output_time_base,
+                            )?;
+                            if drained {
+                                backpressure_waits = 0;
+                            } else {
+                                wait_for_decoder("Audio", &mut backpressure_waits)?;
+                            }
+                        }
+                        Err(error) => {
+                            return Err(format!("Audio decoding failed during export: {error}"));
+                        }
+                    }
+                }
                 drain_audio_decoder(
                     decoder,
                     filter,
@@ -376,9 +619,33 @@ fn render_sequence_inner(
         }
     }
 
-    video_decoder
-        .send_eof()
-        .map_err(|error| format!("Could not finish video decoding: {error}"))?;
+    let mut video_eof_waits = 0;
+    loop {
+        match video_decoder.send_eof() {
+            Ok(()) => break,
+            Err(error) if is_again(error) => {
+                let drained = drain_video_decoder(
+                    &mut video_decoder,
+                    &mut video_filter,
+                    &mut encoded_video,
+                    &mut output,
+                    video_output_index,
+                    video_encoder_time_base,
+                    video_output_time_base,
+                    video_time_base,
+                    video.duration,
+                    progress,
+                    &mut last_video_dts,
+                )?;
+                if drained {
+                    video_eof_waits = 0;
+                } else {
+                    wait_for_decoder("Video", &mut video_eof_waits)?;
+                }
+            }
+            Err(error) => return Err(format!("Could not finish video decoding: {error}")),
+        }
+    }
     drain_video_decoder(
         &mut video_decoder,
         &mut video_filter,
@@ -407,9 +674,20 @@ fn render_sequence_inner(
         video_output_time_base,
         &mut last_video_dts,
     )?;
-    encoded_video
-        .send_eof()
-        .map_err(|error| format!("Could not finish video encoding: {error}"))?;
+    loop {
+        match encoded_video.send_eof() {
+            Ok(()) => break,
+            Err(error) if is_again(error) => drain_video_encoder(
+                &mut encoded_video,
+                &mut output,
+                video_output_index,
+                video_encoder_time_base,
+                video_output_time_base,
+                &mut last_video_dts,
+            )?,
+            Err(error) => return Err(format!("Could not finish video encoding: {error}")),
+        }
+    }
     drain_video_encoder(
         &mut encoded_video,
         &mut output,
@@ -425,9 +703,28 @@ fn render_sequence_inner(
         encoded_audio.as_mut(),
         audio_output_time_base,
     ) {
-        decoder
-            .send_eof()
-            .map_err(|error| format!("Could not finish audio decoding: {error}"))?;
+        let mut audio_eof_waits = 0;
+        loop {
+            match decoder.send_eof() {
+                Ok(()) => break,
+                Err(error) if is_again(error) => {
+                    let drained = drain_audio_decoder(
+                        decoder,
+                        filter,
+                        encoder,
+                        &mut output,
+                        *index,
+                        output_time_base,
+                    )?;
+                    if drained {
+                        audio_eof_waits = 0;
+                    } else {
+                        wait_for_decoder("Audio", &mut audio_eof_waits)?;
+                    }
+                }
+                Err(error) => return Err(format!("Could not finish audio decoding: {error}")),
+            }
+        }
         drain_audio_decoder(
             decoder,
             filter,
@@ -443,9 +740,15 @@ fn render_sequence_inner(
             .flush()
             .map_err(|error| format!("Could not finish the audio timeline: {error}"))?;
         drain_audio_filter(filter, encoder, &mut output, *index, output_time_base)?;
-        encoder
-            .send_eof()
-            .map_err(|error| format!("Could not finish audio encoding: {error}"))?;
+        loop {
+            match encoder.send_eof() {
+                Ok(()) => break,
+                Err(error) if is_again(error) => {
+                    drain_audio_encoder(encoder, &mut output, *index, output_time_base)?;
+                }
+                Err(error) => return Err(format!("Could not finish audio encoding: {error}")),
+            }
+        }
         drain_audio_encoder(encoder, &mut output, *index, output_time_base)?;
     }
 
@@ -579,9 +882,6 @@ fn build_video_filter(
         270 => "transpose=cclock,",
         _ => "",
     };
-    let scale = format!(
-        "{rotation}scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p"
-    );
     let mut pieces = Vec::new();
     let mut cursor = 0.0;
     for (index, clip) in clips.iter().enumerate() {
@@ -601,9 +901,24 @@ fn build_video_filter(
         } else {
             "[in]setpts=PTS-STARTPTS,trim".to_owned()
         };
+        let fg = format!("fg{}", pieces.len());
+        let bg = format!("bg{}", pieces.len());
+        let transform = clip_video_transform(clip, width, height, rotation);
         filters.push(format!(
-            "{input}=start={:.9}:end={:.9},setpts=PTS-STARTPTS,{scale}[{label}]",
+            "{input}=start={:.9}:end={:.9},setpts=PTS-STARTPTS,{transform}[{fg}]",
             clip.source_in, clip.source_out
+        ));
+        // Overlay onto a fixed canvas so scale > 100% and rotation can exceed
+        // the frame without breaking pad (which requires iw/ih <= padded size).
+        filters.push(format!(
+            "color=c=black:s={width}x{height}:r={}/{}[{bg}]",
+            rate.numerator(),
+            rate.denominator()
+        ));
+        let x = clip.motion.position_x.round() as i32;
+        let y = (-clip.motion.position_y).round() as i32;
+        filters.push(format!(
+            "[{bg}][{fg}]overlay=x=(main_w-overlay_w)/2+{x}:y=(main_h-overlay_h)/2+{y}:shortest=1,setsar=1,format=yuv420p[{label}]"
         ));
         pieces.push(label);
         cursor = clip.timeline_end;
@@ -629,6 +944,28 @@ fn build_video_filter(
         rate.denominator()
     ));
     filters.join(";")
+}
+
+fn clip_video_transform(
+    clip: &SequenceClip,
+    width: u32,
+    height: u32,
+    rotation: &str,
+) -> String {
+    let user_scale = (clip.motion.scale / 100.0).max(0.01);
+    let scaled_w = even(((width as f32) * user_scale).round().max(2.0) as usize);
+    let scaled_h = even(((height as f32) * user_scale).round().max(2.0) as usize);
+    let angle = clip.motion.rotation.to_radians() as f64;
+    let rotate = if angle.abs() > 0.000_1 {
+        format!(
+            "rotate={angle:.8}:c=black:ow=rotw({angle:.8}):oh=roth({angle:.8}),"
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{rotation}scale={scaled_w}:{scaled_h}:force_original_aspect_ratio=decrease,setsar=1,{rotate}format=yuv420p"
+    )
 }
 
 fn build_audio_filter(sequence: &Sequence, sample_format: &str) -> String {
@@ -662,8 +999,13 @@ fn build_audio_filter(sequence: &Sequence, sample_format: &str) -> String {
         } else {
             "[in]asetpts=PTS-STARTPTS,atrim".to_owned()
         };
+        let volume = if clip.audio.volume_db.abs() > 0.001 {
+            format!(",volume={:.6}dB", clip.audio.volume_db)
+        } else {
+            String::new()
+        };
         filters.push(format!(
-            "{input}=start={:.9}:end={:.9},asetpts=PTS-STARTPTS,aresample={AUDIO_RATE},aformat=channel_layouts=stereo[{label}]",
+            "{input}=start={:.9}:end={:.9},asetpts=PTS-STARTPTS{volume},aresample={AUDIO_RATE},aformat=channel_layouts=stereo[{label}]",
             clip.source_in, clip.source_out
         ));
         pieces.push(label);
@@ -701,7 +1043,7 @@ fn drain_video_decoder(
     source_duration: f64,
     progress: &AtomicU32,
     last_dts: &mut Option<i64>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let expected_colorspace = if decoder.color_space() == ffmpeg::color::Space::Unspecified {
         ffmpeg::color::Space::BT709
     } else {
@@ -713,7 +1055,13 @@ fn drain_video_decoder(
         decoder.color_range()
     };
     let mut decoded = ffmpeg::frame::Video::empty();
-    while decoder.receive_frame(&mut decoded).is_ok() {
+    let mut drained_any = false;
+    loop {
+        match decoder.receive_frame(&mut decoded) {
+            Ok(()) => drained_any = true,
+            Err(error) if is_again_or_eof(error) => break,
+            Err(error) => return Err(format!("Video decoding failed during export: {error}")),
+        }
         if let Some(timestamp) = decoded.timestamp() {
             let seconds = timestamp as f64 * input_time_base.numerator() as f64
                 / input_time_base.denominator() as f64;
@@ -730,12 +1078,33 @@ fn drain_video_decoder(
         if decoded.color_range() == ffmpeg::color::Range::Unspecified {
             decoded.set_color_range(expected_color_range);
         }
-        filter
-            .get("in")
-            .ok_or_else(|| "Video filter input disappeared.".to_owned())?
-            .source()
-            .add(&decoded)
-            .map_err(|error| format!("Could not add a frame to the video timeline: {error}"))?;
+        loop {
+            let added = filter
+                .get("in")
+                .ok_or_else(|| "Video filter input disappeared.".to_owned())?
+                .source()
+                .add(&decoded);
+            match added {
+                Ok(()) => break,
+                Err(error) if is_again(error) => {
+                    drain_video_filter(
+                        filter,
+                        encoder,
+                        output,
+                        stream_index,
+                        encoder_time_base,
+                        output_time_base,
+                        last_dts,
+                    )?;
+                }
+                Err(ffmpeg::Error::Eof) => return Ok(drained_any),
+                Err(error) => {
+                    return Err(format!(
+                        "Could not add a frame to the video timeline: {error}"
+                    ));
+                }
+            }
+        }
         drain_video_filter(
             filter,
             encoder,
@@ -746,7 +1115,7 @@ fn drain_video_decoder(
             last_dts,
         )?;
     }
-    Ok(())
+    Ok(drained_any)
 }
 
 fn drain_video_filter(
@@ -775,9 +1144,20 @@ fn drain_video_filter(
                 if let Some(pts) = filtered.pts() {
                     filtered.set_pts(Some(pts.rescale(sink_time_base, encoder_time_base)));
                 }
-                encoder
-                    .send_frame(&filtered)
-                    .map_err(|error| format!("Video encoding failed: {error}"))?;
+                loop {
+                    match encoder.send_frame(&filtered) {
+                        Ok(()) => break,
+                        Err(error) if is_again(error) => drain_video_encoder(
+                            encoder,
+                            output,
+                            stream_index,
+                            encoder_time_base,
+                            output_time_base,
+                            last_dts,
+                        )?,
+                        Err(error) => return Err(format!("Video encoding failed: {error}")),
+                    }
+                }
                 drain_video_encoder(
                     encoder,
                     output,
@@ -838,20 +1218,37 @@ fn drain_audio_decoder(
     output: &mut ffmpeg::format::context::Output,
     stream_index: usize,
     output_time_base: Rational,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let mut decoded = ffmpeg::frame::Audio::empty();
-    while decoder.receive_frame(&mut decoded).is_ok() {
+    let mut drained_any = false;
+    loop {
+        match decoder.receive_frame(&mut decoded) {
+            Ok(()) => drained_any = true,
+            Err(error) if is_again_or_eof(error) => break,
+            Err(error) => return Err(format!("Audio decoding failed during export: {error}")),
+        }
         let timestamp = decoded.timestamp();
         decoded.set_pts(timestamp);
-        filter
-            .get("in")
-            .ok_or_else(|| "Audio filter input disappeared.".to_owned())?
-            .source()
-            .add(&decoded)
-            .map_err(|error| format!("Could not add audio to the timeline: {error}"))?;
+        loop {
+            let added = filter
+                .get("in")
+                .ok_or_else(|| "Audio filter input disappeared.".to_owned())?
+                .source()
+                .add(&decoded);
+            match added {
+                Ok(()) => break,
+                Err(error) if is_again(error) => {
+                    drain_audio_filter(filter, encoder, output, stream_index, output_time_base)?;
+                }
+                Err(ffmpeg::Error::Eof) => return Ok(drained_any),
+                Err(error) => {
+                    return Err(format!("Could not add audio to the timeline: {error}"));
+                }
+            }
+        }
         drain_audio_filter(filter, encoder, output, stream_index, output_time_base)?;
     }
-    Ok(())
+    Ok(drained_any)
 }
 
 fn drain_audio_filter(
@@ -879,9 +1276,15 @@ fn drain_audio_filter(
                 if let Some(pts) = filtered.pts() {
                     filtered.set_pts(Some(pts.rescale(sink_time_base, encoder_time_base)));
                 }
-                encoder
-                    .send_frame(&filtered)
-                    .map_err(|error| format!("Audio encoding failed: {error}"))?;
+                loop {
+                    match encoder.send_frame(&filtered) {
+                        Ok(()) => break,
+                        Err(error) if is_again(error) => {
+                            drain_audio_encoder(encoder, output, stream_index, output_time_base)?;
+                        }
+                        Err(error) => return Err(format!("Audio encoding failed: {error}")),
+                    }
+                }
                 drain_audio_encoder(encoder, output, stream_index, output_time_base)?;
             }
             Err(error) if is_again_or_eof(error) => break,
@@ -916,6 +1319,7 @@ fn drain_audio_encoder(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn open_video_encoder(
     width: u32,
     height: u32,
@@ -1029,11 +1433,32 @@ fn open_audio_encoder(
 }
 
 fn is_again_or_eof(error: ffmpeg::Error) -> bool {
-    error == ffmpeg::Error::Eof
-        || error
-            == ffmpeg::Error::Other {
-                errno: ffmpeg::error::EAGAIN,
-            }
+    error == ffmpeg::Error::Eof || is_again(error)
+}
+
+fn is_again(error: ffmpeg::Error) -> bool {
+    error
+        == ffmpeg::Error::Other {
+            errno: ffmpeg::error::EAGAIN,
+        }
+}
+
+fn wait_for_decoder(kind: &str, attempts: &mut usize) -> Result<(), String> {
+    const YIELD_ATTEMPTS: usize = 16;
+    const MAX_ATTEMPTS: usize = 2_000;
+
+    *attempts += 1;
+    if *attempts > MAX_ATTEMPTS {
+        return Err(format!(
+            "{kind} decoder remained busy for too long during export."
+        ));
+    }
+    if *attempts <= YIELD_ATTEMPTS {
+        thread::yield_now();
+    } else {
+        thread::sleep(std::time::Duration::from_millis(1));
+    }
+    Ok(())
 }
 
 fn rational_frame_rate(fps: f64) -> Rational {
@@ -1068,10 +1493,10 @@ fn even(value: usize) -> u32 {
 mod tests {
     use super::SequenceFormat;
     use super::{
-        build_audio_filter, normalize_video_packet_timestamps, render_sequence, ExportResolution,
-        ExportSettings,
+        build_audio_filter, normalize_video_packet_timestamps, render_media_sequence,
+        render_sequence, ExportResolution, ExportSettings,
     };
-    use crate::{media::VideoAsset, sequence::Sequence};
+    use crate::{media::VideoAsset, project::Sequence};
     use ffmpeg_next::Packet;
     use std::{
         fs,
@@ -1143,7 +1568,7 @@ mod tests {
         let temp = std::env::temp_dir();
         let source = temp.join(format!("kuro-export-source-{}.mkv", std::process::id()));
         let output = temp.join(format!("kuro-export-result-{}.mp4", std::process::id()));
-        let blank_output = temp.join(format!("kuro-export-blank-{}.mp4", std::process::id()));
+        let mixed_output = temp.join(format!("kuro-export-mixed-{}.mp4", std::process::id()));
         let generated = Command::new("ffmpeg")
             .args([
                 "-y",
@@ -1191,32 +1616,30 @@ mod tests {
         let exported = VideoAsset::load(output.clone()).expect("export should be readable");
         assert_eq!((exported.source_width, exported.source_height), (180, 320));
         assert!(exported.has_audio);
+        assert!((exported.duration - sequence.duration).abs() < 0.1);
         assert!(fs::metadata(&output).expect("export should exist").len() > 1_000);
 
-        let remaining: Vec<_> = sequence.clips.iter().map(|clip| clip.id).collect();
-        for id in remaining {
-            sequence.delete(id);
-        }
-        render_sequence(
-            &video,
-            &sequence,
-            &ExportSettings {
-                resolution: ExportResolution::Source,
-                ..ExportSettings::default()
-            },
+        let mut mixed = Sequence::empty();
+        mixed.insert_media(1, 0.0, 0.6, 24.0, 0.0).unwrap();
+        mixed.insert_media(2, 0.6, 0.6, 24.0, 0.0).unwrap();
+        render_media_sequence(
+            &[(1, video.clone()), (2, video.clone())],
+            &mixed,
+            &ExportSettings::default(),
             SequenceFormat::from_video(&video),
-            &blank_output,
+            &mixed_output,
             &AtomicU32::new(0),
             &AtomicBool::new(false),
         )
-        .expect("an empty timeline should export black video and silence");
-        let blank =
-            VideoAsset::load(blank_output.clone()).expect("blank export should be readable");
-        assert!(blank.duration >= 1.0);
-        assert!(blank.has_audio);
+        .expect("a sequence with multiple media IDs should export");
+        let mixed_export =
+            VideoAsset::load(mixed_output.clone()).expect("mixed export should be readable");
+        assert!(mixed_export.duration >= 1.1);
+        assert!((mixed_export.duration - mixed.duration).abs() < 0.1);
+        assert!(mixed_export.has_audio);
 
         let _ = fs::remove_file(source);
         let _ = fs::remove_file(output);
-        let _ = fs::remove_file(blank_output);
+        let _ = fs::remove_file(mixed_output);
     }
 }

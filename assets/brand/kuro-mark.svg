@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Kuro">
+  <title>Kuro</title>
+  <rect width="128" height="128" rx="28.63" ry="28.63" fill="#000"/>
+  <g fill="#fff">
+    <rect x="34.50" y="34.50" width="8.50" height="59.00"/>
+    <polygon points="39.46,67.76 95.48,38.26 91.52,30.74 35.49,60.24"/>
+    <polygon points="35.49,67.76 91.52,97.26 95.48,89.74 39.46,60.24"/>
+  </g>
+</svg>

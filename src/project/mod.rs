@@ -1,3 +1,6 @@
+//! Project domain: versioned `.kuro` persistence, autosave/recovery, recent
+//! projects, editor snapshots, and the editable sequence model.
+
 use std::{
     fs,
     io::Write,
@@ -7,12 +10,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    export::ExportSettings,
-    sequence::{EditTool, Sequence},
-};
+use crate::media::export::ExportSettings;
 
-pub const PROJECT_VERSION: u32 = 1;
+pub mod sequence;
+pub use sequence::{EditTool, Sequence};
+
+pub const PROJECT_VERSION: u32 = 2;
 pub const MAX_HISTORY: usize = 100;
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(700);
 
@@ -48,6 +51,8 @@ pub struct MediaReference {
     pub id: u64,
     pub path: PathBuf,
     pub name: String,
+    #[serde(default)]
+    pub managed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -160,7 +165,7 @@ impl ProjectSession {
         let main = read_document(&path);
         let recovery_path = recovery_path(&path);
         let recovery = read_document(&recovery_path);
-        let (document, recovered) = match (main, recovery) {
+        let (mut document, recovered) = match (main, recovery) {
             (Ok(main), Ok(recovery)) if recovery.modified_unix_ms > main.modified_unix_ms => {
                 (recovery, true)
             }
@@ -173,6 +178,21 @@ impl ProjectSession {
                 "This project uses Kuro project format version {}, but this build supports up to version {}.",
                 document.version, PROJECT_VERSION
             ));
+        }
+        if document.version < 2 {
+            let legacy_media_id = document
+                .active_media_id
+                .or_else(|| document.media.first().map(|media| media.id))
+                .unwrap_or(1);
+            if let Some(sequence) = &mut document.sequence {
+                for clip in &mut sequence.clips {
+                    clip.media_id = legacy_media_id;
+                }
+            }
+            document.version = PROJECT_VERSION;
+        }
+        if let Some(sequence) = &mut document.sequence {
+            sequence.recompute_duration();
         }
         let last_signature = document_signature(&document)?;
         Ok(Self {
@@ -343,10 +363,19 @@ fn unix_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::Sequence;
     use super::{
         atomic_write, project_path, recovery_path, ProjectDocument, ProjectSession, ProjectSettings,
     };
-    use crate::sequence::Sequence;
+
+    #[test]
+    fn legacy_media_references_remain_external() {
+        let media: super::MediaReference = serde_json::from_str(
+            r#"{"id":1,"path":"/Volumes/Footage/source.mov","name":"source.mov"}"#,
+        )
+        .expect("legacy media reference should load");
+        assert!(!media.managed);
+    }
 
     #[test]
     fn project_paths_are_sanitized_and_versioned_json_round_trips() {

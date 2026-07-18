@@ -1,22 +1,89 @@
-use std::{path::PathBuf, time::Instant};
+//! Top-level editor coordinator. This module owns runtime state and connects the
+//! project, media, and UI subsystems without putting their implementation details
+//! in `main.rs`.
 
-use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
-
-use crate::{
-    audio::SequenceAudioOutput,
-    export::{ExportJob, ExportResult, ExportSettings, SequenceFormat},
-    media::VideoAsset,
-    playback::{DecodedFrame, PlaybackEngine},
-    project::{
-        self, EditorProjectState, EditorSnapshot, MediaReference, NewProjectDraft, ProjectDocument,
-        ProjectSession, RecentProject, MAX_HISTORY,
-    },
-    sequence::{frame_duration, ClipId, EditTool, Sequence},
-    timeline, ui,
-    waveform::{Waveform, WaveformGenerator},
+use std::{
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
+    sync::mpsc::{self, Receiver},
+    thread,
+    time::Instant,
 };
 
+use eframe::egui::{self, ColorImage, Pos2, TextureHandle, TextureOptions};
+
+use crate::{
+    media::{
+        audio::SequenceAudioOutput,
+        export::{ExportJob, ExportResult, ExportSettings, SequenceFormat},
+        playback::{DecodedFrame, PlaybackEngine},
+        waveform::{Waveform, WaveformGenerator},
+        VideoAsset,
+    },
+    native_menu::{NativeMenu, NativeMenuAction},
+    project::{
+        self,
+        sequence::{frame_duration, ClipAudio, ClipColor, ClipId, ClipMotion, MediaId, SequenceClip},
+        EditTool, EditorProjectState, EditorSnapshot, MediaReference, NewProjectDraft,
+        ProjectDocument, ProjectSession, RecentProject, Sequence, MAX_HISTORY,
+    },
+    ui::{self, timeline},
+};
+
+pub struct LibraryMedia {
+    pub id: MediaId,
+    pub asset: VideoAsset,
+    pub thumbnail: Option<TextureHandle>,
+}
+
+pub struct ClipDrag {
+    pub clip_id: ClipId,
+    pub pointer_offset: f64,
+    original: Sequence,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TimelineDropSource {
+    Library(MediaId),
+    External(PathBuf),
+}
+
+#[derive(Clone, Debug)]
+pub struct TimelineDropPreview {
+    pub source: TimelineDropSource,
+    pub name: String,
+    pub source_duration: f64,
+    pub timeline_start: f64,
+    pub valid: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct MarqueeSelection {
+    pub start: Pos2,
+    pub end: Pos2,
+}
+
+impl MarqueeSelection {
+    pub fn rect(&self) -> egui::Rect {
+        egui::Rect::from_two_pos(self.start, self.end)
+    }
+}
+
+struct ExternalMediaProbe {
+    path: PathBuf,
+    receiver: Receiver<Result<VideoAsset, String>>,
+}
+
+struct PendingExternalDrop {
+    path: PathBuf,
+    timeline_time: f64,
+    snap_threshold: f64,
+}
+
 pub struct VideoEditor {
+    native_menu: NativeMenu,
+    pub media_library: Vec<LibraryMedia>,
+    pub selected_media_id: Option<MediaId>,
     pub video: Option<VideoAsset>,
     pub current_time: f64,
     pub playing: bool,
@@ -41,11 +108,24 @@ pub struct VideoEditor {
     pub new_project_dialog_open: bool,
     pub new_project_draft: NewProjectDraft,
     pub missing_media: Option<MediaReference>,
+    missing_media_queue: VecDeque<MediaReference>,
+    pub clip_drag: Option<ClipDrag>,
+    pub marquee: Option<MarqueeSelection>,
+    pub timeline_drop_preview: Option<TimelineDropPreview>,
+    external_media_probe: Option<ExternalMediaProbe>,
+    external_media_asset: Option<VideoAsset>,
+    pending_external_drop: Option<PendingExternalDrop>,
     playback: PlaybackEngine,
     preloaded_playback: Option<(ClipId, PlaybackEngine)>,
     sequence_audio: Option<SequenceAudioOutput>,
     sequence_audio_started: bool,
     waveform_generator: WaveformGenerator,
+    waveforms: HashMap<MediaId, Waveform>,
+    waveform_queue: VecDeque<MediaId>,
+    waveform_media: Option<MediaId>,
+    thumbnail_engine: PlaybackEngine,
+    thumbnail_queue: VecDeque<MediaId>,
+    thumbnail_media: Option<MediaId>,
     playback_origin: f64,
     playback_started: Instant,
     active_clip: Option<ClipId>,
@@ -59,6 +139,9 @@ pub struct VideoEditor {
 impl VideoEditor {
     pub fn new() -> Self {
         Self {
+            native_menu: NativeMenu::new(),
+            media_library: Vec::new(),
+            selected_media_id: None,
             video: None,
             current_time: 0.0,
             playing: false,
@@ -83,11 +166,24 @@ impl VideoEditor {
             new_project_dialog_open: false,
             new_project_draft: NewProjectDraft::default(),
             missing_media: None,
+            missing_media_queue: VecDeque::new(),
+            clip_drag: None,
+            marquee: None,
+            timeline_drop_preview: None,
+            external_media_probe: None,
+            external_media_asset: None,
+            pending_external_drop: None,
             playback: PlaybackEngine::new(),
             preloaded_playback: None,
             sequence_audio: None,
             sequence_audio_started: false,
             waveform_generator: WaveformGenerator::new(),
+            waveforms: HashMap::new(),
+            waveform_queue: VecDeque::new(),
+            waveform_media: None,
+            thumbnail_engine: PlaybackEngine::new(),
+            thumbnail_queue: VecDeque::new(),
+            thumbnail_media: None,
             playback_origin: 0.0,
             playback_started: Instant::now(),
             active_clip: None,
@@ -99,20 +195,49 @@ impl VideoEditor {
         }
     }
 
+    pub fn open_new_project_dialog(&mut self) {
+        self.new_project_draft = NewProjectDraft::default();
+        self.new_project_dialog_open = true;
+        self.status = None;
+    }
+
+    pub fn close_project(&mut self, ctx: &egui::Context) {
+        if !self.workspace_open {
+            return;
+        }
+        if let Some(job) = self.export_job.take() {
+            job.cancel();
+        }
+        self.save_project();
+        self.reset_editor(ctx);
+        self.project_session = None;
+        self.workspace_open = false;
+        self.new_project_dialog_open = false;
+        self.history.clear();
+        self.history_index = 0;
+        self.history_transaction = None;
+    }
+
     pub fn create_project(&mut self, ctx: &egui::Context) {
-        let name = self.new_project_draft.name.trim();
+        let name = self.new_project_draft.name.trim().to_owned();
         if name.is_empty() {
             self.status = Some("Enter a project name.".to_owned());
             return;
         }
-        let path = project::project_path(&self.new_project_draft.directory, name);
+        let path = project::project_path(&self.new_project_draft.directory, &name);
         if path.exists() {
             self.status =
                 Some("A project with that name already exists in this folder.".to_owned());
             return;
         }
-        let document =
-            ProjectDocument::empty(name.to_owned(), self.new_project_draft.settings.clone());
+        let settings = self.new_project_draft.settings.clone();
+        if self.workspace_open {
+            if let Some(job) = self.export_job.take() {
+                job.cancel();
+            }
+            self.save_project();
+        }
+        let document = ProjectDocument::empty(name, settings);
         match ProjectSession::new(path.clone(), document) {
             Ok(session) => {
                 self.reset_editor(ctx);
@@ -159,17 +284,34 @@ impl VideoEditor {
                 self.project_session = Some(session);
                 self.workspace_open = true;
                 self.missing_media = None;
-                if let Some(media) = document.active_media().cloned() {
+                for media in &document.media {
                     if media.path.exists() {
-                        if let Err(error) = self.load_video_path(media.path.clone(), false, ctx) {
+                        if let Err(error) =
+                            self.load_library_media(media.id, media.path.clone(), false, ctx)
+                        {
                             self.status = Some(error);
-                            self.missing_media = Some(media);
+                            self.queue_missing_media(media.clone());
                         }
                     } else {
-                        self.missing_media = Some(media);
-                        self.status =
-                            Some("Project media is missing. Relink it to continue.".to_owned());
+                        self.queue_missing_media(media.clone());
                     }
+                }
+                self.selected_media_id = document
+                    .active_media_id
+                    .or_else(|| self.media_library.first().map(|media| media.id));
+                if let Some(sequence) = &self.sequence {
+                    for id in sequence.clips.iter().map(|clip| clip.media_id) {
+                        if !self.waveform_queue.contains(&id)
+                            && self.media_asset(id).is_some_and(|asset| asset.has_audio)
+                        {
+                            self.waveform_queue.push_back(id);
+                        }
+                    }
+                }
+                self.pump_waveform_queue(ctx);
+                if self.missing_media.is_some() {
+                    self.status =
+                        Some("Some project media is offline. Relink it to continue.".to_owned());
                 }
                 self.current_time = self.current_time.clamp(0.0, self.duration());
                 self.refresh_preview(ctx);
@@ -192,8 +334,11 @@ impl VideoEditor {
             .set_file_name(&missing.name)
             .pick_file();
         let Some(path) = selected else { return };
-        match self.load_video_path(path.clone(), false, ctx) {
+        match self.load_library_media(missing.id, path.clone(), false, ctx) {
             Ok(()) => {
+                let relinked_name = self
+                    .media_asset(missing.id)
+                    .map_or_else(|| missing.name.clone(), |video| video.name.clone());
                 if let Some(session) = &mut self.project_session {
                     if let Some(media) = session
                         .document
@@ -202,35 +347,48 @@ impl VideoEditor {
                         .find(|media| media.id == missing.id)
                     {
                         media.path = path;
-                        media.name = self
-                            .video
-                            .as_ref()
-                            .map_or_else(|| missing.name.clone(), |video| video.name.clone());
+                        media.managed = false;
+                        media.name = relinked_name;
                     }
                     session.dirty_since = Some(Instant::now());
                 }
-                self.missing_media = None;
+                self.missing_media = self.missing_media_queue.pop_front();
+                if self.missing_media.is_some() {
+                    self.status =
+                        Some("Another project media file still needs relinking.".to_owned());
+                }
             }
             Err(error) => self.status = Some(error),
         }
     }
 
-    fn load_video_path(
+    fn load_library_media(
         &mut self,
+        media_id: MediaId,
         path: PathBuf,
-        reset_sequence: bool,
+        add_reference: bool,
         ctx: &egui::Context,
     ) -> Result<(), String> {
         let mut video = VideoAsset::load(path)?;
         let (max_width, max_height) = preview_decode_budget(ctx);
         video.set_decode_budget(max_width, max_height);
-        self.texture = None;
-        if reset_sequence || self.sequence.is_none() {
+        self.register_library_media(media_id, video, add_reference, ctx);
+        Ok(())
+    }
+
+    fn register_library_media(
+        &mut self,
+        media_id: MediaId,
+        video: VideoAsset,
+        add_reference: bool,
+        ctx: &egui::Context,
+    ) {
+        let first_media = self.media_library.is_empty();
+        if first_media && self.sequence.is_none() {
             self.current_time = 0.0;
-            self.sequence = Some(Sequence::new(video.duration));
+            self.sequence = Some(Sequence::empty());
             self.timeline_zoom = 1.0;
         }
-        self.waveform = None;
         self.media_info_clip = None;
         self.timecode_editing = false;
         self.timecode_input.clear();
@@ -244,27 +402,470 @@ impl VideoEditor {
             video.fps,
             if video.has_audio { "  ·  audio" } else { "" }
         ));
-        self.preview_source_time = Some(0.0);
-        self.playback.request_preview(&video, 0.0, ctx);
-        if video.has_audio {
-            self.waveform_generator
-                .request(&video.path, video.duration, ctx.clone());
+        if add_reference {
+            if let Some(session) = &mut self.project_session {
+                session.document.media.push(MediaReference {
+                    id: media_id,
+                    path: video.path.clone(),
+                    name: video.name.clone(),
+                    managed: false,
+                });
+                session.document.active_media_id = Some(media_id);
+            }
         }
-        self.video = Some(video);
-        Ok(())
+        self.media_library.retain(|media| media.id != media_id);
+        self.media_library.push(LibraryMedia {
+            id: media_id,
+            asset: video.clone(),
+            thumbnail: None,
+        });
+        self.selected_media_id = Some(media_id);
+        self.thumbnail_queue.push_back(media_id);
+        if first_media {
+            self.video = Some(video);
+            self.texture = None;
+        }
+        self.pump_thumbnail_queue(ctx);
+    }
+
+    fn next_media_id(&self) -> MediaId {
+        self.project_session
+            .as_ref()
+            .and_then(|session| session.document.media.iter().map(|media| media.id).max())
+            .unwrap_or(0)
+            .saturating_add(1)
+    }
+
+    fn queue_missing_media(&mut self, media: MediaReference) {
+        if self.missing_media.is_none() {
+            self.missing_media = Some(media);
+        } else if !self
+            .missing_media_queue
+            .iter()
+            .any(|queued| queued.id == media.id)
+        {
+            self.missing_media_queue.push_back(media);
+        }
+    }
+
+    pub fn prepare_external_media_hover(&mut self, path: &PathBuf, ctx: &egui::Context) {
+        if !supported_video_path(path) || !path.is_file() {
+            return;
+        }
+        if self
+            .media_library
+            .iter()
+            .any(|media| media.asset.path == *path)
+            || self
+                .external_media_asset
+                .as_ref()
+                .is_some_and(|asset| asset.path == *path)
+            || self
+                .external_media_probe
+                .as_ref()
+                .is_some_and(|probe| probe.path == *path)
+        {
+            return;
+        }
+
+        let probe_path = path.clone();
+        let worker_path = probe_path.clone();
+        let (sender, receiver) = mpsc::channel();
+        let repaint = ctx.clone();
+        thread::spawn(move || {
+            let result = VideoAsset::load(worker_path);
+            let _ = sender.send(result);
+            repaint.request_repaint();
+        });
+        self.external_media_probe = Some(ExternalMediaProbe {
+            path: probe_path,
+            receiver,
+        });
+        self.external_media_asset = None;
+    }
+
+    pub fn external_media_preview(&self, path: &PathBuf) -> Option<(String, f64)> {
+        if !supported_video_path(path) {
+            return None;
+        }
+        if let Some(asset) = self
+            .media_library
+            .iter()
+            .map(|media| &media.asset)
+            .chain(self.external_media_asset.iter())
+            .find(|asset| asset.path == *path)
+        {
+            return Some((asset.name.clone(), asset.duration));
+        }
+        Some((
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Video")
+                .to_owned(),
+            5.0,
+        ))
+    }
+
+    pub fn placement_preview(
+        &self,
+        source_duration: f64,
+        requested_time: f64,
+        snap_threshold: f64,
+    ) -> (f64, bool) {
+        self.sequence.as_ref().map_or((0.0, true), |sequence| {
+            sequence.preview_media_placement(
+                requested_time,
+                source_duration,
+                self.frame_rate(),
+                snap_threshold,
+            )
+        })
+    }
+
+    pub fn place_external_media(
+        &mut self,
+        path: PathBuf,
+        timeline_time: f64,
+        snap_threshold: f64,
+        ctx: &egui::Context,
+    ) {
+        if !supported_video_path(&path) || !path.is_file() {
+            self.status = Some("That file is not a supported video.".to_owned());
+            return;
+        }
+        if let Some(id) = self
+            .media_library
+            .iter()
+            .find(|media| media.asset.path == path)
+            .map(|media| media.id)
+        {
+            self.insert_media_at(id, timeline_time, snap_threshold, ctx);
+            return;
+        }
+        if self
+            .external_media_asset
+            .as_ref()
+            .is_some_and(|asset| asset.path == path)
+        {
+            let mut asset = self
+                .external_media_asset
+                .take()
+                .expect("the matching external media asset was just checked");
+            let (max_width, max_height) = preview_decode_budget(ctx);
+            asset.set_decode_budget(max_width, max_height);
+            let id = self.next_media_id();
+            self.register_library_media(id, asset, true, ctx);
+            self.insert_media_at(id, timeline_time, snap_threshold, ctx);
+            return;
+        }
+        self.pending_external_drop = Some(PendingExternalDrop {
+            path: path.clone(),
+            timeline_time,
+            snap_threshold,
+        });
+        self.prepare_external_media_hover(&path, ctx);
+        self.status = Some("Importing dropped video…".to_owned());
+    }
+
+    fn poll_external_media_probe(&mut self, ctx: &egui::Context) {
+        let result = self
+            .external_media_probe
+            .as_ref()
+            .and_then(|probe| probe.receiver.try_recv().ok());
+        let Some(result) = result else { return };
+        let Some(probe) = self.external_media_probe.take() else {
+            return;
+        };
+        match result {
+            Ok(asset) => {
+                self.external_media_asset = Some(asset);
+                if self
+                    .pending_external_drop
+                    .as_ref()
+                    .is_some_and(|drop| drop.path == probe.path)
+                {
+                    let drop = self
+                        .pending_external_drop
+                        .take()
+                        .expect("the matching pending drop was just checked");
+                    self.place_external_media(
+                        drop.path,
+                        drop.timeline_time,
+                        drop.snap_threshold,
+                        ctx,
+                    );
+                }
+            }
+            Err(error) => {
+                if self
+                    .pending_external_drop
+                    .as_ref()
+                    .is_some_and(|drop| drop.path == probe.path)
+                {
+                    self.pending_external_drop = None;
+                    self.status = Some(error);
+                }
+            }
+        }
+    }
+
+    fn pump_thumbnail_queue(&mut self, ctx: &egui::Context) {
+        if self.thumbnail_media.is_some() {
+            return;
+        }
+        while let Some(id) = self.thumbnail_queue.pop_front() {
+            let Some(media) = self.media_library.iter().find(|media| media.id == id) else {
+                continue;
+            };
+            let mut thumbnail_asset = media.asset.clone();
+            thumbnail_asset.set_decode_budget(320, 180);
+            self.thumbnail_engine.request_preview(
+                &thumbnail_asset,
+                (media.asset.duration * 0.1).min(1.0),
+                ctx,
+            );
+            self.thumbnail_media = Some(id);
+            break;
+        }
+    }
+
+    fn poll_thumbnail(&mut self, ctx: &egui::Context) {
+        if let Some(frame) = self.thumbnail_engine.poll_preview() {
+            if let Some(id) = self.thumbnail_media.take() {
+                let image = ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
+                if let Some(media) = self.media_library.iter_mut().find(|media| media.id == id) {
+                    media.thumbnail = Some(ctx.load_texture(
+                        format!("kuro-thumbnail-{id}"),
+                        image,
+                        TextureOptions::LINEAR,
+                    ));
+                }
+            }
+        }
+        self.pump_thumbnail_queue(ctx);
+    }
+
+    pub fn media_asset(&self, id: MediaId) -> Option<&VideoAsset> {
+        self.media_library
+            .iter()
+            .find(|media| media.id == id)
+            .map(|media| &media.asset)
+            .or(self.video.as_ref())
+    }
+
+    pub fn media_waveform(&self, id: MediaId) -> Option<&Waveform> {
+        self.waveforms.get(&id)
+    }
+
+    pub fn select_library_media(&mut self, id: MediaId) {
+        self.selected_media_id = Some(id);
+        if let Some(session) = &mut self.project_session {
+            session.document.active_media_id = Some(id);
+            session.dirty_since = Some(Instant::now());
+        }
+    }
+
+    pub fn delete_library_media(&mut self, id: MediaId, ctx: &egui::Context) {
+        let Some(index) = self.media_library.iter().position(|media| media.id == id) else {
+            return;
+        };
+        self.pause(ctx);
+        let removed_path = self.media_library[index].asset.path.clone();
+        self.media_library.remove(index);
+        self.waveforms.remove(&id);
+        self.waveform_queue.retain(|queued| *queued != id);
+        self.thumbnail_queue.retain(|queued| *queued != id);
+        let _ = self
+            .sequence
+            .as_mut()
+            .is_some_and(|sequence| sequence.remove_media(id));
+
+        let next_id = self.media_library.first().map(|media| media.id);
+        if self.selected_media_id == Some(id) {
+            self.selected_media_id = next_id;
+        }
+        if self
+            .video
+            .as_ref()
+            .is_some_and(|video| video.path == removed_path)
+        {
+            self.video = next_id.and_then(|next| self.media_asset(next).cloned());
+            self.texture = None;
+        }
+        if let Some(session) = &mut self.project_session {
+            session.document.media.retain(|media| media.id != id);
+            session.document.active_media_id = self.selected_media_id;
+            session.dirty_since = Some(Instant::now());
+        }
+        self.current_time = self.current_time.clamp(0.0, self.duration());
+        self.refresh_preview(ctx);
+        // Media removal is intentionally not undoable: restoring only the timeline
+        // snapshot would recreate references to footage no longer in the project bin.
+        self.initialize_history();
+        self.status =
+            Some("Media removed from the project. The source file was not deleted.".to_owned());
+    }
+
+    pub fn insert_media_at(&mut self, id: MediaId, time: f64, snap: f64, ctx: &egui::Context) {
+        let Some(asset) = self.media_asset(id).cloned() else {
+            return;
+        };
+        let fps = self.frame_rate();
+        let sequence = self.sequence.get_or_insert_with(Sequence::empty);
+        if sequence
+            .insert_media(id, time, asset.duration, fps, snap)
+            .is_some()
+        {
+            self.record_history();
+            if asset.has_audio && !self.waveforms.contains_key(&id) {
+                self.waveform_queue.push_back(id);
+                self.pump_waveform_queue(ctx);
+            }
+            self.refresh_preview(ctx);
+        } else {
+            self.status = Some("That clip would overlap another clip.".to_owned());
+        }
+    }
+
+    fn pump_waveform_queue(&mut self, ctx: &egui::Context) {
+        if self.waveform_media.is_some() {
+            return;
+        }
+        while let Some(id) = self.waveform_queue.pop_front() {
+            let Some((path, duration)) = self
+                .media_asset(id)
+                .map(|asset| (asset.path.clone(), asset.duration))
+            else {
+                continue;
+            };
+            self.waveform_generator
+                .request(&path, duration, ctx.clone());
+            self.waveform_media = Some(id);
+            break;
+        }
+    }
+
+    pub fn duplicate_clip(&mut self, id: ClipId, ctx: &egui::Context) -> Option<ClipId> {
+        let fps = self.frame_rate();
+        let (preferred, fallback) = {
+            let sequence = self.sequence.as_ref()?;
+            (sequence.clip(id)?.timeline_end, sequence.duration)
+        };
+        let duplicated = self.sequence.as_mut()?.duplicate(id)?;
+        let placed = self
+            .sequence
+            .as_mut()?
+            .move_clip(duplicated, preferred, fps, 0.0)
+            .or_else(|| {
+                self.sequence
+                    .as_mut()?
+                    .move_clip(duplicated, fallback, fps, 0.0)
+            });
+        if placed.is_none() {
+            self.sequence.as_mut()?.delete(duplicated);
+            return None;
+        }
+        self.record_history();
+        self.refresh_preview(ctx);
+        Some(duplicated)
+    }
+
+    pub fn move_clip(&mut self, id: ClipId, start: f64, snap: f64, ctx: &egui::Context) -> bool {
+        let fps = self.frame_rate();
+        let moved = self
+            .sequence
+            .as_mut()
+            .and_then(|sequence| sequence.move_clip(id, start, fps, snap))
+            .is_some();
+        if moved {
+            self.refresh_preview(ctx);
+        }
+        moved
+    }
+
+    pub fn begin_clip_drag(&mut self, id: ClipId, pointer_time: f64, duplicate: bool) {
+        let Some(original) = self.sequence.clone() else {
+            return;
+        };
+        let Some(clip) = original.clip(id) else {
+            return;
+        };
+        let pointer_offset = pointer_time - clip.timeline_start;
+        self.begin_history_transaction();
+        let clip_id = if duplicate {
+            self.sequence
+                .as_mut()
+                .and_then(|sequence| sequence.duplicate(id))
+                .unwrap_or(id)
+        } else {
+            id
+        };
+        self.clip_drag = Some(ClipDrag {
+            clip_id,
+            pointer_offset,
+            original,
+        });
+    }
+
+    pub fn update_clip_drag(&mut self, pointer_time: f64, snap: f64, ctx: &egui::Context) {
+        let Some((id, offset)) = self
+            .clip_drag
+            .as_ref()
+            .map(|drag| (drag.clip_id, drag.pointer_offset))
+        else {
+            return;
+        };
+        self.move_clip(id, (pointer_time - offset).max(0.0), snap, ctx);
+    }
+
+    pub fn finish_clip_drag(&mut self) {
+        let Some(drag) = self.clip_drag.take() else {
+            return;
+        };
+        let duplicate_still_overlaps = self
+            .sequence
+            .as_ref()
+            .is_some_and(|sequence| sequence.has_overlaps());
+        if duplicate_still_overlaps {
+            self.sequence = Some(drag.original);
+        }
+        self.commit_history_transaction();
+    }
+
+    pub fn set_clip_color(&mut self, id: ClipId, color: ClipColor) {
+        if self
+            .sequence
+            .as_mut()
+            .is_some_and(|sequence| sequence.set_color(id, color))
+        {
+            self.record_history();
+        }
     }
 
     fn reset_editor(&mut self, ctx: &egui::Context) {
         self.pause(ctx);
         self.video = None;
+        self.media_library.clear();
+        self.selected_media_id = None;
         self.sequence = None;
         self.texture = None;
         self.waveform = None;
+        self.waveforms.clear();
+        self.waveform_queue.clear();
+        self.waveform_media = None;
+        self.thumbnail_queue.clear();
+        self.thumbnail_media = None;
+        self.external_media_probe = None;
+        self.external_media_asset = None;
+        self.pending_external_drop = None;
+        self.timeline_drop_preview = None;
         self.current_time = 0.0;
         self.timeline_zoom = 1.0;
         self.tool = EditTool::Select;
         self.export_settings = ExportSettings::default();
         self.missing_media = None;
+        self.missing_media_queue.clear();
+        self.marquee = None;
         self.status = None;
     }
 
@@ -351,6 +952,10 @@ impl VideoEditor {
         self.apply_history_snapshot(self.history[self.history_index].clone(), ctx);
     }
 
+    pub fn can_undo(&self) -> bool {
+        self.history_index > 0 && !self.history.is_empty()
+    }
+
     pub fn redo(&mut self, ctx: &egui::Context) {
         if self.history_index + 1 >= self.history.len() {
             return;
@@ -360,6 +965,10 @@ impl VideoEditor {
         self.apply_history_snapshot(self.history[self.history_index].clone(), ctx);
     }
 
+    pub fn can_redo(&self) -> bool {
+        self.history_index + 1 < self.history.len()
+    }
+
     fn sync_project_document(&mut self) {
         let editor = EditorProjectState {
             current_time: self.current_time,
@@ -367,33 +976,12 @@ impl VideoEditor {
             tool: self.tool,
             export_settings: self.export_settings.clone(),
         };
-        let current_media = self.video.as_ref().map(|video| MediaReference {
-            id: self
-                .project_session
-                .as_ref()
-                .and_then(|session| session.document.active_media_id)
-                .unwrap_or(1),
-            path: video.path.clone(),
-            name: video.name.clone(),
-        });
         let Some(session) = &mut self.project_session else {
             return;
         };
         session.document.sequence = self.sequence.clone();
         session.document.editor = editor;
-        if let Some(media) = current_media {
-            session.document.active_media_id = Some(media.id);
-            if let Some(existing) = session
-                .document
-                .media
-                .iter_mut()
-                .find(|item| item.id == media.id)
-            {
-                *existing = media;
-            } else {
-                session.document.media.push(media);
-            }
-        }
+        session.document.active_media_id = self.selected_media_id;
     }
 
     fn tick_project(&mut self) {
@@ -425,21 +1013,23 @@ impl VideoEditor {
         }
         let selected = rfd::FileDialog::new()
             .add_filter("Video", &["mp4", "mov", "mkv", "avi", "webm", "m4v"])
-            .pick_file();
-        let Some(path) = selected else { return };
+            .pick_files();
+        let Some(paths) = selected else { return };
 
         self.pause(ctx);
-        match self.load_video_path(path, true, ctx) {
-            Ok(()) => {
-                // Import establishes the editable sequence baseline. Keeping it as the
-                // first snapshot means the first cut/trim undoes back to the full clip,
-                // rather than to an empty project with a still-loaded decoder.
-                self.initialize_history();
-                if let Some(session) = &mut self.project_session {
-                    session.dirty_since = Some(Instant::now());
-                }
+        let mut imported = 0;
+        for path in paths {
+            let id = self.next_media_id();
+            match self.load_library_media(id, path, true, ctx) {
+                Ok(()) => imported += 1,
+                Err(error) => self.status = Some(error),
             }
-            Err(error) => self.status = Some(error),
+        }
+        if imported > 0 {
+            self.initialize_history();
+            if let Some(session) = &mut self.project_session {
+                session.dirty_since = Some(Instant::now());
+            }
         }
     }
 
@@ -451,6 +1041,9 @@ impl VideoEditor {
         if self.video.is_none() || self.sequence.is_none() {
             return;
         }
+        if !self.ensure_media_available(ctx) {
+            return;
+        }
         let duration = self.duration();
         if self.current_time >= duration - 0.001 {
             self.current_time = 0.0;
@@ -458,9 +1051,19 @@ impl VideoEditor {
         self.playback_origin = self.current_time;
         self.playback_started = Instant::now();
         self.sequence_audio_started = false;
-        let sequence_audio = match (&self.video, &self.sequence) {
-            (Some(video), Some(sequence)) if video.has_audio => {
-                match SequenceAudioOutput::prepare(&video.path, sequence, self.current_time) {
+        let sequence_audio = match &self.sequence {
+            Some(sequence)
+                if sequence.clips.iter().any(|clip| {
+                    self.media_asset(clip.media_id)
+                        .is_some_and(|asset| asset.has_audio)
+                }) =>
+            {
+                let sources = self
+                    .media_library
+                    .iter()
+                    .map(|media| (media.id, media.asset.path.clone()))
+                    .collect();
+                match SequenceAudioOutput::prepare_sources(sources, sequence, self.current_time) {
                     Ok(audio) => Some(audio),
                     Err(error) => {
                         self.status = Some(error);
@@ -484,6 +1087,30 @@ impl VideoEditor {
         ctx.request_repaint();
     }
 
+    pub fn selected_clip(&self) -> Option<&SequenceClip> {
+        let sequence = self.sequence.as_ref()?;
+        let id = sequence.primary_selected()?;
+        sequence.clip(id)
+    }
+
+    pub fn selected_clip_mut(&mut self) -> Option<&mut SequenceClip> {
+        let sequence = self.sequence.as_mut()?;
+        let id = sequence.primary_selected()?;
+        sequence.clips.iter_mut().find(|clip| clip.id == id)
+    }
+
+    pub fn update_selected_clip_motion(&mut self, motion: ClipMotion) {
+        if let Some(clip) = self.selected_clip_mut() {
+            clip.motion = motion;
+        }
+    }
+
+    pub fn update_selected_clip_audio(&mut self, audio: ClipAudio) {
+        if let Some(clip) = self.selected_clip_mut() {
+            clip.audio = audio;
+        }
+    }
+
     pub fn pause(&mut self, ctx: &egui::Context) {
         if self.playing {
             self.update_clock();
@@ -494,7 +1121,36 @@ impl VideoEditor {
         self.refresh_preview(ctx);
     }
 
+    fn ensure_media_available(&mut self, ctx: &egui::Context) -> bool {
+        let Some(video) = self.video.as_ref() else {
+            return false;
+        };
+        if video.path.is_file() {
+            return true;
+        }
+        let missing = self
+            .project_session
+            .as_ref()
+            .and_then(|session| session.document.active_media().cloned())
+            .unwrap_or_else(|| MediaReference {
+                id: 1,
+                path: video.path.clone(),
+                name: video.name.clone(),
+                managed: false,
+            });
+        self.playing = false;
+        self.stop_all_playback();
+        self.texture = None;
+        self.missing_media = Some(missing);
+        self.status = Some("Source media is unavailable. Relink it to continue.".to_owned());
+        ctx.request_repaint();
+        false
+    }
+
     pub fn seek(&mut self, time: f64, ctx: &egui::Context) {
+        if self.video.is_some() && !self.ensure_media_available(ctx) {
+            return;
+        }
         if self.playing {
             self.playing = false;
         }
@@ -513,6 +1169,13 @@ impl VideoEditor {
         self.sequence
             .as_ref()
             .map_or(0.0, |sequence| sequence.duration)
+    }
+
+    pub fn timeline_interaction_duration(&self) -> f64 {
+        self.history_transaction
+            .as_ref()
+            .and_then(|snapshot| snapshot.sequence.as_ref())
+            .map_or_else(|| self.duration(), |sequence| sequence.duration)
     }
 
     pub fn frame_rate(&self) -> f64 {
@@ -550,6 +1213,30 @@ impl VideoEditor {
     pub fn select_clip(&mut self, selected: Option<ClipId>) {
         if let Some(sequence) = &mut self.sequence {
             sequence.select(selected);
+        }
+    }
+
+    pub fn select_clip_only(&mut self, id: ClipId) {
+        if let Some(sequence) = &mut self.sequence {
+            sequence.select_only(id);
+        }
+    }
+
+    pub fn toggle_clip_selection(&mut self, id: ClipId) {
+        if let Some(sequence) = &mut self.sequence {
+            sequence.toggle_select(id);
+        }
+    }
+
+    pub fn select_clips(&mut self, ids: Vec<ClipId>) {
+        if let Some(sequence) = &mut self.sequence {
+            sequence.select_many(ids);
+        }
+    }
+
+    pub fn clear_clip_selection(&mut self) {
+        if let Some(sequence) = &mut self.sequence {
+            sequence.clear_selection();
         }
     }
 
@@ -595,13 +1282,19 @@ impl VideoEditor {
             return;
         }
         let fps = self.frame_rate();
+        let source_duration = self
+            .sequence
+            .as_ref()
+            .and_then(|sequence| sequence.clip(id))
+            .and_then(|clip| self.media_asset(clip.media_id))
+            .map_or(self.duration(), |asset| asset.duration);
         if self.playing {
             self.pause(ctx);
         }
         let trimmed = self
             .sequence
             .as_mut()
-            .and_then(|sequence| sequence.trim_right(id, time, fps));
+            .and_then(|sequence| sequence.trim_right(id, time, fps, source_duration));
         if let Some(time) = trimmed {
             self.select_clip(Some(id));
             self.seek((time - frame_duration(fps)).max(0.0), ctx);
@@ -684,7 +1377,10 @@ impl VideoEditor {
         self.export_dialog_open = false;
         self.export_message = None;
         self.export_job = Some(ExportJob::start(
-            video,
+            self.media_library
+                .iter()
+                .map(|media| (media.id, media.asset.clone()))
+                .collect(),
             sequence,
             self.export_settings.clone(),
             self.sequence_format(),
@@ -718,13 +1414,16 @@ impl VideoEditor {
     }
 
     fn refresh_preview(&mut self, ctx: &egui::Context) {
-        let source_time = self
+        let media_source = self
             .sequence
             .as_ref()
-            .and_then(|sequence| sequence.source_time_at(self.current_time));
-        self.preview_source_time = source_time;
-        if let (Some(video), Some(source_time)) = (&self.video, source_time) {
-            self.playback.request_preview(video, source_time, ctx);
+            .and_then(|sequence| sequence.media_source_at(self.current_time));
+        self.preview_source_time = media_source.map(|(_, time)| time);
+        if let Some((media_id, source_time)) = media_source {
+            if let Some(video) = self.media_asset(media_id).cloned() {
+                self.video = Some(video.clone());
+                self.playback.request_preview(&video, source_time, ctx);
+            }
         } else {
             self.playback.clear_preview();
             self.texture = None;
@@ -747,6 +1446,20 @@ impl VideoEditor {
     }
 
     fn start_clip_decoder(&mut self, clip_id: ClipId, source_time: f64, ctx: &egui::Context) {
+        let Some(media_id) = self
+            .sequence
+            .as_ref()
+            .and_then(|sequence| sequence.clip(clip_id))
+            .map(|clip| clip.media_id)
+        else {
+            return;
+        };
+        let Some(video) = self.media_asset(media_id).cloned() else {
+            return;
+        };
+        // The preview fit must follow the clip that is about to become active,
+        // including when its decoder was preloaded at a transition.
+        self.video = Some(video.clone());
         if self
             .preloaded_playback
             .as_ref()
@@ -764,15 +1477,15 @@ impl VideoEditor {
         }
         self.preloaded_playback = None;
         self.preserve_clock_on_start = false;
-        let Some(video) = &self.video else { return };
         self.active_clip = Some(clip_id);
-        match self.playback.start(video, source_time, ctx) {
+        match self.playback.start(&video, source_time, ctx) {
             Ok(()) => {}
             Err(error) => {
                 self.status = Some(error);
                 self.playing = false;
                 self.active_clip = None;
                 self.stop_all_playback();
+                self.ensure_media_available(ctx);
             }
         }
     }
@@ -793,6 +1506,7 @@ impl VideoEditor {
                 .iter()
                 .find(|clip| clip.timeline_start >= active.timeline_end - 0.000_001)?;
             let continuous = (active.timeline_end - next.timeline_start).abs() < 0.000_001
+                && active.media_id == next.media_id
                 && (active.source_out - next.source_in).abs() < 0.000_001;
             (!continuous).then(|| next.clone())
         });
@@ -804,12 +1518,15 @@ impl VideoEditor {
             .as_ref()
             .is_none_or(|(id, _)| *id != upcoming.id)
         {
-            let Some(video) = &self.video else { return };
+            let Some(video) = self.media_asset(upcoming.media_id).cloned() else {
+                return;
+            };
             let mut playback = PlaybackEngine::new();
-            match playback.start(video, upcoming.source_in, ctx) {
+            match playback.start(&video, upcoming.source_in, ctx) {
                 Ok(()) => {}
                 Err(error) => {
                     self.status = Some(error);
+                    self.ensure_media_available(ctx);
                     return;
                 }
             }
@@ -1013,6 +1730,40 @@ impl VideoEditor {
         self.playback_started = Instant::now();
         self.sequence_audio_started = true;
     }
+
+    fn update_native_menu(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        self.native_menu.attach_to_window(frame);
+        let has_timeline_media = self
+            .sequence
+            .as_ref()
+            .is_some_and(|sequence| !sequence.clips.is_empty());
+        self.native_menu.update_enabled(
+            self.workspace_open,
+            self.workspace_open && has_timeline_media && self.export_job.is_none(),
+            self.can_undo(),
+            self.can_redo(),
+            has_timeline_media,
+        );
+
+        while let Some(action) = self.native_menu.poll() {
+            match action {
+                NativeMenuAction::NewProject => self.open_new_project_dialog(),
+                NativeMenuAction::CloseProject => self.close_project(ctx),
+                NativeMenuAction::Import => self.import_video(ctx),
+                NativeMenuAction::Export => self.open_export(),
+                NativeMenuAction::Undo => self.undo(ctx),
+                NativeMenuAction::Redo => self.redo(ctx),
+                NativeMenuAction::ZoomIn => {
+                    self.timeline_zoom = (self.timeline_zoom * 1.35).clamp(1.0, 32.0);
+                }
+                NativeMenuAction::ZoomOut => {
+                    self.timeline_zoom = (self.timeline_zoom / 1.35).clamp(1.0, 32.0);
+                }
+                NativeMenuAction::ResetZoom => self.timeline_zoom = 1.0,
+            }
+            ctx.request_repaint();
+        }
+    }
 }
 
 fn preview_decode_budget(ctx: &egui::Context) -> (usize, usize) {
@@ -1032,8 +1783,19 @@ fn preview_decode_budget(ctx: &egui::Context) -> (usize, usize) {
     )
 }
 
+fn supported_video_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["mp4", "mov", "mkv", "avi", "webm", "m4v"]
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
+}
+
 impl eframe::App for VideoEditor {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.update_native_menu(ctx, frame);
         ui::title_bar(ctx);
         if !self.workspace_open {
             ui::startup(ctx, self);
@@ -1041,15 +1803,24 @@ impl eframe::App for VideoEditor {
             return;
         }
         self.update_clock();
+        self.poll_external_media_probe(ctx);
+        self.waveform_generator.set_playback_active(self.playing);
         self.sync_playback_segment(ctx);
         self.prepare_upcoming_transition(ctx);
         self.update_frame(ctx);
+        self.poll_thumbnail(ctx);
         if let Some(result) = self.waveform_generator.poll() {
+            let media_id = self.waveform_media.take();
             match result {
-                Ok(waveform) => self.waveform = Some(waveform),
+                Ok(waveform) => {
+                    if let Some(id) = media_id {
+                        self.waveforms.insert(id, waveform);
+                    }
+                }
                 Err(error) if !error.contains("cancelled") => self.status = Some(error),
                 Err(_) => {}
             }
+            self.pump_waveform_queue(ctx);
         }
         self.poll_export();
         self.handle_shortcuts(ctx);
@@ -1058,7 +1829,10 @@ impl eframe::App for VideoEditor {
         ui::missing_media_dialog(ctx, self);
         ui::export_dialog(ctx, self);
         ui::media_info_dialog(ctx, self);
+        ui::new_project_dialog(ctx, self);
         timeline::show(ctx, self);
+        ui::media_panel(ctx, self);
+        ui::properties_panel(ctx, self);
         ui::preview(ctx, self);
         self.tick_project();
 
@@ -1087,8 +1861,8 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use super::VideoEditor;
-    use crate::{media::VideoAsset, sequence::Sequence};
+    use super::{LibraryMedia, VideoEditor};
+    use crate::{media::VideoAsset, project::Sequence};
 
     #[test]
     fn history_is_bounded_and_a_transaction_creates_one_entry() {
@@ -1138,16 +1912,38 @@ mod tests {
         assert!(generated.success());
 
         let video = VideoAsset::load(path.clone()).expect("test video should load");
+        let first_video = video.clone();
+        let mut second_video = video.clone();
+        second_video.source_width = 180;
+        second_video.source_height = 320;
         let mut sequence = Sequence::new(video.duration);
         let middle = sequence.split_at(0.5, video.fps).expect("first cut");
         let tail = sequence.split_at(1.5, video.fps).expect("second cut");
         sequence.select(Some(middle));
         sequence.delete_selected();
+        sequence
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == tail)
+            .expect("tail clip should exist")
+            .media_id = 2;
         let first = sequence.clips[0].id;
 
         let ctx = eframe::egui::Context::default();
         let mut editor = VideoEditor::new();
-        editor.video = Some(video);
+        editor.video = Some(first_video.clone());
+        editor.media_library = vec![
+            LibraryMedia {
+                id: 1,
+                asset: first_video,
+                thumbnail: None,
+            },
+            LibraryMedia {
+                id: 2,
+                asset: second_video,
+                thumbnail: None,
+            },
+        ];
         editor.sequence = Some(sequence);
         editor.current_time = 0.25;
         editor.playing = true;
@@ -1174,6 +1970,13 @@ mod tests {
         editor.current_time = 0.5;
         editor.sync_playback_segment(&ctx);
         assert_eq!(editor.active_clip, Some(tail));
+        assert_eq!(
+            editor
+                .video
+                .as_ref()
+                .map(|video| (video.source_width, video.source_height)),
+            Some((180, 320))
+        );
         assert!(editor.playback.is_ready());
         assert!(editor.preserve_clock_on_start);
 

@@ -1,6 +1,6 @@
 use std::{
-    collections::VecDeque,
-    path::{Path, PathBuf},
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -17,7 +17,7 @@ use ffmpeg_next as ffmpeg;
 
 use crate::{
     media::{initialize_ffmpeg, rational_value},
-    sequence::Sequence,
+    project::{sequence::MediaId, Sequence},
 };
 
 const MAX_BUFFER_SECONDS: usize = 3;
@@ -33,8 +33,18 @@ pub struct SequenceAudioOutput {
 }
 
 impl SequenceAudioOutput {
-    pub fn prepare(path: &Path, sequence: &Sequence, at: f64) -> Result<Self, String> {
+    pub fn prepare_sources(
+        sources: HashMap<MediaId, PathBuf>,
+        sequence: &Sequence,
+        at: f64,
+    ) -> Result<Self, String> {
         initialize_ffmpeg()?;
+        if let Some(path) = sources.values().find(|path| !path.is_file()) {
+            return Err(format!(
+                "The source media is unavailable: {}",
+                path.display()
+            ));
+        }
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -54,13 +64,12 @@ impl SequenceAudioOutput {
         let decode_queue = Arc::clone(&queue);
         let decode_stop = Arc::clone(&stop);
         let worker_finished = Arc::clone(&decode_finished);
-        let path = path.to_path_buf();
         let sequence = sequence.clone();
         let sequence_duration = sequence.duration;
         let start_time = at.clamp(0.0, sequence.duration);
         thread::spawn(move || {
             if let Err(error) = decode_sequence_audio(
-                path,
+                sources,
                 &sequence,
                 start_time,
                 sample_rate,
@@ -206,7 +215,7 @@ where
 }
 
 fn decode_sequence_audio(
-    path: PathBuf,
+    sources: HashMap<MediaId, PathBuf>,
     sequence: &Sequence,
     at: f64,
     output_rate: u32,
@@ -241,16 +250,23 @@ fn decode_sequence_audio(
         let source_end = clip.source_out;
         let expected_samples =
             duration_samples(timeline_end - timeline_start, output_rate, output_channels);
-        let written = decode_audio_segment(
-            path.clone(),
-            source_start,
-            source_end,
-            expected_samples,
-            output_rate,
-            output_channels,
-            Arc::clone(&queue),
-            Arc::clone(&stop),
-        )?;
+        let gain = clip.audio.linear_gain();
+        let written = if let Some(path) = sources.get(&clip.media_id) {
+            decode_audio_segment(
+                path.clone(),
+                source_start,
+                source_end,
+                expected_samples,
+                output_rate,
+                output_channels,
+                gain,
+                Arc::clone(&queue),
+                Arc::clone(&stop),
+            )
+            .unwrap_or(0)
+        } else {
+            0
+        };
         if written < expected_samples {
             push_silence_samples(
                 expected_samples - written,
@@ -333,6 +349,7 @@ fn decode_audio(
         usize::MAX,
         output_rate,
         output_channels,
+        1.0,
         queue,
         stop,
     )
@@ -347,6 +364,7 @@ fn decode_audio_segment(
     max_samples: usize,
     output_rate: u32,
     output_channels: usize,
+    gain: f32,
     queue: Arc<Mutex<VecDeque<f32>>>,
     stop: Arc<AtomicBool>,
 ) -> Result<usize, String> {
@@ -397,6 +415,7 @@ fn decode_audio_segment(
             max_samples.saturating_sub(written),
             output_rate,
             output_channels,
+            gain,
             &queue,
             &stop,
         )?;
@@ -416,6 +435,7 @@ fn decode_audio_segment(
             max_samples.saturating_sub(written),
             output_rate,
             output_channels,
+            gain,
             &queue,
             &stop,
         )?;
@@ -434,6 +454,7 @@ fn drain_audio_frames(
     max_samples: usize,
     output_rate: u32,
     output_channels: usize,
+    gain: f32,
     queue: &Mutex<VecDeque<f32>>,
     stop: &AtomicBool,
 ) -> Result<usize, String> {
@@ -523,7 +544,8 @@ fn drain_audio_frames(
             .lock()
             .map_err(|_| "audio queue was interrupted".to_owned())?;
         for chunk in bytes[..available * 4].chunks_exact(4).skip(skip).take(take) {
-            samples.push_back(f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            let sample = f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) * gain;
+            samples.push_back(sample);
         }
         written += take;
         if written >= max_samples {
@@ -559,7 +581,7 @@ mod tests {
     };
 
     use super::{decode_audio, decode_sequence_audio};
-    use crate::sequence::Sequence;
+    use crate::project::Sequence;
 
     #[test]
     fn decodes_and_resamples_audio_in_process() {
@@ -640,7 +662,7 @@ mod tests {
         sequence.delete(middle);
         let queue = Arc::new(Mutex::new(VecDeque::new()));
         decode_sequence_audio(
-            path.clone(),
+            std::iter::once((1, path.clone())).collect(),
             &sequence,
             0.0,
             48_000,
@@ -668,7 +690,7 @@ mod tests {
         drop(samples);
         let gap_start_queue = Arc::new(Mutex::new(VecDeque::new()));
         decode_sequence_audio(
-            path.clone(),
+            std::iter::once((1, path.clone())).collect(),
             &sequence,
             0.3,
             48_000,

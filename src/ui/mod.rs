@@ -1,83 +1,211 @@
+//! User interface surfaces and reusable presentation components.
+
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, Pos2, Rect,
-    RichText, Sense, Stroke, StrokeKind, Vec2,
+    self, epaint::Vertex, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin,
+    Mesh, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, Vec2,
 };
 
 use crate::{
     app::VideoEditor,
-    export::{ExportQuality, ExportResolution},
-    icons::{self, Icon},
-    sequence::EditTool,
-    theme, timeline,
+    media::export::{ExportQuality, ExportResolution},
+    project::{sequence::ClipMotion, EditTool},
 };
+
+pub mod icons;
+pub mod theme;
+pub mod timeline;
+
+use icons::Icon;
 
 pub fn startup(ctx: &egui::Context, app: &mut VideoEditor) {
     egui::CentralPanel::default()
         .frame(Frame::new().fill(theme::BLACK))
         .show(ctx, |ui| {
+            let column_width = 400.0_f32.min(ui.available_width() - 48.0).max(280.0);
+            let top_pad = (ui.available_height() * 0.18).clamp(56.0, 120.0);
+
             ui.vertical_centered(|ui| {
-                ui.add_space((ui.available_height() * 0.13).max(40.0));
-                ui.heading(RichText::new("Kuro").size(34.0).strong());
-                ui.label(RichText::new("A precise, local video editor").color(theme::MUTED));
+                ui.add_space(top_pad);
+
+                ui.add(
+                    egui::Image::new(egui::include_image!("../../assets/brand/kuro-mark.svg"))
+                        .fit_to_exact_size(Vec2::splat(52.0))
+                        .bg_fill(theme::BLACK),
+                );
+                ui.add_space(14.0);
+                ui.label(RichText::new("Kuro").size(26.0).strong().color(theme::TEXT));
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Local video editing")
+                        .size(13.0)
+                        .color(theme::MUTED),
+                );
+
                 ui.add_space(28.0);
+
                 ui.horizontal(|ui| {
-                    let width = ui.available_width();
-                    ui.add_space(((width - 360.0) * 0.5).max(0.0));
+                    let actions_width = 228.0;
+                    ui.add_space(((ui.available_width() - actions_width) * 0.5).max(0.0));
                     if ui
-                        .add(dialog_primary_button("New Project"))
+                        .add(
+                            egui::Button::new(RichText::new("New Project").strong())
+                                .fill(theme::ACCENT)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(CornerRadius::same(8))
+                                .min_size(Vec2::new(132.0, 32.0)),
+                        )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
-                        app.new_project_draft = crate::project::NewProjectDraft::default();
-                        app.new_project_dialog_open = true;
+                        app.open_new_project_dialog();
                     }
                     if ui
-                        .add(dialog_secondary_button("Open Project"))
+                        .add(
+                            egui::Button::new(RichText::new("Open").color(theme::MUTED))
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(CornerRadius::same(8))
+                                .min_size(Vec2::new(72.0, 32.0)),
+                        )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
                         app.open_project_picker(ctx);
                     }
                 });
-                ui.add_space(34.0);
-                ui.allocate_ui(Vec2::new(520.0, ui.available_height()), |ui| {
-                    ui.label(RichText::new("Recent Projects").size(15.0).strong());
-                    ui.add_space(8.0);
-                    if app.recent_projects.is_empty() {
-                        ui.label(RichText::new("No recent projects yet").color(theme::MUTED));
-                    }
-                    let recent = app.recent_projects.clone();
-                    for project in recent {
-                        let path = project.path.clone();
-                        let response = ui.add_sized(
-                            [ui.available_width(), 52.0],
-                            egui::Button::new(
-                                RichText::new(format!(
-                                    "{}\n{}",
-                                    project.name,
-                                    project.path.display()
-                                ))
-                                .color(theme::TEXT),
-                            )
-                            .fill(Color32::from_rgb(10, 10, 11))
-                            .stroke(Stroke::new(1.0, theme::BORDER))
-                            .corner_radius(CornerRadius::same(9)),
+
+                ui.add_space(48.0);
+
+                ui.allocate_ui_with_layout(
+                    Vec2::new(column_width, ui.available_height()),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        ui.label(
+                            RichText::new("Recent")
+                                .size(11.0)
+                                .color(theme::MUTED),
                         );
-                        if response
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .clicked()
-                        {
-                            app.open_project_path(path, ctx);
+                        ui.add_space(10.0);
+
+                        if app.recent_projects.is_empty() {
+                            ui.label(
+                                RichText::new("No projects yet")
+                                    .size(13.0)
+                                    .color(theme::MUTED),
+                            );
+                        } else {
+                            let recent = app.recent_projects.clone();
+                            for project in recent {
+                                let path = project.path.clone();
+                                let opened = format_relative_opened(project.opened_unix_ms);
+                                if recent_project_row(ui, &project.name, &opened, &path)
+                                    .clicked()
+                                {
+                                    app.open_project_path(path, ctx);
+                                }
+                            }
                         }
-                        ui.add_space(6.0);
-                    }
-                    if let Some(status) = &app.status {
-                        ui.add_space(12.0);
-                        ui.label(RichText::new(status).color(theme::PLAYHEAD));
-                    }
-                });
+
+                        if let Some(status) = &app.status {
+                            ui.add_space(16.0);
+                            ui.label(RichText::new(status).size(12.0).color(theme::PLAYHEAD));
+                        }
+                    },
+                );
             });
         });
+}
+
+fn recent_project_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    opened: &str,
+    path: &std::path::Path,
+) -> egui::Response {
+    let height = 40.0;
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), height),
+        Sense::click(),
+    );
+
+    if ui.is_rect_visible(rect) {
+        if response.hovered() {
+            ui.painter().rect_filled(
+                rect.expand2(Vec2::new(8.0, 0.0)),
+                CornerRadius::same(6),
+                theme::SURFACE_HOVER,
+            );
+        }
+
+        let time_galley = ui.fonts(|fonts| {
+            fonts.layout_no_wrap(
+                opened.to_owned(),
+                FontId::proportional(12.0),
+                theme::MUTED,
+            )
+        });
+        let time_width = time_galley.size().x;
+        let gap = 16.0;
+        let name_right = rect.right() - 4.0 - time_width - gap;
+        let name_rect = Rect::from_min_max(
+            Pos2::new(rect.left() + 4.0, rect.top()),
+            Pos2::new(name_right.max(rect.left() + 44.0), rect.bottom()),
+        );
+        let mid_y = rect.center().y;
+
+        let name_galley = ui.fonts(|fonts| {
+            fonts.layout_no_wrap(name.to_owned(), FontId::proportional(14.0), theme::TEXT)
+        });
+        ui.painter().with_clip_rect(name_rect).galley(
+            Pos2::new(name_rect.left(), mid_y - name_galley.size().y * 0.5),
+            name_galley,
+            theme::TEXT,
+        );
+        ui.painter().galley(
+            Pos2::new(
+                rect.right() - 4.0 - time_width,
+                mid_y - time_galley.size().y * 0.5,
+            ),
+            time_galley,
+            theme::MUTED,
+        );
+    }
+
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(path.display().to_string())
+}
+
+fn format_relative_opened(opened_unix_ms: u64) -> String {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(opened_unix_ms);
+    let elapsed_secs = now_ms.saturating_sub(opened_unix_ms) / 1000;
+
+    match elapsed_secs {
+        0..=59 => "Just now".to_owned(),
+        60..=3599 => {
+            let minutes = elapsed_secs / 60;
+            format!("{minutes}m ago")
+        }
+        3600..=86_399 => {
+            let hours = elapsed_secs / 3600;
+            format!("{hours}h ago")
+        }
+        86_400..=604_799 => {
+            let days = elapsed_secs / 86_400;
+            format!("{days}d ago")
+        }
+        _ => {
+            let weeks = elapsed_secs / 604_800;
+            if weeks < 8 {
+                format!("{weeks}w ago")
+            } else {
+                "Earlier".to_owned()
+            }
+        }
+    }
 }
 
 pub fn new_project_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
@@ -281,14 +409,25 @@ pub fn toolbar(ctx: &egui::Context, app: &mut VideoEditor) {
         .frame(
             Frame::new()
                 .fill(theme::BLACK)
-                .inner_margin(Margin::symmetric(16, 8))
-                .stroke(Stroke::new(1.0, theme::BORDER)),
+                .inner_margin(Margin::symmetric(16, 8)),
         )
         .show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 if icons::import_button(ui).clicked() {
                     app.import_video(ctx);
                 }
+                ui.add_space(10.0);
+                ui.add_enabled_ui(app.can_undo(), |ui| {
+                    if icons::button(ui, Icon::Undo, "Undo (⌘Z)", false).clicked() {
+                        app.undo(ctx);
+                    }
+                });
+                ui.add_enabled_ui(app.can_redo(), |ui| {
+                    if icons::button(ui, Icon::Redo, "Redo (⇧⌘Z)", false).clicked() {
+                        app.redo(ctx);
+                    }
+                });
+                ui.add_space(10.0);
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(progress) = app.export_job.as_ref().map(|job| job.progress()) {
@@ -300,19 +439,6 @@ pub fn toolbar(ctx: &egui::Context, app: &mut VideoEditor) {
                                 .desired_width(180.0)
                                 .show_percentage(),
                         );
-                    } else if ui
-                        .add_enabled(
-                            app.video.is_some(),
-                            egui::Button::new(RichText::new("Export").strong())
-                                .fill(theme::ACCENT)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(CornerRadius::same(9))
-                                .min_size(Vec2::new(96.0, 34.0)),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        app.open_export();
                     }
                     if let Some(message) = &app.export_message {
                         ui.label(RichText::new(message).small().color(theme::MUTED));
@@ -423,12 +549,16 @@ pub fn media_info_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
     let Some(clip_id) = app.media_info_clip else {
         return;
     };
-    let (Some(video), Some(clip)) = (
-        app.video.as_ref(),
-        app.sequence
-            .as_ref()
-            .and_then(|sequence| sequence.clip(clip_id)),
-    ) else {
+    let Some(clip) = app
+        .sequence
+        .as_ref()
+        .and_then(|sequence| sequence.clip(clip_id))
+        .cloned()
+    else {
+        app.media_info_clip = None;
+        return;
+    };
+    let Some(video) = app.media_asset(clip.media_id).cloned() else {
         app.media_info_clip = None;
         return;
     };
@@ -589,6 +719,223 @@ fn format_file_size(bytes: u64) -> String {
     }
 }
 
+fn truncate_to_width(painter: &egui::Painter, text: &str, font: &FontId, max_width: f32) -> String {
+    if painter
+        .layout_no_wrap(text.to_owned(), font.clone(), theme::TEXT)
+        .size()
+        .x
+        <= max_width
+    {
+        return text.to_owned();
+    }
+
+    let characters = text.chars().collect::<Vec<_>>();
+    let mut low = 0;
+    let mut high = characters.len();
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        let candidate = characters[..middle]
+            .iter()
+            .chain(std::iter::once(&'…'))
+            .collect::<String>();
+        if painter
+            .layout_no_wrap(candidate, font.clone(), theme::TEXT)
+            .size()
+            .x
+            <= max_width
+        {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    characters[..low]
+        .iter()
+        .chain(std::iter::once(&'…'))
+        .collect()
+}
+
+pub fn properties_panel(ctx: &egui::Context, app: &mut VideoEditor) {
+    egui::SidePanel::right("clip-properties")
+        .exact_width(268.0)
+        .frame(
+            Frame::new()
+                .fill(theme::BLACK)
+                .inner_margin(Margin::same(14)),
+        )
+        .show(ctx, |ui| {
+            ui.label(RichText::new("Properties").strong());
+            ui.add_space(10.0);
+
+            let selected_count = app
+                .sequence
+                .as_ref()
+                .map(|sequence| sequence.selected.len())
+                .unwrap_or(0);
+            if selected_count == 0 {
+                ui.label(
+                    RichText::new("Select a clip on the timeline to edit motion and audio.")
+                        .size(12.0)
+                        .color(theme::MUTED),
+                );
+                return;
+            }
+            if selected_count > 1 {
+                ui.label(
+                    RichText::new(format!("{selected_count} clips selected"))
+                        .size(12.0)
+                        .color(theme::MUTED),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Select a single clip to edit properties.")
+                        .size(12.0)
+                        .color(theme::MUTED),
+                );
+                return;
+            }
+
+            let (mut motion, mut audio, name) = {
+                let Some(clip) = app.selected_clip() else {
+                    return;
+                };
+                let name = app
+                    .media_asset(clip.media_id)
+                    .map(|asset| asset.name.clone())
+                    .unwrap_or_else(|| "Offline media".to_owned());
+                (clip.motion, clip.audio, name)
+            };
+
+            ui.label(RichText::new(name).size(12.0).color(theme::TEXT));
+            ui.add_space(14.0);
+
+            ui.label(RichText::new("Motion").size(11.0).color(theme::MUTED));
+            ui.add_space(6.0);
+            let mut commit_motion = false;
+            commit_motion |= edit_property(
+                ui,
+                app,
+                "Position X",
+                &mut motion.position_x,
+                -4000.0..=4000.0,
+                1.0,
+            );
+            commit_motion |= edit_property(
+                ui,
+                app,
+                "Position Y",
+                &mut motion.position_y,
+                -4000.0..=4000.0,
+                1.0,
+            );
+            commit_motion |= edit_property(ui, app, "Scale", &mut motion.scale, 1.0..=1000.0, 0.1);
+            commit_motion |=
+                edit_property(ui, app, "Rotation", &mut motion.rotation, -3600.0..=3600.0, 0.1);
+            app.update_selected_clip_motion(motion);
+            if commit_motion {
+                app.commit_history_transaction();
+            }
+
+            ui.add_space(16.0);
+            ui.label(RichText::new("Audio").size(11.0).color(theme::MUTED));
+            ui.add_space(6.0);
+            let commit_audio =
+                edit_property(ui, app, "Level (dB)", &mut audio.volume_db, -60.0..=12.0, 0.1);
+            app.update_selected_clip_audio(audio);
+            if commit_audio {
+                app.commit_history_transaction();
+            }
+        });
+}
+
+/// Returns true when the edit should be committed to undo history this frame.
+fn edit_property(
+    ui: &mut egui::Ui,
+    app: &mut VideoEditor,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    speed: f32,
+) -> bool {
+    let mut should_commit = false;
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            Vec2::new(88.0, ui.spacing().interact_size.y),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.label(RichText::new(label).size(12.0).color(theme::MUTED));
+            },
+        );
+        let response = ui.add(
+            egui::DragValue::new(value)
+                .range(range)
+                .speed(speed)
+                .max_decimals(1),
+        );
+        if response.drag_started() || (response.changed() && !response.dragged()) {
+            app.begin_history_transaction();
+        }
+        if response.drag_stopped() || (response.changed() && !response.dragged()) {
+            should_commit = true;
+        }
+    });
+    ui.add_space(4.0);
+    should_commit
+}
+
+fn paint_clip_frame(
+    painter: &egui::Painter,
+    texture: TextureId,
+    fitted: Rect,
+    frame: Rect,
+    format_width: f32,
+    format_height: f32,
+    motion: ClipMotion,
+) {
+    let scale = (motion.scale / 100.0).max(0.01);
+    let size = fitted.size() * scale;
+    let offset = Vec2::new(
+        motion.position_x / format_width.max(1.0) * frame.width(),
+        -motion.position_y / format_height.max(1.0) * frame.height(),
+    );
+    let dest = Rect::from_center_size(fitted.center() + offset, size);
+    let painter = painter.with_clip_rect(frame);
+    let angle = motion.rotation.to_radians();
+    if angle.abs() < 0.000_1 {
+        painter.image(
+            texture,
+            dest,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        return;
+    }
+
+    let center = dest.center();
+    let cos = angle.cos();
+    let sin = angle.sin();
+    let corners = [
+        (dest.left_top(), Pos2::new(0.0, 0.0)),
+        (dest.right_top(), Pos2::new(1.0, 0.0)),
+        (dest.right_bottom(), Pos2::new(1.0, 1.0)),
+        (dest.left_bottom(), Pos2::new(0.0, 1.0)),
+    ];
+    let mut mesh = Mesh::with_texture(texture);
+    for (pos, uv) in corners {
+        let delta = pos - center;
+        mesh.vertices.push(Vertex {
+            pos: Pos2::new(
+                center.x + delta.x * cos - delta.y * sin,
+                center.y + delta.x * sin + delta.y * cos,
+            ),
+            uv,
+            color: Color32::WHITE,
+        });
+    }
+    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
     egui::CentralPanel::default()
         .frame(
@@ -604,22 +951,32 @@ pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
             );
             let (canvas, _) = ui.allocate_exact_size(preview_size, Sense::hover());
             ui.painter()
-                .rect_filled(canvas, CornerRadius::same(4), theme::SURFACE);
+                .rect_filled(canvas, CornerRadius::same(6), theme::SURFACE);
+
+            let format = app.sequence_format();
+            let project_frame = aspect_fit(
+                canvas.shrink(12.0),
+                format.width as f32 / format.height.max(1) as f32,
+            );
+            ui.painter()
+                .rect_filled(project_frame, CornerRadius::ZERO, Color32::BLACK);
 
             if let (Some(video), Some(texture)) = (&app.video, &app.texture) {
-                let format = app.sequence_format();
-                let project_frame = aspect_fit(
-                    canvas.shrink(12.0),
-                    format.width as f32 / format.height.max(1) as f32,
-                );
-                ui.painter()
-                    .rect_filled(project_frame, CornerRadius::ZERO, Color32::BLACK);
                 let image_rect = aspect_fit(project_frame, video.aspect_ratio());
-                ui.painter().image(
+                let motion = app
+                    .sequence
+                    .as_ref()
+                    .and_then(|sequence| sequence.clip_at(app.current_time))
+                    .map(|clip| clip.motion)
+                    .unwrap_or_default();
+                paint_clip_frame(
+                    ui.painter(),
                     texture.id(),
                     image_rect,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                    Color32::WHITE,
+                    project_frame,
+                    format.width as f32,
+                    format.height as f32,
+                    motion,
                 );
             } else if app.video.is_none() {
                 ui.painter().text(
@@ -630,12 +987,6 @@ pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
                     theme::MUTED,
                 );
             }
-            ui.painter().rect_stroke(
-                canvas,
-                CornerRadius::same(4),
-                Stroke::new(1.0, theme::BORDER),
-                StrokeKind::Inside,
-            );
 
             ui.allocate_ui_with_layout(
                 Vec2::new(ui.available_width(), controls_height),
@@ -702,6 +1053,151 @@ pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
                 },
             );
         });
+}
+
+pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
+    let mut delete_requested = None;
+    egui::SidePanel::left("project-media")
+        .exact_width(270.0)
+        .frame(
+            Frame::new()
+                .fill(theme::BLACK)
+                .inner_margin(Margin::same(12)),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Project media").strong());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(app.media_library.len().to_string())
+                            .small()
+                            .color(theme::MUTED),
+                    );
+                });
+            });
+            ui.add_space(10.0);
+            if app.media_library.is_empty() {
+                ui.label(RichText::new("Import footage to add it here.").color(theme::MUTED));
+                return;
+            }
+
+            let entries = app
+                .media_library
+                .iter()
+                .map(|media| {
+                    (
+                        media.id,
+                        media.asset.name.clone(),
+                        media.asset.file_size,
+                        media.asset.duration,
+                        media.asset.source_width,
+                        media.asset.source_height,
+                        media.thumbnail.as_ref().map(TextureHandle::id),
+                    )
+                })
+                .collect::<Vec<_>>();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for (id, name, size, duration, width, height, thumbnail) in entries {
+                    let selected = app.selected_media_id == Some(id);
+                    let (rect, response) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), 72.0),
+                        Sense::click_and_drag(),
+                    );
+                    response.dnd_set_drag_payload(id);
+                    let response = response
+                        .on_hover_cursor(egui::CursorIcon::Grab)
+                        .on_hover_text_at_pointer("Drag onto the timeline");
+                    if response.secondary_clicked() {
+                        app.select_library_media(id);
+                    }
+                    response.context_menu(|ui| {
+                        ui.visuals_mut().panel_fill = theme::BLACK;
+                        ui.visuals_mut().window_fill = theme::BLACK;
+                        ui.set_min_width(158.0);
+                        ui.set_max_width(180.0);
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.spacing_mut().button_padding = Vec2::new(7.0, 5.0);
+                        if icons::menu_item(ui, Icon::Delete, "Delete media").clicked() {
+                            delete_requested = Some(id);
+                            ui.close_menu();
+                        }
+                    });
+                    let hovered = response.hovered();
+                    ui.painter().rect_filled(
+                        rect,
+                        CornerRadius::same(8),
+                        if selected {
+                            theme::SURFACE
+                        } else if hovered {
+                            theme::SURFACE_HOVER
+                        } else {
+                            Color32::TRANSPARENT
+                        },
+                    );
+                    if selected {
+                        ui.painter().rect_stroke(
+                            rect,
+                            CornerRadius::same(8),
+                            Stroke::new(1.0, theme::ACCENT),
+                            StrokeKind::Inside,
+                        );
+                    }
+                    let thumb =
+                        Rect::from_min_size(rect.min + Vec2::new(7.0, 7.0), Vec2::new(88.0, 58.0));
+                    ui.painter()
+                        .rect_filled(thumb, CornerRadius::same(5), theme::SURFACE);
+                    if let Some(texture) = thumbnail {
+                        ui.painter().image(
+                            texture,
+                            thumb,
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                    }
+                    let text_x = thumb.right() + 9.0;
+                    let title_font = FontId::proportional(12.0);
+                    let title = truncate_to_width(
+                        ui.painter(),
+                        &name,
+                        &title_font,
+                        (rect.right() - text_x - 8.0).max(1.0),
+                    );
+                    ui.painter().text(
+                        Pos2::new(text_x, rect.top() + 9.0),
+                        Align2::LEFT_TOP,
+                        title,
+                        title_font,
+                        theme::TEXT,
+                    );
+                    ui.painter().text(
+                        Pos2::new(text_x, rect.top() + 34.0),
+                        Align2::LEFT_TOP,
+                        format!(
+                            "{} × {}  ·  {}",
+                            width,
+                            height,
+                            format_file_size(size.unwrap_or(0))
+                        ),
+                        FontId::proportional(10.0),
+                        theme::MUTED,
+                    );
+                    ui.painter().text(
+                        Pos2::new(text_x, rect.top() + 50.0),
+                        Align2::LEFT_TOP,
+                        format!("{duration:.1}s"),
+                        FontId::proportional(10.0),
+                        theme::MUTED,
+                    );
+                    if response.clicked() {
+                        app.select_library_media(id);
+                    }
+                    ui.add_space(7.0);
+                }
+            });
+        });
+    if let Some(id) = delete_requested {
+        app.delete_library_media(id, ctx);
+    }
 }
 
 fn current_timecode_editor(
@@ -827,7 +1323,7 @@ pub fn parse_timecode(value: &str, fps: f64) -> Option<f64> {
 mod tests {
     use eframe::egui::{Pos2, Rect};
 
-    use super::{aspect_fit, parse_timecode, timecode};
+    use super::{aspect_fit, format_relative_opened, parse_timecode, timecode};
 
     #[test]
     fn portrait_media_is_fitted_without_stretching() {
@@ -848,5 +1344,19 @@ mod tests {
         assert!((parse_timecode("00:01:05:15", 30.0).unwrap() - 65.5).abs() < 0.000_001);
         assert!(parse_timecode("00:61:00:00", 30.0).is_none());
         assert!(parse_timecode("00:00:00:30", 30.0).is_none());
+    }
+
+    #[test]
+    fn formats_recent_project_relative_times() {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert_eq!(format_relative_opened(now_ms), "Just now");
+        assert_eq!(format_relative_opened(now_ms.saturating_sub(5 * 60 * 1000)), "5m ago");
+        assert_eq!(
+            format_relative_opened(now_ms.saturating_sub(3 * 60 * 60 * 1000)),
+            "3h ago"
+        );
     }
 }

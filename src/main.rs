@@ -1,19 +1,15 @@
 mod app;
-mod audio;
-mod export;
-mod icons;
 mod media;
-mod playback;
+mod native_menu;
 mod project;
-mod sequence;
-mod theme;
-mod timeline;
 mod ui;
-mod waveform;
 
 use app::VideoEditor;
 
 fn main() -> eframe::Result<()> {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/brand/kuro-icon.png"))
+        .expect("Kuro app icon must be a valid PNG");
+
     eframe::run_native(
         "Kuro",
         eframe::NativeOptions {
@@ -24,12 +20,13 @@ fn main() -> eframe::Result<()> {
                 .with_fullsize_content_view(true)
                 .with_title_shown(false)
                 .with_titlebar_shown(false)
-                .with_titlebar_buttons_shown(true),
+                .with_titlebar_buttons_shown(true)
+                .with_icon(icon),
             ..Default::default()
         },
         Box::new(|creation_context| {
             egui_extras::install_image_loaders(&creation_context.egui_ctx);
-            theme::configure(&creation_context.egui_ctx);
+            ui::theme::configure(&creation_context.egui_ctx);
             Ok(Box::new(VideoEditor::new()))
         }),
     )

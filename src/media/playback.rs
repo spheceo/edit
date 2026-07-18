@@ -71,6 +71,12 @@ impl PlaybackEngine {
 
     pub fn start(&mut self, video: &VideoAsset, at: f64, ctx: &Context) -> Result<(), String> {
         initialize_ffmpeg()?;
+        if !video.path.is_file() {
+            return Err(format!(
+                "The source media is unavailable: {}",
+                video.path.display()
+            ));
+        }
         self.stop();
         self.cancel_preview();
         let (receiver, stop) = spawn_video_decoder(video, at, ctx.clone());
@@ -91,6 +97,10 @@ impl PlaybackEngine {
     }
 
     pub fn request_preview(&mut self, video: &VideoAsset, time: f64, ctx: &Context) {
+        if !video.path.is_file() {
+            self.clear_preview();
+            return;
+        }
         let frame_interval = 1.0 / video.fps.max(1.0);
         if self
             .last_preview_request
@@ -588,7 +598,10 @@ mod tests {
         time::Duration,
     };
 
-    use super::{decode_preview, preview_worker, rotate_rgb, spawn_video_decoder, PreviewRequest};
+    use super::{
+        decode_preview, preview_worker, rotate_rgb, spawn_video_decoder, PlaybackEngine,
+        PreviewRequest,
+    };
     use crate::media::VideoAsset;
 
     #[test]
@@ -695,5 +708,10 @@ mod tests {
         drop(request_tx);
         worker.join().expect("preview worker should stop");
         let _ = fs::remove_file(path);
+        let mut playback = PlaybackEngine::new();
+        let error = playback
+            .start(&asset, 0.0, &eframe::egui::Context::default())
+            .expect_err("missing media should fail before a worker is spawned");
+        assert!(error.contains("source media is unavailable"));
     }
 }

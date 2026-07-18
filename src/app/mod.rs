@@ -14,10 +14,10 @@ use eframe::egui::{self, ColorImage, Pos2, TextureHandle, TextureOptions};
 
 use crate::{
     media::{
+        transcription::{self, TranscriptionJob, TranscriptionResult},
         audio::SequenceAudioOutput,
         export::{ExportJob, ExportResult, ExportSettings, SequenceFormat},
         playback::{DecodedFrame, PlaybackEngine},
-        transcription::{self, TranscriptionJob, TranscriptionResult},
         waveform::{Waveform, WaveformGenerator},
         VideoAsset,
     },
@@ -27,15 +27,16 @@ use crate::{
         sequence::{
             frame_duration, ClipAudio, ClipColor, ClipId, ClipMotion, MediaId, SequenceClip,
         },
-        EditTool, EditorProjectState, EditorSnapshot, MediaReference, NewProjectDraft,
-        ProjectDocument, ProjectSession, RecentProject, Sequence, Transcript,
-        DEFAULT_TIMELINE_HEIGHT, MAX_HISTORY, MAX_TIMELINE_HEIGHT, MIN_TIMELINE_HEIGHT,
+        EditTool, EditorProjectState, EditorSnapshot, MediaFolder, MediaReference, NewProjectDraft,
+        ProjectDocument, ProjectSession, RecentProject, Sequence, Transcript, DEFAULT_TIMELINE_HEIGHT,
+        MAX_HISTORY, MAX_TIMELINE_HEIGHT, MIN_TIMELINE_HEIGHT,
     },
     ui::{self, timeline},
 };
 
 pub struct LibraryMedia {
     pub id: MediaId,
+    pub folder_id: Option<u64>,
     pub asset: VideoAsset,
     pub thumbnail: Option<TextureHandle>,
 }
@@ -49,10 +50,32 @@ pub enum PropertiesTab {
 
 pub struct ClipDrag {
     pub clip_id: ClipId,
+    pub clip_ids: Vec<ClipId>,
     pub pointer_offset: f64,
     pub target_track: u8,
     pub valid_target: bool,
     original: Sequence,
+}
+
+pub struct TrimDrag {
+    clip_id: ClipId,
+    clip_ids: Vec<ClipId>,
+    left: bool,
+    original: Sequence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GapLane {
+    Video,
+    Audio,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TimelineGap {
+    pub start: f64,
+    pub end: f64,
+    pub track: u8,
+    pub lane: GapLane,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,6 +122,7 @@ pub struct VideoEditor {
     native_menu: NativeMenu,
     pub media_library: Vec<LibraryMedia>,
     pub selected_media_id: Option<MediaId>,
+    pub current_media_folder: Option<u64>,
     pub video: Option<VideoAsset>,
     pub current_time: f64,
     pub playing: bool,
@@ -112,9 +136,9 @@ pub struct VideoEditor {
     pub export_job: Option<ExportJob>,
     pub export_destination: Option<PathBuf>,
     pub export_message: Option<String>,
-    export_message_shown_at: Option<Instant>,
     pub transcription_job: Option<TranscriptionJob>,
     pub transcription_message: Option<String>,
+    export_message_shown_at: Option<Instant>,
     pub properties_tab: PropertiesTab,
     pub media_info_clip: Option<ClipId>,
     pub timeline_zoom: f32,
@@ -123,7 +147,6 @@ pub struct VideoEditor {
     pub timecode_input: String,
     pub timecode_select_all: bool,
     pub timecode_error: bool,
-    pub workspace_open: bool,
     pub project_session: Option<ProjectSession>,
     pub recent_projects: Vec<RecentProject>,
     pub new_project_dialog_open: bool,
@@ -131,6 +154,8 @@ pub struct VideoEditor {
     pub missing_media: Option<MediaReference>,
     missing_media_queue: VecDeque<MediaReference>,
     pub clip_drag: Option<ClipDrag>,
+    pub trim_drag: Option<TrimDrag>,
+    pub selected_gap: Option<TimelineGap>,
     pub marquee: Option<MarqueeSelection>,
     pub ruler_scrubbing: bool,
     pub timeline_drop_preview: Option<TimelineDropPreview>,
@@ -164,6 +189,7 @@ impl VideoEditor {
             native_menu: NativeMenu::new(),
             media_library: Vec::new(),
             selected_media_id: None,
+            current_media_folder: None,
             video: None,
             current_time: 0.0,
             playing: false,
@@ -177,9 +203,9 @@ impl VideoEditor {
             export_job: None,
             export_destination: None,
             export_message: None,
-            export_message_shown_at: None,
             transcription_job: None,
             transcription_message: None,
+            export_message_shown_at: None,
             properties_tab: PropertiesTab::default(),
             media_info_clip: None,
             timeline_zoom: 1.0,
@@ -188,7 +214,6 @@ impl VideoEditor {
             timecode_input: String::new(),
             timecode_select_all: false,
             timecode_error: false,
-            workspace_open: false,
             project_session: None,
             recent_projects: project::load_recent_projects(),
             new_project_dialog_open: false,
@@ -196,6 +221,8 @@ impl VideoEditor {
             missing_media: None,
             missing_media_queue: VecDeque::new(),
             clip_drag: None,
+            trim_drag: None,
+            selected_gap: None,
             marquee: None,
             ruler_scrubbing: false,
             timeline_drop_preview: None,
@@ -231,19 +258,15 @@ impl VideoEditor {
     }
 
     pub fn close_project(&mut self, ctx: &egui::Context) {
-        if !self.workspace_open {
+        if self.project_session.is_none() {
             return;
         }
         if let Some(job) = self.export_job.take() {
             job.cancel();
         }
-        if let Some(job) = self.transcription_job.take() {
-            job.cancel();
-        }
         self.save_project();
         self.reset_editor(ctx);
         self.project_session = None;
-        self.workspace_open = false;
         self.new_project_dialog_open = false;
         self.history.clear();
         self.history_index = 0;
@@ -263,11 +286,8 @@ impl VideoEditor {
             return;
         }
         let settings = self.new_project_draft.settings.clone();
-        if self.workspace_open {
+        if self.project_session.is_some() {
             if let Some(job) = self.export_job.take() {
-                job.cancel();
-            }
-            if let Some(job) = self.transcription_job.take() {
                 job.cancel();
             }
             self.save_project();
@@ -277,7 +297,6 @@ impl VideoEditor {
             Ok(session) => {
                 self.reset_editor(ctx);
                 self.project_session = Some(session);
-                self.workspace_open = true;
                 self.new_project_dialog_open = false;
                 self.remember_current_project();
                 self.initialize_history();
@@ -321,7 +340,6 @@ impl VideoEditor {
                 self.export_settings = document.editor.export_settings.clone();
                 self.sequence = document.sequence.clone();
                 self.project_session = Some(session);
-                self.workspace_open = true;
                 self.missing_media = None;
                 for media in &document.media {
                     if media.path.exists() {
@@ -386,10 +404,9 @@ impl VideoEditor {
                         .find(|media| media.id == missing.id)
                     {
                         media.path = path;
-                        media.managed = false;
                         media.name = relinked_name;
                     }
-                    session.dirty_since = Some(Instant::now());
+                    session.mark_dirty();
                 }
                 self.missing_media = self.missing_media_queue.pop_front();
                 if self.missing_media.is_some() {
@@ -448,6 +465,7 @@ impl VideoEditor {
                     path: video.path.clone(),
                     name: video.name.clone(),
                     managed: false,
+                    folder_id: self.current_media_folder,
                 });
                 session.document.active_media_id = Some(media_id);
             }
@@ -455,6 +473,14 @@ impl VideoEditor {
         self.media_library.retain(|media| media.id != media_id);
         self.media_library.push(LibraryMedia {
             id: media_id,
+            folder_id: self.project_session.as_ref().and_then(|session| {
+                session
+                    .document
+                    .media
+                    .iter()
+                    .find(|media| media.id == media_id)
+                    .and_then(|media| media.folder_id)
+            }),
             asset: video.clone(),
             thumbnail: None,
         });
@@ -473,6 +499,73 @@ impl VideoEditor {
             .and_then(|session| session.document.media.iter().map(|media| media.id).max())
             .unwrap_or(0)
             .saturating_add(1)
+    }
+
+    pub fn create_media_folder(&mut self) {
+        let Some(session) = &mut self.project_session else {
+            return;
+        };
+        let next_id = session
+            .document
+            .media_folders
+            .iter()
+            .map(|folder| folder.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let siblings = session
+            .document
+            .media_folders
+            .iter()
+            .filter(|folder| folder.parent_id == self.current_media_folder)
+            .count();
+        let name = if siblings == 0 {
+            "New folder".to_owned()
+        } else {
+            format!("New folder {}", siblings + 1)
+        };
+        session.document.media_folders.push(MediaFolder {
+            id: next_id,
+            name,
+            parent_id: self.current_media_folder,
+        });
+        session.mark_dirty();
+    }
+
+    pub fn enter_media_folder(&mut self, folder_id: u64) {
+        if self.project_session.as_ref().is_some_and(|session| {
+            session
+                .document
+                .media_folders
+                .iter()
+                .any(|folder| folder.id == folder_id)
+        }) {
+            self.current_media_folder = Some(folder_id);
+        }
+    }
+
+    pub fn leave_media_folder(&mut self) {
+        self.current_media_folder = self.project_session.as_ref().and_then(|session| {
+            self.current_media_folder.and_then(|current| {
+                session
+                    .document
+                    .media_folders
+                    .iter()
+                    .find(|folder| folder.id == current)
+                    .and_then(|folder| folder.parent_id)
+            })
+        });
+    }
+
+    pub fn current_media_folder_name(&self) -> Option<&str> {
+        let current = self.current_media_folder?;
+        self.project_session
+            .as_ref()?
+            .document
+            .media_folders
+            .iter()
+            .find(|folder| folder.id == current)
+            .map(|folder| folder.name.as_str())
     }
 
     fn queue_missing_media(&mut self, media: MediaReference) {
@@ -707,7 +800,6 @@ impl VideoEditor {
         self.selected_media_id = Some(id);
         if let Some(session) = &mut self.project_session {
             session.document.active_media_id = Some(id);
-            session.dirty_since = Some(Instant::now());
         }
     }
 
@@ -741,7 +833,7 @@ impl VideoEditor {
         if let Some(session) = &mut self.project_session {
             session.document.media.retain(|media| media.id != id);
             session.document.active_media_id = self.selected_media_id;
-            session.dirty_since = Some(Instant::now());
+            session.mark_dirty();
         }
         self.current_time = self.current_time.clamp(0.0, self.duration());
         self.refresh_preview(ctx);
@@ -853,8 +945,16 @@ impl VideoEditor {
         } else {
             id
         };
+        let clip_ids = if duplicate {
+            vec![clip_id]
+        } else if original.is_selected(id) {
+            original.selected.clone()
+        } else {
+            vec![id]
+        };
         self.clip_drag = Some(ClipDrag {
             clip_id,
+            clip_ids,
             pointer_offset,
             target_track: clip.track(),
             valid_target: true,
@@ -869,11 +969,14 @@ impl VideoEditor {
         snap: f64,
         ctx: &egui::Context,
     ) {
-        let Some((id, offset)) = self
-            .clip_drag
-            .as_ref()
-            .map(|drag| (drag.clip_id, drag.pointer_offset))
-        else {
+        let Some((id, ids, offset, original)) = self.clip_drag.as_ref().map(|drag| {
+            (
+                drag.clip_id,
+                drag.clip_ids.clone(),
+                drag.pointer_offset,
+                drag.original.clone(),
+            )
+        }) else {
             return;
         };
         let Some(track) = target_track else {
@@ -882,7 +985,25 @@ impl VideoEditor {
             }
             return;
         };
-        let moved = self.move_clip_to_track(id, (pointer_time - offset).max(0.0), track, snap, ctx);
+        self.sequence = Some(original);
+        let fps = self.frame_rate();
+        let moved = self
+            .sequence
+            .as_mut()
+            .and_then(|sequence| {
+                sequence.move_group_to_track(
+                    &ids,
+                    id,
+                    (pointer_time - offset).max(0.0),
+                    track,
+                    fps,
+                    snap,
+                )
+            })
+            .is_some();
+        if moved {
+            self.refresh_preview(ctx);
+        }
         if let Some(drag) = self.clip_drag.as_mut() {
             drag.target_track = track;
             drag.valid_target = moved;
@@ -904,6 +1025,90 @@ impl VideoEditor {
         self.commit_history_transaction();
     }
 
+    pub fn begin_trim_drag(&mut self, id: ClipId, left: bool) {
+        let Some(original) = self.sequence.clone() else {
+            return;
+        };
+        let clip_ids = if original.is_selected(id) {
+            original.selected.clone()
+        } else {
+            vec![id]
+        };
+        self.begin_history_transaction();
+        self.trim_drag = Some(TrimDrag {
+            clip_id: id,
+            clip_ids,
+            left,
+            original,
+        });
+    }
+
+    pub fn update_trim_drag(&mut self, requested: f64, snap: f64, ctx: &egui::Context) {
+        let Some(drag) = self.trim_drag.as_ref() else {
+            return;
+        };
+        let original = drag.original.clone();
+        let Some(primary) = original.clip(drag.clip_id) else {
+            return;
+        };
+        let delta = requested
+            - if drag.left {
+                primary.timeline_start
+            } else {
+                primary.timeline_end
+            };
+        let ids = drag.clip_ids.clone();
+        let left = drag.left;
+        self.sequence = Some(original.clone());
+        let fps = self.frame_rate();
+        let source_durations = ids
+            .iter()
+            .filter_map(|id| {
+                original.clip(*id).and_then(|clip| {
+                    self.media_asset(clip.media_id)
+                        .map(|asset| (*id, asset.duration))
+                })
+            })
+            .collect::<HashMap<_, _>>();
+        let mut changed = false;
+        if let Some(sequence) = &mut self.sequence {
+            for id in ids {
+                let Some(clip) = original.clip(id) else {
+                    continue;
+                };
+                let edge = if left {
+                    clip.timeline_start
+                } else {
+                    clip.timeline_end
+                } + delta;
+                let result = if left {
+                    sequence.trim_left_snapped(id, edge, fps, snap)
+                } else {
+                    sequence.trim_right_snapped(
+                        id,
+                        edge,
+                        fps,
+                        source_durations
+                            .get(&id)
+                            .copied()
+                            .unwrap_or(clip.source_out),
+                        snap,
+                    )
+                };
+                changed |= result.is_some();
+            }
+        }
+        if changed {
+            self.refresh_preview(ctx);
+        }
+    }
+
+    pub fn finish_trim_drag(&mut self) {
+        if self.trim_drag.take().is_some() {
+            self.commit_history_transaction();
+        }
+    }
+
     pub fn set_clip_color(&mut self, id: ClipId, color: ClipColor) {
         if self
             .sequence
@@ -919,6 +1124,7 @@ impl VideoEditor {
         self.video = None;
         self.media_library.clear();
         self.selected_media_id = None;
+        self.current_media_folder = None;
         self.sequence = None;
         self.texture = None;
         self.waveform = None;
@@ -941,10 +1147,6 @@ impl VideoEditor {
         self.export_settings = ExportSettings::default();
         self.export_destination = None;
         self.clear_export_message();
-        if let Some(job) = self.transcription_job.take() {
-            job.cancel();
-        }
-        self.transcription_message = None;
         self.properties_tab = PropertiesTab::default();
         self.missing_media = None;
         self.missing_media_queue.clear();
@@ -966,14 +1168,11 @@ impl VideoEditor {
     }
 
     fn snapshot(&self) -> EditorSnapshot {
-        EditorSnapshot {
-            sequence: self.sequence.clone(),
-            current_time: self.current_time,
-            timeline_zoom: self.timeline_zoom,
-            timeline_height: self.timeline_height,
-            tool: self.tool,
-            export_settings: self.export_settings.clone(),
+        let mut sequence = self.sequence.clone();
+        if let Some(sequence) = &mut sequence {
+            sequence.clear_selection();
         }
+        EditorSnapshot { sequence }
     }
 
     fn initialize_history(&mut self) {
@@ -1010,24 +1209,25 @@ impl VideoEditor {
         }
         self.history_index = self.history.len().saturating_sub(1);
         if let Some(session) = &mut self.project_session {
-            session.dirty_since = Some(Instant::now());
+            session.mark_dirty();
         }
     }
 
     fn apply_history_snapshot(&mut self, snapshot: EditorSnapshot, ctx: &egui::Context) {
         self.pause(ctx);
+        let selected = self
+            .sequence
+            .as_ref()
+            .map(|sequence| sequence.selected.clone())
+            .unwrap_or_default();
         self.sequence = snapshot.sequence;
-        self.current_time = snapshot.current_time.clamp(0.0, self.duration());
-        self.timeline_zoom = if self.sequence.is_some() {
-            snapshot.timeline_zoom.clamp(1.0, 32.0)
-        } else {
-            1.0
-        };
-        self.timeline_height = snapshot
-            .timeline_height
-            .clamp(MIN_TIMELINE_HEIGHT, MAX_TIMELINE_HEIGHT);
-        self.tool = snapshot.tool;
-        self.export_settings = snapshot.export_settings;
+        if let Some(sequence) = &mut self.sequence {
+            sequence.select_many(selected);
+        }
+        self.current_time = self.current_time.clamp(0.0, self.duration());
+        if let Some(session) = &mut self.project_session {
+            session.mark_dirty();
+        }
         self.refresh_preview(ctx);
     }
 
@@ -1074,16 +1274,19 @@ impl VideoEditor {
     }
 
     fn tick_project(&mut self) {
-        if !self.workspace_open || self.history_transaction.is_some() {
+        if self.history_transaction.is_some()
+            || !self
+                .project_session
+                .as_ref()
+                .is_some_and(ProjectSession::autosave_due)
+        {
             return;
         }
         self.sync_project_document();
-        let result = self.project_session.as_mut().map(|session| {
-            session.observe_changes()?;
-            session.autosave_if_due()
-        });
-        if let Some(Err(error)) = result {
-            self.status = Some(format!("Project autosave failed: {error}"));
+        if let Some(session) = &mut self.project_session {
+            if let Err(error) = session.save() {
+                self.status = Some(format!("Project autosave failed: {error}"));
+            }
         }
     }
 
@@ -1117,7 +1320,7 @@ impl VideoEditor {
         if imported > 0 {
             self.initialize_history();
             if let Some(session) = &mut self.project_session {
-                session.dirty_since = Some(Instant::now());
+                session.mark_dirty();
             }
         }
     }
@@ -1226,6 +1429,7 @@ impl VideoEditor {
                 path: video.path.clone(),
                 name: video.name.clone(),
                 managed: false,
+                folder_id: None,
             });
         self.playing = false;
         self.stop_all_playback();
@@ -1302,24 +1506,28 @@ impl VideoEditor {
     }
 
     pub fn select_clip(&mut self, selected: Option<ClipId>) {
+        self.selected_gap = None;
         if let Some(sequence) = &mut self.sequence {
             sequence.select(selected);
         }
     }
 
     pub fn select_clip_only(&mut self, id: ClipId) {
+        self.selected_gap = None;
         if let Some(sequence) = &mut self.sequence {
             sequence.select_only(id);
         }
     }
 
     pub fn toggle_clip_selection(&mut self, id: ClipId) {
+        self.selected_gap = None;
         if let Some(sequence) = &mut self.sequence {
             sequence.toggle_select(id);
         }
     }
 
     pub fn select_clips(&mut self, ids: Vec<ClipId>) {
+        self.selected_gap = None;
         if let Some(sequence) = &mut self.sequence {
             sequence.select_many(ids);
         }
@@ -1329,6 +1537,15 @@ impl VideoEditor {
         if let Some(sequence) = &mut self.sequence {
             sequence.clear_selection();
         }
+    }
+
+    pub fn select_gap(&mut self, gap: TimelineGap) {
+        self.clear_clip_selection();
+        self.selected_gap = Some(gap);
+    }
+
+    pub fn clear_gap_selection(&mut self) {
+        self.selected_gap = None;
     }
 
     pub fn razor_cut(&mut self, time: f64, ctx: &egui::Context) {
@@ -1406,6 +1623,26 @@ impl VideoEditor {
             self.refresh_preview(ctx);
             self.record_history();
         }
+    }
+
+    pub fn ripple_delete_selected_gap(&mut self, ctx: &egui::Context) -> bool {
+        let Some(gap) = self.selected_gap.take() else {
+            return false;
+        };
+        use crate::project::sequence::ClipLane;
+        let lane = match gap.lane {
+            GapLane::Video => ClipLane::Video,
+            GapLane::Audio => ClipLane::Audio,
+        };
+        let changed = self.sequence.as_mut().is_some_and(|sequence| {
+            sequence.ripple_delete_gap(gap.start, gap.end, lane, gap.track)
+        });
+        if changed {
+            self.stop_all_playback();
+            self.refresh_preview(ctx);
+            self.record_history();
+        }
+        changed
     }
 
     pub fn delete_clip(&mut self, id: ClipId, ctx: &egui::Context) {
@@ -1614,7 +1851,7 @@ impl VideoEditor {
                 let word_count = transcript.words.len();
                 if let Some(session) = &mut self.project_session {
                     session.document.transcript = Some(transcript);
-                    session.dirty_since = Some(Instant::now());
+                    session.mark_dirty();
                 }
                 self.transcription_message = Some(format!(
                     "Transcription complete · {word_count} {}",
@@ -1629,7 +1866,6 @@ impl VideoEditor {
             }
         }
     }
-
     fn poll_export(&mut self) {
         let result = self.export_job.as_ref().and_then(ExportJob::poll);
         if let Some(result) = result {
@@ -1926,7 +2162,9 @@ impl VideoEditor {
         if ctx.input(|input| {
             input.key_pressed(egui::Key::Backspace) || input.key_pressed(egui::Key::Delete)
         }) {
-            self.delete_selected(ctx);
+            if !self.ripple_delete_selected_gap(ctx) {
+                self.delete_selected(ctx);
+            }
         }
         if ctx.input(|input| input.key_pressed(egui::Key::V)) {
             self.tool = EditTool::Select;
@@ -1972,9 +2210,10 @@ impl VideoEditor {
             .sequence
             .as_ref()
             .is_some_and(|sequence| !sequence.clips.is_empty());
+        let workspace_open = self.project_session.is_some();
         self.native_menu.update_enabled(
-            self.workspace_open,
-            self.workspace_open && has_timeline_media && self.export_job.is_none(),
+            workspace_open,
+            workspace_open && has_timeline_media && self.export_job.is_none(),
             self.can_undo(),
             self.can_redo(),
             has_timeline_media,
@@ -2032,7 +2271,7 @@ impl eframe::App for VideoEditor {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.update_native_menu(ctx, frame);
         ui::title_bar(ctx);
-        if !self.workspace_open {
+        if self.project_session.is_none() {
             ui::startup(ctx, self);
             ui::new_project_dialog(ctx, self);
             return;
@@ -2057,8 +2296,8 @@ impl eframe::App for VideoEditor {
             }
             self.pump_waveform_queue(ctx);
         }
-        self.poll_export();
         self.poll_transcription();
+        self.poll_export();
         self.handle_shortcuts(ctx);
 
         ui::missing_media_dialog(ctx, self);
@@ -2073,7 +2312,7 @@ impl eframe::App for VideoEditor {
         ui::preview(ctx, self);
         self.tick_project();
 
-        if self.playing || self.export_job.is_some() || self.transcription_job.is_some() {
+        if self.playing || self.export_job.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(8));
         }
     }
@@ -2083,7 +2322,7 @@ impl eframe::App for VideoEditor {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if self.workspace_open {
+        if self.project_session.is_some() {
             self.save_project();
         }
     }
@@ -2099,7 +2338,13 @@ mod tests {
     };
 
     use super::{LibraryMedia, VideoEditor};
-    use crate::{media::VideoAsset, project::Sequence};
+    use crate::{
+        media::VideoAsset,
+        project::{
+            project_path, sequence::ClipColor, EditTool, ProjectDocument, ProjectSession,
+            ProjectSettings, Sequence,
+        },
+    };
 
     #[test]
     fn history_is_bounded_and_a_transaction_creates_one_entry() {
@@ -2107,14 +2352,22 @@ mod tests {
         editor.sequence = Some(Sequence::new(10.0));
         editor.initialize_history();
         editor.begin_history_transaction();
-        for step in 1..=20 {
-            editor.current_time = step as f64 / 10.0;
-        }
+        editor.sequence.as_mut().unwrap().select_only(1);
+        editor.commit_history_transaction();
+        assert_eq!(editor.history.len(), 1);
+
+        editor.begin_history_transaction();
+        editor
+            .sequence
+            .as_mut()
+            .unwrap()
+            .split_at(5.0, 30.0)
+            .expect("transaction should edit the sequence");
         editor.commit_history_transaction();
         assert_eq!(editor.history.len(), 2);
 
         for step in 0..150 {
-            editor.current_time = 3.0 + step as f64 / 100.0;
+            editor.sequence.as_mut().unwrap().clips[0].audio.volume_db = step as f32;
             editor.record_history();
         }
         assert_eq!(editor.history.len(), crate::project::MAX_HISTORY);
@@ -2122,12 +2375,91 @@ mod tests {
     }
 
     #[test]
+    fn undo_restores_only_sequence_edits_and_preserves_current_selection() {
+        let ctx = eframe::egui::Context::default();
+        let mut sequence = Sequence::new(10.0);
+        let second = sequence.split_at(5.0, 30.0).expect("second clip");
+        let first = sequence.clips[0].id;
+        sequence.select_only(first);
+
+        let mut editor = VideoEditor::new();
+        editor.sequence = Some(sequence);
+        editor.initialize_history();
+        assert!(editor
+            .sequence
+            .as_mut()
+            .unwrap()
+            .set_color_for_selection(first, ClipColor::Red));
+        editor.record_history();
+
+        editor.sequence.as_mut().unwrap().select_only(second);
+        editor.current_time = 7.0;
+        editor.timeline_zoom = 4.0;
+        editor.timeline_height = 420.0;
+        editor.tool = EditTool::Razor;
+        editor.undo(&ctx);
+
+        let restored = editor.sequence.as_ref().unwrap();
+        assert_eq!(restored.clip(first).unwrap().color, ClipColor::Blue);
+        assert_eq!(restored.selected, vec![second]);
+        assert_eq!(editor.current_time, 7.0);
+        assert_eq!(editor.timeline_zoom, 4.0);
+        assert_eq!(editor.timeline_height, 420.0);
+        assert_eq!(editor.tool, EditTool::Razor);
+    }
+
+    #[test]
+    fn autosave_ignores_workspace_only_changes_but_saves_sequence_edits() {
+        let directory =
+            std::env::temp_dir().join(format!("unclip-autosave-test-{}", std::process::id()));
+        let path = project_path(&directory, "Autosave");
+        let document = ProjectDocument::empty("Autosave".to_owned(), ProjectSettings::default());
+
+        let mut editor = VideoEditor::new();
+        editor.project_session = Some(
+            ProjectSession::new(path.clone(), document).expect("project session should start"),
+        );
+        editor.current_time = 7.0;
+        editor.timeline_zoom = 4.0;
+        editor.tool = EditTool::Razor;
+        editor.tick_project();
+
+        let session = editor.project_session.as_ref().unwrap();
+        assert!(!session.is_dirty());
+        assert_eq!(session.document.editor.current_time, 0.0);
+        assert_eq!(session.document.editor.timeline_zoom, 1.0);
+        assert_eq!(session.document.editor.tool, EditTool::Select);
+
+        editor.sequence = Some(Sequence::new(10.0));
+        editor.initialize_history();
+        editor.sequence.as_mut().unwrap().clips[0].color = ClipColor::Red;
+        editor.record_history();
+        assert!(editor.project_session.as_ref().unwrap().is_dirty());
+        editor.project_session.as_mut().unwrap().make_autosave_due();
+        editor.tick_project();
+        assert!(!editor.project_session.as_ref().unwrap().is_dirty());
+
+        let saved = ProjectSession::open(path).expect("autosaved project should reopen");
+        assert_eq!(saved.document.editor.current_time, 7.0);
+        assert_eq!(saved.document.editor.timeline_zoom, 4.0);
+        assert_eq!(saved.document.editor.tool, EditTool::Razor);
+        assert_eq!(
+            saved.document.sequence.unwrap().clips[0].color,
+            ClipColor::Red
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn preloads_the_next_clip_before_a_gap_and_crosses_the_boundary_without_waiting() {
         if Command::new("ffmpeg").arg("-version").output().is_err() {
             return;
         }
-        let path =
-            std::env::temp_dir().join(format!("unclip-gap-preroll-test-{}.mkv", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "unclip-gap-preroll-test-{}.mkv",
+            std::process::id()
+        ));
         let generated = Command::new("ffmpeg")
             .args([
                 "-y",
@@ -2172,11 +2504,13 @@ mod tests {
         editor.media_library = vec![
             LibraryMedia {
                 id: 1,
+                folder_id: None,
                 asset: first_video,
                 thumbnail: None,
             },
             LibraryMedia {
                 id: 2,
+                folder_id: None,
                 asset: second_video,
                 thumbnail: None,
             },

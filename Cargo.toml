@@ -3,6 +3,12 @@ name = "unclip"
 version = "0.0.1"
 edition = "2021"
 
+# The executable name is also the macOS process name when running from Cargo.
+# Keep it aligned with Contents/MacOS/Unclip and the bundle plist.
+[[bin]]
+name = "Unclip"
+path = "src/main.rs"
+
 [workspace]
 members = ["xtask"]
 

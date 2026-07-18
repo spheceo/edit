@@ -4,7 +4,10 @@ use eframe::egui::{
 };
 
 use crate::{
-    app::{MarqueeSelection, TimelineDropPreview, TimelineDropSource, VideoEditor},
+    app::{
+        GapLane, MarqueeSelection, TimelineDropPreview, TimelineDropSource, TimelineGap,
+        VideoEditor,
+    },
     media::waveform::Waveform,
     project::{
         sequence::{ClipColor, ClipLane, MediaId, SequenceClip},
@@ -450,26 +453,37 @@ fn interact(
                 )
                 .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
             edge_active |= left.hovered() || left.dragged() || right.hovered() || right.dragged();
-            if left.clicked() || right.clicked() {
+            if (left.clicked() || right.clicked())
+                && !app
+                    .sequence
+                    .as_ref()
+                    .is_some_and(|sequence| sequence.is_selected(clip.id))
+            {
                 app.select_clip_only(clip.id);
             }
             if left.drag_started() || right.drag_started() {
-                app.select_clip_only(clip.id);
-                app.begin_history_transaction();
+                if !app
+                    .sequence
+                    .as_ref()
+                    .is_some_and(|sequence| sequence.is_selected(clip.id))
+                {
+                    app.select_clip_only(clip.id);
+                }
+                app.begin_trim_drag(clip.id, left.drag_started());
             }
             if left.dragged() {
                 if let Some(position) = left.interact_pointer_pos() {
                     let snap = 9.0 / (content.width() as f64 / duration);
-                    app.trim_left(clip.id, x_to_time(position.x, content, duration), snap, ctx);
+                    app.update_trim_drag(x_to_time(position.x, content, duration), snap, ctx);
                 }
             } else if right.dragged() {
                 if let Some(position) = right.interact_pointer_pos() {
                     let snap = 9.0 / (content.width() as f64 / duration);
-                    app.trim_right(clip.id, x_to_time(position.x, content, duration), snap, ctx);
+                    app.update_trim_drag(x_to_time(position.x, content, duration), snap, ctx);
                 }
             }
             if left.drag_stopped() || right.drag_stopped() {
-                app.commit_history_transaction();
+                app.finish_trim_drag();
             }
         }
 
@@ -493,15 +507,18 @@ fn interact(
         } else {
             body.on_hover_cursor(egui::CursorIcon::PointingHand)
         };
-        if body.secondary_clicked() {
-            if !app
+        if body.secondary_clicked()
+            && !app
                 .sequence
                 .as_ref()
                 .is_some_and(|sequence| sequence.is_selected(clip.id))
-            {
-                app.select_clip_only(clip.id);
-            }
+        {
+            app.select_clip_only(clip.id);
         }
+        let selection_count = app
+            .sequence
+            .as_ref()
+            .map_or(0, |sequence| sequence.selected.len());
         let can_link_selection = app
             .sequence
             .as_ref()
@@ -513,27 +530,36 @@ fn interact(
             ui.set_max_width(180.0);
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.spacing_mut().button_padding = Vec2::new(7.0, 5.0);
-            if icons::menu_item(ui, Icon::Info, "Clip info").clicked() {
+            if selection_count <= 1 && icons::menu_item(ui, Icon::Info, "Clip info").clicked() {
                 context_action = Some(ContextAction::Info(clip.id));
                 ui.close_menu();
             }
-            if icons::menu_item(ui, Icon::Duplicate, "Duplicate clip").clicked() {
+            let duplicate_label = if selection_count > 1 {
+                "Duplicate clips"
+            } else {
+                "Duplicate clip"
+            };
+            if icons::menu_item(ui, Icon::Duplicate, duplicate_label).clicked() {
                 context_action = Some(ContextAction::Duplicate(clip.id));
                 ui.close_menu();
             }
-            if clip.lane == ClipLane::Both && has_audio {
-                if icons::menu_item(ui, Icon::Unlink, "Unlink").clicked() {
-                    context_action = Some(ContextAction::Unlink(clip.id));
-                    ui.close_menu();
-                }
+            if clip.lane == ClipLane::Both
+                && has_audio
+                && icons::menu_item(ui, Icon::Unlink, "Unlink").clicked()
+            {
+                context_action = Some(ContextAction::Unlink(clip.id));
+                ui.close_menu();
             }
-            if can_link_selection {
-                if icons::menu_item(ui, Icon::Link, "Link").clicked() {
-                    context_action = Some(ContextAction::Link);
-                    ui.close_menu();
-                }
+            if can_link_selection && icons::menu_item(ui, Icon::Link, "Link").clicked() {
+                context_action = Some(ContextAction::Link);
+                ui.close_menu();
             }
-            if icons::menu_item(ui, Icon::Delete, "Delete clip").clicked() {
+            let delete_label = if selection_count > 1 {
+                "Delete clips"
+            } else {
+                "Delete clip"
+            };
+            if icons::menu_item(ui, Icon::Delete, delete_label).clicked() {
                 context_action = Some(ContextAction::Delete(clip.id));
                 ui.close_menu();
             }
@@ -723,8 +749,13 @@ fn interact(
         if let Some(position) = timeline_response.interact_pointer_pos() {
             if ruler.contains(position) {
                 seek_empty_at = Some(position);
-            } else if has_selection {
-                app.clear_clip_selection();
+            } else if let Some(gap) = selectable_gap_at(app, &tracks, position, content, duration) {
+                app.select_gap(gap);
+            } else {
+                app.clear_gap_selection();
+                if has_selection {
+                    app.clear_clip_selection();
+                }
             }
         }
     }
@@ -840,6 +871,51 @@ fn interact(
     if app.tool == EditTool::Razor && pointer.is_some_and(|position| content.contains(position)) {
         ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
     }
+}
+
+fn selectable_gap_at(
+    app: &VideoEditor,
+    tracks: &TrackLayout,
+    position: Pos2,
+    content: Rect,
+    duration: f64,
+) -> Option<TimelineGap> {
+    let row = tracks.rows.iter().find(|row| row.rect.contains(position))?;
+    let lane = match row.kind {
+        TrackKind::Video => GapLane::Video,
+        TrackKind::Audio => GapLane::Audio,
+    };
+    let time = x_to_time(position.x, content, duration);
+    let sequence = app.sequence.as_ref()?;
+    let in_lane = |clip: &SequenceClip| match lane {
+        GapLane::Video => clip.lane.shows_video(),
+        GapLane::Audio => clip.lane.shows_audio(),
+    };
+    // A selectable gap must have a following clip. Its left edge is the end of
+    // the preceding clip on the same lane, or zero at the sequence head.
+    let end = sequence
+        .clips
+        .iter()
+        .filter(|clip| clip.track() == row.index && in_lane(clip))
+        .filter(|clip| clip.timeline_start > time + 0.000_001)
+        .map(|clip| clip.timeline_start)
+        .fold(f64::INFINITY, f64::min);
+    if !end.is_finite() {
+        return None;
+    }
+    let start = sequence
+        .clips
+        .iter()
+        .filter(|clip| clip.track() == row.index && in_lane(clip))
+        .filter(|clip| clip.timeline_end <= time + 0.000_001)
+        .map(|clip| clip.timeline_end)
+        .fold(0.0, f64::max);
+    (start < end - 0.000_001 && time >= start && time < end).then_some(TimelineGap {
+        start,
+        end,
+        track: row.index,
+        lane,
+    })
 }
 
 fn trim_handle_rects(video_rect: Rect, body_rect: Rect) -> (Rect, Rect) {
@@ -1029,6 +1105,21 @@ fn draw(ui: &egui::Ui, rect: Rect, app: &VideoEditor) {
                 is_selected,
                 media_bounds,
             );
+        }
+    }
+
+    if let Some(gap) = app.selected_gap {
+        let lane_kind = match gap.lane {
+            GapLane::Video => TrackKind::Video,
+            GapLane::Audio => TrackKind::Audio,
+        };
+        if let Some(row) = tracks.row(lane_kind, gap.track) {
+            let gap_rect = Rect::from_min_max(
+                Pos2::new(time_to_x(gap.start, content, duration), row.top() + 2.0),
+                Pos2::new(time_to_x(gap.end, content, duration), row.bottom() - 2.0),
+            )
+            .intersect(row);
+            painter.rect_filled(gap_rect, CornerRadius::same(3), Color32::WHITE);
         }
     }
 
@@ -1332,9 +1423,14 @@ fn draw_audio_clip(
         // Premiere-style rectified waveform: a continuous amplitude graph grows
         // upward from a fixed floor, so silence remains an unmistakably flat line.
         // Only sample the visible slice for long, highly-zoomed sequences.
-        let visible = rect.intersect(painter.clip_rect());
-        let baseline = rect.bottom() - 2.0;
-        let graph_height = (rect.height() - 4.0).max(1.0);
+        // Egui's paint clip is rectangular; inset by the fill's 3 px rounded
+        // corner radius before clipping. This is the rounded rect's safe inner
+        // bounds, so no waveform stroke can bleed through its corner pixels.
+        let waveform_bounds = rect.shrink2(Vec2::splat(3.0));
+        let visible = waveform_bounds.intersect(painter.clip_rect());
+        let waveform_painter = painter.with_clip_rect(visible);
+        let baseline = waveform_bounds.bottom();
+        let graph_height = waveform_bounds.height().max(1.0);
         let source_peak = waveform.max_peak().max(f32::EPSILON);
         let columns = (visible.width() / 1.5).ceil().max(1.0) as usize;
         let mut envelope = Vec::with_capacity(columns + 1);
@@ -1351,16 +1447,16 @@ fn draw_audio_clip(
             let amplitude = normalized.powf(2.4) * 0.97;
             let top = baseline - amplitude * graph_height;
             envelope.push(Pos2::new(x, top));
-            painter.line_segment(
+            waveform_painter.line_segment(
                 [Pos2::new(x, baseline), Pos2::new(x, top)],
                 Stroke::new(2.0, Color32::from_white_alpha(112)),
             );
         }
-        painter.add(egui::Shape::line(
+        waveform_painter.add(egui::Shape::line(
             envelope,
             Stroke::new(1.2, Color32::from_white_alpha(225)),
         ));
-        painter.line_segment(
+        waveform_painter.line_segment(
             [
                 Pos2::new(visible.left(), baseline),
                 Pos2::new(visible.right(), baseline),

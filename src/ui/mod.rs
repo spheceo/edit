@@ -1,5 +1,6 @@
 //! User interface surfaces and reusable presentation components.
 
+use crate::media::transcription::{self, TranscriptionStage};
 use eframe::egui::{
     self, epaint::Vertex, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin,
     Mesh, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, Vec2,
@@ -7,10 +8,7 @@ use eframe::egui::{
 
 use crate::{
     app::{PropertiesTab, VideoEditor},
-    media::{
-        export::{ExportQuality, ExportResolution},
-        transcription::{self, TranscriptionStage},
-    },
+    media::export::{ExportQuality, ExportResolution},
     project::{
         sequence::{ClipLane, ClipMotion},
         EditTool,
@@ -39,7 +37,12 @@ pub fn startup(ctx: &egui::Context, app: &mut VideoEditor) {
                         .bg_fill(theme::BLACK),
                 );
                 ui.add_space(14.0);
-                ui.label(RichText::new("Unclip").size(26.0).strong().color(theme::TEXT));
+                ui.label(
+                    RichText::new("Unclip")
+                        .size(26.0)
+                        .strong()
+                        .color(theme::TEXT),
+                );
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new("Local video editing")
@@ -1391,6 +1394,9 @@ pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
 pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
     let mut delete_requested = None;
     let mut import_requested = false;
+    let mut create_folder_requested = false;
+    let mut enter_folder_requested = None;
+    let mut leave_folder_requested = false;
     egui::SidePanel::left("project-media")
         .exact_width(300.0)
         .resizable(false)
@@ -1430,19 +1436,45 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                                 import_requested = true;
                                 ui.memory_mut(|mem| mem.close_popup());
                             }
+                            if ui.button("Create folder").clicked() {
+                                create_folder_requested = true;
+                                ui.memory_mut(|mem| mem.close_popup());
+                            }
                         },
                     );
                 });
             });
             ui.add_space(10.0);
-            if app.media_library.is_empty() {
+            if let Some(name) = app.current_media_folder_name().map(str::to_owned) {
+                ui.horizontal(|ui| {
+                    if ui.small_button("‹ Back").clicked() {
+                        leave_folder_requested = true;
+                    }
+                    ui.label(RichText::new(name).small().color(theme::MUTED));
+                });
+                ui.add_space(6.0);
+            }
+            let folders = app
+                .project_session
+                .as_ref()
+                .map(|session| {
+                    session
+                        .document
+                        .media_folders
+                        .iter()
+                        .filter(|folder| folder.parent_id == app.current_media_folder)
+                        .map(|folder| (folder.id, folder.name.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if app.media_library.is_empty() && folders.is_empty() {
                 ui.label(RichText::new("Import footage to add it here.").color(theme::MUTED));
-                return;
             }
 
             let entries = app
                 .media_library
                 .iter()
+                .filter(|media| media.folder_id == app.current_media_folder)
                 .map(|media| {
                     (
                         media.id,
@@ -1456,6 +1488,30 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                 })
                 .collect::<Vec<_>>();
             egui::ScrollArea::vertical().show(ui, |ui| {
+                for (id, name) in folders {
+                    let (rect, response) = ui
+                        .allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click());
+                    ui.painter().rect_filled(
+                        rect,
+                        CornerRadius::same(6),
+                        if response.hovered() {
+                            theme::SURFACE_HOVER
+                        } else {
+                            Color32::TRANSPARENT
+                        },
+                    );
+                    ui.painter().text(
+                        rect.min + Vec2::new(9.0, 9.0),
+                        Align2::LEFT_TOP,
+                        format!("▸  {name}"),
+                        FontId::proportional(12.0),
+                        theme::TEXT,
+                    );
+                    if response.double_clicked() {
+                        enter_folder_requested = Some(id);
+                    }
+                    ui.add_space(4.0);
+                }
                 for (id, name, size, duration, width, height, thumbnail) in entries {
                     let selected = app.selected_media_id == Some(id);
                     let (rect, response) = ui.allocate_exact_size(
@@ -1563,6 +1619,15 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
         });
     if import_requested {
         app.import_video(ctx);
+    }
+    if create_folder_requested {
+        app.create_media_folder();
+    }
+    if let Some(folder_id) = enter_folder_requested {
+        app.enter_media_folder(folder_id);
+    }
+    if leave_folder_requested {
+        app.leave_media_folder();
     }
     if let Some(id) = delete_requested {
         app.delete_library_media(id, ctx);

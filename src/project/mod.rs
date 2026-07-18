@@ -18,12 +18,12 @@ pub use sequence::{EditTool, Sequence};
 pub const PROJECT_VERSION: u32 = 3;
 pub const MAX_HISTORY: usize = 100;
 pub const DEFAULT_TIMELINE_HEIGHT: f32 = 340.0;
-pub const MIN_TIMELINE_HEIGHT: f32 = 150.0;
-pub const MAX_TIMELINE_HEIGHT: f32 = 520.0;
-
 fn default_timeline_height() -> f32 {
     DEFAULT_TIMELINE_HEIGHT
 }
+pub const MIN_TIMELINE_HEIGHT: f32 = 150.0;
+pub const MAX_TIMELINE_HEIGHT: f32 = 520.0;
+
 pub const AUTOSAVE_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -95,6 +95,18 @@ pub struct MediaReference {
     pub name: String,
     #[serde(default)]
     pub managed: bool,
+    #[serde(default)]
+    pub folder_id: Option<u64>,
+}
+
+/// A user-created folder in the project media bin. Folder membership lives on
+/// [`MediaReference`] so existing projects naturally load into the root bin.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct MediaFolder {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub parent_id: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -126,9 +138,10 @@ pub struct ProjectDocument {
     pub modified_unix_ms: u64,
     pub settings: ProjectSettings,
     pub media: Vec<MediaReference>,
+    #[serde(default)]
+    pub media_folders: Vec<MediaFolder>,
     pub active_media_id: Option<u64>,
     pub sequence: Option<Sequence>,
-    #[serde(default)]
     pub transcript: Option<Transcript>,
     pub editor: EditorProjectState,
 }
@@ -141,6 +154,7 @@ impl ProjectDocument {
             modified_unix_ms: unix_millis(),
             settings,
             media: Vec::new(),
+            media_folders: Vec::new(),
             active_media_id: None,
             sequence: None,
             transcript: None,
@@ -188,9 +202,7 @@ pub struct ProjectSession {
     pub path: PathBuf,
     pub document: ProjectDocument,
     pub recovered: bool,
-    pub dirty_since: Option<Instant>,
-    pub last_signature: String,
-    last_observed_signature: String,
+    dirty_since: Option<Instant>,
 }
 
 impl ProjectSession {
@@ -200,12 +212,8 @@ impl ProjectSession {
             document,
             recovered: false,
             dirty_since: None,
-            last_signature: String::new(),
-            last_observed_signature: String::new(),
         };
         session.save()?;
-        session.last_signature = document_signature(&session.document)?;
-        session.last_observed_signature = session.last_signature.clone();
         Ok(session)
     }
 
@@ -227,50 +235,34 @@ impl ProjectSession {
                 document.version, PROJECT_VERSION
             ));
         }
-        if document.version < 2 {
-            let legacy_media_id = document
-                .active_media_id
-                .or_else(|| document.media.first().map(|media| media.id))
-                .unwrap_or(1);
-            if let Some(sequence) = &mut document.sequence {
-                for clip in &mut sequence.clips {
-                    clip.media_id = legacy_media_id;
-                }
-            }
-            document.version = PROJECT_VERSION;
-        }
         if let Some(sequence) = &mut document.sequence {
             sequence.recompute_duration();
         }
-        let last_signature = document_signature(&document)?;
         Ok(Self {
             path,
             document,
             recovered,
             dirty_since: None,
-            last_observed_signature: last_signature.clone(),
-            last_signature,
         })
     }
 
-    pub fn observe_changes(&mut self) -> Result<(), String> {
-        let signature = document_signature(&self.document)?;
-        if signature != self.last_observed_signature {
-            self.dirty_since = Some(Instant::now());
-            self.last_observed_signature = signature;
-        }
-        Ok(())
+    pub fn mark_dirty(&mut self) {
+        self.dirty_since = Some(Instant::now());
     }
 
-    pub fn autosave_if_due(&mut self) -> Result<bool, String> {
-        if self
-            .dirty_since
+    pub fn autosave_due(&self) -> bool {
+        self.dirty_since
             .is_some_and(|changed| changed.elapsed() >= AUTOSAVE_DELAY)
-        {
-            self.save()?;
-            return Ok(true);
-        }
-        Ok(false)
+    }
+
+    #[cfg(test)]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty_since.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn make_autosave_due(&mut self) {
+        self.dirty_since = Some(Instant::now() - AUTOSAVE_DELAY);
     }
 
     pub fn save(&mut self) -> Result<(), String> {
@@ -280,8 +272,6 @@ impl ProjectSession {
             .map_err(|error| format!("Could not serialize the project: {error}"))?;
         atomic_write(&recovery_path(&self.path), &json)?;
         atomic_write(&self.path, &json)?;
-        self.last_signature = document_signature(&self.document)?;
-        self.last_observed_signature = self.last_signature.clone();
         self.dirty_since = None;
         self.recovered = false;
         Ok(())
@@ -291,11 +281,6 @@ impl ProjectSession {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditorSnapshot {
     pub sequence: Option<Sequence>,
-    pub current_time: f64,
-    pub timeline_zoom: f32,
-    pub timeline_height: f32,
-    pub tool: EditTool,
-    pub export_settings: ExportSettings,
 }
 
 pub fn project_path(directory: &Path, name: &str) -> PathBuf {
@@ -398,11 +383,6 @@ fn sanitize_project_name(name: &str) -> String {
     }
 }
 
-fn document_signature(document: &ProjectDocument) -> Result<String, String> {
-    serde_json::to_string(document)
-        .map_err(|error| format!("Could not inspect project changes: {error}"))
-}
-
 fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -418,59 +398,6 @@ mod tests {
     };
 
     #[test]
-    fn legacy_media_references_remain_external() {
-        let media: super::MediaReference = serde_json::from_str(
-            r#"{"id":1,"path":"/Volumes/Footage/source.mov","name":"source.mov"}"#,
-        )
-        .expect("legacy media reference should load");
-        assert!(!media.managed);
-    }
-
-    #[test]
-    fn legacy_editor_state_defaults_timeline_height() {
-        let document = ProjectDocument::empty("Legacy".to_owned(), ProjectSettings::default());
-        let mut json = serde_json::to_value(document).expect("project should serialize");
-        json["editor"]
-            .as_object_mut()
-            .expect("editor state should be an object")
-            .remove("timeline_height");
-
-        let loaded: ProjectDocument =
-            serde_json::from_value(json).expect("legacy project should load");
-        assert_eq!(
-            loaded.editor.timeline_height,
-            super::DEFAULT_TIMELINE_HEIGHT
-        );
-    }
-
-    #[test]
-    fn legacy_project_defaults_to_no_transcript() {
-        let document = ProjectDocument::empty("Legacy".to_owned(), ProjectSettings::default());
-        let mut json = serde_json::to_value(document).expect("project should serialize");
-        json.as_object_mut()
-            .expect("project should be an object")
-            .remove("transcript");
-
-        let loaded: ProjectDocument =
-            serde_json::from_value(json).expect("legacy project should load");
-        assert!(loaded.transcript.is_none());
-    }
-
-    #[test]
-    fn transcript_word_highlight_fades_at_time_boundaries() {
-        let word = super::TranscriptWord {
-            text: "hello".to_owned(),
-            start_secs: 1.0,
-            end_secs: 1.5,
-        };
-        assert_eq!(word.highlight_strength(0.8), 0.0);
-        assert!(word.highlight_strength(0.95) > 0.0);
-        assert_eq!(word.highlight_strength(1.2), 1.0);
-        assert!(word.highlight_strength(1.55) > 0.0);
-        assert_eq!(word.highlight_strength(1.7), 0.0);
-    }
-
-    #[test]
     fn project_paths_are_sanitized_and_versioned_json_round_trips() {
         let directory =
             std::env::temp_dir().join(format!("unclip-project-test-{}", std::process::id()));
@@ -484,6 +411,28 @@ mod tests {
         let loaded = ProjectSession::open(path.clone()).expect("project should reopen");
         assert_eq!(loaded.document.name, document.name);
         assert_eq!(loaded.document.settings, document.settings);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn explicit_dirty_tracking_controls_autosave_readiness() {
+        let directory =
+            std::env::temp_dir().join(format!("unclip-dirty-test-{}", std::process::id()));
+        let path = project_path(&directory, "Dirty");
+        let document = ProjectDocument::empty("Dirty".to_owned(), ProjectSettings::default());
+        let mut session = ProjectSession::new(path, document).expect("project should save");
+
+        assert!(!session.is_dirty());
+        assert!(!session.autosave_due());
+        session.mark_dirty();
+        assert!(session.is_dirty());
+        assert!(!session.autosave_due());
+        session.make_autosave_due();
+        assert!(session.autosave_due());
+        session.save().expect("dirty project should save");
+        assert!(!session.is_dirty());
+        assert!(!session.autosave_due());
+
         let _ = std::fs::remove_dir_all(directory);
     }
 

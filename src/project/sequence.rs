@@ -1,22 +1,7 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 pub type ClipId = u64;
 pub type MediaId = u64;
-
-fn deserialize_selected<'de, D>(deserializer: D) -> Result<Vec<ClipId>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        None | Some(serde_json::Value::Null) => Vec::new(),
-        Some(serde_json::Value::Number(n)) => n.as_u64().into_iter().collect(),
-        Some(serde_json::Value::Array(items)) => {
-            items.into_iter().filter_map(|item| item.as_u64()).collect()
-        }
-        _ => Vec::new(),
-    })
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum EditTool {
@@ -63,14 +48,6 @@ impl ClipColor {
     }
 }
 
-fn legacy_media_id() -> MediaId {
-    1
-}
-
-fn default_track() -> u8 {
-    1
-}
-
 /// Which timeline lane(s) a clip occupies.
 /// Linked clips use [`ClipLane::Both`]; Unlink splits them into Video + Audio.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -96,20 +73,12 @@ impl ClipLane {
     }
 }
 
-fn default_scale() -> f32 {
-    100.0
-}
-
 /// Motion properties for a clip, Premiere-style (origin at frame center).
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ClipMotion {
-    #[serde(default)]
     pub position_x: f32,
-    #[serde(default)]
     pub position_y: f32,
-    #[serde(default = "default_scale")]
     pub scale: f32,
-    #[serde(default)]
     pub rotation: f32,
 }
 
@@ -128,7 +97,6 @@ impl Default for ClipMotion {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ClipAudio {
     /// Gain in dB. `0.0` is unity.
-    #[serde(default)]
     pub volume_db: f32,
 }
 
@@ -141,22 +109,16 @@ impl ClipAudio {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SequenceClip {
     pub id: ClipId,
-    #[serde(default = "legacy_media_id")]
     pub media_id: MediaId,
-    #[serde(default)]
     pub color: ClipColor,
-    #[serde(default)]
     pub lane: ClipLane,
     /// One-based Premiere-style track number. Linked clips occupy matching Vn/An.
-    #[serde(default = "default_track")]
     pub track: u8,
     pub timeline_start: f64,
     pub timeline_end: f64,
     pub source_in: f64,
     pub source_out: f64,
-    #[serde(default)]
     pub motion: ClipMotion,
-    #[serde(default)]
     pub audio: ClipAudio,
 }
 
@@ -178,7 +140,6 @@ impl SequenceClip {
 pub struct Sequence {
     pub clips: Vec<SequenceClip>,
     pub duration: f64,
-    #[serde(default, deserialize_with = "deserialize_selected")]
     pub selected: Vec<ClipId>,
     pub(crate) next_id: ClipId,
 }
@@ -452,6 +413,110 @@ impl Sequence {
         self.sort_clips();
         self.recompute_duration();
         Some(start)
+    }
+
+    /// Move a selected group as one unit. Time and track offsets are measured
+    /// from the grabbed clip, preserving all relative placements.
+    pub fn move_group_to_track(
+        &mut self,
+        ids: &[ClipId],
+        primary_id: ClipId,
+        requested_start: f64,
+        target_track: u8,
+        fps: f64,
+        snap_threshold: f64,
+    ) -> Option<f64> {
+        let primary = self.clip(primary_id)?.clone();
+        let members = ids
+            .iter()
+            .filter_map(|id| self.clip(*id).cloned())
+            .collect::<Vec<_>>();
+        if members.len() != ids.len() || members.is_empty() {
+            return None;
+        }
+        let primary_duration = primary.timeline_end - primary.timeline_start;
+        let requested_start = snap_to_frame(requested_start.max(0.0), fps);
+        let requested_end = requested_start + primary_duration;
+        let selected = ids.iter().copied().collect::<Vec<_>>();
+        let mut best = (requested_start, snap_threshold.max(0.0) + f64::EPSILON);
+        for edge in std::iter::once(0.0).chain(
+            self.clips
+                .iter()
+                .filter(|clip| !selected.contains(&clip.id))
+                .flat_map(|clip| [clip.timeline_start, clip.timeline_end]),
+        ) {
+            for (candidate, distance) in [
+                (edge, (edge - requested_start).abs()),
+                (edge - primary_duration, (edge - requested_end).abs()),
+            ] {
+                if candidate >= 0.0 && distance <= best.1 {
+                    best = (candidate, distance);
+                }
+            }
+        }
+        let start = snap_to_frame(best.0.max(0.0), fps);
+        let track_delta = target_track.max(1) as i16 - primary.track() as i16;
+        let placements = members
+            .iter()
+            .map(|clip| {
+                let track = (clip.track() as i16 + track_delta).max(1) as u8;
+                let offset = clip.timeline_start - primary.timeline_start;
+                (
+                    clip.id,
+                    start + offset,
+                    clip.timeline_end - clip.timeline_start,
+                    track,
+                    clip.lane,
+                )
+            })
+            .collect::<Vec<_>>();
+        if placements.iter().any(|(_, start, duration, track, lane)| {
+            self.clips.iter().any(|other| {
+                !selected.contains(&other.id)
+                    && lane.conflicts_with(other.lane)
+                    && *track == other.track()
+                    && *start < other.timeline_end - 0.000_001
+                    && *start + *duration > other.timeline_start + 0.000_001
+            })
+        }) {
+            return None;
+        }
+        for (id, start, duration, track, _) in placements {
+            let clip = self.clips.iter_mut().find(|clip| clip.id == id)?;
+            clip.timeline_start = start;
+            clip.timeline_end = start + duration;
+            clip.track = track;
+        }
+        self.sort_clips();
+        self.recompute_duration();
+        Some(start)
+    }
+
+    /// Removes a selected gap and pulls clips after it left on the matching
+    /// lane/track, preserving NLE-style ripple behavior.
+    pub fn ripple_delete_gap(&mut self, start: f64, end: f64, lane: ClipLane, track: u8) -> bool {
+        let amount = (end - start).max(0.0);
+        if amount <= f64::EPSILON {
+            return false;
+        }
+        let mut moved = false;
+        for clip in &mut self.clips {
+            let in_lane = match lane {
+                ClipLane::Video => clip.lane.shows_video(),
+                ClipLane::Audio => clip.lane.shows_audio(),
+                ClipLane::Both => clip.lane == ClipLane::Both,
+            };
+            if in_lane && clip.track() == track.max(1) && clip.timeline_start >= end - 0.000_001 {
+                clip.timeline_start = (clip.timeline_start - amount).max(0.0);
+                clip.timeline_end = (clip.timeline_end - amount).max(0.0);
+                moved = true;
+            }
+        }
+        if moved {
+            self.sort_clips();
+            self.recompute_duration();
+        }
+        moved
     }
 
     pub fn set_color(&mut self, id: ClipId, color: ClipColor) -> bool {
@@ -796,19 +861,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_clips_default_to_track_one() {
-        let sequence = Sequence::from_media(42, 5.0);
-        let mut json = serde_json::to_value(&sequence).expect("sequence should serialize");
-        json["clips"][0]
-            .as_object_mut()
-            .expect("clip should be an object")
-            .remove("track");
-
-        let loaded: Sequence = serde_json::from_value(json).expect("legacy sequence should load");
-        assert_eq!(loaded.clips[0].track(), 1);
-    }
-
-    #[test]
     fn overlaps_are_scoped_to_matching_tracks() {
         let mut sequence = Sequence::from_media(1, 2.0);
         let duplicate = sequence.duplicate(1).expect("duplicate should be created");
@@ -1013,5 +1065,32 @@ mod tests {
         sequence.trim_right_snapped(left, 6.0, 25.0, 10.0, 0.0);
         assert_eq!(sequence.clip(left).expect("left clip").timeline_end, 6.0);
         assert_eq!(sequence.clip(left).expect("left clip").source_out, 6.0);
+    }
+
+    #[test]
+    fn moving_a_group_preserves_each_clip_offset() {
+        let mut sequence = Sequence::empty();
+        let first = sequence.insert_media(1, 0.0, 1.0, 30.0, 0.0).unwrap();
+        let second = sequence.duplicate(first).unwrap();
+        sequence.move_clip(second, 2.0, 30.0, 0.0).unwrap();
+
+        sequence
+            .move_group_to_track(&[first, second], first, 3.0, 1, 30.0, 0.0)
+            .expect("group should move");
+
+        assert_eq!(sequence.clip(first).unwrap().timeline_start, 3.0);
+        assert_eq!(sequence.clip(second).unwrap().timeline_start, 5.0);
+    }
+
+    #[test]
+    fn ripple_deleting_a_gap_pulls_later_lane_clips_left() {
+        let mut sequence = Sequence::new(10.0);
+        let middle = sequence.split_at(4.0, 25.0).expect("first cut");
+        sequence.split_at(7.0, 25.0).expect("second cut");
+        sequence.delete(middle);
+
+        assert!(sequence.ripple_delete_gap(4.0, 7.0, ClipLane::Video, 1));
+        assert_eq!(sequence.clips[1].timeline_start, 4.0);
+        assert_eq!(sequence.duration, 7.0);
     }
 }

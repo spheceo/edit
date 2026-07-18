@@ -32,7 +32,7 @@ mod platform {
         zoom_in: MenuItem,
         zoom_out: MenuItem,
         reset_zoom: MenuItem,
-        enabled_state: Option<[bool; 6]>,
+        enabled_state: Option<[bool; 5]>,
         #[cfg(target_os = "windows")]
         attached: bool,
     }
@@ -207,14 +207,7 @@ mod platform {
             can_redo: bool,
             can_zoom: bool,
         ) {
-            let state = [
-                workspace_open,
-                can_export,
-                can_undo,
-                can_redo,
-                can_zoom,
-                true,
-            ];
+            let state = [workspace_open, can_export, can_undo, can_redo, can_zoom];
             if self.enabled_state == Some(state) {
                 return;
             }

@@ -142,11 +142,6 @@ impl VideoAsset {
         })
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn aspect_ratio(&self) -> f32 {
-        self.source_width as f32 / self.source_height.max(1) as f32
-    }
-
     pub fn set_decode_budget(&mut self, max_width: usize, max_height: usize) {
         (self.decode_width, self.decode_height) =
             decode_dimensions(self.source_width, self.source_height, max_width, max_height);
@@ -273,7 +268,7 @@ mod tests {
 
         let asset = VideoAsset::load(path.clone()).expect("test video should be probed");
         assert_eq!((asset.source_width, asset.source_height), (360, 640));
-        assert!(asset.aspect_ratio() < 1.0);
+        assert!(asset.source_width < asset.source_height);
         assert!(asset.has_audio);
         assert!((asset.fps - 30.0).abs() < 0.01);
 

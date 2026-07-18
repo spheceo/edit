@@ -193,7 +193,10 @@ fn bundle_macos() -> Result<()> {
     fs::create_dir_all(&frameworks_dir)?;
     fs::create_dir_all(&resources_dir)?;
 
-    copy_file(cargo_target.join("release/unclip"), macos_dir.join("Unclip"))?;
+    copy_file(
+        cargo_target.join("release/Unclip"),
+        macos_dir.join("Unclip"),
+    )?;
     copy_file(
         project_dir.join("packaging/macos/Info.plist"),
         contents.join("Info.plist"),
@@ -255,7 +258,7 @@ fn run_macos(arguments: &[OsString]) -> Result<()> {
     run(&mut cargo)?;
 
     let target_root = cargo_target_root(&project_dir)?;
-    let binary = target_root.join(profile).join("unclip");
+    let binary = target_root.join(profile).join("Unclip");
     let app = target_root.join(profile).join("Unclip.app");
     if app.exists() {
         fs::remove_dir_all(&app)?;

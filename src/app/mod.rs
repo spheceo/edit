@@ -297,7 +297,7 @@ impl VideoEditor {
 
     pub fn open_project_picker(&mut self, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Kuro project", &["kuro"])
+            .add_filter("Unclip project", &["unclip"])
             .set_directory(project::default_project_directory())
             .pick_file()
         {
@@ -674,7 +674,7 @@ impl VideoEditor {
                 let image = ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
                 if let Some(media) = self.media_library.iter_mut().find(|media| media.id == id) {
                     media.thumbnail = Some(ctx.load_texture(
-                        format!("kuro-thumbnail-{id}"),
+                        format!("unclip-thumbnail-{id}"),
                         image,
                         TextureOptions::LINEAR,
                     ));
@@ -1496,8 +1496,8 @@ impl VideoEditor {
             .file_stem()
             .and_then(|name| name.to_str())
             .map_or_else(
-                || "Kuro Export.mp4".to_owned(),
-                |name| format!("{name} - Kuro.mp4"),
+                || "Unclip Export.mp4".to_owned(),
+                |name| format!("{name} - Unclip.mp4"),
             );
         let destination = rfd::FileDialog::new()
             .add_filter("MPEG-4 video", &["mp4"])
@@ -1899,7 +1899,7 @@ impl VideoEditor {
         if let Some(texture) = &mut self.texture {
             texture.set(image, TextureOptions::LINEAR);
         } else {
-            self.texture = Some(ctx.load_texture("kuro-video", image, TextureOptions::LINEAR));
+            self.texture = Some(ctx.load_texture("unclip-video", image, TextureOptions::LINEAR));
         }
     }
 
@@ -2127,7 +2127,7 @@ mod tests {
             return;
         }
         let path =
-            std::env::temp_dir().join(format!("kuro-gap-preroll-test-{}.mkv", std::process::id()));
+            std::env::temp_dir().join(format!("unclip-gap-preroll-test-{}.mkv", std::process::id()));
         let generated = Command::new("ffmpeg")
             .args([
                 "-y",

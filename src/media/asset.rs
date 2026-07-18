@@ -30,7 +30,7 @@ impl VideoAsset {
     pub fn load(path: PathBuf) -> Result<Self, String> {
         initialize_ffmpeg()?;
         let input = ffmpeg::format::input(&path)
-            .map_err(|error| format!("Kuro could not open that video: {error}"))?;
+            .map_err(|error| format!("Unclip could not open that video: {error}"))?;
         let container_duration = input.duration();
         let audio_details = input
             .streams()
@@ -62,11 +62,11 @@ impl VideoAsset {
         let rotation = stream_rotation(&stream);
 
         let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
-            .map_err(|error| format!("Kuro could not inspect the video codec: {error}"))?;
+            .map_err(|error| format!("Unclip could not inspect the video codec: {error}"))?;
         let decoder = context
             .decoder()
             .video()
-            .map_err(|error| format!("Kuro could not open the video decoder: {error}"))?;
+            .map_err(|error| format!("Unclip could not open the video decoder: {error}"))?;
         let video_codec = decoder
             .codec()
             .map(|codec| codec.description().to_owned())
@@ -242,7 +242,7 @@ mod tests {
             return;
         }
         let path = std::env::temp_dir().join(format!(
-            "kuro-portrait-probe-test-{}.mkv",
+            "unclip-portrait-probe-test-{}.mkv",
             std::process::id()
         ));
         let generated = Command::new("ffmpeg")

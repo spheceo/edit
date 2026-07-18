@@ -2234,25 +2234,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kuro"
-version = "0.0.1"
-dependencies = [
- "block2 0.6.2",
- "cpal",
- "eframe",
- "egui_extras",
- "ffmpeg-next",
- "muda",
- "objc2 0.6.4",
- "objc2-foundation 0.3.2",
- "objc2-speech",
- "raw-window-handle",
- "rfd",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4239,6 +4220,25 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "unclip"
+version = "0.0.1"
+dependencies = [
+ "block2 0.6.2",
+ "cpal",
+ "eframe",
+ "egui_extras",
+ "ffmpeg-next",
+ "muda",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-speech",
+ "raw-window-handle",
+ "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

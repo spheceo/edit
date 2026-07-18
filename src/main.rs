@@ -7,11 +7,11 @@ mod ui;
 use app::VideoEditor;
 
 fn main() -> eframe::Result<()> {
-    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/brand/kuro-icon.png"))
-        .expect("Kuro app icon must be a valid PNG");
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/brand/unclip-icon.png"))
+        .expect("Unclip app icon must be a valid PNG");
 
     eframe::run_native(
-        "Kuro",
+        "Unclip",
         eframe::NativeOptions {
             viewport: eframe::egui::ViewportBuilder::default()
                 .with_min_inner_size([900.0, 600.0])

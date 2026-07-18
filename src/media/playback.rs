@@ -242,7 +242,7 @@ fn spawn_video_decoder(
             || thread_stop.load(Ordering::Acquire),
         );
         if let Err(error) = result {
-            eprintln!("Kuro video decoder stopped: {error}");
+            eprintln!("Unclip video decoder stopped: {error}");
         }
     });
     (receiver, stop)
@@ -618,7 +618,7 @@ mod tests {
             return;
         }
         let path =
-            std::env::temp_dir().join(format!("kuro-playback-test-{}.mkv", std::process::id()));
+            std::env::temp_dir().join(format!("unclip-playback-test-{}.mkv", std::process::id()));
         let generated = Command::new("ffmpeg")
             .args([
                 "-y",

@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 96" role="img" aria-label="Kuro">
-  <title>Kuro</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 96" role="img" aria-label="Unclip">
+  <title>Unclip</title>
   <rect width="260" height="96" fill="#000"/>
   <g transform="translate(8 8) scale(0.625)" fill="#fff">
     <rect x="35.75" y="35.75" width="8.38" height="56.50"/>
@@ -14,5 +14,5 @@
     font-size="28"
     font-weight="600"
     letter-spacing="0.22em"
-  >KURO</text>
+  >UNCLIP</text>
 </svg>

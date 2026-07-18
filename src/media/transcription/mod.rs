@@ -156,7 +156,7 @@ fn recognize(
 fn temporary_audio_path() -> PathBuf {
     let token = TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "kuro-transcription-{}-{token}.wav",
+        "unclip-transcription-{}-{token}.wav",
         std::process::id()
     ))
 }

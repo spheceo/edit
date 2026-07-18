@@ -16,7 +16,7 @@ pub const CONTROL_RADIUS: u8 = 8;
 pub const MENU_RADIUS: u8 = 8;
 
 pub fn configure(ctx: &eframe::egui::Context) {
-    // Kuro owns its palette. Never allow the operating system's current
+    // Unclip owns its palette. Never allow the operating system's current
     // appearance to swap egui back to its built-in light visuals.
     ctx.set_theme(eframe::egui::ThemePreference::Dark);
     let mut visuals = eframe::egui::Visuals::dark();

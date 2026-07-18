@@ -271,7 +271,7 @@ fn render_media_sequence(
             return Err("cancelled".to_owned());
         }
         let path = std::env::temp_dir().join(format!(
-            "kuro-export-{}-{token}-{index}.mp4",
+            "unclip-export-{}-{token}-{index}.mp4",
             std::process::id()
         ));
         let segment_progress = AtomicU32::new(0);
@@ -357,7 +357,7 @@ fn render_media_sequence(
             return Err("cancelled".to_owned());
         }
         let path = std::env::temp_dir().join(format!(
-            "kuro-export-audio-{}-{token}-{index}.mp4",
+            "unclip-export-audio-{}-{token}-{index}.mp4",
             std::process::id()
         ));
         let segment_progress = AtomicU32::new(0);
@@ -382,11 +382,11 @@ fn render_media_sequence(
     }
 
     let joined_video = std::env::temp_dir().join(format!(
-        "kuro-export-video-{}-{token}.mp4",
+        "unclip-export-video-{}-{token}.mp4",
         std::process::id()
     ));
     let joined_audio = std::env::temp_dir().join(format!(
-        "kuro-export-audio-{}-{token}.mp4",
+        "unclip-export-audio-{}-{token}.mp4",
         std::process::id()
     ));
     let result = concatenate_segments(&video_files, &joined_video, cancel)
@@ -1892,9 +1892,9 @@ mod tests {
             return;
         }
         let temp = std::env::temp_dir();
-        let source = temp.join(format!("kuro-export-source-{}.mkv", std::process::id()));
-        let output = temp.join(format!("kuro-export-result-{}.mp4", std::process::id()));
-        let mixed_output = temp.join(format!("kuro-export-mixed-{}.mp4", std::process::id()));
+        let source = temp.join(format!("unclip-export-source-{}.mkv", std::process::id()));
+        let output = temp.join(format!("unclip-export-result-{}.mp4", std::process::id()));
+        let mixed_output = temp.join(format!("unclip-export-mixed-{}.mp4", std::process::id()));
         let generated = Command::new("ffmpeg")
             .args([
                 "-y",
@@ -1976,19 +1976,19 @@ mod tests {
         }
         let temp = std::env::temp_dir();
         let video_source = temp.join(format!(
-            "kuro-export-foreign-audio-video-{}.mkv",
+            "unclip-export-foreign-audio-video-{}.mkv",
             std::process::id()
         ));
         let audio_source = temp.join(format!(
-            "kuro-export-foreign-audio-source-{}.mkv",
+            "unclip-export-foreign-audio-source-{}.mkv",
             std::process::id()
         ));
         let output = temp.join(format!(
-            "kuro-export-foreign-audio-result-{}.mp4",
+            "unclip-export-foreign-audio-result-{}.mp4",
             std::process::id()
         ));
         let same_media_output = temp.join(format!(
-            "kuro-export-unlinked-same-media-result-{}.mp4",
+            "unclip-export-unlinked-same-media-result-{}.mp4",
             std::process::id()
         ));
 

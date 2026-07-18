@@ -1,4 +1,4 @@
-//! Project domain: versioned `.kuro` persistence, autosave/recovery, recent
+//! Project domain: versioned `.unclip` persistence, autosave/recovery, recent
 //! projects, editor snapshots, and the editable sequence model.
 
 use std::{
@@ -223,7 +223,7 @@ impl ProjectSession {
         };
         if document.version > PROJECT_VERSION {
             return Err(format!(
-                "This project uses Kuro project format version {}, but this build supports up to version {}.",
+                "This project uses Unclip project format version {}, but this build supports up to version {}.",
                 document.version, PROJECT_VERSION
             ));
         }
@@ -300,7 +300,7 @@ pub struct EditorSnapshot {
 
 pub fn project_path(directory: &Path, name: &str) -> PathBuf {
     let file_name = sanitize_project_name(name);
-    directory.join(format!("{file_name}.kuro"))
+    directory.join(format!("{file_name}.unclip"))
 }
 
 pub fn default_project_directory() -> PathBuf {
@@ -308,7 +308,7 @@ pub fn default_project_directory() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Documents")
-        .join("Kuro")
+        .join("Unclip")
 }
 
 pub fn load_recent_projects() -> Vec<RecentProject> {
@@ -350,7 +350,7 @@ fn read_document(path: &Path) -> Result<ProjectDocument, String> {
     let bytes =
         fs::read(path).map_err(|error| format!("Could not open {}: {error}", path.display()))?;
     serde_json::from_slice(&bytes)
-        .map_err(|error| format!("Could not read the Kuro project: {error}"))
+        .map_err(|error| format!("Could not read the Unclip project: {error}"))
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -363,7 +363,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         "{}.tmp",
         path.extension()
             .and_then(|extension| extension.to_str())
-            .unwrap_or("kuro")
+            .unwrap_or("unclip")
     ));
     let mut file = fs::File::create(&temporary)
         .map_err(|error| format!("Could not create {}: {error}", temporary.display()))?;
@@ -375,7 +375,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn recovery_path(path: &Path) -> PathBuf {
-    path.with_extension("kuro.recovery")
+    path.with_extension("unclip.recovery")
 }
 
 fn recent_projects_path() -> PathBuf {
@@ -473,11 +473,11 @@ mod tests {
     #[test]
     fn project_paths_are_sanitized_and_versioned_json_round_trips() {
         let directory =
-            std::env::temp_dir().join(format!("kuro-project-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("unclip-project-test-{}", std::process::id()));
         let path = project_path(&directory, "My: Project/One");
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
-            Some("My- Project-One.kuro")
+            Some("My- Project-One.unclip")
         );
         let document = ProjectDocument::empty("Test".to_owned(), ProjectSettings::default());
         ProjectSession::new(path.clone(), document.clone()).expect("project should save");
@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn recovery_copy_restores_newer_cut_and_gap_state() {
         let directory =
-            std::env::temp_dir().join(format!("kuro-recovery-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("unclip-recovery-test-{}", std::process::id()));
         let path = project_path(&directory, "Recovery");
         let document = ProjectDocument::empty("Recovery".to_owned(), ProjectSettings::default());
         ProjectSession::new(path.clone(), document).expect("project should save");

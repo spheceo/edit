@@ -72,7 +72,7 @@ impl SequenceAudioOutput {
             .ok_or_else(|| "No audio output device is available.".to_owned())?;
         let supported = device
             .default_output_config()
-            .map_err(|error| format!("Kuro could not configure audio output: {error}"))?;
+            .map_err(|error| format!("Unclip could not configure audio output: {error}"))?;
         let sample_format = supported.sample_format();
         let config: StreamConfig = supported.into();
         let sample_rate = config.sample_rate;
@@ -98,7 +98,7 @@ impl SequenceAudioOutput {
                 decode_queue,
                 Arc::clone(&decode_stop),
             ) {
-                eprintln!("Kuro sequence audio decoder stopped: {error}");
+                eprintln!("Unclip sequence audio decoder stopped: {error}");
             }
             worker_finished.store(true, Ordering::Release);
         });
@@ -132,7 +132,7 @@ impl SequenceAudioOutput {
     pub fn play(&self) -> Result<(), String> {
         self._stream
             .play()
-            .map_err(|error| format!("Kuro could not start audio playback: {error}"))
+            .map_err(|error| format!("Unclip could not start audio playback: {error}"))
     }
 
     pub fn timeline_time(&self) -> f64 {
@@ -364,10 +364,10 @@ where
                 write_audio(output, &queue);
                 played_frames.fetch_add((output.len() / channels.max(1)) as u64, Ordering::Release);
             },
-            |error| eprintln!("Kuro audio output error: {error}"),
+            |error| eprintln!("Unclip audio output error: {error}"),
             None,
         )
-        .map_err(|error| format!("Kuro could not create an audio stream: {error}"))
+        .map_err(|error| format!("Unclip could not create an audio stream: {error}"))
 }
 
 fn write_audio<T>(output: &mut [T], queue: &Mutex<VecDeque<f32>>)
@@ -757,7 +757,7 @@ mod tests {
         if Command::new("ffmpeg").arg("-version").output().is_err() {
             return;
         }
-        let path = std::env::temp_dir().join(format!("kuro-audio-test-{}.m4a", std::process::id()));
+        let path = std::env::temp_dir().join(format!("unclip-audio-test-{}.m4a", std::process::id()));
         let generated = Command::new("ffmpeg")
             .args([
                 "-y",
@@ -799,7 +799,7 @@ mod tests {
     #[test]
     fn transcription_wav_is_mono_16_bit_pcm() {
         let path = std::env::temp_dir().join(format!(
-            "kuro-transcription-wav-test-{}.wav",
+            "unclip-transcription-wav-test-{}.wav",
             std::process::id()
         ));
         let queue = Arc::new(Mutex::new(VecDeque::from([0.0, 0.5, -0.5])));
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn transcription_wav_averages_stereo_without_added_gain() {
         let path = std::env::temp_dir().join(format!(
-            "kuro-transcription-downmix-test-{}.wav",
+            "unclip-transcription-downmix-test-{}.wav",
             std::process::id()
         ));
         let queue = Arc::new(Mutex::new(VecDeque::from([
@@ -862,7 +862,7 @@ mod tests {
             return;
         }
         let path = std::env::temp_dir().join(format!(
-            "kuro-sequence-audio-test-{}.m4a",
+            "unclip-sequence-audio-test-{}.m4a",
             std::process::id()
         ));
         let generated = Command::new("ffmpeg")
@@ -943,7 +943,7 @@ mod tests {
 
         drop(gap_start_samples);
         let transcription_path = std::env::temp_dir().join(format!(
-            "kuro-sequence-transcription-test-{}.wav",
+            "unclip-sequence-transcription-test-{}.wav",
             std::process::id()
         ));
         let stats = super::render_sequence_audio_wav(

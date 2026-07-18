@@ -5,17 +5,17 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Kuro</string>
+    <string>Unclip</string>
     <key>CFBundleExecutable</key>
-    <string>Kuro</string>
+    <string>Unclip</string>
     <key>CFBundleIdentifier</key>
-    <string>app.kuro.editor</string>
+    <string>app.unclip.editor</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Kuro</string>
+    <string>Unclip</string>
     <key>CFBundleIconFile</key>
-    <string>Kuro</string>
+    <string>Unclip</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -27,6 +27,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Kuro uses on-device speech recognition to transcribe audio in your edited sequence.</string>
+    <string>Unclip uses on-device speech recognition to transcribe audio in your edited sequence.</string>
 </dict>
 </plist>

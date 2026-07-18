@@ -1,3 +1,3 @@
-<h1 align="center">Kuro</h1>
+<h1 align="center">Unclip</h1>
 
-Kuro is a fast, native video editor built in Rust for smooth playback, precise timeline editing, and focused cutting workflows.
+Unclip is a fast, native video editor built in Rust for smooth playback, precise timeline editing, and focused cutting workflows.

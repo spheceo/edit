@@ -34,12 +34,12 @@ pub fn startup(ctx: &egui::Context, app: &mut VideoEditor) {
                 ui.add_space(top_pad);
 
                 ui.add(
-                    egui::Image::new(egui::include_image!("../../assets/brand/kuro-mark.svg"))
+                    egui::Image::new(egui::include_image!("../../assets/brand/unclip-mark.svg"))
                         .fit_to_exact_size(Vec2::splat(52.0))
                         .bg_fill(theme::BLACK),
                 );
                 ui.add_space(14.0);
-                ui.label(RichText::new("Kuro").size(26.0).strong().color(theme::TEXT));
+                ui.label(RichText::new("Unclip").size(26.0).strong().color(theme::TEXT));
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new("Local video editing")
@@ -426,7 +426,7 @@ pub fn missing_media_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
             style_dialog_controls(ui);
             ui.heading(RichText::new("Media is offline").strong());
             ui.add_space(8.0);
-            ui.label(format!("Kuro could not find {}.", media.name));
+            ui.label(format!("Unclip could not find {}.", media.name));
             ui.label(
                 RichText::new(media.path.display().to_string())
                     .small()
@@ -459,7 +459,7 @@ pub fn title_bar(ctx: &egui::Context) {
             ui.painter().text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "KURO",
+                "UNCLIP",
                 FontId::proportional(12.0),
                 theme::MUTED,
             );

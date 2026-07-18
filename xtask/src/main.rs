@@ -53,7 +53,7 @@ fn try_main() -> Result<()> {
 
 fn print_help() {
     println!(
-        "Usage: cargo run -p xtask -- <command> [options]\n\nCommands:\n  bundle-macos  Build a self-contained dist/Kuro.app with FFmpeg\n  run-macos     Build, sign, and open a development Kuro.app\n\nRun `cargo run -p xtask -- <command> --help` for command-specific help."
+        "Usage: cargo run -p xtask -- <command> [options]\n\nCommands:\n  bundle-macos  Build a self-contained dist/Unclip.app with FFmpeg\n  run-macos     Build, sign, and open a development Unclip.app\n\nRun `cargo run -p xtask -- <command> --help` for command-specific help."
     );
 }
 
@@ -97,7 +97,7 @@ fn bundle_macos() -> Result<()> {
     let ffmpeg_source = build_root.join("ffmpeg-8.1");
     let ffmpeg_prefix = build_root.join("ffmpeg-install");
     let cargo_target = build_root.join("cargo-target");
-    let app_bundle = project_dir.join("dist/Kuro.app");
+    let app_bundle = project_dir.join("dist/Unclip.app");
 
     if app_bundle.exists() {
         return Err(io::Error::new(
@@ -193,7 +193,7 @@ fn bundle_macos() -> Result<()> {
     fs::create_dir_all(&frameworks_dir)?;
     fs::create_dir_all(&resources_dir)?;
 
-    copy_file(cargo_target.join("release/kuro"), macos_dir.join("Kuro"))?;
+    copy_file(cargo_target.join("release/unclip"), macos_dir.join("Unclip"))?;
     copy_file(
         project_dir.join("packaging/macos/Info.plist"),
         contents.join("Info.plist"),
@@ -210,11 +210,11 @@ fn bundle_macos() -> Result<()> {
         ffmpeg_source.join("COPYING.LGPLv2.1"),
         resources_dir.join("COPYING.LGPLv2.1"),
     )?;
-    make_executable(&macos_dir.join("Kuro"))?;
+    make_executable(&macos_dir.join("Unclip"))?;
 
     create_icon(&project_dir, &build_root, &resources_dir)?;
 
-    let executable = macos_dir.join("Kuro");
+    let executable = macos_dir.join("Unclip");
     let mut add_rpath = Command::new("install_name_tool");
     add_rpath
         .args(["-add_rpath", "@executable_path/../Frameworks"])
@@ -255,8 +255,8 @@ fn run_macos(arguments: &[OsString]) -> Result<()> {
     run(&mut cargo)?;
 
     let target_root = cargo_target_root(&project_dir)?;
-    let binary = target_root.join(profile).join("kuro");
-    let app = target_root.join(profile).join("Kuro.app");
+    let binary = target_root.join(profile).join("unclip");
+    let app = target_root.join(profile).join("Unclip.app");
     if app.exists() {
         fs::remove_dir_all(&app)?;
     }
@@ -267,8 +267,8 @@ fn run_macos(arguments: &[OsString]) -> Result<()> {
         project_dir.join("packaging/macos/Info.plist"),
         contents.join("Info.plist"),
     )?;
-    copy_file(binary, macos_dir.join("Kuro"))?;
-    make_executable(&macos_dir.join("Kuro"))?;
+    copy_file(binary, macos_dir.join("Unclip"))?;
+    make_executable(&macos_dir.join("Unclip"))?;
     codesign(&app)?;
 
     println!("Launching development bundle: {}", app.display());
@@ -292,8 +292,8 @@ fn cargo_target_root(project_dir: &Path) -> Result<PathBuf> {
 }
 
 fn create_icon(project_dir: &Path, build_root: &Path, resources_dir: &Path) -> Result<()> {
-    let source = project_dir.join("assets/brand/kuro-icon.png");
-    let iconset = build_root.join("Kuro.iconset");
+    let source = project_dir.join("assets/brand/unclip-icon.png");
+    let iconset = build_root.join("Unclip.iconset");
     if iconset.exists() {
         fs::remove_dir_all(&iconset)?;
     }
@@ -316,7 +316,7 @@ fn create_icon(project_dir: &Path, build_root: &Path, resources_dir: &Path) -> R
         .args(["-c", "icns"])
         .arg(&iconset)
         .args(["-o"])
-        .arg(resources_dir.join("Kuro.icns"));
+        .arg(resources_dir.join("Unclip.icns"));
     run(&mut iconutil)?;
     fs::remove_dir_all(iconset)?;
     Ok(())

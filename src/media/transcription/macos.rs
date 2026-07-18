@@ -164,7 +164,7 @@ unsafe fn ensure_authorized(cancel: &AtomicBool) -> Result<(), String> {
     }
     if status == SFSpeechRecognizerAuthorizationStatus::Denied {
         return Err(
-            "Speech Recognition access is disabled. Enable Kuro in System Settings → Privacy & Security → Speech Recognition."
+            "Speech Recognition access is disabled. Enable Unclip in System Settings → Privacy & Security → Speech Recognition."
                 .to_owned(),
         );
     }
@@ -208,7 +208,7 @@ fn ensure_app_bundle() -> Result<(), String> {
         Ok(())
     } else {
         Err(
-            "Speech Recognition requires Kuro to run from a macOS app bundle. Quit this build and launch it with cargo run -p xtask -- run-macos."
+            "Speech Recognition requires Unclip to run from a macOS app bundle. Quit this build and launch it with cargo run -p xtask -- run-macos."
                 .to_owned(),
         )
     }
@@ -218,15 +218,15 @@ fn ensure_usage_description() -> Result<(), String> {
     let key = NSString::from_str("NSSpeechRecognitionUsageDescription");
     let Some(value) = NSBundle::mainBundle().objectForInfoDictionaryKey(&key) else {
         return Err(
-            "Kuro cannot request Speech Recognition access because its usage description is missing. Rebuild Kuro before transcribing."
+            "Unclip cannot request Speech Recognition access because its usage description is missing. Rebuild Unclip before transcribing."
                 .to_owned(),
         );
     };
     let Ok(description) = value.downcast::<NSString>() else {
-        return Err("Kuro's Speech Recognition usage description is invalid.".to_owned());
+        return Err("Unclip's Speech Recognition usage description is invalid.".to_owned());
     };
     if description.is_empty() {
-        return Err("Kuro's Speech Recognition usage description is empty.".to_owned());
+        return Err("Unclip's Speech Recognition usage description is empty.".to_owned());
     }
     Ok(())
 }

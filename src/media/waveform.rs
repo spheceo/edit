@@ -21,7 +21,7 @@ const WAVEFORM_BINS: usize = 8_192;
 const MAX_WAVEFORM_SAMPLE_RATE: u32 = 8_000;
 const MIN_WAVEFORM_SAMPLE_RATE: u32 = 50;
 const SAMPLES_PER_BIN: f64 = 24.0;
-const CACHE_MAGIC: &[u8; 9] = b"KUROWAVE1";
+const CACHE_MAGIC: &[u8; 9] = b"UNCLIPWAV";
 
 pub struct Waveform {
     peaks: Vec<f32>,
@@ -346,7 +346,7 @@ mod tests {
             return;
         }
         let path =
-            std::env::temp_dir().join(format!("kuro-waveform-test-{}.m4a", std::process::id()));
+            std::env::temp_dir().join(format!("unclip-waveform-test-{}.m4a", std::process::id()));
         let generated = Command::new("ffmpeg")
             .args([
                 "-y",

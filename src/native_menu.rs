@@ -110,7 +110,7 @@ mod platform {
             window.set_as_windows_menu_for_nsapp();
 
             let about = AboutMetadata {
-                name: Some("Kuro".to_owned()),
+                name: Some("Unclip".to_owned()),
                 version: Some(env!("CARGO_PKG_VERSION").to_owned()),
                 comments: Some("A precise, local video editor".to_owned()),
                 ..Default::default()
@@ -119,7 +119,7 @@ mod platform {
                 "Help",
                 true,
                 &[&PredefinedMenuItem::about(
-                    Some("About Kuro"),
+                    Some("About Unclip"),
                     Some(about.clone()),
                 )],
             )
@@ -129,10 +129,10 @@ mod platform {
             #[cfg(target_os = "macos")]
             {
                 let app = Submenu::with_items(
-                    "Kuro",
+                    "Unclip",
                     true,
                     &[
-                        &PredefinedMenuItem::about(Some("About Kuro"), Some(about)),
+                        &PredefinedMenuItem::about(Some("About Unclip"), Some(about)),
                         &PredefinedMenuItem::separator(),
                         &PredefinedMenuItem::services(None),
                         &PredefinedMenuItem::separator(),

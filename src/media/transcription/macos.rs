@@ -208,7 +208,7 @@ fn ensure_app_bundle() -> Result<(), String> {
         Ok(())
     } else {
         Err(
-            "Speech Recognition requires Kuro to run from a macOS app bundle. Quit this build and launch it with cargo xtask run-macos."
+            "Speech Recognition requires Kuro to run from a macOS app bundle. Quit this build and launch it with cargo run -p xtask -- run-macos."
                 .to_owned(),
         )
     }
@@ -307,7 +307,7 @@ mod tests {
         autoreleasepool(|_| {
             let error = super::ensure_app_bundle()
                 .expect_err("a test executable must not be treated as an app bundle");
-            assert!(error.contains("cargo xtask run-macos"));
+            assert!(error.contains("cargo run -p xtask -- run-macos"));
         });
     }
 

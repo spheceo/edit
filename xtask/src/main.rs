@@ -53,16 +53,16 @@ fn try_main() -> Result<()> {
 
 fn print_help() {
     println!(
-        "Usage: cargo xtask <command> [options]\n\nCommands:\n  bundle-macos  Build a self-contained dist/Kuro.app with FFmpeg\n  run-macos     Build, sign, and open a development Kuro.app\n\nRun `cargo xtask <command> --help` for command-specific help."
+        "Usage: cargo run -p xtask -- <command> [options]\n\nCommands:\n  bundle-macos  Build a self-contained dist/Kuro.app with FFmpeg\n  run-macos     Build, sign, and open a development Kuro.app\n\nRun `cargo run -p xtask -- <command> --help` for command-specific help."
     );
 }
 
 fn print_bundle_help() {
-    println!("Usage: cargo xtask bundle-macos");
+    println!("Usage: cargo run -p xtask -- bundle-macos");
 }
 
 fn print_run_help() {
-    println!("Usage: cargo xtask run-macos [--release]");
+    println!("Usage: cargo run -p xtask -- run-macos [--release]");
 }
 
 fn usage_error(message: &str) -> Box<dyn Error> {

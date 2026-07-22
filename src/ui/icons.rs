@@ -18,6 +18,8 @@ pub enum Icon {
     Link,
     Unlink,
     Delete,
+    Folder,
+    Timeline,
 }
 
 impl Icon {
@@ -35,6 +37,8 @@ impl Icon {
             Self::Link => egui::include_image!("../../assets/icons/link.svg"),
             Self::Unlink => egui::include_image!("../../assets/icons/unlink.svg"),
             Self::Delete => egui::include_image!("../../assets/icons/delete.svg"),
+            Self::Folder => egui::include_image!("../../assets/icons/folder.svg"),
+            Self::Timeline => egui::include_image!("../../assets/icons/timeline.svg"),
         }
     }
 }
@@ -137,4 +141,25 @@ pub fn paint(ui: &egui::Ui, icon: Icon, rect: Rect, tint: Color32) {
         .fit_to_exact_size(rect.size())
         .tint(tint)
         .paint_at(ui, rect);
+}
+
+/// Title-bar / chrome view toggle: white when the panel is open, muted when closed.
+pub fn view_toggle(ui: &mut egui::Ui, icon: Icon, tooltip: &str, open: bool) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        if response.hovered() || response.is_pointer_button_down_on() {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(6), theme::SURFACE_HOVER);
+        }
+        let tint = if open { theme::TEXT } else { theme::MUTED };
+        paint(
+            ui,
+            icon,
+            Rect::from_center_size(rect.center(), Vec2::splat(16.0)),
+            tint,
+        );
+    }
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text_at_pointer(tooltip)
 }

@@ -443,13 +443,63 @@ pub fn missing_media_dialog(ctx: &egui::Context, app: &mut VideoEditor) {
         });
 }
 
-pub fn title_bar(ctx: &egui::Context) {
+pub fn title_bar(ctx: &egui::Context, app: &mut VideoEditor) {
     egui::TopBottomPanel::top("title_bar")
         .exact_height(36.0)
+        .show_separator_line(false)
         .frame(Frame::new().fill(theme::BLACK).inner_margin(Margin::ZERO))
         .show(ctx, |ui| {
             let rect = ui.max_rect();
-            let drag = ui.interact(rect, ui.id().with("window_drag"), Sense::click_and_drag());
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "UNCLIP",
+                FontId::proportional(12.0),
+                theme::MUTED,
+            );
+
+            let mut drag_left = rect.left() + theme::TITLE_TRAFFIC_CLEARANCE;
+            let mut drag_right = rect.right() - 10.0;
+            if app.project_session.is_some() {
+                let controls = Rect::from_min_max(
+                    Pos2::new(drag_left, rect.top()),
+                    Pos2::new(drag_right, rect.bottom()),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(controls), |ui| {
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        if icons::view_toggle(
+                            ui,
+                            Icon::Folder,
+                            "Toggle Project panel",
+                            app.show_project_panel,
+                        )
+                        .clicked()
+                        {
+                            app.show_project_panel = !app.show_project_panel;
+                        }
+                        drag_left = ui.min_rect().right() + 8.0;
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if icons::view_toggle(
+                                ui,
+                                Icon::Info,
+                                "Toggle Properties panel",
+                                app.show_properties_panel,
+                            )
+                            .clicked()
+                            {
+                                app.show_properties_panel = !app.show_properties_panel;
+                            }
+                            drag_right = ui.min_rect().left() - 8.0;
+                        });
+                    });
+                });
+            }
+
+            let drag_rect = Rect::from_min_max(
+                Pos2::new(drag_left, rect.top()),
+                Pos2::new(drag_right.max(drag_left), rect.bottom()),
+            );
+            let drag = ui.interact(drag_rect, ui.id().with("window_drag"), Sense::click_and_drag());
             if drag.drag_started() || drag.double_clicked() {
                 if drag.double_clicked() {
                     let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
@@ -458,13 +508,32 @@ pub fn title_bar(ctx: &egui::Context) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
             }
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                "UNCLIP",
-                FontId::proportional(12.0),
-                theme::MUTED,
-            );
+        });
+}
+
+/// Black strip under the timeline with the timeline view toggle on the far left.
+pub fn timeline_view_toggle(ctx: &egui::Context, app: &mut VideoEditor) {
+    egui::TopBottomPanel::bottom("timeline-view-toggle")
+        .exact_height(theme::TIMELINE_TOGGLE_HEIGHT)
+        .show_separator_line(false)
+        .frame(
+            Frame::new()
+                .fill(theme::BLACK)
+                .inner_margin(Margin::symmetric(10, 0)),
+        )
+        .show(ctx, |ui| {
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                if icons::view_toggle(
+                    ui,
+                    Icon::Timeline,
+                    "Toggle Timeline",
+                    app.show_timeline,
+                )
+                .clicked()
+                {
+                    app.show_timeline = !app.show_timeline;
+                }
+            });
         });
 }
 
@@ -758,6 +827,58 @@ fn dialog_frame() -> Frame {
         .inner_margin(Margin::same(20))
 }
 
+/// Black chrome shell: insets the island by [`theme::PANEL_GAP`] on every side.
+/// Using inner margin (not outer) keeps gaps inside the panel clip/allocation so
+/// side panels keep their window-edge padding and rounded corners.
+pub(crate) fn island_shell_frame() -> Frame {
+    Frame::new()
+        .fill(theme::BLACK)
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::ZERO)
+        .inner_margin(Margin::same(theme::PANEL_GAP))
+}
+
+/// 0..=1 expand factor for view toggles.
+///
+/// Uses cubic in-out so open and close feel the same. (`cubic_out` alone makes
+/// opens rush the start and closes collapse early once egui flips the easing.)
+pub(crate) fn panel_expand_t(ctx: &egui::Context, id: egui::Id, expanded: bool) -> f32 {
+    ctx.animate_bool_with_time_and_easing(
+        id.with("expand"),
+        expanded,
+        theme::PANEL_ANIM_SECS,
+        egui::emath::easing::cubic_in_out,
+    )
+}
+
+/// Paint the surface island and wrap content with the panel's inner padding.
+pub(crate) fn show_island<R>(
+    ui: &mut egui::Ui,
+    content_inner: Margin,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.set_min_size(ui.max_rect().size());
+    let island = ui.max_rect();
+    ui.painter().rect(
+        island,
+        CornerRadius::same(theme::PANEL_RADIUS),
+        theme::SURFACE,
+        Stroke::new(1.0, theme::BORDER),
+        StrokeKind::Inside,
+    );
+    // Keep egui fills (scroll areas, etc.) on the island surface, not pure black.
+    ui.visuals_mut().panel_fill = theme::SURFACE;
+    ui.visuals_mut().window_fill = theme::SURFACE;
+    ui.visuals_mut().extreme_bg_color = theme::SURFACE;
+    ui.visuals_mut().faint_bg_color = theme::SURFACE;
+    Frame::new()
+        .fill(Color32::TRANSPARENT)
+        .stroke(Stroke::NONE)
+        .inner_margin(content_inner)
+        .show(ui, add_contents)
+        .inner
+}
+
 fn style_dialog_controls(ui: &mut egui::Ui) {
     let radius = CornerRadius::same(theme::CONTROL_RADIUS);
     let field_stroke = Stroke::new(1.0, Color32::from_rgb(52, 52, 56));
@@ -910,16 +1031,32 @@ fn truncate_to_width(painter: &egui::Painter, text: &str, font: &FontId, max_wid
 }
 
 pub fn properties_panel(ctx: &egui::Context, app: &mut VideoEditor) {
+    let inner = Margin::same(14);
+    // Extra right chrome so the island matches the Project panel's window-edge gap.
+    let shell = Margin {
+        left: theme::PANEL_GAP,
+        right: theme::PANEL_GAP + 4,
+        top: theme::PANEL_GAP,
+        bottom: theme::PANEL_GAP,
+    };
+    let full_width = 268.0 + shell.leftf() + shell.rightf();
+    let t = panel_expand_t(ctx, egui::Id::new("clip-properties"), app.show_properties_panel);
+    if t <= 0.0 {
+        return;
+    }
     egui::SidePanel::right("clip-properties")
-        .exact_width(268.0)
+        .exact_width((full_width * t).max(1.0))
         .resizable(false)
-        .show_separator_line(true)
+        .show_separator_line(false)
         .frame(
             Frame::new()
                 .fill(theme::BLACK)
-                .inner_margin(Margin::same(14)),
+                .stroke(Stroke::NONE)
+                .corner_radius(CornerRadius::ZERO)
+                .inner_margin(shell),
         )
         .show(ctx, |ui| {
+            show_island(ui, inner, |ui| {
             ui.horizontal(|ui| {
                 properties_tab(
                     ui,
@@ -1040,6 +1177,7 @@ pub fn properties_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                     app.commit_history_transaction();
                 }
             }
+            });
         });
 }
 
@@ -1182,21 +1320,18 @@ fn paint_clip_frame(
 }
 
 pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
+    let inner = Margin::same(18);
     egui::CentralPanel::default()
-        .frame(
-            Frame::new()
-                .fill(theme::BLACK)
-                .inner_margin(Margin::same(18)),
-        )
+        .frame(island_shell_frame())
         .show(ctx, |ui| {
+            show_island(ui, inner, |ui| {
             let controls_height = 46.0;
             let preview_size = Vec2::new(
                 ui.available_width(),
                 (ui.available_height() - controls_height).max(100.0),
             );
             let (canvas, _) = ui.allocate_exact_size(preview_size, Sense::hover());
-            ui.painter()
-                .rect_filled(canvas, CornerRadius::same(6), theme::SURFACE);
+            // Canvas stays island gray; only the project aspect frame is black.
 
             let format = app.sequence_format();
             let project_frame = aspect_fit(
@@ -1241,8 +1376,15 @@ pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
                 );
             }
 
+            let controls_width = ui.available_width();
+            let sep_y = ui.cursor().min.y;
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                sep_y,
+                Stroke::new(1.0, theme::BORDER),
+            );
             ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), controls_height),
+                Vec2::new(controls_width, controls_height),
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     let fps = app.frame_rate();
@@ -1305,6 +1447,7 @@ pub fn preview(ctx: &egui::Context, app: &mut VideoEditor) {
                     });
                 },
             );
+            });
         });
 }
 
@@ -1314,226 +1457,241 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
     let mut create_folder_requested = false;
     let mut enter_folder_requested = None;
     let mut leave_folder_requested = false;
+    let inner = Margin::same(12);
+    let full_width = 300.0 + 2.0 * theme::PANEL_GAP as f32;
+    let t = panel_expand_t(ctx, egui::Id::new("project-media"), app.show_project_panel);
+    if t <= 0.0 {
+        return;
+    }
+    // Docked left SidePanel (same model as Properties): Preview owns the
+    // remaining center and is never covered by Project. Heavy list/thumbnail
+    // work stays off the tween frames so the width ease stays smooth.
+    let animating = t < 1.0;
     egui::SidePanel::left("project-media")
-        .exact_width(300.0)
+        .exact_width((full_width * t).max(1.0))
         .resizable(false)
-        .show_separator_line(true)
-        .frame(
-            Frame::new()
-                .fill(theme::BLACK)
-                .inner_margin(Margin::same(12)),
-        )
+        .show_separator_line(false)
+        .frame(island_shell_frame())
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Project media").strong());
-                if !app.media_library.is_empty() {
-                    ui.label(
-                        RichText::new(app.media_library.len().to_string())
-                            .small()
-                            .color(theme::MUTED),
-                    );
+            show_island(ui, inner, |ui| {
+                if animating {
+                    let _ = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+                    return;
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let response = icons::import_menu_button(ui);
-                    let popup_id = ui.make_persistent_id("media-import-menu");
-                    if response.clicked() {
-                        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Project").strong());
+                    if !app.media_library.is_empty() {
+                        ui.label(
+                            RichText::new(app.media_library.len().to_string())
+                                .small()
+                                .color(theme::MUTED),
+                        );
                     }
-                    egui::popup::popup_below_widget(
-                        ui,
-                        popup_id,
-                        &response,
-                        egui::popup::PopupCloseBehavior::CloseOnClick,
-                        |ui| {
-                            ui.set_min_width(148.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let response = icons::import_menu_button(ui);
+                        let popup_id = ui.make_persistent_id("media-import-menu");
+                        if response.clicked() {
+                            ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+                        }
+                        egui::popup::popup_below_widget(
+                            ui,
+                            popup_id,
+                            &response,
+                            egui::popup::PopupCloseBehavior::CloseOnClick,
+                            |ui| {
+                                ui.set_min_width(148.0);
+                                ui.visuals_mut().panel_fill = theme::BLACK;
+                                ui.visuals_mut().window_fill = theme::BLACK;
+                                style_combo_menu(ui);
+                                if icons::menu_item(ui, Icon::Import, "Import").clicked() {
+                                    import_requested = true;
+                                    ui.memory_mut(|mem| mem.close_popup());
+                                }
+                                if ui.button("Create folder").clicked() {
+                                    create_folder_requested = true;
+                                    ui.memory_mut(|mem| mem.close_popup());
+                                }
+                            },
+                        );
+                    });
+                });
+                ui.add_space(10.0);
+                if let Some(name) = app.current_media_folder_name().map(str::to_owned) {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("‹ Back").clicked() {
+                            leave_folder_requested = true;
+                        }
+                        ui.label(RichText::new(name).small().color(theme::MUTED));
+                    });
+                    ui.add_space(6.0);
+                }
+                let folders = app
+                    .project_session
+                    .as_ref()
+                    .map(|session| {
+                        session
+                            .document
+                            .media_folders
+                            .iter()
+                            .filter(|folder| folder.parent_id == app.current_media_folder)
+                            .map(|folder| (folder.id, folder.name.clone()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if app.media_library.is_empty() && folders.is_empty() {
+                    ui.label(RichText::new("Import footage to add it here.").color(theme::MUTED));
+                }
+
+                let entries = app
+                    .media_library
+                    .iter()
+                    .filter(|media| media.folder_id == app.current_media_folder)
+                    .map(|media| {
+                        (
+                            media.id,
+                            media.asset.name.clone(),
+                            media.asset.file_size,
+                            media.asset.duration,
+                            media.asset.source_width,
+                            media.asset.source_height,
+                            media.thumbnail.as_ref().map(TextureHandle::id),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (id, name) in folders {
+                        let (rect, response) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), 34.0),
+                            Sense::click(),
+                        );
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(6),
+                            if response.hovered() {
+                                theme::SURFACE_HOVER
+                            } else {
+                                Color32::TRANSPARENT
+                            },
+                        );
+                        ui.painter().text(
+                            rect.min + Vec2::new(9.0, 9.0),
+                            Align2::LEFT_TOP,
+                            format!("▸  {name}"),
+                            FontId::proportional(12.0),
+                            theme::TEXT,
+                        );
+                        if response.double_clicked() {
+                            enter_folder_requested = Some(id);
+                        }
+                        ui.add_space(4.0);
+                    }
+                    for (id, name, size, duration, width, height, thumbnail) in entries {
+                        let selected = app.selected_media_id == Some(id);
+                        let (rect, response) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), 72.0),
+                            Sense::click_and_drag(),
+                        );
+                        response.dnd_set_drag_payload(id);
+                        let response = response
+                            .on_hover_cursor(egui::CursorIcon::Grab)
+                            .on_hover_text_at_pointer("Drag onto the timeline");
+                        if response.secondary_clicked() {
+                            app.select_library_media(id);
+                        }
+                        response.context_menu(|ui| {
                             ui.visuals_mut().panel_fill = theme::BLACK;
                             ui.visuals_mut().window_fill = theme::BLACK;
-                            style_combo_menu(ui);
-                            if icons::menu_item(ui, Icon::Import, "Import").clicked() {
-                                import_requested = true;
-                                ui.memory_mut(|mem| mem.close_popup());
+                            ui.set_min_width(158.0);
+                            ui.set_max_width(180.0);
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.spacing_mut().button_padding = Vec2::new(7.0, 5.0);
+                            if icons::menu_item(ui, Icon::Delete, "Delete media").clicked() {
+                                delete_requested = Some(id);
+                                ui.close_menu();
                             }
-                            if ui.button("Create folder").clicked() {
-                                create_folder_requested = true;
-                                ui.memory_mut(|mem| mem.close_popup());
-                            }
-                        },
-                    );
-                });
-            });
-            ui.add_space(10.0);
-            if let Some(name) = app.current_media_folder_name().map(str::to_owned) {
-                ui.horizontal(|ui| {
-                    if ui.small_button("‹ Back").clicked() {
-                        leave_folder_requested = true;
-                    }
-                    ui.label(RichText::new(name).small().color(theme::MUTED));
-                });
-                ui.add_space(6.0);
-            }
-            let folders = app
-                .project_session
-                .as_ref()
-                .map(|session| {
-                    session
-                        .document
-                        .media_folders
-                        .iter()
-                        .filter(|folder| folder.parent_id == app.current_media_folder)
-                        .map(|folder| (folder.id, folder.name.clone()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            if app.media_library.is_empty() && folders.is_empty() {
-                ui.label(RichText::new("Import footage to add it here.").color(theme::MUTED));
-            }
-
-            let entries = app
-                .media_library
-                .iter()
-                .filter(|media| media.folder_id == app.current_media_folder)
-                .map(|media| {
-                    (
-                        media.id,
-                        media.asset.name.clone(),
-                        media.asset.file_size,
-                        media.asset.duration,
-                        media.asset.source_width,
-                        media.asset.source_height,
-                        media.thumbnail.as_ref().map(TextureHandle::id),
-                    )
-                })
-                .collect::<Vec<_>>();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for (id, name) in folders {
-                    let (rect, response) = ui
-                        .allocate_exact_size(Vec2::new(ui.available_width(), 34.0), Sense::click());
-                    ui.painter().rect_filled(
-                        rect,
-                        CornerRadius::same(6),
-                        if response.hovered() {
-                            theme::SURFACE_HOVER
-                        } else {
-                            Color32::TRANSPARENT
-                        },
-                    );
-                    ui.painter().text(
-                        rect.min + Vec2::new(9.0, 9.0),
-                        Align2::LEFT_TOP,
-                        format!("▸  {name}"),
-                        FontId::proportional(12.0),
-                        theme::TEXT,
-                    );
-                    if response.double_clicked() {
-                        enter_folder_requested = Some(id);
-                    }
-                    ui.add_space(4.0);
-                }
-                for (id, name, size, duration, width, height, thumbnail) in entries {
-                    let selected = app.selected_media_id == Some(id);
-                    let (rect, response) = ui.allocate_exact_size(
-                        Vec2::new(ui.available_width(), 72.0),
-                        Sense::click_and_drag(),
-                    );
-                    response.dnd_set_drag_payload(id);
-                    let response = response
-                        .on_hover_cursor(egui::CursorIcon::Grab)
-                        .on_hover_text_at_pointer("Drag onto the timeline");
-                    if response.secondary_clicked() {
-                        app.select_library_media(id);
-                    }
-                    response.context_menu(|ui| {
-                        ui.visuals_mut().panel_fill = theme::BLACK;
-                        ui.visuals_mut().window_fill = theme::BLACK;
-                        ui.set_min_width(158.0);
-                        ui.set_max_width(180.0);
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.spacing_mut().button_padding = Vec2::new(7.0, 5.0);
-                        if icons::menu_item(ui, Icon::Delete, "Delete media").clicked() {
-                            delete_requested = Some(id);
-                            ui.close_menu();
-                        }
-                    });
-                    let hovered = response.hovered();
-                    ui.painter().rect_filled(
-                        rect,
-                        CornerRadius::same(8),
-                        if selected {
-                            theme::SURFACE
-                        } else if hovered {
-                            theme::SURFACE_HOVER
-                        } else {
-                            Color32::TRANSPARENT
-                        },
-                    );
-                    if selected {
-                        ui.painter().rect_stroke(
+                        });
+                        let hovered = response.hovered();
+                        ui.painter().rect_filled(
                             rect,
                             CornerRadius::same(8),
-                            Stroke::new(1.0, theme::ACCENT),
-                            StrokeKind::Inside,
+                            if selected {
+                                theme::SURFACE
+                            } else if hovered {
+                                theme::SURFACE_HOVER
+                            } else {
+                                Color32::TRANSPARENT
+                            },
                         );
-                    }
-                    // Fixed 16:9 frame; media keeps its native aspect (letterbox / pillarbox).
-                    let thumb_h = 50.0;
-                    let thumb_w = thumb_h * 16.0 / 9.0;
-                    let thumb = Rect::from_min_size(
-                        rect.min + Vec2::new(7.0, (rect.height() - thumb_h) * 0.5),
-                        Vec2::new(thumb_w, thumb_h),
-                    );
-                    ui.painter()
-                        .rect_filled(thumb, CornerRadius::same(5), theme::SURFACE);
-                    if let Some(texture) = thumbnail {
-                        let image_rect =
-                            aspect_fit(thumb, width.max(1) as f32 / height.max(1) as f32);
-                        ui.painter().with_clip_rect(thumb).image(
-                            texture,
-                            image_rect,
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                            Color32::WHITE,
+                        if selected {
+                            ui.painter().rect_stroke(
+                                rect,
+                                CornerRadius::same(8),
+                                Stroke::new(1.0, theme::ACCENT),
+                                StrokeKind::Inside,
+                            );
+                        }
+                        // Fixed 16:9 frame; media keeps its native aspect (letterbox / pillarbox).
+                        let thumb_h = 50.0;
+                        let thumb_w = thumb_h * 16.0 / 9.0;
+                        let thumb = Rect::from_min_size(
+                            rect.min + Vec2::new(7.0, (rect.height() - thumb_h) * 0.5),
+                            Vec2::new(thumb_w, thumb_h),
                         );
+                        ui.painter()
+                            .rect_filled(thumb, CornerRadius::same(5), theme::SURFACE);
+                        if let Some(texture) = thumbnail {
+                            let image_rect =
+                                aspect_fit(thumb, width.max(1) as f32 / height.max(1) as f32);
+                            ui.painter().with_clip_rect(thumb).image(
+                                texture,
+                                image_rect,
+                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        }
+                        let text_x = thumb.right() + 9.0;
+                        let title_font = FontId::proportional(12.0);
+                        let title = truncate_to_width(
+                            ui.painter(),
+                            &name,
+                            &title_font,
+                            (rect.right() - text_x - 8.0).max(1.0),
+                        );
+                        ui.painter().text(
+                            Pos2::new(text_x, rect.top() + 9.0),
+                            Align2::LEFT_TOP,
+                            title,
+                            title_font,
+                            theme::TEXT,
+                        );
+                        ui.painter().text(
+                            Pos2::new(text_x, rect.top() + 34.0),
+                            Align2::LEFT_TOP,
+                            format!(
+                                "{} × {}  ·  {}",
+                                width,
+                                height,
+                                format_file_size(size.unwrap_or(0))
+                            ),
+                            FontId::proportional(10.0),
+                            theme::MUTED,
+                        );
+                        ui.painter().text(
+                            Pos2::new(text_x, rect.top() + 50.0),
+                            Align2::LEFT_TOP,
+                            format!("{duration:.1}s"),
+                            FontId::proportional(10.0),
+                            theme::MUTED,
+                        );
+                        if response.clicked() {
+                            app.select_library_media(id);
+                        }
+                        ui.add_space(7.0);
                     }
-                    let text_x = thumb.right() + 9.0;
-                    let title_font = FontId::proportional(12.0);
-                    let title = truncate_to_width(
-                        ui.painter(),
-                        &name,
-                        &title_font,
-                        (rect.right() - text_x - 8.0).max(1.0),
-                    );
-                    ui.painter().text(
-                        Pos2::new(text_x, rect.top() + 9.0),
-                        Align2::LEFT_TOP,
-                        title,
-                        title_font,
-                        theme::TEXT,
-                    );
-                    ui.painter().text(
-                        Pos2::new(text_x, rect.top() + 34.0),
-                        Align2::LEFT_TOP,
-                        format!(
-                            "{} × {}  ·  {}",
-                            width,
-                            height,
-                            format_file_size(size.unwrap_or(0))
-                        ),
-                        FontId::proportional(10.0),
-                        theme::MUTED,
-                    );
-                    ui.painter().text(
-                        Pos2::new(text_x, rect.top() + 50.0),
-                        Align2::LEFT_TOP,
-                        format!("{duration:.1}s"),
-                        FontId::proportional(10.0),
-                        theme::MUTED,
-                    );
-                    if response.clicked() {
-                        app.select_library_media(id);
-                    }
-                    ui.add_space(7.0);
-                }
+                });
             });
         });
+
     if import_requested {
         app.import_video(ctx);
     }

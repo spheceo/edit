@@ -693,11 +693,7 @@ impl Sequence {
     }
 
     pub fn select_only(&mut self, id: ClipId) {
-        self.selected = if self.clip(id).is_some() {
-            vec![id]
-        } else {
-            Vec::new()
-        };
+        self.select(Some(id));
     }
 
     pub fn toggle_select(&mut self, id: ClipId) {

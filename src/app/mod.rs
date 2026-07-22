@@ -24,7 +24,7 @@ use crate::{
     project::{
         self,
         sequence::{
-            frame_duration, ClipAudio, ClipColor, ClipId, ClipMotion, MediaId, SequenceClip,
+            ClipAudio, ClipColor, ClipId, ClipMotion, MediaId, SequenceClip,
         },
         EditTool, EditorProjectState, EditorSnapshot, MediaFolder, MediaReference, NewProjectDraft,
         ProjectDocument, ProjectSession, RecentProject, Sequence, DEFAULT_TIMELINE_HEIGHT,
@@ -140,6 +140,9 @@ pub struct VideoEditor {
     pub media_info_clip: Option<ClipId>,
     pub timeline_zoom: f32,
     pub timeline_height: f32,
+    pub show_project_panel: bool,
+    pub show_properties_panel: bool,
+    pub show_timeline: bool,
     pub timecode_editing: bool,
     pub timecode_input: String,
     pub timecode_select_all: bool,
@@ -205,6 +208,9 @@ impl VideoEditor {
             media_info_clip: None,
             timeline_zoom: 1.0,
             timeline_height: DEFAULT_TIMELINE_HEIGHT,
+            show_project_panel: true,
+            show_properties_panel: true,
+            show_timeline: true,
             timecode_editing: false,
             timecode_input: String::new(),
             timecode_select_all: false,
@@ -903,26 +909,6 @@ impl VideoEditor {
         Some(duplicated)
     }
 
-    pub fn move_clip_to_track(
-        &mut self,
-        id: ClipId,
-        start: f64,
-        track: u8,
-        snap: f64,
-        ctx: &egui::Context,
-    ) -> bool {
-        let fps = self.frame_rate();
-        let moved = self
-            .sequence
-            .as_mut()
-            .and_then(|sequence| sequence.move_clip_to_track(id, start, track, fps, snap))
-            .is_some();
-        if moved {
-            self.refresh_preview(ctx);
-        }
-        moved
-    }
-
     pub fn begin_clip_drag(&mut self, id: ClipId, pointer_time: f64, duplicate: bool) {
         let Some(original) = self.sequence.clone() else {
             return;
@@ -1500,13 +1486,6 @@ impl VideoEditor {
         )
     }
 
-    pub fn select_clip(&mut self, selected: Option<ClipId>) {
-        self.selected_gap = None;
-        if let Some(sequence) = &mut self.sequence {
-            sequence.select(selected);
-        }
-    }
-
     pub fn select_clip_only(&mut self, id: ClipId) {
         self.selected_gap = None;
         if let Some(sequence) = &mut self.sequence {
@@ -1559,48 +1538,6 @@ impl VideoEditor {
         {
             self.seek(time, ctx);
             self.record_history();
-        }
-    }
-
-    pub fn trim_left(&mut self, id: ClipId, time: f64, snap: f64, ctx: &egui::Context) {
-        if self.video.is_none() {
-            return;
-        }
-        let fps = self.frame_rate();
-        if self.playing {
-            self.pause(ctx);
-        }
-        let trimmed = self
-            .sequence
-            .as_mut()
-            .and_then(|sequence| sequence.trim_left_snapped(id, time, fps, snap));
-        if let Some(time) = trimmed {
-            self.select_clip(Some(id));
-            self.seek(time, ctx);
-        }
-    }
-
-    pub fn trim_right(&mut self, id: ClipId, time: f64, snap: f64, ctx: &egui::Context) {
-        if self.video.is_none() {
-            return;
-        }
-        let fps = self.frame_rate();
-        let source_duration = self
-            .sequence
-            .as_ref()
-            .and_then(|sequence| sequence.clip(id))
-            .and_then(|clip| self.media_asset(clip.media_id))
-            .map_or(self.duration(), |asset| asset.duration);
-        if self.playing {
-            self.pause(ctx);
-        }
-        let trimmed = self
-            .sequence
-            .as_mut()
-            .and_then(|sequence| sequence.trim_right_snapped(id, time, fps, source_duration, snap));
-        if let Some(time) = trimmed {
-            self.select_clip(Some(id));
-            self.seek((time - frame_duration(fps)).max(0.0), ctx);
         }
     }
 
@@ -2197,7 +2134,7 @@ fn supported_video_path(path: &std::path::Path) -> bool {
 impl eframe::App for VideoEditor {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.update_native_menu(ctx, frame);
-        ui::title_bar(ctx);
+        ui::title_bar(ctx, self);
         if self.project_session.is_none() {
             ui::startup(ctx, self);
             ui::new_project_dialog(ctx, self);
@@ -2232,6 +2169,8 @@ impl eframe::App for VideoEditor {
         ui::export_notice(ctx, self);
         ui::media_info_dialog(ctx, self);
         ui::new_project_dialog(ctx, self);
+        // Bottom chrome first so the timeline toggle strip stays under the island.
+        ui::timeline_view_toggle(ctx, self);
         timeline::show(ctx, self);
         ui::media_panel(ctx, self);
         ui::properties_panel(ctx, self);

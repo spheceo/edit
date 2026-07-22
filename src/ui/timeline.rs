@@ -1,6 +1,6 @@
 use eframe::egui::{
-    self, scroll_area::ScrollBarVisibility, Align, Align2, Color32, CornerRadius, FontId, Frame,
-    Layout, Margin, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+    self, scroll_area::ScrollBarVisibility, Align, Align2, Color32, CornerRadius, FontId, Layout,
+    Margin, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
 
 use crate::{
@@ -128,70 +128,137 @@ impl TrackLayout {
 }
 
 pub fn show(ctx: &egui::Context, app: &mut VideoEditor) {
+    let inner = Margin::symmetric(14, 10);
+    let t = super::panel_expand_t(ctx, egui::Id::new("timeline"), app.show_timeline);
+    if t <= 0.0 {
+        return;
+    }
+    let full_height = app
+        .timeline_height
+        .clamp(MIN_TIMELINE_HEIGHT, MAX_TIMELINE_HEIGHT);
+    let animating = t < 1.0;
+    // Keep height on one path (exact_height) for the whole tween so we don't
+    // hitch when switching into default_height + resizable at t == 1.
+    let height = (full_height * t).max(1.0);
     let response = egui::TopBottomPanel::bottom("timeline")
-        .resizable(true)
-        .default_height(app.timeline_height)
-        .min_height(MIN_TIMELINE_HEIGHT)
-        .max_height(MAX_TIMELINE_HEIGHT)
-        .frame(
-            Frame::new()
-                .fill(theme::BLACK)
-                .inner_margin(Margin::symmetric(14, 10)),
-        )
+        .exact_height(height)
+        .resizable(!animating)
+        .min_height(if animating {
+            height
+        } else {
+            MIN_TIMELINE_HEIGHT
+        })
+        .max_height(if animating {
+            height
+        } else {
+            MAX_TIMELINE_HEIGHT
+        })
+        .show_separator_line(false)
+        .frame(super::island_shell_frame())
         .show(ctx, |ui| {
-            let available = ui.available_size();
-            // Keep the strip reserved at every zoom level so the timeline never jumps
-            // vertically when the scrollbar appears or disappears.
-            let canvas_height = (available.y - SCROLLBAR_RESERVE).max(1.0);
-            ui.spacing_mut().item_spacing.x = 0.0;
-            ui.horizontal_top(|ui| {
-                let (labels, _) =
-                    ui.allocate_exact_size(Vec2::new(LABEL_WIDTH, canvas_height), Sense::hover());
-                draw_labels(ui, labels, app);
+            super::show_island(ui, inner, |ui| {
+                // Keep clips/waveforms out of the tween, but reveal stable,
+                // full-height lane chrome from the bottom. This avoids both the
+                // blank-panel phase and the shifting track geometry that made
+                // the old height tween feel unfinished.
+                if animating {
+                    draw_tween_chrome(ui, full_height, app);
+                    let _ = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+                    return;
+                }
+                let available = ui.available_size();
+                // Keep the strip reserved at every zoom level so the timeline never jumps
+                // vertically when the scrollbar appears or disappears.
+                let canvas_height = (available.y - SCROLLBAR_RESERVE).max(1.0);
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.horizontal_top(|ui| {
+                    let (labels, _) = ui
+                        .allocate_exact_size(Vec2::new(LABEL_WIDTH, canvas_height), Sense::hover());
+                    draw_labels(ui, labels, app);
 
-                let viewport_width = ui.available_width().max(1.0);
-                let view_duration =
-                    timeline_view_duration(app.timeline_interaction_duration().max(0.0));
-                let canvas_width =
-                    timeline_canvas_width(viewport_width, app.timeline_zoom, view_duration);
-                let scrollable = timeline_is_scrollable(canvas_width, viewport_width);
-                egui::ScrollArea::horizontal()
-                    .id_salt("timeline-canvas-scroll")
-                    .auto_shrink([false, false])
-                    .animated(false)
-                    .scroll_bar_visibility(if scrollable {
-                        ScrollBarVisibility::AlwaysVisible
-                    } else {
-                        ScrollBarVisibility::AlwaysHidden
-                    })
-                    .show_viewport(ui, |ui, viewport| {
-                        let (rect, timeline_response) = ui.allocate_exact_size(
-                            Vec2::new(canvas_width, canvas_height),
-                            Sense::click_and_drag(),
-                        );
-                        draw(ui, rect, app);
-                        interact(ui, ctx, rect, timeline_response, app);
-                        if app.playing && scrollable {
-                            let playhead_x =
-                                time_to_x(app.current_time, timeline_content(rect), view_duration);
-                            if playhead_needs_follow(viewport, playhead_x) {
-                                ui.scroll_to_rect(
-                                    Rect::from_center_size(
-                                        Pos2::new(playhead_x.round(), rect.center().y),
-                                        Vec2::new(2.0, rect.height()),
-                                    ),
-                                    Some(Align::Center),
+                    let viewport_width = ui.available_width().max(1.0);
+                    let view_duration =
+                        timeline_view_duration(app.timeline_interaction_duration().max(0.0));
+                    let canvas_width =
+                        timeline_canvas_width(viewport_width, app.timeline_zoom, view_duration);
+                    let scrollable = timeline_is_scrollable(canvas_width, viewport_width);
+                    egui::ScrollArea::horizontal()
+                        .id_salt("timeline-canvas-scroll")
+                        .auto_shrink([false, false])
+                        .animated(false)
+                        .scroll_bar_visibility(if scrollable {
+                            ScrollBarVisibility::AlwaysVisible
+                        } else {
+                            ScrollBarVisibility::AlwaysHidden
+                        })
+                        .show_viewport(ui, |ui, viewport| {
+                            let (rect, timeline_response) = ui.allocate_exact_size(
+                                Vec2::new(canvas_width, canvas_height),
+                                Sense::click_and_drag(),
+                            );
+                            draw(ui, rect, app);
+                            interact(ui, ctx, rect, timeline_response, app);
+                            if app.playing && scrollable {
+                                let playhead_x = time_to_x(
+                                    app.current_time,
+                                    timeline_content(rect),
+                                    view_duration,
                                 );
+                                if playhead_needs_follow(viewport, playhead_x) {
+                                    ui.scroll_to_rect(
+                                        Rect::from_center_size(
+                                            Pos2::new(playhead_x.round(), rect.center().y),
+                                            Vec2::new(2.0, rect.height()),
+                                        ),
+                                        Some(Align::Center),
+                                    );
+                                }
                             }
-                        }
-                    });
+                        });
+                });
             });
         });
-    app.timeline_height = response
-        .response
-        .rect
-        .height()
-        .clamp(MIN_TIMELINE_HEIGHT, MAX_TIMELINE_HEIGHT);
+    if !animating {
+        app.timeline_height = response
+            .response
+            .rect
+            .height()
+            .clamp(MIN_TIMELINE_HEIGHT, MAX_TIMELINE_HEIGHT);
+    }
+}
+
+/// Lightweight timeline geometry for expand/collapse frames.
+///
+/// The target layout is anchored to the panel's bottom and clipped by the
+/// currently revealed height. Its rows therefore land exactly where the full
+/// timeline will be, without paying to paint clips, thumbnails, or waveforms on
+/// every animation frame.
+fn draw_tween_chrome(ui: &egui::Ui, full_height: f32, app: &VideoEditor) {
+    let shell_height = 2.0 * theme::PANEL_GAP as f32;
+    let content_margin_height = 20.0; // `Margin::symmetric(14, 10)` above.
+    let target_height = (full_height - shell_height - content_margin_height).max(1.0);
+    let visible = ui.max_rect();
+    let top = visible.bottom() - target_height;
+    let canvas_height = (target_height - SCROLLBAR_RESERVE).max(1.0);
+    let label_width = LABEL_WIDTH.min(visible.width());
+    let labels = Rect::from_min_size(
+        Pos2::new(visible.left(), top),
+        Vec2::new(label_width, canvas_height),
+    );
+    let canvas = Rect::from_min_size(
+        Pos2::new(labels.right(), top),
+        Vec2::new((visible.right() - labels.right()).max(1.0), canvas_height),
+    );
+
+    draw_labels(ui, labels, app);
+    let content = timeline_content(canvas);
+    let tracks = TrackLayout::new(content);
+    draw_lane_lines(ui.painter(), &tracks);
+    ui.painter().hline(
+        canvas.x_range(),
+        content.top(),
+        Stroke::new(1.0, theme::BORDER),
+    );
 }
 
 pub fn zoom_controls(ui: &mut egui::Ui, app: &mut VideoEditor) {
@@ -1029,8 +1096,6 @@ fn color_submenu_item(ui: &mut egui::Ui, color: ClipColor, selected: bool) -> eg
 
 fn draw(ui: &egui::Ui, rect: Rect, app: &VideoEditor) {
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(6), theme::SURFACE);
-
     let content = timeline_content(rect);
     let tracks = TrackLayout::new(content);
     draw_lane_lines(painter, &tracks);
@@ -1143,7 +1208,6 @@ fn draw(ui: &egui::Ui, rect: Rect, app: &VideoEditor) {
 
 fn draw_labels(ui: &egui::Ui, rect: Rect, app: &VideoEditor) {
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(6), theme::SURFACE);
     let content = timeline_content(rect);
     let tracks = TrackLayout::new(content);
     draw_lane_lines(painter, &tracks);
@@ -1248,7 +1312,6 @@ fn draw_lane_label(painter: &egui::Painter, labels: Rect, lane: Rect, label: &st
         Pos2::new(labels.left(), lane.top()),
         Pos2::new(labels.right(), lane.bottom()),
     );
-    painter.rect_filled(label_rect, CornerRadius::ZERO, theme::BLACK);
     painter.text(
         label_rect.center(),
         Align2::CENTER_CENTER,

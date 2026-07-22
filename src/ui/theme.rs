@@ -1,7 +1,8 @@
 use eframe::egui::{Color32, CornerRadius, Stroke};
 
 pub const BLACK: Color32 = Color32::BLACK;
-pub const SURFACE: Color32 = Color32::from_rgb(10, 10, 10);
+/// Floating-island panel fill (`#0c0c0c`).
+pub const SURFACE: Color32 = Color32::from_rgb(12, 12, 12);
 pub const SURFACE_HOVER: Color32 = Color32::from_rgb(23, 23, 23);
 pub const BORDER: Color32 = Color32::from_rgb(39, 39, 39);
 pub const MUTED: Color32 = Color32::from_rgb(142, 142, 147);
@@ -14,6 +15,16 @@ pub const SELECTION: Color32 = Color32::from_rgb(242, 194, 65);
 pub const CONTROL_RADIUS: u8 = 8;
 /// Popup / menu corner radius — keep in step with control radius.
 pub const MENU_RADIUS: u8 = 8;
+/// Corner radius for editor floating-island panels.
+pub const PANEL_RADIUS: u8 = 10;
+/// Outer margin around each floating-island panel (gap to neighbors / chrome).
+pub const PANEL_GAP: i8 = 8;
+/// Height of the black timeline view-toggle strip under the timeline island.
+pub const TIMELINE_TOGGLE_HEIGHT: f32 = 32.0;
+/// macOS traffic-light clearance before title-bar controls.
+pub const TITLE_TRAFFIC_CLEARANCE: f32 = 78.0;
+/// Duration for Project / Properties / Timeline open-close animation.
+pub const PANEL_ANIM_SECS: f32 = 0.36;
 
 pub fn configure(ctx: &eframe::egui::Context) {
     // Unclip owns its palette. Never allow the operating system's current

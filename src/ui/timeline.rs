@@ -328,8 +328,12 @@ fn zoom_button(ui: &mut egui::Ui, label: &str, tooltip: &str) -> egui::Response 
 /// Seconds shown across the viewport at 100% zoom. Short sequences stay on this
 /// fixed scale (Premiere-style) instead of stretching to fill the strip.
 const BASE_VIEW_DURATION: f64 = 30.0;
-/// Empty runway kept after the last clip once content grows past the base view.
-const TIMELINE_RUNWAY: f64 = 8.0;
+/// Minimum empty runway kept after the last clip once content grows past the base view.
+const TIMELINE_RUNWAY_MIN: f64 = 8.0;
+/// Extra runway as a fraction of content duration so long clips leave usable space after.
+const TIMELINE_RUNWAY_RATIO: f64 = 0.2;
+/// Cap runway growth so multi-hour sequences do not add unbounded empty canvas.
+const TIMELINE_RUNWAY_MAX: f64 = 180.0;
 
 fn timeline_canvas_width(viewport_width: f32, zoom: f32, view_duration: f64) -> f32 {
     let zoom = zoom.clamp(1.0, 32.0);
@@ -337,12 +341,16 @@ fn timeline_canvas_width(viewport_width: f32, zoom: f32, view_duration: f64) -> 
     viewport_width.max(1.0) * zoom * scale
 }
 
+fn timeline_runway(content_duration: f64) -> f64 {
+    (content_duration * TIMELINE_RUNWAY_RATIO).clamp(TIMELINE_RUNWAY_MIN, TIMELINE_RUNWAY_MAX)
+}
+
 pub fn timeline_view_duration(content_duration: f64) -> f64 {
     // Fixed time scale until the sequence (+ runway) needs more room.
     let needed = if content_duration <= 0.0 {
         BASE_VIEW_DURATION
     } else {
-        content_duration + TIMELINE_RUNWAY
+        content_duration + timeline_runway(content_duration)
     };
     needed.max(BASE_VIEW_DURATION)
 }
@@ -1166,6 +1174,7 @@ fn draw(ui: &egui::Ui, rect: Rect, app: &VideoEditor) {
                 audio_rect,
                 clip,
                 app.media_waveform(clip.media_id),
+                app.waveform_is_pending(clip.media_id),
                 clip.color,
                 is_selected,
                 media_bounds,
@@ -1475,6 +1484,7 @@ fn draw_audio_clip(
     rect: Rect,
     clip: &SequenceClip,
     waveform: Option<&Waveform>,
+    waveform_loading: bool,
     color: ClipColor,
     selected: bool,
     media_bounds: MediaBoundFlags,
@@ -1526,6 +1536,25 @@ fn draw_audio_clip(
             ],
             Stroke::new(1.0, Color32::from_white_alpha(95)),
         );
+    } else if waveform_loading {
+        let pulse = ((painter.ctx().input(|input| input.time) * 3.2).sin() * 0.5 + 0.5) as f32;
+        let alpha = (70.0 + pulse * 110.0) as u8;
+        painter.line_segment(
+            [
+                Pos2::new(rect.left() + 4.0, rect.center().y),
+                Pos2::new(rect.right() - 4.0, rect.center().y),
+            ],
+            Stroke::new(1.5, Color32::from_white_alpha(alpha)),
+        );
+        if rect.width() > 72.0 {
+            painter.text(
+                Pos2::new(rect.left() + 8.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                "Analyzing audio…",
+                FontId::proportional(10.0),
+                Color32::from_white_alpha(alpha.saturating_add(40)),
+            );
+        }
     } else {
         painter.line_segment(
             [
@@ -1689,9 +1718,13 @@ mod tests {
         assert_eq!(timeline_view_duration(0.0), 30.0);
         assert_eq!(timeline_view_duration(7.0), 30.0);
         assert_eq!(timeline_view_duration(20.0), 30.0);
-        // 25s content + 8s runway exceeds the 30s base → extend.
+        // 25s content + max(8, 25*0.2)=8 runway → 33s.
         assert_eq!(timeline_view_duration(25.0), 33.0);
+        // 40s content + max(8, 40*0.2)=8 runway → 48s.
         assert_eq!(timeline_view_duration(40.0), 48.0);
+        // Long clips get proportional runway (20%), capped at 180s.
+        assert_eq!(timeline_view_duration(1_953.0), 1_953.0 + 180.0);
+        assert_eq!(timeline_view_duration(600.0), 600.0 + 120.0);
     }
 
     #[test]

@@ -40,12 +40,13 @@ impl PreviewRequest {
 
 pub struct PlaybackEngine {
     playback_rx: Option<Receiver<DecodedFrame>>,
+    playback_error_rx: Option<Receiver<String>>,
     playback_stop: Option<Arc<AtomicBool>>,
     queued_frame: Option<DecodedFrame>,
     playback_ready: bool,
     playback_just_started: bool,
     preview_tx: mpsc::Sender<PreviewRequest>,
-    preview_rx: Receiver<DecodedFrame>,
+    preview_rx: Receiver<Result<DecodedFrame, String>>,
     preview_generation: Arc<AtomicU64>,
     last_preview_request: Option<(PathBuf, f64)>,
 }
@@ -58,6 +59,7 @@ impl PlaybackEngine {
 
         Self {
             playback_rx: None,
+            playback_error_rx: None,
             playback_stop: None,
             queued_frame: None,
             playback_ready: false,
@@ -79,8 +81,9 @@ impl PlaybackEngine {
         }
         self.stop();
         self.cancel_preview();
-        let (receiver, stop) = spawn_video_decoder(video, at, ctx.clone());
+        let (receiver, error_rx, stop) = spawn_video_decoder(video, at, ctx.clone());
         self.playback_rx = Some(receiver);
+        self.playback_error_rx = Some(error_rx);
         self.playback_stop = Some(stop);
 
         Ok(())
@@ -91,9 +94,22 @@ impl PlaybackEngine {
             stop.store(true, Ordering::Release);
         }
         self.playback_rx = None;
+        self.playback_error_rx = None;
         self.queued_frame = None;
         self.playback_ready = false;
         self.playback_just_started = false;
+    }
+
+    pub fn take_error(&mut self) -> Option<String> {
+        let receiver = self.playback_error_rx.as_ref()?;
+        match receiver.try_recv() {
+            Ok(error) => Some(error),
+            Err(TryRecvError::Disconnected) => {
+                self.playback_error_rx = None;
+                None
+            }
+            Err(TryRecvError::Empty) => None,
+        }
     }
 
     pub fn request_preview(&mut self, video: &VideoAsset, time: f64, ctx: &Context) {
@@ -127,9 +143,16 @@ impl PlaybackEngine {
     }
 
     pub fn poll_preview(&mut self) -> Option<DecodedFrame> {
+        match self.poll_preview_result()? {
+            Ok(frame) => Some(frame),
+            Err(_) => None,
+        }
+    }
+
+    pub fn poll_preview_result(&mut self) -> Option<Result<DecodedFrame, String>> {
         let mut latest = None;
-        while let Ok(frame) = self.preview_rx.try_recv() {
-            latest = Some(frame);
+        while let Ok(result) = self.preview_rx.try_recv() {
+            latest = Some(result);
         }
         latest
     }
@@ -142,7 +165,9 @@ impl PlaybackEngine {
 
         loop {
             if let Some(frame) = self.queued_frame.take() {
-                if frame.time <= clock + frame_interval * 0.55 {
+                // Always accept the first decoded frame so PTS offsets / keyframe
+                // landings cannot deadlock the sequence clock before it starts.
+                if !self.playback_ready || frame.time <= clock + frame_interval * 0.55 {
                     selected = Some(frame);
                 } else {
                     self.queued_frame = Some(frame);
@@ -151,7 +176,11 @@ impl PlaybackEngine {
             }
 
             match receiver.try_recv() {
-                Ok(frame) if frame.time <= clock + frame_interval * 0.55 => selected = Some(frame),
+                Ok(frame)
+                    if !self.playback_ready || frame.time <= clock + frame_interval * 0.55 =>
+                {
+                    selected = Some(frame);
+                }
                 Ok(frame) => {
                     self.queued_frame = Some(frame);
                     break;
@@ -214,8 +243,13 @@ fn spawn_video_decoder(
     video: &VideoAsset,
     at: f64,
     ctx: Context,
-) -> (Receiver<DecodedFrame>, Arc<AtomicBool>) {
+) -> (
+    Receiver<DecodedFrame>,
+    Receiver<String>,
+    Arc<AtomicBool>,
+) {
     let (sender, receiver) = mpsc::sync_channel(8);
+    let (error_tx, error_rx) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
     let path = video.path.clone();
@@ -225,6 +259,7 @@ fn spawn_video_decoder(
     let fps = video.fps;
 
     thread::spawn(move || {
+        ensure_media_thread_ready();
         let result = decode_video(
             &path,
             at,
@@ -243,45 +278,71 @@ fn spawn_video_decoder(
         );
         if let Err(error) = result {
             eprintln!("Unclip video decoder stopped: {error}");
+            let _ = error_tx.send(error);
+            ctx.request_repaint();
         }
     });
-    (receiver, stop)
+    (receiver, error_rx, stop)
 }
 
-fn preview_worker(requests: Receiver<PreviewRequest>, frames: mpsc::Sender<DecodedFrame>) {
+fn preview_worker(
+    requests: Receiver<PreviewRequest>,
+    frames: mpsc::Sender<Result<DecodedFrame, String>>,
+) {
+    ensure_media_thread_ready();
     while let Ok(mut request) = requests.recv() {
         while let Ok(newer) = requests.try_recv() {
             request = newer;
         }
-        if let Ok(Some(frame)) = decode_preview(&request) {
-            if !request.is_current() {
-                continue;
-            }
-            if frames.send(frame).is_err() {
-                break;
-            }
-            request.ctx.request_repaint();
+        if !request.is_current() {
+            continue;
         }
+        let result = match decode_preview(&request) {
+            Ok(Some(frame)) => Ok(frame),
+            Ok(None) => Err("could not decode a preview frame".to_owned()),
+            Err(error) => Err(error),
+        };
+        if !request.is_current() {
+            continue;
+        }
+        if frames.send(result).is_err() {
+            break;
+        }
+        request.ctx.request_repaint();
     }
 }
 
 fn decode_preview(request: &PreviewRequest) -> Result<Option<DecodedFrame>, String> {
+    // Library thumbs and scrub previews stay on software decode. Hardware paths
+    // on Windows can report success while returning black / unusable frames.
     let mut chosen = None;
-    decode_video(
+    decode_preview_at(request, request.time, &mut chosen)?;
+    if chosen.is_none() && request.time > 0.05 {
+        decode_preview_at(request, 0.0, &mut chosen)?;
+    }
+    Ok(chosen)
+}
+
+fn decode_preview_at(
+    request: &PreviewRequest,
+    at: f64,
+    chosen: &mut Option<DecodedFrame>,
+) -> Result<(), String> {
+    decode_video_pass(
         &request.path,
-        request.time,
+        at,
         request.fps,
         request.width,
         request.height,
         request.rotation,
-        |frame| {
-            let reached_target = frame.time + 0.5 / request.fps.max(1.0) >= request.time;
-            chosen = Some(frame);
-            !reached_target
+        false,
+        &mut |frame| {
+            let reached_target = frame.time + 0.5 / request.fps.max(1.0) >= at;
+            *chosen = Some(frame);
+            !reached_target && request.is_current()
         },
-        || !request.is_current(),
-    )?;
-    Ok(chosen)
+        &mut || !request.is_current(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -299,6 +360,52 @@ where
     F: FnMut(DecodedFrame) -> bool,
     C: FnMut() -> bool,
 {
+    match decode_video_pass(
+        path,
+        at,
+        fps,
+        output_width,
+        output_height,
+        rotation,
+        true,
+        &mut on_frame,
+        &mut cancelled,
+    ) {
+        Ok(()) => Ok(()),
+        Err(_) if cancelled() => Ok(()),
+        Err(hardware_error) => {
+            eprintln!("Unclip falling back to software decode: {hardware_error}");
+            decode_video_pass(
+                path,
+                at,
+                fps,
+                output_width,
+                output_height,
+                rotation,
+                false,
+                &mut on_frame,
+                &mut cancelled,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_video_pass<F, C>(
+    path: &Path,
+    at: f64,
+    fps: f64,
+    output_width: usize,
+    output_height: usize,
+    rotation: i32,
+    use_hardware: bool,
+    on_frame: &mut F,
+    cancelled: &mut C,
+) -> Result<(), String>
+where
+    F: FnMut(DecodedFrame) -> bool,
+    C: FnMut() -> bool,
+{
     initialize_ffmpeg()?;
     if cancelled() {
         return Ok(());
@@ -310,10 +417,13 @@ where
         .best(ffmpeg::media::Type::Video)
         .ok_or_else(|| "no video stream was found".to_owned())?;
     let stream_index = stream.index();
+    let codec_id = stream.parameters().id();
     let time_base = rational_value(stream.time_base());
     let mut context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|error| format!("could not configure video decoder: {error}"))?;
-    enable_hardware_decoding(&mut context);
+    if use_hardware {
+        enable_hardware_decoding(&mut context, codec_id);
+    }
     let mut decoder = context
         .decoder()
         .video()
@@ -336,11 +446,9 @@ where
         if stream.index() != stream_index {
             continue;
         }
-        decoder
-            .send_packet(&packet)
-            .map_err(|error| format!("video packet failed: {error}"))?;
-        if !drain_video_frames(
+        send_video_packet(
             &mut decoder,
+            &packet,
             &mut scaler,
             time_base,
             at,
@@ -349,11 +457,9 @@ where
             output_height,
             rotation,
             &mut fallback_index,
-            &mut on_frame,
-            &mut cancelled,
-        )? {
-            return Ok(());
-        }
+            on_frame,
+            cancelled,
+        )?;
     }
     let _ = decoder.send_eof();
     let _ = drain_video_frames(
@@ -366,10 +472,80 @@ where
         output_height,
         rotation,
         &mut fallback_index,
-        &mut on_frame,
-        &mut cancelled,
+        on_frame,
+        cancelled,
     )?;
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_video_packet<F, C>(
+    decoder: &mut ffmpeg::decoder::Video,
+    packet: &ffmpeg::Packet,
+    scaler: &mut Option<ffmpeg::software::scaling::Context>,
+    time_base: f64,
+    requested_start: f64,
+    fps: f64,
+    output_width: usize,
+    output_height: usize,
+    rotation: i32,
+    fallback_index: &mut u64,
+    on_frame: &mut F,
+    cancelled: &mut C,
+) -> Result<(), String>
+where
+    F: FnMut(DecodedFrame) -> bool,
+    C: FnMut() -> bool,
+{
+    loop {
+        match decoder.send_packet(packet) {
+            Ok(()) => {
+                if !drain_video_frames(
+                    decoder,
+                    scaler,
+                    time_base,
+                    requested_start,
+                    fps,
+                    output_width,
+                    output_height,
+                    rotation,
+                    fallback_index,
+                    on_frame,
+                    cancelled,
+                )? {
+                    return Ok(());
+                }
+                return Ok(());
+            }
+            Err(error) if is_again(error) => {
+                if !drain_video_frames(
+                    decoder,
+                    scaler,
+                    time_base,
+                    requested_start,
+                    fps,
+                    output_width,
+                    output_height,
+                    rotation,
+                    fallback_index,
+                    on_frame,
+                    cancelled,
+                )? {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                return Err(format!("video packet failed: {error}"));
+            }
+        }
+    }
+}
+
+fn is_again(error: ffmpeg::Error) -> bool {
+    error
+        == ffmpeg::Error::Other {
+            errno: ffmpeg::error::EAGAIN,
+        }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -475,40 +651,159 @@ where
 }
 
 #[cfg(target_os = "macos")]
-fn enable_hardware_decoding(context: &mut ffmpeg::codec::context::Context) {
+fn enable_hardware_decoding(
+    context: &mut ffmpeg::codec::context::Context,
+    codec_id: ffmpeg::codec::Id,
+) {
+    if !codec_supports_hw_device(
+        codec_id,
+        ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+    ) {
+        return;
+    }
+    attach_hardware_device(
+        context,
+        ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+        select_macos_hardware_format,
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn enable_hardware_decoding(
+    context: &mut ffmpeg::codec::context::Context,
+    codec_id: ffmpeg::codec::Id,
+) {
+    // Prefer D3D11VA; fall back to DXVA2 when the GPU/driver only exposes the older path.
+    if codec_supports_hw_device(codec_id, ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA)
+        && attach_hardware_device(
+            context,
+            ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+            select_d3d11_hardware_format,
+        )
+    {
+        return;
+    }
+    if codec_supports_hw_device(codec_id, ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2) {
+        attach_hardware_device(
+            context,
+            ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2,
+            select_dxva2_hardware_format,
+        );
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn enable_hardware_decoding(
+    _context: &mut ffmpeg::codec::context::Context,
+    _codec_id: ffmpeg::codec::Id,
+) {
+}
+
+fn codec_supports_hw_device(
+    codec_id: ffmpeg::codec::Id,
+    device_type: ffmpeg::ffi::AVHWDeviceType,
+) -> bool {
+    let Some(codec) = ffmpeg::decoder::find(codec_id) else {
+        return false;
+    };
+    let mut index = 0;
+    loop {
+        let config = unsafe { ffmpeg::ffi::avcodec_get_hw_config(codec.as_ptr(), index) };
+        if config.is_null() {
+            return false;
+        }
+        let config = unsafe { &*config };
+        let supports_device_ctx = config.methods as i32
+            & ffmpeg::ffi::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32
+            != 0;
+        if supports_device_ctx && config.device_type == device_type {
+            return true;
+        }
+        index += 1;
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn attach_hardware_device(
+    context: &mut ffmpeg::codec::context::Context,
+    device_type: ffmpeg::ffi::AVHWDeviceType,
+    get_format: unsafe extern "C" fn(
+        *mut ffmpeg::ffi::AVCodecContext,
+        *const ffmpeg::ffi::AVPixelFormat,
+    ) -> ffmpeg::ffi::AVPixelFormat,
+) -> bool {
     unsafe {
         let mut device = std::ptr::null_mut();
         let result = ffmpeg::ffi::av_hwdevice_ctx_create(
             &mut device,
-            ffmpeg::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+            device_type,
             std::ptr::null(),
             std::ptr::null_mut(),
             0,
         );
         if result >= 0 && !device.is_null() {
             (*context.as_mut_ptr()).hw_device_ctx = device;
-            (*context.as_mut_ptr()).get_format = Some(select_hardware_format);
+            (*context.as_mut_ptr()).get_format = Some(get_format);
+            true
+        } else {
+            false
         }
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn enable_hardware_decoding(_context: &mut ffmpeg::codec::context::Context) {}
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" fn select_hardware_format(
-    _context: *mut ffmpeg::ffi::AVCodecContext,
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+unsafe fn prefer_hardware_format(
     formats: *const ffmpeg::ffi::AVPixelFormat,
+    preferred: ffmpeg::ffi::AVPixelFormat,
 ) -> ffmpeg::ffi::AVPixelFormat {
     let mut current = formats;
     let fallback = *current;
     while *current != ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NONE {
-        if *current == ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX {
+        if *current == preferred {
             return *current;
         }
         current = current.add(1);
     }
     fallback
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn select_macos_hardware_format(
+    _context: *mut ffmpeg::ffi::AVCodecContext,
+    formats: *const ffmpeg::ffi::AVPixelFormat,
+) -> ffmpeg::ffi::AVPixelFormat {
+    prefer_hardware_format(formats, ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX)
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "C" fn select_d3d11_hardware_format(
+    _context: *mut ffmpeg::ffi::AVCodecContext,
+    formats: *const ffmpeg::ffi::AVPixelFormat,
+) -> ffmpeg::ffi::AVPixelFormat {
+    prefer_hardware_format(formats, ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_D3D11)
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "C" fn select_dxva2_hardware_format(
+    _context: *mut ffmpeg::ffi::AVCodecContext,
+    formats: *const ffmpeg::ffi::AVPixelFormat,
+) -> ffmpeg::ffi::AVPixelFormat {
+    prefer_hardware_format(formats, ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_DXVA2_VLD)
+}
+
+fn ensure_media_thread_ready() {
+    #[cfg(target_os = "windows")]
+    {
+        // D3D11VA/DXVA2 require COM on the decoding thread.
+        #[link(name = "ole32")]
+        extern "system" {
+            fn CoInitializeEx(pvreserved: *mut core::ffi::c_void, dwcoinit: u32) -> i32;
+        }
+        const COINIT_MULTITHREADED: u32 = 0;
+        unsafe {
+            let _ = CoInitializeEx(std::ptr::null_mut(), COINIT_MULTITHREADED);
+        }
+    }
 }
 
 fn is_hardware_frame(frame: &ffmpeg::frame::Video) -> bool {
@@ -657,7 +952,7 @@ mod tests {
         .expect("preview should decode");
         assert_eq!(preview.rgb.len(), preview.width * preview.height * 3);
 
-        let (receiver, stop) = spawn_video_decoder(&asset, 0.0, ctx.clone());
+        let (receiver, _error_rx, stop) = spawn_video_decoder(&asset, 0.0, ctx.clone());
         let first = receiver
             .recv_timeout(Duration::from_secs(5))
             .expect("first playback frame should arrive");
@@ -702,7 +997,8 @@ mod tests {
             .expect("latest request should be queued");
         let latest = frame_rx
             .recv_timeout(Duration::from_secs(5))
-            .expect("latest preview should arrive");
+            .expect("latest preview should arrive")
+            .expect("latest preview should decode");
         assert!((latest.time - 0.35).abs() <= 1.5 / asset.fps);
         assert!(frame_rx.try_recv().is_err());
         drop(request_tx);

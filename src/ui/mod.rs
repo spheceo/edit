@@ -1542,22 +1542,40 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                     ui.label(RichText::new("Import footage to add it here.").color(theme::MUTED));
                 }
 
-                let entries = app
-                    .media_library
-                    .iter()
-                    .filter(|media| media.folder_id == app.current_media_folder)
-                    .map(|media| {
-                        (
-                            media.id,
-                            media.asset.name.clone(),
-                            media.asset.file_size,
-                            media.asset.duration,
-                            media.asset.source_width,
-                            media.asset.source_height,
-                            media.thumbnail.as_ref().map(TextureHandle::id),
-                        )
-                    })
-                    .collect::<Vec<_>>();
+                let entries = {
+                    let folder = app.current_media_folder;
+                    let media_rows = app
+                        .media_library
+                        .iter()
+                        .filter(|media| media.folder_id == folder)
+                        .map(|media| {
+                            (
+                                media.id,
+                                media.asset.name.clone(),
+                                media.asset.file_size,
+                                media.asset.duration,
+                                media.asset.source_width,
+                                media.asset.source_height,
+                                media.thumbnail.as_ref().map(TextureHandle::id),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    media_rows
+                        .into_iter()
+                        .map(|(id, name, size, duration, width, height, thumbnail)| {
+                            (
+                                id,
+                                name,
+                                size,
+                                duration,
+                                width,
+                                height,
+                                thumbnail,
+                                app.thumbnail_is_pending(id),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for (id, name) in folders {
                         let (rect, response) = ui.allocate_exact_size(
@@ -1585,7 +1603,9 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                         }
                         ui.add_space(4.0);
                     }
-                    for (id, name, size, duration, width, height, thumbnail) in entries {
+                    for (id, name, size, duration, width, height, thumbnail, thumb_loading) in
+                        entries
+                    {
                         let selected = app.selected_media_id == Some(id);
                         let (rect, response) = ui.allocate_exact_size(
                             Vec2::new(ui.available_width(), 72.0),
@@ -1647,6 +1667,17 @@ pub fn media_panel(ctx: &egui::Context, app: &mut VideoEditor) {
                                 image_rect,
                                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                                 Color32::WHITE,
+                            );
+                        } else if thumb_loading {
+                            let pulse =
+                                ((ui.input(|input| input.time) * 3.2).sin() * 0.5 + 0.5) as f32;
+                            let alpha = (90.0 + pulse * 100.0) as u8;
+                            ui.painter().text(
+                                thumb.center(),
+                                Align2::CENTER_CENTER,
+                                "…",
+                                FontId::proportional(16.0),
+                                Color32::from_white_alpha(alpha),
                             );
                         }
                         let text_x = thumb.right() + 9.0;

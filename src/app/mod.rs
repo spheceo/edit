@@ -750,6 +750,9 @@ impl VideoEditor {
             let Some(media) = self.media_library.iter().find(|media| media.id == id) else {
                 continue;
             };
+            if !media.asset.path.is_file() {
+                continue;
+            }
             let mut thumbnail_asset = media.asset.clone();
             thumbnail_asset.set_decode_budget(320, 180);
             self.thumbnail_engine.request_preview(
@@ -763,17 +766,25 @@ impl VideoEditor {
     }
 
     fn poll_thumbnail(&mut self, ctx: &egui::Context) {
-        if let Some(frame) = self.thumbnail_engine.poll_preview() {
-            if let Some(id) = self.thumbnail_media.take() {
-                let image = ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
-                if let Some(media) = self.media_library.iter_mut().find(|media| media.id == id) {
-                    media.thumbnail = Some(ctx.load_texture(
-                        format!("unclip-thumbnail-{id}"),
-                        image,
-                        TextureOptions::LINEAR,
-                    ));
+        match self.thumbnail_engine.poll_preview_result() {
+            Some(Ok(frame)) => {
+                if let Some(id) = self.thumbnail_media.take() {
+                    let image = ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
+                    if let Some(media) = self.media_library.iter_mut().find(|media| media.id == id)
+                    {
+                        media.thumbnail = Some(ctx.load_texture(
+                            format!("unclip-thumbnail-{id}"),
+                            image,
+                            TextureOptions::LINEAR,
+                        ));
+                    }
                 }
             }
+            Some(Err(error)) => {
+                eprintln!("Unclip thumbnail failed: {error}");
+                self.thumbnail_media = None;
+            }
+            None => {}
         }
         self.pump_thumbnail_queue(ctx);
     }
@@ -795,6 +806,14 @@ impl VideoEditor {
 
     pub fn media_waveform(&self, id: MediaId) -> Option<&Waveform> {
         self.waveforms.get(&id)
+    }
+
+    pub fn waveform_is_pending(&self, id: MediaId) -> bool {
+        self.waveform_media == Some(id) || self.waveform_queue.contains(&id)
+    }
+
+    pub fn thumbnail_is_pending(&self, id: MediaId) -> bool {
+        self.thumbnail_media == Some(id) || self.thumbnail_queue.contains(&id)
     }
 
     pub fn select_library_media(&mut self, id: MediaId) {
@@ -871,15 +890,20 @@ impl VideoEditor {
             return;
         }
         while let Some(id) = self.waveform_queue.pop_front() {
-            let Some((path, duration)) = self
-                .media_asset(id)
-                .map(|asset| (asset.path.clone(), asset.duration))
-            else {
+            let Some((path, duration, name)) = self.media_asset(id).map(|asset| {
+                (
+                    asset.path.clone(),
+                    asset.duration,
+                    asset.name.clone(),
+                )
+            }) else {
                 continue;
             };
+            self.status = Some(format!("Analyzing audio for {name}…"));
             self.waveform_generator
                 .request(&path, duration, ctx.clone());
             self.waveform_media = Some(id);
+            ctx.request_repaint();
             break;
         }
     }
@@ -2145,6 +2169,10 @@ impl eframe::App for VideoEditor {
         self.waveform_generator.set_playback_active(self.playing);
         self.sync_playback_segment(ctx);
         self.prepare_upcoming_transition(ctx);
+        if let Some(error) = self.playback.take_error() {
+            self.status = Some(format!("Playback failed: {error}"));
+            self.pause(ctx);
+        }
         self.update_frame(ctx);
         self.poll_thumbnail(ctx);
         if let Some(result) = self.waveform_generator.poll() {
@@ -2152,13 +2180,24 @@ impl eframe::App for VideoEditor {
             match result {
                 Ok(waveform) => {
                     if let Some(id) = media_id {
+                        let name = self
+                            .media_asset(id)
+                            .map(|asset| asset.name.clone())
+                            .unwrap_or_else(|| "media".to_owned());
                         self.waveforms.insert(id, waveform);
+                        self.status = Some(format!("Audio ready for {name}"));
                     }
                 }
                 Err(error) if !error.contains("cancelled") => self.status = Some(error),
                 Err(_) => {}
             }
             self.pump_waveform_queue(ctx);
+        }
+        if self.waveform_media.is_some() || !self.waveform_queue.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        if self.thumbnail_media.is_some() || !self.thumbnail_queue.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.poll_export();
         self.handle_shortcuts(ctx);

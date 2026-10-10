@@ -1,0 +1,204 @@
+//! The preview engine the browser drives. JS owns decoding (video elements)
+//! and timing; this owns evaluation and drawing so they match the export.
+
+#![cfg(target_arch = "wasm32")]
+
+use edit_core::{evaluate, sources_at, Project};
+use edit_render::{wgpu, Renderer};
+use wasm_bindgen::prelude::*;
+use web_sys::{HtmlCanvasElement, VideoFrame};
+
+#[wasm_bindgen(start)]
+fn start() {
+    console_error_panic_hook::set_once();
+}
+
+fn js_error(error: impl std::fmt::Display) -> JsValue {
+    JsValue::from_str(&error.to_string())
+}
+
+#[wasm_bindgen]
+pub struct Engine {
+    renderer: Renderer,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    project: Option<Project>,
+}
+
+/// Creates the engine on `canvas`. Fails when the browser has no WebGPU.
+#[wasm_bindgen(js_name = createEngine)]
+pub async fn create_engine(canvas: HtmlCanvasElement) -> Result<Engine, JsValue> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::BROWSER_WEBGPU,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let surface = instance
+        .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+        .map_err(js_error)?;
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        })
+        .await
+        .map_err(js_error)?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("edit"),
+            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+            ..Default::default()
+        })
+        .await
+        .map_err(js_error)?;
+    // Read the size only now: the canvas may have resized while the GPU was being set up.
+    let (width, height) = (canvas.width().max(1), canvas.height().max(1));
+    let caps = surface.get_capabilities(&adapter);
+    // Pixels are already sRGB-encoded, so present through a non-sRGB view.
+    let format = caps
+        .formats
+        .iter()
+        .copied()
+        .find(|format| !format.is_srgb())
+        .unwrap_or(caps.formats[0]);
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format,
+        width,
+        height,
+        present_mode: wgpu::PresentMode::Fifo,
+        desired_maximum_frame_latency: 1,
+        alpha_mode: caps.alpha_modes[0],
+        view_formats: vec![],
+        color_space: wgpu::SurfaceColorSpace::Auto,
+    };
+    surface.configure(&device, &config);
+    Ok(Engine {
+        renderer: Renderer::new(device, queue, 1920, 1080),
+        surface,
+        config,
+        project: None,
+    })
+}
+
+#[wasm_bindgen]
+impl Engine {
+    #[wasm_bindgen(js_name = addFont)]
+    pub fn add_font(&mut self, family: &str, weight: u16, bytes: &[u8]) -> Result<(), JsValue> {
+        self.renderer
+            .fonts_mut()
+            .add(family, weight, bytes)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = setProject)]
+    pub fn set_project(&mut self, json: &str) -> Result<(), JsValue> {
+        let project: Project = serde_json::from_str(json).map_err(js_error)?;
+        self.renderer
+            .resize(project.settings.width, project.settings.height);
+        self.project = Some(project);
+        Ok(())
+    }
+
+    /// JSON `[{media, time}]`: the video frames `frame` needs.
+    pub fn sources(&self, frame: f64) -> String {
+        let Some(project) = &self.project else {
+            return "[]".to_owned();
+        };
+        let list: Vec<_> = sources_at(project, frame as i64)
+            .into_iter()
+            .map(|request| serde_json::json!({ "media": request.media, "time": request.source_time }))
+            .collect();
+        serde_json::Value::Array(list).to_string()
+    }
+
+    /// Copies a decoded frame into the GPU texture for `media`.
+    ///
+    /// Takes a WebCodecs `VideoFrame` (JS builds it from the element) rather
+    /// than the element itself: constructing the frame fails cleanly when the
+    /// element has nothing to show, whereas copying from the element can make
+    /// wgpu panic and poison the engine.
+    #[wasm_bindgen(js_name = uploadFrame)]
+    pub fn upload_frame(&mut self, media: &str, frame: VideoFrame) {
+        let (width, height) = (frame.display_width(), frame.display_height());
+        if width == 0 || height == 0 {
+            return;
+        }
+        let texture = self.renderer.video_texture(media, width, height).clone();
+        self.renderer.queue().copy_external_image_to_texture(
+            &wgpu::CopyExternalImageSourceInfo {
+                source: wgpu::ExternalImageSource::VideoFrame(frame),
+                origin: wgpu::Origin2d::ZERO,
+                flip_y: false,
+            },
+            wgpu::CopyExternalImageDestInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+                color_space: wgpu::PredefinedColorSpace::Srgb,
+                premultiplied_alpha: false,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    #[wasm_bindgen(js_name = forgetVideo)]
+    pub fn forget_video(&mut self, media: &str) {
+        self.renderer.forget_video(media);
+    }
+
+    /// Canvas backing-store size changed.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let (width, height) = (width.max(1), height.max(1));
+        if (width, height) == (self.config.width, self.config.height) {
+            return;
+        }
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(self.renderer.device(), &self.config);
+    }
+
+    /// Evaluates and draws `frame`, letterboxed into the canvas.
+    pub fn render(&mut self, frame: f64) -> Result<(), JsValue> {
+        let Some(project) = &self.project else {
+            return Ok(());
+        };
+        let scene = evaluate(project, frame.floor() as i64);
+        self.renderer.render(&scene);
+        self.present()
+    }
+
+    fn present(&mut self) -> Result<(), JsValue> {
+        let texture = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            other => {
+                self.surface.configure(self.renderer.device(), &self.config);
+                return Err(js_error(format!("surface unavailable: {other:?}")));
+            }
+        };
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let (width, height) = self.renderer.size();
+        let (cw, ch) = (self.config.width as f32, self.config.height as f32);
+        let fit = (cw / width as f32).min(ch / height as f32);
+        let (w, h) = (width as f32 * fit, height as f32 * fit);
+        let viewport = [
+            ((cw - w) / 2.0).floor(),
+            ((ch - h) / 2.0).floor(),
+            w.round(),
+            h.round(),
+        ];
+        self.renderer
+            .present(&view, self.config.format, viewport, wgpu::Color::BLACK);
+        self.renderer.queue().present(texture);
+        Ok(())
+    }
+}

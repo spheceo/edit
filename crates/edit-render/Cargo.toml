@@ -1,0 +1,20 @@
+[package]
+name = "edit-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Edit's GPU compositor: the same shaders draw the browser preview and the export"
+
+[dependencies]
+edit-core.workspace = true
+wgpu.workspace = true
+fontdue.workspace = true
+bytemuck.workspace = true
+
+[features]
+# Embed the Geist faces (native export). The browser fetches them instead.
+bundled-fonts = []
+
+[dev-dependencies]
+pollster = "1"
+png = "0.18"

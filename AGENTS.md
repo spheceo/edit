@@ -4,28 +4,27 @@
 
 Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as the user only: `git add`, `git commit`, and `git push` with a normal message body — no co-authors, no extra attribution trailers.
 
+## Layout
+
+- `crates/edit-core` — project model and frame evaluation. Pure Rust, no I/O; compiles natively and to WASM. Timeline times are integer frames; `source_in` is seconds. `Project::validate` is the contract every writer (UI, MCP) must satisfy.
+- `crates/edit-render` — the wgpu compositor. The browser preview and the export both call `Renderer::render`; never add an effect to only one side. Shaders live in `src/shaders/`.
+- `crates/edit-wasm` — wasm-bindgen wrapper; `just wasm` writes `web/src/engine/pkg` (generated, gitignored).
+- `crates/edit` — `edit serve`: REST + websocket events, FFmpeg media jobs, native frame renders, export, MCP at `/mcp` (`?project=` scopes a connection to one project), and `agent.rs`, the Codex app-server bridge behind the agent panel.
+- `relay/` — Cloudflare Worker (`edit-relay`) that holds API keys and rate-limits paid calls. Edit installs never get keys. Deploy from `relay/` with `bunx wrangler deploy`.
+- `web/` — React UI. Per-frame work (playhead, timeline canvas, preview) runs outside React; see `src/lib/playback.ts`.
+
+When the model changes, update `edit-core`, `web/src/lib/types.ts`, the param tables in `web/src/lib/edit.ts`, and the model description in `crates/edit/src/mcp.rs` together.
+
+## Checks
+
+`just check` (fmt, clippy `-D warnings`, tests, typecheck). The render test in `crates/edit-render/tests` needs a GPU; it writes PNGs to `target/render-tests/` for eyeballing.
+
+Preview/export parity can be verified in a browser: `window.__edit.preview.engine.render(frame)` then read the canvas, and compare with `GET /api/projects/{id}/frame/{frame}.png` — graphics-only frames are byte-identical.
+
 ## Auto-update (later)
 
-Candidate for later: [Velopack](https://velopack.io/) — cross-platform installer / auto-update for desktop apps. Not integrated yet; keep in mind when we add shipping updates.
+Candidate: [Velopack](https://velopack.io/) for a desktop build. Not integrated.
 
-## macOS packaging (xtask)
+## Brand
 
-There is no `.cargo` alias. Invoke the packager directly:
-
-```sh
-cargo run -p xtask -- run-macos              # dev Unclip.app (Speech / day-to-day)
-cargo run -p xtask -- run-macos --release
-cargo run -p xtask -- bundle-macos           # self-contained dist/Unclip.app + FFmpeg
-```
-
-## macOS dock icon
-
-Hard constraints for dock / window icons (rationale + failed experiments: Traycer epic decision log `macos-dock-icon/decisions`):
-
-- Keep `assets/brand/unclip-icon.png` (and 256/512 variants) as **1024 / 512 / 256** square PNGs with alpha
-- Keep the black (or brand) shape as a **squircle baked into the PNG** — do not ship a sharp full-bleed square
-- Keep the shape at about **82% of the canvas** with even transparent padding on all sides
-- Corner radius ≈ **22.37%** of the shape side (macOS-like)
-- Wire the window icon from `assets/brand/unclip-icon.png` in `main.rs`; `cargo run -p xtask -- bundle-macos` builds `.icns` from the same source
-
-Glyph / mark artwork inside the squircle can change freely. The canvas, padding ratio, and pre-masked squircle must stay.
+`assets/brand/edit-mark.svg` (three clips forming an E, cut by a playhead; made for dark backgrounds) and `edit-icon.svg` / `edit-icon-1024.png` (app icon). For a future macOS dock icon keep the squircle baked into the PNG at ~82% of the canvas with even transparent padding and a corner radius of ~22.37% of the shape side.

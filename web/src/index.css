@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+
+  --color-bg: #000000;
+  --color-panel: #0a0a0a;
+  --color-raised: #131313;
+  --color-hover: #1a1a1a;
+  --color-active: #222222;
+  --color-line: rgb(255 255 255 / 0.07);
+  --color-line-strong: rgb(255 255 255 / 0.13);
+  --color-fg: #ededed;
+  --color-muted: #8f8f8f;
+  --color-faint: #5c5c5c;
+  --color-playhead: #ff3d6e;
+  --color-agent: #a78bfa;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
+  body {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+    overflow: hidden;
+    user-select: none;
+  }
+  input,
+  textarea,
+  select {
+    user-select: text;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 0.12) transparent;
+  }
+  ::selection {
+    background: rgb(255 61 110 / 0.35);
+  }
+  /* Focus rings only while navigating with Tab: a clicked button shouldn't light up when a shortcut is pressed next. */
+  :focus-visible {
+    outline: none;
+  }
+  [data-keyboard] :focus-visible {
+    outline: 1.5px solid rgb(255 255 255 / 0.5);
+    outline-offset: 1px;
+  }
+  input[type="color"] {
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0;
+    border: none;
+    background: none;
+  }
+  input[type="color"]::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+  input[type="color"]::-webkit-color-swatch {
+    border: none;
+    border-radius: 6px;
+  }
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Text that's still being worked on: a light sweep across muted ink (as in phi). */
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, var(--color-faint) 0%, var(--color-faint) 40%, var(--color-fg) 50%, var(--color-faint) 60%, var(--color-faint) 100%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}

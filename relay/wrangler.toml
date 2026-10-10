@@ -1,0 +1,28 @@
+# Edit's relay: the only place API keys live. Edit installs send audio here;
+# keys never ship in the binary. Deploy with `bunx wrangler deploy` from relay/.
+name = "edit-relay"
+main = "src/index.ts"
+compatibility_date = "2026-09-07"
+workers_dev = true
+preview_urls = false
+
+[vars]
+# Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
+# (~14.4 MB per hour). Transcription is needed about once per project.
+DAILY_BYTES_PER_IP = "72000000"   # ~5 hours
+DAILY_BYTES_TOTAL = "216000000"   # ~15 hours
+MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
+
+# Bursts: a few requests a minute per IP.
+[[ratelimits]]
+name = "BURST"
+namespace_id = "7701"
+
+[ratelimits.simple]
+limit = 4
+period = 60
+
+# Daily usage counters.
+[[kv_namespaces]]
+binding = "USAGE"
+id = "0953cd12f6f84b3dbde62939f574e926"

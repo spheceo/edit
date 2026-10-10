@@ -1,35 +1,28 @@
-[package]
-name = "unclip"
-version = "0.0.1"
-edition = "2021"
-
-# The executable name is also the macOS process name when running from Cargo.
-# Keep it aligned with Contents/MacOS/Unclip and the bundle plist.
-[[bin]]
-name = "Unclip"
-path = "src/main.rs"
-
 [workspace]
-members = ["xtask"]
+resolver = "2"
+members = ["crates/edit-core", "crates/edit-render", "crates/edit-wasm", "crates/edit"]
 
-[dependencies]
-cpal = "0.18"
-eframe = "0.31"
-egui_extras = { version = "0.31", features = ["svg"] }
-ffmpeg-next = { version = "8.1", default-features = false, features = ["codec", "filter", "format", "software-scaling", "software-resampling"] }
-rfd = "0.15"
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+edit-core = { path = "crates/edit-core" }
+edit-render = { path = "crates/edit-render" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+wgpu = "30"
+fontdue = "0.9"
+bytemuck = { version = "1", features = ["derive"] }
 
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-muda = "0.19"
-raw-window-handle = "0.6"
+# The renderer runs per frame while scrubbing; keep dev builds fast enough to judge feel.
+[profile.dev.package."*"]
+opt-level = 2
 
-
-# The editor is graphics- and copy-heavy. Optimizing both our code and dependencies in
-# development builds keeps `cargo run` representative of bundled playback performance.
 [profile.dev]
 opt-level = 1
 
-[profile.dev.package."*"]
-opt-level = 2
+[profile.release]
+lto = "thin"
+strip = true

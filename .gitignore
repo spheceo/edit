@@ -1,11 +1,14 @@
 # Rust build output
 /target/
 
-# Local dependency and bundle build work
-/.build/
-
-# Generated application bundles
-/dist/
+# Web build output and the generated WASM engine
+/web/node_modules/
+/web/dist/
+/web/src/engine/pkg/
 
 # macOS metadata
 .DS_Store
+
+# Local caches (Wrangler's holds Cloudflare account details)
+/relay/.wrangler/
+*.tsbuildinfo

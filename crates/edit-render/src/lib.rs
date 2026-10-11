@@ -31,7 +31,9 @@ struct LayerUniforms {
     opacity: f32,
     tint: [f32; 4],
     mode: u32,
-    _pad: [u32; 3],
+    /// The Gaussian's sigma in pixels, for a box shadow.
+    blur: f32,
+    _pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -72,6 +74,7 @@ const MODE_SOLID: u32 = 1;
 const MODE_GLOW: u32 = 2;
 const MODE_PREMULTIPLIED: u32 = 3;
 const MODE_SHADOW: u32 = 4;
+const MODE_BOX_SHADOW: u32 = 5;
 
 struct Target {
     texture: wgpu::Texture,
@@ -543,7 +546,8 @@ impl Renderer {
                         opacity: *opacity,
                         tint: color.0,
                         mode: MODE_SOLID,
-                        _pad: [0; 3],
+                        blur: 0.0,
+                        _pad: [0; 2],
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));
@@ -595,49 +599,47 @@ impl Renderer {
                             slot.block[1] + 2.0 * background.pad_y * scale,
                         ];
                         // A shadow, cast by the box (the text's own would be hidden
-                        // behind it): stacked, widening copies make the soft edge.
+                        // behind it): the box grown by `size`, blurred by `blur`,
+                        // worked out exactly in the shader (a Gaussian-blurred box).
                         if let Some(shadow) = style.shadow {
-                            const STEPS: usize = 10;
                             let angle = shadow.angle.to_radians();
-                            let border = background.border * scale;
+                            let sigma = (shadow.blur * scale / 2.0).max(0.01);
+                            // The quad reaches 3 sigma past the shape, where it's gone.
+                            let reach =
+                                shadow.size * scale + background.border * scale + 3.0 * sigma;
+                            let moved = Transform {
+                                x: placed.x + shadow.distance * scale * angle.sin(),
+                                y: placed.y - shadow.distance * scale * angle.cos(),
+                                ..placed
+                            };
                             let mut tint = shadow.color.0;
-                            tint[3] *= shadow.opacity / STEPS as f32;
-                            let group = self.bind(&self.blank.view);
-                            for step in 0..STEPS {
-                                let spread = shadow.size * scale + border - shadow.blur * scale
-                                    + 2.0 * shadow.blur * scale * step as f32 / (STEPS - 1) as f32;
-                                let moved = Transform {
-                                    x: placed.x + shadow.distance * scale * angle.sin(),
-                                    y: placed.y - shadow.distance * scale * angle.cos(),
-                                    ..placed
-                                };
-                                let grown = [
-                                    (size[0] + 2.0 * spread).max(0.0),
-                                    (size[1] + 2.0 * spread).max(0.0),
-                                ];
-                                let uniforms = quad_uniforms(
+                            tint[3] *= shadow.opacity;
+                            let uniforms = LayerUniforms {
+                                blur: sigma,
+                                ..quad_uniforms(
                                     &moved,
-                                    grown,
+                                    [size[0] + 2.0 * reach, size[1] + 2.0 * reach],
                                     half_canvas,
                                     *opacity,
                                     tint,
-                                    MODE_SOLID,
-                                );
-                                let offset = slots.push(
-                                    &self.queue,
-                                    &self.uniforms,
-                                    bytemuck::bytes_of(&uniforms),
-                                );
-                                draw(
-                                    &mut encoder,
-                                    &self.over_pipeline,
-                                    &self.accum[current].view,
-                                    &group,
-                                    offset,
-                                    4,
-                                    None,
-                                );
-                            }
+                                    MODE_BOX_SHADOW,
+                                )
+                            };
+                            let offset = slots.push(
+                                &self.queue,
+                                &self.uniforms,
+                                bytemuck::bytes_of(&uniforms),
+                            );
+                            let group = self.bind(&self.blank.view);
+                            draw(
+                                &mut encoder,
+                                &self.over_pipeline,
+                                &self.accum[current].view,
+                                &group,
+                                offset,
+                                4,
+                                None,
+                            );
                         }
                         let mut tint = background.color.0;
                         tint[3] *= background.opacity;
@@ -1514,7 +1516,8 @@ fn quad_uniforms(
         opacity: opacity.clamp(0.0, 1.0),
         tint,
         mode,
-        _pad: [0; 3],
+        blur: 0.0,
+        _pad: [0; 2],
     }
 }
 

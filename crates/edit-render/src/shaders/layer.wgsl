@@ -9,9 +9,11 @@ struct Layer {
     rotation: f32,
     opacity: f32,
     tint: vec4f,
-    // 0 straight-alpha texture, 1 solid tint, 2 glow mask (tinted alpha), 3 premultiplied texture, 4 shadow
+    // 0 straight-alpha texture, 1 solid tint, 2 glow mask (tinted alpha), 3 premultiplied texture, 4 shadow,
+    // 5 box shadow
     mode: u32,
-    _p0: u32,
+    // Box shadow: the Gaussian's sigma in pixels.
+    blur: f32,
     _p1: u32,
     _p2: u32,
 };
@@ -38,6 +40,23 @@ fn vs(@builtin(vertex_index) i: u32) -> VsOut {
     return out;
 }
 
+// erf, closely enough (Abramowitz & Stegun 7.1.27), per component.
+fn erf2(x: vec2f) -> vec2f {
+    let s = sign(x);
+    let a = abs(x);
+    var r = 1.0 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
+    r = r * r;
+    return s - s / (r * r);
+}
+
+// How much of a box (half-size `half`, centred) a Gaussian of `sigma` around
+// `p` covers: the box blurred exactly, separable in x and y.
+fn box_blur(p: vec2f, half: vec2f, sigma: f32) -> f32 {
+    let k = 1.0 / (sqrt(2.0) * sigma);
+    let covered = 0.5 * (erf2((p + half) * k) - erf2((p - half) * k));
+    return covered.x * covered.y;
+}
+
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
     let texel = textureSampleLevel(tex, samp, in.uv, 0.0);
@@ -56,6 +75,13 @@ fn fs(in: VsOut) -> @location(0) vec4f {
             // Drop shadow: the blurred text, thickened (the "grown" text), then
             // capped at the shadow's own opacity.
             let a = min(texel.a * 2.5, 1.0) * u.tint.a * u.opacity;
+            return vec4f(u.tint.rgb * a, a);
+        }
+        case 5u: {
+            // The quad is the shape plus 3 sigma all round.
+            let p = (in.uv - 0.5) * u.size;
+            let half = max(u.size * 0.5 - 3.0 * u.blur, vec2f(0.0));
+            let a = box_blur(p, half, u.blur) * u.tint.a * u.opacity;
             return vec4f(u.tint.rgb * a, a);
         }
         default: {

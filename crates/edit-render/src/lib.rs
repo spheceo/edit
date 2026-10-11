@@ -1720,8 +1720,9 @@ pub fn rasterize_line(
             .iter()
             .enumerate()
             .map(|(index, level)| {
-                // Below a whisper (room noise, breath) the line lies flat.
-                let level = ((level - 0.18) / 0.82).max(0.0);
+                // Below a whisper (room noise, breath) the line lies flat, and
+                // quiet sound stays small (an expander): speech and loud sounds spike.
+                let level = ((level - 0.24) / 0.76).max(0.0).powf(1.6);
                 // Swings mostly alternate, like a signal, but not like clockwork.
                 let flip = if jitter(strand, index, tick, 4) > 0.6 {
                     -1.0
@@ -1732,28 +1733,30 @@ pub fn rasterize_line(
                 let amount = 0.25 + 0.75 * jitter(strand, index, tick, 1).abs();
                 let y = middle
                     + swing * amount * level * span_h / 2.0
-                    + jitter(strand, index, tick, 2) * 1.5 * scale;
+                    + jitter(strand, index, tick, 2) * (0.4 + 1.5 * level) * scale;
                 // Loud stretches wander sideways, so strands loop over each other.
                 let x =
                     pad + step * index as f32 + jitter(strand, index, tick, 3) * step * 1.2 * level;
                 (x, y)
             })
             .collect();
-        // Turbulent displace: the whole tangle drifts and buckles, more where it's loud.
+        // Turbulent displace: the whole tangle drifts and buckles where it's loud;
+        // in quiet it barely stirs (an almost flat line, just alive).
         let time = tick as f32 / LINE_TICKS;
         let curve: Vec<(f32, f32)> = smooth(&points, 6)
             .into_iter()
             .map(|(x, y)| {
                 let loud = ((y - middle).abs() / (span_h / 2.0)).min(1.0);
-                let reach = (8.0 + 26.0 * loud) * scale;
+                let reach = (1.5 + 32.0 * loud) * scale;
                 let (u, v) = (x / (70.0 * scale), y / (70.0 * scale));
                 // Plus a fine, jittery ripple: kinks all along the strands.
                 let (fu, fv) = (x / (18.0 * scale), y / (18.0 * scale));
+                let ripple = (0.5 + 6.5 * loud.sqrt()) * scale;
                 (
                     x + turbulence(u, v, time, 11) * reach
-                        + turbulence(fu, fv, time * 2.0, 21) * 4.0 * scale,
+                        + turbulence(fu, fv, time * 2.0, 21) * ripple * 0.6,
                     y + turbulence(u, v, time, 12) * reach * 1.4
-                        + turbulence(fu, fv, time * 2.0, 22) * 7.0 * scale,
+                        + turbulence(fu, fv, time * 2.0, 22) * ripple,
                 )
             })
             .collect();

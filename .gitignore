@@ -11,4 +11,5 @@
 
 # Local caches (Wrangler's holds Cloudflare account details)
 /relay/.wrangler/
+/relay/.dev.vars
 *.tsbuildinfo

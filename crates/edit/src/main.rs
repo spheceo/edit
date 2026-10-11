@@ -10,6 +10,7 @@ mod speakers;
 mod store;
 mod track;
 mod transcribe;
+mod update;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,6 +26,8 @@ USAGE
       devices use `tailscale serve --bg http://127.0.0.1:7700`).
   edit mcp
       Print how to connect Codex / Claude Code to the editor.
+  edit update
+      Install the newest release (the editor also offers it, one click).
   edit --version
 
 ENV
@@ -60,6 +63,11 @@ fn main() {
                 "Start the editor with `edit serve`, then register it once:\n\n  claude mcp add --transport http edit http://127.0.0.1:{port}/mcp\n  codex mcp add edit --url http://127.0.0.1:{port}/mcp\n\nAgents then see tools like get_project, add_text, update_clip, set_keyframes,\nrender_frame and contact_sheet, and their edits appear live in the open project."
             );
         }
+        Some("update") => update::run_cli(
+            &std::env::var_os("EDIT_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(default_home),
+        ),
         Some("--version" | "-V" | "version") => println!("edit {}", env!("CARGO_PKG_VERSION")),
         Some("--help" | "-h" | "help") | None => print!("{HELP}"),
         Some(other) => fail(&format!("unknown command {other}\n\n{HELP}")),
@@ -130,6 +138,7 @@ fn serve(home: PathBuf, host: Option<String>, port: u16) {
             );
         }
         let app = server::App {
+            updater: update::Updater::new(home.clone()),
             agents: agent::Agents::new(Arc::clone(&store), home.clone(), port),
             scripts: Arc::new(script::Jobs::default()),
             media: media::Processor::new(Arc::clone(&store)),
@@ -162,6 +171,17 @@ fn serve(home: PathBuf, host: Option<String>, port: u16) {
             fail(&format!("nothing to listen on (is port {port} taken?)"));
         }
         println!("edit: data in {}", home.display());
+        if update::enabled() {
+            std::thread::spawn(|| {
+                if let Ok(Some(release)) = update::check() {
+                    println!(
+                        "edit: {} is out (this is {}); update from the editor or run `edit update`",
+                        release.tag,
+                        update::VERSION
+                    );
+                }
+            });
+        }
         for handle in handles {
             let _ = handle.await;
         }

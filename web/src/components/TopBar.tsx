@@ -8,6 +8,7 @@ import { useEditor } from "../lib/store";
 import { OpenAIMark } from "./AgentPanel";
 import { AppMenu } from "./AppMenu";
 import { Mark } from "./Logo";
+import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton, spring } from "./ui";
 
 export function TopBar({ onExport }: { onExport: () => void }) {
@@ -60,6 +61,7 @@ export function TopBar({ onExport }: { onExport: () => void }) {
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
+        <UpdateButton />
         <IconButton label="Toggle Codex" active={showAgent} onClick={() => toggle("showAgent")} className="relative">
           <OpenAIMark size={14} />
           {agentActive && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-agent" />}

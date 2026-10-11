@@ -400,6 +400,10 @@ pub struct Exports {
 }
 
 impl Exports {
+    pub fn running(&self) -> bool {
+        !self.jobs.lock().unwrap().is_empty()
+    }
+
     pub fn cancel(&self, project: &str) -> bool {
         self.jobs
             .lock()

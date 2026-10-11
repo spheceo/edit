@@ -33,6 +33,7 @@ pub struct App {
     pub machine: Arc<str>,
     pub agents: Arc<crate::agent::Agents>,
     pub scripts: Arc<crate::script::Jobs>,
+    pub updater: Arc<crate::update::Updater>,
 }
 
 #[derive(rust_embed::Embed)]
@@ -60,6 +61,7 @@ fn not_found(message: impl Into<String>) -> ApiError {
 pub fn router(app: App) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/update", get(update_status).post(update_install))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
             "/api/projects/{id}",
@@ -137,6 +139,22 @@ async fn check_host(State(app): State<App>, request: Request, next: Next) -> Res
 
 async fn health(State(app): State<App>) -> Json<Value> {
     Json(json!({ "name": "edit", "version": env!("CARGO_PKG_VERSION"), "machine": &*app.machine }))
+}
+
+async fn update_status(State(app): State<App>) -> Json<crate::update::Status> {
+    Json(app.updater.status().await)
+}
+
+/// Downloads the newest release and restarts into it.
+async fn update_install(State(app): State<App>) -> ApiResult {
+    if app.exports.running() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "an export is running; update when it's done".to_owned(),
+        ));
+    }
+    let status = app.updater.start().map_err(bad)?;
+    Ok(Json(status).into_response())
 }
 
 /// An upload that sends nothing for this long is abandoned.

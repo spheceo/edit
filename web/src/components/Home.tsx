@@ -10,6 +10,7 @@ import type { ProjectSummary } from "../lib/types";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Mark } from "./Logo";
+import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, spring } from "./ui";
 
 const PRESETS = [
@@ -42,6 +43,7 @@ export function Home() {
         <header className="flex items-center justify-between">
           <Logo size={22} />
           <div className="flex items-center gap-1.5">
+            <UpdateButton />
             <AppMenu />
             <Button variant="primary" onClick={() => setCreating(true)}>
               <Plus size={15} strokeWidth={2.2} /> New project

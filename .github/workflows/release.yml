@@ -1,0 +1,114 @@
+name: Release
+
+# `just publish` bumps the patch version, tags it and pushes; this builds
+# Apple Silicon and Intel Mac archives and publishes the GitHub Release once
+# both are up (a draft until then, so updaters never see a half-built one).
+#
+# Run it by hand (Actions → Release → Run workflow) for a test build: the
+# archives land as workflow artifacts and nothing is released.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.ref_name }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
+  RELEASE: ${{ github.event_name == 'push' }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the workspace version
+        if: env.RELEASE == 'true'
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG but Cargo.toml says $version"
+            exit 1
+          fi
+      - name: Create the draft release
+        if: env.RELEASE == 'true'
+        run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "Edit $TAG" --generate-notes
+
+  # The UI (with the WASM preview engine) is the same for every build.
+  web:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: swatinem/rust-cache@v2
+      - name: Install wasm-bindgen (the version in Cargo.lock)
+        run: |
+          version="$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - uses: oven-sh/setup-bun@v2
+      - name: Build the UI
+        run: |
+          cargo build -p edit-wasm --target wasm32-unknown-unknown --release
+          wasm-bindgen --target web --out-dir web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
+          bun install --cwd web --frozen-lockfile
+          bun run --cwd web build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+  build:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both on the Apple Silicon runner; Intel is cross-compiled.
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      # EDIT_RELEASE turns on self-update (crates/edit/src/update.rs).
+      - name: Build
+        run: EDIT_RELEASE=1 cargo build --release --locked -p edit --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="edit-${{ matrix.target }}.tar.gz"
+          mkdir dist
+          tar -czf "dist/$name" -C "target/${{ matrix.target }}/release" edit
+          (cd dist && shasum -a 256 "$name" > "$name.sha256")
+          echo "NAME=$name" >> "$GITHUB_ENV"
+      - name: Upload to the release
+        if: env.RELEASE == 'true'
+        run: gh release upload "$TAG" --clobber "dist/$NAME" "dist/$NAME.sha256"
+      - name: Keep as a test build
+        if: env.RELEASE != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: dist
+
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the release
+        run: gh release edit "$TAG" --draft=false --latest

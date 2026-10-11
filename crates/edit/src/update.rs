@@ -1,10 +1,11 @@
-//! Self-update from the repo's GitHub Releases (`just publish` makes them).
-//! `GET /api/update` says whether a newer version is out; `POST /api/update` downloads it, checks its SHA-256,
-//! swaps it in for the running binary and restarts in place. On Unix that's an
+//! Self-update from the repo's GitHub Releases (built by the release
+//! workflow). `GET /api/update` says whether a newer version is out;
+//! `POST /api/update` downloads it, checks its SHA-256, swaps it in for the
+//! running binary and restarts in place. On Unix that's an
 //! exec, so `edit serve` keeps its terminal, PID and flags, and the open
 //! editor reloads once the new version answers.
 //!
-//! Only release builds update themselves (`just publish` builds with
+//! Only release builds update themselves (the workflow builds with
 //! EDIT_RELEASE=1); a dev build would otherwise swap out target/debug/edit.
 
 use std::io::Read;
@@ -27,7 +28,7 @@ pub fn enabled() -> bool {
     cfg!(unix) && option_env!("EDIT_RELEASE").is_some()
 }
 
-/// The release archive for this machine, as `just publish` names it.
+/// The release archive for this machine, as the release workflow names it.
 fn asset_target() -> &'static str {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "aarch64-apple-darwin"

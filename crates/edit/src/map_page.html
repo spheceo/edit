@@ -14,11 +14,36 @@ const info = { start: Date.now() };
 document.getElementById("map").style.cssText += `;width:${C.width}px;height:${C.height}px`;
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 async function until(test, ms) { const end = Date.now() + ms; while (!test() && Date.now() < end) await sleep(200); }
+// Grade the imagery before the building marker is drawn, so it stays bright
+// and sharp. This is baked into every still and moving-shot frame.
+function createMapLook(width, height) {
+  const stops = -1, vignette = 0.55;
+  // Exposure in linear light, cached as an sRGB lookup rather than calculated
+  // for every pixel of every frame.
+  const exposure = Uint8Array.from({ length: 256 }, (_, i) => {
+    const s = i / 255, linear = (s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4) * 2 ** stops;
+    return Math.round(255 * (linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1 / 2.4) - 0.055));
+  });
+  return (source, ctx) => {
+    ctx.drawImage(source, 0, 0, width, height);
+    const picture = ctx.getImageData(0, 0, width, height), pixels = picture.data;
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = exposure[pixels[i]]; pixels[i + 1] = exposure[pixels[i + 1]]; pixels[i + 2] = exposure[pixels[i + 2]];
+    }
+    ctx.putImageData(picture, 0, 0);
+    ctx.save();
+    ctx.translate(width / 2, height / 2); ctx.scale(width / 2, height / 2);
+    const shade = ctx.createRadialGradient(0, 0, 0.25, 0, 0, Math.SQRT2);
+    shade.addColorStop(0, "rgba(0,0,0,0)"); shade.addColorStop(0.45, "rgba(0,0,0,0.08)"); shade.addColorStop(1, `rgba(0,0,0,${vignette})`);
+    ctx.fillStyle = shade; ctx.fillRect(-1, -1, 2, 2);
+    ctx.restore();
+  };
+}
 // The place in glowing red, drawn over the picture: the building's outline
 // raised to its roof (heights read off the 3D tiles), or a ring on the ground.
 // Where it lands in the picture goes back as info.building (left, top, right, bottom px).
 let roof = null;
-async function mark(ctx, ground) {
+async function mark(ctx, ground, opacity) {
   const scene = window.viewer.scene;
   const toScreen = (lon, lat, height) => scene.cartesianToCanvasCoordinates(Cesium.Cartesian3.fromDegrees(lon, lat, height));
   const scale = C.width / scene.canvas.width;
@@ -29,6 +54,7 @@ async function mark(ctx, ground) {
   };
   const path = (points) => { ctx.beginPath(); points.forEach((p, i) => (i ? ctx.lineTo(p.x * scale, p.y * scale) : ctx.moveTo(p.x * scale, p.y * scale))); ctx.closePath(); };
   ctx.save();
+  ctx.globalAlpha = opacity;
   ctx.shadowColor = "rgba(255, 30, 30, 0.95)";
   ctx.shadowBlur = 36 * C.height / 1080;
   ctx.lineJoin = "round";
@@ -117,21 +143,19 @@ async function mark(ctx, ground) {
   await sleep(1500);
   const out = document.createElement("canvas");
   out.width = C.width; out.height = C.height;
-  const ctx = out.getContext("2d");
-  // Google's logo and the imagery's data providers, as Google requires.
-  const logo = new Image(); logo.crossOrigin = "anonymous"; logo.src = "https://assets.ion.cesium.com/google-credit.png?edit";
-  await logo.decode().catch(() => {});
-  const credits = viewer.cesiumWidget.creditContainer.innerText.split(/[•\n]/).map((part) => part.trim()).filter(Boolean).join(" · ");
-  // Far enough in to survive a push-in to 1.07.
-  const unit = C.height / 1080, inX = C.width * 0.036, inY = C.height * 0.036;
-  const draw = async () => {
+  const ctx = out.getContext("2d", { willReadFrequently: true });
+  const drawMap = createMapLook(C.width, C.height);
+  // Measure the building even before its reveal, so labels can track it from
+  // any frame. Timing is in source seconds, independent of capture speed.
+  const draw = async (frame = 0) => {
     viewer.render();
     ctx.clearRect(0, 0, C.width, C.height);
-    ctx.drawImage(scene.canvas, 0, 0, C.width, C.height);
-    if (C.highlight) await mark(ctx, ground);
-    if (logo.naturalWidth) ctx.drawImage(logo, inX, C.height - inY - logo.naturalHeight * unit, logo.naturalWidth * unit, logo.naturalHeight * unit);
-    ctx.font = `${Math.round(15 * unit)}px Helvetica, Arial, sans-serif`; ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.textAlign = "right";
-    ctx.fillText(credits, C.width - inX, C.height - inY);
+    drawMap(scene.canvas, ctx);
+    if (C.highlight) {
+      const elapsed = frame / C.fps - C.highlight_after;
+      const t = C.highlight_fade > 0 ? Math.max(0, Math.min(1, elapsed / C.highlight_fade)) : Number(elapsed >= 0);
+      await mark(ctx, ground, t * t * (3 - 2 * t));
+    }
   };
   const picture = (type, quality) => new Promise((done) => out.toBlob(done, type, quality));
   if (!C.frames) {
@@ -149,7 +173,7 @@ async function mark(ctx, ground) {
     viewer.render();
     await sleep(20);
     await until(() => tileset.tilesLoaded, 15000);
-    await draw();
+    await draw(i);
     info.track.push(info.building);
     const sent = await fetch(`${location.href}/frame/${i}`, { method: "POST", headers: { "content-type": "image/jpeg" }, body: await picture("image/jpeg", 0.95) });
     if (!sent.ok) throw new Error(`frame ${i}: ${sent.status}`);

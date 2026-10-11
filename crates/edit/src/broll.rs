@@ -486,8 +486,8 @@ fn chrome() -> Option<PathBuf> {
 pub static LISTENING: OnceLock<SocketAddr> = OnceLock::new();
 
 /// The map page: Google's Photorealistic 3D Tiles (through the relay, which
-/// holds the key) drawn by CesiumJS, the place marked in glowing red and
-/// Google's logo and data credits on the picture. When the tiles are in, it
+/// holds the key) drawn by CesiumJS, graded darker with a vignette and the
+/// place marked in glowing red. When the tiles are in, it
 /// posts the picture back to its own address.
 const MAP_PAGE: &str = include_str!("map_page.html");
 
@@ -650,6 +650,14 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
     let mark = args["highlight"].as_bool().unwrap_or(true);
     let still = args["still"].as_bool().unwrap_or(false);
     let seconds = args["seconds"].as_f64().unwrap_or(6.0).clamp(1.0, 20.0);
+    let highlight_after = args["highlight_after"]
+        .as_f64()
+        .unwrap_or(0.0)
+        .clamp(0.0, seconds);
+    let highlight_fade = args["highlight_fade"]
+        .as_f64()
+        .unwrap_or(0.0)
+        .clamp(0.0, seconds);
     let orbit = args["orbit"].as_f64().unwrap_or(15.0).clamp(-90.0, 90.0);
     let push = args["push"].as_f64().unwrap_or(0.12).clamp(0.0, 0.6);
     let (width, height, fps) = (
@@ -688,6 +696,7 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
         // The page wants the camera's angle below the horizon.
         "pitch": 90.0 - pitch,
         "highlight": mark, "ring": ring,
+        "highlight_after": highlight_after, "highlight_fade": highlight_fade, "fps": fps,
         "width": width, "height": height,
         "relay": crate::transcribe::relay(),
     });
@@ -698,7 +707,9 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
     }
     let dir = app.store.uploads_dir(project_id).join("maps");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let key = fingerprint(&[&config.to_string(), "google-3d"]);
+    // A capture-page change (including its baked-in grade) must not reuse
+    // footage made with the previous look.
+    let key = fingerprint(&[&config.to_string(), "google-3d", MAP_PAGE]);
     let out = dir.join(format!(
         "map-{key}.{}",
         if frames > 0 { "mp4" } else { "png" }
@@ -776,9 +787,9 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
     .await?;
     let media = added.first().cloned().ok_or_else(|| errors.join("; "))?;
     let note = if frames > 0 {
-        "A moving shot (frames/fps seconds): the camera circles the building and closes in at a constant speed by itself, so place it as a video clip at scale 1 from source_in 0 with no scale keyframes. `building` is where the marked building sits on the first frame and `building_track` where it is every half second (frame = frames into the footage), in timeline transform coordinates: keyframe a label's x and y at those frames (ease linear) to keep it pinned. Google's logo and data credits sit in the bottom corners and stay there; keep them visible."
+        "A moving shot (frames/fps seconds): the camera circles the building and closes in at a constant speed by itself, so place it as a video clip at scale 1 from source_in 0 with no scale keyframes. `building` is where the marked building sits on the first frame and `building_track` where it is every half second (frame = frames into the footage), in timeline transform coordinates: keyframe a label's x and y at those frames (ease linear) to keep it pinned. The marker can reveal after a date title using `highlight_after` and `highlight_fade` in source seconds; tracking remains available throughout."
     } else {
-        "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. `building` is where the marked building sits in the frame (timeline transform coordinates at scale 1; a push-in to s moves a point p to p*s). It carries Google's logo and data credits (bottom corners); keep them visible."
+        "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. `building` is where the marked building sits in the frame (timeline transform coordinates at scale 1; a push-in to s moves a point p to p*s)."
     };
     Ok(json!({
         "media": media,

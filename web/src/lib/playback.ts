@@ -75,6 +75,11 @@ const LOCK_LIMIT = 0.1;
 const LOCK_GAIN = 0.08;
 /** At play, the playhead waits this long at most for the picture to start moving. */
 const START_WAIT_MS = 400;
+/** After a seek, how long to wait for the element to report the new picture before taking it anyway
+ * (hidden tabs and busy pages can skip the report, which used to leave the preview waiting). */
+const PRESENT_WAIT_MS = 250;
+/** Waits shorter than this (a seek over the network) don't show "Loading frame…". */
+const BUFFERING_BADGE_MS = 600;
 /** Short audio (sound effects) plays through Web Audio, scheduled to the frame, not a media element. */
 const SOUND_SECONDS = 20;
 /** How far ahead sounds are scheduled, in seconds. */
@@ -119,6 +124,8 @@ class Preview {
   private pending = new Map<HTMLVideoElement, number>();
   private copied = new Map<string, { video: HTMLVideoElement; serial: number }>();
   private presented = new Map<HTMLVideoElement, { time: number; serial: number }>();
+  /** When each element finished its last seek. */
+  private settled = new Map<HTMLVideoElement, number>();
   private callbacks = new Map<HTMLVideoElement, number>();
   private pictureSerial = 0;
   /** When the clock's element last changed (a cut swapped rolls). */
@@ -483,10 +490,12 @@ class Preview {
     this.stalled.delete(video);
     this.lastBusy.delete(video);
     this.presented.delete(video);
+    this.settled.delete(video);
   }
 
   private onSeeked(video: HTMLVideoElement) {
     this.seeking.delete(video);
+    this.settled.set(video, performance.now());
     const next = this.pending.get(video);
     this.pending.delete(video);
     if (next !== undefined && Math.abs(video.currentTime - next) > 1e-3) {
@@ -961,7 +970,12 @@ class Preview {
       }
       // currentTime changes before the decoded picture does. Never copy the
       // old picture while seeking, including when a newer scrub is queued.
-      if (video.readyState < 2 || video.seeking || this.seeking.has(video) || this.pending.has(video) || (this.callbacks.has(video) && !presented)) {
+      if (video.readyState < 2 || video.seeking || this.seeking.has(video) || this.pending.has(video)) {
+        waiting = true;
+        continue;
+      }
+      if (this.callbacks.has(video) && !presented && performance.now() - (this.settled.get(video) ?? 0) < PRESENT_WAIT_MS) {
+        this.retryWhenPresented(video);
         waiting = true;
         continue;
       }
@@ -1026,7 +1040,7 @@ class Preview {
         this.bufferingTimer = undefined;
         this.buffering = true;
         this.notify();
-      }, 150);
+      }, BUFFERING_BADGE_MS);
     } else {
       clearTimeout(this.bufferingTimer);
       this.bufferingTimer = undefined;

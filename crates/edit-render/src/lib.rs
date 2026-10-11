@@ -1587,7 +1587,7 @@ pub fn wave_points(style: &edit_core::WaveformStyle, transform: &Transform) -> u
 }
 
 /// The line's blur (sigma, px at scale 1): it's drawn soft, never crisp.
-const LINE_SOFTNESS: f32 = 3.6;
+const LINE_SOFTNESS: f32 = 2.8;
 
 /// The line's tangle changes this many times a second (on any frame rate).
 const LINE_TICKS: f32 = 24.0;

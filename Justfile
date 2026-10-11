@@ -20,9 +20,37 @@ web: wasm web-install
 serve: web
     cargo run -p edit -- serve
 
-# Release binary with the UI embedded
+# Release binary with the UI embedded (doesn't update itself; see `publish`)
 release: web
     cargo build -p edit --release
+
+# Bump [workspace.package] version and commit first. Builds on this Mac (Apple
+# Silicon is the only target); installs pick the release up through the relay.
+# Ship the Cargo.toml version: check, build, tag, upload to GitHub Releases
+publish: check web
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ] || { echo "publish from an Apple Silicon Mac"; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { echo "commit your changes first"; exit 1; }
+    version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+    tag="v$version"
+    if git rev-parse -q --verify "refs/tags/$tag" >/dev/null || gh release view "$tag" >/dev/null 2>&1; then
+        echo "$tag already exists; bump the version in Cargo.toml"
+        exit 1
+    fi
+    # EDIT_RELEASE turns on self-update (crates/edit/src/update.rs).
+    EDIT_RELEASE=1 cargo build -p edit --release --locked
+    out="target/publish"
+    name="edit-aarch64-apple-darwin.tar.gz"
+    rm -rf "$out" && mkdir -p "$out"
+    tar -czf "$out/$name" -C target/release edit
+    (cd "$out" && shasum -a 256 "$name" > "$name.sha256")
+    git push origin HEAD
+    git tag "$tag" && git push origin "$tag"
+    # Draft until the upload is done, so updaters never see a half-uploaded release.
+    gh release create "$tag" --draft --title "Edit $tag" --generate-notes "$out/$name" "$out/$name.sha256"
+    gh release edit "$tag" --draft=false --latest
+    echo "Published $tag. Running copies offer it within ~10 minutes."
 
 # Server on :7700 (rebuilt and restarted on Rust changes) plus Vite with hot
 # reload on :5173. Over Tailscale, open http://<machine>:5173 (redirects to HTTPS).

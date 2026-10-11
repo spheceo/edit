@@ -12,12 +12,12 @@ set -eu
 RELAY="__RELAY__"
 PREFIX="${EDIT_INSTALL_DIR:-$HOME/.local/bin}"
 
+# Releases are built on an Apple Silicon Mac (`just publish`); that's the
+# only build there is.
 case "$(uname -s)/$(uname -m)" in
   Darwin/arm64) TARGET="aarch64-apple-darwin" ;;
-  Darwin/x86_64) TARGET="x86_64-apple-darwin" ;;
-  Linux/x86_64) TARGET="x86_64-unknown-linux-gnu" ;;
   *)
-    echo "Edit has no build for $(uname -s)/$(uname -m) yet." >&2
+    echo "Edit only has a build for Apple Silicon Macs so far (this is $(uname -s)/$(uname -m))." >&2
     exit 1
     ;;
 esac

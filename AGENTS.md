@@ -24,9 +24,9 @@ Preview/export parity can be verified in a browser: `window.__edit.preview.engin
 
 ## Releases and self-update
 
-Bump `version` in the workspace `Cargo.toml`, commit, then `git tag vX.Y.Z && git push origin main vX.Y.Z`. `.github/workflows/release.yml` builds the UI once, then `edit-<target>.tar.gz` (+ `.sha256`) for macOS arm64/x64 and Linux x64, and publishes the draft release when all are up.
+Bump `version` in the workspace `Cargo.toml`, commit, then `just publish` on an Apple Silicon Mac: it runs the checks, builds `edit-aarch64-apple-darwin.tar.gz` (+ `.sha256`), pushes the `vX.Y.Z` tag and uploads a GitHub Release (a draft until the upload finishes). There's no CI build (Actions minutes on a private repo), and Apple Silicon is the only target; adding one means building its archive somewhere and adding it to `install.sh`.
 
-The repo is private, so installs never talk to GitHub: the relay serves `/v1/releases/latest?target=`, `/v1/releases/download/<tag>/<asset>` and `/install.sh` using a read-only `GITHUB_TOKEN` secret. `crates/edit/src/update.rs` checks the relay, and the editor's "Update to vX" button (`web/src/lib/update.ts`) downloads, verifies, swaps the binary and execs it in place; the page reloads when the new version answers. Only builds made with `EDIT_RELEASE=1` (CI) update themselves, so dev builds never replace `target/`. Removing a target from the matrix breaks updates and `install.sh` for that platform.
+The repo is private, so installs never talk to GitHub: the relay serves `/v1/releases/latest?target=`, `/v1/releases/download/<tag>/<asset>` and `/install.sh` using a read-only `GITHUB_TOKEN` secret. `crates/edit/src/update.rs` checks the relay, and the editor's "Update to vX" button (`web/src/lib/update.ts`) downloads, verifies, swaps the binary and execs it in place; the page reloads when the new version answers. Only builds made with `EDIT_RELEASE=1` (`just publish`) update themselves, so dev builds never replace `target/`.
 
 ## Brand
 

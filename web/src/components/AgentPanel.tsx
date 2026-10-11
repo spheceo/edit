@@ -28,6 +28,8 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import {
   chooseEffort,
@@ -382,27 +384,65 @@ function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean
       initial={fresh ? { opacity: 0 } : false}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.18 }}
-      className={cx("px-1.5 leading-relaxed whitespace-pre-wrap", muted ? "text-[12px] text-muted" : "text-[13px] text-fg/90")}
+      className={cx("px-1.5 leading-relaxed", muted ? "text-[12px] text-muted" : "text-[13px] text-fg/90")}
     >
-      {formatted(entry.text)}
+      <Markdown text={entry.text} />
     </motion.div>
   );
 }
 
-/** `code` and **bold**: enough for short agent replies, no HTML injection. */
-function formatted(text: string) {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part, index) =>
-    part.startsWith("`") && part.endsWith("`") ? (
-      <code key={index} className="rounded bg-raised px-1 font-mono text-[12px]">
-        {part.slice(1, -1)}
-      </code>
-    ) : part.startsWith("**") && part.endsWith("**") ? (
-      <strong key={index} className="font-semibold text-fg">
-        {part.slice(2, -2)}
-      </strong>
+/**
+ * The agent's replies as Markdown (tables, lists, headings, code), styled for
+ * the panel. Raw HTML in a reply is shown as text, never run.
+ */
+const MARKDOWN: Components = {
+  p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0">{children}</p>,
+  strong: ({ children }) => <strong className="font-semibold text-fg">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  a: ({ children, href }) => (
+    <a href={href} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-2 hover:decoration-white">
+      {children}
+    </a>
+  ),
+  h1: ({ children }) => <h3 className="mt-3 mb-1 text-[14px] font-semibold text-fg first:mt-0">{children}</h3>,
+  h2: ({ children }) => <h3 className="mt-3 mb-1 text-[13.5px] font-semibold text-fg first:mt-0">{children}</h3>,
+  h3: ({ children }) => <h4 className="mt-2.5 mb-1 text-[13px] font-semibold text-fg first:mt-0">{children}</h4>,
+  ul: ({ children }) => <ul className="my-1.5 list-disc space-y-0.5 pl-4 marker:text-faint">{children}</ul>,
+  ol: ({ children }) => <ol className="my-1.5 list-decimal space-y-0.5 pl-4 marker:text-faint">{children}</ol>,
+  li: ({ children }) => <li className="pl-0.5">{children}</li>,
+  blockquote: ({ children }) => <blockquote className="my-1.5 border-l-2 border-line-strong pl-2.5 text-muted">{children}</blockquote>,
+  hr: () => <hr className="my-3 border-line" />,
+  pre: ({ children }) => <pre className="my-1.5 overflow-x-auto rounded-lg bg-black p-2.5 font-mono text-[11.5px] leading-relaxed ring-1 ring-line">{children}</pre>,
+  code: ({ children, className }) =>
+    className ? (
+      <code className={className}>{children}</code>
     ) : (
-      part
+      <code className="rounded bg-raised px-1 font-mono text-[12px]">{children}</code>
     ),
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto rounded-lg ring-1 ring-line">
+      <table className="w-full border-collapse text-[12px] tabular">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-raised text-muted">{children}</thead>,
+  tr: ({ children }) => <tr className="border-t border-line first:border-t-0">{children}</tr>,
+  th: ({ children, style }) => (
+    <th className="px-2 py-1.5 text-left font-medium" style={style}>
+      {children}
+    </th>
+  ),
+  td: ({ children, style }) => (
+    <td className="px-2 py-1.5 align-top" style={style}>
+      {children}
+    </td>
+  ),
+};
+
+function Markdown({ text }: { text: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN} skipHtml>
+      {text}
+    </ReactMarkdown>
   );
 }
 

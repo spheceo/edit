@@ -1,4 +1,4 @@
-//! The preview engine the browser drives. JS owns decoding (video elements)
+//! The preview engine the browser drives. JS owns decoding (WebCodecs workers)
 //! and timing; this owns evaluation and drawing so they match the export.
 
 #![cfg(target_arch = "wasm32")]
@@ -154,10 +154,8 @@ impl Engine {
 
     /// Copies a decoded frame into the GPU texture for `media`.
     ///
-    /// Takes a WebCodecs `VideoFrame` (JS builds it from the element) rather
-    /// than the element itself: constructing the frame fails cleanly when the
-    /// element has nothing to show, whereas copying from the element can make
-    /// wgpu panic and poison the engine.
+    /// Takes a WebCodecs `VideoFrame` transferred from the decoder worker.
+    /// JS retains ownership in its bounded cache; uploading does not close it.
     #[wasm_bindgen(js_name = uploadFrame)]
     pub fn upload_frame(&mut self, media: &str, frame: VideoFrame) {
         let (width, height) = (frame.display_width(), frame.display_height());

@@ -25,7 +25,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Tag matches the workspace version
         if: env.RELEASE == 'true'
         run: |
@@ -43,7 +43,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -59,7 +59,7 @@ jobs:
           wasm-bindgen --target web --out-dir web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
           bun install --cwd web --frozen-lockfile
           bun run --cwd web build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: web-dist
           path: web/dist
@@ -73,14 +73,14 @@ jobs:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: web-dist
           path: web/dist
@@ -100,7 +100,7 @@ jobs:
         run: gh release upload "$TAG" --clobber "dist/$NAME" "dist/$NAME.sha256"
       - name: Keep as a test build
         if: env.RELEASE != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.NAME }}
           path: dist

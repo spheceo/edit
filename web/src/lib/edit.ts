@@ -751,3 +751,51 @@ export function removeMedia(project: Project, id: string) {
   project.clips = project.clips.filter((clip) => !((clip.type === "video" || clip.type === "audio") && clip.media === id));
   project.media = project.media.filter((media) => media.id !== id);
 }
+
+/** How the edit uses a media file: clips that play it, and whether the script plays from it. */
+export interface MediaUse {
+  clips: number;
+  script: boolean;
+}
+
+export function mediaUses(project: Project): Map<string, MediaUse> {
+  const uses = new Map(project.media.map((media) => [media.id, { clips: 0, script: false }]));
+  for (const clip of project.clips) {
+    if (clip.type === "video" || clip.type === "audio") {
+      const use = uses.get(clip.media);
+      if (use) use.clips++;
+    }
+  }
+  for (const block of project.script?.blocks ?? []) {
+    const use = block.kind === "footage" && block.media ? uses.get(block.media) : undefined;
+    if (use) use.script = true;
+  }
+  return uses;
+}
+
+export const isUsed = (use: MediaUse | undefined) => Boolean(use && (use.clips || use.script));
+
+/** Removes media nothing plays (no clips, not linked from the script); returns how many. */
+export function removeUnusedMedia(project: Project) {
+  const uses = mediaUses(project);
+  const before = project.media.length;
+  project.media = project.media.filter((media) => isUsed(uses.get(media.id)));
+  return before - project.media.length;
+}
+
+/** The media bin's folders. Files sort into them by kind; nothing is moved on disk. */
+export const MEDIA_FOLDERS = [
+  { id: "footage", label: "Footage" },
+  { id: "audio", label: "Audio" },
+  { id: "sfx", label: "Sound effects" },
+  { id: "images", label: "Images" },
+] as const;
+
+export type MediaFolder = (typeof MEDIA_FOLDERS)[number]["id"];
+
+export function folderOf(media: Media): MediaFolder {
+  if (media.kind === "image") return "images";
+  // Bundled sounds live in <Edit's home>/sfx (crates/edit/src/sfx.rs).
+  if (media.kind === "audio") return /[\\/]sfx[\\/][^\\/]+$/.test(media.path) ? "sfx" : "audio";
+  return "footage";
+}

@@ -1,38 +1,110 @@
-import { AudioLines, CircleAlert, HardDrive, Upload as UploadIcon, X } from "lucide-react";
+import { AudioLines, Check, ChevronLeft, CircleAlert, Ellipsis, Folder, HardDrive, Trash2, Upload as UploadIcon, X } from "lucide-react";
 import { motion } from "motion/react";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { mediaUrl, useMachine } from "../lib/api";
+import { folderOf, isUsed, MEDIA_FOLDERS, mediaUses, placeMedia, removeUnusedMedia, type MediaFolder, type MediaUse } from "../lib/edit";
 import { mediaMenu } from "../lib/menus";
-import { openMenu } from "./ContextMenu";
-import { placeMedia } from "../lib/edit";
+import { openMenu, toggleMenu } from "./ContextMenu";
 import { playhead } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import { shortDuration } from "../lib/time";
 import type { Media, MediaStatus } from "../lib/types";
 import { cancelUpload, uploadFiles, useUploads, type Upload } from "../lib/upload";
-import { Button, cx, ProgressRing, spring } from "./ui";
+import { Button, cx, IconButton, ProgressRing, spring } from "./ui";
 
 export const MEDIA_MIME = "application/x-edit-media";
 export const ELEMENT_MIME = "application/x-edit-element";
 
+/** Which media the bin lists: everything, or what the edit does / doesn't use. */
+type Show = "all" | "used" | "unused";
+
+const FOLDER_TINT: Record<MediaFolder, string> = {
+  footage: "text-sky-300",
+  audio: "text-green-300",
+  sfx: "text-amber-300",
+  images: "text-violet-300",
+};
+
 export function MediaPanel({ onImport }: { onImport: () => void }) {
   const machine = useMachine();
+  const project = useEditor((state) => state.project)!;
+  const [opened, setOpened] = useState<MediaFolder | null>(null);
+  const [show, setShow] = useState<Show>("all");
+  const uses = useMemo(() => mediaUses(project), [project]);
+  // A folder emptied (everything in it removed) closes itself.
+  const folder = opened && project.media.some((media) => folderOf(media) === opened) ? opened : null;
+  const label = MEDIA_FOLDERS.find((candidate) => candidate.id === folder)?.label;
   return (
     <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-line pr-1 pl-3.5">
-        <span className="font-medium">Media</span>
-        <div className="flex items-center">
+      <div className="flex h-11 shrink-0 items-center justify-between gap-1 border-b border-line pr-1 pl-3.5">
+        <div className="flex min-w-0 items-center gap-1">
+          {folder ? (
+            <button
+              onClick={() => setOpened(null)}
+              title="Back to all media"
+              className="-ml-1.5 flex min-w-0 items-center gap-0.5 rounded-md py-1 pr-1.5 pl-0.5 font-medium transition-colors hover:bg-hover"
+            >
+              <ChevronLeft size={15} className="shrink-0 text-muted" />
+              <span className="truncate">{label}</span>
+            </button>
+          ) : (
+            <span className="font-medium">Media</span>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center">
           <UploadButton />
           <Button size="sm" variant="ghost" onClick={onImport} title={`Add files already on ${machine} (⌘I)`}>
             <HardDrive size={13} /> {machine}
           </Button>
+          <MediaOptions show={show} setShow={setShow} uses={uses} />
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <MediaGrid onImport={onImport} />
+        <MediaGrid onImport={onImport} folder={folder} open={setOpened} show={show} uses={uses} />
       </div>
     </section>
+  );
+}
+
+/** The bin's ⋯: what to list, and clearing out what the edit doesn't use. */
+function MediaOptions({ show, setShow, uses }: { show: Show; setShow: (show: Show) => void; uses: Map<string, MediaUse> }) {
+  const edit = useEditor((state) => state.edit);
+  const toast = useEditor((state) => state.toast);
+  const used = [...uses.values()].filter(isUsed).length;
+  const unused = uses.size - used;
+  return (
+    <IconButton
+      label="Media options"
+      onClick={(event) =>
+        toggleMenu(
+          event.currentTarget,
+          [
+            { heading: "Show" },
+            { label: "All media", checked: show === "all", hint: String(uses.size), onSelect: () => setShow("all") },
+            { label: "Used in the edit", checked: show === "used", hint: String(used), onSelect: () => setShow("used") },
+            { label: "Unused", checked: show === "unused", hint: String(unused), onSelect: () => setShow("unused") },
+            { separator: true },
+            {
+              label: "Remove unused media",
+              icon: <Trash2 size={14} />,
+              danger: true,
+              disabled: !unused,
+              onSelect: () => {
+                let removed = 0;
+                edit((draft) => {
+                  removed = removeUnusedMedia(draft);
+                });
+                toast(`Removed ${removed} unused file${removed === 1 ? "" : "s"} from the project (⌘Z to undo). Nothing was deleted from disk.`);
+              },
+            },
+          ],
+          { width: 220 },
+        )
+      }
+    >
+      <Ellipsis size={16} />
+    </IconButton>
   );
 }
 
@@ -59,7 +131,19 @@ function UploadButton() {
   );
 }
 
-function MediaGrid({ onImport }: { onImport: () => void }) {
+function MediaGrid({
+  onImport,
+  folder,
+  open,
+  show,
+  uses,
+}: {
+  onImport: () => void;
+  folder: MediaFolder | null;
+  open: (folder: MediaFolder) => void;
+  show: Show;
+  uses: Map<string, MediaUse>;
+}) {
   const project = useEditor((state) => state.project)!;
   const statuses = useEditor((state) => state.media);
   const uploads = useUploads((state) => state.uploads);
@@ -79,17 +163,51 @@ function MediaGrid({ onImport }: { onImport: () => void }) {
       </div>
     );
   }
+  const listed = project.media.filter((media) => show === "all" || isUsed(uses.get(media.id)) === (show === "used"));
+  const folders = MEDIA_FOLDERS.map((entry) => ({ ...entry, items: listed.filter((media) => folderOf(media) === entry.id) })).filter(
+    (entry) => entry.items.length,
+  );
+  const items = folder ? listed.filter((media) => folderOf(media) === folder) : [];
+  const nothing = folder ? !items.length : !folders.length;
   return (
-    <div className="grid grid-cols-2 gap-2">
-      {uploads.map((upload) => (
-        <UploadTile key={upload.id} upload={upload} />
-      ))}
-      {project.media.map((media, index) => (
-        <motion.div key={media.id} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ ...spring, delay: index * 0.02 }}>
-          <MediaTile media={media} status={statuses[media.id]} projectId={project.id} />
-        </motion.div>
-      ))}
-    </div>
+    <>
+      <div className="grid grid-cols-2 gap-2">
+        {uploads.map((upload) => (
+          <UploadTile key={upload.id} upload={upload} />
+        ))}
+        {folder
+          ? items.map((media, index) => (
+              <motion.div key={media.id} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ ...spring, delay: index * 0.02 }}>
+                <MediaTile media={media} status={statuses[media.id]} projectId={project.id} use={uses.get(media.id)} />
+              </motion.div>
+            ))
+          : folders.map((entry, index) => (
+              <motion.div key={entry.id} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ ...spring, delay: index * 0.03 }}>
+                <FolderTile folder={entry.id} label={entry.label} count={entry.items.length} onOpen={() => open(entry.id)} />
+              </motion.div>
+            ))}
+      </div>
+      {nothing && project.media.length > 0 && (
+        <div className="px-4 py-8 text-center text-[12px] text-muted">
+          {show === "unused" ? "Everything here is in the edit." : show === "used" ? "Nothing here is in the edit yet." : "Empty."}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** A bin folder; media sorts into these by kind. */
+function FolderTile({ folder, label, count, onOpen }: { folder: MediaFolder; label: string; count: number; onOpen: () => void }) {
+  return (
+    <button onClick={onOpen} title={`Open ${label}`} className="group block w-full text-left">
+      <div className="flex aspect-video items-center justify-center rounded-lg bg-raised ring-1 ring-line transition-[box-shadow] group-hover:ring-line-strong">
+        <Folder size={24} strokeWidth={1.6} className={cx("transition-transform duration-150 group-hover:scale-105", FOLDER_TINT[folder])} />
+      </div>
+      <div className="mt-1 flex items-baseline justify-between gap-2 px-0.5 text-[12px] text-muted group-hover:text-fg">
+        <span className="truncate">{label}</span>
+        <span className="shrink-0 font-mono text-[11px] text-faint tabular">{count}</span>
+      </div>
+    </button>
   );
 }
 
@@ -132,7 +250,13 @@ function UploadTile({ upload }: { upload: Upload }) {
   );
 }
 
-function MediaTile({ media, status, projectId }: { media: Media; status?: MediaStatus; projectId: string }) {
+/** How a file is used, for its tooltip. */
+function usage(use: MediaUse | undefined) {
+  if (!use?.clips) return use?.script ? "In the script" : "Not used in the edit";
+  return `In the edit: ${use.clips} clip${use.clips === 1 ? "" : "s"}${use.script ? ", and the script" : ""}`;
+}
+
+function MediaTile({ media, status, projectId, use }: { media: Media; status?: MediaStatus; projectId: string; use?: MediaUse }) {
   const [skim, setSkim] = useState<number | null>(null);
   const edit = useEditor((state) => state.edit);
   const select = useEditor((state) => state.select);
@@ -154,7 +278,7 @@ function MediaTile({ media, status, projectId }: { media: Media; status?: MediaS
         });
         select(ids);
       }}
-      title={`${media.name}\nDouble-click to place at the playhead, or drag onto the timeline`}
+      title={`${media.name}\n${usage(use)}\nDouble-click to place at the playhead, or drag onto the timeline`}
       onContextMenu={(event) => openMenu(event, mediaMenu(media.id))}
       className="group cursor-grab active:cursor-grabbing"
     >
@@ -181,6 +305,12 @@ function MediaTile({ media, status, projectId }: { media: Media; status?: MediaS
           />
         ) : (
           <div className="size-full animate-pulse bg-hover" />
+        )}
+        {isUsed(use) && (
+          <span className="absolute top-1 left-1 flex items-center gap-0.5 rounded bg-black/70 px-1 font-mono text-[10px] text-fg/90 tabular">
+            <Check size={10} strokeWidth={3} className="text-green-300" />
+            {use?.clips || "script"}
+          </span>
         )}
         {skim !== null && thumbs > 0 && <div className="absolute inset-y-0 w-px bg-playhead" style={{ left: `${skim * 100}%` }} />}
         <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1 font-mono text-[10px] text-fg/90 tabular">{shortDuration(media.duration)}</span>

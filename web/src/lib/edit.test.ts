@@ -1,8 +1,23 @@
 import { produce } from "immer";
 import { describe, expect, it } from "vitest";
 
-import { clipEnd, duplicateClips, presetHandles, removeTrack, rippleDelete, sample, segmentSpeed, setDuration, setSpeed, splitAt, validateProject } from "./edit";
-import type { Clip, Keyframe, Project } from "./types";
+import {
+  clipEnd,
+  duplicateClips,
+  folderOf,
+  mediaUses,
+  presetHandles,
+  removeTrack,
+  removeUnusedMedia,
+  rippleDelete,
+  sample,
+  segmentSpeed,
+  setDuration,
+  setSpeed,
+  splitAt,
+  validateProject,
+} from "./edit";
+import type { Clip, Keyframe, Media, Project } from "./types";
 
 const video = (id: string, start: number, duration: number, extra: Partial<Clip> = {}): Clip =>
   ({
@@ -131,5 +146,43 @@ describe("keyframe curves (mirrors edit-core eval tests)", () => {
     const explicit = [key(0, 0, "in_out", { handle_out: out }), key(20, 100, "linear", { handle_in: inn })];
     const preset = [key(0, 0, "in_out"), key(20, 100, "linear")];
     for (const frame of [2, 7, 13, 18]) expect(sample(explicit, frame)).toBeCloseTo(sample(preset, frame)!, 4);
+  });
+});
+
+describe("media bin", () => {
+  const file = (id: string, kind: Media["kind"], path: string): Media => ({
+    id,
+    name: id,
+    path,
+    kind,
+    duration: 10,
+    width: 0,
+    height: 0,
+    fps: 0,
+    has_audio: kind !== "image",
+  });
+
+  it("counts clips and script links as uses, and removes only what nothing plays", () => {
+    const base = project([video("c1", 0, 30), video("c2", 30, 30)]);
+    base.media.push(file("m2", "video", "/b.mp4"), file("m3", "audio", "/c.wav"));
+    base.script = { blocks: [{ kind: "footage", url: "", file: "f", start: 0, end: 1, label: "", media: "m2" }] };
+    const uses = mediaUses(base);
+    expect(uses.get("m1")).toEqual({ clips: 2, script: false });
+    expect(uses.get("m2")).toEqual({ clips: 0, script: true });
+    expect(uses.get("m3")).toEqual({ clips: 0, script: false });
+    let removed = 0;
+    const next = produce(base, (draft) => {
+      removed = removeUnusedMedia(draft);
+    });
+    expect(removed).toBe(1);
+    expect(next.media.map((media) => media.id)).toEqual(["m1", "m2"]);
+    expect(validateProject(next)).toBeNull();
+  });
+
+  it("sorts files into folders by kind, with bundled sounds apart", () => {
+    expect(folderOf(file("a", "video", "/x/a.mov"))).toBe("footage");
+    expect(folderOf(file("b", "audio", "/x/song.mp3"))).toBe("audio");
+    expect(folderOf(file("c", "audio", "/Users/me/.edit/sfx/shutter-1a2b.wav"))).toBe("sfx");
+    expect(folderOf(file("d", "image", "/x/logo.png"))).toBe("images");
   });
 });

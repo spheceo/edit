@@ -106,6 +106,10 @@ pub fn router(app: App) -> Router {
                 .post(crate::broll::map_shot)
                 .layer(DefaultBodyLimit::max(64 << 20)),
         )
+        .route(
+            "/api/maps/{token}/frame/{index}",
+            post(crate::broll::map_frame).layer(DefaultBodyLimit::max(64 << 20)),
+        )
         .route("/api/fs", get(browse))
         .route("/api/ws", get(websocket))
         .route("/fonts/{file}", get(font))

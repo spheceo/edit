@@ -494,10 +494,12 @@ const MAP_PAGE: &str = include_str!("map_page.html");
 /// A map picture and what the page measured, or what went wrong.
 type MapShot = Result<(Vec<u8>, Value), String>;
 
-/// Map pages waiting to be opened, and who is waiting for their picture.
+/// Map pages waiting to be opened, who is waiting for their picture, and
+/// where a moving shot's frames go.
 struct MapJob {
     page: String,
     done: Option<oneshot::Sender<MapShot>>,
+    frames: PathBuf,
 }
 
 fn map_jobs() -> &'static Mutex<HashMap<String, MapJob>> {
@@ -513,8 +515,25 @@ pub async fn map_page(UrlPath(token): UrlPath<String>) -> Response {
     }
 }
 
+/// `POST /api/maps/{token}/frame/{index}`: one frame of a moving shot (image/jpeg).
+pub async fn map_frame(UrlPath((token, index)): UrlPath<(String, u32)>, body: Bytes) -> StatusCode {
+    let Some(dir) = map_jobs()
+        .lock()
+        .unwrap()
+        .get(&token)
+        .map(|job| job.frames.clone())
+    else {
+        return StatusCode::NOT_FOUND;
+    };
+    match std::fs::write(dir.join(format!("frame-{index:05}.jpg")), body) {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// `POST /api/maps/{token}`: the picture (image/png) with what the page measured
-/// (`x-map-info`, JSON), or what went wrong (text).
+/// (`x-map-info`, JSON); for a moving shot, once its frames are in, just what it
+/// measured (application/json); or what went wrong (text).
 pub async fn map_shot(
     UrlPath(token): UrlPath<String>,
     headers: HeaderMap,
@@ -528,23 +547,30 @@ pub async fn map_shot(
     let Some(waiting) = waiting else {
         return StatusCode::NOT_FOUND;
     };
-    let png = headers
+    let kind = headers
         .get(header::CONTENT_TYPE)
-        .is_some_and(|kind| kind.as_bytes().starts_with(b"image/png"));
+        .map(|kind| kind.as_bytes())
+        .unwrap_or_default();
     let info: Value = headers
         .get("x-map-info")
         .and_then(|info| serde_json::from_slice(info.as_bytes()).ok())
         .unwrap_or_default();
-    let _ = waiting.send(if png {
+    let _ = waiting.send(if kind.starts_with(b"image/png") {
         Ok((body.to_vec(), info))
+    } else if kind.starts_with(b"application/json") {
+        Ok((
+            Vec::new(),
+            serde_json::from_slice(&body).unwrap_or_default(),
+        ))
     } else {
         Err(String::from_utf8_lossy(&body).into_owned())
     });
     StatusCode::NO_CONTENT
 }
 
-/// Opens the map page in headless Chrome and waits for its picture.
-async fn render_map(config: &Value, width: u32, height: u32) -> MapShot {
+/// Opens the map page in headless Chrome and waits for its picture (or, for a
+/// moving shot, its frames in `frames`).
+async fn render_map(config: &Value, width: u32, height: u32, frames: &Path) -> MapShot {
     let browser = chrome().ok_or("map views need Google Chrome (or Chromium) installed")?;
     let address = LISTENING.get().ok_or("the server isn't listening yet")?;
     let host = if address.ip().is_unspecified() {
@@ -566,6 +592,7 @@ async fn render_map(config: &Value, width: u32, height: u32) -> MapShot {
         MapJob {
             page,
             done: Some(sender),
+            frames: frames.to_owned(),
         },
     );
     let profile = std::env::temp_dir().join(format!("edit-map-{token}"));
@@ -590,7 +617,10 @@ async fn render_map(config: &Value, width: u32, height: u32) -> MapShot {
         .kill_on_drop(true);
     let answer = match command.spawn() {
         Ok(mut child) => {
-            let answer = tokio::time::timeout(Duration::from_secs(150), receiver).await;
+            // A moving shot waits on tiles for every frame.
+            let count = config["frames"].as_u64().unwrap_or(0);
+            let wait = Duration::from_secs(150 + 2 * count);
+            let answer = tokio::time::timeout(wait, receiver).await;
             let _ = child.kill().await;
             match answer {
                 Ok(Ok(answer)) => answer.map_err(|error| format!("the map didn't render: {error}")),
@@ -606,10 +636,11 @@ async fn render_map(config: &Value, width: u32, height: u32) -> MapShot {
 }
 
 /// A tilted 3D view of `place` (or `lat`/`lon`) from Google's photorealistic
-/// map, the building there in red, as footage in the project. Returns the
-/// media and where it is. The same view again reuses the picture (each new
-/// one is a billed map session).
-pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Value, String> {
+/// map, the building there in red, as footage in the project: by default a
+/// moving shot (the camera circling the building and closing in), or a still.
+/// Returns the media and where the building is. The same view again reuses the
+/// footage (each new one is a billed map session).
+pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value, String> {
     let project: Project = app.store.get(project_id).ok_or("no such project")?.project;
     let place = args["place"].as_str().map(str::to_owned);
     let given = args["lat"].as_f64().zip(args["lon"].as_f64());
@@ -617,7 +648,20 @@ pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Valu
     let pitch = args["pitch"].as_f64().unwrap_or(55.0).clamp(0.0, 80.0);
     let heading = args["heading"].as_f64().unwrap_or(-25.0);
     let mark = args["highlight"].as_bool().unwrap_or(true);
-    let (width, height) = (project.settings.width, project.settings.height);
+    let still = args["still"].as_bool().unwrap_or(false);
+    let seconds = args["seconds"].as_f64().unwrap_or(6.0).clamp(1.0, 20.0);
+    let orbit = args["orbit"].as_f64().unwrap_or(15.0).clamp(-90.0, 90.0);
+    let push = args["push"].as_f64().unwrap_or(0.12).clamp(0.0, 0.6);
+    let (width, height, fps) = (
+        project.settings.width,
+        project.settings.height,
+        project.settings.fps.max(1),
+    );
+    let frames = if still {
+        0
+    } else {
+        (seconds * fps as f64).round() as u32
+    };
     let (lat, lon, found, ring) = tokio::task::spawn_blocking(move || {
         let (lat, lon, found) = match (given, place) {
             (Some((lat, lon)), place) => (
@@ -639,7 +683,7 @@ pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Valu
     })
     .await
     .map_err(|error| error.to_string())??;
-    let config = json!({
+    let mut config = json!({
         "lat": lat, "lon": lon, "range": range, "heading": heading,
         // The page wants the camera's angle below the horizon.
         "pitch": 90.0 - pitch,
@@ -647,27 +691,48 @@ pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Valu
         "width": width, "height": height,
         "relay": crate::transcribe::relay(),
     });
+    if frames > 0 {
+        config["frames"] = json!(frames);
+        config["orbit"] = json!(orbit);
+        config["push"] = json!(push);
+    }
     let dir = app.store.uploads_dir(project_id).join("maps");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let png = dir.join(format!(
-        "map-{}.png",
-        fingerprint(&[&config.to_string(), "google-3d"])
+    let key = fingerprint(&[&config.to_string(), "google-3d"]);
+    let out = dir.join(format!(
+        "map-{key}.{}",
+        if frames > 0 { "mp4" } else { "png" }
     ));
-    // What the page measured is kept beside the picture, for reuse.
-    let measured = png.with_extension("json");
-    let info: Value = if png.is_file() {
+    // What the page measured is kept beside the footage, for reuse.
+    let measured = out.with_extension("json");
+    let info: Value = if out.is_file() {
         std::fs::read(&measured)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
     } else {
-        let (picture, info) = render_map(&config, width, height).await?;
-        std::fs::write(&png, picture).map_err(|error| error.to_string())?;
+        let shots = dir.join(format!("map-{key}.frames"));
+        std::fs::create_dir_all(&shots).map_err(|error| error.to_string())?;
+        let made = async {
+            let (picture, info) = render_map(&config, width, height, &shots).await?;
+            if frames > 0 {
+                let (shots, out) = (shots.clone(), out.clone());
+                tokio::task::spawn_blocking(move || frames_video(&shots, fps, &out))
+                    .await
+                    .map_err(|error| error.to_string())??;
+            } else {
+                std::fs::write(&out, picture).map_err(|error| error.to_string())?;
+            }
+            Ok::<_, String>(info)
+        }
+        .await;
+        let _ = std::fs::remove_dir_all(&shots);
+        let info = made?;
         let _ = std::fs::write(&measured, info.to_string());
         info
     };
     // The building's box in timeline coordinates (pixels from the frame's centre, y down).
-    let building = info["building"].as_array().and_then(|bounds| {
+    let place_box = |bounds: &Value| {
         let [left, top, right, bottom] =
             [0, 1, 2, 3].map(|i| bounds.get(i).and_then(Value::as_f64));
         let (half_w, half_h) = (width as f64 / 2.0, height as f64 / 2.0);
@@ -678,25 +743,90 @@ pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Valu
             "left": (left? - half_w).round(),
             "right": (right? - half_w).round(),
         }))
-    });
+    };
+    let track: Vec<Value> = info["track"]
+        .as_array()
+        .map(|track| {
+            // Every half second, and the last frame.
+            let step = (fps as usize / 2).max(1);
+            let last = track.len().saturating_sub(1);
+            track
+                .iter()
+                .enumerate()
+                .filter(|(frame, _)| frame % step == 0 || *frame == last)
+                .filter_map(|(frame, bounds)| {
+                    let mut at = place_box(bounds)?;
+                    at["frame"] = json!(frame);
+                    Some(at)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let building = track
+        .first()
+        .cloned()
+        .or_else(|| place_box(&info["building"]));
     let (_, added, errors) = crate::server::import_paths(
         app,
         project_id,
-        vec![png.to_string_lossy().into_owned()],
+        vec![out.to_string_lossy().into_owned()],
         false,
         "agent",
     )
     .await?;
     let media = added.first().cloned().ok_or_else(|| errors.join("; "))?;
+    let note = if frames > 0 {
+        "A moving shot (frames/fps seconds): the camera circles the building and closes in at a constant speed by itself, so place it as a video clip at scale 1 from source_in 0 with no scale keyframes. `building` is where the marked building sits on the first frame and `building_track` where it is every half second (frame = frames into the footage), in timeline transform coordinates: keyframe a label's x and y at those frames (ease linear) to keep it pinned. Google's logo and data credits sit in the bottom corners and stay there; keep them visible."
+    } else {
+        "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. `building` is where the marked building sits in the frame (timeline transform coordinates at scale 1; a push-in to s moves a point p to p*s). It carries Google's logo and data credits (bottom corners); keep them visible."
+    };
     Ok(json!({
         "media": media,
         "place": found,
         "lat": lat,
         "lon": lon,
+        "frames": frames,
+        "fps": fps,
         "building_outlined": ring.is_some(),
         "building": building,
-        "note": "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. `building` is where the marked building sits in the frame (timeline transform coordinates at scale 1; a push-in to s moves a point p to p*s). It carries Google's logo and data credits (bottom corners); keep them visible.",
+        "building_track": track,
+        "note": note,
     }))
+}
+
+/// A moving map shot's frames (`frame-00000.jpg`…) as footage at `fps`.
+fn frames_video(frames: &Path, fps: u32, out: &Path) -> Result<(), String> {
+    let partial = out.with_extension("partial.mp4");
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-framerate"])
+        .arg(fps.to_string())
+        .arg("-i")
+        .arg(frames.join("frame-%05d.jpg"))
+        .args([
+            "-vf",
+            "format=yuv420p",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "14",
+            "-an",
+            "-movflags",
+            "+faststart",
+        ])
+        .arg(&partial)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!(
+            "couldn't make the map footage: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    std::fs::rename(&partial, out).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

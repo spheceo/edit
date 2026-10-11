@@ -58,7 +58,7 @@ export function toggleMenu(button: Element, items: MenuItem[], options: { width?
   openMenu({ clientX: box.right - width, clientY: box.bottom + 4, preventDefault: () => {} }, items, { width, owner: button });
 }
 
-export const closeMenu = () => useMenu.setState({ menu: null });
+const closeMenu = () => useMenu.setState({ menu: null });
 
 const isAction = (item: MenuItem): item is Extract<MenuItem, { label: string }> => "label" in item;
 

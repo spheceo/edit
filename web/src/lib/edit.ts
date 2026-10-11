@@ -42,7 +42,7 @@ export function addTrack(project: Project, kind: TrackKind) {
 }
 
 /** The subtitles' track, made on top of every video track if there isn't one (as edit-core subtitles_track). */
-export function subtitlesTrack(project: Project) {
+function subtitlesTrack(project: Project) {
   const existing = project.tracks.find((track) => track.subtitles);
   if (existing) return existing.id;
   const id = freshId(project, "v");
@@ -61,7 +61,7 @@ export function peekFreeTrack(project: Project, kind: TrackKind, start: number, 
 }
 
 /** Lowest free track of `kind`; graphics skip V1 so they land above footage. Adds a track if needed. */
-export function freeTrack(project: Project, kind: TrackKind, start: number, end: number, aboveFootage = false) {
+function freeTrack(project: Project, kind: TrackKind, start: number, end: number, aboveFootage = false) {
   return peekFreeTrack(project, kind, start, end, aboveFootage) ?? addTrack(project, kind);
 }
 
@@ -96,7 +96,7 @@ export function maxDuration(project: Project, clip: Clip) {
 }
 
 /** Splits `clip` at absolute `frame`; returns the new right-hand clip. */
-export function splitClip(project: Project, clip: Clip, frame: number, link?: string): Clip | null {
+function splitClip(project: Project, clip: Clip, frame: number, link?: string): Clip | null {
   if (frame <= clip.start || frame >= clipEnd(clip)) return null;
   const offset = frame - clip.start;
   const right = copyClip(clip);
@@ -240,7 +240,7 @@ export const ELEMENT_SECONDS: Record<Element, number> = {
 };
 
 /** The cut-in card's words: sized so long narration still fits (edit script.rs `cut_in_style`). */
-export function cutInStyle(width: number, height: number, text: string): TextStyle {
+function cutInStyle(width: number, height: number, text: string): TextStyle {
   const k = height / 1080;
   const maxWidth = width * 0.62;
   const fit = Math.sqrt((0.75 * height * maxWidth) / Math.max(1, [...text].length));
@@ -503,7 +503,7 @@ const params: Record<string, [Getter, Setter]> = {
 };
 
 /** Mirrors edit-core::animatable_params. */
-export function animatableParams(clip: Clip): string[] {
+function animatableParams(clip: Clip): string[] {
   switch (clip.type) {
     case "video": return ["x", "y", "scale", "rotation", "shake", "opacity"];
     case "text": return ["x", "y", "scale", "rotation", "shake", "opacity", "size", "tracking", "glow.radius", "glow.strength"];
@@ -727,7 +727,7 @@ export function linkClips(project: Project, ids: Iterable<string>) {
 }
 
 /** Frames from the clip's start to the next clip on its track (Infinity when it's the last). */
-export function roomAfter(project: Project, clip: Clip) {
+function roomAfter(project: Project, clip: Clip) {
   const next = project.clips
     .filter((other) => other.track === clip.track && other.id !== clip.id && other.start >= clip.start)
     .reduce((nearest, other) => Math.min(nearest, other.start), Number.POSITIVE_INFINITY);

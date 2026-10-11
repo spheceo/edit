@@ -95,13 +95,6 @@ impl Default for ShakeOffset {
     }
 }
 
-/// A video source the preview must have decoded before drawing a frame.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SourceRequest {
-    pub media: String,
-    pub source_time: f64,
-}
-
 pub fn evaluate(project: &Project, frame: i64) -> Scene {
     let fps = project.fps();
     let mut layers = Vec::new();
@@ -257,20 +250,6 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
         height: project.settings.height,
         layers,
     }
-}
-
-/// Video frames the scene at `frame` needs, one per visible video layer.
-pub fn sources_at(project: &Project, frame: i64) -> Vec<SourceRequest> {
-    evaluate(project, frame)
-        .layers
-        .into_iter()
-        .filter_map(|layer| match layer {
-            Layer::Video {
-                media, source_time, ..
-            } => Some(SourceRequest { media, source_time }),
-            _ => None,
-        })
-        .collect()
 }
 
 /// The text up to the last word that has appeared by `local` (frames into the

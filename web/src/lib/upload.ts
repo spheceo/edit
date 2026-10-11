@@ -7,7 +7,7 @@ import { placeMedia } from "./edit";
 import { clientId, useEditor } from "./store";
 import type { Project } from "./types";
 
-export const MEDIA_FILE = /\.(mp4|mov|m4v|mkv|webm|avi|mts|mxf|wav|mp3|m4a|aac|flac|aif|aiff|ogg|opus)$/i;
+const MEDIA_FILE = /\.(mp4|mov|m4v|mkv|webm|avi|mts|mxf|wav|mp3|m4a|aac|flac|aif|aiff|ogg|opus)$/i;
 
 export interface Upload {
   id: number;

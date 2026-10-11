@@ -211,12 +211,6 @@ impl Engine {
         self.lost.load(Ordering::Acquire)
     }
 
-    /// Drops the GPU device the way the browser can, to test recovery.
-    #[wasm_bindgen(js_name = loseDevice)]
-    pub fn lose_device(&self) {
-        self.renderer.device().destroy();
-    }
-
     /// Canvas backing-store size changed.
     pub fn resize(&mut self, width: u32, height: u32) {
         let (width, height) = (width.max(1), height.max(1));

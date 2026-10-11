@@ -166,14 +166,32 @@ pub async fn transcript(app: &App, media: &Media) -> Result<crate::transcribe::T
 }
 
 /// What's said in a media file between `from` and `to` (its own seconds), as
-/// phrases with their times and who says them.
+/// phrases with their times and who says them, or word by word (`words`) for
+/// timing something to an exact word.
 pub async fn media_transcript(
     app: &App,
     media: &Media,
     from: f64,
     to: f64,
+    words: bool,
 ) -> Result<String, String> {
     let transcript = transcript(app, media).await?;
+    if words {
+        let lines: Vec<String> = transcript
+            .words
+            .iter()
+            .filter(|word| word.start >= from && word.start < to)
+            .map(|word| format!("{:.2}–{:.2} {}", word.start, word.end, word.text))
+            .collect();
+        return Ok(if lines.is_empty() {
+            format!(
+                "nothing is said in {} between {from:.1}s and {to:.1}s",
+                media.name
+            )
+        } else {
+            lines.join("\n")
+        });
+    }
     let mut out = String::new();
     let mut phrase: Option<(f64, Option<String>, String, f64)> = None;
     let flush = |out: &mut String, phrase: &mut Option<(f64, Option<String>, String, f64)>| {

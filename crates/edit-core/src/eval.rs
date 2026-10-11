@@ -356,12 +356,13 @@ pub fn shake_offset(
             // cut. Measured mid-frame, so the frames either side mirror each other.
             let half = time.length.max(1e-3) / 2.0;
             let at = |local: f32| (local + time.frame / 2.0) / half;
-            let (now, then) = (at(time.local), at(time.local - back));
+            let now = at(time.local);
             let p = if now < 1.0 {
-                then.clamp(0.0, 1.0).powi(3)
+                at(time.local - back).clamp(0.0, 1.0).powi(3)
             } else {
-                // Its blur stays on its own side of the cut.
-                -(2.0 - then.clamp(1.0, 2.0)).powi(3)
+                // The old shot's blur mirrored: it smears toward where the
+                // picture settles, so the new shot comes clean as it lands.
+                -(2.0 - at(time.local + back).clamp(1.0, 2.0)).powi(3)
             };
             return (
                 amount * p * along_x,
@@ -930,9 +931,13 @@ mod tests {
             let shaken = whip(index);
             assert_eq!((shaken.x, shaken.from_x), (0.0, 0.0));
             assert!(shaken.mirror && shaken.zoom == 1.0);
-            assert!(shaken.y > shaken.from_y, "blurred along the drop");
-            // The new shot settles the way the old one fell away.
-            assert!((shaken.y + whip(5 - index).y).abs() < 1e-3);
+            // The new shot settles the way the old one fell away, blur and all.
+            let mirror = whip(5 - index);
+            assert!((shaken.y + mirror.y).abs() < 1e-3);
+            assert!((shaken.from_y + mirror.from_y).abs() < 1e-3);
+            if index < 3 {
+                assert!(shaken.y >= shaken.from_y, "blurred along the drop");
+            }
             if (1..3).contains(&index) {
                 let step = shaken.y - whip(index - 1).y;
                 assert!(step > last_step, "only down, accelerating into the cut");
@@ -944,7 +949,7 @@ mod tests {
         assert!(before.y > vertical.amount * 0.5, "far down at the cut");
         assert!(whip(5).y.abs() < 5.0, "at rest by the end");
         assert!(
-            before.y - before.from_y > 100.0 && after.y - after.from_y > 100.0,
+            before.y - before.from_y > 100.0 && after.from_y - after.y > 100.0,
             "a heavy streak either side of the cut: {}",
             before.y - before.from_y
         );

@@ -603,7 +603,11 @@ impl Renderer {
                         // worked out exactly in the shader (a Gaussian-blurred box).
                         if let Some(shadow) = style.shadow {
                             let angle = shadow.angle.to_radians();
-                            let sigma = (shadow.blur * scale / 2.0).max(0.01);
+                            // The same falloff as the old stack of copies, which faded
+                            // linearly over 2 * blur: a Gaussian of equal slope.
+                            let sigma = (2.0 * shadow.blur * scale
+                                / (2.0 * std::f32::consts::PI).sqrt())
+                            .max(0.01);
                             // The quad reaches 3 sigma past the shape, where it's gone.
                             let reach =
                                 shadow.size * scale + background.border * scale + 3.0 * sigma;

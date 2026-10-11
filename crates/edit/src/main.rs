@@ -1,4 +1,5 @@
 mod agent;
+mod broll;
 mod captions;
 mod export;
 mod mcp;

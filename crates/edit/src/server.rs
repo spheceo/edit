@@ -534,10 +534,34 @@ pub async fn import_paths(
 ) -> Result<(u64, Vec<String>, Vec<String>), String> {
     let mut probed = Vec::new();
     let mut errors = Vec::new();
+    let mut names: std::collections::HashMap<PathBuf, String> = Default::default();
     for path in paths {
         let path = PathBuf::from(&path);
         let path = match path.canonicalize() {
             Ok(path) if path.is_file() && media::is_media_path(&path) => path,
+            // A still becomes 30 s of footage (it then plays, scales and exports like any clip).
+            Ok(path) if path.is_file() && crate::broll::is_image_path(&path) => {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned());
+                let dir = app.store.uploads_dir(id).join("stills");
+                let image = path.clone();
+                match tokio::task::spawn_blocking(move || crate::broll::still_video(&image, &dir))
+                    .await
+                    .unwrap_or_else(|error| Err(error.to_string()))
+                {
+                    Ok(video) => {
+                        if let Some(name) = name {
+                            names.insert(video.clone(), name);
+                        }
+                        video
+                    }
+                    Err(error) => {
+                        errors.push(error);
+                        continue;
+                    }
+                }
+            }
             _ => {
                 errors.push(format!(
                     "{} is not a supported local media file",
@@ -567,10 +591,12 @@ pub async fn import_paths(
                     let media_id = project.fresh_id("m");
                     project.media.push(edit_core::Media {
                         id: media_id.clone(),
-                        name: path.file_name().map_or_else(
-                            || path_text.clone(),
-                            |name| name.to_string_lossy().to_string(),
-                        ),
+                        name: names.get(path).cloned().unwrap_or_else(|| {
+                            path.file_name().map_or_else(
+                                || path_text.clone(),
+                                |name| name.to_string_lossy().to_string(),
+                            )
+                        }),
                         path: path_text.clone(),
                         kind: probe.kind,
                         duration: probe.duration,

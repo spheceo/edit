@@ -175,7 +175,7 @@ impl Drop for VideoReader {
 
 /// Decodes the single source frame nearest `time` (as the export's fps filter
 /// and the browser preview pick it) without keeping a process around.
-fn grab_frame(
+pub(crate) fn grab_frame(
     media: &Media,
     time: f64,
     width: u32,

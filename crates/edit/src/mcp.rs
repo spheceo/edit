@@ -48,6 +48,10 @@ House editing style (videos cut from a script of police footage):
   - B-roll over cuts: while someone keeps talking, lay a different shot (another moment of the footage, the scene, the other person reacting) on a video track above for 1–3 s as picture only; the sound underneath carries on. Prefer moments the transcript or the Doc's notes point to.
   - Quick white flashes or dips on hard scene changes, sparingly.
 - CUT-INS (the black narration cards) may carry stylised text and graphics.
+- B-ROLL IN CUT-INS: a cut-in's voice-over is covered by B-roll that shows what it says, never generic footage. Read the narration, then find the moments that back it up in the source footage (media_transcript to find who says what where; look_at_media to see it): someone confused when the words say they had no idea, the wreck or a shocked witness when they say a devastating crash. Short cut-ins (under ~10 s) get two shots, longer ones more, each a few seconds, butted end to end and filling the cut-in from its first frame to its last, on a video track above the card. Each shot is picture only, slowed (speed about 0.5) and then made smooth with smooth_slow_motion, with a slow push-in (scale keyframes from 1 to about 1.08 across the shot, ease in_out). The vertical drop into the cut-in still applies.
+- THE DATE CUT-IN (the "On <date>…" cut-in that opens the story) opens on where it happened: map_still of the place the narration names (the department, the station or the street; add the city and state), full frame under everything with a slow push-in, then the cut-in's other B-roll. Over the map: the place's name in white (Geist 600, size ~44 at 1080p, glow off) on a black background box, near the top middle; the state (or city) in red text (Geist 600, ~48, color [1,0.1,0.1,1], glow off) in the lower middle; the date top-left in white with the house glow (Geist 600, ~52, two lines like "July 13th,\n2024", left of centre at about x -0.38*width, y -0.38*height). All three fade in (preset fade).
+- GENERATED STILLS: when no footage shows a moment the narration describes (the victim frozen at the scene, a car seconds before the crash), you can generate one with your image generation: black and white, a simple untextured 3D render like a Blender clay scene, figures and objects stopped in time, 16:9, no text. Save it, import it with import_media (a still imports as 30 s of footage), use a couple of seconds of it with a slow push-in. Describe what you generated so the user can ask for another take.
+- CALLS WITHOUT PICTURE in the story (a 911 call, a voicemail): cover them with B-roll that moves slowly (a push-in), the glowing waveform and its dark vignette on top (see PHONE CALLS), and subtitles as everywhere after the intro.
 - VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Leave the cut-in cards and their words in place unless the user asks to remove them.
 - PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
@@ -214,6 +218,46 @@ fn tools() -> Vec<Value> {
             "Import media files by absolute path. place=true also appends them to the end of the timeline.",
             json!({ "paths": { "type": "array", "items": { "type": "string" } }, "place": { "type": "boolean" } }),
             &["paths"],
+        ),
+        tool(
+            "look_at_media",
+            "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. For finding B-roll moments that show what a cut-in says.",
+            json!({
+                "media_id": { "type": "string" },
+                "start": { "type": "number" }, "end": { "type": "number" },
+                "count": { "type": "integer", "description": "Frames, max 24 (default 12)." },
+                "columns": { "type": "integer", "description": "Default 4." }
+            }),
+            &["media_id", "start", "end"],
+        ),
+        tool(
+            "media_transcript",
+            "What's said in a media file (its own seconds, the whole source), as phrases with times and speakers; transcribes it first if needed. For finding moments to use as B-roll (someone confused, a witness reacting).",
+            json!({
+                "media_id": { "type": "string" },
+                "start": { "type": "number", "description": "Default 0." },
+                "end": { "type": "number", "description": "Default the end of the file." }
+            }),
+            &["media_id"],
+        ),
+        tool(
+            "smooth_slow_motion",
+            "Make a slowed video clip (speed below 1) play smoothly: the stretch of its media is rendered at that speed with new frames made between the real ones (motion interpolation, like After Effects' pixel-motion frame blending), and the clip then plays that at 1×. Timing is unchanged. Set the clip's speed and trim first; run again after changing them. Takes a while (it renders).",
+            json!({ "clip_id": { "type": "string" } }),
+            &["clip_id"],
+        ),
+        tool(
+            "map_still",
+            "A tilted 3D map view of a place (satellite imagery with the buildings raised, the building at the place marked in glowing red), made free from OpenStreetMap data, imported as footage (30 s of the still). Give the place as an address or name (\"Kent Police Department, Kent, Washington\") or lat/lon. Returns the media id and the place it found.",
+            json!({
+                "place": { "type": "string" },
+                "lat": { "type": "number" }, "lon": { "type": "number" },
+                "zoom": { "type": "number", "description": "17 (wide) to 19 (close); default 18.2." },
+                "pitch": { "type": "number", "description": "Tilt in degrees; default 60." },
+                "bearing": { "type": "number", "description": "Compass turn in degrees; default -25." },
+                "highlight": { "type": "boolean", "description": "Mark the building in red (default true)." }
+            }),
+            &[],
         ),
         tool(
             "add_sound_effect",
@@ -677,6 +721,58 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             } else {
                 serde_json::to_string_pretty(&changed).unwrap_or_default()
             }))
+        }
+        "look_at_media" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let media_id = args["media_id"].as_str().ok_or("media_id is required")?;
+            let media = live
+                .project
+                .media(media_id)
+                .ok_or_else(|| format!("no media {media_id}"))?
+                .clone();
+            let start = args["start"].as_f64().unwrap_or(0.0).max(0.0);
+            let end = args["end"].as_f64().unwrap_or(media.duration);
+            let count = args["count"].as_u64().unwrap_or(12).clamp(1, 24) as usize;
+            let columns = args["columns"].as_u64().unwrap_or(4).clamp(1, 8) as u32;
+            let (images, times) = tokio::task::spawn_blocking(move || {
+                crate::broll::media_frames(&media, start, end, count)
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            let png = encode_png(&tile(&images, columns))?;
+            let times: Vec<String> = times.iter().map(|time| format!("{time:.2}s")).collect();
+            Ok(image(
+                &png,
+                format!(
+                    "{media_id}: {} frames, left-to-right then down, at {}",
+                    times.len(),
+                    times.join(", ")
+                ),
+            ))
+        }
+        "media_transcript" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let media_id = args["media_id"].as_str().ok_or("media_id is required")?;
+            let media = live
+                .project
+                .media(media_id)
+                .ok_or_else(|| format!("no media {media_id}"))?;
+            let from = args["start"].as_f64().unwrap_or(0.0);
+            let to = args["end"].as_f64().unwrap_or(f64::MAX);
+            Ok(text(
+                crate::broll::media_transcript(app, media, from, to).await?,
+            ))
+        }
+        "smooth_slow_motion" => {
+            let clip = args["clip_id"].as_str().ok_or("clip_id is required")?;
+            let done = crate::broll::smooth_slow_motion(app, &id, clip).await?;
+            Ok(text(done.to_string()))
+        }
+        "map_still" => {
+            let done = crate::broll::map_still(app, &id, args).await?;
+            Ok(text(
+                serde_json::to_string_pretty(&done).unwrap_or_default(),
+            ))
         }
         "place_voiceovers" => {
             let media: Option<Vec<String>> = args

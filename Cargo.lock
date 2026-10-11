@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "edit"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "axum",
  "base64",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "edit-core"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "edit-render"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "bytemuck",
  "edit-core",
@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "edit-wasm"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "console_error_panic_hook",
  "edit-core",

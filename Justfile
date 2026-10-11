@@ -24,29 +24,39 @@ serve: web
 release: web
     cargo build -p edit --release
 
-# Bump [workspace.package] version and commit first. Builds on this Mac (Apple
-# Silicon is the only target); installs pick the release up through the relay.
-# Ship the Cargo.toml version: check, build, tag, upload to GitHub Releases
+# Releases go up a patch at a time (v0.0.1, v0.0.2, …). Builds on this Mac
+# (Apple Silicon is the only target); installs pick it up through the relay.
+# Ship the next patch version: check, bump, build, tag, upload to GitHub Releases
 publish: check web
     #!/usr/bin/env bash
     set -euo pipefail
     [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ] || { echo "publish from an Apple Silicon Mac"; exit 1; }
     [ -z "$(git status --porcelain)" ] || { echo "commit your changes first"; exit 1; }
-    version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+    current="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+    IFS=. read -r major minor patch <<<"$current"
+    version="$major.$minor.$((patch + 1))"
     tag="v$version"
     if git rev-parse -q --verify "refs/tags/$tag" >/dev/null || gh release view "$tag" >/dev/null 2>&1; then
-        echo "$tag already exists; bump the version in Cargo.toml"
+        echo "$tag already exists"
         exit 1
     fi
+    # Put the version back if anything fails before the release commit.
+    trap 'git checkout -- Cargo.toml Cargo.lock web/package.json' ERR
+    sed -i '' "s/^version = \"$current\"/version = \"$version\"/" Cargo.toml
+    sed -i '' "s/\"version\": \"$current\"/\"version\": \"$version\"/" web/package.json
+    cargo update --workspace -q
     # EDIT_RELEASE turns on self-update (crates/edit/src/update.rs).
     EDIT_RELEASE=1 cargo build -p edit --release --locked
+    [ "$(target/release/edit --version)" = "edit $version" ] || { echo "built the wrong version"; false; }
     out="target/publish"
     name="edit-aarch64-apple-darwin.tar.gz"
     rm -rf "$out" && mkdir -p "$out"
     tar -czf "$out/$name" -C target/release edit
     (cd "$out" && shasum -a 256 "$name" > "$name.sha256")
-    git push origin HEAD
-    git tag "$tag" && git push origin "$tag"
+    git commit -q -m "Release $tag" Cargo.toml Cargo.lock web/package.json
+    trap - ERR
+    git tag "$tag"
+    git push origin HEAD "$tag"
     # Draft until the upload is done, so updaters never see a half-uploaded release.
     gh release create "$tag" --draft --title "Edit $tag" --generate-notes "$out/$name" "$out/$name.sha256"
     gh release edit "$tag" --draft=false --latest

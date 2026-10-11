@@ -120,6 +120,9 @@ export interface TextBox {
   opacity: number;
   pad_x: number;
   pad_y: number;
+  /** A line around the box, outside it (0 or absent = none). */
+  border?: number;
+  border_color?: Rgba;
 }
 
 /** Premiere-style drop shadow: angle in degrees clockwise from up. */

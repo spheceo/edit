@@ -495,6 +495,11 @@ pub struct TextBox {
     pub pad_x: f32,
     #[serde(default = "default_pad_y")]
     pub pad_y: f32,
+    /// A line around the box, outside it (project pixels; 0 = none).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub border: f32,
+    #[serde(default = "white")]
+    pub border_color: Rgba,
 }
 
 fn black() -> Rgba {
@@ -520,11 +525,14 @@ impl Default for TextBox {
             opacity: default_box_opacity(),
             pad_x: default_pad_x(),
             pad_y: default_pad_y(),
+            border: 0.0,
+            border_color: Rgba::WHITE,
         }
     }
 }
 
 /// Drop shadow as Premiere/Repack describe it (project pixels, degrees clockwise from up).
+/// Text in a box: the box casts it.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub struct TextShadow {
     #[serde(default = "black")]
@@ -1430,7 +1438,14 @@ fn content_finite(content: &ClipContent) -> bool {
                 && finite(word_times)
                 && style.background.is_none_or(|background| {
                     finite(&background.color.0)
-                        && finite(&[background.opacity, background.pad_x, background.pad_y])
+                        && finite(&background.border_color.0)
+                        && finite(&[
+                            background.opacity,
+                            background.pad_x,
+                            background.pad_y,
+                            background.border,
+                        ])
+                        && background.border >= 0.0
                 })
                 && style.shadow.is_none_or(|shadow| {
                     finite(&shadow.color.0)

@@ -491,10 +491,13 @@ pub static LISTENING: OnceLock<SocketAddr> = OnceLock::new();
 /// posts the picture back to its own address.
 const MAP_PAGE: &str = include_str!("map_page.html");
 
+/// A map picture and what the page measured, or what went wrong.
+type MapShot = Result<(Vec<u8>, Value), String>;
+
 /// Map pages waiting to be opened, and who is waiting for their picture.
 struct MapJob {
     page: String,
-    done: Option<oneshot::Sender<Result<Vec<u8>, String>>>,
+    done: Option<oneshot::Sender<MapShot>>,
 }
 
 fn map_jobs() -> &'static Mutex<HashMap<String, MapJob>> {
@@ -510,7 +513,8 @@ pub async fn map_page(UrlPath(token): UrlPath<String>) -> Response {
     }
 }
 
-/// `POST /api/maps/{token}`: the picture (image/png), or what went wrong (text).
+/// `POST /api/maps/{token}`: the picture (image/png) with what the page measured
+/// (`x-map-info`, JSON), or what went wrong (text).
 pub async fn map_shot(
     UrlPath(token): UrlPath<String>,
     headers: HeaderMap,
@@ -527,15 +531,12 @@ pub async fn map_shot(
     let png = headers
         .get(header::CONTENT_TYPE)
         .is_some_and(|kind| kind.as_bytes().starts_with(b"image/png"));
-    eprintln!(
-        "edit: map {token}: {}",
-        headers
-            .get("x-map-info")
-            .and_then(|info| info.to_str().ok())
-            .unwrap_or("")
-    );
+    let info: Value = headers
+        .get("x-map-info")
+        .and_then(|info| serde_json::from_slice(info.as_bytes()).ok())
+        .unwrap_or_default();
     let _ = waiting.send(if png {
-        Ok(body.to_vec())
+        Ok((body.to_vec(), info))
     } else {
         Err(String::from_utf8_lossy(&body).into_owned())
     });
@@ -543,7 +544,7 @@ pub async fn map_shot(
 }
 
 /// Opens the map page in headless Chrome and waits for its picture.
-async fn render_map(config: &Value, width: u32, height: u32) -> Result<Vec<u8>, String> {
+async fn render_map(config: &Value, width: u32, height: u32) -> MapShot {
     let browser = chrome().ok_or("map views need Google Chrome (or Chromium) installed")?;
     let address = LISTENING.get().ok_or("the server isn't listening yet")?;
     let host = if address.ip().is_unspecified() {
@@ -612,7 +613,7 @@ pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Valu
     let project: Project = app.store.get(project_id).ok_or("no such project")?.project;
     let place = args["place"].as_str().map(str::to_owned);
     let given = args["lat"].as_f64().zip(args["lon"].as_f64());
-    let range = args["range"].as_f64().unwrap_or(330.0).clamp(60.0, 3000.0);
+    let range = args["range"].as_f64().unwrap_or(170.0).clamp(60.0, 3000.0);
     let pitch = args["pitch"].as_f64().unwrap_or(55.0).clamp(0.0, 80.0);
     let heading = args["heading"].as_f64().unwrap_or(-25.0);
     let mark = args["highlight"].as_bool().unwrap_or(true);
@@ -652,10 +653,32 @@ pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Valu
         "map-{}.png",
         fingerprint(&[&config.to_string(), "google-3d"])
     ));
-    if !png.is_file() {
-        let picture = render_map(&config, width, height).await?;
+    // What the page measured is kept beside the picture, for reuse.
+    let measured = png.with_extension("json");
+    let info: Value = if png.is_file() {
+        std::fs::read(&measured)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    } else {
+        let (picture, info) = render_map(&config, width, height).await?;
         std::fs::write(&png, picture).map_err(|error| error.to_string())?;
-    }
+        let _ = std::fs::write(&measured, info.to_string());
+        info
+    };
+    // The building's box in timeline coordinates (pixels from the frame's centre, y down).
+    let building = info["building"].as_array().and_then(|bounds| {
+        let [left, top, right, bottom] =
+            [0, 1, 2, 3].map(|i| bounds.get(i).and_then(Value::as_f64));
+        let (half_w, half_h) = (width as f64 / 2.0, height as f64 / 2.0);
+        Some(json!({
+            "x": ((left? + right?) / 2.0 - half_w).round(),
+            "top": (top? - half_h).round(),
+            "bottom": (bottom? - half_h).round(),
+            "left": (left? - half_w).round(),
+            "right": (right? - half_w).round(),
+        }))
+    });
     let (_, added, errors) = crate::server::import_paths(
         app,
         project_id,
@@ -671,7 +694,8 @@ pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Valu
         "lat": lat,
         "lon": lon,
         "building_outlined": ring.is_some(),
-        "note": "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. It carries Google's logo and data credits (bottom corners); keep them visible.",
+        "building": building,
+        "note": "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. `building` is where the marked building sits in the frame (timeline transform coordinates at scale 1; a push-in to s moves a point p to p*s). It carries Google's logo and data credits (bottom corners); keep them visible.",
     }))
 }
 

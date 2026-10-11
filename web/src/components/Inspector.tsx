@@ -357,6 +357,20 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                     (live, value) => live.type === "text" && live.style.background && (live.style.background.pad_y = value),
                     { min: 0, suffix: "px" },
                   )}
+                  {field(
+                    "Border",
+                    clip.style.background.border ?? 0,
+                    (live, value) => live.type === "text" && live.style.background && (live.style.background.border = value),
+                    { min: 0, suffix: "px" },
+                  )}
+                  {(clip.style.background.border ?? 0) > 0 && (
+                    <Row label="Border color">
+                      <ColorField
+                        value={clip.style.background.border_color ?? [1, 1, 1, 1]}
+                        onChange={(color) => once((live) => live.type === "text" && live.style.background && (live.style.background.border_color = color))}
+                      />
+                    </Row>
+                  )}
                 </>
               )}
             </Section>

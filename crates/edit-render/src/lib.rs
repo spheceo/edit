@@ -594,6 +594,51 @@ impl Renderer {
                             slot.block[0] + 2.0 * background.pad_x * scale,
                             slot.block[1] + 2.0 * background.pad_y * scale,
                         ];
+                        // A shadow, cast by the box (the text's own would be hidden
+                        // behind it): stacked, widening copies make the soft edge.
+                        if let Some(shadow) = style.shadow {
+                            const STEPS: usize = 10;
+                            let angle = shadow.angle.to_radians();
+                            let border = background.border * scale;
+                            let mut tint = shadow.color.0;
+                            tint[3] *= shadow.opacity / STEPS as f32;
+                            let group = self.bind(&self.blank.view);
+                            for step in 0..STEPS {
+                                let spread = shadow.size * scale + border - shadow.blur * scale
+                                    + 2.0 * shadow.blur * scale * step as f32 / (STEPS - 1) as f32;
+                                let moved = Transform {
+                                    x: placed.x + shadow.distance * scale * angle.sin(),
+                                    y: placed.y - shadow.distance * scale * angle.cos(),
+                                    ..placed
+                                };
+                                let grown = [
+                                    (size[0] + 2.0 * spread).max(0.0),
+                                    (size[1] + 2.0 * spread).max(0.0),
+                                ];
+                                let uniforms = quad_uniforms(
+                                    &moved,
+                                    grown,
+                                    half_canvas,
+                                    *opacity,
+                                    tint,
+                                    MODE_SOLID,
+                                );
+                                let offset = slots.push(
+                                    &self.queue,
+                                    &self.uniforms,
+                                    bytemuck::bytes_of(&uniforms),
+                                );
+                                draw(
+                                    &mut encoder,
+                                    &self.over_pipeline,
+                                    &self.accum[current].view,
+                                    &group,
+                                    offset,
+                                    4,
+                                    None,
+                                );
+                            }
+                        }
                         let mut tint = background.color.0;
                         tint[3] *= background.opacity;
                         let uniforms =
@@ -610,6 +655,47 @@ impl Renderer {
                             4,
                             None,
                         );
+                        // Its border: four strips just outside it, turned with it.
+                        if background.border > 0.0 {
+                            let line = background.border * scale;
+                            let [w, h] = size;
+                            let (sin, cos) = transform.rotation.to_radians().sin_cos();
+                            let strips = [
+                                ([w + 2.0 * line, line], [0.0, -(h + line) / 2.0]),
+                                ([w + 2.0 * line, line], [0.0, (h + line) / 2.0]),
+                                ([line, h], [-(w + line) / 2.0, 0.0]),
+                                ([line, h], [(w + line) / 2.0, 0.0]),
+                            ];
+                            for (strip, [dx, dy]) in strips {
+                                let edge = Transform {
+                                    x: placed.x + dx * cos - dy * sin,
+                                    y: placed.y + dx * sin + dy * cos,
+                                    ..placed
+                                };
+                                let uniforms = quad_uniforms(
+                                    &edge,
+                                    strip,
+                                    half_canvas,
+                                    *opacity,
+                                    background.border_color.0,
+                                    MODE_SOLID,
+                                );
+                                let offset = slots.push(
+                                    &self.queue,
+                                    &self.uniforms,
+                                    bytemuck::bytes_of(&uniforms),
+                                );
+                                draw(
+                                    &mut encoder,
+                                    &self.over_pipeline,
+                                    &self.accum[current].view,
+                                    &group,
+                                    offset,
+                                    4,
+                                    None,
+                                );
+                            }
+                        }
                         // The label's own, smaller box above.
                         if let (Some([label_w, label_h, above]), Some(label)) =
                             (slot.label, style.label.as_ref())

@@ -1,6 +1,6 @@
 //! What cut-ins are made of: B-roll picked from the source footage (looked
 //! through and read, not just the timeline), slowed down smoothly, stills
-//! (generated images, map views) turned into footage, and 3D map views of the
+//! turned into footage, and 3D map views of the
 //! places a story happens, from Google's photorealistic 3D map drawn in the
 //! local Chrome.
 

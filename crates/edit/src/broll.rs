@@ -250,7 +250,9 @@ pub async fn smooth_slow_motion(
         .ok_or("the clip's media is missing")?
         .clone();
     let fps = project.fps();
-    let length = clip.duration as f64 / fps * speed;
+    // Interpolation loses a few frames at the ends: render a little more than
+    // the clip plays, so the result always covers it at 1×.
+    let length = (clip.duration as f64 / fps + 0.25) * speed;
     let dir = app.store.uploads_dir(project_id).join("smooth");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let stem = Path::new(&source.name).file_stem().map_or_else(

@@ -13,6 +13,12 @@ DAILY_BYTES_PER_IP = "72000000"   # ~5 hours
 DAILY_BYTES_TOTAL = "216000000"   # ~15 hours
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
 
+# Map stills (Google Photorealistic 3D Tiles, billed per session): a day's
+# sessions per IP and across everyone. 30 a day is at most ~900 a month;
+# compare with Google's current free allowance before raising it.
+DAILY_MAP_SESSIONS_PER_IP = "15"
+DAILY_MAP_SESSIONS_TOTAL = "30"
+
 # Bursts: a few requests a minute per IP.
 [[ratelimits]]
 name = "BURST"

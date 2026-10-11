@@ -100,6 +100,12 @@ pub fn router(app: App) -> Router {
             "/api/projects/{id}/script/job",
             get(script_job).post(script_resume),
         )
+        .route(
+            "/api/maps/{token}",
+            get(crate::broll::map_page)
+                .post(crate::broll::map_shot)
+                .layer(DefaultBodyLimit::max(64 << 20)),
+        )
         .route("/api/fs", get(browse))
         .route("/api/ws", get(websocket))
         .route("/fonts/{file}", get(font))

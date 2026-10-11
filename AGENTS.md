@@ -11,7 +11,7 @@ Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as t
 - `crates/edit-wasm` — wasm-bindgen wrapper; `just wasm` writes `web/src/engine/pkg` (generated, gitignored).
 - `crates/edit` — `edit serve`: REST + websocket events, FFmpeg media jobs, native frame renders, export, MCP at `/mcp` (`?project=` scopes a connection to one project), and `agent.rs`, the Codex app-server bridge behind the agent panel.
 - `assets/sfx/` — sound effects compiled into the `edit` binary (`crates/edit/src/sfx.rs`), so every install has them; written on first use to `~/.edit/sfx/<name>-<hash>.wav` (a new version is a new file, so old projects keep theirs). Each ships with a "hit" marker (media markers) that `add_sound_effect` lines up on the cut. `shutter.wav` is the first shutter from https://youtu.be/R24UqkKj90w, trimmed to 0.17 s.
-- `relay/` — Cloudflare Worker (`edit-relay`) that holds API keys and rate-limits paid calls. Edit installs never get keys. Deploy from `relay/` with `bunx wrangler deploy`.
+- `relay/` — Cloudflare Worker (`edit-relay`) that holds API keys (ElevenLabs; Google Maps for `map_still`, whose page in `crates/edit/src/map_page.html` loads 3D tiles through it) and rate-limits paid calls. Edit installs never get keys. Deploy from `relay/` with `bunx wrangler deploy`.
 - `web/` — React UI. Per-frame work (playhead, timeline canvas, preview) runs outside React; see `src/lib/playback.ts`.
 
 When the model changes, update `edit-core`, `web/src/lib/types.ts`, the param tables in `web/src/lib/edit.ts`, and the model description in `crates/edit/src/mcp.rs` together.

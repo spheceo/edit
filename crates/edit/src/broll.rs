@@ -1,21 +1,30 @@
 //! What cut-ins are made of: B-roll picked from the source footage (looked
 //! through and read, not just the timeline), slowed down smoothly, stills
 //! (generated images, map views) turned into footage, and 3D map views of the
-//! places a story happens, made with free map data and the local Chrome.
+//! places a story happens, from Google's photorealistic 3D map drawn in the
+//! local Chrome.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use axum::body::Bytes;
+use axum::extract::Path as UrlPath;
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{Html, IntoResponse, Response};
 use edit_core::{ClipContent, Media, Project};
 use serde_json::{json, Value};
+use tokio::sync::oneshot;
 
 use crate::render::RgbaImage;
 use crate::server::App;
 
-/// Identifies Edit to the free map services (as their usage policies ask).
+/// Identifies Edit to the services it calls.
 const USER_AGENT: &str = "edit-video-editor/0.1 (+https://github.com/spheceo/edit)";
 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"];
@@ -353,28 +362,82 @@ pub async fn smooth_slow_motion(
     Ok(done)
 }
 
-/// Where a place is: (lat, lon, the full name the map service knows it by).
+/// Where a place is, from Google's geocoding through the relay (only Google's
+/// may be shown with its tiles): lat, lon and its full address.
 fn geocode(place: &str) -> Result<(f64, f64, String), String> {
     let url = format!(
-        "https://nominatim.openstreetmap.org/search?format=json&limit=1&q={}",
+        "{}/v1/geocode?address={}",
+        crate::transcribe::relay(),
         urlencode(place)
     );
-    let body = fetch(&url)?;
-    let found: Value = serde_json::from_str(&body)
+    let found: Value = serde_json::from_str(&fetch(&url)?)
         .map_err(|error| format!("unexpected answer from the map search: {error}"))?;
-    let first = found
-        .get(0)
-        .ok_or_else(|| format!("couldn't find \"{place}\" on the map; try a fuller address"))?;
-    let number = |key: &str| {
-        first[key]
-            .as_str()
-            .and_then(|value| value.parse::<f64>().ok())
-    };
+    match found["status"].as_str() {
+        Some("OK") => {}
+        Some("ZERO_RESULTS") => {
+            return Err(format!(
+                "couldn't find \"{place}\" on the map; try a fuller address"
+            ))
+        }
+        _ => {
+            return Err(format!(
+                "the map search failed: {}",
+                found["error_message"]
+                    .as_str()
+                    .or(found["error"].as_str())
+                    .or(found["status"].as_str())
+                    .unwrap_or("no answer")
+            ))
+        }
+    }
+    let first = &found["results"][0];
+    let location = &first["geometry"]["location"];
     Ok((
-        number("lat").ok_or("no latitude")?,
-        number("lon").ok_or("no longitude")?,
-        first["display_name"].as_str().unwrap_or(place).to_owned(),
+        location["lat"].as_f64().ok_or("no latitude")?,
+        location["lng"].as_f64().ok_or("no longitude")?,
+        first["formatted_address"]
+            .as_str()
+            .unwrap_or(place)
+            .to_owned(),
     ))
+}
+
+/// The outline (lon, lat ring) of the building at a point, from Google.
+fn building_outline(lat: f64, lon: f64) -> Option<Vec<[f64; 2]>> {
+    let url = format!(
+        "{}/v1/outline?lat={lat}&lon={lon}",
+        crate::transcribe::relay()
+    );
+    let found: Value = serde_json::from_str(&fetch(&url).ok()?).ok()?;
+    outline_in(&found)
+}
+
+/// The first building's outer ring in a destinations answer: the place
+/// itself if it is a building, else the building that holds it.
+fn outline_in(found: &Value) -> Option<Vec<[f64; 2]>> {
+    let destination = found["destinations"].get(0)?;
+    let places = std::iter::once(&destination["primary"]).chain(
+        destination["containingPlaces"]
+            .as_array()
+            .into_iter()
+            .flatten(),
+    );
+    places
+        .filter(|place| place["structureType"] == "BUILDING")
+        .find_map(|place| {
+            let polygon = &place["displayPolygon"];
+            let ring = match polygon["type"].as_str()? {
+                "Polygon" => &polygon["coordinates"][0],
+                "MultiPolygon" => &polygon["coordinates"][0][0],
+                _ => return None,
+            };
+            let ring: Vec<[f64; 2]> = ring
+                .as_array()?
+                .iter()
+                .filter_map(|point| Some([point[0].as_f64()?, point[1].as_f64()?]))
+                .collect();
+            (ring.len() >= 4).then_some(ring)
+        })
 }
 
 fn urlencode(text: &str) -> String {
@@ -391,7 +454,7 @@ fn urlencode(text: &str) -> String {
 
 fn fetch(url: &str) -> Result<String, String> {
     let output = Command::new("curl")
-        .args(["-sS", "-f", "--max-time", "30", "-A", USER_AGENT, url])
+        .args(["-sS", "--max-time", "30", "-A", USER_AGENT, url])
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("curl: {error}"))?;
@@ -403,87 +466,6 @@ fn fetch(url: &str) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// The outline (lon, lat ring) and height (m) of the building at a point, from OpenStreetMap.
-fn building_at(lat: f64, lon: f64) -> Option<(Vec<[f64; 2]>, f64)> {
-    let d = 0.0006;
-    let url = format!(
-        "https://api.openstreetmap.org/api/0.6/map.json?bbox={},{},{},{}",
-        lon - d,
-        lat - d,
-        lon + d,
-        lat + d
-    );
-    let data: Value = serde_json::from_str(&fetch(&url).ok()?).ok()?;
-    let elements = data["elements"].as_array()?;
-    let nodes: std::collections::HashMap<i64, [f64; 2]> = elements
-        .iter()
-        .filter(|element| element["type"] == "node")
-        .filter_map(|node| {
-            Some((
-                node["id"].as_i64()?,
-                [node["lon"].as_f64()?, node["lat"].as_f64()?],
-            ))
-        })
-        .collect();
-    let buildings = elements
-        .iter()
-        .filter(|element| element["type"] == "way" && element["tags"]["building"].is_string());
-    let mut best: Option<(f64, Vec<[f64; 2]>, f64)> = None;
-    for way in buildings {
-        let ring: Vec<[f64; 2]> = way["nodes"]
-            .as_array()?
-            .iter()
-            .filter_map(|id| nodes.get(&id.as_i64()?).copied())
-            .collect();
-        if ring.len() < 4 {
-            continue;
-        }
-        let tags = &way["tags"];
-        let height = tags["height"]
-            .as_str()
-            .and_then(|value| value.trim_end_matches(" m").parse::<f64>().ok())
-            .or_else(|| {
-                tags["building:levels"]
-                    .as_str()
-                    .and_then(|value| value.parse::<f64>().ok())
-                    .map(|levels| levels * 3.2)
-            })
-            .unwrap_or(5.5);
-        // Containing the point wins; else the nearest by its middle.
-        let inside = contains(&ring, [lon, lat]);
-        let middle = ring.iter().fold([0.0, 0.0], |sum, point| {
-            [sum[0] + point[0], sum[1] + point[1]]
-        });
-        let middle = [middle[0] / ring.len() as f64, middle[1] / ring.len() as f64];
-        let distance = if inside {
-            0.0
-        } else {
-            (middle[0] - lon).hypot(middle[1] - lat)
-        };
-        if best.as_ref().is_none_or(|(least, _, _)| distance < *least) {
-            best = Some((distance, ring, height));
-        }
-    }
-    // Further than ~60 m isn't the place.
-    best.filter(|(distance, _, _)| *distance < 0.0006)
-        .map(|(_, ring, height)| (ring, height))
-}
-
-fn contains(ring: &[[f64; 2]], point: [f64; 2]) -> bool {
-    let mut inside = false;
-    let mut j = ring.len() - 1;
-    for i in 0..ring.len() {
-        let (a, b) = (ring[i], ring[j]);
-        if (a[1] > point[1]) != (b[1] > point[1])
-            && point[0] < (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0]
-        {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
 }
 
 fn chrome() -> Option<PathBuf> {
@@ -500,120 +482,180 @@ fn chrome() -> Option<PathBuf> {
     .find(|path| path.is_file())
 }
 
-/// The map page: satellite imagery with buildings raised in 3D (OpenFreeMap),
-/// tilted, and the place's building marked in glowing red. Drawn by MapLibre;
-/// all free, no keys.
-const MAP_PAGE: &str = r##"<!doctype html><html><head><meta charset="utf-8">
-<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<style>html,body,#map{margin:0;width:100%;height:100%;background:#000}</style></head><body><div id="map"></div>
-<script>
-const C = __CONFIG__;
-const map = new maplibregl.Map({
-  container: "map", interactive: false, attributionControl: false, preserveDrawingBuffer: true,
-  center: [C.lon, C.lat], zoom: C.zoom, pitch: C.pitch, bearing: C.bearing,
-  style: {
-    version: 8,
-    sources: {
-      sat: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, maxzoom: 19 },
-      omt: { type: "vector", url: "https://tiles.openfreemap.org/planet" },
-    },
-    layers: [
-      { id: "sat", type: "raster", source: "sat" },
-      { id: "buildings", type: "fill-extrusion", source: "omt", "source-layer": "building", minzoom: 14,
-        paint: { "fill-extrusion-color": "#d9d4cc", "fill-extrusion-height": ["coalesce", ["get", "render_height"], 8],
-                 "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0], "fill-extrusion-opacity": 0.92 } },
-    ],
-  },
-});
-// The place, marked over the map (drawn here, not by the map, so it never waits on the map's workers):
-// its outline lifted into a block of its height, red, glowing.
-if (C.ring) {
-  const canvas = document.createElement("canvas");
-  canvas.width = innerWidth; canvas.height = innerHeight;
-  canvas.style.cssText = "position:absolute;inset:0;pointer-events:none";
-  document.body.appendChild(canvas);
-  const ctx = canvas.getContext("2d");
-  const metersPerPixel = 40075016.686 * Math.cos(C.lat * Math.PI / 180) / (512 * Math.pow(2, C.zoom));
-  const lift = C.height / metersPerPixel * Math.sin(C.pitch * Math.PI / 180);
-  const base = C.ring.map((point) => map.project(point));
-  const roof = base.map((point) => ({ x: point.x, y: point.y - lift }));
-  const face = (points) => { ctx.beginPath(); points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.closePath(); ctx.fill(); };
-  ctx.fillStyle = "rgba(255, 40, 40, 0.42)";
-  ctx.shadowColor = "rgba(255, 30, 30, 0.9)";
-  ctx.shadowBlur = 40;
-  for (let i = 0; i + 1 < base.length; i++) face([base[i], base[i + 1], roof[i + 1], roof[i]]);
-  face(roof);
-}
-</script></body></html>"##;
+/// Where this server answers; map pages open in Chrome against it.
+pub static LISTENING: OnceLock<SocketAddr> = OnceLock::new();
 
-/// A tilted 3D map view of `place` (or `lat`/`lon`), the building there in
-/// red, as footage in the project. Returns the media and where it is.
+/// The map page: Google's Photorealistic 3D Tiles (through the relay, which
+/// holds the key) drawn by CesiumJS, the place marked in glowing red and
+/// Google's logo and data credits on the picture. When the tiles are in, it
+/// posts the picture back to its own address.
+const MAP_PAGE: &str = include_str!("map_page.html");
+
+/// Map pages waiting to be opened, and who is waiting for their picture.
+struct MapJob {
+    page: String,
+    done: Option<oneshot::Sender<Result<Vec<u8>, String>>>,
+}
+
+fn map_jobs() -> &'static Mutex<HashMap<String, MapJob>> {
+    static JOBS: OnceLock<Mutex<HashMap<String, MapJob>>> = OnceLock::new();
+    JOBS.get_or_init(Default::default)
+}
+
+/// `GET /api/maps/{token}`
+pub async fn map_page(UrlPath(token): UrlPath<String>) -> Response {
+    match map_jobs().lock().unwrap().get(&token) {
+        Some(job) => Html(job.page.clone()).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// `POST /api/maps/{token}`: the picture (image/png), or what went wrong (text).
+pub async fn map_shot(
+    UrlPath(token): UrlPath<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let waiting = map_jobs()
+        .lock()
+        .unwrap()
+        .get_mut(&token)
+        .and_then(|job| job.done.take());
+    let Some(waiting) = waiting else {
+        return StatusCode::NOT_FOUND;
+    };
+    let png = headers
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|kind| kind.as_bytes().starts_with(b"image/png"));
+    eprintln!(
+        "edit: map {token}: {}",
+        headers
+            .get("x-map-info")
+            .and_then(|info| info.to_str().ok())
+            .unwrap_or("")
+    );
+    let _ = waiting.send(if png {
+        Ok(body.to_vec())
+    } else {
+        Err(String::from_utf8_lossy(&body).into_owned())
+    });
+    StatusCode::NO_CONTENT
+}
+
+/// Opens the map page in headless Chrome and waits for its picture.
+async fn render_map(config: &Value, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let browser = chrome().ok_or("map views need Google Chrome (or Chromium) installed")?;
+    let address = LISTENING.get().ok_or("the server isn't listening yet")?;
+    let host = if address.ip().is_unspecified() {
+        "127.0.0.1".to_owned()
+    } else if address.is_ipv6() {
+        format!("[{}]", address.ip())
+    } else {
+        address.ip().to_string()
+    };
+    let token = fingerprint(&[
+        &config.to_string(),
+        &format!("{:?}", Instant::now()),
+        &std::process::id().to_string(),
+    ]);
+    let (sender, receiver) = oneshot::channel();
+    let page = MAP_PAGE.replace("__CONFIG__", &config.to_string().replace("</", "<\\/"));
+    map_jobs().lock().unwrap().insert(
+        token.clone(),
+        MapJob {
+            page,
+            done: Some(sender),
+        },
+    );
+    let profile = std::env::temp_dir().join(format!("edit-map-{token}"));
+    let mut command = tokio::process::Command::new(&browser);
+    command
+        .args([
+            "--headless=new",
+            "--hide-scrollbars",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--mute-audio",
+            // Room for the page at full size: headless windows lose some
+            // height to the browser's own frame.
+            &format!("--window-size={},{}", width + 64, height + 200),
+            &format!("--user-data-dir={}", profile.display()),
+        ])
+        .args(cfg!(target_os = "macos").then_some("--use-angle=metal"))
+        .arg(format!("http://{host}:{}/api/maps/{token}", address.port()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let answer = match command.spawn() {
+        Ok(mut child) => {
+            let answer = tokio::time::timeout(Duration::from_secs(150), receiver).await;
+            let _ = child.kill().await;
+            match answer {
+                Ok(Ok(answer)) => answer.map_err(|error| format!("the map didn't render: {error}")),
+                Ok(Err(_)) => Err("the map page went away".to_owned()),
+                Err(_) => Err("the map took too long to load".to_owned()),
+            }
+        }
+        Err(error) => Err(format!("chrome: {error}")),
+    };
+    map_jobs().lock().unwrap().remove(&token);
+    let _ = std::fs::remove_dir_all(&profile);
+    answer
+}
+
+/// A tilted 3D view of `place` (or `lat`/`lon`) from Google's photorealistic
+/// map, the building there in red, as footage in the project. Returns the
+/// media and where it is. The same view again reuses the picture (each new
+/// one is a billed map session).
 pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Value, String> {
     let project: Project = app.store.get(project_id).ok_or("no such project")?.project;
     let place = args["place"].as_str().map(str::to_owned);
     let given = args["lat"].as_f64().zip(args["lon"].as_f64());
-    let zoom = args["zoom"].as_f64().unwrap_or(18.2).clamp(14.0, 19.5);
-    let pitch = args["pitch"].as_f64().unwrap_or(60.0).clamp(0.0, 75.0);
-    let bearing = args["bearing"].as_f64().unwrap_or(-25.0);
+    let range = args["range"].as_f64().unwrap_or(330.0).clamp(60.0, 3000.0);
+    let pitch = args["pitch"].as_f64().unwrap_or(55.0).clamp(0.0, 80.0);
+    let heading = args["heading"].as_f64().unwrap_or(-25.0);
     let mark = args["highlight"].as_bool().unwrap_or(true);
     let (width, height) = (project.settings.width, project.settings.height);
-    let browser = chrome().ok_or("map views need Google Chrome (or Chromium) installed")?;
-    let dir = app.store.uploads_dir(project_id).join("maps");
-    let (lat, lon, found, png) = tokio::task::spawn_blocking(move || -> Result<_, String> {
-        let (lat, lon, found) = match (given, place.as_deref()) {
-            (Some((lat, lon)), _) => (
+    let (lat, lon, found, ring) = tokio::task::spawn_blocking(move || {
+        let (lat, lon, found) = match (given, place) {
+            (Some((lat, lon)), place) => (
                 lat,
                 lon,
-                place
-                    .clone()
-                    .unwrap_or_else(|| format!("{lat:.5}, {lon:.5}")),
+                place.unwrap_or_else(|| format!("{lat:.5}, {lon:.5}")),
             ),
-            (None, Some(place)) => geocode(place)?,
+            (None, Some(place)) => geocode(&place)?,
             (None, None) => {
                 return Err("give a place (an address or name) or lat and lon".to_owned())
             }
         };
-        let building = if mark { building_at(lat, lon) } else { None };
-        let config = json!({
-            "lat": lat, "lon": lon, "zoom": zoom, "pitch": pitch, "bearing": bearing,
-            "ring": building.as_ref().map(|(ring, _)| ring),
-            "height": building.as_ref().map_or(0.0, |(_, height)| *height),
-        });
-        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-        let key = fingerprint(&[&config.to_string(), &format!("{width}x{height}")]);
-        let page = std::env::temp_dir().join(format!("edit-map-{key}.html"));
-        std::fs::write(&page, MAP_PAGE.replace("__CONFIG__", &config.to_string()))
-            .map_err(|error| error.to_string())?;
-        let png = dir.join(format!("map-{key}.png"));
-        let output = Command::new(&browser)
-            .args([
-                "--headless=new",
-                "--hide-scrollbars",
-                "--use-angle=metal",
-                &format!("--window-size={width},{height}"),
-                // The map's tiles load on Chrome's virtual clock before the shot.
-                "--virtual-time-budget=20000",
-                &format!("--screenshot={}", png.display()),
-            ])
-            .arg(format!("file://{}", page.display()))
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| format!("chrome: {error}"))?;
-        let _ = std::fs::remove_file(&page);
-        if !png.is_file() {
-            return Err(format!(
-                "the map didn't render: {}",
-                String::from_utf8_lossy(&output.stderr)
-                    .lines()
-                    .last()
-                    .unwrap_or("")
-            ));
-        }
-        Ok((lat, lon, found, png))
+        let ring = if mark {
+            building_outline(lat, lon)
+        } else {
+            None
+        };
+        Ok((lat, lon, found, ring))
     })
     .await
     .map_err(|error| error.to_string())??;
+    let config = json!({
+        "lat": lat, "lon": lon, "range": range, "heading": heading,
+        // The page wants the camera's angle below the horizon.
+        "pitch": 90.0 - pitch,
+        "highlight": mark, "ring": ring,
+        "width": width, "height": height,
+        "relay": crate::transcribe::relay(),
+    });
+    let dir = app.store.uploads_dir(project_id).join("maps");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let png = dir.join(format!(
+        "map-{}.png",
+        fingerprint(&[&config.to_string(), "google-3d"])
+    ));
+    if !png.is_file() {
+        let picture = render_map(&config, width, height).await?;
+        std::fs::write(&png, picture).map_err(|error| error.to_string())?;
+    }
     let (_, added, errors) = crate::server::import_paths(
         app,
         project_id,
@@ -628,7 +670,8 @@ pub async fn map_still(app: &App, project_id: &str, args: &Value) -> Result<Valu
         "place": found,
         "lat": lat,
         "lon": lon,
-        "note": "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes.",
+        "building_outlined": ring.is_some(),
+        "note": "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. It carries Google's logo and data credits (bottom corners); keep them visible.",
     }))
 }
 
@@ -637,18 +680,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn points_in_outlines() {
-        let square = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]];
-        assert!(contains(&square, [0.5, 0.5]));
-        assert!(!contains(&square, [1.5, 0.5]));
-    }
-
-    #[test]
     fn places_are_encoded_for_the_search() {
         assert_eq!(
             urlencode("Kent Police, WA & co"),
             "Kent+Police%2C+WA+%26+co"
         );
+    }
+
+    #[test]
+    fn building_outlines_are_read() {
+        let found = json!({ "destinations": [{
+            "primary": { "structureType": "POINT" },
+            "containingPlaces": [{ "structureType": "BUILDING", "displayPolygon": {
+                "type": "Polygon",
+                "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]]]
+            } }]
+        }] });
+        assert_eq!(outline_in(&found).map(|ring| ring.len()), Some(4));
+        assert_eq!(outline_in(&json!({ "destinations": [] })), None);
     }
 
     #[test]

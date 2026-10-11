@@ -164,6 +164,7 @@ fn serve(home: PathBuf, host: Option<String>, port: u16) {
             match tokio::net::TcpListener::bind(address).await {
                 Ok(listener) => {
                     println!("edit: http://{address}");
+                    let _ = broll::LISTENING.set(listener.local_addr().unwrap_or(address));
                     let router = router.clone();
                     handles.push(tokio::spawn(async move {
                         if let Err(error) = axum::serve(listener, router).await {

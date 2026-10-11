@@ -71,7 +71,11 @@ async function mark(ctx, ground) {
   }));
   viewer.resolutionScale = 1;
   const scene = viewer.scene;
-  const tileset = await Cesium.createGooglePhotorealistic3DTileset({ onlyUsingWithGoogleGeocoder: true }, { showCreditsOnScreen: true, maximumScreenSpaceError: 6 });
+  // No camera collision: while only coarse tiles are in, it takes the camera
+  // for underground and lifts it away from the place.
+  scene.screenSpaceCameraController.enableInputs = false;
+  scene.screenSpaceCameraController.enableCollisionDetection = false;
+  const tileset = await Cesium.createGooglePhotorealistic3DTileset({ onlyUsingWithGoogleGeocoder: true }, { showCreditsOnScreen: true, maximumScreenSpaceError: 6, enableCollision: false });
   scene.primitives.add(tileset);
   const place = Cesium.Cartographic.fromDegrees(C.lon, C.lat);
   viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(C.lon, C.lat, 900) });
@@ -90,12 +94,19 @@ async function mark(ctx, ground) {
   } catch (error) { info.sampleError = String(error); }
   info.ground = ground;
   const center = Cesium.Cartesian3.fromDegrees(C.lon, C.lat, ground + 8);
-  viewer.camera.lookAt(center, new Cesium.HeadingPitchRange(Cesium.Math.toRadians(C.heading), Cesium.Math.toRadians(-C.pitch), C.range));
-  viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-
+  const aim = () => {
+    viewer.camera.lookAt(center, new Cesium.HeadingPitchRange(Cesium.Math.toRadians(C.heading), Cesium.Math.toRadians(-C.pitch), C.range));
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+  };
+  aim();
   await sleep(500);
   await until(() => tileset.tilesLoaded, 60000);
+  // Aim again in case anything moved the camera, and let any new tiles in.
+  aim();
+  await sleep(300);
+  await until(() => tileset.tilesLoaded, 20000);
   info.loaded = tileset.tilesLoaded;
+  info.range = Math.round(Cesium.Cartesian3.distance(viewer.camera.positionWC, center));
 
   info.seconds = (Date.now() - info.start) / 1000;
   await sleep(1500);

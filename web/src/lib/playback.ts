@@ -6,7 +6,7 @@
 import init, { createEngine, type Engine } from "../engine/pkg/edit_wasm";
 import { fetchRetrying, mediaUrl } from "./api";
 import { clipEnd, mediaOf, projectDuration, trackOf } from "./edit";
-import type { Project } from "./types";
+import type { Media, Project } from "./types";
 
 type Listener = () => void;
 
@@ -65,6 +65,21 @@ const SWAP_GRACE_MS = 250;
 const RUN_IN = 0.5;
 /** Elements per media: the one playing and the one cued for the next cut. */
 const ROLLS = 2;
+/** How long a roll that's done keeps running silently before it's paused, in ms. */
+const OUTRO_MS = 600;
+/** How far the clock may run fast or slow to close on the picture (share of normal speed). */
+const LOCK_LIMIT = 0.1;
+/** Share of the gap to the picture closed per tick. */
+const LOCK_GAIN = 0.08;
+/** At play, the playhead waits this long at most for the picture to start moving. */
+const START_WAIT_MS = 400;
+/** Short audio (sound effects) plays through Web Audio, scheduled to the frame, not a media element. */
+const SOUND_SECONDS = 20;
+/** How far ahead sounds are scheduled, in seconds. */
+const SOUND_AHEAD = 0.3;
+
+/** A sound effect: decoded once and scheduled sample-accurately. */
+const isSound = (media: Media | undefined) => media?.kind === "audio" && media.duration <= SOUND_SECONDS;
 
 class Preview {
   engine: Engine | null = null;
@@ -84,12 +99,22 @@ class Preview {
   private waitingFor = new Set<HTMLVideoElement>();
   /** Elements that reported they ran out of data. */
   private stalled = new Set<HTMLVideoElement>();
+  /** When each element last had work (played or was cued). */
+  private lastBusy = new Map<HTMLVideoElement, number>();
   private pending = new Map<HTMLVideoElement, number>();
   /** Media whose engine texture holds a frame already. */
   private uploaded = new Set<string>();
   /** When the clock's element last changed (a cut swapped rolls). */
   private masterSince = 0;
   private lastMaster: HTMLVideoElement | null = null;
+  /** Since play: waiting for the picture to start moving (when, and the element's time then). */
+  private starting: { since: number; from: number } | null = null;
+  private lastTick = 0;
+  private audio: AudioContext | null = null;
+  /** Decoded sound effects by media id. */
+  private sounds = new Map<string, AudioBuffer | Promise<void>>();
+  /** Sound clips scheduled in this run of playback. */
+  private scheduled = new Map<string, AudioBufferSourceNode>();
   private queued = 0;
   private clockStart = 0;
   private frameAtStart = 0;
@@ -208,9 +233,14 @@ class Preview {
     const changedSource = this.project?.id !== project.id;
     this.project = project;
     if (changedSource) this.detachVideos();
+    this.stopSounds();
     for (const media of project.media) {
       if (media.kind === "image") continue;
       const version = proxyVersions[media.id] ?? "0";
+      if (isSound(media)) {
+        this.loadSound(project.id, media.id, version);
+        continue;
+      }
       if (this.videos.has(media.id) && this.versions.get(media.id) === version) continue;
       const src = `${mediaUrl(project.id, media.id, "proxy")}?v=${version}`;
       this.sources.set(media.id, src);
@@ -323,6 +353,8 @@ class Preview {
     if (playhead.playing) {
       this.frameAtStart = playhead.frame;
       this.clockStart = performance.now();
+      this.starting = { since: this.clockStart, from: NaN };
+      this.stopSounds();
       this.syncElements(true);
     }
     playhead.emit();
@@ -347,14 +379,18 @@ class Preview {
     playhead.playing = true;
     this.frameAtStart = playhead.frame;
     this.clockStart = performance.now();
-    // Start elements inside the user gesture so audio is allowed.
+    this.lastTick = this.clockStart;
+    this.starting = { since: this.clockStart, from: NaN };
+    // Start elements (and sound) inside the user gesture so audio is allowed.
+    this.audio ??= new AudioContext({ latencyHint: "interactive" });
+    void this.audio.resume().catch(() => {});
     this.syncElements(true);
     playhead.emit();
     cancelAnimationFrame(this.queued);
     this.queued = 0;
-    const tick = () => {
+    const tick = (time: number) => {
       if (!playhead.playing) return;
-      this.tick();
+      this.tick(time);
       this.loop = requestAnimationFrame(tick);
     };
     this.loop = requestAnimationFrame(tick);
@@ -369,50 +405,64 @@ class Preview {
       video.pause();
       video.muted = true;
     }
+    this.stopSounds();
+    this.starting = null;
     playhead.frame = Math.round(playhead.frame);
     playhead.emit();
     this.invalidate();
   }
 
   /**
-   * The picture is the clock: while the top visible video plays smoothly the
-   * playhead reads its time, so nothing drifts and nothing re-seeks. If it is
-   * buffering the playhead waits rather than running ahead. Gaps and graphics
-   * use the wall clock.
+   * The clock runs on wall time, locked gently to the picture: while the top
+   * visible video plays it runs a touch fast or slow (at most LOCK_LIMIT) to
+   * close on it, so the playhead moves evenly and never jumps or stops dead.
+   * If the picture is buffering the playhead waits; at play it holds until
+   * the picture actually starts moving. Gaps and graphics use the wall clock.
    */
-  private tick() {
+  private tick(now: number) {
     if (!this.project) return;
     const fps = this.project.settings.fps;
     const end = projectDuration(this.project);
-    const now = performance.now();
-    const wall = this.frameAtStart + ((now - this.clockStart) / 1000) * fps;
+    // rAF times are the frame's vsync, so steps are even; the first can predate play().
+    const step = (Math.max(0, Math.min(100, now - this.lastTick)) / 1000) * fps;
+    this.lastTick = now;
+    const wall = this.frameAtStart + (Math.max(0, now - this.clockStart) / 1000) * fps;
     let frame = wall;
     const master = [...this.wants(Math.floor(playhead.frame)).entries()].sort((a, b) => b[1].rank - a[1].rank)[0];
-    if (master) {
-      const [id, want] = master;
-      const video = this.shown(id);
-      if (video) {
-        if (video !== this.lastMaster) {
-          this.lastMaster = video;
-          this.masterSince = now;
-        }
-        // Just after a cut the new roll is starting from its cued frame: keep
-        // time moving rather than holding the playhead for it.
-        const starting = now - this.masterSince < SWAP_GRACE_MS && Math.abs(video.currentTime - want.time) < 0.25;
-        const ready = !video.paused && video.readyState >= 3 && !this.seeking.has(video) && !this.stalled.has(video);
-        if (video.ended || starting) {
-          // The source ran out before its clip did, or a roll is starting: keep time on the wall clock.
-        } else if (ready) {
-          const pictureFrame = want.clipStart + ((video.currentTime - want.sourceIn) / want.speed) * fps;
-          // Follow the picture unless it is plainly elsewhere (then re-cue it below). When it
-          // trails by a frame or two, ease forward until it catches up rather than stopping dead.
-          if (Math.abs(pictureFrame - wall) <= fps * 0.5) {
-            frame = pictureFrame >= playhead.frame ? pictureFrame : playhead.frame + (wall - playhead.frame) * 0.35;
-          }
-        } else {
-          frame = playhead.frame;
-        }
+    const video = master ? this.shown(master[0]) : undefined;
+    if (master && video) {
+      const want = master[1];
+      if (video !== this.lastMaster) {
+        this.lastMaster = video;
+        this.masterSince = now;
       }
+      const ready = !video.paused && video.readyState >= 3 && !this.seeking.has(video) && !this.stalled.has(video);
+      const pictureFrame = want.clipStart + ((video.currentTime - want.sourceIn) / want.speed) * fps;
+      if (this.starting) {
+        // Hold until the picture moves (or give up waiting), then run from where it is.
+        if (ready && Number.isNaN(this.starting.from)) this.starting.from = video.currentTime;
+        // Frames the picture has moved since play: it starts slowly, so follow it until it's under way.
+        const moved = ready ? ((video.currentTime - this.starting.from) / want.speed) * fps : 0;
+        const near = Math.abs(pictureFrame - playhead.frame) <= fps * 0.5;
+        frame = moved > 0 && near ? Math.max(playhead.frame, pictureFrame) : playhead.frame;
+        if ((moved >= 2 && near) || now - this.starting.since > START_WAIT_MS) this.starting = null;
+      } else if (video.ended) {
+        // The source ran out before its clip did: keep time on the wall clock.
+      } else if (ready) {
+        // Just after a cut the new roll is starting from its cued frame: let the wall clock carry it.
+        const settling = now - this.masterSince < SWAP_GRACE_MS;
+        const gap = pictureFrame - wall;
+        if (!settling && Math.abs(gap) <= fps * 0.5) {
+          // Further off, close faster (still gently).
+          const limit = (Math.abs(gap) > 2 ? 2.5 : 1) * LOCK_LIMIT * step;
+          frame = wall + Math.max(-limit, Math.min(limit, gap * LOCK_GAIN));
+        }
+      } else if (now - this.masterSince >= SWAP_GRACE_MS) {
+        // Buffering: wait for it.
+        frame = playhead.frame;
+      }
+    } else {
+      this.starting = null;
     }
     this.frameAtStart = frame;
     this.clockStart = now;
@@ -424,7 +474,70 @@ class Preview {
     playhead.frame = frame;
     playhead.emit();
     this.syncElements(false);
+    this.scheduleSounds();
     this.draw();
+  }
+
+  private loadSound(project: string, id: string, version: string) {
+    const key = `${id}@${version}`;
+    if (this.sounds.has(key)) return;
+    this.sounds.set(
+      key,
+      fetchRetrying(`${mediaUrl(project, id, "proxy")}?v=${version}`)
+        .then((response) => response.arrayBuffer())
+        .then((bytes) => (this.audio ??= new AudioContext({ latencyHint: "interactive" })).decodeAudioData(bytes))
+        .then((buffer) => {
+          this.sounds.set(key, buffer);
+          this.sounds.set(id, buffer);
+        })
+        .catch(() => {
+          this.sounds.delete(key);
+        }),
+    );
+  }
+
+  /** Schedules sound-effect clips starting soon (or already under way) on the audio clock. */
+  private scheduleSounds() {
+    const project = this.project;
+    const audio = this.audio;
+    if (!project || !audio || audio.state !== "running" || this.starting) return;
+    const fps = project.settings.fps;
+    const frame = playhead.frame;
+    for (const clip of project.clips) {
+      if (clip.type !== "audio") continue;
+      const lead = (clip.start - frame) / fps;
+      const end = (clipEnd(clip) - frame) / fps;
+      if (lead > SOUND_AHEAD || end <= 0) continue;
+      const key = `${clip.id}@${clip.start}@${clip.source_in}`;
+      if (this.scheduled.has(key)) continue;
+      if (!isSound(mediaOf(project, clip.media))) continue;
+      const track = trackOf(project, clip.track);
+      const buffer = this.sounds.get(clip.media);
+      if (!track || track.muted || !(buffer instanceof AudioBuffer)) continue;
+      const source = audio.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.value = clip.speed;
+      const gain = audio.createGain();
+      gain.gain.value = 10 ** (clip.volume_db / 20);
+      source.connect(gain).connect(audio.destination);
+      const into = Math.max(0, -lead);
+      source.start(audio.currentTime + Math.max(0, lead), clip.source_in + into * clip.speed, Math.max(0, end - Math.max(0, lead)) * clip.speed);
+      source.onended = () => {
+        if (this.scheduled.get(key) === source) this.scheduled.delete(key);
+      };
+      this.scheduled.set(key, source);
+    }
+  }
+
+  private stopSounds() {
+    for (const source of this.scheduled.values()) {
+      try {
+        source.stop();
+      } catch {
+        // Not started yet or already done.
+      }
+    }
+    this.scheduled.clear();
   }
 
   /** What each media element should be doing at the playhead. */
@@ -436,6 +549,7 @@ class Preview {
     for (const clip of project.clips) {
       if (frame < clip.start || frame >= clipEnd(clip)) continue;
       if (clip.type !== "video" && clip.type !== "audio") continue;
+      if (clip.type === "audio" && isSound(mediaOf(project, clip.media))) continue;
       const track = trackOf(project, clip.track);
       if (!track || (clip.type === "video" && track.hidden) || (clip.type === "audio" && track.muted)) continue;
       const time = clip.source_in + ((frame - clip.start) / fps) * clip.speed;
@@ -549,9 +663,18 @@ class Preview {
       }
     }
 
-    // Everything else rests.
+    // Everything else rests. A roll that just finished runs on silently for a moment: pausing it
+    // at the cut makes the browser rework its audio, which hitches the roll taking over.
+    const now = performance.now();
     for (const video of this.allVideos()) {
-      if (busy.has(video)) continue;
+      if (busy.has(video)) {
+        this.lastBusy.set(video, now);
+        continue;
+      }
+      if (playhead.playing && !hard && now - (this.lastBusy.get(video) ?? 0) < OUTRO_MS) {
+        setIfChanged(video, "volume", 0);
+        continue;
+      }
       if (!video.paused) video.pause();
       video.muted = true;
     }

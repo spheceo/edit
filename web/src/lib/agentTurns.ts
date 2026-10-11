@@ -95,6 +95,8 @@ export function callTitle(entry: AgentEntry): string {
       return `Deleted ${plural(Array.isArray(a.clip_ids) ? a.clip_ids.length : 1, "clip")}`;
     case "set_keyframes":
       return `Animated ${a.param ?? "a value"}${a.clip_id ? ` on ${a.clip_id}` : ""}`;
+    case "add_sound_effect":
+      return `Added ${plural(Array.isArray(a.times) ? a.times.length : 1, String(a.sound ?? "sound"))}`;
     case "import_media":
       return `Imported ${plural(Array.isArray(a.paths) ? a.paths.length : 1, "file")}`;
     case "render_frame":
@@ -125,6 +127,7 @@ export function groupSummary(calls: AgentEntry[]): string {
       set_keyframes: "animation",
       delete_clips: "deletion",
       import_media: "import",
+      add_sound_effect: "sound",
       render_frame: "frame",
       contact_sheet: "frame",
       export: "started an export",
@@ -149,6 +152,8 @@ export function groupSummary(calls: AgentEntry[]): string {
         return `deleted clips`;
       case "import":
         return `imported media`;
+      case "sound":
+        return `added ${plural(count, "sound effect")}`;
       case "frame":
         return `looked at ${plural(count, "frame")}`;
       case "step":

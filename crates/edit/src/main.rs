@@ -5,6 +5,7 @@ mod media;
 mod render;
 mod script;
 mod server;
+mod sfx;
 mod speakers;
 mod store;
 mod track;

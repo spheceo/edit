@@ -5,6 +5,7 @@ import {
   Captions,
   Copy,
   Eye,
+  Flag,
   EyeOff,
   Gauge,
   ImageDown,
@@ -22,6 +23,7 @@ import {
   Trash2,
   Type,
   Unlink,
+  Vibrate,
   Volume2,
   VolumeX,
   Waves,
@@ -33,7 +35,9 @@ import type { MenuItem } from "../components/ContextMenu";
 import { api } from "./api";
 import {
   addElement,
+  addMarker,
   addTrack,
+  clearMarkers,
   clipEnd,
   deleteClips,
   duplicateClips,
@@ -62,6 +66,7 @@ const ELEMENT_ITEMS: { id: Element; label: string; icon: ReactNode }[] = [
   { id: "subtitle", label: "Subtitle", icon: <Captions size={14} /> },
   { id: "cutin", label: "Cut-in", icon: <RectangleHorizontal size={14} /> },
   { id: "adjustment", label: "Adjustment layer", icon: <Sun size={14} /> },
+  { id: "shake", label: "Shake", icon: <Vibrate size={14} /> },
   { id: "flash", label: "Flash", icon: <Zap size={14} /> },
   { id: "black", label: "Dip to black", icon: <Moon size={14} /> },
 ];
@@ -106,6 +111,18 @@ export function clipMenu(clipId: string): MenuItem[] {
         });
         editor.select(created);
       },
+    },
+    {
+      label: "Mark the source here",
+      icon: <Flag size={14} />,
+      shortcut: "M",
+      disabled: !underPlayhead || !timed,
+      onSelect: () => editor.edit((draft) => addMarker(draft, ids, frame)),
+    },
+    {
+      label: "Clear markers",
+      disabled: !clips.some((clip) => (clip.type === "video" || clip.type === "audio") && project.media.find((media) => media.id === clip.media)?.markers?.length),
+      onSelect: () => editor.edit((draft) => clearMarkers(draft, ids)),
     },
     { separator: true },
     {

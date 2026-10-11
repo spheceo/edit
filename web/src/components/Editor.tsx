@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
-import { addElement, clipEnd, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
+import { addElement, addMarker, clipEnd, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { api, useMachine } from "../lib/api";
 import { connectEvents, flushSave, syncScriptJob, useEditor } from "../lib/store";
@@ -289,6 +289,10 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
         state.setTool("select");
       } else if (key === "c") {
         state.setTool("razor");
+      } else if (key === "m") {
+        handled();
+        const frame = Math.round(playhead.frame);
+        state.edit((draft) => addMarker(draft, state.selection, frame));
       } else if (key === "n") {
         state.toggle("snapping");
       } else if (key === "g") {

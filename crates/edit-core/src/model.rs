@@ -119,6 +119,18 @@ pub struct Media {
     pub fps: f64,
     #[serde(default)]
     pub has_audio: bool,
+    /// Points marked in the source, carried by every clip of it (a sound's hit, a beat).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
+}
+
+/// A point in a media file.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct Marker {
+    /// Seconds into the source.
+    pub time: f64,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -238,10 +250,12 @@ pub enum ClipContent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         word_times: Vec<f32>,
     },
-    /// Applies a grade to everything composited beneath it.
+    /// Applies a grade, and camera shake, to everything composited beneath it.
     Adjustment {
         #[serde(default)]
         grade: Grade,
+        #[serde(default, skip_serializing_if = "Shake::is_off")]
+        shake: Shake,
         #[serde(default = "one_f32")]
         opacity: f32,
     },
@@ -550,6 +564,188 @@ impl Default for TextAnimation {
     }
 }
 
+/// Camera shake on everything beneath an adjustment layer, modelled on
+/// Sapphire S_Shake: a fast random wiggle `frequency` times a second,
+/// `amount` px at its peak, with real motion blur along the movement and
+/// mirrored edges. A preset supplies every number; any given here overrides it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct Shake {
+    #[serde(default)]
+    pub preset: ShakePreset,
+    /// Pixels at its peak, at 1080p (scaled with the frame).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<f32>,
+    /// Wiggles per second.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency: Option<f32>,
+    /// Degrees of tilt at its peak.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<ShakeDirection>,
+    /// How strong it is across the clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<ShakeEnvelope>,
+    /// Motion blur length in frames of movement (S_Shake's Mo Blur Length): 0 = sharp, 1 = a full frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion_blur: Option<f32>,
+    /// What shows past the frame's edges as it moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edges: Option<ShakeEdges>,
+    /// A random wiggle, or one fast move in a single direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<ShakeMotion>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShakeMotion {
+    /// Random jolts `frequency` times a second, shaped by the envelope.
+    #[default]
+    Wiggle,
+    /// One move that accelerates across the clip, `amount` px by its end:
+    /// down (vertical) or right (horizontal); a negative amount goes up or
+    /// left. With motion blur it's a slam into the next shot.
+    Drop,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShakePreset {
+    /// No preset: only the numbers given (none = no shake).
+    #[default]
+    None,
+    /// Slow, gentle drift, like a hand holding the camera.
+    Handheld,
+    /// A fast, heavily blurred drop: the picture slams downwards into the cut.
+    Vertical,
+    /// The same, whipping sideways.
+    Horizontal,
+    /// A violent jolt at the start that dies away, with a little tilt.
+    Impact,
+    /// Strong, fast and in every direction, throughout.
+    Earthquake,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShakeDirection {
+    #[default]
+    Both,
+    Vertical,
+    Horizontal,
+}
+
+/// The shake's strength over the clip.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShakeEnvelope {
+    /// Full strength throughout.
+    #[default]
+    Steady,
+    /// Rises to full strength at the end (into a cut).
+    Build,
+    /// Full strength at the start, eased down to nothing (AE: amplitude keyed down with easy ease).
+    Hit,
+    /// Up to full strength in the middle and back down.
+    Swell,
+}
+
+impl ShakeEnvelope {
+    /// Strength at `progress` 0..1 through the clip.
+    pub fn at(self, progress: f32) -> f32 {
+        let p = progress.clamp(0.0, 1.0);
+        match self {
+            ShakeEnvelope::Steady => 1.0,
+            ShakeEnvelope::Build => p * p * (3.0 - 2.0 * p),
+            ShakeEnvelope::Hit => (1.0 - p) * (1.0 - p),
+            ShakeEnvelope::Swell => (p * std::f32::consts::PI).sin(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShakeEdges {
+    /// Mirror the picture past its edges (S_Shake's Reflect): big moves, no crop.
+    #[default]
+    Mirror,
+    /// Zoom in just enough that the edges never show.
+    Zoom,
+}
+
+/// A shake with every number filled in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShakeSettings {
+    pub amount: f32,
+    pub frequency: f32,
+    pub rotation: f32,
+    pub direction: ShakeDirection,
+    pub envelope: ShakeEnvelope,
+    pub motion_blur: f32,
+    pub edges: ShakeEdges,
+    pub motion: ShakeMotion,
+}
+
+impl ShakePreset {
+    pub const ALL: [ShakePreset; 6] = [
+        ShakePreset::None,
+        ShakePreset::Handheld,
+        ShakePreset::Vertical,
+        ShakePreset::Horizontal,
+        ShakePreset::Impact,
+        ShakePreset::Earthquake,
+    ];
+
+    /// The preset's numbers (amount at 1080p).
+    pub fn settings(self) -> ShakeSettings {
+        use ShakeDirection::{Both, Horizontal, Vertical};
+        use ShakeEdges::{Mirror, Zoom};
+        use ShakeEnvelope::{Hit, Steady};
+        use ShakeMotion::{Drop, Wiggle};
+        let (amount, frequency, rotation, direction, envelope, motion_blur, edges, motion) =
+            match self {
+                ShakePreset::None => (0.0, 8.0, 0.0, Both, Steady, 1.0, Mirror, Wiggle),
+                ShakePreset::Handheld => (8.0, 1.2, 0.4, Both, Steady, 0.0, Zoom, Wiggle),
+                ShakePreset::Vertical => (540.0, 0.0, 0.0, Vertical, Steady, 2.0, Mirror, Drop),
+                ShakePreset::Horizontal => (540.0, 0.0, 0.0, Horizontal, Steady, 2.0, Mirror, Drop),
+                ShakePreset::Impact => (160.0, 30.0, 3.0, Both, Hit, 1.5, Mirror, Wiggle),
+                ShakePreset::Earthquake => (60.0, 16.0, 1.5, Both, Steady, 1.0, Mirror, Wiggle),
+            };
+        ShakeSettings {
+            amount,
+            frequency,
+            rotation,
+            direction,
+            envelope,
+            motion_blur,
+            edges,
+            motion,
+        }
+    }
+}
+
+impl Shake {
+    pub fn is_off(&self) -> bool {
+        *self == Shake::default()
+    }
+
+    /// Every number: the preset's unless given (amount at 1080p).
+    pub fn resolved(&self) -> ShakeSettings {
+        let preset = self.preset.settings();
+        ShakeSettings {
+            amount: self.amount.unwrap_or(preset.amount),
+            frequency: self.frequency.unwrap_or(preset.frequency),
+            rotation: self.rotation.unwrap_or(preset.rotation),
+            direction: self.direction.unwrap_or(preset.direction),
+            envelope: self.envelope.unwrap_or(preset.envelope),
+            motion_blur: self.motion_blur.unwrap_or(preset.motion_blur),
+            edges: self.edges.unwrap_or(preset.edges),
+            motion: self.motion.unwrap_or(preset.motion),
+        }
+    }
+}
+
 /// A basic grade. All zeros is identity.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Grade {
@@ -627,6 +823,7 @@ pub fn animatable_params(content: &ClipContent) -> &'static [&'static str] {
         ],
         ClipContent::Adjustment { .. } => &[
             "opacity",
+            "shake",
             "exposure",
             "contrast",
             "saturation",

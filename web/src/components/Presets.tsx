@@ -1,4 +1,4 @@
-import { ChevronRight, Captions, RectangleHorizontal, Moon, Sparkles, Sun, Type, Zap } from "lucide-react";
+import { ChevronRight, Captions, RectangleHorizontal, Moon, Sparkles, Sun, Type, Vibrate, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState, type ReactNode } from "react";
 
@@ -61,6 +61,13 @@ const FOLDERS: { id: string; label: string; presets: Preset[] }[] = [
         hint: "Grade everything below",
         icon: <Sun size={14} />,
         color: CLIP_HEX.purple,
+      },
+      {
+        id: "shake",
+        label: "Shake",
+        hint: "Judders everything below",
+        icon: <Vibrate size={14} />,
+        color: CLIP_HEX.orange,
       },
       {
         id: "flash",

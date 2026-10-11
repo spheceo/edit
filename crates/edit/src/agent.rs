@@ -98,7 +98,7 @@ struct Ask {
 impl Agents {
     pub fn new(store: Arc<Store>, home: PathBuf, port: u16) -> Arc<Self> {
         let dir = home.join("agent");
-        let _ = std::fs::create_dir_all(dir.join("chats"));
+        let _ = std::fs::create_dir_all(&dir);
         let models = std::fs::read(dir.join("models.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
@@ -256,26 +256,40 @@ impl Agents {
 
     // --- chats -------------------------------------------------------------
 
-    fn chat_path(&self, project: &str) -> PathBuf {
-        self.dir.join("chats").join(format!("{project}.json"))
+    /// A project's chat from disk: beside the project, or where Edit used to keep chats.
+    fn load(&self, project: &str) -> Chat {
+        let path = self.store.chat_path(project);
+        let old = self.dir.join("chats").join(format!("{project}.json"));
+        if !path.exists() && old.exists() {
+            let _ = std::fs::rename(&old, &path);
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            return Chat::default();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            // Never overwrite a chat we can't read: set it aside and start fresh.
+            eprintln!("agent chat {}: {error}", path.display());
+            let _ = std::fs::rename(
+                &path,
+                path.with_extension(format!("unreadable-{}", now_ms())),
+            );
+            Chat::default()
+        })
     }
 
     fn with_chat<T>(&self, project: &str, edit: impl FnOnce(&mut Chat) -> T) -> T {
         let mut chats = self.chats.lock().unwrap();
-        let chat = chats.entry(project.to_owned()).or_insert_with(|| {
-            std::fs::read(self.chat_path(project))
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or_default()
-        });
+        let chat = chats
+            .entry(project.to_owned())
+            .or_insert_with(|| self.load(project));
         edit(chat)
     }
 
     fn save(&self, project: &str) {
         let snapshot = self.with_chat(project, |chat| chat.clone());
-        let _ = std::fs::write(
-            self.chat_path(project),
-            serde_json::to_vec(&snapshot).unwrap_or_default(),
+        let _ = crate::store::write_atomic(
+            &self.store.chat_path(project),
+            &serde_json::to_vec(&snapshot).unwrap_or_default(),
         );
     }
 
@@ -287,7 +301,7 @@ impl Agents {
 
     pub fn reset(&self, project: &str) {
         self.with_chat(project, |chat| *chat = Chat::default());
-        let _ = std::fs::remove_file(self.chat_path(project));
+        let _ = std::fs::remove_file(self.store.chat_path(project));
         self.emit(project, json!({ "event": "reset" }));
     }
 
@@ -366,8 +380,10 @@ impl Agents {
             "You are the agent built into Edit, a video editor. The user is watching the editor while you work: every change you make through the `edit` tools appears live on their timeline and can be undone with ⌘Z. \
              Edit only through the `edit` tools; you have no shell or files. The project is \"{}\" ({}x{} at {} fps). \
              Call get_project before editing and read_transcript when speech matters. After visual changes, look at your work with render_frame or contact_sheet. \
-             Keep replies short: say what you changed and where (timecodes).",
-            live.project.name, live.project.settings.width, live.project.settings.height, live.project.settings.fps
+             Keep replies short: say what you changed and where (timecodes).\n\n{}",
+            live.project.name, live.project.settings.width, live.project.settings.height, live.project.settings.fps,
+            // The model and house style, as every MCP client gets them.
+            crate::mcp::INSTRUCTIONS
         );
         let thread = match (thread, known) {
             (Some(thread), true) => thread,
@@ -408,6 +424,7 @@ impl Agents {
                 ..Entry::default()
             },
         );
+        self.save(project);
         self.emit(project, json!({ "event": "status", "running": true }));
         let mut params = json!({
             "threadId": thread,

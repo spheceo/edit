@@ -30,12 +30,46 @@ pub enum Layer {
     },
     Adjustment {
         grade: Grade,
+        /// How the picture beneath moves this frame.
+        shake: ShakeOffset,
         opacity: f32,
     },
     Solid {
         color: Rgba,
         opacity: f32,
     },
+}
+
+/// The picture beneath an adjustment layer, moved by its shake: offset in
+/// project px and tilt in degrees clockwise now, and where it was one
+/// shutter earlier (`from_*`, the same when there's no motion blur), so the
+/// renderer can blur along the move; `zoom` keeps the edges out of sight, or
+/// `mirror` reflects the picture past them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShakeOffset {
+    pub x: f32,
+    pub y: f32,
+    pub rotation: f32,
+    pub from_x: f32,
+    pub from_y: f32,
+    pub from_rotation: f32,
+    pub zoom: f32,
+    pub mirror: bool,
+}
+
+impl Default for ShakeOffset {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            rotation: 0.0,
+            from_x: 0.0,
+            from_y: 0.0,
+            from_rotation: 0.0,
+            zoom: 1.0,
+            mirror: false,
+        }
+    }
 }
 
 /// A video source the preview must have decoded before drawing a frame.
@@ -133,16 +167,37 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                     opacity: anim("opacity", *opacity) * fade,
                 }
             }
-            ClipContent::Adjustment { grade, opacity } => Layer::Adjustment {
-                grade: Grade {
-                    exposure: anim("exposure", grade.exposure),
-                    contrast: anim("contrast", grade.contrast),
-                    saturation: anim("saturation", grade.saturation),
-                    temperature: anim("temperature", grade.temperature),
-                    vignette: anim("vignette", grade.vignette),
-                },
-                opacity: anim("opacity", *opacity) * fade,
-            },
+            ClipContent::Adjustment {
+                grade,
+                shake,
+                opacity,
+            } => {
+                let settings = shake.resolved();
+                // Amounts are at 1080p.
+                let amount =
+                    anim("shake", settings.amount) * project.settings.height as f32 / 1080.0;
+                Layer::Adjustment {
+                    grade: Grade {
+                        exposure: anim("exposure", grade.exposure),
+                        contrast: anim("contrast", grade.contrast),
+                        saturation: anim("saturation", grade.saturation),
+                        temperature: anim("temperature", grade.temperature),
+                        vignette: anim("vignette", grade.vignette),
+                    },
+                    shake: shake_offset(
+                        &clip.id,
+                        &ShakeSettings { amount, ..settings },
+                        ShakeTime {
+                            seconds,
+                            local: local / fps as f32,
+                            length: clip.duration.max(1) as f32 / fps as f32,
+                            frame: 1.0 / fps as f32,
+                        },
+                        (project.settings.width, project.settings.height),
+                    ),
+                    opacity: anim("opacity", *opacity) * fade,
+                }
+            }
             ClipContent::Solid { fill, opacity } => Layer::Solid {
                 color: *fill,
                 opacity: anim("opacity", *opacity) * fade,
@@ -200,31 +255,116 @@ pub fn words_shown(text: &str, times: &[f32], stagger: f32, local: f32) -> Strin
     text[..end].to_owned()
 }
 
+fn seed_of(text: &str) -> u32 {
+    text.bytes().fold(2166136261_u32, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(16777619)
+    })
+}
+
+/// Smooth value noise in -1..1, one wave per unit of `t`.
+fn noise(seed: u32, channel: u32, t: f32) -> f32 {
+    let lattice = |i: i64| {
+        let mut h = seed ^ channel.wrapping_mul(0x9E37_79B9) ^ (i as u32).wrapping_mul(0x85EB_CA6B);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^= h >> 12;
+        (h as f32 / u32::MAX as f32) * 2.0 - 1.0
+    };
+    let i = t.floor();
+    let f = t - i;
+    let s = f * f * (3.0 - 2.0 * f);
+    lattice(i as i64) * (1.0 - s) + lattice(i as i64 + 1) * s
+}
+
 /// Smooth handheld wander for `seconds`, each axis in -1..1 (x, y, tilt).
 /// Seeded by the clip so stacked clips don't shake in lockstep.
 fn wobble(seed: &str, seconds: f32) -> [f32; 3] {
-    let seed = seed.bytes().fold(2166136261_u32, |hash, byte| {
-        (hash ^ u32::from(byte)).wrapping_mul(16777619)
-    });
-    let noise = |channel: u32, t: f32| {
-        let lattice = |i: i64| {
-            let mut h =
-                seed ^ channel.wrapping_mul(0x9E37_79B9) ^ (i as u32).wrapping_mul(0x85EB_CA6B);
-            h ^= h >> 15;
-            h = h.wrapping_mul(0x2C1B_3C6D);
-            h ^= h >> 12;
-            (h as f32 / u32::MAX as f32) * 2.0 - 1.0
-        };
-        let i = t.floor();
-        let f = t - i;
-        let s = f * f * (3.0 - 2.0 * f);
-        lattice(i as i64) * (1.0 - s) + lattice(i as i64 + 1) * s
-    };
+    let seed = seed_of(seed);
     // A slow drift plus a quicker jitter, like a hand holding a camera.
     let axis = |channel: u32| {
-        0.7 * noise(channel, seconds * 2.5) + 0.3 * noise(channel + 7, seconds * 9.0)
+        0.7 * noise(seed, channel, seconds * 2.5) + 0.3 * noise(seed, channel + 7, seconds * 9.0)
     };
     [axis(1), axis(2), axis(3)]
+}
+
+/// When a shake is evaluated, in seconds: on the timeline, into the clip,
+/// the clip's length, and one frame.
+#[derive(Clone, Copy, Debug)]
+pub struct ShakeTime {
+    pub seconds: f32,
+    pub local: f32,
+    pub length: f32,
+    pub frame: f32,
+}
+
+/// An adjustment layer's shake, after Sapphire S_Shake: a fast random wiggle
+/// (a wave `frequency` times a second with a finer one on top), shaped over
+/// the clip by its envelope, plus where it was a shutter earlier for the
+/// motion blur, and the edge handling.
+pub fn shake_offset(
+    seed: &str,
+    shake: &ShakeSettings,
+    time: ShakeTime,
+    (width, height): (u32, u32),
+) -> ShakeOffset {
+    let drop = shake.motion == ShakeMotion::Drop;
+    // A drop can go either way; a wiggle's amount is a size.
+    let amount = if drop {
+        shake.amount
+    } else {
+        shake.amount.max(0.0)
+    };
+    if amount == 0.0 && shake.rotation.abs() <= 0.0 {
+        return ShakeOffset::default();
+    }
+    let seed = seed_of(seed);
+    let (along_x, along_y) = match shake.direction {
+        ShakeDirection::Both => (1.0, 1.0),
+        ShakeDirection::Vertical => (0.0, 1.0),
+        ShakeDirection::Horizontal => (1.0, 0.0),
+    };
+    let at = |back: f32| {
+        if drop {
+            // Accelerating all the way, so it's fastest (and most blurred) at the cut.
+            let p = ((time.local - back) / time.length.max(1e-3)).clamp(0.0, 1.0);
+            let moved = amount * p * p * p;
+            return (moved * along_x, moved * along_y, shake.rotation * p * p * p);
+        }
+        let t = (time.seconds - back) * shake.frequency.max(0.0);
+        let strength = shake
+            .envelope
+            .at((time.local - back) / time.length.max(1e-3));
+        let axis = |channel: u32| {
+            (0.75 * noise(seed, channel, t) + 0.25 * noise(seed, channel + 7, t * 2.3)) * strength
+        };
+        (
+            axis(1) * amount * along_x,
+            axis(2) * amount * along_y,
+            axis(3) * shake.rotation,
+        )
+    };
+    let (x, y, rotation) = at(0.0);
+    let (from_x, from_y, from_rotation) = at(shake.motion_blur.max(0.0) * time.frame);
+    let zoom = match shake.edges {
+        ShakeEdges::Mirror => 1.0,
+        // Cover the furthest it can go, so the zoom holds steady while it moves.
+        ShakeEdges::Zoom => {
+            let (w, h) = (width.max(1) as f32, height.max(1) as f32);
+            let turn = shake.rotation.abs().to_radians();
+            (turn.cos() + (w / h).max(h / w) * turn.sin())
+                + 2.0 * (amount.abs() * along_x / w).max(amount.abs() * along_y / h)
+        }
+    };
+    ShakeOffset {
+        x,
+        y,
+        rotation,
+        from_x,
+        from_y,
+        from_rotation,
+        zoom,
+        mirror: shake.edges == ShakeEdges::Mirror,
+    }
 }
 
 fn fade_factor(clip: &Clip, local: f32) -> f32 {
@@ -438,6 +578,7 @@ mod tests {
             height: 1080,
             fps: 30.0,
             has_audio: true,
+            markers: Vec::new(),
         });
         let v1 = project.tracks[0].id.clone();
         let v2 = project.tracks[1].id.clone();
@@ -667,5 +808,104 @@ mod tests {
             wobble("c2", 1.0),
             "each clip shakes its own way"
         );
+    }
+
+    #[test]
+    fn shake_presets_move_hard_with_blur_and_follow_their_envelope() {
+        let frame = (1920, 1080);
+        let at = |shake: &ShakeSettings, local: f32| {
+            shake_offset(
+                "c1",
+                shake,
+                ShakeTime {
+                    seconds: 10.0 + local,
+                    local,
+                    length: 0.5,
+                    frame: 1.0 / 30.0,
+                },
+                frame,
+            )
+        };
+        // The vertical preset is a drop: straight down, faster every frame, ending far down.
+        let vertical = Shake {
+            preset: ShakePreset::Vertical,
+            ..Shake::default()
+        }
+        .resolved();
+        let mut last = 0.0_f32;
+        let mut last_step = 0.0_f32;
+        for step in 1..=15 {
+            let shaken = at(&vertical, step as f32 / 30.0);
+            assert_eq!((shaken.x, shaken.from_x), (0.0, 0.0));
+            assert!(shaken.mirror && shaken.zoom == 1.0);
+            assert!(shaken.y > last, "only ever down");
+            assert!(shaken.y - last >= last_step, "accelerating");
+            assert!(shaken.y > shaken.from_y, "blurred along the drop");
+            last_step = shaken.y - last;
+            last = shaken.y;
+        }
+        assert!(last > vertical.amount * 0.8);
+        let end = at(&vertical, 14.0 / 30.0);
+        assert!(
+            end.y - end.from_y > 100.0,
+            "a heavy streak at the cut: {}",
+            end.y - end.from_y
+        );
+        // A wiggle lands somewhere new every frame rather than gliding.
+        let earthquake = Shake {
+            preset: ShakePreset::Earthquake,
+            frequency: Some(30.0),
+            ..Shake::default()
+        }
+        .resolved();
+        let jumps: f32 = (1..15)
+            .map(|i| {
+                (at(&earthquake, i as f32 / 30.0).y - at(&earthquake, (i - 1) as f32 / 30.0).y)
+                    .abs()
+            })
+            .sum::<f32>()
+            / 14.0;
+        assert!(jumps > earthquake.amount * 0.25, "{jumps}");
+        // Built up, a wiggle rises into the end of the clip.
+        let building = Shake {
+            preset: ShakePreset::Earthquake,
+            envelope: Some(ShakeEnvelope::Build),
+            ..Shake::default()
+        }
+        .resolved();
+        let early: f32 = (0..4).map(|i| at(&building, i as f32 / 30.0).y.abs()).sum();
+        let late: f32 = (11..15)
+            .map(|i| at(&building, i as f32 / 30.0).y.abs())
+            .sum();
+        assert!(late > early * 2.0);
+        // An impact dies away; no motion blur means no streak.
+        let impact = Shake {
+            preset: ShakePreset::Impact,
+            motion_blur: Some(0.0),
+            ..Shake::default()
+        }
+        .resolved();
+        let start = at(&impact, 0.02);
+        assert_eq!((start.x, start.y), (start.from_x, start.from_y));
+        assert!(at(&impact, 0.5).x.abs() < 1e-3);
+        // A given number overrides the preset's; nothing at all is no shake.
+        let custom = Shake {
+            preset: ShakePreset::Vertical,
+            amount: Some(4.0),
+            ..Shake::default()
+        };
+        assert_eq!(custom.resolved().amount, 4.0);
+        assert_eq!(custom.resolved().frequency, vertical.frequency);
+        assert_eq!(
+            at(&Shake::default().resolved(), 0.2),
+            ShakeOffset::default()
+        );
+        // Zoomed edges cover the move.
+        let handheld = Shake {
+            preset: ShakePreset::Handheld,
+            ..Shake::default()
+        }
+        .resolved();
+        assert!((at(&handheld, 0.2).zoom - 1.0) * 1080.0 / 2.0 >= handheld.amount - 1e-3);
     }
 }

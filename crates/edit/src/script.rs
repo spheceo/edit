@@ -556,9 +556,56 @@ fn spoken(word: &str) -> Option<String> {
     Some(normalize(word)).filter(|word| !word.is_empty())
 }
 
+/// How well a transcript word matches a cue word from the Doc: 0 the same,
+/// 1 the same word spelt a little differently (a plural or possessive,
+/// "priuses" for "Prius", or a letter or two off), None not it. Short words
+/// must match exactly.
+fn likeness(word: &str, cue: &str) -> Option<u8> {
+    let word = normalize(word);
+    if word == cue {
+        return Some(0);
+    }
+    let shortest = word.chars().count().min(cue.chars().count());
+    if shortest < 4 {
+        return None;
+    }
+    let stem = |text: &str| {
+        let text = text
+            .strip_suffix("es")
+            .filter(|rest| rest.len() >= 3)
+            .unwrap_or(text);
+        text.strip_suffix('s')
+            .filter(|rest| rest.len() >= 3)
+            .unwrap_or(text)
+            .to_owned()
+    };
+    let (a, b) = (stem(&word), stem(cue));
+    let allowed = if shortest >= 8 { 2 } else { 1 };
+    (a == b || a == cue || b == word || edit_distance(&a, &b) <= allowed).then_some(1)
+}
+
+/// Levenshtein distance.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut previous = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let here = row[j + 1];
+            row[j + 1] = (previous + usize::from(ca != *cb))
+                .min(row[j] + 1)
+                .min(here + 1);
+            previous = here;
+        }
+    }
+    row[b.len()]
+}
+
 /// Finds a range's first and last words near where it's written to start and
-/// end, and returns where to cut: just before the first, just after the last
-/// (never into a neighbouring word). Times are in the transcript's clock.
+/// end (the same word, else the closest spelling of it), and returns where to
+/// cut: just before the first, just after the last (never into a
+/// neighbouring word). Times are in the transcript's clock.
 pub fn align(
     words: &[crate::transcribe::Word],
     cue: &[String; 2],
@@ -570,11 +617,12 @@ pub fn align(
         words
             .iter()
             .enumerate()
-            .filter(|(_, word)| {
-                (at(word) - time).abs() <= CUE_SEARCH && normalize(&word.text) == wanted
+            .filter(|(_, word)| (at(word) - time).abs() <= CUE_SEARCH)
+            .filter_map(|(index, word)| {
+                likeness(&word.text, &wanted).map(|score| (score, (at(word) - time).abs(), index))
             })
-            .min_by(|a, b| (at(a.1) - time).abs().total_cmp(&(at(b.1) - time).abs()))
-            .map(|(index, _)| index)
+            .min_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)))
+            .map(|(_, _, index)| index)
     };
     // A range written "…-02:03" ends somewhere in that second.
     let first = nearest(spoken(&cue[0]), start, |word| word.start);
@@ -1383,6 +1431,101 @@ async fn place(
         .map(|_| ())
 }
 
+/// Re-finds every placed range's first and last words (after matching
+/// improves or a transcript arrives) and moves its clip's in and out points
+/// to them. Everything after a clip that changes length moves with it, so the
+/// timeline stays butted; effects ending on its cut (a shake into a cut-in)
+/// keep ending on it. Returns what changed.
+pub async fn realign(app: &App, id: &str) -> Result<Vec<serde_json::Value>, String> {
+    let live = app.store.get(id).ok_or("no such project")?;
+    let transcripts = transcripts(app, &live.project).await;
+    let (_, changed) = app.store.update(id, "agent", |project| {
+        let fps = project.fps();
+        let mut changed = Vec::new();
+        let Some(mut blocks) = project.script.as_ref().map(|script| script.blocks.clone()) else {
+            return Ok(changed);
+        };
+        for block in &mut blocks {
+            let ScriptBlock::Footage {
+                start,
+                end,
+                label,
+                media: Some(media),
+                media_start,
+                words: Some(cue),
+                cut,
+                clip: Some(clip_id),
+                ..
+            } = block
+            else {
+                continue;
+            };
+            let Some(words) = transcripts.get(media.as_str()) else {
+                continue;
+            };
+            let offset = media_start.unwrap_or(0.0);
+            let (cut_in, cut_out) = align(words, cue, *start - offset, *end - offset);
+            let found = [
+                cut_in.map_or(*start, |at| at + offset),
+                cut_out.map_or(*end, |at| at + offset),
+            ];
+            *cut = (cut_in.is_some() || cut_out.is_some()).then_some(found);
+            let Some(clip) = project.clip(clip_id).cloned() else {
+                continue;
+            };
+            let ClipContent::Video {
+                source_in, speed, ..
+            } = clip.content
+            else {
+                continue;
+            };
+            // The clip plays seconds of the media, which begins `offset` into the file.
+            let (new_in, new_out) = (found[0] - offset, found[1] - offset);
+            let old_out = source_in + clip.duration as f64 / fps * speed;
+            if (new_in - source_in).abs() < 0.5 / fps && (new_out - old_out).abs() < 0.5 / fps {
+                continue;
+            }
+            let duration = (((new_out - new_in) / speed) * fps).round().max(1.0) as i64;
+            let delta = duration - clip.duration;
+            let old_end = clip.end();
+            for other in &mut project.clips {
+                let partner =
+                    other.id == clip.id || (clip.link.is_some() && other.link == clip.link);
+                if partner {
+                    if let ClipContent::Video { source_in, .. }
+                    | ClipContent::Audio { source_in, .. } = &mut other.content
+                    {
+                        *source_in = new_in;
+                    }
+                    other.duration = duration;
+                } else if other.start >= old_end
+                    || (other.end() == old_end
+                        && matches!(
+                            other.content,
+                            ClipContent::Adjustment { .. } | ClipContent::Solid { .. }
+                        ))
+                {
+                    other.start += delta;
+                }
+            }
+            changed.push(json!({
+                "range": label,
+                "clip": clip.id,
+                "seconds": [source_in, old_out],
+                "now": [new_in, new_out],
+                "frames_longer": delta,
+                "first_word_found": cut_in.is_some(),
+                "last_word_found": cut_out.is_some(),
+            }));
+        }
+        if let Some(script) = project.script.as_mut() {
+            script.blocks = blocks;
+        }
+        Ok(changed)
+    })?;
+    Ok(changed)
+}
+
 /// Transcribes each media the script plays (through Edit's relay) and waits
 /// for the words. Media without sound, or whose transcription fails, are
 /// left out: their ranges keep the times the Doc wrote.
@@ -1807,6 +1950,7 @@ mod tests {
             height: 1080,
             fps: 30.0,
             has_audio: true,
+            markers: Vec::new(),
         });
         let footage = |start: f64, end: f64| ScriptBlock::Footage {
             url: String::new(),
@@ -1934,6 +2078,41 @@ mod tests {
             Some(["*Victim".into(), "man".into()])
         );
         assert_eq!(cue_words(&["To Editor: Blur the victim".to_owned()]), None);
+    }
+
+    #[test]
+    fn matches_cue_words_spelt_a_little_differently() {
+        use crate::transcribe::Word;
+        let word = |text: &str, start: f64, end: f64| Word {
+            text: text.into(),
+            start,
+            end,
+            speaker: None,
+        };
+        // The Doc's range "i....priuses" over a transcript that heard "Prius".
+        let words = [
+            word("I", 77.1, 77.2),
+            word("saw", 77.25, 77.5),
+            word("hit", 81.4, 81.55),
+            word("that", 81.56, 81.8),
+            word("Prius", 81.82, 82.12),
+            word("that's,", 82.14, 82.4),
+            word("whatever,", 82.5, 83.0),
+            word("behind", 83.6, 83.9),
+            word("the", 83.92, 84.0),
+            word("Prius", 84.14, 84.36),
+            word("car.", 84.4, 84.7),
+        ];
+        let (_, cut_out) = align(&words, &["i".into(), "priuses".into()], 77.0, 82.0);
+        // Just after the "Prius" nearest the written end, not short of it.
+        let cut_out = cut_out.expect("found the last word");
+        assert!(cut_out > 82.12 && cut_out <= 82.14, "{cut_out}");
+        assert_eq!(likeness("Prius", "priuses"), Some(1));
+        assert_eq!(likeness("Prious", "prius"), Some(1));
+        assert_eq!(likeness("Prius", "prius"), Some(0));
+        // Short words and different words don't pass.
+        assert_eq!(likeness("a", "i"), None);
+        assert_eq!(likeness("Pickup", "priuses"), None);
     }
 
     #[test]

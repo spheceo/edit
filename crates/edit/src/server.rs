@@ -475,6 +475,7 @@ pub async fn import_paths(
                         height: probe.height,
                         fps: probe.fps,
                         has_audio: probe.has_audio,
+                        markers: Vec::new(),
                     });
                     media_id
                 }
@@ -1050,7 +1051,7 @@ async fn script_resume(
 
 #[derive(Deserialize, Default)]
 struct CaptionsBody {
-    /// Timeline seconds; default the intro (start to the first cut-in).
+    /// Timeline seconds; default the intro (start to the cut-in before the full footage).
     start: Option<f64>,
     end: Option<f64>,
 }

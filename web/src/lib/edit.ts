@@ -3,7 +3,7 @@
 
 import { current, isDraft } from "immer";
 
-import { HOUSE_BOX, HOUSE_GLOW, HOUSE_SHADOW, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind } from "./types";
+import { HOUSE_BOX, HOUSE_GLOW, HOUSE_SHADOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind } from "./types";
 
 export const freshId = (project: Project, prefix: string) => {
   const id = `${prefix}${Math.max(1, project.next_id)}`;
@@ -206,7 +206,7 @@ export function placeMedia(project: Project, mediaId: string, frame: number, vid
   return ids;
 }
 
-export type Element = "title" | "caption" | "subtitle" | "cutin" | "adjustment" | "flash" | "black";
+export type Element = "title" | "caption" | "subtitle" | "cutin" | "adjustment" | "shake" | "flash" | "black";
 
 /** Default length of each element, in seconds. */
 export const ELEMENT_SECONDS: Record<Element, number> = {
@@ -215,6 +215,7 @@ export const ELEMENT_SECONDS: Record<Element, number> = {
   subtitle: 3,
   cutin: 3,
   adjustment: 5,
+  shake: 0.2,
   flash: 0.4,
   black: 1,
 };
@@ -362,6 +363,17 @@ export function addElement(project: Project, element: Element, frame: number, on
         opacity: 1,
       };
       break;
+    case "shake":
+      clip = {
+        ...base,
+        color: "orange",
+        name: "Shake",
+        type: "adjustment",
+        grade: { exposure: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 },
+        shake: { preset: "vertical" },
+        opacity: 1,
+      };
+      break;
     case "flash":
       clip = {
         ...base,
@@ -399,7 +411,13 @@ const params: Record<string, [Getter, Setter]> = {
   y: [(c) => ("transform" in c ? c.transform.y : 0), (c, v) => "transform" in c && (c.transform.y = v)],
   scale: [(c) => ("transform" in c ? c.transform.scale : 1), (c, v) => "transform" in c && (c.transform.scale = v)],
   rotation: [(c) => ("transform" in c ? c.transform.rotation : 0), (c, v) => "transform" in c && (c.transform.rotation = v)],
-  shake: [(c) => ("transform" in c ? (c.transform.shake ?? 0) : 0), (c, v) => "transform" in c && (c.transform.shake = v)],
+  shake: [
+    (c) => ("transform" in c ? (c.transform.shake ?? 0) : c.type === "adjustment" ? resolvedShake(c.shake).amount : 0),
+    (c, v) => {
+      if ("transform" in c) c.transform.shake = v;
+      else if (c.type === "adjustment") c.shake = { ...c.shake, amount: v };
+    },
+  ],
   size: [(c) => (c.type === "text" ? c.style.size : 0), (c, v) => c.type === "text" && (c.style.size = v)],
   tracking: [(c) => (c.type === "text" ? c.style.tracking : 0), (c, v) => c.type === "text" && (c.style.tracking = v)],
   "glow.radius": [(c) => (c.type === "text" ? c.style.glow.radius : 0), (c, v) => c.type === "text" && (c.style.glow.radius = v)],
@@ -690,6 +708,32 @@ export function setFades(project: Project, ids: Iterable<string>, frames: number
     const length = Math.min(frames, Math.floor(clip.duration / 2));
     clip.fade_in = length;
     clip.fade_out = length;
+  }
+}
+
+/** Marks the source of each selected clip under `frame`; the mark shows on every clip of that media. */
+export function addMarker(project: Project, ids: Iterable<string>, frame: number) {
+  const fps = project.settings.fps;
+  const done = new Set<string>();
+  for (const id of ids) {
+    const clip = project.clips.find((candidate) => candidate.id === id);
+    if (!clip || (clip.type !== "video" && clip.type !== "audio") || frame < clip.start || frame >= clipEnd(clip)) continue;
+    const media = project.media.find((candidate) => candidate.id === clip.media);
+    if (!media || done.has(media.id)) continue;
+    done.add(media.id);
+    const time = clip.source_in + ((frame - clip.start) / fps) * clip.speed;
+    media.markers = [...(media.markers ?? []).filter((marker) => Math.abs(marker.time - time) > 0.5 / fps), { time, name: "marker" }].sort(
+      (a, b) => a.time - b.time,
+    );
+  }
+}
+
+export function clearMarkers(project: Project, ids: Iterable<string>) {
+  for (const id of ids) {
+    const clip = project.clips.find((candidate) => candidate.id === id);
+    if (!clip || (clip.type !== "video" && clip.type !== "audio")) continue;
+    const media = project.media.find((candidate) => candidate.id === clip.media);
+    if (media) delete media.markers;
   }
 }
 

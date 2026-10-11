@@ -764,45 +764,55 @@ export function Timeline() {
         </div>
         {view.graph && <GraphEditor />}
       </div>
-      <ZoomBar width={view.lanes} header={view.graph ? GRAPH_HEADER : HEADER} fps={fps} onFit={fit} />
+      <ZoomBar width={view.lanes} header={view.graph ? GRAPH_HEADER : HEADER} onFit={fit} />
     </section>
   );
 }
 
-/** Never narrower than this, in px (from Repack's lanes). */
-const THUMB_LEAST = 28;
+/** The thumb fully zoomed in, as a share of the bar. */
+const THUMB_LEAST_SHARE = 0.06;
 
 /**
  * The view as a bar under the lanes (from Repack's subtitle timeline): the
- * thumb is the stretch in view. Drag it to move, drag an end to zoom,
- * click beside it to jump there, double-click to see it all.
+ * thumb is the stretch in view. Its width follows the zoom on a log scale,
+ * the whole bar when everything fits down to THUMB_LEAST_SHARE fully zoomed
+ * in, so it shrinks smoothly all the way and stays easy to see and grab at
+ * frame-level zoom. Drag it to move, drag an end to zoom, click beside it to
+ * jump there, double-click to see it all.
  */
-function ZoomBar({ width, header, fps, onFit }: { width: number; header: number; fps: number; onFit: () => void }) {
+function ZoomBar({ width, header, onFit }: { width: number; header: number; onFit: () => void }) {
   const { ppf, scrollX } = useView();
-  const held = useRef<{ part: "thumb" | "in" | "out"; x: number; start: number; end: number } | null>(null);
+  const held = useRef<{ part: "thumb" | "in" | "out"; x: number; start: number; end: number; thumb: number } | null>(null);
   const start = scrollX / ppf;
   const span = width / ppf;
-  // The bar is the whole edit; the thumb is the part in view.
   const total = Math.max(contentFrames(), start + span, 1);
-  const thumbWidth = width > 0 ? Math.max(THUMB_LEAST, Math.min(width, (span / total) * width)) : 0;
-  const thumbLeft = width > 0 ? Math.max(0, Math.min(width - thumbWidth, (start / total) * width)) : 0;
-  const show = (from: number, to: number) => {
-    const next = width / Math.max(1, to - from);
-    setView({ ppf: next, scrollX: from * Math.min(MOST_PPF, Math.max(next, width / contentFrames())) });
-  };
+  // Zoom as 0 (all of it) … 1 (most zoomed in), on a log scale like the zoom itself.
+  const fit = width / total;
+  const range = Math.log(MOST_PPF / Math.min(fit, MOST_PPF * 0.999));
+  const zoomOf = (value: number) => Math.min(1, Math.max(0, Math.log(value / fit) / range));
+  const ppfOf = (thumb: number) => fit * Math.exp(range * Math.min(1, Math.max(0, Math.log(thumb / width) / Math.log(THUMB_LEAST_SHARE))));
+  const thumbWidth = width > 0 ? Math.max(12, width * THUMB_LEAST_SHARE ** zoomOf(ppf)) : 0;
+  const travel = width - thumbWidth;
+  const room = Math.max(0, total - span);
+  const thumbLeft = travel > 0 && room > 0 ? Math.max(0, Math.min(travel, (start / room) * travel)) : 0;
   const down = (event: React.PointerEvent<HTMLElement>, part: "thumb" | "in" | "out") => {
     if (event.button !== 0) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    held.current = { part, x: event.clientX, start, end: start + span };
+    held.current = { part, x: event.clientX, start, end: start + span, thumb: thumbWidth };
   };
   const move = (event: React.PointerEvent<HTMLElement>) => {
     const grip = held.current;
     if (!grip || width <= 0) return;
-    const shift = ((event.clientX - grip.x) * total) / width;
-    if (grip.part === "thumb") setView({ scrollX: (grip.start + shift) * ppf });
-    else if (grip.part === "in") show(Math.max(0, Math.min(grip.end - fps, grip.start + shift)), grip.end);
-    else show(grip.start, Math.max(grip.start + fps, grip.end + shift));
+    const dx = event.clientX - grip.x;
+    if (grip.part === "thumb") {
+      setView({ scrollX: (grip.start + (travel > 0 ? (dx * room) / travel : 0)) * ppf });
+      return;
+    }
+    // Dragging an end resizes the thumb; the other end's moment stays put.
+    const next = ppfOf(Math.max(12, Math.min(width, grip.thumb + (grip.part === "out" ? dx : -dx))));
+    if (grip.part === "out") setView({ ppf: next, scrollX: grip.start * next });
+    else setView({ ppf: next, scrollX: grip.end * next - width });
   };
   return (
     <div className="flex h-4 shrink-0 border-t border-line">
@@ -813,8 +823,8 @@ function ZoomBar({ width, header, fps, onFit }: { width: number; header: number;
         onPointerDown={(event) => {
           if (event.button !== 0 || width <= 0) return;
           const box = event.currentTarget.getBoundingClientRect();
-          const at = ((event.clientX - box.left) / width) * total;
-          setView({ scrollX: (at - span / 2) * ppf });
+          const left = event.clientX - box.left - thumbWidth / 2;
+          setView({ scrollX: (travel > 0 ? (left / travel) * room : 0) * ppf });
         }}
         onPointerMove={move}
         onPointerUp={() => (held.current = null)}
@@ -984,6 +994,21 @@ function drawClip(
   };
   fade(clip.fade_in, true);
   fade(clip.fade_out, false);
+
+  // Markers in the source (a sound's hit): a flag down from the top.
+  if (clip.type === "video" || clip.type === "audio") {
+    for (const marker of mediaOf(project, clip.media)?.markers ?? []) {
+      const mx = x0 + ((marker.time - clip.source_in) / clip.speed) * fps * ppf;
+      if (mx < x0 || mx > x0 + w) continue;
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillRect(Math.round(mx), y, 1, h);
+      ctx.beginPath();
+      ctx.moveTo(mx - 4, y);
+      ctx.lineTo(mx + 4, y);
+      ctx.lineTo(mx, y + 5);
+      ctx.fill();
+    }
+  }
 
   // Keyframe ticks.
   if (clip.keyframes) {

@@ -20,6 +20,14 @@ export interface Media {
   height: number;
   fps: number;
   has_audio: boolean;
+  /** Points marked in the source, carried by every clip of it (a sound's hit, a beat). */
+  markers?: Marker[];
+}
+
+export interface Marker {
+  /** Seconds into the source. */
+  time: number;
+  name: string;
 }
 
 export type TrackKind = "video" | "audio";
@@ -144,6 +152,59 @@ export interface Grade {
   vignette: number;
 }
 
+export type ShakePreset = "none" | "handheld" | "vertical" | "horizontal" | "impact" | "earthquake";
+export type ShakeDirection = "both" | "vertical" | "horizontal";
+export type ShakeEnvelope = "steady" | "build" | "hit" | "swell";
+export type ShakeEdges = "mirror" | "zoom";
+export type ShakeMotion = "wiggle" | "drop";
+
+/** Camera shake on everything below an adjustment layer (after Sapphire S_Shake): a preset, any number overriding it. */
+export interface Shake {
+  preset?: ShakePreset;
+  /** Pixels at its peak, at 1080p (scaled with the frame). */
+  amount?: number;
+  /** Wiggles per second. */
+  frequency?: number;
+  /** Degrees of tilt at its peak. */
+  rotation?: number;
+  direction?: ShakeDirection;
+  /** Strength over the clip: steady, build (into the end), hit (dies away), swell. */
+  envelope?: ShakeEnvelope;
+  /** Motion blur length in frames of movement: 0 = sharp, 1 = a full frame. */
+  motion_blur?: number;
+  /** Past the frame's edges: mirror the picture, or zoom so they never show. */
+  edges?: ShakeEdges;
+  /** Random jolts, or one accelerating move (down / right; a negative amount goes up / left). */
+  motion?: ShakeMotion;
+}
+
+export type ShakeSettings = Required<Omit<Shake, "preset">>;
+
+/** Mirrors edit-core `ShakePreset::settings`. */
+export const SHAKE_PRESETS: Record<ShakePreset, ShakeSettings & { label: string }> = {
+  none: { label: "None", amount: 0, frequency: 8, rotation: 0, direction: "both", envelope: "steady", motion_blur: 1, edges: "mirror", motion: "wiggle" },
+  handheld: { label: "Handheld", amount: 8, frequency: 1.2, rotation: 0.4, direction: "both", envelope: "steady", motion_blur: 0, edges: "zoom", motion: "wiggle" },
+  vertical: { label: "Vertical drop", amount: 540, frequency: 0, rotation: 0, direction: "vertical", envelope: "steady", motion_blur: 2, edges: "mirror", motion: "drop" },
+  horizontal: { label: "Horizontal whip", amount: 540, frequency: 0, rotation: 0, direction: "horizontal", envelope: "steady", motion_blur: 2, edges: "mirror", motion: "drop" },
+  impact: { label: "Impact", amount: 160, frequency: 30, rotation: 3, direction: "both", envelope: "hit", motion_blur: 1.5, edges: "mirror", motion: "wiggle" },
+  earthquake: { label: "Earthquake", amount: 60, frequency: 16, rotation: 1.5, direction: "both", envelope: "steady", motion_blur: 1, edges: "mirror", motion: "wiggle" },
+};
+
+/** Every number of a shake: the preset's unless given. */
+export function resolvedShake(shake: Shake | undefined): ShakeSettings {
+  const { label: _label, ...preset } = SHAKE_PRESETS[shake?.preset ?? "none"];
+  return {
+    amount: shake?.amount ?? preset.amount,
+    frequency: shake?.frequency ?? preset.frequency,
+    rotation: shake?.rotation ?? preset.rotation,
+    direction: shake?.direction ?? preset.direction,
+    envelope: shake?.envelope ?? preset.envelope,
+    motion_blur: shake?.motion_blur ?? preset.motion_blur,
+    edges: shake?.edges ?? preset.edges,
+    motion: shake?.motion ?? preset.motion,
+  };
+}
+
 interface ClipBase {
   id: string;
   track: string;
@@ -188,6 +249,7 @@ export interface TextClip extends ClipBase {
 export interface AdjustmentClip extends ClipBase {
   type: "adjustment";
   grade: Grade;
+  shake?: Shake;
   opacity: number;
 }
 
@@ -299,6 +361,6 @@ export const ANIMATABLE: Record<ClipType, string[]> = {
   video: ["opacity", "x", "y", "scale", "rotation", "shake"],
   audio: ["volume_db"],
   text: ["opacity", "x", "y", "scale", "rotation", "shake", "size", "tracking", "glow.radius", "glow.strength"],
-  adjustment: ["opacity", "exposure", "contrast", "saturation", "temperature", "vignette"],
+  adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette"],
   solid: ["opacity"],
 };

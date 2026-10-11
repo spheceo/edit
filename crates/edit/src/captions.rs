@@ -31,6 +31,12 @@ const NAME: &str = "Caption";
 const HOLD: f64 = 0.35;
 /// Camera shake on captions, in pixels at 1080p.
 const SHAKE: f32 = 3.0;
+/// A caption this close to a cut, or to the next caption, meets it (seconds).
+const SNAP: f64 = 0.2;
+/// Words that aren't worth a caption on their own.
+const FILLERS: [&str; 12] = [
+    "like", "um", "umm", "uh", "uhh", "er", "erm", "ah", "oh", "hmm", "mm", "so",
+];
 
 /// One spoken line in a footage clip.
 #[derive(Clone, Debug)]
@@ -60,6 +66,17 @@ impl Line {
             .collect::<Vec<_>>()
             .join(" ")
     }
+}
+
+/// A line that adds nothing on screen: only fillers ("like", "um").
+fn throwaway(line: &Line) -> bool {
+    line.words.iter().all(|word| {
+        let bare = word
+            .text
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
+        bare.is_empty() || FILLERS.contains(&bare.as_str())
+    })
 }
 
 /// A line's voice for the model: "speaker_0 (Suspect)" once the voices are named.
@@ -227,13 +244,16 @@ fn overlaps(a: [f64; 4], b: [f64; 4]) -> bool {
 }
 
 /// Where a caption goes and how wide it is: the first spot by the speaker
-/// (above when there's room, then beside them towards the middle of the
-/// frame, then below, then the other side), narrowing it so lines stack,
-/// that covers no face and no burned-in overlay (`avoid`, as [top, left,
-/// bottom, right] project pixels from the frame's centre).
+/// (where their previous line sat, so a run of lines doesn't jump about, then
+/// above when there's room, below, and only then beside them, towards the
+/// middle of the frame first), narrowing it so lines stack, that covers no
+/// face and no burned-in overlay (`avoid`, as [top, left, bottom, right]
+/// project pixels from the frame's centre).
+#[allow(clippy::too_many_arguments)]
 fn choose(
     face: [f64; 4],
     above: bool,
+    previous: Option<Side>,
     avoid: &[[f64; 4]],
     text: &str,
     style: &TextStyle,
@@ -250,11 +270,15 @@ fn choose(
     } else {
         Side::Left
     };
-    let mut sides = Vec::new();
-    if above {
-        sides.push(Side::Above);
+    let mut sides: Vec<Side> = Vec::new();
+    for side in previous
+        .into_iter()
+        .chain([Side::Above, Side::Below, centre, away])
+    {
+        if (side != Side::Above || above) && !sides.contains(&side) {
+            sides.push(side);
+        }
     }
-    sides.extend([centre, Side::Below, away]);
     let pad = gap / 2.0;
     for side in sides {
         for share in WIDTHS {
@@ -369,67 +393,70 @@ fn still(media: &Path, time: f64, out: &Path) -> Result<(), String> {
         .ok_or_else(|| "couldn't take a still".to_owned())
 }
 
-/// The intro: from the start up to the first cut-in, when the project follows a script.
+/// Footage at least this long is the full footage that follows the intro (seconds).
+const FULL_FOOTAGE: f64 = 20.0;
+
+/// The intro, when the project follows a script: the short teaser clips
+/// (with any cut-ins between them) from the start up to the cut-in that leads
+/// into the full footage. Without full footage, up to the first cut-in.
 pub fn intro(project: &Project) -> Option<(i64, i64)> {
-    let first_cut_in = project
+    let full = FULL_FOOTAGE * project.fps();
+    // (is a cut-in, start, duration) of each block that's on the timeline, in order.
+    let blocks: Vec<(bool, i64, i64)> = project
         .script
         .as_ref()?
         .blocks
         .iter()
-        .find_map(|block| match block {
-            ScriptBlock::Narration {
-                clip: Some(clip), ..
-            } => project
-                .clips
-                .iter()
-                .find(|candidate| &candidate.id == clip)
-                .map(|clip| clip.start),
-            _ => None,
-        })?;
-    Some((0, first_cut_in))
-}
-
-/// Captions every line spoken in the footage between `from` and `to` (timeline frames).
-pub async fn caption_speakers(
-    app: &App,
-    project_id: &str,
-    from: i64,
-    to: i64,
-) -> Result<Value, String> {
-    let project = app.store.get(project_id).ok_or("no such project")?.project;
-    let fps = project.fps();
-    let (width, height) = (
-        f64::from(project.settings.width),
-        f64::from(project.settings.height),
-    );
-    let video_tracks: Vec<String> = project
-        .tracks
-        .iter()
-        .filter(|track| track.kind == TrackKind::Video && !track.hidden)
-        .map(|track| track.id.clone())
-        .collect();
-    let mut footage: Vec<&Clip> = project
-        .clips
-        .iter()
-        .filter(|clip| {
-            matches!(clip.content, ClipContent::Video { .. })
-                && video_tracks.contains(&clip.track)
-                && clip.start < to
-                && clip.end() > from
+        .filter_map(|block| {
+            let (cut_in, clip) = match block {
+                ScriptBlock::Footage { clip, .. } => (false, clip),
+                ScriptBlock::Narration { clip, .. } => (true, clip),
+            };
+            let clip = project.clip(clip.as_deref()?)?;
+            Some((cut_in, clip.start, clip.duration))
         })
         .collect();
-    footage.sort_by_key(|clip| clip.start);
+    let end = match blocks
+        .iter()
+        .position(|&(cut_in, _, duration)| !cut_in && duration as f64 >= full)
+    {
+        Some(mut index) => {
+            while index > 0 && blocks[index - 1].0 {
+                index -= 1;
+            }
+            blocks[index].1
+        }
+        None => blocks.iter().find(|block| block.0)?.1,
+    };
+    Some((0, end))
+}
 
-    // Lines, from each clip's words within what the clip plays.
+/// The lines spoken in `clips` (video or audio clips of footage) between
+/// `from` and `to` (timeline frames), each with its speaker's name and colour
+/// when the transcript has them, transcribing media that hasn't been yet.
+async fn spoken_lines(
+    app: &App,
+    project: &Project,
+    clips: &[&Clip],
+    from: i64,
+    to: i64,
+) -> Result<Vec<Line>, String> {
+    let fps = project.fps();
     let mut lines: Vec<Line> = Vec::new();
     let mut transcripts: HashMap<String, crate::transcribe::Transcript> = HashMap::new();
-    for clip in &footage {
-        let ClipContent::Video {
+    for clip in clips {
+        let (ClipContent::Video {
             media,
             source_in,
             speed,
             ..
-        } = &clip.content
+        }
+        | ClipContent::Audio {
+            media,
+            source_in,
+            speed,
+            ..
+        }) = &clip.content
         else {
             continue;
         };
@@ -463,6 +490,210 @@ pub async fn caption_speakers(
             line
         }));
     }
+    Ok(lines)
+}
+
+/// Repack's subtitle look at this project's size: the caption box, bigger,
+/// as wide as 80% of the frame, in the bottom middle.
+pub fn subtitle_style(width: u32, height: u32) -> TextStyle {
+    let k = height as f32 / 1080.0;
+    let style = caption_style(width, height);
+    let pad = style.background.map_or(0.0, |background| background.pad_x);
+    TextStyle {
+        size: (48.0 * k).round(),
+        max_width: Some((width as f32 * 0.8 - pad * 2.0).round()),
+        ..style
+    }
+}
+
+/// Names subtitle clips so a second run replaces the first.
+const SUBTITLE: &str = "Subtitle";
+/// The shortest a subtitle of a word or two can be on screen and still be read (seconds).
+const MIN_SUBTITLE: f64 = 0.25;
+/// Time a longer line squeezed by crosstalk is given to be read (seconds).
+const READ_SUBTITLE: f64 = 0.6;
+
+/// Plain subtitles for everything said between `from` and `to` (timeline
+/// frames): Repack's style, bottom middle, no animation and no tracking, in
+/// each speaker's colour. They come from the footage's sound (so B-roll over
+/// it changes nothing), skip throwaway lines, start on the cut when a line
+/// starts just after one and leave no hairline gaps. Replaces subtitles made
+/// before in that span.
+pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Result<Value, String> {
+    let project = app.store.get(project_id).ok_or("no such project")?.project;
+    let fps = project.fps();
+    let audible: Vec<String> = project
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Audio && !track.muted)
+        .map(|track| track.id.clone())
+        .collect();
+    // The footage's own sound: audio clips of video files (not sound effects or music).
+    let mut sound: Vec<&Clip> = project
+        .clips
+        .iter()
+        .filter(|clip| {
+            audible.contains(&clip.track)
+                && clip.start < to
+                && clip.end() > from
+                && matches!(&clip.content, ClipContent::Audio { media, .. }
+                    if project.media(media).is_some_and(|media| media.kind == edit_core::MediaKind::Video))
+        })
+        .collect();
+    sound.sort_by_key(|clip| clip.start);
+    let mut lines = spoken_lines(app, &project, &sound, from, to).await?;
+    lines.retain(|line| !throwaway(line));
+    let (width, height) = (project.settings.width, project.settings.height);
+    let style = subtitle_style(width, height);
+    let (live, placed) = app.store.update(project_id, "agent", |project| {
+        let old: HashSet<String> = project
+            .clips
+            .iter()
+            .filter(|clip| {
+                clip.name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with(SUBTITLE))
+                    && clip.start < to
+                    && clip.end() > from
+            })
+            .map(|clip| clip.id.clone())
+            .collect();
+        project.clips.retain(|clip| !old.contains(&clip.id));
+        let snap = (SNAP * fps).round() as i64;
+        let least = (MIN_SUBTITLE * fps).round() as i64;
+        // Last line first, so each knows where the next one it must give way to starts.
+        let mut slots = Vec::new();
+        let mut next_start: HashMap<String, i64> = HashMap::new();
+        for line in lines.iter().rev() {
+            let Some(clip) = project.clip(&line.clip).cloned() else {
+                continue;
+            };
+            let ClipContent::Audio {
+                source_in, speed, ..
+            } = clip.content
+            else {
+                continue;
+            };
+            let on_timeline =
+                |seconds: f64| clip.start as f64 + (seconds - source_in) / speed * fps;
+            let mut start = (on_timeline(line.start()).floor() as i64)
+                .max(clip.start)
+                .max(from);
+            if start - clip.start <= snap {
+                start = clip.start.max(from);
+            }
+            let until = next_start
+                .get(&line.clip)
+                .copied()
+                .unwrap_or(i64::MAX)
+                .min(clip.end())
+                .min(to);
+            let natural = on_timeline(line.end() + HOLD).ceil() as i64;
+            let mut end = natural.min(until).max(start);
+            if until - end <= snap {
+                end = until.max(start);
+            }
+            // Someone's "okay" over the next line: no room to read it, so it's left out.
+            if end - start < least && line.words.len() <= 2 {
+                continue;
+            }
+            next_start.insert(line.clip.clone(), start);
+            slots.push((line, start, end, natural));
+        }
+        slots.reverse();
+        // Crosstalk: a line squeezed by the next one gets time to be read,
+        // and the next starts a moment later (keeping its own time to read).
+        let read = (READ_SUBTITLE * fps).round() as i64;
+        for index in 0..slots.len().saturating_sub(1) {
+            let (_, start, end, natural) = slots[index];
+            let need = (start + read).min(natural.max(start + least));
+            let (next_line, next_start, next_end, _) = slots[index + 1];
+            if end < need
+                && next_line.clip == slots[index].0.clip
+                && next_start < need
+                && need <= next_end - least
+            {
+                slots[index].2 = need;
+                slots[index + 1].1 = need;
+            }
+        }
+        slots.retain(|(_, start, end, _)| end > start);
+        let mut placed = 0;
+        for (line, start, end, _) in slots {
+            let who = line
+                .name
+                .clone()
+                .or_else(|| line.voice.clone())
+                .unwrap_or_else(|| "Speaker".into());
+            let track = free_track(project, start, end);
+            let id = project.fresh_id("c");
+            project.clips.push(Clip {
+                id,
+                track,
+                start,
+                duration: end - start,
+                color: ClipColor::Cyan,
+                name: Some(format!("{SUBTITLE} · {who}")),
+                link: None,
+                fade_in: 0,
+                fade_out: 0,
+                keyframes: Default::default(),
+                content: ClipContent::Text {
+                    text: line.text(),
+                    // The speaker's colour (their glow follows it), white when unnamed.
+                    style: TextStyle {
+                        color: line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE),
+                        ..style.clone()
+                    },
+                    transform: Transform {
+                        y: height as f32 * 0.4,
+                        ..Transform::default()
+                    },
+                    animation: TextAnimation::default(),
+                    opacity: 1.0,
+                    word_times: Vec::new(),
+                },
+            });
+            placed += 1;
+        }
+        Ok(placed)
+    })?;
+    Ok(json!({ "rev": live.rev, "lines": lines.len(), "placed": placed }))
+}
+
+/// Captions every line spoken in the footage between `from` and `to` (timeline frames).
+pub async fn caption_speakers(
+    app: &App,
+    project_id: &str,
+    from: i64,
+    to: i64,
+) -> Result<Value, String> {
+    let project = app.store.get(project_id).ok_or("no such project")?.project;
+    let fps = project.fps();
+    let (width, height) = (
+        f64::from(project.settings.width),
+        f64::from(project.settings.height),
+    );
+    let video_tracks: Vec<String> = project
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Video && !track.hidden)
+        .map(|track| track.id.clone())
+        .collect();
+    let mut footage: Vec<&Clip> = project
+        .clips
+        .iter()
+        .filter(|clip| {
+            matches!(clip.content, ClipContent::Video { .. })
+                && video_tracks.contains(&clip.track)
+                && clip.start < to
+                && clip.end() > from
+        })
+        .collect();
+    footage.sort_by_key(|clip| clip.start);
+
+    let mut lines = spoken_lines(app, &project, &footage, from, to).await?;
+    lines.retain(|line| !throwaway(line));
     if lines.is_empty() {
         return Err("No speech in that part of the timeline (is the footage transcribed?).".into());
     }
@@ -661,6 +892,8 @@ pub async fn caption_speakers(
             .collect();
         project.clips.retain(|clip| !old.contains(&clip.id));
         let mut placed = 0;
+        // Where each speaker's last caption in a clip sat.
+        let mut sides: HashMap<(String, String), Side> = HashMap::new();
         for plan in &plans {
             let line = &lines[plan.line];
             let footage = project
@@ -682,16 +915,25 @@ pub async fn caption_speakers(
             let media = project.media(media).unwrap().clone();
             let on_timeline =
                 |seconds: f64| footage.start as f64 + (seconds - source_in) / speed * fps;
-            let start = on_timeline(line.start()).floor().max(footage.start as f64) as i64;
+            let snap = (SNAP * fps).round() as i64;
+            let mut start = on_timeline(line.start()).floor().max(footage.start as f64) as i64;
+            // A line that starts just after the cut starts on it.
+            if start - footage.start <= snap {
+                start = footage.start;
+            }
             // Up until the next line in the same clip begins, or the clip ends.
-            let next = lines
+            let until = lines
                 .get(plan.line + 1)
                 .filter(|next| next.clip == line.clip)
-                .map(|next| on_timeline(next.start()).floor() as i64);
-            let end = (on_timeline(line.end() + HOLD).ceil() as i64)
-                .min(next.unwrap_or(i64::MAX))
-                .min(footage.end())
-                .max(start + 1);
+                .map(|next| on_timeline(next.start()).floor() as i64)
+                .unwrap_or(i64::MAX)
+                .min(footage.end());
+            let mut end = (on_timeline(line.end() + HOLD).ceil() as i64).min(until);
+            // No hairline gap before the next caption or the cut.
+            if until - end <= snap {
+                end = until;
+            }
+            let end = end.max(start + 1);
             let text = line.text();
             let gap = 14.0 * k;
             let corners = |region: [f64; 4]| {
@@ -722,6 +964,7 @@ pub async fn caption_speakers(
                 Some(face) => choose(
                     corners(face),
                     plan.above,
+                    sides.get(&(line.clip.clone(), plan.who.clone())).copied(),
                     &avoid,
                     &text,
                     &style,
@@ -733,6 +976,9 @@ pub async fn caption_speakers(
                     style.max_width.unwrap_or(width as f32 * WIDTHS[0]),
                 ),
             };
+            if plan.face.is_some() {
+                sides.insert((line.clip.clone(), plan.who.clone()), side);
+            }
             let line_style = TextStyle {
                 max_width: Some(max_width),
                 ..style.clone()
@@ -794,6 +1040,14 @@ pub async fn caption_speakers(
                 .iter()
                 .map(|word| (on_timeline(word.start) - start as f64).max(0.0) as f32)
                 .collect();
+            // The first word is up as soon as the caption is.
+            let mut word_times = word_times;
+            if let Some(first) = word_times
+                .first_mut()
+                .filter(|first| **first <= snap as f32)
+            {
+                *first = 0.0;
+            }
             let track = free_track(project, start, end);
             let who = plan.who.clone();
             let id = project.fresh_id("c");
@@ -1081,6 +1335,24 @@ mod tests {
     }
 
     #[test]
+    fn drops_lines_that_are_only_fillers() {
+        let line = |words: &[&str]| Line {
+            clip: "c1".into(),
+            words: words
+                .iter()
+                .map(|text| word(text, 0.0, 0.1, "s0"))
+                .collect(),
+            voice: None,
+            name: None,
+            color: None,
+        };
+        assert!(throwaway(&line(&["like"])));
+        assert!(throwaway(&line(&["Um,", "like..."])));
+        assert!(!throwaway(&line(&["No."])));
+        assert!(!throwaway(&line(&["Like", "this."])));
+    }
+
+    #[test]
     fn sits_above_or_below_the_face_and_on_screen() {
         let frame = (1920.0, 1080.0);
         // A face high in the frame: no room above, so below it.
@@ -1125,14 +1397,15 @@ mod tests {
         let (side, _) = choose(
             witness,
             true,
+            None,
             &[hud, officer, witness],
             text,
             &style,
             frame,
             gap,
         );
-        // Above would sit on the timestamp: beside them, towards the middle, instead.
-        assert_eq!(side, Side::Left);
+        // Above would sit on the timestamp: below them instead, not beside.
+        assert_eq!(side, Side::Below);
         // Squeezed between two faces, it narrows so the lines stack rather than cover either.
         let left = [-200.0, -400.0, 0.0, -200.0];
         let right = [-200.0, 120.0, 0.0, 320.0];
@@ -1140,6 +1413,7 @@ mod tests {
         let (side, width) = choose(
             left,
             false,
+            None,
             &[hud, left, right, [100.0, -960.0, 540.0, 960.0]],
             long,
             &style,
@@ -1149,5 +1423,25 @@ mod tests {
         // Between them is too tight even narrowed, and below is taken: the open side, narrowed.
         assert_eq!(side, Side::Left);
         assert!(width < 1920.0 * 0.42);
+    }
+
+    #[test]
+    fn a_run_of_lines_stays_on_one_side() {
+        let frame = (1920.0, 1080.0);
+        let style = caption_style(1920, 1080);
+        let hud = [-540.0, -960.0, -540.0 + 1080.0 * 0.11, 960.0];
+        // Head near the top, left of centre: no room above.
+        let face = [-470.0, -520.0, -230.0, -260.0];
+        let avoid = [hud, face];
+        let pick = |text: &str, previous| {
+            choose(face, false, previous, &avoid, text, &style, frame, 14.0).0
+        };
+        // A long line and a one-word line both go below; a short line fitting beside isn't reason to move.
+        let first = pick("I have no idea how he got his arm", None);
+        assert_eq!(first, Side::Below);
+        assert_eq!(pick("injured.", Some(first)), Side::Below);
+        assert_eq!(pick("injured.", None), Side::Below);
+        // Pushed beside by something below, the next line keeps that side while it fits.
+        assert_eq!(pick("injured.", Some(Side::Right)), Side::Right);
     }
 }

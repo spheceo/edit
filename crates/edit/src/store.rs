@@ -86,6 +86,11 @@ impl Store {
         self.home.join("projects").join(format!("{id}.json"))
     }
 
+    /// The project's agent chat, kept beside it (and deleted with it).
+    pub fn chat_path(&self, id: &str) -> PathBuf {
+        self.home.join("projects").join(format!("{id}.chat.json"))
+    }
+
     pub fn list(&self) -> Vec<ProjectSummary> {
         let mut out = Vec::new();
         let Ok(entries) = std::fs::read_dir(self.home.join("projects")) else {
@@ -158,6 +163,7 @@ impl Store {
             return false;
         }
         self.projects.lock().unwrap().remove(id);
+        let _ = std::fs::remove_file(self.chat_path(id));
         std::fs::remove_file(self.path(id)).is_ok()
     }
 
@@ -219,10 +225,10 @@ impl Store {
     }
 
     fn write(&self, project: &Project) -> std::io::Result<()> {
-        let path = self.path(&project.id);
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(project)?)?;
-        std::fs::rename(tmp, path)
+        write_atomic(
+            &self.path(&project.id),
+            &serde_json::to_vec_pretty(project)?,
+        )
     }
 
     pub fn set_active(&self, id: &str) {
@@ -245,6 +251,14 @@ impl Store {
             .map(|summary| summary.id.clone())
             .ok_or_else(|| "no projects yet; create one in the UI first".to_owned())
     }
+}
+
+/// Writes through a temporary file, so a crash mid-write leaves the old file whole.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(tmp, path)
 }
 
 fn valid_id(id: &str) -> bool {

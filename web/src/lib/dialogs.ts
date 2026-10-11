@@ -25,6 +25,7 @@ export const SHORTCUTS: { group: string; keys: [string, string][] }[] = [
       ["V / C", "Select / razor tool"],
       ["T", "Add a title"],
       ["N", "Toggle snapping"],
+      ["M", "Mark the source at the playhead (selected clips)"],
       ["⌫ / ⇧⌫", "Delete / ripple delete"],
       ["⌘D", "Duplicate"],
       ["⌘Z / ⇧⌘Z", "Undo / redo (agent edits too)"],

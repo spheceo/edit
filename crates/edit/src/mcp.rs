@@ -26,21 +26,31 @@ Model (JSON):
   - type "video": media, source_in, speed (0.05..20), transform {x, y (px from frame centre, y down), scale (1 = fit frame), rotation (deg clockwise), shake (px of handheld camera wobble, 0 = still)}, opacity 0..1
   - type "audio": media, source_in, speed, volume_db
   - type "text": text (\n for lines), style {font "Geist" (weight 400|500|600|700|900) or "Montserrat" (600 only), size px, color [r,g,b,a] 0..1, tracking px, line_height, glow {enabled (default true), color [r,g,b,a] or null = text colour (default null), radius = blur px (default 46), strength = opacity 0..1 (default 0.5)}, optional max_width px (wrap lines), optional background {color, opacity (0.75), pad_x (12), pad_y (8)} = a box behind the lines, optional shadow {color, opacity (0.65), distance px (3), angle degrees clockwise from up (112), size px (6), blur px (8)}}. Subtitle house style (at 1080p; scale by height/1080): Montserrat 600, size 48, line_height 1.15, glow default, max_width = 0.8*width - 24, background and shadow at their defaults, transform.y = 0.4*height, animation none, transform (as video, shake included), animation {preset none|fade|rise|pop|typewriter|words, duration frames, stagger frames}, opacity, word_times (frames from the clip start at which each word appears, for preset "words": words pop in one at a time, no motion, synced to speech; without word_times one every `stagger` frames)
-  - type "adjustment": grade {exposure stops, contrast -1..1, saturation -1..1, temperature -1..1, vignette 0..1}, opacity — grades everything below it
+  - type "adjustment": grade {exposure stops, contrast -1..1, saturation -1..1, temperature -1..1, vignette 0..1}, shake {preset none|handheld|vertical|horizontal|impact|earthquake, and optionally any of motion wiggle|drop, amount (px at 1080p), frequency (wiggles/s), rotation (deg of tilt), direction both|vertical|horizontal, envelope steady|build|hit|swell (wiggle only), motion_blur (frames of movement smeared), edges mirror|zoom — each overrides the preset}, opacity — grades and moves everything below it, modelled on Sapphire S_Shake (heavy motion blur, picture mirrored past its edges). motion "wiggle" = random jolts; motion "drop" = one move that accelerates across the clip, amount px by its end, down (vertical) or right (horizontal), negative amount for up/left. Presets: vertical = a drop straight down, 540px, blur 2 (the house slam into a cut: it only goes down, fast, heavily blurred, never up and down); horizontal = the same sideways; impact 160px wiggle 30/s, 3° tilt, hit; earthquake 60px wiggle 16/s; handheld 8px 1.2/s, sharp, zoomed (subtle).
   - type "solid": fill [r,g,b,a], opacity — flashes, dips to black
+- media: {id, name, path, kind, duration, …, markers?: [{time (SECONDS into the media), name}]} — markers are points in the source that every clip of it carries (a sound effect's "hit"; the user adds them with M).
 - script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
-- keyframes: {param: [{frame (relative to clip start), value, ease linear|in_out|in|out|hold (preset for the segment to the next key), optional handle_in / handle_out {speed = value units per frame at the key, influence 0..1 of the segment} = After Effects-style bezier handles that override the preset at that end}]}. Animatable params: video x,y,scale,rotation,shake,opacity; text also size,tracking,glow.radius,glow.strength; adjustment exposure,contrast,saturation,temperature,vignette,opacity; solid opacity; audio volume_db.
+- keyframes: {param: [{frame (relative to clip start), value, ease linear|in_out|in|out|hold (preset for the segment to the next key), optional handle_in / handle_out {speed = value units per frame at the key, influence 0..1 of the segment} = After Effects-style bezier handles that override the preset at that end}]}. Animatable params: video x,y,scale,rotation,shake,opacity; text also size,tracking,glow.radius,glow.strength; adjustment shake (amount),exposure,contrast,saturation,temperature,vignette,opacity; solid opacity; audio volume_db.
 Linked clips (same link id) are picture+sound of one source; keep them aligned when moving.
 Look at your work with render_frame / contact_sheet before telling the user it is done.
 
 House editing style (videos cut from a script of police footage):
-- The INTRO is everything before the first cut-in. It's the hook, and where the treatment goes:
+- The INTRO is the hook: the short teaser clips from the start up to the cut-in that leads into the full footage. It can have cut-ins between its teasers (they're part of it, but get none of the footage treatment). It's where the treatment goes:
+  - It always opens with a reverse dip to black: add_clip {type "solid", fill [0,0,0,1], start 0, duration about 0.5 s in frames, track "new"} so it covers everything, then set_keyframes opacity [{frame 0, value 1}, {frame duration-1, value 0}].
+  - Every cut in the intro gets a camera shutter: once the picture is final, call add_sound_effect {sound "shutter", times [...]} with the timeline second of each cut (the frame where one footage clip meets the next, and where B-roll starts and ends). The shutter is lined up by its "hit" marker so it straddles the cut; placing again replaces what's there. Not on cuts into or out of a cut-in.
+  - A vertical drop just before each cut-in: an adjustment layer {type "adjustment", grade all 0, shake {preset "vertical"}} over the last 6 frames (~0.2 s) of footage leading into the cut-in, ending exactly on the cut-in's first frame, on a track above the footage (and above its captions). The picture slams down, fast and heavily motion-blurred, into the cut — one direction only, never a back-and-forth shake. If it looks weak in render_frame, raise amount or motion_blur rather than lengthening it.
+  - Linked picture and sound stay whole: never leave a clip's sound trimmed short of its picture, and never put a sound effect on the footage's own audio track (A1).
   - Speaker captions on what's said: run caption_speakers (it works out who speaks each line by watching and listening, then places word-by-word captions in the house box style by that person, above their head when there's room, else just below their face or redaction box, tracked to them with a little shake). Check a few with render_frame and fix any that sit on the wrong person.
   - Punch-ins on reactions and key lines: scale keyframes from 1 to about 1.08–1.15 over a few frames, centred on the face (move x/y too).
   - B-roll over cuts: while someone keeps talking, lay a different shot (another moment of the footage, the scene, the other person reacting) on a video track above for 1–3 s as picture only; the sound underneath carries on. Prefer moments the transcript or the Doc's notes point to.
   - Quick white flashes or dips on hard scene changes, sparingly.
 - CUT-INS (the black narration cards) may carry stylised text and graphics.
-- AFTER THE INTRO the video is the full footage: keep it clean. No captions or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
+- AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
+  - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: run add_subtitles (it defaults to everything after the intro). They sit bottom middle, no animation, no tracking, each line in its speaker's colour. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own.
+- Be precise, and fill in the small gaps yourself: skip throwaway moments (a lone "like" or "um", a blip that adds nothing to the story) rather than captioning them; when something starts or ends within ~0.2 s of a cut or of the next caption, snap it to that edge so there are no slivers or hairline gaps.
+- Keep the layers tidy: a clip shouldn't float on a track with nothing under it. After adding or removing layers, run tidy_tracks; it moves clips down into empty space below them (keeping what's above what) and drops empty tracks.
+- When the user corrects something or tells you how they like it, apply it everywhere it fits in the project, not just the one spot they pointed at.
+- Every footage range must play from its first word to its last (the Doc's "first....last" note). If one stops or starts a word short (e.g. it cuts at "hit that" when the range ends on "priuses"), run realign_script, then re-caption the clips it changed.
 - Redactions in the footage are deliberate; never cover or move them.
 - track_region pins anything (text, an overlay) to a moving face or object."#;
 
@@ -154,7 +164,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "add_clip",
-            "Add any clip (video/audio/text/adjustment/solid) using the model in the server instructions. Omit id. If track is omitted a free track of the right kind is chosen (created if needed).",
+            "Add any clip (video/audio/text/adjustment/solid) using the model in the server instructions. Omit id. If track is omitted a free track of the right kind is chosen (created if needed); track \"new\" puts it on a new track on top of the rest.",
             json!({ "clip": { "type": "object" } }),
             &["clip"],
         ),
@@ -192,6 +202,28 @@ fn tools() -> Vec<Value> {
             &["paths"],
         ),
         tool(
+            "add_sound_effect",
+            "Place a sound effect bundled with Edit at timeline times, on a free audio track. Each is lined up by its \"hit\" marker (see media markers): for a cut, give the cut's time (where the two clips meet) and the sound straddles it. The same sound already within 0.5 s of a time is replaced, so placing again (or after the sound is updated) never doubles up.",
+            json!({
+                "sound": { "type": "string", "enum": crate::sfx::names(), "description": "shutter = a camera shutter, for cuts in the intro." },
+                "times": { "type": "array", "items": { "type": "number" }, "description": "Seconds on the timeline." },
+                "volume_db": { "type": "number", "description": "Default 0." }
+            }),
+            &["sound", "times"],
+        ),
+        tool(
+            "realign_script",
+            "Re-finds each script range's first and last words in its transcript (forgiving how the Doc spells them: plurals, possessives, a letter off, e.g. \"priuses\" for \"Prius\") and moves that clip's in/out points to them, shifting everything after it so nothing overlaps or gaps (effects ending on its cut move with the cut). Use it when a range starts or ends a word early or late. Re-run caption_speakers over any clip it changes.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "tidy_tracks",
+            "Moves every clip down onto the track below wherever that track is empty for the clip's whole span (never into V1/A1, the footage tracks), so layers don't float above gaps and clips that overlap keep their order, then removes tracks left empty. Run it after adding or removing layers.",
+            json!({}),
+            &[],
+        ),
+        tool(
             "read_transcript",
             "What is said on the timeline, with timeline times in seconds, grouped into phrases. Only audio clips whose media has been transcribed appear; use `transcribe` first.",
             json!({}),
@@ -221,10 +253,19 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "caption_speakers",
-            "Speaker captions for intro footage: splits what's said into lines, asks a vision model (Luna) who says each line and where they are (stills + sound), then adds a word-by-word caption per line in the house box style beside its speaker, tracked to their face with a little shake. Replaces captions it made before in that span. Takes a few minutes. Defaults to the intro (start to the first cut-in).",
+            "Speaker captions for intro footage: splits what's said into lines, asks a vision model (Luna) who says each line and where they are (stills + sound), then adds a word-by-word caption per line in the house box style beside its speaker, tracked to their face with a little shake. Replaces captions it made before in that span. Takes a few minutes. Defaults to the intro (start to the cut-in before the full footage).",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
-                "end": { "type": "number", "description": "Seconds on the timeline (default: the first cut-in)." }
+                "end": { "type": "number", "description": "Seconds on the timeline (default: the end of the intro)." }
+            }),
+            &[],
+        ),
+        tool(
+            "add_subtitles",
+            "Plain subtitles for everything said (Repack's style): bottom middle, no animation, no tracking, each line in its speaker's colour. Made from the footage's own sound, skipping throwaway lines and snapping to cuts. Replaces subtitles it made before in that span. Defaults to after the intro: from the cut-in before the full footage to the end of the timeline.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline (default: the end of the intro)." },
+                "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." }
             }),
             &[],
         ),
@@ -361,10 +402,14 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 } else {
                     TrackKind::Video
                 };
-                if value["track"].as_str().is_none() {
-                    let start = value["start"].as_i64().unwrap_or(0);
-                    let end = start + value["duration"].as_i64().unwrap_or(1);
-                    value["track"] = json!(free_track(project, kind, start, end));
+                match value["track"].as_str() {
+                    Some("new") => value["track"] = json!(project.add_track(kind)),
+                    Some(_) => {}
+                    None => {
+                        let start = value["start"].as_i64().unwrap_or(0);
+                        let end = start + value["duration"].as_i64().unwrap_or(1);
+                        value["track"] = json!(free_track(project, kind, start, end));
+                    }
                 }
                 let clip: Clip =
                     serde_json::from_value(value).map_err(|error| format!("clip: {error}"))?;
@@ -454,6 +499,121 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 }
             )))
         }
+        "add_sound_effect" => {
+            let name = args["sound"].as_str().ok_or("sound is required")?;
+            let sound = crate::sfx::find(name).ok_or_else(|| {
+                format!(
+                    "no sound {name}; use one of {}",
+                    crate::sfx::names().join(", ")
+                )
+            })?;
+            let times: Vec<f64> =
+                serde_json::from_value(args["times"].clone()).map_err(|error| error.to_string())?;
+            let volume_db = args["volume_db"].as_f64().unwrap_or(0.0) as f32;
+            let path = crate::sfx::path(store.home(), sound)?;
+            let (_, added, errors) = crate::server::import_paths(
+                app,
+                &id,
+                vec![path.to_string_lossy().to_string()],
+                false,
+                ORIGIN,
+            )
+            .await?;
+            let media_id = added
+                .into_iter()
+                .next()
+                .ok_or_else(|| format!("couldn't import {name}: {errors:?}"))?;
+            let (_, placed) = store.update(&id, ORIGIN, |project| {
+                let fps = project.fps();
+                let media = project
+                    .media
+                    .iter_mut()
+                    .find(|media| media.id == media_id)
+                    .ok_or("sound media vanished")?;
+                // The sound's markers come with it (kept if the user has moved them).
+                if media.markers.is_empty() {
+                    media.markers = sound.markers();
+                }
+                let hit = media
+                    .markers
+                    .iter()
+                    .find(|marker| marker.name == crate::sfx::HIT)
+                    .or(media.markers.first())
+                    .map_or(0.0, |marker| marker.time);
+                let length = ((media.duration * fps).floor() as i64).max(1);
+                let mut placed = Vec::new();
+                let mut replaced = 0;
+                for time in &times {
+                    // This sound already near the time (any version of it) gives way to the new one.
+                    let (near0, near1) = (((time - 0.5) * fps) as i64, ((time + 0.5) * fps) as i64);
+                    let before = project.clips.len();
+                    project.clips.retain(|clip| {
+                        !(clip.name.as_deref() == Some(name)
+                            && matches!(clip.content, ClipContent::Audio { .. })
+                            && clip.start < near1
+                            && clip.end() > near0)
+                    });
+                    replaced += before - project.clips.len();
+                    // Its hit marker lands on the time given.
+                    let mut start = ((time - hit) * fps).round() as i64;
+                    let mut duration = length;
+                    let mut source_in = 0.0;
+                    // A hit on frame 0: drop the bit before it.
+                    if start < 0 {
+                        source_in = -start as f64 / fps;
+                        duration += start;
+                        start = 0;
+                    }
+                    if duration < 1 {
+                        continue;
+                    }
+                    // Never on A1: that's the footage's own sound.
+                    let track =
+                        free_track_from(project, TrackKind::Audio, 1, start, start + duration);
+                    let clip_id = project.fresh_id("c");
+                    project.clips.push(Clip {
+                        id: clip_id,
+                        track,
+                        start,
+                        duration,
+                        color: ClipColor::Yellow,
+                        name: Some(name.to_owned()),
+                        link: None,
+                        fade_in: 0,
+                        fade_out: 0,
+                        keyframes: Default::default(),
+                        content: ClipContent::Audio {
+                            media: media_id.clone(),
+                            source_in,
+                            speed: 1.0,
+                            volume_db,
+                        },
+                    });
+                    placed.push(format!("{time:.2}s"));
+                }
+                Ok((placed, replaced))
+            })?;
+            let (placed, replaced) = placed;
+            Ok(text(format!(
+                "placed {name} at {} (replacing {replaced} already near those times)",
+                placed.join(", ")
+            )))
+        }
+        "realign_script" => {
+            let changed = crate::script::realign(app, &id).await?;
+            Ok(text(if changed.is_empty() {
+                "every range already starts and ends on its words".to_owned()
+            } else {
+                serde_json::to_string_pretty(&changed).unwrap_or_default()
+            }))
+        }
+        "tidy_tracks" => {
+            let (_, (moved, removed)) =
+                store.update(&id, ORIGIN, |project| Ok(tidy_tracks(project)))?;
+            Ok(text(format!(
+                "moved {moved} clip(s) down, removed {removed} empty track(s)"
+            )))
+        }
         "transcribe" => {
             let live = store.get(&id).ok_or("project vanished")?;
             let media_id = args["media_id"].as_str().ok_or("media_id is required")?;
@@ -484,6 +644,26 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             let summary = crate::captions::caption_speakers(app, &id, from, to).await?;
             Ok(text(format!(
                 "captioned {}–{}s: {}",
+                from as f64 / fps,
+                to as f64 / fps,
+                serde_json::to_string(&summary).unwrap_or_default()
+            )))
+        }
+        "add_subtitles" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let intro_end = crate::captions::intro(&live.project).map_or(0, |(_, end)| end);
+            let from = args["start"]
+                .as_f64()
+                .map_or(intro_end, |seconds| (seconds * fps).round() as i64);
+            let to = args["end"]
+                .as_f64()
+                .map_or(live.project.duration(), |seconds| {
+                    (seconds * fps).round() as i64
+                });
+            let summary = crate::captions::subtitles(app, &id, from, to).await?;
+            Ok(text(format!(
+                "subtitled {:.2}–{:.2}s: {}",
                 from as f64 / fps,
                 to as f64 / fps,
                 serde_json::to_string(&summary).unwrap_or_default()
@@ -661,7 +841,90 @@ fn timeline_transcript(app: &App, project: &Project) -> String {
 
 /// Lowest track of `kind` free over [start, end); adds a track when none is.
 /// Text and graphics prefer tracks above the main footage.
+/// Moves clips down onto the track below wherever it's empty for the clip's
+/// whole span, so nothing floats above a gap; clips that overlap in time keep
+/// their order. The first track of each kind (the footage) is left as it is.
+/// Then drops tracks left empty. Returns (clips moved, tracks removed).
+fn tidy_tracks(project: &mut Project) -> (usize, usize) {
+    let mut moved = 0;
+    loop {
+        let mut changed = false;
+        for kind in [TrackKind::Video, TrackKind::Audio] {
+            let tracks: Vec<(String, bool)> = project
+                .tracks
+                .iter()
+                .filter(|track| track.kind == kind)
+                .map(|track| (track.id.clone(), track.locked))
+                .collect();
+            // From the second track up, each onto the one below (never into the first).
+            for pair in tracks.windows(2).skip(1) {
+                let ((below, below_locked), (here, here_locked)) = (&pair[0], &pair[1]);
+                if *below_locked || *here_locked {
+                    continue;
+                }
+                let ids: Vec<String> = project
+                    .clips
+                    .iter()
+                    .filter(|clip| &clip.track == here)
+                    .map(|clip| clip.id.clone())
+                    .collect();
+                for id in ids {
+                    let (start, end) = match project.clip(&id) {
+                        Some(clip) => (clip.start, clip.end()),
+                        None => continue,
+                    };
+                    let free = !project.clips.iter().any(|other| {
+                        &other.track == below && other.start < end && start < other.end()
+                    });
+                    if free {
+                        if let Some(clip) = project.clip_mut(&id) {
+                            clip.track = below.clone();
+                        }
+                        moved += 1;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let before = project.tracks.len();
+    let firsts: Vec<String> = [TrackKind::Video, TrackKind::Audio]
+        .iter()
+        .filter_map(|kind| project.tracks.iter().find(|track| track.kind == *kind))
+        .map(|track| track.id.clone())
+        .collect();
+    let used: std::collections::HashSet<String> = project
+        .clips
+        .iter()
+        .map(|clip| clip.track.clone())
+        .collect();
+    project
+        .tracks
+        .retain(|track| firsts.contains(&track.id) || used.contains(&track.id));
+    (moved, before - project.tracks.len())
+}
+
 fn free_track(project: &mut Project, kind: TrackKind, start: i64, end: i64) -> String {
+    free_track_from(
+        project,
+        kind,
+        usize::from(kind == TrackKind::Video),
+        start,
+        end,
+    )
+}
+
+/// The lowest track of `kind` free for the span, after the first `skip` of them.
+fn free_track_from(
+    project: &mut Project,
+    kind: TrackKind,
+    skip: usize,
+    start: i64,
+    end: i64,
+) -> String {
     let busy = |project: &Project, track: &str| {
         project
             .clips
@@ -672,7 +935,7 @@ fn free_track(project: &mut Project, kind: TrackKind, start: i64, end: i64) -> S
         .tracks
         .iter()
         .filter(|track| track.kind == kind)
-        .skip(usize::from(kind == TrackKind::Video))
+        .skip(skip)
         .map(|track| track.id.clone())
         .collect();
     for track in candidates {
@@ -706,8 +969,39 @@ fn merge(target: &mut Value, patch: &Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::merge;
+    use super::{merge, tidy_tracks, Clip, Project, TrackKind};
     use serde_json::json;
+
+    #[test]
+    fn tidy_tracks_drops_layers_into_gaps_and_keeps_their_order() {
+        let mut project = Project::new("p".into(), "t".into(), Default::default());
+        project.tracks.clear();
+        let [v1, v2, v3, v4] = [(); 4].map(|_| project.add_track(TrackKind::Video));
+        project.add_track(TrackKind::Audio);
+        let clip = |id: &str, track: &str, start: i64, duration: i64| {
+            serde_json::from_value::<Clip>(json!({
+                "id": id, "track": track, "start": start, "duration": duration,
+                "type": "solid", "fill": [0, 0, 0, 1]
+            }))
+            .unwrap()
+        };
+        project.clips = vec![
+            clip("footage", &v1, 0, 100),
+            // A caption alone on V3 with V2 empty under it: drops to V2.
+            clip("caption", &v3, 0, 20),
+            // A flash on V4 over a title on V2: drops to V3 (still above the title), not onto it.
+            clip("title", &v2, 40, 30),
+            clip("flash", &v4, 50, 5),
+        ];
+        let (moved, removed) = tidy_tracks(&mut project);
+        let track_of = |id: &str| project.clip(id).unwrap().track.clone();
+        assert_eq!(track_of("footage"), v1);
+        assert_eq!(track_of("caption"), v2);
+        assert_eq!(track_of("title"), v2);
+        assert_eq!(track_of("flash"), v3);
+        assert_eq!((moved, removed), (2, 1));
+        assert!(!project.tracks.iter().any(|track| track.id == v4));
+    }
 
     #[test]
     fn merge_patch_follows_rfc_7386() {

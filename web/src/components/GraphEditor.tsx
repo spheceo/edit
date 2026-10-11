@@ -289,13 +289,30 @@ function Curves({
       requestDraw();
     });
     observer.observe(wrap);
+    // The timeline's own zoom comes back on close.
+    const { ppf, scrollX } = useView.getState();
     return () => {
       observer.disconnect();
       setLanesWidth(previous);
-      setView({});
+      setView({ ppf, scrollX });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Frame the clip's keyframes (or the clip) so short moves are big enough to work on.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!clip || !wrap) return;
+    const frames = Object.values(clip.keyframes ?? {}).flatMap((keys) => keys.map((key) => key.frame));
+    const from = clip.start + (frames.length > 1 ? Math.min(...frames) : 0);
+    const to = clip.start + (frames.length > 1 ? Math.max(...frames) : clip.duration);
+    const span = Math.max(8, to - from);
+    const pad = span * 0.15;
+    setLanesWidth(wrap.clientWidth);
+    const next = Math.min(MOST_PPF, wrap.clientWidth / (span + pad * 2));
+    setView({ ppf: next, scrollX: (from - pad) * next });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip?.id]);
 
   useEffect(() => {
     const offPlayhead = playhead.subscribe(requestDraw);

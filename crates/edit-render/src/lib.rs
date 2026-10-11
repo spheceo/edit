@@ -45,6 +45,16 @@ struct GradeUniforms {
     opacity: f32,
     aspect: f32,
     _pad: f32,
+    /// Shake now: offset (in frame heights), tilt (radians clockwise), zoom.
+    shake_x: f32,
+    shake_y: f32,
+    shake_turn: f32,
+    shake_zoom: f32,
+    /// Where it was a shutter earlier (blurred along the way), and 1 to mirror past the edges.
+    from_x: f32,
+    from_y: f32,
+    from_turn: f32,
+    mirror: f32,
 }
 
 #[repr(C)]
@@ -649,8 +659,13 @@ impl Renderer {
                         None,
                     );
                 }
-                Layer::Adjustment { grade, opacity } => {
-                    if *opacity <= 0.0 || *grade == Grade::default() {
+                Layer::Adjustment {
+                    grade,
+                    shake,
+                    opacity,
+                } => {
+                    let still = *shake == edit_core::ShakeOffset::default();
+                    if still && (*opacity <= 0.0 || *grade == Grade::default()) {
                         continue;
                     }
                     let uniforms = GradeUniforms {
@@ -662,6 +677,14 @@ impl Renderer {
                         opacity: opacity.clamp(0.0, 1.0),
                         aspect: self.width as f32 / self.height as f32,
                         _pad: 0.0,
+                        shake_x: shake.x / self.height as f32,
+                        shake_y: shake.y / self.height as f32,
+                        shake_turn: shake.rotation.to_radians(),
+                        shake_zoom: shake.zoom.max(0.01),
+                        from_x: shake.from_x / self.height as f32,
+                        from_y: shake.from_y / self.height as f32,
+                        from_turn: shake.from_rotation.to_radians(),
+                        mirror: if shake.mirror { 1.0 } else { 0.0 },
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));

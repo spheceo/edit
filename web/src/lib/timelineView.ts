@@ -24,7 +24,7 @@ interface View {
 export const useView = create<View>(() => ({ ppf: 4, scrollX: 0, scrollY: 0, fitted: false, graph: false, lanes: 1 }));
 
 /** Most zoomed in: pixels per frame. */
-export const MOST_PPF = 40;
+export const MOST_PPF = 80;
 /** Width of the lanes, kept current by the Timeline. */
 let lanesWidth = 1;
 export const getLanesWidth = () => lanesWidth;

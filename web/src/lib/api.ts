@@ -122,7 +122,7 @@ export const api = {
   resumeScript: (id: string, recut = false) => request<{ job: ScriptJob | null }>("POST", `/api/projects/${id}/script/job${recut ? "?recut=true" : ""}`),
 };
 
-export const mediaUrl = (project: string, media: string, kind: "proxy" | "thumbs" | "peaks") =>
+export const mediaUrl = (project: string, media: string, kind: "proxy" | "audio" | "thumbs" | "peaks") =>
   `/api/projects/${project}/media/${media}/${kind}`;
 
 let machine: Promise<string> | null = null;

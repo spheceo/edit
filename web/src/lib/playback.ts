@@ -42,6 +42,8 @@ const BUFFERING_BADGE_MS = 600;
 const LOOK_AHEAD = 1;
 const AUDIO_AHEAD = 0.8;
 const START_LEAD = 0.05;
+/** After the playhead rests this long, its sound is decoded so Play starts at once. */
+const SETTLE_MS = 300;
 
 class Preview {
   engine: Engine | null = null;
@@ -59,12 +61,15 @@ class Preview {
   private tracks = new Map<string, Track>();
   private media = new Map<string, Media>();
   private sources = new Map<string, string>();
+  private sounds = new Map<string, string>();
   private duration = 0;
   private persistedAt = 0;
   private renderedFrame: number | null = null;
   private copied = new Map<string, VideoFrame>();
   private pendingScenes = new Map<number, { serial: number; sources: PictureSource[] }>();
   private seekSerial = 0;
+  private settled = true;
+  private settleTimer: ReturnType<typeof setTimeout> | undefined;
   private renderedScrub = -1;
   private direction = 1;
   private playedFrom = 0;
@@ -212,6 +217,7 @@ class Preview {
     this.pause();
     cancelAnimationFrame(this.queued);
     this.queued = 0;
+    clearTimeout(this.settleTimer);
     this.retire();
     this.decoder.dispose();
     this.pendingScenes.clear();
@@ -233,6 +239,7 @@ class Preview {
       this.pause();
       this.decoder.dispose();
       this.sources.clear();
+      this.sounds.clear();
       this.copied.clear();
       this.peaks.clear();
       this.use((engine) => engine.clearPeaks());
@@ -261,10 +268,15 @@ class Preview {
     this.duration = projectDuration(project);
     this.tracks = new Map(project.tracks.map((track) => [track.id, track]));
     this.media = new Map(project.media.map((media) => [media.id, media]));
-    const nextSources = new Map(project.media.map((media) => [media.id,
-      `${mediaUrl(project.id, media.id, "proxy")}?v=${encodeURIComponent(proxyVersions[media.id] ?? "source")}`]));
+    // Picture and sound are separate preview files, so decoding sound never downloads video.
+    const url = (media: Media, kind: "proxy" | "audio") =>
+      `${mediaUrl(project.id, media.id, kind)}?v=${encodeURIComponent(proxyVersions[media.id] ?? "source")}`;
+    const nextSources = new Map(project.media.map((media) => [media.id, url(media, "proxy")]));
+    const nextSounds = new Map(project.media.map((media) => [media.id, url(media, "audio")]));
     for (const [id, url] of this.sources) if (nextSources.get(id) !== url) this.decoder.forget(url);
+    for (const [id, url] of this.sounds) if (nextSounds.get(id) !== url) this.decoder.forget(url);
     this.sources = nextSources;
+    this.sounds = nextSounds;
     this.copied.clear();
     this.loadPeaks(project);
     this.resetClock();
@@ -316,6 +328,9 @@ class Preview {
     playhead.frame = Math.max(0, Math.round(frame));
     clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => this.remember(), 200);
+    this.settled = false;
+    clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => { this.settled = true; this.invalidate(); }, SETTLE_MS);
     this.resetClock();
     playhead.emit();
     this.invalidate();
@@ -457,7 +472,11 @@ class Preview {
     const lanes = new Set<string>();
     for (const source of sources) this.requestPicture(source, lanes);
     // Scrubbing needs one picture, not concurrent audio and future-cut decodes.
-    if (!playhead.playing) { this.decoder.retain(lanes); return; }
+    if (!playhead.playing) {
+      if (this.settled) for (const clip of this.activeClips(frame)) this.requestSound(clip, frame, lanes);
+      this.decoder.retain(lanes);
+      return;
+    }
     const active = this.activeClips(frame);
     // Cue upcoming cuts, including a different moment of the same source.
     let lo = 0, hi = this.clips.length;
@@ -470,16 +489,19 @@ class Preview {
     for (const clip of upcoming) if (clip.type === "video" && !this.tracks.get(clip.track)?.hidden) {
       this.requestPicture({ clip: clip.id, media: clip.media, time: clip.source_in }, lanes);
     }
-    for (const clip of [...active, ...upcoming]) if (this.audible(clip)) {
-      const media = this.media.get(clip.media)!;
-      const url = this.sources.get(clip.media)!;
-      const time = clip.source_in + Math.max(0, frame - clip.start) / fps * clip.speed;
-      if (time >= media.duration) continue;
-      const lane = `a:${clip.id}`;
-      lanes.add(lane);
-      this.decoder.requestAudio(url, url, lane, time, media.duration, clip.speed);
-    }
+    for (const clip of [...active, ...upcoming]) this.requestSound(clip, frame, lanes);
     this.decoder.retain(lanes);
+  }
+
+  private requestSound(clip: Clip, frame: number, lanes: Set<string>) {
+    if (!this.audible(clip)) return;
+    const media = this.media.get(clip.media)!;
+    const url = this.sounds.get(clip.media)!;
+    const time = clip.source_in + Math.max(0, frame - clip.start) / this.project!.settings.fps * clip.speed;
+    if (time >= media.duration) return;
+    const lane = `a:${clip.id}`;
+    lanes.add(lane);
+    this.decoder.requestAudio(url, url, lane, time, media.duration, clip.speed);
   }
 
   private audioReady(frame: number, ahead: number) {
@@ -495,7 +517,7 @@ class Preview {
       const end = Math.min(media.duration, clip.source_in + (Math.min(until, clipEnd(clip)) - clip.start) / fps * clip.speed);
       const first = Math.floor((time + 1e-8) / AUDIO_CHUNK_SECONDS);
       const last = Math.max(first, Math.floor((end - 1e-8) / AUDIO_CHUNK_SECONDS));
-      for (let chunk = first; chunk <= last; chunk++) if (!this.decoder.pcm(this.sources.get(clip.media)!, chunk, clip.speed)) return false;
+      for (let chunk = first; chunk <= last; chunk++) if (!this.decoder.pcm(this.sounds.get(clip.media)!, chunk, clip.speed)) return false;
       return true;
     });
   }
@@ -509,7 +531,7 @@ class Preview {
     for (const clip of this.clips) {
       if (clip.start > until) break;
       if (clipEnd(clip) <= frame || !this.audible(clip)) continue;
-      const url = this.sources.get(clip.media)!;
+      const url = this.sounds.get(clip.media)!;
       const media = this.media.get(clip.media)!;
       const time = clip.source_in + Math.max(0, frame - clip.start) / fps * clip.speed;
       const first = Math.floor(time / AUDIO_CHUNK_SECONDS);

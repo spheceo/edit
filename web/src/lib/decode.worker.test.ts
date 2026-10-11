@@ -3,24 +3,37 @@ import type { DecodeRequest, DecodeResponse } from "./decoder.protocol";
 
 const decoding = vi.hoisted(() => ({
   gate: null as Promise<void> | null,
-  closed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(), audioRanges: vi.fn(),
+  closed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(), audioRanges: vi.fn(), videoOpened: vi.fn(), scrubbed: vi.fn(),
 }));
 vi.mock("mediabunny", () => ({
   ALL_FORMATS: [],
-  UrlSource: class {},
+  StreamSource: class {},
   Input: class {
     dispose = decoding.disposed;
     async getPrimaryVideoTrack() { return { canDecode: async () => true, getFirstTimestamp: async () => 0 }; }
     async getPrimaryAudioTrack() { return { canDecode: async () => true }; }
   },
   VideoSampleSink: class {
+    // A 30 fps source decoded forward from the frame shown at `start`.
     async *samplesAtTimestamps(times: number[]) {
-      try {
-        for (const time of times) {
-          if (time === 0 && decoding.gate) await decoding.gate;
-          yield { close: () => decoding.closed(time), toVideoFrame: () => ({ timestamp: time * 1e6 }) };
-        }
-      } finally { decoding.iteratorClosed(); }
+      decoding.scrubbed(times);
+      for (const time of times) {
+        const timestamp = Math.floor(time * 30 + 1e-9) / 30;
+        if (timestamp === 0 && decoding.gate) await decoding.gate;
+        yield { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => ({ timestamp: timestamp * 1e6 }) };
+      }
+    }
+    samples(start: number, end = Infinity) {
+      decoding.videoOpened(start, end);
+      return (async function* () {
+        try {
+          for (let frame = Math.floor(start * 30 + 1e-9); frame / 30 < end; frame++) {
+            const timestamp = frame / 30;
+            if (frame === 0 && decoding.gate) await decoding.gate;
+            yield { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => ({ timestamp: timestamp * 1e6 }) };
+          }
+        } finally { decoding.iteratorClosed(); }
+      })();
     }
   },
   AudioSampleSink: class {
@@ -52,20 +65,61 @@ describe("decoder worker scheduling and PCM boundaries", () => {
   it("finishes one obsolete picture for responsive dragging, then decodes only the newest request", async () => {
     let release!: () => void;
     decoding.gate = new Promise<void>((resolve) => { release = resolve; });
-    send({ type: "video", id: 1, key: "file", url: "/file", lane: "v:clip", times: [0, 0.1, 0.2] });
-    send({ type: "video", id: 2, key: "file", url: "/file", lane: "v:clip", times: [3] });
-    send({ type: "video", id: 3, key: "file", url: "/file", lane: "v:clip", times: [5, 5.1] });
+    send({ type: "video", id: 1, key: "file", url: "/file", lane: "v:clip", times: [0, 0.1, 0.2], playing: true });
+    send({ type: "video", id: 2, key: "file", url: "/file", lane: "v:clip", times: [3], playing: true });
+    send({ type: "video", id: 3, key: "file", url: "/file", lane: "v:clip", times: [5, 5.1], playing: true });
     release();
     await vi.waitFor(() => expect(messages.some((m) => m.type === "done" && m.id === 3)).toBe(true));
     expect(messages.filter((m) => m.type === "video").map((m) => m.time)).toEqual([0, 5, 5.1]);
-    expect(decoding.closed).toHaveBeenCalledWith(0.1);
-    expect(decoding.iteratorClosed).toHaveBeenCalledTimes(2);
+    // The jump reopened the decoder at 5 s; that one stays open for the next request.
+    expect(decoding.videoOpened.mock.calls.map(([start]) => start)).toEqual([0, 5]);
+    expect(decoding.iteratorClosed).toHaveBeenCalledOnce();
+  });
+
+  it("keeps one decoder across playback batches and reopens it to go backwards", async () => {
+    const done = (id: number) => vi.waitFor(() => expect(messages.some((m) => m.type === "done" && m.id === id)).toBe(true));
+    send({ type: "video", id: 1, key: "file", url: "/file", lane: "v:clip", times: [1, 1 + 1 / 30, 1 + 2 / 30], playing: true });
+    await done(1);
+    send({ type: "video", id: 2, key: "file", url: "/file", lane: "v:clip", times: [1 + 3 / 30, 1.5], playing: true });
+    await done(2);
+    expect(decoding.videoOpened).toHaveBeenCalledOnce();
+    send({ type: "video", id: 3, key: "file", url: "/file", lane: "v:clip", times: [0.5], playing: true });
+    await done(3);
+    expect(decoding.videoOpened.mock.calls.map(([start]) => start)).toEqual([1, 0.5]);
+    expect(decoding.videoOpened).toHaveBeenLastCalledWith(0.5, Infinity);
+    const frames = messages.flatMap((m) => m.type === "video" ? [Math.round((m.frame as unknown as { timestamp: number }).timestamp / 1e6 * 30)] : []);
+    expect(frames).toEqual([30, 31, 32, 33, 45, 15]);
+  });
+
+  it("decodes a scrub exactly to its picture, but continues an open playback decoder", async () => {
+    const done = (id: number) => vi.waitFor(() => expect(messages.some((m) => m.type === "done" && m.id === id)).toBe(true));
+    send({ type: "video", id: 1, key: "file", url: "/file", lane: "v:clip", times: [1], playing: false });
+    await done(1);
+    send({ type: "video", id: 2, key: "file", url: "/file", lane: "v:clip", times: [1.2], playing: false });
+    await done(2);
+    expect(decoding.scrubbed.mock.calls).toEqual([[[1]], [[1.2]]]);
+    expect(decoding.videoOpened).not.toHaveBeenCalled();
+    send({ type: "video", id: 3, key: "file", url: "/file", lane: "v:clip", times: [1.3], playing: true });
+    await done(3);
+    send({ type: "video", id: 4, key: "file", url: "/file", lane: "v:clip", times: [1.5], playing: false });
+    await done(4);
+    expect(decoding.videoOpened).toHaveBeenCalledOnce();
+    expect(decoding.scrubbed).toHaveBeenCalledTimes(2);
+    expect(messages.filter((m) => m.type === "video").map((m) => m.time)).toEqual([1, 1.2, 1.3, 1.5]);
+  });
+
+  it("releases a lane's decoder when the preview stops showing it", async () => {
+    send({ type: "video", id: 1, key: "file", url: "/file", lane: "v:clip", times: [1], playing: true });
+    await vi.waitFor(() => expect(messages.some((m) => m.type === "done")).toBe(true));
+    expect(decoding.iteratorClosed).not.toHaveBeenCalled();
+    send({ type: "retain", lanes: [] });
+    await vi.waitFor(() => expect(decoding.iteratorClosed).toHaveBeenCalledOnce());
   });
 
   it("cancels obsolete lanes and disposes their input during source replacement", async () => {
     let release!: () => void;
     decoding.gate = new Promise<void>((resolve) => { release = resolve; });
-    send({ type: "video", id: 1, key: "old", url: "/old", lane: "v:clip", times: [0, 0.1] });
+    send({ type: "video", id: 1, key: "old", url: "/old", lane: "v:clip", times: [0, 0.1], playing: true });
     send({ type: "forget", key: "old" });
     release();
     await vi.waitFor(() => expect(messages.some((m) => m.type === "done")).toBe(true));

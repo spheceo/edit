@@ -21,7 +21,7 @@ relay/               Cloudflare Worker holding API keys (transcription)
 ```
 
 - **Exact effects.** The preview runs `edit-render` as WASM on WebGPU; export and agent frame grabs run the same crate natively. Text is rasterized on the CPU by shared code, so a frame renders to identical pixels in both.
-- **Clean scrubbing.** Imports get an all-intra H.264 proxy (every frame a keyframe, ≤1080p, tagged BT.709). Scrubbing coalesces requests and displays decoded pictures; playback cues upcoming cuts. The playhead is remembered per project in this browser. Export always reads the originals.
+- **Clean scrubbing.** Imports get a light H.264 preview proxy (≤1080p, a keyframe every half second, no B-frames, tagged BT.709) plus a separate AAC sound file, so the preview streams comfortably over Wi-Fi. Scrubbing coalesces requests and displays decoded pictures; playback keeps one decoder running and cues upcoming cuts. The playhead is remembered per project in this browser. Export always reads the originals.
 - **Built-in agent.** The Codex panel drives `codex app-server` with the user's own `codex login`. Edit injects its MCP server per chat (`/mcp?project=<id>`, tools pre-approved) and turns off the user's other MCP servers, apps and plugins; the sandbox is read-only, so the agent can only change the edit. Models are cached in `~/.edit/agent/models.json` (refreshed daily), chats in `~/.edit/agent/chats/`.
 - **Agents.** `POST /mcp` exposes `get_project`, `add_text`, `add_clip`, `update_clip`, `set_keyframes`, `render_frame`, `contact_sheet`, `export` and more. See `crates/edit/src/mcp.rs` for the model description agents receive.
 

@@ -185,14 +185,21 @@ describe("preview seeks and lifetime", () => {
     expect(nodes.every((node) => node.stop.mock.calls.length === 0)).toBe(true);
   });
 
-  it("does not decode audio or upcoming cuts while scrubbing", () => {
-    const p = fixture(); p.media[0].has_audio = true;
-    p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
-    p.clips.push({ id: "a", type: "audio", track: "a1", media: "m1", start: 0, duration: 90,
-      source_in: 2, speed: 1, volume_db: 0, fade_in: 0, fade_out: 0, color: "blue" });
-    preview.setProject(p, {}); draw(); preview.seek(15); draw();
-    expect(decoding.requestAudio).not.toHaveBeenCalled();
-    expect(decoding.requestVideo.mock.calls.every((call) => call[7] === false)).toBe(true);
+  it("does not decode audio or upcoming cuts while scrubbing, then cues sound where the playhead rests", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const p = fixture(); p.media[0].has_audio = true;
+      p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
+      p.clips.push({ id: "a", type: "audio", track: "a1", media: "m1", start: 0, duration: 90,
+        source_in: 2, speed: 1, volume_db: 0, fade_in: 0, fade_out: 0, color: "blue" });
+      preview.setProject(p, {}); preview.seek(10); draw(); preview.seek(15); draw();
+      expect(decoding.requestAudio).not.toHaveBeenCalled();
+      expect(decoding.requestVideo.mock.calls.every((call) => call[7] === false)).toBe(true);
+      vi.advanceTimersByTime(300); draw();
+      expect(decoding.requestAudio).toHaveBeenCalledOnce();
+      expect(decoding.requestAudio.mock.calls[0][2]).toBe("a:a");
+      expect(decoding.requestAudio.mock.calls[0][3]).toBeCloseTo(2.5);
+    } finally { vi.useRealTimers(); }
   });
 
   it("freezes both clocks when decoded audio is missing", () => {

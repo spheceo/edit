@@ -1,7 +1,7 @@
 export const AUDIO_CHUNK_SECONDS = 0.5;
 
 export type DecodeRequest =
-  | { type: "video"; id: number; key: string; url: string; lane: string; times: number[] }
+  | { type: "video"; id: number; key: string; url: string; lane: string; times: number[]; playing: boolean }
   | { type: "audio"; id: number; key: string; url: string; lane: string; chunks: number[]; speed: number }
   | { type: "retain"; lanes: string[] }
   | { type: "forget"; key: string };

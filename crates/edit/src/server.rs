@@ -764,9 +764,14 @@ async fn media_file(
     let paths = app.media.paths(&source);
     let file = match kind.as_str() {
         // Until the proxy exists, stream the original (fine for H.264/HEVC MP4/MOV).
-        "proxy" => {
-            if paths.proxy.is_file() {
+        "proxy" | "audio" => {
+            let proxy = if kind == "proxy" {
                 paths.proxy
+            } else {
+                paths.audio
+            };
+            if paths.proxy_done.is_file() && proxy.is_file() {
+                proxy
             } else {
                 source
             }

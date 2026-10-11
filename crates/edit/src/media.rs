@@ -1,7 +1,9 @@
 //! Probing and background media work: scrub proxies, thumbnail strips, waveforms.
 //!
-//! Proxies are all-intra H.264 (every frame a keyframe), so the browser can
-//! land on any frame without decoding a GOP. That is what makes scrubbing clean.
+//! Preview proxies are small enough to stream over Wi-Fi: H.264 with a
+//! keyframe every half second and no B-frames, so the browser decodes at most
+//! a few frames to land anywhere and plays forward on one decoder. Sound is a
+//! separate AAC file, so decoding it never downloads the picture.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -192,7 +194,12 @@ pub struct Processor {
 }
 
 pub struct CachePaths {
+    /// Preview picture (video sources only, no sound).
     pub proxy: PathBuf,
+    /// Preview sound (sources with audio).
+    pub audio: PathBuf,
+    /// Written once both preview files are complete.
+    pub proxy_done: PathBuf,
     pub thumbs: PathBuf,
     pub thumbs_meta: PathBuf,
     pub peaks: PathBuf,
@@ -212,7 +219,9 @@ impl Processor {
     pub fn paths(&self, source: &Path) -> CachePaths {
         let dir = self.store.cache_dir().join(media_key(source));
         CachePaths {
-            proxy: dir.join("proxy.mp4"),
+            proxy: dir.join("preview.mp4"),
+            audio: dir.join("preview.m4a"),
+            proxy_done: dir.join("preview.done"),
             thumbs: dir.join("thumbs.jpg"),
             thumbs_meta: dir.join("thumbs.json"),
             peaks: dir.join("peaks.bin"),
@@ -235,13 +244,14 @@ impl Processor {
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
             .and_then(|meta| meta["count"].as_u64())
             .unwrap_or(0) as u32;
+        let proxied = paths.proxy_done.is_file();
         MediaStatus {
-            proxy: if paths.proxy.is_file() {
+            proxy: if proxied {
                 Stage::Ready
             } else {
                 Stage::Pending
             },
-            proxy_progress: if paths.proxy.is_file() { 1.0 } else { 0.0 },
+            proxy_progress: if proxied { 1.0 } else { 0.0 },
             thumbs: if thumb_count > 0 && paths.thumbs.is_file() {
                 Stage::Ready
             } else {
@@ -328,12 +338,14 @@ impl Processor {
                 } else if !probe.has_audio {
                     worker.set(&source, |status| status.peaks = Stage::Skipped);
                 }
-                if status.proxy != Stage::Ready {
+                if probe.kind == MediaKind::Image {
+                    worker.set(&source, |status| status.proxy = Stage::Skipped);
+                } else if status.proxy != Stage::Ready {
                     worker.set(&source, |status| {
                         status.proxy = Stage::Working;
                         status.error = None;
                     });
-                    match make_proxy(&source, &probe, &paths.proxy, |progress| {
+                    match make_proxy(&source, &probe, &paths, |progress| {
                         worker.set(&source, |status| status.proxy_progress = progress)
                     }) {
                         Ok(()) => worker.set(&source, |status| {
@@ -408,60 +420,85 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
 fn make_proxy(
     source: &Path,
     probe: &Probe,
-    out: &Path,
+    paths: &CachePaths,
     mut progress: impl FnMut(f32),
 ) -> Result<(), String> {
-    let tmp = out.with_extension("partial.mp4");
+    let _ = std::fs::remove_file(&paths.proxy_done);
+    let video = probe.kind == MediaKind::Video;
+    let video_tmp = paths.proxy.with_extension("partial.mp4");
+    let audio_tmp = paths.audio.with_extension("partial.m4a");
     let mut command = Command::new("ffmpeg");
     command
         .args([
             "-hide_banner",
             "-nostats",
             "-y",
+            "-progress",
+            "pipe:1",
             "-protocol_whitelist",
             "file,pipe",
             "-i",
         ])
         .arg(source);
-    if probe.kind == MediaKind::Video {
-        command.args([
-            "-map",
-            "0:v:0",
-            "-vf",
-            &format!(
-                "scale=w='min({PROXY_MAX_WIDTH},iw)':h='min({PROXY_MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2:out_color_matrix=bt709:out_range=tv,format=yuv420p"
-            ),
-            // Tagged BT.709 so the browser decodes the colours FFmpeg (and so the export) sees.
-            "-colorspace",
-            "bt709",
-            "-color_primaries",
-            "bt709",
-            "-color_trc",
-            "bt709",
-            "-color_range",
-            "tv",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-tune",
-            "fastdecode",
-            "-crf",
-            "20",
-            "-g",
-            "1",
-            "-bf",
-            "0",
-        ]);
-    } else {
-        command.args(["-vn"]);
+    if video {
+        // Half-second GOPs: seeking decodes at most ~15 frames, and playback
+        // streams at a few Mbit/s instead of the ~70 an all-intra 1080p file needs.
+        let gop = (probe.fps / 2.0).round().max(1.0).to_string();
+        command
+            .args([
+                "-map",
+                "0:v:0",
+                "-vf",
+                &format!(
+                    "scale=w='min({PROXY_MAX_WIDTH},iw)':h='min({PROXY_MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2:out_color_matrix=bt709:out_range=tv,format=yuv420p"
+                ),
+                // Tagged BT.709 so the browser decodes the colours FFmpeg (and so the export) sees.
+                "-colorspace",
+                "bt709",
+                "-color_primaries",
+                "bt709",
+                "-color_trc",
+                "bt709",
+                "-color_range",
+                "tv",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "20",
+                "-g",
+                &gop,
+                // No reordering: each frame comes out of the decoder as soon as it goes in.
+                "-bf",
+                "0",
+                "-an",
+                "-movflags",
+                "+faststart",
+            ])
+            .arg(&video_tmp);
     }
     if probe.has_audio {
-        command.args(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "160k", "-ac", "2"]);
+        command
+            .args([
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                "-ac",
+                "2",
+                "-movflags",
+                "+faststart",
+            ])
+            .arg(&audio_tmp);
+    }
+    if !video && !probe.has_audio {
+        return Err("proxy: nothing to encode".to_owned());
     }
     command
-        .args(["-movflags", "+faststart", "-progress", "pipe:1"])
-        .arg(&tmp)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -492,7 +529,8 @@ fn make_proxy(
     let status = child.wait().map_err(|error| error.to_string())?;
     let stderr = stderr_thread.join().unwrap_or_default();
     if !status.success() {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&video_tmp);
+        let _ = std::fs::remove_file(&audio_tmp);
         let last = stderr
             .lines()
             .rev()
@@ -500,7 +538,20 @@ fn make_proxy(
             .unwrap_or("proxy encode failed");
         return Err(format!("proxy: {}", last.trim()));
     }
-    std::fs::rename(&tmp, out).map_err(|error| error.to_string())
+    for (tmp, out, wanted) in [
+        (&video_tmp, &paths.proxy, video),
+        (&audio_tmp, &paths.audio, probe.has_audio),
+    ] {
+        if wanted {
+            std::fs::rename(tmp, out).map_err(|error| error.to_string())?;
+        }
+    }
+    std::fs::write(&paths.proxy_done, b"").map_err(|error| error.to_string())?;
+    // The all-intra proxy from before 2026-10-12 is no longer read.
+    if let Some(dir) = paths.proxy.parent() {
+        let _ = std::fs::remove_file(dir.join("proxy.mp4"));
+    }
+    Ok(())
 }
 
 fn make_thumbs(source: &Path, probe: &Probe, paths: &CachePaths) -> Result<u32, String> {

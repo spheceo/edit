@@ -138,7 +138,7 @@ export class Decoder {
     this.files.add(key);
     this.flights.set(lane, { id, key, values: new Set(times.map((t) => frameKey(key, t))) });
     this.stats.videoRequests++;
-    this.worker("video")?.postMessage({ type: "video", id, key, url, lane, times } satisfies DecodeRequest);
+    this.worker("video")?.postMessage({ type: "video", id, key, url, lane, times, playing } satisfies DecodeRequest);
   }
 
   requestAudio(key: string, url: string, lane: string, time: number, duration: number, speed = 1) {

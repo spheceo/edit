@@ -1,5 +1,6 @@
-import { ALL_FORMATS, AudioSampleSink, Input, UrlSource, VideoSampleSink } from "mediabunny";
+import { ALL_FORMATS, AudioSampleSink, Input, StreamSource, VideoSampleSink, type VideoSample } from "mediabunny";
 import { stretchAudio } from "./audio-stretch";
+import { rangeReader } from "./range-source";
 import { AUDIO_CHUNK_SECONDS, type DecodeJob, type DecodeRequest, type DecodeResponse, type PcmChunk } from "./decoder.protocol";
 
 // No DOM or audio context in this worker. Only demux, decode and transferable resources.
@@ -13,7 +14,24 @@ interface File {
   audio?: Promise<AudioSampleSink>;
   users: number;
 }
-interface Lane { latest: DecodeJob | null; running: DecodeJob | null; cancelled: boolean }
+/**
+ * During playback one decoder per lane stays open between jobs, so each batch
+ * continues where the last picture left off instead of reopening the codec and
+ * decoding again from a keyframe. Scrubs near it reuse it too.
+ */
+interface Cursor {
+  key: string;
+  file: File;
+  samples: AsyncGenerator<VideoSample, void, unknown>;
+  /** The most recent decoded picture, which may cover several requested times. */
+  held: VideoSample | null;
+  start: number;
+  ended: boolean;
+}
+interface Lane { latest: DecodeJob | null; running: DecodeJob | null; cancelled: boolean; cursor: Cursor | null }
+/** Decoding forward this far is cheaper than reopening at the preceding keyframe. */
+const CONTINUE_SECONDS = 1;
+const EPSILON = 1e-6;
 const files = new Map<string, File>();
 const lanes = new Map<string, Lane>();
 let running = 0;
@@ -31,10 +49,10 @@ function open(job: DecodeJob) {
   let file = files.get(job.key);
   if (!file) {
     file = {
-      input: new Input({ formats: ALL_FORMATS, source: new UrlSource(job.url, {
-        maxCacheSize: 8 * 1024 * 1024,
-        parallelism: 2,
-        getRetryDelay: (attempt) => attempt < 8 ? Math.min(2, 0.25 * 2 ** attempt) : null,
+      input: new Input({ formats: ALL_FORMATS, source: new StreamSource({
+        ...rangeReader(job.url),
+        // Exact reads: the block layer aligns them and reads ahead only when access is sequential.
+        prefetchProfile: "none",
         handleUnhandledError: () => {}, // A subsequent read reports the failure to the preview.
       }) }),
       users: 0,
@@ -63,19 +81,65 @@ async function audioSink(file: File) {
   })();
 }
 
+function closeCursor(lane: Lane) {
+  const cursor = lane.cursor;
+  if (!cursor) return;
+  lane.cursor = null;
+  cursor.held?.close();
+  void cursor.samples.return(undefined).catch(() => {});
+  cursor.file.users--;
+}
+
+/** The decoded picture shown at `time`: the last frame starting at or before it. */
+async function pictureAt(cursor: Cursor, time: number) {
+  for (;;) {
+    const held = cursor.held;
+    if (held && (held.timestamp > time + EPSILON || time < held.timestamp + held.duration - EPSILON)) return held;
+    if (cursor.ended) return held;
+    const next = await cursor.samples.next();
+    if (next.done) { cursor.ended = true; continue; }
+    held?.close();
+    cursor.held = next.value;
+  }
+}
+
 async function decodeVideo(job: Extract<DecodeJob, { type: "video" }>, file: File, lane: Lane) {
   const { sink, first } = await videoSink(file);
-  let i = 0;
-  for await (const sample of sink.samplesAtTimestamps(job.times.map((time) => Math.max(first, time)))) {
+  for (const [i, requested] of job.times.entries()) {
     // Finish the first requested picture even if the cursor moved while decoding it:
     // the preview can display that complete scene instead of starving during a drag.
-    if (lane.cancelled || (i > 0 && lane.latest)) { sample?.close(); break; }
-    const time = job.times[i++];
-    if (!sample) throw new Error("No video frame at the requested source time");
-    try {
-      const frame = sample.toVideoFrame();
-      scope.postMessage({ type: "video", id: job.id, key: job.key, time, frame }, [frame]);
-    } finally { sample.close(); }
+    if (lane.cancelled || (i > 0 && lane.latest)) break;
+    const time = Math.max(first, requested);
+    const cursor = lane.cursor;
+    const at = cursor?.held?.timestamp ?? cursor?.start ?? 0;
+    const continues = cursor?.key === job.key && time >= at - EPSILON && time - at <= CONTINUE_SECONDS;
+    let frame: VideoFrame;
+    if (continues) {
+      const sample = await pictureAt(cursor, time);
+      if (lane.cancelled) break;
+      if (!sample) throw new Error("No video frame at the requested source time");
+      frame = sample.toVideoFrame();
+    } else if (job.playing) {
+      // Playback reads on from here until the lane is released.
+      closeCursor(lane);
+      file.users++;
+      lane.cursor = { key: job.key, file, samples: sink.samples(time), held: null, start: time, ended: false };
+      const sample = await pictureAt(lane.cursor, time);
+      if (lane.cancelled) break;
+      if (!sample) throw new Error("No video frame at the requested source time");
+      frame = sample.toVideoFrame();
+    } else {
+      // An open decoder reads dozens of packets ahead. A scrub decodes from the
+      // keyframe to exactly its picture, so a drag doesn't download what it skips.
+      let sample: VideoSample | null = null;
+      for await (const decoded of sink.samplesAtTimestamps([time])) sample = decoded;
+      if (!sample) throw new Error("No video frame at the requested source time");
+      try {
+        if (lane.cancelled) break;
+        frame = sample.toVideoFrame();
+      } finally { sample.close(); }
+    }
+    scope.postMessage({ type: "video", id: job.id, key: job.key, time: requested, frame }, [frame]);
   }
 }
 
@@ -137,13 +201,17 @@ async function run(job: DecodeJob, lane: Lane) {
     if (job.type === "video") await decodeVideo(job, file, lane);
     else await decodeAudio(job, file, lane);
   } catch (error) {
+    // A failed decoder can't be trusted for the next request on this lane.
+    closeCursor(lane);
     if (!lane.cancelled) scope.postMessage({ type: "error", id: job.id, key: job.key, lane: job.lane, error: String(error) });
   } finally {
     if (file) file.users--;
     running--;
     lane.running = null;
+    if (lane.cancelled) closeCursor(lane);
     scope.postMessage({ type: "done", id: job.id, lane: job.lane });
-    if (!lane.latest && lanes.get(job.lane) === lane) lanes.delete(job.lane);
+    // Idle audio lanes hold nothing; video lanes keep their decoder until released.
+    if (!lane.latest && !lane.cursor && lanes.get(job.lane) === lane) lanes.delete(job.lane);
     trimFiles();
     pump();
   }
@@ -156,20 +224,27 @@ function pump() {
   }
 }
 
+function release(name: string, lane: Lane) {
+  lane.cancelled = true;
+  lane.latest = null;
+  lanes.delete(name);
+  // A running job closes its own cursor when it notices the cancellation.
+  if (!lane.running) closeCursor(lane);
+}
+
 scope.onmessage = ({ data }) => {
   if (data.type === "forget") {
-    for (const [key, lane] of lanes) if (lane.running?.key === data.key || lane.latest?.key === data.key) {
-      lane.cancelled = true; lane.latest = null; lanes.delete(key);
+    for (const [name, lane] of lanes) {
+      if (lane.running?.key === data.key || lane.latest?.key === data.key || lane.cursor?.key === data.key) release(name, lane);
     }
     files.get(data.key)?.input.dispose();
     files.delete(data.key);
   } else if (data.type === "retain") {
     const keep = new Set(data.lanes);
-    for (const [key, lane] of lanes) if (!keep.has(key)) {
-      lane.cancelled = true; lane.latest = null; lanes.delete(key);
-    }
+    for (const [name, lane] of lanes) if (!keep.has(name)) release(name, lane);
+    trimFiles();
   } else {
-    const lane = lanes.get(data.lane) ?? { latest: null, running: null, cancelled: false };
+    const lane = lanes.get(data.lane) ?? { latest: null, running: null, cancelled: false, cursor: null };
     lane.latest = data;
     lanes.set(data.lane, lane);
   }

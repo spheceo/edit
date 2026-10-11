@@ -22,7 +22,7 @@ export function Viewer() {
   const [error, setError] = useState<string | null>(null);
   const [buffering, setBuffering] = useState(false);
 
-  const versionKey = JSON.stringify(Object.fromEntries(Object.entries(media).map(([id, status]) => [id, status.proxy === "ready" ? "proxy" : "source"])));
+  const versionKey = JSON.stringify(Object.fromEntries(Object.entries(media).map(([id, status]) => [id, status.proxy === "ready" ? "preview" : "source"])));
   const versions = useMemo(() => JSON.parse(versionKey) as Record<string, string>, [versionKey]);
 
   useEffect(() => {

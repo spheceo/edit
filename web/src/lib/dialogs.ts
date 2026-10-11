@@ -16,6 +16,8 @@ export const SHORTCUTS: { group: string; keys: [string, string][] }[] = [
       ["Space", "Play / pause"],
       ["← →", "Step a frame (⇧ = 1s)"],
       ["↑ ↓", "Previous / next edit"],
+      ["I / O", "Mark in / out (play stops at out)"],
+      ["⌥I / ⌥O / ⌥X", "Clear in / out / both"],
     ],
   },
   {
@@ -28,7 +30,7 @@ export const SHORTCUTS: { group: string; keys: [string, string][] }[] = [
       ["M", "Mark the source at the playhead (selected clips)"],
       ["⌫ / ⇧⌫", "Delete / ripple delete"],
       ["⌘D", "Duplicate"],
-      ["⌘Z / ⇧⌘Z", "Undo / redo (agent edits too)"],
+      ["⌘Z / ⇧⌘Z", "Undo / redo (in/out points, imports and agent edits too)"],
       ["Drag", "Box-select clips or keyframes"],
       ["Right-click", "More actions"],
     ],

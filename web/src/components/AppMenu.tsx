@@ -1,3 +1,4 @@
+import { writeSetting } from "../lib/storage";
 // The ⋯ menu at the top (shortcuts, settings) and the dialogs it opens.
 
 import { Ellipsis, Keyboard, RotateCw, Settings } from "lucide-react";
@@ -99,7 +100,7 @@ function SettingsBody() {
       if (next.ready) {
         const { models } = (await (await fetchRetrying("/api/agent/models")).json()) as { models: AgentModel[] };
         if (models?.length) {
-          localStorage.setItem("edit.agent.models", JSON.stringify(models));
+          writeSetting("edit.agent.models", JSON.stringify(models));
           useAgent.setState({ models });
         }
       }

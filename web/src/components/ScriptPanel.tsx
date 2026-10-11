@@ -287,7 +287,8 @@ function AttachScript({ project }: { project: Project }) {
     setError(null);
     try {
       const { rev, project: next, job } = await api.attachScript(project.id, url.trim());
-      useEditor.setState({ project: next, rev, scriptJob: job });
+      useEditor.getState().adopt(rev, next);
+      useEditor.setState({ scriptJob: job });
     } catch (failure) {
       setError((failure as Error).message);
     } finally {

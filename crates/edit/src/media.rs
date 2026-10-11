@@ -3,9 +3,9 @@
 //! Proxies are all-intra H.264 (every frame a keyframe), so the browser can
 //! land on any frame without decoding a GOP. That is what makes scrubbing clean.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -52,6 +52,8 @@ pub fn probe(path: &Path) -> Result<Probe, String> {
         .args([
             "-v",
             "error",
+            "-protocol_whitelist",
+            "file,pipe",
             "-print_format",
             "json",
             "-show_streams",
@@ -143,7 +145,7 @@ fn rotation_of(stream: &Value) -> i64 {
 fn parse_rate(rate: Option<&str>) -> Option<f64> {
     let (num, den) = rate?.split_once('/')?;
     let (num, den): (f64, f64) = (num.parse().ok()?, den.parse().ok()?);
-    (num > 0.0 && den > 0.0).then_some(num / den)
+    (num.is_finite() && den.is_finite() && num > 0.0 && den > 0.0).then_some(num / den)
 }
 
 /// Identity of a source file's content for cache reuse across projects.
@@ -186,6 +188,7 @@ pub struct Processor {
     store: Arc<Store>,
     status: Mutex<HashMap<String, MediaStatus>>,
     encodes: Arc<tokio::sync::Semaphore>,
+    processing: Mutex<HashSet<String>>,
 }
 
 pub struct CachePaths {
@@ -202,6 +205,7 @@ impl Processor {
             store,
             status: Mutex::new(HashMap::new()),
             encodes: Arc::new(tokio::sync::Semaphore::new(2)),
+            processing: Mutex::new(HashSet::new()),
         })
     }
 
@@ -279,94 +283,92 @@ impl Processor {
     /// Starts whatever work is missing for `source`. Safe to call repeatedly.
     pub fn ensure(self: &Arc<Self>, source: PathBuf, probe: Probe) {
         let key = media_key(&source);
-        {
-            let mut map = self.status.lock().unwrap();
-            if map.contains_key(&key) {
-                return;
-            }
-            map.insert(key, self.status_from_disk(&source));
+        if !self.processing.lock().unwrap().insert(key.clone()) {
+            return;
         }
-        let status = self.status(&source);
         let paths = self.paths(&source);
         if let Some(dir) = paths.proxy.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-
-        if probe.kind == MediaKind::Video && status.thumbs != Stage::Ready {
-            let this = Arc::clone(self);
-            let (source, probe) = (source.clone(), probe.clone());
-            tokio::task::spawn_blocking(move || {
-                this.set(&source, |status| status.thumbs = Stage::Working);
-                match make_thumbs(&source, &probe, &this.paths(&source)) {
-                    Ok(count) => this.set(&source, |status| {
-                        status.thumbs = Stage::Ready;
-                        status.thumb_count = count;
-                    }),
-                    Err(error) => this.set(&source, |status| {
-                        status.thumbs = Stage::Failed;
-                        status.error = Some(error);
-                    }),
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            // Limit all FFmpeg work, including waveforms and thumbnails, rather
+            // than starting two unbounded extra decoders for every import.
+            let Ok(_permit) = this.encodes.clone().acquire_owned().await else {
+                return;
+            };
+            let worker = Arc::clone(&this);
+            let _ = tokio::task::spawn_blocking(move || {
+                let status = worker.status(&source);
+                let paths = worker.paths(&source);
+                if probe.kind == MediaKind::Video && status.thumbs != Stage::Ready {
+                    worker.set(&source, |status| status.thumbs = Stage::Working);
+                    match make_thumbs(&source, &probe, &paths) {
+                        Ok(count) => worker.set(&source, |status| {
+                            status.thumbs = Stage::Ready;
+                            status.thumb_count = count;
+                        }),
+                        Err(error) => worker.set(&source, |status| {
+                            status.thumbs = Stage::Failed;
+                            status.error = Some(error);
+                        }),
+                    }
+                } else if probe.kind != MediaKind::Video {
+                    worker.set(&source, |status| status.thumbs = Stage::Skipped);
                 }
-            });
-        } else if probe.kind != MediaKind::Video {
-            self.set(&source, |status| status.thumbs = Stage::Skipped);
-        }
-
-        if probe.has_audio && status.peaks != Stage::Ready {
-            let this = Arc::clone(self);
-            let source = source.clone();
-            tokio::task::spawn_blocking(move || {
-                this.set(&source, |status| status.peaks = Stage::Working);
-                match make_peaks(&source, &this.paths(&source).peaks) {
-                    Ok(()) => this.set(&source, |status| status.peaks = Stage::Ready),
-                    Err(error) => this.set(&source, |status| {
-                        status.peaks = Stage::Failed;
-                        status.error = Some(error);
-                    }),
+                if probe.has_audio && status.peaks != Stage::Ready {
+                    worker.set(&source, |status| status.peaks = Stage::Working);
+                    match make_peaks(&source, &paths.peaks) {
+                        Ok(()) => worker.set(&source, |status| status.peaks = Stage::Ready),
+                        Err(error) => worker.set(&source, |status| {
+                            status.peaks = Stage::Failed;
+                            status.error = Some(error);
+                        }),
+                    }
+                } else if !probe.has_audio {
+                    worker.set(&source, |status| status.peaks = Stage::Skipped);
                 }
-            });
-        } else if !probe.has_audio {
-            self.set(&source, |status| status.peaks = Stage::Skipped);
-        }
-
-        if status.proxy != Stage::Ready {
-            let this = Arc::clone(self);
-            tokio::spawn(async move {
-                let Ok(_permit) = this.encodes.clone().acquire_owned().await else {
-                    return;
-                };
-                let worker = Arc::clone(&this);
-                let source_for_task = source.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    worker.set(&source_for_task, |status| status.proxy = Stage::Working);
-                    let paths = worker.paths(&source_for_task);
-                    make_proxy(&source_for_task, &probe, &paths.proxy, |progress| {
-                        worker.set(&source_for_task, |status| status.proxy_progress = progress);
-                    })
-                })
-                .await
-                .unwrap_or_else(|error| Err(error.to_string()));
-                match result {
-                    Ok(()) => this.set(&source, |status| {
-                        status.proxy = Stage::Ready;
-                        status.proxy_progress = 1.0;
-                    }),
-                    Err(error) => this.set(&source, |status| {
-                        status.proxy = Stage::Failed;
-                        status.error = Some(error);
-                    }),
+                if status.proxy != Stage::Ready {
+                    worker.set(&source, |status| {
+                        status.proxy = Stage::Working;
+                        status.error = None;
+                    });
+                    match make_proxy(&source, &probe, &paths.proxy, |progress| {
+                        worker.set(&source, |status| status.proxy_progress = progress)
+                    }) {
+                        Ok(()) => worker.set(&source, |status| {
+                            status.proxy = Stage::Ready;
+                            status.proxy_progress = 1.0;
+                        }),
+                        Err(error) => worker.set(&source, |status| {
+                            status.proxy = Stage::Failed;
+                            status.error = Some(error);
+                        }),
+                    }
                 }
-            });
-        }
+            })
+            .await;
+            this.processing.lock().unwrap().remove(&key);
+        });
     }
 }
 
 impl Processor {
     /// Transcribes `source` through the relay unless already done or running.
     pub fn transcribe(self: &Arc<Self>, source: PathBuf, has_audio: bool) -> MediaStatus {
-        let current = self.status(&source);
-        if !has_audio || matches!(current.transcript, Stage::Working | Stage::Ready) {
-            return current;
+        {
+            let key = media_key(&source);
+            let mut statuses = self.status.lock().unwrap();
+            let current = statuses
+                .entry(key)
+                .or_insert_with(|| self.status_from_disk(&source));
+            if !has_audio || matches!(current.transcript, Stage::Working | Stage::Ready) {
+                return current.clone();
+            }
+            // Claim before dropping the lock: two requests cannot start the
+            // same paid transcription between status() and set().
+            current.transcript = Stage::Working;
+            current.transcript_error = None;
         }
         self.set(&source, |status| {
             status.transcript = Stage::Working;
@@ -412,7 +414,14 @@ fn make_proxy(
     let tmp = out.with_extension("partial.mp4");
     let mut command = Command::new("ffmpeg");
     command
-        .args(["-hide_banner", "-nostats", "-y", "-i"])
+        .args([
+            "-hide_banner",
+            "-nostats",
+            "-y",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-i",
+        ])
         .arg(source);
     if probe.kind == MediaKind::Video {
         command.args([
@@ -503,7 +512,7 @@ fn make_thumbs(source: &Path, probe: &Probe, paths: &CachePaths) -> Result<u32, 
     let _ = std::fs::remove_dir_all(&frames_dir);
     std::fs::create_dir_all(&frames_dir).map_err(|error| error.to_string())?;
     run(Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i"])
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-protocol_whitelist", "file,pipe", "-i"])
         .arg(source)
         .args([
             "-an",
@@ -554,8 +563,16 @@ fn make_thumbs(source: &Path, probe: &Probe, paths: &CachePaths) -> Result<u32, 
 /// One byte per 1/`PEAKS_PER_SECOND` s: the peak absolute amplitude scaled to 0..255.
 fn make_peaks(source: &Path, out: &Path) -> Result<(), String> {
     let rate = PEAKS_PER_SECOND * 40;
-    let pcm = run(Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-i"])
+    let tmp = out.with_extension("partial");
+    let mut child = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-i",
+        ])
         .arg(source)
         .args([
             "-map",
@@ -567,23 +584,50 @@ fn make_peaks(source: &Path, out: &Path) -> Result<(), String> {
             "-f",
             "f32le",
             "pipe:1",
-        ]))?;
-    let samples: Vec<f32> = pcm
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect();
-    let peaks: Vec<u8> = samples
-        .chunks(40)
-        .map(|bucket| {
-            let peak = bucket
-                .iter()
-                .fold(0.0_f32, |max, value| max.max(value.abs()));
-            (peak.min(1.0).sqrt() * 255.0).round() as u8
-        })
-        .collect();
-    let tmp = out.with_extension("partial");
-    std::fs::write(&tmp, peaks).map_err(|error| error.to_string())?;
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    let result = (|| {
+        let mut reader = BufReader::new(child.stdout.take().ok_or("ffmpeg stdout")?);
+        let mut writer =
+            BufWriter::new(std::fs::File::create(&tmp).map_err(|error| error.to_string())?);
+        let mut sample = [0; 4];
+        let mut peak = 0.0_f32;
+        let mut count = 0;
+        loop {
+            match reader.read_exact(&mut sample) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(error) => return Err(error.to_string()),
+            }
+            peak = peak.max(f32::from_le_bytes(sample).abs());
+            count += 1;
+            if count == 40 {
+                writer
+                    .write_all(&[(peak.min(1.0).sqrt() * 255.0).round() as u8])
+                    .map_err(|error| error.to_string())?;
+                count = 0;
+                peak = 0.0;
+            }
+        }
+        if count > 0 {
+            writer
+                .write_all(&[(peak.min(1.0).sqrt() * 255.0).round() as u8])
+                .map_err(|error| error.to_string())?;
+        }
+        writer.flush().map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait().map_err(|error| error.to_string())?;
+    if result.is_err() || !status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        result?;
+        return Err("waveform decoding failed".to_owned());
+    }
     std::fs::rename(tmp, out).map_err(|error| error.to_string())
 }

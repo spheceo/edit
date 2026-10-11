@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { applyAgentEvent, openAgent } from "./agent";
 import { api, ApiError, useConnection } from "./api";
 import { validateProject } from "./edit";
+import { readSetting, writeSetting } from "./storage";
 import type { MediaStatus, Project, ScriptJob } from "./types";
 
 export const clientId = `ui-${Math.random().toString(36).slice(2, 10)}`;
@@ -16,6 +17,8 @@ export interface ExportState {
   path: string;
   error?: string;
   seconds?: number;
+  /** Size of the finished file. */
+  bytes?: number;
 }
 
 export interface Toast {
@@ -64,6 +67,8 @@ interface EditorState {
   endGesture(): void;
   undo(): void;
   redo(): void;
+  /** Takes a project the server changed at our request (an import, a script) as one undo step. */
+  adopt(rev: number, project: Project): void;
   select(ids: string[], mode?: "replace" | "toggle" | "add"): void;
   setTool(tool: Tool): void;
   toggle(key: "snapping" | "showMedia" | "showInspector" | "showAgent"): void;
@@ -75,6 +80,7 @@ interface EditorState {
 }
 
 let toastId = 0;
+let editorSession = 0;
 
 export const useEditor = create<EditorState>((set, get) => ({
   project: null,
@@ -91,16 +97,24 @@ export const useEditor = create<EditorState>((set, get) => ({
   snapping: true,
   showMedia: true,
   showInspector: true,
-  showAgent: localStorage.getItem("edit.showAgent") !== "false",
-  sideTab: (["info", "presets", "transcript"] as const).find((tab) => tab === localStorage.getItem("edit.sideTab")) ?? "info",
-  workspace: localStorage.getItem("edit.workspace") === "script" ? "script" : "edit",
+  showAgent: readSetting("edit.showAgent") !== "false",
+  sideTab: (["info", "presets", "transcript"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
+  workspace: readSetting("edit.workspace") === "script" ? "script" : "edit",
   scriptJob: null,
-  timelineHeight: Number(localStorage.getItem("edit.timelineHeight")) || 340,
+  timelineHeight: Number(readSetting("edit.timelineHeight")) || 340,
   toasts: [],
   agentActive: 0,
 
-  load: (rev, project) => set({ project, rev, past: [], future: [], selection: [], dirty: false, exportState: null, media: {}, scriptJob: null }),
-  close: () => set({ project: null, rev: 0, past: [], future: [], selection: [], media: {} }),
+  load: (rev, project) => {
+    editorSession++;
+    clearTimeout(saveTimer);
+    set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, media: {}, scriptJob: null });
+  },
+  close: () => {
+    editorSession++;
+    clearTimeout(saveTimer);
+    set({ project: null, rev: 0, past: [], future: [], gestureBase: null, dirty: false, saving: false, selection: [], media: {} });
+  },
 
   edit: (recipe) => {
     // A drag the browser cancelled must not hold back this edit or the saves.
@@ -158,6 +172,16 @@ export const useEditor = create<EditorState>((set, get) => ({
     scheduleSave(0);
   },
 
+  adopt: (rev, next) => {
+    if (get().gestureBase) get().endGesture();
+    const { project, past } = get();
+    if (!project || next.id !== project.id || rev < get().rev) return;
+    // The live event for our own change can land first: it bumps rev but leaves the project
+    // to this response. Another client's event may instead have brought the change already.
+    if (rev === get().rev && JSON.stringify(project) === JSON.stringify(next)) return;
+    set({ project: next, rev, past: [...past.slice(-HISTORY_LIMIT), project], future: [], dirty: false });
+  },
+
   select: (ids, mode = "replace") => {
     const current = new Set(get().selection);
     if (mode === "replace") return set({ selection: ids });
@@ -170,19 +194,19 @@ export const useEditor = create<EditorState>((set, get) => ({
   setTool: (tool) => set({ tool }),
   toggle: (key) => {
     const value = !get()[key];
-    if (key === "showAgent") localStorage.setItem("edit.showAgent", String(value));
+    if (key === "showAgent") writeSetting("edit.showAgent", String(value));
     set({ [key]: value } as Partial<EditorState>);
   },
   setSideTab: (sideTab) => {
-    localStorage.setItem("edit.sideTab", sideTab);
+    writeSetting("edit.sideTab", sideTab);
     set({ sideTab, showInspector: true });
   },
   setWorkspace: (workspace) => {
-    localStorage.setItem("edit.workspace", workspace);
+    writeSetting("edit.workspace", workspace);
     set({ workspace });
   },
   setTimelineHeight: (height) => {
-    localStorage.setItem("edit.timelineHeight", String(Math.round(height)));
+    writeSetting("edit.timelineHeight", String(Math.round(height)));
     set({ timelineHeight: height });
   },
   toast: (text, tone = "info") => {
@@ -197,8 +221,7 @@ export const useEditor = create<EditorState>((set, get) => ({
 // Saving: debounced whole-document PUTs against the last known revision.
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
-let inFlight = false;
-let again = false;
+let inFlight: Promise<void> | null = null;
 
 function scheduleSave(delay = 250) {
   clearTimeout(saveTimer);
@@ -206,30 +229,45 @@ function scheduleSave(delay = 250) {
 }
 
 async function flush() {
-  const state = useEditor.getState();
-  if (!state.project || !state.dirty || state.gestureBase) return;
+  clearTimeout(saveTimer);
   if (inFlight) {
-    again = true;
+    await inFlight;
+    if (useEditor.getState().dirty) await flush();
     return;
   }
-  inFlight = true;
+  const state = useEditor.getState();
+  if (!state.project || !state.dirty || state.gestureBase) return;
+  const task = saveProject(state);
+  inFlight = task;
+  try { await task; } finally {
+    inFlight = null;
+    if (useEditor.getState().dirty) scheduleSave(1000);
+  }
+}
+
+async function saveProject(state: EditorState) {
+  if (!state.project) return;
   const project = state.project;
+  const session = editorSession;
   useEditor.setState({ saving: true });
   try {
     const { rev } = await api.saveProject(project.id, state.rev, project, clientId);
+    if (session !== editorSession) return;
     const current = useEditor.getState();
     useEditor.setState({ rev: Math.max(rev, current.rev), dirty: current.project !== project });
   } catch (error) {
+    if (session !== editorSession) return;
     if (error instanceof ApiError && error.status === 409) {
       const body = error.body as { rev: number; project: Project };
-      useEditor.setState({ project: body.project, rev: body.rev, dirty: false });
+      const current = useEditor.getState();
+      useEditor.setState({ project: body.project, rev: body.rev, dirty: false, gestureBase: null, past: [...current.past.slice(-HISTORY_LIMIT), current.project ?? project], future: [] });
       useEditor.getState().toast("The project changed elsewhere; showing the latest version.", "info");
     } else if (error instanceof ApiError && error.status === 400) {
       // The server refused the change: show what it has, never a version that can't be saved.
       useEditor.getState().toast(`That change couldn't be saved (${error.message}); restored the last saved version.`, "error");
       try {
         const live = await api.project(project.id);
-        useEditor.setState({ project: live.project, rev: live.rev, dirty: false });
+        if (session === editorSession) useEditor.setState({ project: live.project, rev: live.rev, dirty: false });
       } catch {
         // Offline: keep what's on screen; the next save retries.
       }
@@ -237,12 +275,7 @@ async function flush() {
       useEditor.getState().toast(`Couldn't save: ${(error as Error).message}`, "error");
     }
   } finally {
-    inFlight = false;
-    useEditor.setState({ saving: false });
-    if (again || useEditor.getState().dirty) {
-      again = false;
-      if (useEditor.getState().dirty) scheduleSave(150);
-    }
+    if (session === editorSession) useEditor.setState({ saving: false });
   }
 }
 
@@ -270,7 +303,10 @@ export async function syncScriptJob(id: string) {
     useEditor.setState({ scriptJob: job });
     const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing");
     // A failed run waits for Retry; anything else unfinished carries on by itself.
-    if (unfinished && !running && job?.state !== "failed") useEditor.setState({ scriptJob: (await api.resumeScript(id)).job });
+    if (unfinished && !running && job?.state !== "failed") {
+      const resumed = await api.resumeScript(id);
+      if (useEditor.getState().project?.id === id) useEditor.setState({ scriptJob: resumed.job });
+    }
   } catch {
     // Offline: the next reconnect tries again.
   }
@@ -321,6 +357,7 @@ export function connectEvents() {
         project: event.project,
         rev: event.rev,
         dirty: false,
+        gestureBase: null,
         past: [...state.past.slice(-HISTORY_LIMIT), project],
         future: [],
         selection: state.selection.filter((id) => event.project.clips.some((clip: { id: string }) => clip.id === id)),
@@ -347,7 +384,7 @@ export function connectEvents() {
     } else if (event.type === "agent") {
       applyAgentEvent(event);
     } else if (event.type === "resync" && project) {
-      void api.project(project.id).then(({ rev, project }) => useEditor.setState({ rev, project, dirty: false }));
+      catchUp();
     }
   };
   socket.onclose = () => {
@@ -360,3 +397,12 @@ export function connectEvents() {
     setTimeout(connectEvents, 1000);
   };
 }
+
+// The last drag and debounced edit get a chance to save before navigation.
+window.addEventListener("pagehide", () => {
+  useEditor.getState().endGesture();
+  void flush();
+});
+window.addEventListener("beforeunload", (event) => {
+  if (useEditor.getState().dirty || useEditor.getState().saving) event.preventDefault();
+});

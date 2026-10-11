@@ -71,6 +71,7 @@ pub fn set_role(
         return Err(format!("role is one of {}", ROLES.join(", ")));
     }
     let target = app.media.paths(source).transcript;
+    let _guard = TRANSCRIPT_EDITS.lock().unwrap();
     let mut transcript = read(&target).ok_or("no transcript")?;
     transcript.roles.insert(voice.to_owned(), role.to_owned());
     match label.map(str::trim).filter(|label| !label.is_empty()) {
@@ -89,9 +90,9 @@ pub fn set_role(
         }
     }
     transcript.colors = colors(&transcript);
-    std::fs::write(
+    crate::store::write_atomic(
         &target,
-        serde_json::to_vec(&transcript).map_err(|error| error.to_string())?,
+        &serde_json::to_vec(&transcript).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
     app.store
@@ -120,6 +121,8 @@ pub const ROLES: [&str; 10] = [
 
 /// Files being named now, so each is named once.
 static NAMING: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+// These are short read-modify-write operations; never hold this across the model call.
+static TRANSCRIPT_EDITS: Mutex<()> = Mutex::new(());
 
 /// Names the voices of every transcript that comes in, from now on.
 pub fn watch(app: App) {
@@ -330,17 +333,29 @@ async fn name(app: &App, source: &Path, target: &Path) -> Result<(), String> {
         .await?;
     let named: Named = serde_json::from_str(answer.trim()).map_err(|error| error.to_string())?;
     // Re-read so nothing written meanwhile is lost, then save the names into it.
+    let _guard = TRANSCRIPT_EDITS.lock().unwrap();
     let mut transcript = read(target).ok_or("no transcript")?;
-    transcript.speakers = labels(&named);
-    transcript.roles = named
-        .speakers
-        .into_iter()
-        .map(|speaker| (speaker.id, speaker.role))
-        .collect();
+    for speaker in &named.speakers {
+        transcript
+            .roles
+            .entry(speaker.id.clone())
+            .or_insert_with(|| speaker.role.clone());
+    }
+    for (id, label) in labels(&named) {
+        let role = transcript
+            .roles
+            .get(&id)
+            .map(String::as_str)
+            .unwrap_or("other");
+        transcript
+            .speakers
+            .entry(id)
+            .or_insert_with(|| relabel(&label, role));
+    }
     transcript.colors = colors(&transcript);
-    std::fs::write(
+    crate::store::write_atomic(
         target,
-        serde_json::to_vec(&transcript).map_err(|error| error.to_string())?,
+        &serde_json::to_vec(&transcript).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
     app.store

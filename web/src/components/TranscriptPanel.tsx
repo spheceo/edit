@@ -2,7 +2,7 @@ import { AudioLines, CircleAlert, RotateCcw } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import { trackOf } from "../lib/edit";
+import { isSoundEffect, trackOf } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import type { Project, Transcript } from "../lib/types";
@@ -104,7 +104,8 @@ export function TranscriptPanel() {
     for (const clip of [...project.clips].sort((a, b) => a.start - b.start)) {
       if (clip.type === "audio" && !ids.includes(clip.media)) ids.push(clip.media);
     }
-    return ids.map((id) => project.media.find((media) => media.id === id)!).filter(Boolean);
+    // Sound effects (the shutter on the cuts) have nothing said in them.
+    return ids.map((id) => project.media.find((media) => media.id === id)!).filter((media) => media && !isSoundEffect(media));
   }, [project]);
 
   // Voices get named after a transcript arrives: reload it when that lands.
@@ -179,7 +180,9 @@ export function TranscriptPanel() {
       .then(({ status }) => useEditor.setState({ media: { ...useEditor.getState().media, [mediaId]: status } }))
       .catch((error) => toast((error as Error).message, "error"));
 
-  if (!heard.length) {
+  // Audio files in the bin (voice-overs) can be transcribed before they're on the timeline.
+  const unplaced = project.media.filter((media) => media.kind === "audio" && !isSoundEffect(media) && !heard.includes(media));
+  if (!heard.length && !unplaced.length) {
     return (
       <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center px-6 text-center">
         <span className="flex size-10 items-center justify-center rounded-xl bg-raised text-muted ring-1 ring-line">
@@ -191,7 +194,7 @@ export function TranscriptPanel() {
     );
   }
 
-  const pending = heard.filter((media) => statuses[media.id]?.transcript !== "ready");
+  const pending = [...heard, ...unplaced].filter((media) => statuses[media.id]?.transcript !== "ready");
   const waiting = pending.filter((media) => (statuses[media.id]?.transcript ?? "pending") === "pending");
   const error = pending.map((media) => statuses[media.id]?.transcript_error).find(Boolean);
   return (

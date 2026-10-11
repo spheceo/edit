@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use edit_core::{evaluate, sources_at, Project};
+use edit_core::{evaluate, Layer, Project, Scene};
 use edit_render::{wgpu, Renderer};
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, VideoFrame};
@@ -26,6 +26,7 @@ pub struct Engine {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     project: Option<Project>,
+    evaluated: Option<(i64, Scene)>,
     /// Set when the browser takes the GPU device away (see `is_lost`).
     lost: Arc<AtomicBool>,
 }
@@ -95,6 +96,7 @@ pub async fn create_engine(canvas: HtmlCanvasElement) -> Result<Engine, JsValue>
         surface,
         config,
         project: None,
+        evaluated: None,
         lost,
     })
 }
@@ -112,20 +114,40 @@ impl Engine {
     #[wasm_bindgen(js_name = setProject)]
     pub fn set_project(&mut self, json: &str) -> Result<(), JsValue> {
         let project: Project = serde_json::from_str(json).map_err(js_error)?;
+        project.validate().map_err(js_error)?;
         self.renderer
             .resize(project.settings.width, project.settings.height);
         self.project = Some(project);
+        self.evaluated = None;
         Ok(())
     }
 
-    /// JSON `[{media, time}]`: the video frames `frame` needs.
-    pub fn sources(&self, frame: f64) -> String {
-        let Some(project) = &self.project else {
+    /// JSON: the project's intro, B-roll spots, story and outro (edit_core::sections).
+    pub fn sections(&self) -> String {
+        self.project
+            .as_ref()
+            .and_then(|project| serde_json::to_string(&edit_core::sections(project)).ok())
+            .unwrap_or_else(|| "null".to_owned())
+    }
+
+    /// JSON `[{clip, media, time}]`: the video frames `frame` needs.
+    pub fn sources(&mut self, frame: f64) -> String {
+        self.evaluate(frame.floor() as i64);
+        let Some((_, scene)) = &self.evaluated else {
             return "[]".to_owned();
         };
-        let list: Vec<_> = sources_at(project, frame as i64)
-            .into_iter()
-            .map(|request| serde_json::json!({ "media": request.media, "time": request.source_time }))
+        let list: Vec<_> = scene
+            .layers
+            .iter()
+            .filter_map(|layer| match layer {
+                Layer::Video {
+                    clip,
+                    media,
+                    source_time,
+                    ..
+                } => Some(serde_json::json!({ "clip": clip, "media": media, "time": source_time })),
+                _ => None,
+            })
             .collect();
         serde_json::Value::Array(list).to_string()
     }
@@ -165,6 +187,17 @@ impl Engine {
         );
     }
 
+    /// A media's sound levels for waveforms: its peaks (one byte per 10 ms).
+    #[wasm_bindgen(js_name = setPeaks)]
+    pub fn set_peaks(&mut self, media: &str, peaks: &[u8]) {
+        self.renderer.set_peaks(media, peaks.to_vec());
+    }
+
+    #[wasm_bindgen(js_name = clearPeaks)]
+    pub fn clear_peaks(&mut self) {
+        self.renderer.clear_peaks();
+    }
+
     #[wasm_bindgen(js_name = forgetVideo)]
     pub fn forget_video(&mut self, media: &str) {
         self.renderer.forget_video(media);
@@ -197,12 +230,25 @@ impl Engine {
 
     /// Evaluates and draws `frame`, letterboxed into the canvas.
     pub fn render(&mut self, frame: f64) -> Result<(), JsValue> {
-        let Some(project) = &self.project else {
+        self.evaluate(frame.floor() as i64);
+        let Some((_, scene)) = &self.evaluated else {
             return Ok(());
         };
-        let scene = evaluate(project, frame.floor() as i64);
-        self.renderer.render(&scene);
+        self.renderer.render(scene);
         self.present()
+    }
+
+    fn evaluate(&mut self, frame: i64) {
+        if self
+            .evaluated
+            .as_ref()
+            .is_none_or(|(cached, _)| *cached != frame)
+        {
+            self.evaluated = self
+                .project
+                .as_ref()
+                .map(|project| (frame, evaluate(project, frame)));
+        }
     }
 
     fn present(&mut self) -> Result<(), JsValue> {

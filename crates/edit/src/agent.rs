@@ -6,7 +6,7 @@
 //! other MCP servers, apps and plugins are switched off and the sandbox is
 //! read-only: the agent edits through Edit's tools and nothing else.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -81,6 +81,7 @@ pub struct Agents {
     dir: PathBuf,
     codex: tokio::sync::Mutex<Option<Arc<Codex>>>,
     chats: Mutex<HashMap<String, Chat>>,
+    sending: Mutex<HashSet<String>>,
     /// Codex thread id → Edit project id.
     threads: Mutex<HashMap<String, String>>,
     models: Mutex<Option<ModelCache>>,
@@ -108,6 +109,7 @@ impl Agents {
             dir,
             codex: tokio::sync::Mutex::new(None),
             chats: Mutex::new(HashMap::new()),
+            sending: Mutex::new(HashSet::new()),
             threads: Mutex::new(HashMap::new()),
             models: Mutex::new(models),
             refreshing: AtomicBool::new(false),
@@ -351,6 +353,23 @@ impl Agents {
         effort: Option<String>,
     ) -> Result<(), String> {
         let live = self.store.get(project).ok_or("no such project")?;
+        if !self.sending.lock().unwrap().insert(project.to_owned()) {
+            return Err("the agent is already starting a turn".to_owned());
+        }
+        struct Sending<'a> {
+            agents: &'a Agents,
+            project: &'a str,
+        }
+        impl Drop for Sending<'_> {
+            fn drop(&mut self) {
+                self.agents.sending.lock().unwrap().remove(self.project);
+            }
+        }
+        let _sending = Sending {
+            agents: self,
+            project,
+        };
+
         if self.with_chat(project, |chat| chat.running) {
             return Err("the agent is still working; stop it or wait".to_owned());
         }

@@ -1,3 +1,5 @@
+declare const FixedLengthStream: { new(size: number): { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> } };
+
 /**
  * Edit's relay. Holds the ElevenLabs key so Edit installs never do.
  *
@@ -6,7 +8,7 @@
  *   GET  /health
  *
  * Spend is bounded three ways: a burst limit per IP, a daily byte quota per
- * IP and a daily byte cap across everyone (KV counters). The audio streams
+ * IP and a daily byte cap across everyone (atomic reservations). The audio streams
  * straight through to ElevenLabs and the answer streams straight back, so the
  * Worker never buffers or parses either (keeps CPU tiny on any plan).
  */
@@ -15,7 +17,7 @@ export interface Env {
   ELEVENLABS_API_KEY?: string;
   /** If set, requests must send `authorization: Bearer <token>`. */
   CLIENT_TOKEN?: string;
-  USAGE: KVNamespace;
+  BUDGET: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
   BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
   DAILY_BYTES_PER_IP: string;
   DAILY_BYTES_TOTAL: string;
@@ -26,7 +28,7 @@ const SCRIBE = "https://api.elevenlabs.io/v1/speech-to-text";
 const MODEL = "scribe_v2";
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY) });
     if (url.pathname !== "/v1/transcribe") return json(404, { error: "not found" });
@@ -40,25 +42,23 @@ export default {
     const type = request.headers.get("content-type") ?? "";
     if (!type.startsWith("audio/")) return json(415, { error: "Send audio (e.g. audio/ogg)." });
     const size = Number(request.headers.get("content-length"));
-    if (!Number.isFinite(size) || size <= 0) return json(411, { error: "Content-Length is required." });
+    if (!Number.isSafeInteger(size) || size <= 0) return json(411, { error: "Content-Length is required." });
+    if (![env.MAX_UPLOAD_BYTES, env.DAILY_BYTES_PER_IP, env.DAILY_BYTES_TOTAL].every(value => Number.isSafeInteger(Number(value)) && Number(value) > 0)) return json(503, { error: "Transcription budget is misconfigured." });
     if (size > Number(env.MAX_UPLOAD_BYTES)) return json(413, { error: "That recording is too long for one request." });
 
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
     if (!(await env.BURST.limit({ key: ip })).success) {
       return json(429, { error: "Too many transcriptions at once; try again in a minute." });
     }
-    const day = new Date().toISOString().slice(0, 10);
-    const ipKey = `ip:${ip}:${day}`;
-    const allKey = `all:${day}`;
-    const [ipUsed, allUsed] = await Promise.all([env.USAGE.get(ipKey), env.USAGE.get(allKey)]).then((values) => values.map(Number));
-    if ((ipUsed || 0) + size > Number(env.DAILY_BYTES_PER_IP)) {
-      return json(429, { error: "Today's transcription allowance for this connection is used up; it resets at midnight UTC." });
-    }
-    if ((allUsed || 0) + size > Number(env.DAILY_BYTES_TOTAL)) {
-      return json(429, { error: "Edit's shared transcription budget for today is used up; it resets at midnight UTC." });
-    }
-
     const language = url.searchParams.get("language");
+    if (language && !/^[a-zA-Z]{2,3}$/.test(language)) return json(400, { error: "Invalid language code." });
+    const day = new Date().toISOString().slice(0, 10);
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
+    const client = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    const budget = env.BUDGET.get(env.BUDGET.idFromName(day));
+    const reserved = await budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client, size }) }));
+    if (!reserved.ok) return reserved;
+
     const form = multipart(request.body!, size, type, {
       model_id: MODEL,
       diarize: "true",
@@ -72,15 +72,6 @@ export default {
       body: form.body,
     });
 
-    if (upstream.ok) {
-      // Count what was paid for. KV is eventually consistent; good enough for a budget.
-      ctx.waitUntil(
-        Promise.all([
-          env.USAGE.put(ipKey, String((ipUsed || 0) + size), { expirationTtl: 2 * 86400 }),
-          env.USAGE.put(allKey, String((allUsed || 0) + size), { expirationTtl: 2 * 86400 }),
-        ]),
-      );
-    }
     return new Response(upstream.body, {
       status: upstream.status,
       headers: { "content-type": upstream.headers.get("content-type") ?? "application/json", "x-edit-model": MODEL },
@@ -120,4 +111,37 @@ function multipart(audio: ReadableStream<Uint8Array>, audioSize: number, audioTy
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+/** The namespace has one object per UTC day. Reserve before calling Scribe:
+ * simultaneous requests cannot spend the same allowance. Failed requests keep
+ * their reservation, because a network error cannot prove Scribe didn't bill.
+ */
+interface BudgetStorage {
+  get<T>(key: string): Promise<T | undefined>;
+  put(key: string, value: number): Promise<void>;
+  transaction<T>(callback: (storage: BudgetStorage) => Promise<T>): Promise<T>;
+  setAlarm(time: number): Promise<void>;
+  deleteAll(): Promise<void>;
+}
+interface BudgetState { storage: BudgetStorage }
+export class TranscriptionBudget {
+  constructor(private state: BudgetState, private env: Env) {}
+  async fetch(request: Request): Promise<Response> {
+    const { client, size } = await request.json() as { client: string; size: number };
+    if (!/^[a-f0-9]{64}$/.test(client) || !Number.isSafeInteger(size) || size <= 0 || size > Number(this.env.MAX_UPLOAD_BYTES)) return json(400, { error: "Invalid budget reservation." });
+    const answer = await this.state.storage.transaction(async storage => {
+      const ipKey = `ip:${client}`;
+      const ipUsed = await storage.get<number>(ipKey) ?? 0;
+      const allUsed = await storage.get<number>("all") ?? 0;
+      if (ipUsed + size > Number(this.env.DAILY_BYTES_PER_IP)) return json(429, { error: "Today's transcription allowance for this connection is used up; it resets at midnight UTC." });
+      if (allUsed + size > Number(this.env.DAILY_BYTES_TOTAL)) return json(429, { error: "Edit's shared transcription budget for today is used up; it resets at midnight UTC." });
+      await storage.put(ipKey, ipUsed + size);
+      await storage.put("all", allUsed + size);
+      return json(200, { ok: true });
+    });
+    await this.state.storage.setAlarm(Date.now() + 2 * 86400_000);
+    return answer;
+  }
+  async alarm() { await this.state.storage.deleteAll(); }
 }

@@ -5,7 +5,8 @@ import { addElement, addMarker, clipEnd, deleteClips, duplicateClips, rippleDele
 import { playhead, preview } from "../lib/playback";
 import { api, useMachine } from "../lib/api";
 import { connectEvents, flushSave, syncScriptJob, useEditor } from "../lib/store";
-import { useView } from "../lib/timelineView";
+import { clearIn, clearInOut, clearOut, markIn, markOut } from "../lib/inOut";
+import { goToEnd, goToStart, useView } from "../lib/timelineView";
 import { uploadFiles } from "../lib/upload";
 import { ExportDialog } from "./ExportDialog";
 import { FileBrowser } from "./FileBrowser";
@@ -58,7 +59,6 @@ export function Editor({ id }: { id: string }) {
   useEffect(() => {
     let alive = true;
     connectEvents();
-    playhead.frame = 0;
     api
       .project(id)
       .then(({ rev, project }) => {
@@ -274,10 +274,10 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
         if (target !== undefined) preview.seek(target);
       } else if (key === "home") {
         handled();
-        preview.seek(0);
+        goToStart();
       } else if (key === "end") {
         handled();
-        preview.seekEnd();
+        goToEnd();
       } else if (key === "backspace" || key === "delete") {
         if (!state.selection.length) return;
         handled();
@@ -304,6 +304,18 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
           id = addElement(draft, "title", Math.round(playhead.frame));
         });
         state.select([id]);
+      } else if (event.altKey && (event.code === "KeyI" || event.code === "KeyO" || event.code === "KeyX")) {
+        // ⌥ changes the key's character on a Mac, so match the physical key.
+        handled();
+        if (event.code === "KeyI") clearIn();
+        else if (event.code === "KeyO") clearOut();
+        else clearInOut();
+      } else if (key === "i") {
+        handled();
+        markIn(playhead.frame);
+      } else if (key === "o") {
+        handled();
+        markOut(playhead.frame);
       } else if (key === "k") {
         preview.pause();
       } else if (key === "l") {

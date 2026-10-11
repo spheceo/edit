@@ -132,6 +132,8 @@ fn decode(
             &format!("{from:.4}"),
             "-t",
             &format!("{:.4}", to - from),
+            "-protocol_whitelist",
+            "file,pipe",
             "-i",
         ])
         .arg(path)

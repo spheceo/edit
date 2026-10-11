@@ -22,7 +22,11 @@ namespace_id = "7701"
 limit = 4
 period = 60
 
-# Daily usage counters.
-[[kv_namespaces]]
-binding = "USAGE"
-id = "0953cd12f6f84b3dbde62939f574e926"
+# Atomic daily reservations, including requests still in flight.
+[[durable_objects.bindings]]
+name = "BUDGET"
+class_name = "TranscriptionBudget"
+
+[[migrations]]
+tag = "v1-budget"
+new_sqlite_classes = ["TranscriptionBudget"]

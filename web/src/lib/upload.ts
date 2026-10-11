@@ -105,8 +105,8 @@ function send(job: Job): Promise<{ rev: number; added: string[]; project: Projec
     const watch = () => {
       clearTimeout(stall);
       stall = setTimeout(() => {
-        xhr.abort();
         reject(new Error("the server stopped accepting the upload (is `edit serve` up to date?)"));
+        xhr.abort();
       }, STALL_MS);
     };
     const done = () => {
@@ -144,7 +144,7 @@ function send(job: Job): Promise<{ rev: number; added: string[]; project: Projec
       done();
       reject(new Error("connection lost"));
     };
-    xhr.send(job.file);
+    try { xhr.send(job.file); } catch (error) { done(); reject(error); }
   });
 }
 
@@ -152,7 +152,7 @@ function land(job: Job, result: { rev: number; added: string[]; project: Project
   const state = useEditor.getState();
   if (!state.project || state.project.id !== job.projectId) return;
   // The live event normally beats the HTTP response; catch up if it didn't.
-  if (state.rev < result.rev) useEditor.setState({ project: result.project, rev: result.rev });
+  if (state.rev < result.rev) state.adopt(result.rev, result.project);
   const media = result.added[0];
   if (!job.placement || !media) return;
   const frame = job.placement.frame >= 0 ? job.placement.frame : followFrame;

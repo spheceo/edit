@@ -1,3 +1,4 @@
+import { readSetting, writeSetting } from "../lib/storage";
 import { AudioLines, ChevronRight, Film, Folder, HardDrive } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -25,11 +26,11 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
 
   const go = (path?: string) =>
     api
-      .browse(path ?? (localStorage.getItem("edit.lastFolder") || undefined))
+      .browse(path ?? (readSetting("edit.lastFolder") || undefined))
       .then((next) => {
         setListing(next);
         setPathInput(next.path);
-        localStorage.setItem("edit.lastFolder", next.path);
+        writeSetting("edit.lastFolder", next.path);
       })
       .catch((error) => {
         if (!path) return api.browse().then(setListing);
@@ -50,7 +51,7 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
     setBusy(true);
     try {
       const result = await api.importMedia(project.id, picked, place, clientId);
-      useEditor.setState({ project: result.project, rev: result.rev });
+      useEditor.getState().adopt(result.rev, result.project);
       for (const error of result.errors) toast(error, "error");
       onClose();
     } catch (error) {

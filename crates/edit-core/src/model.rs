@@ -24,6 +24,12 @@ pub struct Project {
     /// The script the edit follows (e.g. imported from a Google Doc).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<Script>,
+    /// In point (I): the first frame of the span that export renders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_in: Option<i64>,
+    /// Out point (O): the last frame of that span (shown, inclusive); playback stops on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_out: Option<i64>,
 }
 
 /// A script: footage ranges and the narration between them, in order.
@@ -75,6 +81,10 @@ pub enum ScriptBlock {
         notes: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         clip: Option<String>,
+        /// The voice-over clip reading it, once placed: it stands in for the
+        /// card once the card is gone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        voiceover: Option<String>,
     },
 }
 
@@ -150,6 +160,10 @@ pub struct Track {
     pub muted: bool,
     #[serde(default)]
     pub locked: bool,
+    /// The subtitles' own track: the top video track (drawn over everything,
+    /// shown slim under the ruler). New tracks go beneath it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub subtitles: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -197,7 +211,7 @@ pub struct Clip {
 
 impl Clip {
     pub fn end(&self) -> i64 {
-        self.start + self.duration
+        self.start.saturating_add(self.duration)
     }
 
     pub fn contains(&self, frame: i64) -> bool {
@@ -266,6 +280,107 @@ pub enum ClipContent {
         #[serde(default = "one_f32")]
         opacity: f32,
     },
+    /// A glowing waveform of the sound heard on the timeline (phone calls,
+    /// voice notes): mirrored bars over a stretch of time centred on now.
+    Waveform {
+        /// Only this media's sound; everything heard when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media: Option<String>,
+        #[serde(default)]
+        style: WaveformStyle,
+        #[serde(default)]
+        transform: Transform,
+        #[serde(default = "one_f32")]
+        opacity: f32,
+    },
+}
+
+/// How a waveform looks. Sizes are project pixels.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct WaveformStyle {
+    #[serde(default)]
+    pub kind: WaveformKind,
+    #[serde(default = "default_wave_color")]
+    pub color: Rgba,
+    /// Bars across the width (bars).
+    #[serde(default = "default_wave_bars")]
+    pub bars: u32,
+    /// Tangled strands (line).
+    #[serde(default = "default_wave_strands")]
+    pub strands: u32,
+    /// Across all the bars.
+    #[serde(default = "default_wave_width")]
+    pub width: f32,
+    /// The tallest bar, top to bottom.
+    #[serde(default = "default_wave_height")]
+    pub height: f32,
+    /// Each bar's share of its slot (the rest is the gap), 0..1.
+    #[serde(default = "default_wave_fill")]
+    pub fill: f32,
+    /// Seconds of sound across the width, centred on now.
+    #[serde(default = "default_wave_window")]
+    pub window: f32,
+    /// Multiplies the sound's level before drawing.
+    #[serde(default = "one_f32")]
+    pub gain: f32,
+    /// The house glow, in the waveform's colour unless set.
+    #[serde(default)]
+    pub glow: Glow,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WaveformKind {
+    /// Glowing strands that zigzag with the sound, tangled together, like a real signal.
+    #[default]
+    Line,
+    /// Mirrored bars with round ends.
+    Bars,
+}
+
+fn default_wave_color() -> Rgba {
+    Rgba([1.0, 0.03, 0.03, 1.0])
+}
+
+fn default_wave_bars() -> u32 {
+    48
+}
+
+fn default_wave_strands() -> u32 {
+    2
+}
+
+fn default_wave_width() -> f32 {
+    1400.0
+}
+
+fn default_wave_height() -> f32 {
+    360.0
+}
+
+fn default_wave_fill() -> f32 {
+    0.5
+}
+
+fn default_wave_window() -> f32 {
+    1.6
+}
+
+impl Default for WaveformStyle {
+    fn default() -> Self {
+        Self {
+            kind: WaveformKind::default(),
+            color: default_wave_color(),
+            bars: default_wave_bars(),
+            strands: default_wave_strands(),
+            width: default_wave_width(),
+            height: default_wave_height(),
+            fill: default_wave_fill(),
+            window: default_wave_window(),
+            gain: 1.0,
+            glow: Glow::default(),
+        }
+    }
 }
 
 fn one() -> f64 {
@@ -349,6 +464,24 @@ pub struct TextStyle {
     /// A soft drop shadow (the text grown, blurred and offset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<TextShadow>,
+    /// A small line above the text, in its own colour (and box, when the
+    /// text has one): who's speaking ("Officer:").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<TextLabel>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct TextLabel {
+    pub text: String,
+    #[serde(default = "white")]
+    pub color: Rgba,
+    /// Project pixels.
+    #[serde(default = "default_label_size")]
+    pub size: f32,
+}
+
+fn default_label_size() -> f32 {
+    26.0
 }
 
 /// Behind-the-text box, sized to the lines plus padding (project pixels).
@@ -472,6 +605,7 @@ impl Default for TextStyle {
             max_width: None,
             background: None,
             shadow: None,
+            label: None,
         }
     }
 }
@@ -831,6 +965,16 @@ pub fn animatable_params(content: &ClipContent) -> &'static [&'static str] {
             "vignette",
         ],
         ClipContent::Solid { .. } => &["opacity"],
+        ClipContent::Waveform { .. } => &[
+            "opacity",
+            "x",
+            "y",
+            "scale",
+            "rotation",
+            "gain",
+            "glow.radius",
+            "glow.strength",
+        ],
     }
 }
 
@@ -846,6 +990,8 @@ impl Project {
             clips: Vec::new(),
             next_id: 1,
             script: None,
+            mark_in: None,
+            mark_out: None,
         };
         for kind in [
             TrackKind::Video,
@@ -860,9 +1006,24 @@ impl Project {
     }
 
     pub fn fresh_id(&mut self, prefix: &str) -> String {
-        let id = format!("{prefix}{}", self.next_id.max(1));
-        self.next_id = self.next_id.max(1) + 1;
-        id
+        loop {
+            let next = self.next_id.clamp(1, 9_007_199_254_740_991);
+            let id = format!("{prefix}{next}");
+            self.next_id = if next == 9_007_199_254_740_991 {
+                1
+            } else {
+                next + 1
+            };
+            if !self.tracks.iter().any(|track| track.id == id)
+                && !self.media.iter().any(|media| media.id == id)
+                && !self
+                    .clips
+                    .iter()
+                    .any(|clip| clip.id == id || clip.link.as_deref() == Some(&id))
+            {
+                return id;
+            }
+        }
     }
 
     pub fn add_track(&mut self, kind: TrackKind) -> String {
@@ -870,13 +1031,44 @@ impl Project {
             TrackKind::Video => "v",
             TrackKind::Audio => "a",
         });
-        self.tracks.push(Track {
+        let track = Track {
             id: id.clone(),
             kind,
             hidden: false,
             muted: false,
             locked: false,
-        });
+            subtitles: false,
+        };
+        // Video goes on top of the rest, but under the subtitles.
+        match self.tracks.iter().position(|track| track.subtitles) {
+            Some(at) if kind == TrackKind::Video => self.tracks.insert(at, track),
+            _ => self.tracks.push(track),
+        }
+        id
+    }
+
+    /// The subtitles' track, made (on top of every video track) if there isn't one.
+    pub fn subtitles_track(&mut self) -> String {
+        if let Some(track) = self.tracks.iter().find(|track| track.subtitles) {
+            return track.id.clone();
+        }
+        let id = self.fresh_id("v");
+        let after = self
+            .tracks
+            .iter()
+            .rposition(|track| track.kind == TrackKind::Video)
+            .map_or(0, |at| at + 1);
+        self.tracks.insert(
+            after,
+            Track {
+                id: id.clone(),
+                kind: TrackKind::Video,
+                hidden: false,
+                muted: false,
+                locked: false,
+                subtitles: true,
+            },
+        );
         id
     }
 
@@ -924,16 +1116,96 @@ impl Project {
     }
 
     /// Checks references and ranges. Agents write projects, so this runs on every save.
+    /// The span between the in and out points as frames `[start, end)`, or
+    /// None when neither is set. A missing in is the start; a missing out, the end.
+    pub fn in_out(&self) -> Option<(i64, i64)> {
+        if self.mark_in.is_none() && self.mark_out.is_none() {
+            return None;
+        }
+        let duration = self.duration();
+        let start = self.mark_in.unwrap_or(0).min((duration - 1).max(0));
+        let end = self.mark_out.map_or(duration, |out| out + 1).min(duration);
+        (end > start).then_some((start, end))
+    }
+
     pub fn validate(&self) -> Result<(), String> {
+        if self.mark_in.is_some_and(|frame| frame < 0)
+            || self.mark_out.is_some_and(|frame| frame < 0)
+        {
+            return Err("mark_in and mark_out must be frames from 0".to_owned());
+        }
+        if let (Some(start), Some(end)) = (self.mark_in, self.mark_out) {
+            if start > end {
+                return Err("mark_in must not come after mark_out".to_owned());
+            }
+        }
+        if self.next_id > 9_007_199_254_740_991 {
+            return Err("next_id must fit in a JavaScript safe integer".to_owned());
+        }
         if self.settings.width == 0 || self.settings.height == 0 || self.settings.fps == 0 {
             return Err("settings width, height and fps must be positive".to_owned());
         }
         if self.settings.width > 8192 || self.settings.height > 8192 {
             return Err("settings width and height must be at most 8192".to_owned());
         }
+        let mut tracks = std::collections::HashSet::new();
+        if let Some(script) = &self.script {
+            for block in &script.blocks {
+                if let ScriptBlock::Footage {
+                    file, start, end, ..
+                } = block
+                {
+                    if file.is_empty()
+                        || file.len() > 200
+                        || !file
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+                    {
+                        return Err(
+                            "script file must be a Google Drive ID, without path separators"
+                                .to_owned(),
+                        );
+                    }
+                    if !start.is_finite() || !end.is_finite() || *start < 0.0 || end <= start {
+                        return Err(
+                            "script footage needs a finite, positive source range".to_owned()
+                        );
+                    }
+                }
+            }
+        }
+        for track in &self.tracks {
+            if track.id.is_empty() || !tracks.insert(&track.id) {
+                return Err(format!("empty or duplicate track id {}", track.id));
+            }
+        }
+        let subtitles: Vec<&Track> = self.tracks.iter().filter(|track| track.subtitles).collect();
+        if subtitles.len() > 1 || subtitles.iter().any(|track| track.kind != TrackKind::Video) {
+            return Err("there can be one subtitles track, a video track".to_owned());
+        }
+        let mut media_ids = std::collections::HashSet::new();
+        for media in &self.media {
+            if media.id.is_empty() || !media_ids.insert(&media.id) {
+                return Err(format!("empty or duplicate media id {}", media.id));
+            }
+            if !media.duration.is_finite()
+                || media.duration < 0.0
+                || !media.fps.is_finite()
+                || media.fps < 0.0
+            {
+                return Err(format!("media {} has invalid duration or fps", media.id));
+            }
+            if media
+                .markers
+                .iter()
+                .any(|marker| !marker.time.is_finite() || marker.time < 0.0)
+            {
+                return Err(format!("media {} has an invalid marker", media.id));
+            }
+        }
         let mut ids = std::collections::HashSet::new();
         for clip in &self.clips {
-            if !ids.insert(clip.id.as_str()) {
+            if clip.id.is_empty() || !ids.insert(clip.id.as_str()) {
                 return Err(format!("duplicate clip id {}", clip.id));
             }
             let track = self
@@ -944,6 +1216,19 @@ impl Project {
             }
             if clip.start < 0 {
                 return Err(format!("clip {} starts before frame 0", clip.id));
+            }
+            if clip
+                .start
+                .checked_add(clip.duration)
+                .is_none_or(|end| end > 9_007_199_254_740_991)
+            {
+                return Err(format!(
+                    "clip {} exceeds the timeline's integer range",
+                    clip.id
+                ));
+            }
+            if clip.fade_in < 0 || clip.fade_out < 0 {
+                return Err(format!("clip {} fades must be nonnegative", clip.id));
             }
             let audio_clip = matches!(clip.content, ClipContent::Audio { .. });
             if audio_clip != (track.kind == TrackKind::Audio) {
@@ -962,9 +1247,38 @@ impl Project {
                     return Err(format!("clip {} references unknown media {media}", clip.id));
                 }
             }
-            if let ClipContent::Video { speed, .. } | ClipContent::Audio { speed, .. } =
-                clip.content
+            if let ClipContent::Waveform { media, style, .. } = &clip.content {
+                if let Some(media) = media {
+                    if self.media(media).is_none() {
+                        return Err(format!("clip {} references unknown media {media}", clip.id));
+                    }
+                }
+                if !(1..=512).contains(&style.bars) {
+                    return Err(format!("clip {} waveform bars must be 1 to 512", clip.id));
+                }
+                if !(1..=8).contains(&style.strands) {
+                    return Err(format!("clip {} waveform strands must be 1 to 8", clip.id));
+                }
+                if style.width <= 0.0 || style.height <= 0.0 || style.window <= 0.0 {
+                    return Err(format!(
+                        "clip {} waveform width, height and window must be positive",
+                        clip.id
+                    ));
+                }
+            }
+            if let ClipContent::Video {
+                speed, source_in, ..
+            }
+            | ClipContent::Audio {
+                speed, source_in, ..
+            } = clip.content
             {
+                if !source_in.is_finite() || source_in < 0.0 {
+                    return Err(format!(
+                        "clip {} source_in must be finite and nonnegative",
+                        clip.id
+                    ));
+                }
                 if !(0.05..=20.0).contains(&speed) {
                     return Err(format!(
                         "clip {} speed must be between 0.05 and 20",
@@ -973,6 +1287,9 @@ impl Project {
                 }
             }
             let allowed = animatable_params(&clip.content);
+            if !content_finite(&clip.content) {
+                return Err(format!("clip {} parameters must be finite", clip.id));
+            }
             for (param, keys) in &clip.keyframes {
                 if !allowed.contains(&param.as_str()) {
                     return Err(format!(
@@ -984,6 +1301,16 @@ impl Project {
                 if keys.is_empty() {
                     return Err(format!(
                         "clip {} has an empty keyframe list for {param}",
+                        clip.id
+                    ));
+                }
+                if keys
+                    .iter()
+                    .any(|key| !key.frame.is_finite() || !key.value.is_finite())
+                    || keys.windows(2).any(|pair| pair[0].frame >= pair[1].frame)
+                {
+                    return Err(format!(
+                        "clip {} {param}: keys must be finite and in strictly increasing order",
                         clip.id
                     ));
                 }
@@ -1003,19 +1330,198 @@ impl Project {
                 }
             }
         }
-        for (index, clip) in self.clips.iter().enumerate() {
-            for other in &self.clips[index + 1..] {
-                if clip.track == other.track && clip.start < other.end() && other.start < clip.end()
-                {
-                    return Err(format!(
-                        "clips {} and {} overlap on track {}",
-                        clip.id,
-                        other.id,
-                        self.track_label(&clip.track).unwrap_or_default()
-                    ));
-                }
+        let mut ordered: Vec<_> = self.clips.iter().collect();
+        ordered.sort_unstable_by(|a, b| (&a.track, a.start).cmp(&(&b.track, b.start)));
+        for pair in ordered.windows(2) {
+            let [clip, other] = pair else { unreachable!() };
+            if clip.track == other.track && other.start < clip.end() {
+                return Err(format!(
+                    "clips {} and {} overlap on track {}",
+                    clip.id,
+                    other.id,
+                    self.track_label(&clip.track).unwrap_or_default()
+                ));
             }
         }
         Ok(())
+    }
+}
+
+fn content_finite(content: &ClipContent) -> bool {
+    let transform_finite = |transform: &Transform| {
+        [
+            transform.x,
+            transform.y,
+            transform.scale,
+            transform.rotation,
+            transform.shake,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+    };
+    let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
+    match content {
+        ClipContent::Video {
+            transform, opacity, ..
+        } => transform_finite(transform) && opacity.is_finite(),
+        ClipContent::Audio { volume_db, .. } => volume_db.is_finite(),
+        ClipContent::Solid { fill, opacity } => finite(&fill.0) && opacity.is_finite(),
+        ClipContent::Waveform {
+            style,
+            transform,
+            opacity,
+            ..
+        } => {
+            transform_finite(transform)
+                && opacity.is_finite()
+                && finite(&style.color.0)
+                && finite(&[
+                    style.width,
+                    style.height,
+                    style.fill,
+                    style.window,
+                    style.gain,
+                    style.glow.radius,
+                    style.glow.strength,
+                ])
+                && style.glow.color.is_none_or(|color| finite(&color.0))
+        }
+        ClipContent::Adjustment {
+            grade,
+            shake,
+            opacity,
+        } => {
+            let shake = shake.resolved();
+            finite(&[
+                grade.exposure,
+                grade.contrast,
+                grade.saturation,
+                grade.temperature,
+                grade.vignette,
+                shake.amount,
+                shake.frequency,
+                shake.rotation,
+                shake.motion_blur,
+                *opacity,
+            ])
+        }
+        ClipContent::Text {
+            style,
+            transform,
+            animation,
+            opacity,
+            word_times,
+            ..
+        } => {
+            transform_finite(transform)
+                && finite(&[
+                    style.size,
+                    style.tracking,
+                    style.line_height,
+                    style.glow.radius,
+                    style.glow.strength,
+                    animation.duration,
+                    animation.stagger,
+                    *opacity,
+                ])
+                && finite(&style.color.0)
+                && style.glow.color.is_none_or(|color| finite(&color.0))
+                && style.max_width.is_none_or(|value| value.is_finite())
+                && finite(word_times)
+                && style.background.is_none_or(|background| {
+                    finite(&background.color.0)
+                        && finite(&[background.opacity, background.pad_x, background.pad_y])
+                })
+                && style.shadow.is_none_or(|shadow| {
+                    finite(&shadow.color.0)
+                        && finite(&[
+                            shadow.opacity,
+                            shadow.distance,
+                            shadow.angle,
+                            shadow.size,
+                            shadow.blur,
+                        ])
+                })
+        }
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+    fn project() -> Project {
+        let mut project = Project::new("p".into(), "test".into(), Settings::default());
+        project.clips.push(Clip {
+            id: "c".into(),
+            track: project.tracks[0].id.clone(),
+            start: 0,
+            duration: 30,
+            color: ClipColor::Blue,
+            name: None,
+            link: None,
+            fade_in: 0,
+            fade_out: 0,
+            keyframes: Default::default(),
+            content: ClipContent::Solid {
+                fill: Rgba::BLACK,
+                opacity: 1.0,
+            },
+        });
+        project
+    }
+    #[test]
+    fn fresh_ids_skip_existing_clips_and_links_and_wrap_safely() {
+        let mut p = project();
+        p.clips[0].id = "c1".into();
+        p.clips[0].link = Some("l2".into());
+        p.next_id = 1;
+        assert_eq!(p.fresh_id("c"), "c2");
+        p.next_id = 2;
+        assert_eq!(p.fresh_id("l"), "l3");
+        p.next_id = 9_007_199_254_740_991;
+        assert_eq!(p.fresh_id("c"), "c9007199254740991");
+        assert_eq!(p.fresh_id("c"), "c2");
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_overflow_and_duplicate_references() {
+        let mut p = project();
+        p.clips[0].start = i64::MAX;
+        assert!(p.validate().is_err());
+        assert_eq!(p.duration(), i64::MAX);
+        let mut p = project();
+        p.tracks.push(p.tracks[0].clone());
+        assert!(p.validate().is_err());
+    }
+    #[test]
+    fn rejects_nonfinite_and_unsorted_keys() {
+        let mut p = project();
+        p.clips[0].content = ClipContent::Solid {
+            fill: Rgba::BLACK,
+            opacity: f32::NAN,
+        };
+        assert!(p.validate().is_err());
+        let mut p = project();
+        p.clips[0].keyframes.insert(
+            "opacity".into(),
+            vec![
+                Keyframe {
+                    frame: 10.0,
+                    value: 1.0,
+                    ease: Ease::Linear,
+                    handle_in: None,
+                    handle_out: None,
+                },
+                Keyframe {
+                    frame: 0.0,
+                    value: 0.0,
+                    ease: Ease::Linear,
+                    handle_in: None,
+                    handle_out: None,
+                },
+            ],
+        );
+        assert!(p.validate().is_err());
     }
 }

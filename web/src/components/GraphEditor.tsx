@@ -1,3 +1,4 @@
+import { readSetting, writeSetting } from "../lib/storage";
 // After Effects-style graph editor for the selected clip's keyframes: a value
 // graph and a speed graph, bezier handles on the keyframes, and marquee
 // selection. Shares the timeline's zoom, scroll, ruler and playhead, so curves
@@ -9,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { controlPoints, effectiveHandles, isAnimated, paramAt, sample, segmentSpeed, setParam } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
-import { drawMarquee, drawRuler, getLanesWidth, leftTheWindow, MOST_PPF, RULER, setLanesWidth, setView, useView } from "../lib/timelineView";
+import { drawMarquee, drawPlayhead, drawRuler, getLanesWidth, leftTheWindow, MOST_PPF, RULER, setLanesWidth, setView, useView } from "../lib/timelineView";
 import { ANIMATABLE, type Clip, type Ease, type Handle, type Keyframe } from "../lib/types";
 import { openMenu } from "./ContextMenu";
 import { cx } from "./ui";
@@ -128,7 +129,7 @@ export function GraphEditor() {
   const selection = useEditor((state) => state.selection);
   const clip = selection.length === 1 ? project.clips.find((candidate) => candidate.id === selection[0]) : undefined;
   const animated = clip ? ANIMATABLE[clip.type].filter((param) => isAnimated(clip, param)) : [];
-  const [mode, setModeState] = useState<Mode>(() => (localStorage.getItem("edit.graph.mode") === "speed" ? "speed" : "value"));
+  const [mode, setModeState] = useState<Mode>(() => (readSetting("edit.graph.mode") === "speed" ? "speed" : "value"));
   /** Properties picked to show; null = every animated one. */
   const [only, setOnly] = useState<string[] | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
@@ -138,7 +139,7 @@ export function GraphEditor() {
   const focused = focus && shown.includes(focus) ? focus : (shown[0] ?? null);
 
   const setMode = (next: Mode) => {
-    localStorage.setItem("edit.graph.mode", next);
+    writeSetting("edit.graph.mode", next);
     setModeState(next);
   };
 
@@ -466,8 +467,8 @@ function Curves({
 
     if (!clip) {
       message("Select a clip to see its animation curves");
-      drawRuler(ctx, width, fps, ppf, scrollX);
-      drawPlayhead(ctx, height);
+      drawRuler(ctx, width, fps, ppf, scrollX, preview.sections);
+      drawPlayhead(ctx, Math.round(frameToX(playhead.frame)) + 0.5, height);
       return;
     }
 
@@ -630,27 +631,8 @@ function Curves({
     }
 
     drawMarquee(ctx, drag.current?.kind === "marquee" ? drag.current : null);
-    drawRuler(ctx, width, fps, ppf, scrollX);
-    drawPlayhead(ctx, height);
-  }
-
-  function drawPlayhead(ctx: CanvasRenderingContext2D, height: number) {
-    const px = Math.round(frameToX(playhead.frame)) + 0.5;
-    ctx.strokeStyle = "#ff3d6e";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(px, RULER - 4);
-    ctx.lineTo(px, height);
-    ctx.stroke();
-    ctx.fillStyle = "#ff3d6e";
-    ctx.beginPath();
-    ctx.moveTo(px - 6, 6);
-    ctx.lineTo(px + 6, 6);
-    ctx.lineTo(px + 7, 15);
-    ctx.lineTo(px, RULER - 4);
-    ctx.lineTo(px - 7, 15);
-    ctx.closePath();
-    ctx.fill();
+    drawRuler(ctx, width, fps, ppf, scrollX, preview.sections);
+    drawPlayhead(ctx, Math.round(frameToX(playhead.frame)) + 0.5, height);
   }
 
   const local = (event: { clientX: number; clientY: number }) => {

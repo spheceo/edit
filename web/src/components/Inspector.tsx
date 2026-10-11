@@ -1,4 +1,4 @@
-import { AudioLines, Clapperboard, Diamond, Film, RotateCcw, Sun, Trash2, Type } from "lucide-react";
+import { AudioLines, AudioWaveform, Clapperboard, Diamond, Film, RotateCcw, Sun, Trash2, Type } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useSyncExternalStore, type ReactNode } from "react";
 
@@ -109,6 +109,7 @@ const clipIcon = (clip: Clip) =>
     text: <Type size={14} />,
     adjustment: <Sun size={14} />,
     solid: <Clapperboard size={14} />,
+    waveform: <AudioWaveform size={14} />,
   })[clip.type];
 
 export function clipTitle(project: Project, clip: Clip) {
@@ -116,6 +117,7 @@ export function clipTitle(project: Project, clip: Clip) {
   if (clip.type === "video" || clip.type === "audio") return mediaOf(project, clip.media)?.name ?? "Missing media";
   if (clip.type === "text") return clip.text.split("\n")[0] || "Text";
   if (clip.type === "adjustment") return "Adjustment layer";
+  if (clip.type === "waveform") return "Waveform";
   return clip.fill[0] + clip.fill[1] + clip.fill[2] > 1.5 ? "Flash" : "Solid";
 }
 
@@ -460,6 +462,44 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                 </>
               )}
             </Section>
+            <Section
+              title="Speaker label"
+              aside={
+                <Switch
+                  checked={Boolean(clip.style.label)}
+                  onChange={(on) =>
+                    once((live) => {
+                      if (live.type !== "text") return;
+                      if (!on) delete live.style.label;
+                      else live.style.label = { text: "Speaker:", color: [1, 0.86, 0.2, 1], size: Math.round((live.style.size * 26) / 48) };
+                    })
+                  }
+                />
+              }
+            >
+              {clip.style.label && (
+                <>
+                  <Row label="Name">
+                    <input
+                      value={clip.style.label.text}
+                      onChange={(event) => once((live) => live.type === "text" && live.style.label && (live.style.label.text = event.target.value))}
+                      spellCheck={false}
+                      className="h-6 w-full min-w-0 rounded-md bg-raised px-1.5 text-right text-[12px] text-fg outline-none ring-1 ring-line focus:ring-line-strong"
+                    />
+                  </Row>
+                  <Row label="Color">
+                    <ColorField
+                      value={clip.style.label.color}
+                      onChange={(color) => once((live) => live.type === "text" && live.style.label && (live.style.label.color = color))}
+                    />
+                  </Row>
+                  {field("Size", clip.style.label.size, (live, value) => live.type === "text" && live.style.label && (live.style.label.size = value), {
+                    min: 1,
+                    suffix: "px",
+                  })}
+                </>
+              )}
+            </Section>
             <Section title="Animate in">
               <Row label="Style">
                 <Select<TextPreset>
@@ -632,6 +672,84 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
               scale: 100,
             })}
           </Section>
+        )}
+        {clip.type === "waveform" && (
+          <>
+            <Section title="Waveform">
+              <Row label="Style">
+                <Select<"line" | "bars">
+                  value={clip.style.kind ?? "line"}
+                  options={[
+                    { value: "line", label: "Tangled line" },
+                    { value: "bars", label: "Bars" },
+                  ]}
+                  onChange={(kind) => once((live) => live.type === "waveform" && (live.style.kind = kind))}
+                />
+              </Row>
+              <Row label="Color">
+                <ColorField value={clip.style.color} onChange={(color) => once((live) => live.type === "waveform" && (live.style.color = color))} />
+              </Row>
+              {(clip.style.kind ?? "line") === "bars"
+                ? field("Bars", clip.style.bars, (live, value) => live.type === "waveform" && (live.style.bars = Math.round(value)), { min: 1, max: 512 })
+                : field("Strands", clip.style.strands ?? 3, (live, value) => live.type === "waveform" && (live.style.strands = Math.round(value)), { min: 1, max: 8 })}
+              {field("Width", clip.style.width, (live, value) => live.type === "waveform" && (live.style.width = value), { min: 1, suffix: "px" })}
+              {field("Height", clip.style.height, (live, value) => live.type === "waveform" && (live.style.height = value), { min: 1, suffix: "px" })}
+              {(clip.style.kind ?? "line") === "bars" &&
+                field("Bar width", clip.style.fill, (live, value) => live.type === "waveform" && (live.style.fill = value), {
+                  step: 0.5,
+                  min: 5,
+                  max: 100,
+                  suffix: "%",
+                  scale: 100,
+                })}
+              {field("Time shown", clip.style.window, (live, value) => live.type === "waveform" && (live.style.window = value), {
+                step: 0.05,
+                min: 0.1,
+                max: 10,
+                precision: 2,
+                suffix: "s",
+              })}
+              {param("Sensitivity", "gain", { step: 0.01, min: 0, max: 10, precision: 2, suffix: "×" })}
+              {param("Opacity", "opacity", { step: 0.5, min: 0, max: 100, suffix: "%", scale: 100 })}
+            </Section>
+            <Section
+              title="Glow"
+              aside={
+                <Switch
+                  checked={clip.style.glow.enabled}
+                  onChange={(enabled) => once((live) => live.type === "waveform" && (live.style.glow.enabled = enabled))}
+                />
+              }
+            >
+              {clip.style.glow.enabled && (
+                <>
+                  <Row
+                    label="Color"
+                    keyframe={
+                      clip.style.glow.color ? (
+                        <button
+                          title="Match the waveform colour"
+                          onClick={() => once((live) => live.type === "waveform" && (live.style.glow.color = null))}
+                          className="text-faint transition-colors hover:text-fg"
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      ) : undefined
+                    }
+                  >
+                    <ColorField
+                      value={clip.style.glow.color ?? clip.style.color}
+                      label={clip.style.glow.color ? undefined : "Waveform"}
+                      onChange={(color) => once((live) => live.type === "waveform" && (live.style.glow.color = color))}
+                    />
+                  </Row>
+                  {param("Blur", "glow.radius", { min: 0, max: 200, suffix: "px" })}
+                  {param("Opacity", "glow.strength", { step: 0.5, min: 0, max: 100, suffix: "%", scale: 100 })}
+                </>
+              )}
+            </Section>
+            {transform}
+          </>
         )}
         {clip.type === "solid" && (
           <Section title="Fill">

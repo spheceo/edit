@@ -3,12 +3,15 @@
 
 import { current, isDraft } from "immer";
 
-import { HOUSE_BOX, HOUSE_GLOW, HOUSE_SHADOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind } from "./types";
+import { HOUSE_BOX, HOUSE_GLOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind } from "./types";
 
 export const freshId = (project: Project, prefix: string) => {
-  const id = `${prefix}${Math.max(1, project.next_id)}`;
-  project.next_id = Math.max(1, project.next_id) + 1;
-  return id;
+  for (;;) {
+    const next = Number.isSafeInteger(project.next_id) && project.next_id > 0 ? project.next_id : 1;
+    const id = `${prefix}${next}`;
+    project.next_id = next === Number.MAX_SAFE_INTEGER ? 1 : next + 1;
+    if (!project.tracks.some(track => track.id === id) && !project.media.some(media => media.id === id) && !project.clips.some(clip => clip.id === id || clip.link === id)) return id;
+  }
 };
 
 export const clipEnd = (clip: Clip) => clip.start + clip.duration;
@@ -23,13 +26,28 @@ export const mediaOf = (project: Project, id: string): Media | undefined => proj
 export const projectDuration = (project: Project) => project.clips.reduce((end, clip) => Math.max(end, clipEnd(clip)), 0);
 
 export function trackLabel(project: Project, track: Track) {
-  const index = project.tracks.filter((other) => other.kind === track.kind).findIndex((other) => other.id === track.id);
+  if (track.subtitles) return "Subs";
+  const index = project.tracks.filter((other) => other.kind === track.kind && !other.subtitles).findIndex((other) => other.id === track.id);
   return `${track.kind === "video" ? "V" : "A"}${index + 1}`;
 }
 
+/** Adds a track: video on top of the rest, but under the subtitles (as edit-core add_track). */
 export function addTrack(project: Project, kind: TrackKind) {
   const id = freshId(project, kind === "video" ? "v" : "a");
-  project.tracks.push({ id, kind, hidden: false, muted: false, locked: false });
+  const track: Track = { id, kind, hidden: false, muted: false, locked: false };
+  const subtitles = project.tracks.findIndex((candidate) => candidate.subtitles);
+  if (kind === "video" && subtitles >= 0) project.tracks.splice(subtitles, 0, track);
+  else project.tracks.push(track);
+  return id;
+}
+
+/** The subtitles' track, made on top of every video track if there isn't one (as edit-core subtitles_track). */
+export function subtitlesTrack(project: Project) {
+  const existing = project.tracks.find((track) => track.subtitles);
+  if (existing) return existing.id;
+  const id = freshId(project, "v");
+  const lastVideo = project.tracks.map((track) => track.kind).lastIndexOf("video");
+  project.tracks.splice(lastVideo + 1, 0, { id, kind: "video", hidden: false, muted: false, locked: false, subtitles: true });
   return id;
 }
 
@@ -38,7 +56,7 @@ const busy = (project: Project, track: string, start: number, end: number, excep
 
 /** The free track `freeTrack` would pick, without adding one (undefined = it would add a track). */
 export function peekFreeTrack(project: Project, kind: TrackKind, start: number, end: number, aboveFootage = false) {
-  const tracks = project.tracks.filter((track) => track.kind === kind && !track.locked).slice(aboveFootage ? 1 : 0);
+  const tracks = project.tracks.filter((track) => track.kind === kind && !track.locked && !track.subtitles).slice(aboveFootage ? 1 : 0);
   return tracks.find((track) => !busy(project, track.id, start, end))?.id;
 }
 
@@ -206,7 +224,7 @@ export function placeMedia(project: Project, mediaId: string, frame: number, vid
   return ids;
 }
 
-export type Element = "title" | "caption" | "subtitle" | "cutin" | "adjustment" | "shake" | "flash" | "black";
+export type Element = "title" | "caption" | "subtitle" | "cutin" | "adjustment" | "shake" | "flash" | "black" | "waveform";
 
 /** Default length of each element, in seconds. */
 export const ELEMENT_SECONDS: Record<Element, number> = {
@@ -218,6 +236,7 @@ export const ELEMENT_SECONDS: Record<Element, number> = {
   shake: 0.2,
   flash: 0.4,
   black: 1,
+  waveform: 5,
 };
 
 /** The cut-in card's words: sized so long narration still fits (edit script.rs `cut_in_style`). */
@@ -243,7 +262,11 @@ export function addElement(project: Project, element: Element, frame: number, on
   const duration = Math.max(1, Math.round(ELEMENT_SECONDS[element] * fps));
   const start = Math.max(0, Math.round(frame));
   let track: string;
-  if (onTrack && trackOf(project, onTrack)?.kind === "video") {
+  if (element === "subtitle") {
+    // Subtitles live on their own track, over everything.
+    track = subtitlesTrack(project);
+    clearRange(project, track, start, start + duration, new Set());
+  } else if (onTrack && trackOf(project, onTrack)?.kind === "video" && !trackOf(project, onTrack)?.subtitles) {
     track = onTrack;
     clearRange(project, track, start, start + duration, new Set());
   } else {
@@ -295,12 +318,13 @@ export function addElement(project: Project, element: Element, frame: number, on
       };
       break;
     case "subtitle": {
-      // Repack's subtitle house style, authored at 1080p and scaled to the project.
+      // The subtitle look after the intro (crates/edit/src/captions.rs subtitle_style), authored at 1080p:
+      // white words in a black box, no glow, the speaker's name above in their colour.
       const { width, height } = project.settings;
       const k = height / 1080;
       const scaled = <T extends object>(value: T, keys: (keyof T)[]) =>
         Object.fromEntries(Object.entries(value).map(([key, v]) => [key, keys.includes(key as keyof T) ? (v as number) * k : v])) as T;
-      const background = scaled(HOUSE_BOX, ["pad_x", "pad_y"]);
+      const background = { ...scaled(HOUSE_BOX, ["pad_x", "pad_y"]), color: [0, 0, 0, 1] as [number, number, number, number], opacity: 1 };
       clip = {
         ...base,
         color: "cyan",
@@ -313,10 +337,10 @@ export function addElement(project: Project, element: Element, frame: number, on
           color: [1, 1, 1, 1],
           tracking: 0,
           line_height: 1.15,
-          glow: { ...HOUSE_GLOW, radius: HOUSE_GLOW.radius * k },
+          glow: { ...HOUSE_GLOW, enabled: false, radius: HOUSE_GLOW.radius * k },
           max_width: width * 0.8 - background.pad_x * 2,
           background,
-          shadow: scaled(HOUSE_SHADOW, ["distance", "size", "blur"]),
+          label: { text: "Speaker:", color: [1, 0.86, 0.2, 1], size: Math.round(26 * k) },
         },
         transform: { ...transform, y: height * 0.4 },
         animation: { preset: "none", duration: 0, stagger: 0 },
@@ -384,6 +408,47 @@ export function addElement(project: Project, element: Element, frame: number, on
         fade_out: Math.max(1, duration - 2),
       };
       break;
+    case "waveform": {
+      // A phone call's look: a dark vignette over the footage (see-through, darker at the edges),
+      // the waveform glowing on top (linked).
+      const k = project.settings.height / 1080;
+      const link = freshId(project, "l");
+      const tintTrack = project.tracks.findIndex((candidate) => candidate.id === track);
+      const above = project.tracks.filter((candidate, index) => candidate.kind === "video" && !candidate.locked && index > tintTrack);
+      const waveTrack = above.find((candidate) => !busy(project, candidate.id, start, start + duration))?.id ?? addTrack(project, "video");
+      project.clips.push({
+        ...base,
+        id: freshId(project, "c"),
+        track: waveTrack,
+        color: "cyan",
+        link,
+        type: "waveform",
+        style: {
+          kind: "line",
+          color: [1, 0.03, 0.03, 1],
+          bars: 48,
+          strands: 2,
+          width: 1400 * k,
+          height: 360 * k,
+          fill: 0.5,
+          window: 1.6,
+          gain: 1,
+          glow: { ...HOUSE_GLOW, radius: HOUSE_GLOW.radius * k },
+        },
+        transform,
+        opacity: 1,
+      });
+      clip = {
+        ...base,
+        color: "cyan",
+        name: "Dark vignette",
+        link,
+        type: "adjustment",
+        grade: { exposure: -1.9, contrast: 0, saturation: 0, temperature: 0, vignette: 0.9 },
+        opacity: 1,
+      };
+      break;
+    }
     case "black":
       clip = {
         ...base,
@@ -420,8 +485,15 @@ const params: Record<string, [Getter, Setter]> = {
   ],
   size: [(c) => (c.type === "text" ? c.style.size : 0), (c, v) => c.type === "text" && (c.style.size = v)],
   tracking: [(c) => (c.type === "text" ? c.style.tracking : 0), (c, v) => c.type === "text" && (c.style.tracking = v)],
-  "glow.radius": [(c) => (c.type === "text" ? c.style.glow.radius : 0), (c, v) => c.type === "text" && (c.style.glow.radius = v)],
-  "glow.strength": [(c) => (c.type === "text" ? c.style.glow.strength : 0), (c, v) => c.type === "text" && (c.style.glow.strength = v)],
+  "glow.radius": [
+    (c) => (c.type === "text" || c.type === "waveform" ? c.style.glow.radius : 0),
+    (c, v) => (c.type === "text" || c.type === "waveform") && (c.style.glow.radius = v),
+  ],
+  "glow.strength": [
+    (c) => (c.type === "text" || c.type === "waveform" ? c.style.glow.strength : 0),
+    (c, v) => (c.type === "text" || c.type === "waveform") && (c.style.glow.strength = v),
+  ],
+  gain: [(c) => (c.type === "waveform" ? c.style.gain : 1), (c, v) => c.type === "waveform" && (c.style.gain = v)],
   volume_db: [(c) => (c.type === "audio" ? c.volume_db : 0), (c, v) => c.type === "audio" && (c.volume_db = v)],
   exposure: [(c) => (c.type === "adjustment" ? c.grade.exposure : 0), (c, v) => c.type === "adjustment" && (c.grade.exposure = v)],
   contrast: [(c) => (c.type === "adjustment" ? c.grade.contrast : 0), (c, v) => c.type === "adjustment" && (c.grade.contrast = v)],
@@ -429,6 +501,18 @@ const params: Record<string, [Getter, Setter]> = {
   temperature: [(c) => (c.type === "adjustment" ? c.grade.temperature : 0), (c, v) => c.type === "adjustment" && (c.grade.temperature = v)],
   vignette: [(c) => (c.type === "adjustment" ? c.grade.vignette : 0), (c, v) => c.type === "adjustment" && (c.grade.vignette = v)],
 };
+
+/** Mirrors edit-core::animatable_params. */
+export function animatableParams(clip: Clip): string[] {
+  switch (clip.type) {
+    case "video": return ["x", "y", "scale", "rotation", "shake", "opacity"];
+    case "text": return ["x", "y", "scale", "rotation", "shake", "opacity", "size", "tracking", "glow.radius", "glow.strength"];
+    case "adjustment": return ["shake", "exposure", "contrast", "saturation", "temperature", "vignette", "opacity"];
+    case "solid": return ["opacity"];
+    case "waveform": return ["x", "y", "scale", "rotation", "opacity", "gain", "glow.radius", "glow.strength"];
+    case "audio": return ["volume_db"];
+  }
+}
 
 type Ease = Keyframe["ease"];
 
@@ -680,16 +764,38 @@ export function setSpeed(project: Project, ids: Iterable<string>, speed: number)
 
 /** The checks edit-core's `Project::validate` runs, so a change the server would refuse is never shown. */
 export function validateProject(project: Project): string | null {
+  const finite = (value: unknown): boolean => typeof value === "number" ? Number.isFinite(value) : value !== null && typeof value === "object" ? Object.values(value).every(finite) : true;
+  if (!finite(project)) return `project numbers must be finite`;
+  if (!Number.isSafeInteger(project.next_id) || project.next_id < 0) return `next_id must be a nonnegative safe integer`;
+  if (![project.settings.width, project.settings.height, project.settings.fps].every((value) => Number.isSafeInteger(value) && value > 0)) return `settings must be positive integers`;
+  if (project.settings.width > 8192 || project.settings.height > 8192) return `dimensions must be at most 8192`;
+  const marks = [project.mark_in, project.mark_out].filter((mark): mark is number => mark != null);
+  if (!marks.every((mark) => Number.isSafeInteger(mark) && mark >= 0)) return `in and out points must be frames from 0`;
+  if (project.mark_in != null && project.mark_out != null && project.mark_in > project.mark_out) return `the in point must not come after the out point`;
+  const unique = (items: { id: string }[]) => items.every((item) => item.id.length > 0) && new Set(items.map((item) => item.id)).size === items.length;
+  if (!unique(project.tracks) || !unique(project.media) || !unique(project.clips)) return `IDs must be nonempty and unique within each collection`;
+  if (project.media.some((media) => media.duration < 0 || media.fps < 0 || media.markers?.some((marker) => marker.time < 0))) return `media timing must be nonnegative`;
+  if (project.script?.blocks.some((block) => block.kind === "footage" && (!/^[a-zA-Z0-9_-]{1,200}$/.test(block.file) || block.start < 0 || block.end <= block.start))) return `script footage needs a Drive ID and positive source range`;
   const tracks = new Map(project.tracks.map((track) => [track.id, track]));
   const byTrack = new Map<string, Clip[]>();
   for (const clip of project.clips) {
     const track = tracks.get(clip.track);
     if (!track) return `a clip is on a track that no longer exists`;
     if (clip.duration <= 0) return `a clip would have no length`;
+    if (![clip.start, clip.duration, clipEnd(clip)].every(Number.isSafeInteger)) return `clip times must be safe integer frames`;
     if (clip.start < 0) return `a clip would start before the beginning`;
     if ((clip.type === "audio") !== (track.kind === "audio")) return `a clip is on the wrong kind of track`;
     if ((clip.type === "video" || clip.type === "audio") && !mediaOf(project, clip.media)) return `a clip's media is missing`;
-    byTrack.set(clip.track, [...(byTrack.get(clip.track) ?? []), clip]);
+    if ((clip.type === "video" || clip.type === "audio") && (clip.source_in < 0 || clip.speed < 0.05 || clip.speed > 20)) return `source timing or speed is invalid`;
+    if (clip.fade_in < 0 || clip.fade_out < 0 || !Number.isSafeInteger(clip.fade_in) || !Number.isSafeInteger(clip.fade_out)) return `fades must be nonnegative integer frames`;
+    for (const [param, keys] of Object.entries(clip.keyframes ?? {})) {
+      if (!animatableParams(clip).includes(param)) return `a clip cannot animate ${param}`;
+      if (!keys.length || keys.some((key, index) => index > 0 && key.frame <= keys[index - 1].frame)) return `keyframes must be in strictly increasing order`;
+      if (keys.some((key) => [key.handle_in, key.handle_out].some((handle) => handle && (handle.influence <= 0 || handle.influence > 1)))) return `keyframe handle influence must be in (0, 1]`;
+    }
+    const clips = byTrack.get(clip.track) ?? [];
+    clips.push(clip);
+    byTrack.set(clip.track, clips);
   }
   for (const [track, clips] of byTrack) {
     const sorted = [...clips].sort((a, b) => a.start - b.start);
@@ -795,7 +901,15 @@ export type MediaFolder = (typeof MEDIA_FOLDERS)[number]["id"];
 
 export function folderOf(media: Media): MediaFolder {
   if (media.kind === "image") return "images";
-  // Bundled sounds live in <Edit's home>/sfx (crates/edit/src/sfx.rs).
-  if (media.kind === "audio") return /[\\/]sfx[\\/][^\\/]+$/.test(media.path) ? "sfx" : "audio";
+  if (media.kind === "audio") return isSoundEffect(media) ? "sfx" : "audio";
   return "footage";
+}
+
+/** Audio this short is a sound effect, not something said (seconds); as Media::is_sound_effect. */
+const SOUND_EFFECT_SECONDS = 3;
+
+/** A sound effect (a bundled sound, or any very short audio): heard, never transcribed. */
+export function isSoundEffect(media: Media) {
+  // Bundled sounds live in <Edit's home>/sfx (crates/edit/src/sfx.rs).
+  return media.kind === "audio" && (media.duration <= SOUND_EFFECT_SECONDS || /[\\/]sfx[\\/][^\\/]+$/.test(media.path));
 }

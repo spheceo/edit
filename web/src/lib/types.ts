@@ -38,6 +38,8 @@ export interface Track {
   hidden: boolean;
   muted: boolean;
   locked: boolean;
+  /** The subtitles' own track: always the top video track, shown slim under the ruler. */
+  subtitles?: boolean;
 }
 
 export const CLIP_COLORS = ["blue", "cyan", "green", "yellow", "orange", "red", "purple", "pink"] as const;
@@ -101,6 +103,15 @@ export interface TextStyle {
   max_width?: number;
   background?: TextBox;
   shadow?: TextShadow;
+  /** A small line above the text in its own colour (and box): who's speaking ("Officer:"). */
+  label?: TextLabel;
+}
+
+export interface TextLabel {
+  text: string;
+  color: Rgba;
+  /** Project pixels. */
+  size: number;
 }
 
 /** A box behind the lines (project pixels). */
@@ -259,9 +270,43 @@ export interface SolidClip extends ClipBase {
   opacity: number;
 }
 
-export type Clip = VideoClip | AudioClip | TextClip | AdjustmentClip | SolidClip;
+/** How a waveform looks (edit-core WaveformStyle). Sizes are project pixels. */
+export interface WaveformStyle {
+  /** line: tangled glowing strands that zigzag with the sound (the house look); bars: mirrored bars. */
+  kind: "line" | "bars";
+  color: Rgba;
+  /** Bars across the width (bars). */
+  bars: number;
+  /** Tangled strands (line). */
+  strands: number;
+  /** Across all the bars. */
+  width: number;
+  /** The tallest bar, top to bottom. */
+  height: number;
+  /** Each bar's share of its slot (the rest is the gap), 0–1. */
+  fill: number;
+  /** Seconds of sound across the width, centred on now. */
+  window: number;
+  /** Multiplies the sound's level. */
+  gain: number;
+  glow: Glow;
+}
+
+/** A glowing waveform of the sound heard on the timeline (phone calls, voice notes). */
+export interface WaveformClip extends ClipBase {
+  type: "waveform";
+  /** Only this media's sound; everything heard when absent. */
+  media?: string | null;
+  style: WaveformStyle;
+  transform: Transform;
+  opacity: number;
+}
+
+export type Clip = VideoClip | AudioClip | TextClip | AdjustmentClip | SolidClip | WaveformClip;
 export type ClipType = Clip["type"];
 
+/** Writers must satisfy edit-core Project::validate: safe frame integers,
+ * unique collection IDs, finite numeric parameters and ordered keyframes. */
 export interface Project {
   version: number;
   id: string;
@@ -270,9 +315,14 @@ export interface Project {
   media: Media[];
   tracks: Track[];
   clips: Clip[];
+  /** Nonnegative safe integer; allocators skip existing IDs and link IDs. */
   next_id: number;
   /** The script the edit follows (edit-core `Script`). */
   script?: Script;
+  /** In point (I): first frame of the span export renders. */
+  mark_in?: number | null;
+  /** Out point (O): last frame of that span (inclusive); playback stops on it. */
+  mark_out?: number | null;
 }
 
 export interface Script {
@@ -303,7 +353,14 @@ export type ScriptBlock =
       cut?: [number, number];
       clip?: string;
     }
-  | { kind: "narration"; text: string; notes?: string[]; clip?: string };
+  | {
+      kind: "narration";
+      text: string;
+      notes?: string[];
+      clip?: string;
+      /** The voice-over clip reading it, once placed (stands in for the card once it's gone). */
+      voiceover?: string;
+    };
 
 /** A script import's footage downloads (crates/edit/src/script.rs `Job`). */
 export interface ScriptJob {
@@ -363,4 +420,23 @@ export const ANIMATABLE: Record<ClipType, string[]> = {
   text: ["opacity", "x", "y", "scale", "rotation", "shake", "size", "tracking", "glow.radius", "glow.strength"],
   adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette"],
   solid: ["opacity"],
+  waveform: ["opacity", "x", "y", "scale", "rotation", "gain", "glow.radius", "glow.strength"],
 };
+
+/** A stretch of the timeline (frames, `end` exclusive), found from the script (edit_core::sections). */
+export interface Section {
+  kind: "intro" | "broll" | "story" | "outro";
+  start: number;
+  end: number;
+  /** "Intro 1/2", "B-roll", "Story", "Outro". */
+  label: string;
+}
+
+export interface Sections {
+  intro: [number, number] | null;
+  /** How many parts the intro's cut-ins split it into (1 when it has none). */
+  intro_splits: number;
+  outro: [number, number] | null;
+  /** Back to back from the start of the edit; empty without a script. */
+  parts: Section[];
+}

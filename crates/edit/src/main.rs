@@ -1,5 +1,6 @@
 mod agent;
 mod captions;
+mod export;
 mod mcp;
 mod media;
 mod render;
@@ -11,6 +12,7 @@ mod store;
 mod track;
 mod transcribe;
 mod update;
+mod voiceover;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -126,6 +128,9 @@ fn serve(home: PathBuf, host: Option<String>, port: u16) {
         if let Some(ip) = server::tailscale_ip() {
             allowed.push(ip.to_string());
         }
+        if let Some(name) = server::tailscale_name() {
+            allowed.push(name);
+        }
         if let Some(host) = &host {
             allowed.push(host.to_ascii_lowercase());
         }
@@ -137,13 +142,14 @@ fn serve(home: PathBuf, host: Option<String>, port: u16) {
                     .filter(|host| !host.is_empty()),
             );
         }
+        let cache = store.cache_dir();
         let app = server::App {
             updater: update::Updater::new(home.clone()),
             agents: agent::Agents::new(Arc::clone(&store), home.clone(), port),
             scripts: Arc::new(script::Jobs::default()),
             media: media::Processor::new(Arc::clone(&store)),
             store,
-            frames: render::FrameRenderer::start(),
+            frames: render::FrameRenderer::start(cache),
             exports: Arc::new(render::Exports::default()),
             allowed_hosts: Arc::new(allowed),
             machine: hostname()

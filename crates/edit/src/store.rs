@@ -1,7 +1,9 @@
 //! Projects on disk plus the live revision every client and agent edits against.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -138,13 +140,16 @@ impl Store {
         }
         let text = std::fs::read_to_string(self.path(id)).ok()?;
         let project: Project = serde_json::from_str(&text).ok()?;
+        if project.id != id || project.validate().is_err() {
+            return None;
+        }
         let live = Live { rev: 1, project };
         projects.insert(id.to_owned(), live.clone());
         Some(live)
     }
 
     pub fn create(&self, name: &str, settings: Settings) -> Result<Live, String> {
-        let id = format!("p{}", now_ms());
+        let id = format!("p{}-{}", now_ms(), next_file_id());
         let name = if name.trim().is_empty() {
             "Untitled"
         } else {
@@ -162,7 +167,12 @@ impl Store {
         if !valid_id(id) {
             return false;
         }
-        self.projects.lock().unwrap().remove(id);
+        let mut projects = self.projects.lock().unwrap();
+        projects.remove(id);
+        let mut active = self.active.lock().unwrap();
+        if active.as_deref() == Some(id) {
+            *active = None;
+        }
         let _ = std::fs::remove_file(self.chat_path(id));
         std::fs::remove_file(self.path(id)).is_ok()
     }
@@ -182,7 +192,6 @@ impl Store {
         project.id = id.to_owned();
         project.validate().map_err(UpdateError::Invalid)?;
         self.commit(id, current.rev, project, origin)
-            .map_err(UpdateError::Invalid)
     }
 
     /// Read-modify-write used by agent tools and server-side edits.
@@ -197,17 +206,31 @@ impl Store {
         let value = edit(&mut project)?;
         project.id = id.to_owned();
         project.validate()?;
-        let live = self.commit(id, current.rev, project, origin)?;
+        let live = self
+            .commit(id, current.rev, project, origin)
+            .map_err(|error| match error {
+                UpdateError::NotFound => "project was deleted while editing".to_owned(),
+                UpdateError::Conflict(_) => "project changed while editing; retry".to_owned(),
+                UpdateError::Invalid(error) => error,
+            })?;
         Ok((live, value))
     }
 
-    fn commit(&self, id: &str, rev: u64, project: Project, origin: &str) -> Result<Live, String> {
+    fn commit(
+        &self,
+        id: &str,
+        rev: u64,
+        project: Project,
+        origin: &str,
+    ) -> Result<Live, UpdateError> {
         let mut projects = self.projects.lock().unwrap();
         // Another writer may have landed between read and commit.
-        if projects.get(id).is_some_and(|live| live.rev != rev) {
-            return Err("project changed while editing; retry".to_owned());
+        let current = projects.get(id).ok_or(UpdateError::NotFound)?;
+        if current.rev != rev {
+            return Err(UpdateError::Conflict(Box::new(current.clone())));
         }
-        self.write(&project).map_err(|error| error.to_string())?;
+        self.write(&project)
+            .map_err(|error| UpdateError::Invalid(error.to_string()))?;
         let live = Live {
             rev: rev + 1,
             project,
@@ -256,9 +279,25 @@ impl Store {
 /// Writes through a temporary file, so a crash mid-write leaves the old file whole.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(tmp, path)
+    tmp.push(format!(".{}-{}.tmp", std::process::id(), next_file_id()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn next_file_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 fn valid_id(id: &str) -> bool {
@@ -273,4 +312,67 @@ pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_writer_gets_a_conflict_and_deleted_projects_stay_deleted() {
+        let dir = std::env::temp_dir().join(format!(
+            "edit-store-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let store = Store::open(dir.clone()).unwrap();
+        let original = store.create("test", Settings::default()).unwrap();
+        let newer = store
+            .replace(
+                &original.project.id,
+                Some(original.rev),
+                original.project.clone(),
+                "test",
+            )
+            .ok()
+            .unwrap();
+        assert!(matches!(
+            store.commit(
+                &original.project.id,
+                original.rev,
+                original.project.clone(),
+                "stale"
+            ),
+            Err(UpdateError::Conflict(_))
+        ));
+        assert!(store.delete(&original.project.id));
+        assert!(matches!(
+            store.commit(&original.project.id, newer.rev, newer.project, "late"),
+            Err(UpdateError::NotFound)
+        ));
+        assert!(store.get(&original.project.id).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn simultaneous_project_creation_does_not_overwrite_projects() {
+        let dir = std::env::temp_dir().join(format!(
+            "edit-create-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let store = Store::open(dir.clone()).unwrap();
+        let ids: std::collections::HashSet<_> = (0..100)
+            .map(|_| {
+                store
+                    .create("test", Settings::default())
+                    .unwrap()
+                    .project
+                    .id
+            })
+            .collect();
+        assert_eq!(ids.len(), 100);
+        assert_eq!(store.list().len(), 100);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

@@ -1,4 +1,5 @@
-import { ChevronRight, Captions, RectangleHorizontal, Moon, Sparkles, Sun, Type, Vibrate, Zap } from "lucide-react";
+import { readSetting, writeSetting } from "../lib/storage";
+import { AudioWaveform, Captions, ChevronRight, Moon, RectangleHorizontal, Sparkles, Sun, Type, Vibrate, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState, type ReactNode } from "react";
 
@@ -83,6 +84,13 @@ const FOLDERS: { id: string; label: string; presets: Preset[] }[] = [
         icon: <Moon size={14} />,
         color: CLIP_HEX.red,
       },
+      {
+        id: "waveform",
+        label: "Glowing waveform",
+        hint: "Phone calls: the sound, over a dark tint",
+        icon: <AudioWaveform size={14} />,
+        color: CLIP_HEX.cyan,
+      },
     ],
   },
 ];
@@ -91,7 +99,7 @@ const STORAGE = "edit.presets.closed";
 
 const closedFolders = (): string[] => {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE) ?? "[]");
+    return JSON.parse(readSetting(STORAGE) ?? "[]");
   } catch {
     return [];
   }
@@ -101,7 +109,7 @@ export function Presets() {
   const [closed, setClosed] = useState(closedFolders);
   const toggle = (id: string) => {
     const next = closed.includes(id) ? closed.filter((folder) => folder !== id) : [...closed, id];
-    localStorage.setItem(STORAGE, JSON.stringify(next));
+    writeSetting(STORAGE, JSON.stringify(next));
     setClosed(next);
   };
   return (

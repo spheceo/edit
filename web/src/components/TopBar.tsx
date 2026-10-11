@@ -1,4 +1,4 @@
-import { ChevronLeft, Share } from "lucide-react";
+import { ChevronLeft, Redo2, Share, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -28,6 +28,7 @@ export function TopBar({ onExport }: { onExport: () => void }) {
       </IconButton>
       <Mark size={20} />
       <NameField value={name} />
+      <History />
       {/* Only worth a word when the server is away. */}
       <AnimatePresence>
         {down && (
@@ -107,5 +108,21 @@ function NameField({ value }: { value: string }) {
       className="h-8 min-w-0 truncate rounded-md bg-transparent px-1.5 text-[14px] font-medium text-fg outline-none hover:bg-hover focus:bg-hover"
       style={{ width: `${Math.min(40, Math.max(6, draft.length + 1))}ch` }}
     />
+  );
+}
+
+/** Undo and redo (⌘Z, ⇧⌘Z): every edit, in and out points, imports and the agent's changes. */
+function History() {
+  const canUndo = useEditor((state) => state.past.length > 0);
+  const canRedo = useEditor((state) => state.future.length > 0);
+  return (
+    <div className="flex items-center">
+      <IconButton label="Undo (⌘Z)" disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
+        <Undo2 size={15} />
+      </IconButton>
+      <IconButton label="Redo (⇧⌘Z)" disabled={!canRedo} onClick={() => useEditor.getState().redo()}>
+        <Redo2 size={15} />
+      </IconButton>
+    </div>
   );
 }

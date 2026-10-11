@@ -85,6 +85,9 @@ pub fn router(app: App) -> Router {
         .route("/api/projects/{id}/frame/{frame}", get(frame_png))
         .route("/api/projects/{id}/export", post(start_export))
         .route("/api/projects/{id}/export/cancel", post(cancel_export))
+        .route("/api/export/encoders", get(export_encoders))
+        .route("/api/exports/file", get(exported_file))
+        .route("/api/exports/reveal", post(reveal_export))
         .route("/api/agent", get(agent_status))
         .route("/api/agent/models", get(agent_models))
         .route("/api/projects/{id}/agent", get(agent_chat).post(agent_send))
@@ -106,27 +109,23 @@ pub fn router(app: App) -> Router {
         .with_state(app)
 }
 
-/// Rejects requests whose Host isn't this machine (DNS-rebinding guard).
+/// Host protects against DNS rebinding; Origin also protects local APIs and
+/// websockets from a malicious page making requests to an allowed localhost.
 async fn check_host(State(app): State<App>, request: Request, next: Next) -> Response {
     let host = request
         .headers()
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let name = host.rsplit_once(':').map_or(host, |(name, port)| {
-        if port.chars().all(|ch| ch.is_ascii_digit()) {
-            name
-        } else {
-            host
-        }
-    });
-    let name = name
+    let Ok(authority) = host.parse::<axum::http::uri::Authority>() else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let name = authority
+        .host()
         .trim_start_matches('[')
         .trim_end_matches(']')
         .to_ascii_lowercase();
-    let allowed = app.allowed_hosts.contains(&name)
-        || name.ends_with(".ts.net")
-        || name.ends_with(".localhost");
+    let allowed = app.allowed_hosts.contains(&name) || name.ends_with(".localhost");
     if !allowed {
         return (
             StatusCode::FORBIDDEN,
@@ -134,7 +133,55 @@ async fn check_host(State(app): State<App>, request: Request, next: Next) -> Res
         )
             .into_response();
     }
-    next.run(request).await
+    if let Some(origin) = request.headers().get(header::ORIGIN) {
+        if !origin
+            .to_str()
+            .ok()
+            .is_some_and(|origin| same_origin(origin, host))
+        {
+            return (
+                StatusCode::FORBIDDEN,
+                "cross-origin requests are not allowed",
+            )
+                .into_response();
+        }
+    }
+    if request
+        .headers()
+        .get("sec-fetch-site")
+        .is_some_and(|site| site == "cross-site")
+    {
+        return (StatusCode::FORBIDDEN, "cross-site requests are not allowed").into_response();
+    }
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+        .headers_mut()
+        .insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    response
+}
+
+fn same_origin(origin: &str, host: &str) -> bool {
+    let Ok(uri) = origin.parse::<axum::http::Uri>() else {
+        return false;
+    };
+    let Some(scheme @ ("http" | "https")) = uri.scheme_str() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    let Ok(host) = host.parse::<axum::http::uri::Authority>() else {
+        return false;
+    };
+    let default_port = if scheme == "https" { 443 } else { 80 };
+    authority.host().eq_ignore_ascii_case(host.host())
+        && authority.port_u16().unwrap_or(default_port) == host.port_u16().unwrap_or(default_port)
+        && uri.path() == "/"
+        && uri.query().is_none()
 }
 
 async fn health(State(app): State<App>) -> Json<Value> {
@@ -214,11 +261,30 @@ async fn upload_media(
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|error| bad(error.to_string()))?;
-    let target = unique_path(&dir, &name);
-    let partial = PartialFile(Some(target.with_extension("uploading")));
+    let limit = std::env::var("EDIT_MAX_UPLOAD_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(100 * 1024 * 1024 * 1024);
+    if query.size.is_some_and(|size| size == 0 || size > limit) {
+        return Err(ApiError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("upload must be between 1 and {limit} bytes"),
+        ));
+    }
+    let target = reserve_upload(&dir, &name)
+        .await
+        .map_err(|error| bad(error.to_string()))?;
+    let target_guard = PartialFile(Some(target.clone()));
+    let mut temporary = target.as_os_str().to_owned();
+    temporary.push(".uploading");
+    let partial = PartialFile(Some(PathBuf::from(temporary)));
     let result = async {
         let path = partial.0.as_deref().expect("armed");
-        let mut file = tokio::fs::File::create(path).await?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .await?;
         let mut stream = body.into_data_stream();
         let mut received = 0_u64;
         // Stop at the announced size rather than waiting for end-of-body:
@@ -230,6 +296,9 @@ async fn upload_media(
             let Some(chunk) = next else { break };
             let chunk = chunk.map_err(std::io::Error::other)?;
             received += chunk.len() as u64;
+            if received > limit || query.size.is_some_and(|size| received > size) {
+                return Err(std::io::Error::other("upload exceeds its size limit"));
+            }
             file.write_all(&chunk).await?;
         }
         if let Some(size) = query.size.filter(|size| *size != received) {
@@ -264,31 +333,38 @@ async fn upload_media(
         return Err(bad(error.clone()));
     }
     let project = app.store.get(&id).map(|live| live.project);
+    target_guard.keep();
     Ok(Json(json!({ "rev": rev, "added": added, "project": project })).into_response())
 }
 
 /// `dir/name`, or `dir/name-2.ext`, `-3`… if taken.
-fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if !candidate.exists() {
-        return candidate;
-    }
+async fn reserve_upload(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
     let path = Path::new(name);
     let stem = path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("upload");
     let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-    (2..)
-        .map(|n| {
-            dir.join(if ext.is_empty() {
-                format!("{stem}-{n}")
-            } else {
-                format!("{stem}-{n}.{ext}")
-            })
-        })
-        .find(|path| !path.exists())
-        .expect("a free name")
+    for n in 1_u64.. {
+        let candidate = dir.join(if n == 1 {
+            name.to_owned()
+        } else if ext.is_empty() {
+            format!("{stem}-{n}")
+        } else {
+            format!("{stem}-{n}.{ext}")
+        });
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+            .await
+        {
+            Ok(_) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!()
 }
 
 async fn agent_status(State(app): State<App>) -> Json<Value> {
@@ -460,7 +536,16 @@ pub async fn import_paths(
     let mut errors = Vec::new();
     for path in paths {
         let path = PathBuf::from(&path);
-        let path = path.canonicalize().unwrap_or(path);
+        let path = match path.canonicalize() {
+            Ok(path) if path.is_file() && media::is_media_path(&path) => path,
+            _ => {
+                errors.push(format!(
+                    "{} is not a supported local media file",
+                    path.display()
+                ));
+                continue;
+            }
+        };
         let result = {
             let path = path.clone();
             tokio::task::spawn_blocking(move || media::probe(&path))
@@ -695,6 +780,12 @@ async fn transcribe_media(
     if !media.has_audio {
         return Err(bad(format!("{} has no audio to transcribe", media.name)));
     }
+    if media.is_sound_effect() {
+        return Err(bad(format!(
+            "{} is a sound effect; there's nothing said to transcribe",
+            media.name
+        )));
+    }
     let status = app
         .media
         .transcribe(PathBuf::from(&media.path), media.has_audio);
@@ -732,6 +823,8 @@ async fn frame_png(
 #[derive(Deserialize, Default)]
 struct ExportBody {
     path: Option<String>,
+    #[serde(default)]
+    options: crate::export::ExportOptions,
 }
 
 pub fn default_export_path(project: &Project) -> PathBuf {
@@ -781,15 +874,81 @@ async fn start_export(
         .store
         .get(&id)
         .ok_or_else(|| not_found("no such project"))?;
-    let path = body
-        .and_then(|Json(body)| body.path)
+    let (path, options) = body.map_or((None, Default::default()), |Json(body)| {
+        (body.path, body.options)
+    });
+    let path = path
         .filter(|path| !path.trim().is_empty())
         .map(|path| expand_home(&path))
         .unwrap_or_else(|| default_export_path(&live.project));
-    app.exports
-        .start(Arc::clone(&app.store), live.project, path.clone())
+    let path = app
+        .exports
+        .start(Arc::clone(&app.store), live.project, options, path)
         .map_err(bad)?;
     Ok(Json(json!({ "path": path })).into_response())
+}
+
+/// Which export formats and encoders this machine's FFmpeg offers.
+async fn export_encoders() -> Json<crate::export::Encoders> {
+    Json(
+        tokio::task::spawn_blocking(crate::export::encoders)
+            .await
+            .unwrap_or_default(),
+    )
+}
+
+#[derive(Deserialize)]
+struct ExportedQuery {
+    path: String,
+}
+
+/// A finished export, downloaded to the device the editor is open on.
+async fn exported_file(
+    State(app): State<App>,
+    Query(query): Query<ExportedQuery>,
+    request: Request,
+) -> ApiResult {
+    let path = PathBuf::from(&query.path);
+    if !app.exports.exported(&path) {
+        return Err(not_found("not an export from this session"));
+    }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().replace('"', "'"))
+        .unwrap_or_else(|| "export".to_owned());
+    let mut response = ServeFile::new(&path)
+        .oneshot(request)
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
+    }
+    Ok(response)
+}
+
+/// Shows a finished export in Finder (or the file manager) on the machine running Edit.
+async fn reveal_export(State(app): State<App>, Json(body): Json<ExportedQuery>) -> ApiResult {
+    let path = PathBuf::from(&body.path);
+    if !app.exports.exported(&path) {
+        return Err(not_found("not an export from this session"));
+    }
+    let opened = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .status()
+    } else {
+        std::process::Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(&path))
+            .status()
+    };
+    match opened {
+        Ok(status) if status.success() => Ok(Json(json!({ "ok": true })).into_response()),
+        _ => Err(bad("couldn't open a file browser on this machine")),
+    }
 }
 
 async fn cancel_export(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Json<Value> {
@@ -982,6 +1141,26 @@ pub fn tailscale_ip() -> Option<std::net::IpAddr> {
     })
 }
 
+pub fn tailscale_name() -> Option<String> {
+    [
+        "tailscale",
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    ]
+    .iter()
+    .find_map(|binary| {
+        let output = std::process::Command::new(binary)
+            .args(["status", "--json"])
+            .output()
+            .ok()?;
+        let status: Value = serde_json::from_slice(&output.stdout).ok()?;
+        let name = status["Self"]["DNSName"]
+            .as_str()?
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        (!name.is_empty()).then_some(name)
+    })
+}
+
 // --- scripts -------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -1130,4 +1309,43 @@ async fn set_speaker(
     )
     .map_err(bad)?;
     Ok(Json(transcript).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_must_match_host_and_port() {
+        assert!(same_origin("http://localhost:7700", "localhost:7700"));
+        assert!(same_origin("https://kenobi.example", "kenobi.example:443"));
+        assert!(same_origin("http://[::1]:7700", "[::1]:7700"));
+        for origin in [
+            "null",
+            "https://evil.example",
+            "http://localhost:5173",
+            "http://localhost:7700/path",
+            "http://localhost:7700?x=1",
+        ] {
+            assert!(!same_origin(origin, "localhost:7700"), "{origin}");
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_uploads_reserve_different_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "edit-upload-test-{}-{}",
+            std::process::id(),
+            crate::store::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = tokio::join!(
+            reserve_upload(&dir, "clip.mp4"),
+            reserve_upload(&dir, "clip.mp4")
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_ne!(a, b);
+        assert!(a.exists() && b.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

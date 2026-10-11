@@ -5,6 +5,7 @@ import {
   clipEnd,
   duplicateClips,
   folderOf,
+  freshId,
   mediaUses,
   presetHandles,
   removeTrack,
@@ -53,6 +54,15 @@ function project(clips: Clip[]): Project {
     next_id: 10,
   };
 }
+
+it("creates safe IDs even with an outdated counter and reserved links", () => {
+  const p = project([video("c1", 0, 30, { link: "l2" })]);
+  p.next_id = 1; expect(freshId(p, "c")).toBe("c2");
+  p.next_id = 2; expect(freshId(p, "l")).toBe("l3");
+  p.next_id = Number.MAX_SAFE_INTEGER; expect(freshId(p, "c")).toBe("c9007199254740991");
+  expect(freshId(p, "c")).toBe("c2");
+  expect(validateProject(p)).toBeNull();
+});
 
 /** No two clips overlap on a track (edit-core's `validate` contract). */
 function assertNoOverlaps(p: Project) {
@@ -182,6 +192,7 @@ describe("media bin", () => {
   it("sorts files into folders by kind, with bundled sounds apart", () => {
     expect(folderOf(file("a", "video", "/x/a.mov"))).toBe("footage");
     expect(folderOf(file("b", "audio", "/x/song.mp3"))).toBe("audio");
+    expect(folderOf({ ...file("w", "audio", "/x/whoosh.wav"), duration: 1.2 })).toBe("sfx");
     expect(folderOf(file("c", "audio", "/Users/me/.edit/sfx/shutter-1a2b.wav"))).toBe("sfx");
     expect(folderOf(file("d", "image", "/x/logo.png"))).toBe("images");
   });

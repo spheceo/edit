@@ -21,7 +21,7 @@ import {
 } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
-import { contentFrames, drawMarquee, drawRuler, getLanesWidth, leftTheWindow, initialPpf, MOST_PPF, RULER, setLanesWidth, setView, useView } from "../lib/timelineView";
+import { contentFrames, dimOutsideSpan, marksOf, drawMarquee, drawPlayhead, drawRuler, getLanesWidth, leftTheWindow, initialPpf, MOST_PPF, RULER, setLanesWidth, setView, useView } from "../lib/timelineView";
 import { uploadFiles } from "../lib/upload";
 import type { Clip, Project, Track } from "../lib/types";
 import { clipMenu, timelineMenu, trackMenu } from "../lib/menus";
@@ -33,6 +33,8 @@ import { cx, IconButton } from "./ui";
 
 const HEADER = 84;
 const VIDEO_ROW = 48;
+/** The subtitles' row: slim, right under the ruler. */
+const SUBTITLE_ROW = 26;
 const AUDIO_ROW = 40;
 const ROW_GAP = 3;
 const DIVIDER = 10;
@@ -51,8 +53,9 @@ function layoutRows(project: Project): { rows: Row[]; height: number } {
   const rows: Row[] = [];
   let y = RULER + 6;
   for (const track of video) {
-    rows.push({ track, y, h: VIDEO_ROW });
-    y += VIDEO_ROW + ROW_GAP;
+    const h = track.subtitles ? SUBTITLE_ROW : VIDEO_ROW;
+    rows.push({ track, y, h });
+    y += h + ROW_GAP;
   }
   y += DIVIDER;
   for (const track of audio) {
@@ -153,7 +156,8 @@ export function Timeline() {
     if (!useView.getState().graph) setLanesWidth(size.w);
     if (!useView.getState().fitted) {
       useView.setState({ fitted: true });
-      setView({ ppf: initialPpf(), scrollX: 0 });
+      const ppf = initialPpf();
+      setView({ ppf, scrollX: Math.max(0, playhead.frame * ppf - size.w / 2) });
     } else setView({});
   }, [size.w, project]);
 
@@ -176,6 +180,14 @@ export function Timeline() {
   }, []);
 
   useEffect(requestDraw);
+
+  // The ruler's sections come from the preview engine, which may start after the timeline.
+  const redraw = useRef(requestDraw);
+  redraw.current = requestDraw;
+  useEffect(() => {
+    const off = preview.onStatus(() => redraw.current());
+    return () => void off();
+  }, []);
 
   // Keyboard zoom.
   useEffect(() => {
@@ -628,6 +640,8 @@ export function Timeline() {
       }
       ctx.setLineDash([]);
     }
+    const marks = marksOf(project);
+    dimOutsideSpan(ctx, width, height, ppf, useView.getState().scrollX, marks);
     ctx.restore();
 
     // Razor guide.
@@ -660,29 +674,11 @@ export function Timeline() {
       ctx.stroke();
     }
 
-    drawRuler(ctx, width, fps, ppf, useView.getState().scrollX);
+    drawRuler(ctx, width, fps, ppf, useView.getState().scrollX, preview.sections, marks);
 
     // Playhead.
     const px = Math.round(frameToX(playhead.frame)) + 0.5;
-    if (px >= -10 && px <= width + 10) {
-      ctx.strokeStyle = "#ff3d6e";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(px, RULER - 4);
-      ctx.lineTo(px, height);
-      ctx.stroke();
-      ctx.fillStyle = "#ff3d6e";
-      ctx.beginPath();
-      ctx.moveTo(px - 6, 6);
-      ctx.lineTo(px + 6, 6);
-      ctx.quadraticCurveTo(px + 7, 6, px + 7, 8);
-      ctx.lineTo(px + 7, 15);
-      ctx.lineTo(px, RULER - 4);
-      ctx.lineTo(px - 7, 15);
-      ctx.lineTo(px - 7, 8);
-      ctx.quadraticCurveTo(px - 7, 6, px - 6, 6);
-      ctx.fill();
-    }
+    if (px >= -10 && px <= width + 10) drawPlayhead(ctx, px, height);
 
     if (!project.clips.length && !drop.current) {
       ctx.fillStyle = "#5c5c5c";
@@ -868,7 +864,14 @@ function TrackHeader({ row, label }: { row: Row; label: string }) {
       style={{ top: row.y, height: row.h }}
       onContextMenu={(event) => openMenu(event, trackMenu(track.id))}
     >
-      <span className={cx("mr-auto font-mono text-[11px] font-medium", track.kind === "video" ? "text-fg/80" : "text-green-300/80")}>{label}</span>
+      <span
+        className={cx(
+          "mr-auto font-mono text-[11px] font-medium",
+          track.subtitles ? "text-cyan-300/80" : track.kind === "video" ? "text-fg/80" : "text-green-300/80",
+        )}
+      >
+        {label}
+      </span>
       {track.kind === "video" ? (
         <IconButton label={track.hidden ? "Show track" : "Hide track"} className="size-6" onClick={() => set("hidden")}>
           {track.hidden ? <EyeOff size={13} /> : <Eye size={13} />}

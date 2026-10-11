@@ -2,11 +2,12 @@
 
 import {
   ArrowLeftToLine,
+  AudioWaveform,
   Captions,
   Copy,
   Eye,
-  Flag,
   EyeOff,
+  Flag,
   Gauge,
   ImageDown,
   Link,
@@ -42,6 +43,7 @@ import {
   deleteClips,
   duplicateClips,
   isLinked,
+  isSoundEffect,
   linkClips,
   placeMedia,
   projectDuration,
@@ -69,6 +71,7 @@ const ELEMENT_ITEMS: { id: Element; label: string; icon: ReactNode }[] = [
   { id: "shake", label: "Shake", icon: <Vibrate size={14} /> },
   { id: "flash", label: "Flash", icon: <Zap size={14} /> },
   { id: "black", label: "Dip to black", icon: <Moon size={14} /> },
+  { id: "waveform", label: "Glowing waveform", icon: <AudioWaveform size={14} /> },
 ];
 
 function addAt(element: Element, frame: number, track?: string) {
@@ -309,7 +312,7 @@ export function mediaMenu(mediaId: string): MenuItem[] {
     {
       label: transcript === "ready" ? "Transcribed" : transcript === "working" ? "Transcribing…" : "Transcribe",
       icon: <Captions size={14} />,
-      disabled: !media?.has_audio || transcript === "ready" || transcript === "working",
+      disabled: !media?.has_audio || isSoundEffect(media) || transcript === "ready" || transcript === "working",
       onSelect: () =>
         void api
           .transcribe(project.id, mediaId)

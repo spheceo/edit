@@ -185,10 +185,13 @@ export function Select<T extends string | number>({
   value,
   options,
   onChange,
+  className,
 }: {
   value: T;
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
+  /** Overrides the look (by default a compact right-aligned value, as in the Inspector). */
+  className?: string;
 }) {
   const current = options.find((option) => option.value === value);
   return (
@@ -201,7 +204,10 @@ export function Select<T extends string | number>({
           { width: 150 },
         )
       }
-      className="flex h-6 w-full min-w-0 items-center justify-end gap-1 rounded-md px-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+      className={cx(
+        "flex w-full min-w-0 items-center gap-1 rounded-md text-[12px] text-fg transition-colors",
+        className ?? "h-6 justify-end px-1.5 hover:bg-hover",
+      )}
     >
       <span className="truncate">{current?.label ?? String(value)}</span>
       <ChevronDown size={12} className="shrink-0 text-faint" />

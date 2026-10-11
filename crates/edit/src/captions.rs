@@ -14,8 +14,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use edit_core::{
-    Clip, ClipColor, ClipContent, Ease, Glow, Keyframe, Media, Project, Rgba, ScriptBlock,
-    TextAnimation, TextBox, TextPreset, TextShadow, TextStyle, TrackKind, Transform,
+    Clip, ClipColor, ClipContent, Ease, Glow, Keyframe, Media, Project, Rgba, TextAnimation,
+    TextBox, TextLabel, TextPreset, TextShadow, TextStyle, TrackKind, Transform,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -199,6 +199,7 @@ pub fn caption_style(width: u32, height: u32) -> TextStyle {
             blur: 8.0 * k,
             ..TextShadow::default()
         }),
+        label: None,
     }
 }
 
@@ -393,42 +394,9 @@ fn still(media: &Path, time: f64, out: &Path) -> Result<(), String> {
         .ok_or_else(|| "couldn't take a still".to_owned())
 }
 
-/// Footage at least this long is the full footage that follows the intro (seconds).
-const FULL_FOOTAGE: f64 = 20.0;
-
-/// The intro, when the project follows a script: the short teaser clips
-/// (with any cut-ins between them) from the start up to the cut-in that leads
-/// into the full footage. Without full footage, up to the first cut-in.
+/// The intro (frames), when the project follows a script: see edit_core::sections.
 pub fn intro(project: &Project) -> Option<(i64, i64)> {
-    let full = FULL_FOOTAGE * project.fps();
-    // (is a cut-in, start, duration) of each block that's on the timeline, in order.
-    let blocks: Vec<(bool, i64, i64)> = project
-        .script
-        .as_ref()?
-        .blocks
-        .iter()
-        .filter_map(|block| {
-            let (cut_in, clip) = match block {
-                ScriptBlock::Footage { clip, .. } => (false, clip),
-                ScriptBlock::Narration { clip, .. } => (true, clip),
-            };
-            let clip = project.clip(clip.as_deref()?)?;
-            Some((cut_in, clip.start, clip.duration))
-        })
-        .collect();
-    let end = match blocks
-        .iter()
-        .position(|&(cut_in, _, duration)| !cut_in && duration as f64 >= full)
-    {
-        Some(mut index) => {
-            while index > 0 && blocks[index - 1].0 {
-                index -= 1;
-            }
-            blocks[index].1
-        }
-        None => blocks.iter().find(|block| block.0)?.1,
-    };
-    Some((0, end))
+    edit_core::sections(project).intro
 }
 
 /// The lines spoken in `clips` (video or audio clips of footage) between
@@ -493,18 +461,34 @@ async fn spoken_lines(
     Ok(lines)
 }
 
-/// Repack's subtitle look at this project's size: the caption box, bigger,
-/// as wide as 80% of the frame, in the bottom middle.
+/// The subtitle look after the intro at this project's size: white words in
+/// a pure black box, no glow, as wide as 80% of the frame, bottom middle; the
+/// speaker's name rides above in their colour (set per line).
 pub fn subtitle_style(width: u32, height: u32) -> TextStyle {
     let k = height as f32 / 1080.0;
     let style = caption_style(width, height);
     let pad = style.background.map_or(0.0, |background| background.pad_x);
     TextStyle {
         size: (48.0 * k).round(),
+        color: Rgba::WHITE,
         max_width: Some((width as f32 * 0.8 - pad * 2.0).round()),
+        glow: Glow {
+            enabled: false,
+            ..style.glow
+        },
+        // Pure black, not the intro captions' see-through box.
+        background: style.background.map(|background| TextBox {
+            color: Rgba::BLACK,
+            opacity: 1.0,
+            ..background
+        }),
+        shadow: None,
         ..style
     }
 }
+
+/// The speaker label's size at 1080p.
+const LABEL_SIZE: f32 = 26.0;
 
 /// Names subtitle clips so a second run replaces the first.
 const SUBTITLE: &str = "Subtitle";
@@ -619,13 +603,29 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
         }
         slots.retain(|(_, start, end, _)| end > start);
         let mut placed = 0;
+        // Every subtitle on the subtitles' own track, one after another.
+        let track = project.subtitles_track();
+        let mut free_from = 0;
         for (line, start, end, _) in slots {
+            let start = start.max(free_from);
+            let busy = project
+                .clips
+                .iter()
+                .filter(|clip| clip.track == track && clip.start < end && start < clip.end())
+                .map(|clip| clip.end())
+                .max();
+            let start = busy.map_or(start, |taken| start.max(taken));
+            if end <= start {
+                continue;
+            }
+            free_from = end;
             let who = line
                 .name
                 .clone()
                 .or_else(|| line.voice.clone())
                 .unwrap_or_else(|| "Speaker".into());
-            let track = free_track(project, start, end);
+            let color = line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE);
+            let track = track.clone();
             let id = project.fresh_id("c");
             project.clips.push(Clip {
                 id,
@@ -640,9 +640,13 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
                 keyframes: Default::default(),
                 content: ClipContent::Text {
                     text: line.text(),
-                    // The speaker's colour (their glow follows it), white when unnamed.
+                    // White words; who says them above, in their colour.
                     style: TextStyle {
-                        color: line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE),
+                        label: Some(TextLabel {
+                            text: format!("{who}:"),
+                            color,
+                            size: (LABEL_SIZE * height as f32 / 1080.0).round(),
+                        }),
                         ..style.clone()
                     },
                     transform: Transform {
@@ -1286,7 +1290,7 @@ fn free_track(project: &mut Project, start: i64, end: i64) -> String {
     let video: Vec<String> = project
         .tracks
         .iter()
-        .filter(|track| track.kind == TrackKind::Video && !track.locked)
+        .filter(|track| track.kind == TrackKind::Video && !track.locked && !track.subtitles)
         .map(|track| track.id.clone())
         .collect();
     for track in video.iter().skip(1) {

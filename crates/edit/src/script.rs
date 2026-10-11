@@ -9,7 +9,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use edit_core::{
@@ -80,6 +81,10 @@ pub fn fetch_doc(id: &str) -> Result<(String, String), String> {
         .args([
             "-sS",
             "-L",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
             "--max-time",
             "30",
             "--max-filesize",
@@ -473,6 +478,7 @@ pub fn parse(html: &str) -> Parsed {
                     text,
                     notes,
                     clip: None,
+                    voiceover: None,
                 });
             }
             continue;
@@ -685,9 +691,19 @@ impl Jobs {
         self.0.lock().unwrap().get(project).cloned()
     }
 
-    fn running(&self, project: &str) -> bool {
-        self.get(project)
-            .is_some_and(|job| matches!(job.state, "downloading" | "placing"))
+    fn claim(&self, app: &App, project: &str, job: Job) -> bool {
+        let mut jobs = self.0.lock().unwrap();
+        if jobs
+            .get(project)
+            .is_some_and(|job| matches!(job.state, "downloading" | "transcribing" | "placing"))
+        {
+            return false;
+        }
+        jobs.insert(project.to_owned(), job.clone());
+        drop(jobs);
+        app.store
+            .emit(json!({ "type": "script", "id": project, "job": job }));
+        true
     }
 
     fn set(&self, app: &App, project: &str, edit: impl FnOnce(&mut Job)) {
@@ -720,6 +736,10 @@ fn probe(url: &str, scratch: &Path) -> Result<Head, String> {
         .args([
             "-sS",
             "-L",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
             "-r",
             "0-0",
             "--max-filesize",
@@ -817,6 +837,11 @@ fn confirm_link(page: &str) -> Option<String> {
     let form = &page[page.find("id=\"download-form\"")?..];
     let action =
         attribute(&form[..form.find('>')?], "action").map(|action| decode_entities(&action))?;
+    // A Drive upload can itself contain HTML. Never let its form direct curl
+    // at an arbitrary URL, local file or service on the editor's network.
+    if action != "https://drive.usercontent.google.com/download" {
+        return None;
+    }
     let form = &form[..form.find("</form>").unwrap_or(form.len())];
     let fields: Vec<String> = form
         .split("<input")
@@ -880,6 +905,19 @@ pub fn download(
     file: &str,
     progress: &dyn Fn(u64, Option<u64>, &str),
 ) -> Result<PathBuf, String> {
+    static DOWNLOADS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    let lock = {
+        let mut downloads = DOWNLOADS.lock().unwrap();
+        downloads.retain(|_, lock| lock.strong_count() > 0);
+        let lock = downloads
+            .get(dir)
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| Arc::new(Mutex::new(())));
+        downloads.insert(dir.to_path_buf(), Arc::downgrade(&lock));
+        lock
+    };
+    let _guard = lock.lock().unwrap();
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     if let Ok(name) = std::fs::read_to_string(dir.join(".done")) {
         let path = dir.join(name.trim());
@@ -894,7 +932,18 @@ pub fn download(
     let mut head = probe(&url, &scratch)?;
     if head.html {
         let page = Command::new("curl")
-            .args(["-sS", "-L", "--max-time", "30", "--max-filesize", "5000000"])
+            .args([
+                "-sS",
+                "-L",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--max-time",
+                "30",
+                "--max-filesize",
+                "5000000",
+            ])
             .arg(&url)
             .output()
             .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
@@ -924,6 +973,10 @@ pub fn download(
             "-sS",
             "-L",
             "--fail",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
             "-C",
             "-",
             "--retry",
@@ -999,6 +1052,8 @@ fn duration_of(path: &Path) -> Result<f64, String> {
         .args([
             "-v",
             "error",
+            "-protocol_whitelist",
+            "file,pipe",
             "-show_entries",
             "format=duration",
             "-of",
@@ -1021,6 +1076,8 @@ fn keyframe_before(path: &Path, time: f64) -> f64 {
             .args([
                 "-v",
                 "error",
+                "-protocol_whitelist",
+                "file,pipe",
                 "-select_streams",
                 "v:0",
                 "-skip_frame",
@@ -1097,6 +1154,8 @@ pub fn excerpts(source: &Path, ranges: &[(f64, f64)]) -> Result<Vec<Excerpt>, St
         || "footage".into(),
         |stem| stem.to_string_lossy().to_string(),
     );
+    let stem: String = stem.chars().take(20).collect();
+    let source_key = crate::media::media_key(source);
     let extension = source
         .extension()
         .map_or_else(|| "mp4".into(), |ext| ext.to_string_lossy().to_string());
@@ -1107,11 +1166,45 @@ pub fn excerpts(source: &Path, ranges: &[(f64, f64)]) -> Result<Vec<Excerpt>, St
             let whole = seconds.round() as u64;
             format!("{}h{:02}m{:02}s", whole / 3600, whole / 60 % 60, whole % 60)
         };
-        let path = dir.join(format!("{stem} {}-{}.{extension}", clock(start), clock(to)));
+        let path = dir.join(format!(
+            "{stem} {}-{}-{source_key}-{:016x}-{:016x}.{extension}",
+            clock(start),
+            clock(to),
+            start.to_bits(),
+            to.to_bits()
+        ));
         if !path.exists() {
-            let partial = dir.join(format!(".cutting.{extension}"));
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let partial = dir.join(format!(
+                ".cutting-{}-{}-{}.{}",
+                std::process::id(),
+                crate::store::now_ms(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+                extension
+            ));
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&partial)
+                .map_err(|error| error.to_string())?;
+            struct Partial(PathBuf);
+            impl Drop for Partial {
+                fn drop(&mut self) {
+                    let _ = std::fs::remove_file(&self.0);
+                }
+            }
+            let partial = Partial(partial);
             let status = Command::new("ffmpeg")
-                .args(["-v", "error", "-y", "-ss", &format!("{start}"), "-i"])
+                .args([
+                    "-v",
+                    "error",
+                    "-y",
+                    "-ss",
+                    &format!("{start}"),
+                    "-protocol_whitelist",
+                    "file,pipe",
+                    "-i",
+                ])
                 .arg(source)
                 .args([
                     "-t",
@@ -1127,13 +1220,13 @@ pub fn excerpts(source: &Path, ranges: &[(f64, f64)]) -> Result<Vec<Excerpt>, St
                     "-b:a",
                     "192k",
                 ])
-                .arg(&partial)
+                .arg(&partial.0)
                 .status()
                 .map_err(|error| format!("ffmpeg: {error}"))?;
             if !status.success() {
                 return Err("Couldn't cut an excerpt from the footage.".into());
             }
-            std::fs::rename(&partial, &path).map_err(|error| error.to_string())?;
+            std::fs::rename(&partial.0, &path).map_err(|error| error.to_string())?;
         }
         out.push(Excerpt {
             path,
@@ -1202,15 +1295,14 @@ pub fn unfinished(project: &Project) -> bool {
 /// Downloads the script's footage and lays the edit out. Safe to call again:
 /// finished downloads are reused and placed blocks are skipped.
 pub fn start(app: &App, project_id: &str, recut: bool) {
-    if app.scripts.running(project_id) {
-        return;
-    }
     let Some(live) = app.store.get(project_id) else {
         return;
     };
     let files = missing_files(&live.project);
-    app.scripts.set(app, project_id, |job| {
-        *job = Job {
+    if !app.scripts.claim(
+        app,
+        project_id,
+        Job {
             state: "downloading",
             error: None,
             files: files
@@ -1224,8 +1316,10 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                     error: None,
                 })
                 .collect(),
-        };
-    });
+        },
+    ) {
+        return;
+    }
     let app = app.clone();
     let id = project_id.to_owned();
     tokio::spawn(async move {
@@ -1589,6 +1683,11 @@ fn clear_layout(project: &mut Project) {
     };
     let mut placed: HashSet<String> = HashSet::new();
     for block in &mut script.blocks {
+        if let ScriptBlock::Narration { voiceover, .. } = block {
+            if let Some(clip) = voiceover.take() {
+                placed.insert(clip);
+            }
+        }
         let (ScriptBlock::Footage { clip, .. } | ScriptBlock::Narration { clip, .. }) = block;
         if let Some(clip) = clip.take() {
             placed.insert(clip);
@@ -1625,6 +1724,7 @@ pub fn cut_in_style(width: u32, height: u32, text: &str) -> TextStyle {
         max_width: Some(max_width.round()),
         background: None,
         shadow: None,
+        label: None,
     }
 }
 
@@ -1934,6 +2034,69 @@ mod tests {
             confirm_link(page).as_deref(),
             Some("https://drive.usercontent.google.com/download?id=X1&confirm=t&uuid=u-1")
         );
+        for action in [
+            "file:///etc/passwd",
+            "http://127.0.0.1:7700/api/projects",
+            "https://evil.example/download",
+            "https://drive.usercontent.google.com.evil.example/download",
+        ] {
+            assert!(confirm_link(
+                &page.replace("https://drive.usercontent.google.com/download", action)
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
+    fn concurrent_local_excerpts_keep_exact_ranges_and_separate_temporary_files() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "edit-excerpt-test-{}-{}",
+            std::process::id(),
+            crate::store::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mp4");
+        assert!(Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red:s=32x32:r=30:d=60",
+                "-c:v",
+                "libx264",
+                "-g",
+                "1",
+                "-pix_fmt",
+                "yuv420p"
+            ])
+            .arg(&source)
+            .status()
+            .unwrap()
+            .success());
+        let (a, b) = std::thread::scope(|scope| {
+            let a = scope.spawn(|| excerpts(&source, &[(20.1, 20.61)]).unwrap());
+            let b = scope.spawn(|| excerpts(&source, &[(20.2, 20.7)]).unwrap());
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        assert_ne!(a[0].path, b[0].path);
+        for excerpt in [&a[0], &b[0]] {
+            let duration = duration_of(&excerpt.path).unwrap();
+            assert!((20.4..20.7).contains(&duration), "{duration}");
+        }
+        assert!(std::fs::read_dir(dir.join("excerpts"))
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".cutting")));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1973,6 +2136,7 @@ mod tests {
                     text: "Words between.".into(),
                     notes: Vec::new(),
                     clip: None,
+                    voiceover: None,
                 },
                 footage(10.0, 12.0),
                 // Past the end of the file: skipped, not stretched.

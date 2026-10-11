@@ -1,3 +1,4 @@
+import { readSetting, writeSetting } from "./storage";
 // The agent chat: Codex through Edit's server (crates/edit/src/agent.rs).
 
 import { create } from "zustand";
@@ -50,7 +51,7 @@ interface AgentState {
 
 const cachedModels = (): AgentModel[] => {
   try {
-    return JSON.parse(localStorage.getItem("edit.agent.models") ?? "[]");
+    return JSON.parse(readSetting("edit.agent.models") ?? "[]");
   } catch {
     return [];
   }
@@ -64,8 +65,8 @@ export const useAgent = create<AgentState>(() => ({
   entries: [],
   running: false,
   activityAt: 0,
-  model: localStorage.getItem("edit.agent.model"),
-  effort: localStorage.getItem("edit.agent.effort"),
+  model: readSetting("edit.agent.model"),
+  effort: readSetting("edit.agent.effort"),
 }));
 
 /** Chats already seen this session, so reopening the panel or a project is instant. */
@@ -100,12 +101,12 @@ export function currentEffort(state = useAgent.getState()) {
 }
 
 export function chooseModel(id: string) {
-  localStorage.setItem("edit.agent.model", id);
+  writeSetting("edit.agent.model", id);
   useAgent.setState({ model: id });
 }
 
 export function chooseEffort(effort: string) {
-  localStorage.setItem("edit.agent.effort", effort);
+  writeSetting("edit.agent.effort", effort);
   useAgent.setState({ effort });
 }
 
@@ -141,7 +142,7 @@ export async function openAgent(project: string) {
     fetchRetrying("/api/agent/models")
       .then((response) => json<{ models: AgentModel[] }>(response))
       .then(({ models }) => {
-        localStorage.setItem("edit.agent.models", JSON.stringify(models));
+        writeSetting("edit.agent.models", JSON.stringify(models));
         useAgent.setState({ models });
       })
       .catch(() => {});

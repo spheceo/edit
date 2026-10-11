@@ -21,23 +21,26 @@ pub const INSTRUCTIONS: &str = r#"Edit is a local video editor. Tools edit the p
 
 Model (JSON):
 - settings: {width, height, fps}. Timeline times (clip.start, clip.duration, fade_in, fade_out, keyframe.frame) are integer FRAMES at settings.fps. source_in is SECONDS into the media.
-- tracks: video tracks composite in list order (first = bottom, label V1); audio tracks mix. A track holds non-overlapping clips. Video-type clips go on video tracks; audio clips on audio tracks.
+- tracks: video tracks composite in list order (first = bottom, label V1); audio tracks mix. A track holds non-overlapping clips. Video-type clips go on video tracks; audio clips on audio tracks. One video track may be the subtitles' own (subtitles: true): always the top video track, holding only subtitles (add_subtitles puts them there; new tracks go beneath it; tidy_tracks leaves it alone). Put nothing else on it.
 - clip: {id, track, start, duration, color (blue|cyan|green|yellow|orange|red|purple|pink), link?, fade_in, fade_out, keyframes, type, ...}
   - type "video": media, source_in, speed (0.05..20), transform {x, y (px from frame centre, y down), scale (1 = fit frame), rotation (deg clockwise), shake (px of handheld camera wobble, 0 = still)}, opacity 0..1
   - type "audio": media, source_in, speed, volume_db
-  - type "text": text (\n for lines), style {font "Geist" (weight 400|500|600|700|900) or "Montserrat" (600 only), size px, color [r,g,b,a] 0..1, tracking px, line_height, glow {enabled (default true), color [r,g,b,a] or null = text colour (default null), radius = blur px (default 46), strength = opacity 0..1 (default 0.5)}, optional max_width px (wrap lines), optional background {color, opacity (0.75), pad_x (12), pad_y (8)} = a box behind the lines, optional shadow {color, opacity (0.65), distance px (3), angle degrees clockwise from up (112), size px (6), blur px (8)}}. Subtitle house style (at 1080p; scale by height/1080): Montserrat 600, size 48, line_height 1.15, glow default, max_width = 0.8*width - 24, background and shadow at their defaults, transform.y = 0.4*height, animation none, transform (as video, shake included), animation {preset none|fade|rise|pop|typewriter|words, duration frames, stagger frames}, opacity, word_times (frames from the clip start at which each word appears, for preset "words": words pop in one at a time, no motion, synced to speech; without word_times one every `stagger` frames)
+  - type "text": text (\n for lines), style {font "Geist" (weight 400|500|600|700|900) or "Montserrat" (600 only), size px, color [r,g,b,a] 0..1, tracking px, line_height, glow {enabled (default true), color [r,g,b,a] or null = text colour (default null), radius = blur px (default 46), strength = opacity 0..1 (default 0.5)}, optional max_width px (wrap lines), optional background {color, opacity (0.75), pad_x (12), pad_y (8)} = a box behind the lines, optional shadow {color, opacity (0.65), distance px (3), angle degrees clockwise from up (112), size px (6), blur px (8)}, optional label {text, color, size px (26)} = a small line centred above the text in its own colour, in its own box when there's a background (who's speaking: "Officer:")}. Subtitle house style after the intro (at 1080p; scale by height/1080): Montserrat 600, size 48, white, line_height 1.15, glow off, max_width = 0.8*width - 24, background pure black (color [0,0,0,1], opacity 1, default padding), no shadow, label {text "<speaker>:", color = the speaker's colour, size 26}, transform.y = 0.4*height, animation none, transform (as video, shake included), animation {preset none|fade|rise|pop|typewriter|words, duration frames, stagger frames}, opacity, word_times (frames from the clip start at which each word appears, for preset "words": words pop in one at a time, no motion, synced to speech; without word_times one every `stagger` frames)
   - type "adjustment": grade {exposure stops, contrast -1..1, saturation -1..1, temperature -1..1, vignette 0..1}, shake {preset none|handheld|vertical|horizontal|impact|earthquake, and optionally any of motion wiggle|drop, amount (px at 1080p), frequency (wiggles/s), rotation (deg of tilt), direction both|vertical|horizontal, envelope steady|build|hit|swell (wiggle only), motion_blur (frames of movement smeared), edges mirror|zoom — each overrides the preset}, opacity — grades and moves everything below it, modelled on Sapphire S_Shake (heavy motion blur, picture mirrored past its edges). motion "wiggle" = random jolts; motion "drop" = one move that accelerates across the clip, amount px by its end, down (vertical) or right (horizontal), negative amount for up/left. Presets: vertical = a drop straight down, 540px, blur 2 (the house slam into a cut: it only goes down, fast, heavily blurred, never up and down); horizontal = the same sideways; impact 160px wiggle 30/s, 3° tilt, hit; earthquake 60px wiggle 16/s; handheld 8px 1.2/s, sharp, zoomed (subtle).
   - type "solid": fill [r,g,b,a], opacity — flashes, dips to black
+  - type "waveform": media? (only that media's sound; default everything heard), style {kind line|bars (line: tangled glowing strands that zigzag with the sound, the house look; bars: mirrored bars), color [r,g,b,a] (rich red [1,0.03,0.03,1] by default), strands (2, line), bars (48, bars), width (1400 px), height (360 px, the loudest swing), fill (0.5, bars' share of their slots), window (1.6 s of sound across the width, centred on now), gain (1), glow (the text glow: enabled, color?, radius, strength)}, transform, opacity — a glowing waveform of what's heard
 - media: {id, name, path, kind, duration, …, markers?: [{time (SECONDS into the media), name}]} — markers are points in the source that every clip of it carries (a sound effect's "hit"; the user adds them with M).
-- script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
-- keyframes: {param: [{frame (relative to clip start), value, ease linear|in_out|in|out|hold (preset for the segment to the next key), optional handle_in / handle_out {speed = value units per frame at the key, influence 0..1 of the segment} = After Effects-style bezier handles that override the preset at that end}]}. Animatable params: video x,y,scale,rotation,shake,opacity; text also size,tracking,glow.radius,glow.strength; adjustment shake (amount),exposure,contrast,saturation,temperature,vignette,opacity; solid opacity; audio volume_db.
+- script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?, voiceover? (the voice-over clip reading it)}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
+- mark_in, mark_out (optional): the in and out points (I / O), frames; mark_out is the last frame in (inclusive). Playback stops at the out point and export renders just that span when no range is given. They're part of the project (set_in_out), so setting them is an undo step like any edit.
+- keyframes: {param: [{frame (relative to clip start), value, ease linear|in_out|in|out|hold (preset for the segment to the next key), optional handle_in / handle_out {speed = value units per frame at the key, influence 0..1 of the segment} = After Effects-style bezier handles that override the preset at that end}]}. Animatable params: video x,y,scale,rotation,shake,opacity; text also size,tracking,glow.radius,glow.strength; waveform x,y,scale,rotation,opacity,gain,glow.radius,glow.strength; adjustment shake (amount),exposure,contrast,saturation,temperature,vignette,opacity; solid opacity; audio volume_db.
+Validation: collection IDs are nonempty and unique; next_id is a nonnegative safe integer; timeline start/duration/fades are nonnegative safe integer frames (duration positive), source_in is finite and nonnegative, all numeric parameters are finite, keyframes are in strictly increasing frame order, and script file is a Drive ID with no path separators and a positive source range. Project dimensions are 1..8192.
 Linked clips (same link id) are picture+sound of one source; keep them aligned when moving.
 Look at your work with render_frame / contact_sheet before telling the user it is done.
 
 House editing style (videos cut from a script of police footage):
-- The INTRO is the hook: the short teaser clips from the start up to the cut-in that leads into the full footage. It can have cut-ins between its teasers (they're part of it, but get none of the footage treatment). It's where the treatment goes:
+- get_project's "sections" are found automatically from where the script's blocks sit (never set by hand): intro, intro_splits, outro, and parts back to back (intro / b-roll / story / outro, frames). Every cut-in is a B-roll spot.
+- The INTRO is the hook: the short teaser clips from the start up to the "On <date>" cut-in that starts the story (without one, the cut-in that leads into the full footage). It can have cut-ins between its teasers (they're part of it, but get none of the footage treatment): one cut-in makes a two-split intro, two a three-split, and so on. It's where the treatment goes:
   - It always opens with a reverse dip to black: add_clip {type "solid", fill [0,0,0,1], start 0, duration about 0.5 s in frames, track "new"} so it covers everything, then set_keyframes opacity [{frame 0, value 1}, {frame duration-1, value 0}].
-  - Every cut in the intro gets a camera shutter: once the picture is final, call add_sound_effect {sound "shutter", times [...]} with the timeline second of each cut (the frame where one footage clip meets the next, and where B-roll starts and ends). The shutter is lined up by its "hit" marker so it straddles the cut; placing again replaces what's there. Not on cuts into or out of a cut-in.
   - A vertical drop just before each cut-in: an adjustment layer {type "adjustment", grade all 0, shake {preset "vertical"}} over the last 6 frames (~0.2 s) of footage leading into the cut-in, ending exactly on the cut-in's first frame, on a track above the footage (and above its captions). The picture slams down, fast and heavily motion-blurred, into the cut — one direction only, never a back-and-forth shake. If it looks weak in render_frame, raise amount or motion_blur rather than lengthening it.
   - Linked picture and sound stay whole: never leave a clip's sound trimmed short of its picture, and never put a sound effect on the footage's own audio track (A1).
   - Speaker captions on what's said: run caption_speakers (it works out who speaks each line by watching and listening, then places word-by-word captions in the house box style by that person, above their head when there's room, else just below their face or redaction box, tracked to them with a little shake). Check a few with render_frame and fix any that sit on the wrong person.
@@ -45,8 +48,10 @@ House editing style (videos cut from a script of police footage):
   - B-roll over cuts: while someone keeps talking, lay a different shot (another moment of the footage, the scene, the other person reacting) on a video track above for 1–3 s as picture only; the sound underneath carries on. Prefer moments the transcript or the Doc's notes point to.
   - Quick white flashes or dips on hard scene changes, sparingly.
 - CUT-INS (the black narration cards) may carry stylised text and graphics.
+- VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Leave the cut-in cards and their words in place unless the user asks to remove them.
+- PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
-  - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: run add_subtitles (it defaults to everything after the intro). They sit bottom middle, no animation, no tracking, each line in its speaker's colour. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own.
+  - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: run add_subtitles (it defaults to everything after the intro). They sit bottom middle on the subtitles track, no animation, no tracking: white words without glow in a pure black box (opaque, unlike the intro captions'), the speaker's name above in their colour ("Officer:"). The intro keeps its own speaker captions (caption_speakers), glow and all. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own.
 - Be precise, and fill in the small gaps yourself: skip throwaway moments (a lone "like" or "um", a blip that adds nothing to the story) rather than captioning them; when something starts or ends within ~0.2 s of a cut or of the next caption, snap it to that edge so there are no slivers or hairline gaps.
 - Keep the layers tidy: a clip shouldn't float on a track with nothing under it. After adding or removing layers, run tidy_tracks; it moves clips down into empty space below them (keeping what's above what) and drops empty tracks.
 - When the user corrects something or tells you how they like it, apply it everywhere it fits in the project, not just the one spot they pointed at.
@@ -164,7 +169,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "add_clip",
-            "Add any clip (video/audio/text/adjustment/solid) using the model in the server instructions. Omit id. If track is omitted a free track of the right kind is chosen (created if needed); track \"new\" puts it on a new track on top of the rest.",
+            "Add any clip (video/audio/text/adjustment/solid/waveform) using the model in the server instructions. Omit id. If track is omitted a free track of the right kind is chosen (created if needed); track \"new\" puts it on a new track on top of the rest.",
             json!({ "clip": { "type": "object" } }),
             &["clip"],
         ),
@@ -173,6 +178,15 @@ fn tools() -> Vec<Value> {
             "Change a clip with a JSON merge patch (RFC 7386), e.g. {\"start\": 90, \"style\": {\"glow\": {\"enabled\": true}}}. Set a key to null to remove it.",
             json!({ "clip_id": { "type": "string" }, "patch": { "type": "object" } }),
             &["clip_id", "patch"],
+        ),
+        tool(
+            "set_in_out",
+            "Set the in and out points (seconds on the timeline; the out point's frame is the last one in). Null clears one; omit to leave it. Export without a range renders just that span, and playback stops at the out point.",
+            json!({
+                "in": { "type": ["number", "null"] },
+                "out": { "type": ["number", "null"] }
+            }),
+            &[],
         ),
         tool(
             "delete_clips",
@@ -203,9 +217,9 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "add_sound_effect",
-            "Place a sound effect bundled with Edit at timeline times, on a free audio track. Each is lined up by its \"hit\" marker (see media markers): for a cut, give the cut's time (where the two clips meet) and the sound straddles it. The same sound already within 0.5 s of a time is replaced, so placing again (or after the sound is updated) never doubles up.",
+            "Place a sound effect bundled with Edit at timeline times, on a free audio track. Only when the user asks for one. Each is lined up by its \"hit\" marker (see media markers): for a cut, give the cut's time (where the two clips meet) and the sound straddles it. The same sound already within 0.5 s of a time is replaced, so placing again (or after the sound is updated) never doubles up.",
             json!({
-                "sound": { "type": "string", "enum": crate::sfx::names(), "description": "shutter = a camera shutter, for cuts in the intro." },
+                "sound": { "type": "string", "enum": crate::sfx::names(), "description": "shutter = a camera shutter. Not part of the house style: only when the user asks for it." },
                 "times": { "type": "array", "items": { "type": "number" }, "description": "Seconds on the timeline." },
                 "volume_db": { "type": "number", "description": "Default 0." }
             }),
@@ -215,6 +229,14 @@ fn tools() -> Vec<Value> {
             "realign_script",
             "Re-finds each script range's first and last words in its transcript (forgiving how the Doc spells them: plurals, possessives, a letter off, e.g. \"priuses\" for \"Prius\") and moves that clip's in/out points to them, shifting everything after it so nothing overlaps or gaps (effects ending on its cut move with the cut). Use it when a range starts or ends a word early or late. Re-run caption_speakers over any clip it changes.",
             json!({}),
+            &[],
+        ),
+        tool(
+            "place_voiceovers",
+            "Lay voice-over recordings on the script's cut-ins. The recordings read the cut-ins' text: each is transcribed, the words that read each cut-in are found, and that stretch of audio is placed where the cut-in is (on a voice-over track). The cut-in (card and words) takes the voice-over's length and everything after moves with it, so the timeline stays butted. Placing again replaces what it placed. Takes a while the first time (transcription). Reports what was placed and any cut-in whose words weren't found.",
+            json!({
+                "media_ids": { "type": "array", "items": { "type": "string" }, "description": "The recordings (default: every audio file not on the timeline that isn't a sound effect, plus ones placed before)." }
+            }),
             &[],
         ),
         tool(
@@ -282,8 +304,26 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "export",
-            "Export the project to an MP4 (H.264 + AAC). Progress shows in the UI.",
-            json!({ "path": { "type": "string", "description": "Output .mp4 path (default ~/Movies/Edit/<name>.mp4)." } }),
+            "Export the project (default: the whole edit as an MP4, H.264 + AAC, at the project's size). Progress shows in the UI. Options as the export dialog: format, range (frames [start, end)), shape (vertical = 9:16 for Shorts/Reels, filled per fill: blur | crop | black), size (short side px), quality or target_mb, loudness (LUFS, e.g. -14 for YouTube), chapters.",
+            json!({
+                "path": { "type": "string", "description": "Output path (default ~/Movies/Edit/<name>.mp4); the extension follows the format." },
+                "options": {
+                    "type": "object",
+                    "properties": {
+                        "format": { "type": "string", "enum": ["h264", "hevc", "prores", "gif", "wav", "mp3", "png"] },
+                        "range": { "type": "array", "items": { "type": "integer" }, "description": "[start, end) frames of the edit; png uses start." },
+                        "shape": { "type": "string", "enum": ["original", "vertical", "square", "portrait"] },
+                        "fill": { "type": "string", "enum": ["blur", "crop", "black"] },
+                        "size": { "type": "integer", "description": "Short side in px (e.g. 1080, 720)." },
+                        "quality": { "type": "string", "enum": ["high", "balanced", "small"] },
+                        "target_mb": { "type": "number" },
+                        "hardware": { "type": "boolean", "description": "Encode on the Mac's media engine: much faster." },
+                        "audio": { "type": "boolean" },
+                        "loudness": { "type": "number" },
+                        "chapters": { "type": "array", "items": { "type": "object", "properties": { "start": { "type": "integer" }, "title": { "type": "string" } } } }
+                    }
+                }
+            }),
             &[],
         ),
     ]
@@ -327,6 +367,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     "duration_frames": project.duration(),
                     "duration_seconds": project.duration() as f64 / project.fps(),
                     "track_labels": labels,
+                    "sections": edit_core::sections(project),
                     "project": project,
                 }))
                 .unwrap_or_default(),
@@ -442,6 +483,36 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 "updated {clip_id}: {}",
                 serde_json::to_string(&clip).unwrap_or_default()
             )))
+        }
+        "set_in_out" => {
+            let fps = store.get(&id).ok_or("project vanished")?.project.fps();
+            let frame = |key: &str| -> Option<Option<i64>> {
+                let value = args.get(key)?;
+                Some(
+                    value
+                        .as_f64()
+                        .map(|seconds| (seconds * fps).round().max(0.0) as i64),
+                )
+            };
+            let (start, end) = (frame("in"), frame("out"));
+            let (_, span) = store.update(&id, ORIGIN, |project| {
+                if let Some(start) = start {
+                    project.mark_in = start;
+                }
+                if let Some(end) = end {
+                    project.mark_out = end;
+                }
+                Ok(project.in_out())
+            })?;
+            Ok(text(match span {
+                Some((start, end)) => format!(
+                    "in/out: {:.2}s to {:.2}s ({} frames)",
+                    start as f64 / fps,
+                    end as f64 / fps,
+                    end - start
+                ),
+                None => "in and out points cleared".to_owned(),
+            }))
         }
         "delete_clips" => {
             let ids: Vec<String> = serde_json::from_value(args["clip_ids"].clone())
@@ -607,6 +678,19 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 serde_json::to_string_pretty(&changed).unwrap_or_default()
             }))
         }
+        "place_voiceovers" => {
+            let media: Option<Vec<String>> = args
+                .get("media_ids")
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
+                })
+                .transpose()?;
+            let report = crate::voiceover::place(app, &id, media).await?;
+            Ok(text(
+                serde_json::to_string_pretty(&report).unwrap_or_default(),
+            ))
+        }
         "tidy_tracks" => {
             let (_, (moved, removed)) =
                 store.update(&id, ORIGIN, |project| Ok(tidy_tracks(project)))?;
@@ -621,6 +705,12 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .project
                 .media(media_id)
                 .ok_or_else(|| format!("no media {media_id}"))?;
+            if media.is_sound_effect() {
+                return Err(format!(
+                    "{} is a sound effect; there's nothing said to transcribe",
+                    media.name
+                ));
+            }
             let status = app
                 .media
                 .transcribe(std::path::PathBuf::from(&media.path), media.has_audio);
@@ -748,8 +838,11 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .filter(|path| !path.trim().is_empty())
                 .map(crate::server::expand_home)
                 .unwrap_or_else(|| crate::server::default_export_path(&live.project));
-            app.exports
-                .start(std::sync::Arc::clone(store), live.project, path.clone())?;
+            let options: crate::export::ExportOptions =
+                serde_json::from_value(args["options"].clone()).unwrap_or_default();
+            let path =
+                app.exports
+                    .start(std::sync::Arc::clone(store), live.project, options, path)?;
             Ok(text(format!("export started → {}", path.display())))
         }
         _ => Err(format!("unknown tool {name}")),
@@ -850,10 +943,11 @@ fn tidy_tracks(project: &mut Project) -> (usize, usize) {
     loop {
         let mut changed = false;
         for kind in [TrackKind::Video, TrackKind::Audio] {
+            // The subtitles keep their own track: nothing moves onto it or off it.
             let tracks: Vec<(String, bool)> = project
                 .tracks
                 .iter()
-                .filter(|track| track.kind == kind)
+                .filter(|track| track.kind == kind && !track.subtitles)
                 .map(|track| (track.id.clone(), track.locked))
                 .collect();
             // From the second track up, each onto the one below (never into the first).
@@ -903,7 +997,7 @@ fn tidy_tracks(project: &mut Project) -> (usize, usize) {
         .collect();
     project
         .tracks
-        .retain(|track| firsts.contains(&track.id) || used.contains(&track.id));
+        .retain(|track| firsts.contains(&track.id) || used.contains(&track.id) || track.subtitles);
     (moved, before - project.tracks.len())
 }
 
@@ -934,7 +1028,7 @@ fn free_track_from(
     let candidates: Vec<String> = project
         .tracks
         .iter()
-        .filter(|track| track.kind == kind)
+        .filter(|track| track.kind == kind && !track.subtitles)
         .skip(skip)
         .map(|track| track.id.clone())
         .collect();

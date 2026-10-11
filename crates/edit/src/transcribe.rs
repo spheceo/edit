@@ -2,6 +2,7 @@
 //! key. Edit sends small mono Opus audio and keeps Scribe's words, cached per
 //! source file so the same footage is never paid for twice.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -45,9 +46,18 @@ pub struct Transcript {
 
 /// Extracts audio, sends it to the relay, writes `target` (transcript JSON).
 pub fn run(source: &Path, target: &Path) -> Result<(), String> {
+    let config = relay_config(std::env::var("EDIT_RELAY_TOKEN").ok().as_deref())?;
     let audio = target.with_extension("ogg");
     let encoded = Command::new("ffmpeg")
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-i",
+        ])
         .arg(source)
         .args([
             "-map",
@@ -75,24 +85,41 @@ pub fn run(source: &Path, target: &Path) -> Result<(), String> {
         ));
     }
     // curl streams the file (-T) and is on every Mac and Linux box; no TLS stack in Edit.
-    let response = Command::new("curl")
-        .args([
-            "-sS",
-            "-X",
-            "POST",
-            "-H",
-            "content-type: audio/ogg",
-            "--max-time",
-            "1800",
-            "-w",
-            "\n%{http_code}",
-            "-T",
-        ])
-        .arg(&audio)
-        .arg(format!("{}/v1/transcribe", relay()))
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("curl: {error}"));
+    let response = (|| -> std::io::Result<std::process::Output> {
+        let mut child = Command::new("curl")
+            .args([
+                "-sS",
+                "--config",
+                "-",
+                "-X",
+                "POST",
+                "-H",
+                "content-type: audio/ogg",
+                "--max-time",
+                "1800",
+                "-w",
+                "\n%{http_code}",
+                "-T",
+            ])
+            .arg(&audio)
+            .arg(format!("{}/v1/transcribe", relay()))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let result = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("curl stdin"))?
+            .write_all(config.as_bytes());
+        if let Err(error) = result {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        child.wait_with_output()
+    })()
+    .map_err(|error| format!("curl: {error}"));
     let _ = std::fs::remove_file(&audio);
     let response = response?;
     if !response.status.success() {
@@ -112,13 +139,44 @@ pub fn run(source: &Path, target: &Path) -> Result<(), String> {
         return Err(format!("transcription failed ({}): {message}", code.trim()));
     }
     let transcript = parse_scribe(&value)?;
-    let tmp = target.with_extension("partial");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec(&transcript).map_err(|error| error.to_string())?,
+    crate::store::write_atomic(
+        target,
+        &serde_json::to_vec(&transcript).map_err(|error| error.to_string())?,
     )
-    .map_err(|error| error.to_string())?;
-    std::fs::rename(&tmp, target).map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())
+}
+
+/// Optional private-relay authentication. Feed curl's config through stdin so
+/// the token isn't exposed in process arguments. Reject config/header injection.
+fn relay_config(token: Option<&str>) -> Result<String, String> {
+    match token.filter(|token| !token.is_empty()) {
+        Some(token) if token.chars().any(char::is_control) => {
+            Err("EDIT_RELAY_TOKEN contains a control character".to_owned())
+        }
+        Some(token) => Ok(format!(
+            "header = \"Authorization: Bearer {}\"\n",
+            token.replace('\\', "\\\\").replace('"', "\\\"")
+        )),
+        None => Ok(String::new()),
+    }
+}
+
+#[cfg(test)]
+mod relay_auth_tests {
+    use super::relay_config;
+    #[test]
+    fn private_relay_token_is_escaped_and_cannot_add_headers() {
+        assert_eq!(relay_config(None).unwrap(), "");
+        assert_eq!(
+            relay_config(Some("test-token")).unwrap(),
+            "header = \"Authorization: Bearer test-token\"\n"
+        );
+        assert_eq!(
+            relay_config(Some("a\"b\\c")).unwrap(),
+            "header = \"Authorization: Bearer a\\\"b\\\\c\"\n"
+        );
+        assert!(relay_config(Some("token\nheader = evil")).is_err());
+    }
 }
 
 /// Scribe's answer, keeping only spoken words (not spacing or sound events).

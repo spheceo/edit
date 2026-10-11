@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Edit playback regression</title>
+<style>body{background:#111;color:#eee;font:15px system-ui;max-width:900px;margin:40px auto}canvas{width:640px;height:360px;background:#000}pre{white-space:pre-wrap}button{padding:12px}</style>
+<h1>Playback regression</h1>
+<p>Pass a project with a red clip at frames 0–19 and a blue clip at 20–39 as <code>?project=ID</code>. Uses the real WASM engine and browser decoder.</p>
+<button id="run">Run playback checks</button><br><br>
+<canvas id="preview" width="640" height="360"></canvas>
+<pre id="result">Ready</pre>
+<script type="module">
+import { preview, playhead } from "/src/lib/playback.ts";
+const canvas = document.querySelector("#preview");
+const result = document.querySelector("#result");
+const next = () => new Promise(resolve => requestAnimationFrame(resolve));
+const pixelCanvas = document.createElement("canvas"); pixelCanvas.width = pixelCanvas.height = 1;
+const ctx = pixelCanvas.getContext("2d", { willReadFrequently: true });
+let captured = {r:0,g:0,b:0};
+const color = () => captured;
+function capture() { ctx.drawImage(canvas, 0, 0, 1, 1); const [r,g,b] = ctx.getImageData(0,0,1,1).data; return {r,g,b}; }
+async function waitFor(test, timeout=3000) { const start=performance.now(); while (!test()) { if(performance.now()-start>timeout) throw new Error("Timed out waiting for decoded picture"); await next(); } }
+const id = new URL(location.href).searchParams.get("project");
+const live = await fetch(`/api/projects/${id}`).then(r=>r.json());
+const status = await fetch(`/api/projects/${id}/media-status`).then(r=>r.json());
+await preview.attach(canvas);
+// WebGPU canvas textures expire after presentation: read in the render task.
+const trace = [];
+const upload = preview.engine.uploadFrame.bind(preview.engine);
+preview.engine.uploadFrame = (id, frame) => { trace.push({ upload:id, timestamp:frame.timestamp, frame:playhead.frame }); upload(id,frame); };
+const render = preview.engine.render.bind(preview.engine);
+preview.engine.render = frame => { render(frame); captured = capture(); trace.push({render:frame, color:captured}); };
+preview.setProject(live.project, Object.fromEntries(Object.entries(status.media).map(([id,s])=>[id,s.proxy==="ready"?"proxy":"source"])));
+result.textContent = JSON.stringify({status:"Ready", restoredFrame:playhead.frame}, null, 2);
+document.querySelector("#run").onclick = async () => {
+ document.querySelector("#run").disabled=true;
+ try {
+  preview.pause(); preview.seek(0);
+  await waitFor(()=>color().r>150 && color().b<80);
+  trace.length=0;
+  const samples=[]; preview.play();
+  const start=performance.now();
+  while (playhead.playing && performance.now()-start<5000) { await next(); samples.push({frame:playhead.frame,...color()}); }
+  preview.pause();
+  const wrong=samples.filter(s=>s.frame>=22 && (s.b<150 || s.r>80));
+  const blank=samples.filter(s=>Math.max(s.r,s.g,s.b)<30);
+  const incorrectRenders=trace.filter(s=>s.render!==undefined && (s.render<20 ? s.color.r<150 || s.color.b>80 : s.color.b<150 || s.color.r>80));
+  if(playhead.frame<38 || wrong.length || blank.length || incorrectRenders.length) throw new Error(JSON.stringify({frame:playhead.frame,wrong,blank,incorrectRenders}));
+  const seeks=[];
+  for (const frame of [4,25,10,35]) { const start=performance.now(); result.textContent=`Seeking ${frame}`; preview.seek(frame); await waitFor(()=>frame<20 ? color().r>150 : color().b>150); seeks.push({frame,ms:Math.round(performance.now()-start)}); }
+  preview.seek(10); preview.seek(30); preview.seek(5); await waitFor(()=>color().r>150);
+  result.textContent=JSON.stringify({status:"PASS",samples:samples.length,wrongFrames:wrong.length,blackFrames:blank.length,incorrectRenders:incorrectRenders.length,seeks,latestScrubFrame:playhead.frame},null,2);
+ } catch(error) { preview.pause(); result.textContent=`FAIL: ${error.stack??error}\n${JSON.stringify({ frame: playhead.frame, color:color(), trace:trace.slice(-12), rendered:preview.renderedFrame, copied:[...preview.copied.entries()].map(([id,s])=>({id,serial:s.serial})), elements: [...preview.videos.values()].flat().map(v=>({time:v.currentTime,seeking:v.seeking,ours:preview.seeking.has(v),pending:preview.pending.get(v),presented:preview.presented.get(v),owner:preview.owner.get(v), pixel:(()=>{ctx.drawImage(v,0,0,1,1);return [...ctx.getImageData(0,0,1,1).data]})()})) },null,2)}`; }
+ finally { document.querySelector("#run").disabled=false; }
+};
+</script>

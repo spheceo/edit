@@ -33,6 +33,42 @@ fn save(name: &str, width: u32, height: u32, pixels: &[u8]) {
 }
 
 #[test]
+fn keeps_uniforms_independent_beyond_512_draws() {
+    let Some(mut renderer) = renderer(1200, 2) else {
+        return;
+    };
+    renderer.upload_video_rgba("red", 1, 1, &[255, 0, 0, 255]);
+    renderer.upload_video_rgba("blue", 1, 1, &[0, 0, 255, 255]);
+    let scene = Scene {
+        width: 1200,
+        height: 2,
+        layers: (0..600)
+            .map(|index| Layer::Video {
+                clip: format!("c{index}"),
+                media: if index % 2 == 0 { "red" } else { "blue" }.into(),
+                source_time: 0.0,
+                transform: Transform {
+                    x: -599.0 + index as f32 * 2.0,
+                    ..Default::default()
+                },
+                opacity: 1.0,
+            })
+            .collect(),
+    };
+    renderer.render(&scene);
+    let pixels = renderer.read_output().unwrap();
+    for index in 0..600 {
+        let pixel = &pixels[index * 8..index * 8 + 4];
+        let expected = if index % 2 == 0 {
+            [255, 0, 0, 255]
+        } else {
+            [0, 0, 255, 255]
+        };
+        assert_eq!(pixel, expected, "draw {index}");
+    }
+}
+
+#[test]
 fn renders_gradient_glowing_title_and_grade() {
     let (w, h) = (960, 540);
     let Some(mut renderer) = renderer(w, h) else {
@@ -181,4 +217,34 @@ fn renders_repack_subtitle_style() {
         at(325, 1028) < at(325, 700) / 2,
         "box should darken the subtitle band"
     );
+}
+
+#[test]
+fn independent_moments_of_one_source_do_not_share_a_texture() {
+    let Some(mut renderer) = renderer(80, 40) else {
+        return;
+    };
+    renderer.upload_video_rgba("left", 2, 2, &[255, 0, 0, 255].repeat(4));
+    renderer.upload_video_rgba("right", 2, 2, &[0, 0, 255, 255].repeat(4));
+    let layer = |clip: &str, x| Layer::Video {
+        clip: clip.into(),
+        media: "same-source".into(),
+        source_time: 0.0,
+        transform: Transform {
+            x,
+            scale: 0.5,
+            ..Default::default()
+        },
+        opacity: 1.0,
+    };
+    renderer.render(&Scene {
+        width: 80,
+        height: 40,
+        layers: vec![layer("left", -20.0), layer("right", 20.0)],
+    });
+    let pixels = renderer.read_output().unwrap();
+    let left = (20 * 80 + 20) * 4;
+    let right = (20 * 80 + 60) * 4;
+    assert!(pixels[left] > 240 && pixels[left + 2] < 10);
+    assert!(pixels[right] < 10 && pixels[right + 2] > 240);
 }

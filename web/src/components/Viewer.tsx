@@ -2,8 +2,10 @@ import { Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucid
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { paramAt, projectDuration, setParam } from "../lib/edit";
+import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
 import { viewerMenu } from "../lib/menus";
 import { playhead, preview } from "../lib/playback";
+import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
@@ -18,16 +20,14 @@ export function Viewer() {
   const project = useEditor((state) => state.project);
   const media = useEditor((state) => state.media);
   const [error, setError] = useState<string | null>(null);
+  const [buffering, setBuffering] = useState(false);
 
-  const versions = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const [id, status] of Object.entries(media)) out[id] = status.proxy === "ready" ? "proxy" : "source";
-    return out;
-  }, [media]);
+  const versionKey = JSON.stringify(Object.fromEntries(Object.entries(media).map(([id, status]) => [id, status.proxy === "ready" ? "proxy" : "source"])));
+  const versions = useMemo(() => JSON.parse(versionKey) as Record<string, string>, [versionKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const off = preview.onStatus(() => setError(preview.error));
+    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); });
     void preview.attach(canvas);
     return () => {
       off();
@@ -67,6 +67,11 @@ export function Viewer() {
         {error && (
           <div className="absolute inset-0 flex items-center justify-center p-8 text-center text-muted">
             <p className="max-w-[380px]">{error}</p>
+          </div>
+        )}
+        {!error && buffering && (
+          <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
+            <span className="size-3 animate-spin rounded-full border border-white/20 border-t-white/80" /> Loading frame…
           </div>
         )}
         {!error && empty && (
@@ -126,11 +131,13 @@ function Transport() {
   const playing = usePlaying();
   const fps = useEditor((state) => state.project?.settings.fps ?? 30);
   const duration = useEditor((state) => (state.project ? projectDuration(state.project) : 0));
+  const points = useInOut();
+  const span = inOutSpan(duration, points);
   return (
     <div className="flex h-11 shrink-0 items-center border-t border-line px-3">
-      <div className="w-[120px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
+      <div className="w-[150px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
       <div className="flex flex-1 items-center justify-center gap-0.5">
-        <IconButton label="Go to start (Home)" onClick={() => preview.seek(0)}>
+        <IconButton label="Go to start (Home)" onClick={goToStart}>
           <SkipBack size={15} />
         </IconButton>
         <IconButton label="Previous frame (←)" onClick={() => preview.seek(playhead.frame - 1)}>
@@ -147,11 +154,24 @@ function Transport() {
         <IconButton label="Next frame (→)" onClick={() => preview.seek(playhead.frame + 1)}>
           <StepForward size={15} />
         </IconButton>
-        <IconButton label="Go to end (End)" onClick={() => preview.seekEnd()}>
+        <IconButton label="Go to end (End)" onClick={goToEnd}>
           <SkipForward size={15} />
         </IconButton>
       </div>
-      <div className="w-[120px] text-right font-mono text-[13px] text-faint tabular">{timecode(duration, fps)}</div>
+      {span ? (
+        <button
+          onClick={clearInOut}
+          title="In to out: what play stops at and export renders. Click (or ⌥X) to clear."
+          className="group flex w-[150px] items-center justify-end gap-1.5 font-mono text-[13px] text-fg tabular"
+        >
+          <span className="rounded bg-white/10 px-1 font-sans text-[10px] font-medium tracking-wide text-muted uppercase group-hover:bg-white/15 group-hover:text-fg">
+            In–Out
+          </span>
+          {timecode(span[1] - span[0], fps)}
+        </button>
+      ) : (
+        <div className="w-[150px] text-right font-mono text-[13px] text-faint tabular">{timecode(duration, fps)}</div>
+      )}
     </div>
   );
 }

@@ -5,8 +5,9 @@
 
 import init, { createEngine, type Engine } from "../engine/pkg/edit_wasm";
 import { fetchRetrying, mediaUrl } from "./api";
-import { clipEnd, mediaOf, projectDuration, trackOf } from "./edit";
-import type { Media, Project } from "./types";
+import { clipEnd, projectDuration, validateProject } from "./edit";
+import { savedFrame, saveFrame } from "./storage";
+import type { Clip, Media, Project, Sections, Track } from "./types";
 
 type Listener = () => void;
 
@@ -44,6 +45,7 @@ let fontBytes: Promise<[string, number, Uint8Array][]> | null = null;
 interface Want {
   /** The moment this is (start frame and source in): linked picture and sound share it. */
   key: string;
+  media: string;
   time: number;
   speed: number;
   audible: boolean;
@@ -64,7 +66,7 @@ const SWAP_GRACE_MS = 250;
 /** The next roll starts playing (muted, unseen) this long before its cut, so it's already running at the cut. */
 const RUN_IN = 0.5;
 /** Elements per media: the one playing and the one cued for the next cut. */
-const ROLLS = 2;
+const ROLLS = 2; // Minimum when one moment plays and another is cued.
 /** How long a roll that's done keeps running silently before it's paused, in ms. */
 const OUTRO_MS = 600;
 /** How far the clock may run fast or slow to close on the picture (share of normal speed). */
@@ -83,10 +85,23 @@ const isSound = (media: Media | undefined) => media?.kind === "audio" && media.d
 
 class Preview {
   engine: Engine | null = null;
+  /** The project's intro, B-roll spots, story and outro, kept current with it (for the ruler). */
+  sections: Sections | null = null;
   error: string | null = null;
+  buffering = false;
+  private bufferingTimer: ReturnType<typeof setTimeout> | undefined;
   private canvas: HTMLCanvasElement | null = null;
   private restarts = 0;
   private project: Project | null = null;
+  private clips: Clip[] = [];
+  private clipsByTrack = new Map<string, Clip[]>();
+  private clipsById = new Map<string, Clip>();
+  private tracks = new Map<string, Track>();
+  private media = new Map<string, Media>();
+  private ranks = new Map<string, number>();
+  private duration = 0;
+  private persistedAt = 0;
+  private renderedFrame: number | null = null;
   /** Each media's elements (A/B rolls). */
   private videos = new Map<string, HTMLVideoElement[]>();
   /** The element showing each media right now. */
@@ -102,15 +117,21 @@ class Preview {
   /** When each element last had work (played or was cued). */
   private lastBusy = new Map<HTMLVideoElement, number>();
   private pending = new Map<HTMLVideoElement, number>();
-  /** Media whose engine texture holds a frame already. */
-  private uploaded = new Set<string>();
+  private copied = new Map<string, { video: HTMLVideoElement; serial: number }>();
+  private presented = new Map<HTMLVideoElement, { time: number; serial: number }>();
+  private callbacks = new Map<HTMLVideoElement, number>();
+  private pictureSerial = 0;
   /** When the clock's element last changed (a cut swapped rolls). */
   private masterSince = 0;
   private lastMaster: HTMLVideoElement | null = null;
   /** Since play: waiting for the picture to start moving (when, and the element's time then). */
   private starting: { since: number; from: number } | null = null;
   private lastTick = 0;
+  /** Where this run of playback began: it stops at an out point only if it began before it. */
+  private playedFrom = 0;
   private audio: AudioContext | null = null;
+  /** Sound levels waveforms read, by media id: fetched once per project (or in flight). */
+  private peaks = new Map<string, Uint8Array | Promise<void>>();
   /** Decoded sound effects by media id. */
   private sounds = new Map<string, AudioBuffer | Promise<void>>();
   /** Sound clips scheduled in this run of playback. */
@@ -142,6 +163,7 @@ class Preview {
       return;
     }
     this.attaching = true;
+    this.setBuffering(true);
     try {
       wasmReady ??= init();
       fontBytes ??= Promise.all(
@@ -163,11 +185,15 @@ class Preview {
       this.retire();
       this.engine = engine;
       if (this.project) engine.setProject(JSON.stringify(this.project));
+      for (const [media, levels] of this.peaks) if (levels instanceof Uint8Array) engine.setPeaks(media, levels);
+      this.readSections();
+      this.setBuffering(false);
       this.notify();
       this.invalidate();
     } catch (error) {
       if (generation !== this.generation) return;
       this.error = `Preview failed to start: ${error}`;
+      this.setBuffering(false);
       this.notify();
     } finally {
       if (generation === this.generation) this.attaching = false;
@@ -180,6 +206,7 @@ class Preview {
    * the engine if needed, or retry an engine that failed to start.
    */
   wake() {
+    this.renderedFrame = null;
     if (this.canvas && !this.engine && !this.attaching) void this.attach(this.canvas);
     else this.invalidate();
   }
@@ -189,7 +216,6 @@ class Preview {
     if (!this.canvas || this.attaching) return;
     console.warn("edit: preview lost its GPU device; restarting it");
     this.retire();
-    this.uploaded.clear();
     void this.attach(this.canvas);
   }
 
@@ -225,29 +251,37 @@ class Preview {
       // Already dead.
     }
     this.engine = null;
+    this.renderedFrame = null;
+    this.copied.clear();
   }
 
   detach() {
+    this.setBuffering(false);
+    this.remember();
     this.canvas = null;
     this.generation++;
     this.attaching = false;
     this.pause();
     this.retire();
-    for (const video of this.allVideos()) {
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-    }
+    for (const video of this.allVideos()) this.disposeVideo(video);
     this.forgetElements();
   }
 
   private forgetElements() {
-    this.uploaded.clear();
+    this.copied.clear();
     this.videos.clear();
     this.active.clear();
     this.owner.clear();
     this.sources.clear();
     this.versions.clear();
+    this.seeking.clear();
+    this.pending.clear();
+    this.stalled.clear();
+    this.lastBusy.clear();
+    this.waitingFor.clear();
+    this.presented.clear();
+    this.lastMaster = null;
+    this.starting = null;
   }
 
   /**
@@ -256,6 +290,7 @@ class Preview {
    * the browser never shows the blank canvas, e.g. while panels animate.
    */
   resize(width: number, height: number) {
+    this.renderedFrame = null;
     this.use((engine) => engine.resize(width, height));
     cancelAnimationFrame(this.queued);
     this.queued = 0;
@@ -263,14 +298,47 @@ class Preview {
   }
 
   setProject(project: Project, proxyVersions: Record<string, string>) {
+    // Gestures may briefly overlap clips or keys before endGesture validates
+    // them. Keep the last valid preview instead of restarting WASM on rejection.
+    if (validateProject(project)) return;
     const changedSource = this.project?.id !== project.id;
+    if (changedSource) {
+      this.remember();
+      this.pause();
+      this.detachVideos();
+      this.sounds.clear();
+      this.peaks.clear();
+      this.use((engine) => engine.clearPeaks());
+      playhead.frame = savedFrame(project.id);
+      playhead.emit();
+    }
+    for (const clip of this.project?.clips ?? []) {
+      if (!project.clips.some((next) => next.id === clip.id)) {
+        this.use((engine) => engine.forgetVideo(clip.id));
+        this.copied.delete(clip.id);
+      }
+    }
     this.project = project;
-    if (changedSource) this.detachVideos();
+    this.renderedFrame = null;
+    this.clips = [...project.clips].sort((a, b) => a.start - b.start);
+    this.clipsByTrack.clear();
+    this.clipsById = new Map(project.clips.map((clip) => [clip.id, clip]));
+    for (const clip of this.clips) {
+      const clips = this.clipsByTrack.get(clip.track) ?? [];
+      clips.push(clip);
+      this.clipsByTrack.set(clip.track, clips);
+    }
+    this.duration = projectDuration(project);
+    this.tracks = new Map(project.tracks.map((track) => [track.id, track]));
+    this.media = new Map(project.media.map((media) => [media.id, media]));
+    this.ranks = new Map(project.tracks.filter((track) => track.kind === "video").map((track, index) => [track.id, index + 1]));
+    this.loadPeaks(project);
     this.stopSounds();
     for (const media of project.media) {
       if (media.kind === "image") continue;
       const version = proxyVersions[media.id] ?? "0";
       if (isSound(media)) {
+        this.versions.set(media.id, version);
         this.loadSound(project.id, media.id, version);
         continue;
       }
@@ -281,32 +349,69 @@ class Preview {
       const rolls = this.videos.get(media.id) ?? [this.makeVideo(media.id)];
       for (const video of rolls) {
         const resume = video.currentTime;
+        this.seeking.delete(video);
+        this.pending.delete(video);
+        this.presented.delete(video);
         video.src = src;
-        if (resume) video.currentTime = resume;
+        if (resume) this.seekVideo(video, resume);
+      }
+      this.copied.delete(media.id);
+      for (const clip of project.clips) if ((clip.type === "video" || clip.type === "audio") && clip.media === media.id) {
+        this.copied.delete(clip.id);
       }
     }
     for (const [id, rolls] of this.videos) {
       if (!project.media.some((media) => media.id === id)) {
-        for (const video of rolls) {
-          video.pause();
-          video.removeAttribute("src");
-          this.owner.delete(video);
-        }
+        for (const video of rolls) this.disposeVideo(video);
         this.videos.delete(id);
-        this.active.delete(id);
+        for (const [key, video] of this.active) if (rolls.includes(video)) this.active.delete(key);
+        this.sources.delete(id);
+        this.versions.delete(id);
+        this.copied.delete(id);
         this.use((engine) => engine.forgetVideo(id));
       }
     }
     this.use((engine) => engine.setProject(JSON.stringify(project)));
+    this.readSections();
+    this.notify();
     this.invalidate();
+  }
+
+  /** Fetches the levels of the sound on the timeline when a waveform shows it. */
+  private loadPeaks(project: Project) {
+    if (!project.clips.some((clip) => clip.type === "waveform")) return;
+    for (const clip of project.clips) {
+      if (clip.type !== "audio" || this.peaks.has(clip.media)) continue;
+      const media = clip.media;
+      const loading: Promise<void> = fetchRetrying(mediaUrl(project.id, media, "peaks"))
+        .then(async (response) => {
+          if (!response.ok) throw new Error(`peaks: HTTP ${response.status}`);
+          const levels = new Uint8Array(await response.arrayBuffer());
+          if (this.project?.id !== project.id) return;
+          this.peaks.set(media, levels);
+          this.use((engine) => engine.setPeaks(media, levels));
+          this.invalidate();
+        })
+        // Not made yet (or offline): ask again on the next change.
+        .catch(() => {
+          if (this.peaks.get(media) === loading) this.peaks.delete(media);
+        });
+      this.peaks.set(media, loading);
+    }
+  }
+
+  /** The engine works out the sections from the project it was just given. */
+  private readSections() {
+    try {
+      this.sections = JSON.parse(this.use((engine) => engine.sections()) ?? "null");
+    } catch {
+      this.sections = null;
+    }
   }
 
   private detachVideos() {
     for (const [id, rolls] of this.videos) {
-      for (const video of rolls) {
-        video.pause();
-        video.removeAttribute("src");
-      }
+      for (const video of rolls) this.disposeVideo(video);
       this.use((engine) => engine.forgetVideo(id));
     }
     this.forgetElements();
@@ -315,7 +420,7 @@ class Preview {
   /** A media's rolls, adding the second when a cut needs it. */
   private rolls(id: string, wanted = 1) {
     const rolls = this.videos.get(id) ?? [];
-    while (rolls.length < Math.min(wanted, ROLLS)) {
+    while (rolls.length < wanted) {
       const video = this.makeVideo(id);
       const src = this.sources.get(id);
       if (src) video.src = src;
@@ -330,8 +435,8 @@ class Preview {
   }
 
   /** The element that shows `id` now (the first roll until a cut picks another). */
-  private shown(id: string) {
-    return this.active.get(id) ?? this.videos.get(id)?.[0];
+  private shown(key: string) {
+    return this.active.get(key);
   }
 
   private makeVideo(id: string) {
@@ -347,8 +452,37 @@ class Preview {
     video.addEventListener("waiting", () => this.stalled.add(video));
     video.addEventListener("playing", () => this.stalled.delete(video));
     video.addEventListener("canplay", () => this.stalled.delete(video));
+    video.addEventListener("error", () => {
+      this.seeking.delete(video);
+      this.pending.delete(video);
+    });
+    if ("requestVideoFrameCallback" in video) {
+      const presented: VideoFrameRequestCallback = (_now, metadata) => {
+        if (!this.callbacks.has(video)) return;
+        const serial = ++this.pictureSerial;
+        this.presented.set(video, { time: metadata.mediaTime, serial });
+        this.invalidate();
+        this.callbacks.set(video, video.requestVideoFrameCallback(presented));
+      };
+      this.callbacks.set(video, video.requestVideoFrameCallback(presented));
+    }
     if (!this.videos.has(id)) this.videos.set(id, [video]);
     return video;
+  }
+
+  private disposeVideo(video: HTMLVideoElement) {
+    const callback = this.callbacks.get(video);
+    this.callbacks.delete(video);
+    if (callback !== undefined) video.cancelVideoFrameCallback(callback);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    this.owner.delete(video);
+    this.seeking.delete(video);
+    this.pending.delete(video);
+    this.stalled.delete(video);
+    this.lastBusy.delete(video);
+    this.presented.delete(video);
   }
 
   private onSeeked(video: HTMLVideoElement) {
@@ -363,12 +497,25 @@ class Preview {
   }
 
   private seekVideo(video: HTMLVideoElement, time: number) {
+    const target = Math.max(0, Number.isFinite(video.duration) ? Math.min(time, Math.max(0, video.duration - 1e-4)) : time);
     if (this.seeking.has(video)) {
-      this.pending.set(video, time);
+      this.pending.set(video, target);
       return;
     }
+    if (Math.abs(video.currentTime - target) < 1e-4) return;
     this.seeking.add(video);
-    video.currentTime = time;
+    this.presented.delete(video);
+    try {
+      video.currentTime = target;
+    } catch {
+      this.seeking.delete(video);
+    }
+  }
+
+  /** Persist explicit seeks immediately; playback checkpoints at most once a second. */
+  remember() {
+    if (this.project) saveFrame(this.project.id, playhead.frame);
+    this.persistedAt = performance.now();
   }
 
   /** Requests a redraw on the next animation frame. Cheap to call often. */
@@ -382,7 +529,9 @@ class Preview {
 
   /** Moves the playhead anywhere from 0 on, including past the last clip (shows black). */
   seek(frame: number) {
+    if (!Number.isFinite(frame)) return;
     playhead.frame = Math.max(0, Math.round(frame));
+    this.remember();
     if (playhead.playing) {
       this.frameAtStart = playhead.frame;
       this.clockStart = performance.now();
@@ -406,10 +555,11 @@ class Preview {
 
   play() {
     if (!this.project || playhead.playing) return;
-    const end = projectDuration(this.project);
+    const end = this.duration;
     if (end <= 0) return;
     if (playhead.frame >= end - 1) playhead.frame = 0;
     playhead.playing = true;
+    this.playedFrom = playhead.frame;
     this.frameAtStart = playhead.frame;
     this.clockStart = performance.now();
     this.lastTick = this.clockStart;
@@ -422,14 +572,18 @@ class Preview {
     cancelAnimationFrame(this.queued);
     this.queued = 0;
     const tick = (time: number) => {
+      this.loop = 0;
       if (!playhead.playing) return;
       this.tick(time);
-      this.loop = requestAnimationFrame(tick);
+      // tick() can pause at the end of the edit. Leaving a phantom loop
+      // scheduled then makes invalidate() ignore every subsequent scrub.
+      if (playhead.playing) this.loop = requestAnimationFrame(tick);
     };
     this.loop = requestAnimationFrame(tick);
   }
 
   pause() {
+    this.remember();
     if (!playhead.playing) return;
     playhead.playing = false;
     cancelAnimationFrame(this.loop);
@@ -455,7 +609,7 @@ class Preview {
   private tick(now: number) {
     if (!this.project) return;
     const fps = this.project.settings.fps;
-    const end = projectDuration(this.project);
+    const end = this.duration;
     // rAF times are the frame's vsync, so steps are even; the first can predate play().
     const step = (Math.max(0, Math.min(100, now - this.lastTick)) / 1000) * fps;
     this.lastTick = now;
@@ -499,12 +653,20 @@ class Preview {
     }
     this.frameAtStart = frame;
     this.clockStart = now;
+    // Stop on the out point; playing again from there runs on past it.
+    const out = this.project.mark_out ?? null;
+    if (out !== null && this.playedFrom < out && frame >= out && out < end) {
+      playhead.frame = out;
+      this.pause();
+      return;
+    }
     if (frame >= end) {
       playhead.frame = Math.max(0, end - 1);
       this.pause();
       return;
     }
     playhead.frame = frame;
+    if (now - this.persistedAt >= 1000) this.remember();
     playhead.emit();
     this.syncElements(false);
     this.scheduleSounds();
@@ -512,7 +674,7 @@ class Preview {
   }
 
   private loadSound(project: string, id: string, version: string) {
-    const key = `${id}@${version}`;
+    const key = `${project}@${id}@${version}`;
     if (this.sounds.has(key)) return;
     this.sounds.set(
       key,
@@ -520,6 +682,7 @@ class Preview {
         .then((response) => response.arrayBuffer())
         .then((bytes) => (this.audio ??= new AudioContext({ latencyHint: "interactive" })).decodeAudioData(bytes))
         .then((buffer) => {
+          if (this.project?.id !== project || !this.media.has(id) || this.versions.get(id) !== version) return;
           this.sounds.set(key, buffer);
           this.sounds.set(id, buffer);
         })
@@ -543,20 +706,31 @@ class Preview {
       if (lead > SOUND_AHEAD || end <= 0) continue;
       const key = `${clip.id}@${clip.start}@${clip.source_in}`;
       if (this.scheduled.has(key)) continue;
-      if (!isSound(mediaOf(project, clip.media))) continue;
-      const track = trackOf(project, clip.track);
+      if (!isSound(this.media.get(clip.media))) continue;
+      const track = this.tracks.get(clip.track);
       const buffer = this.sounds.get(clip.media);
       if (!track || track.muted || !(buffer instanceof AudioBuffer)) continue;
       const source = audio.createBufferSource();
       source.buffer = buffer;
       source.playbackRate.value = clip.speed;
       const gain = audio.createGain();
-      gain.gain.value = 10 ** (clip.volume_db / 20);
-      source.connect(gain).connect(audio.destination);
+      const volume = 10 ** (clip.volume_db / 20);
+      const when = audio.currentTime + Math.max(0, lead);
       const into = Math.max(0, -lead);
-      source.start(audio.currentTime + Math.max(0, lead), clip.source_in + into * clip.speed, Math.max(0, end - Math.max(0, lead)) * clip.speed);
+      const fadeIn = clip.fade_in / fps;
+      const fadeOut = clip.fade_out / fps;
+      gain.gain.setValueAtTime(volume * (fadeIn > 0 ? Math.min(1, into / fadeIn) : 1) * (fadeOut > 0 ? Math.min(1, end / fadeOut) : 1), when);
+      if (fadeIn > into) gain.gain.linearRampToValueAtTime(volume, when + fadeIn - into);
+      if (fadeOut > 0) {
+        const finish = audio.currentTime + end;
+        gain.gain.setValueAtTime(volume * Math.min(1, end / fadeOut), Math.max(when, finish - fadeOut));
+        gain.gain.linearRampToValueAtTime(0, finish);
+      }
+      source.connect(gain).connect(audio.destination);
+      source.start(when, clip.source_in + into * clip.speed, Math.max(0, end - Math.max(0, lead)) * clip.speed);
       source.onended = () => {
-        if (this.scheduled.get(key) === source) this.scheduled.delete(key);
+        source.disconnect();
+        gain.disconnect();
       };
       this.scheduled.set(key, source);
     }
@@ -574,20 +748,31 @@ class Preview {
   }
 
   /** What each media element should be doing at the playhead. */
-  private wants(frame: number): Map<string, Want> {
+  private wants(frame: number, clips?: Clip[]): Map<string, Want> {
     const project = this.project!;
     const fps = project.settings.fps;
-    const videoTracks = project.tracks.filter((track) => track.kind === "video");
     const wants = new Map<string, Want>();
-    for (const clip of project.clips) {
+    if (!clips) {
+      clips = [];
+      for (const lane of this.clipsByTrack.values()) {
+        let lo = 0, hi = lane.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (lane[mid].start <= frame) lo = mid + 1;
+          else hi = mid;
+        }
+        if (lo) clips.push(lane[lo - 1]);
+      }
+    }
+    for (const clip of clips) {
       if (frame < clip.start || frame >= clipEnd(clip)) continue;
       if (clip.type !== "video" && clip.type !== "audio") continue;
-      if (clip.type === "audio" && isSound(mediaOf(project, clip.media))) continue;
-      const track = trackOf(project, clip.track);
+      if (clip.type === "audio" && isSound(this.media.get(clip.media))) continue;
+      const track = this.tracks.get(clip.track);
       if (!track || (clip.type === "video" && track.hidden) || (clip.type === "audio" && track.muted)) continue;
       const time = clip.source_in + ((frame - clip.start) / fps) * clip.speed;
-      const base = { key: `${clip.start}@${clip.source_in.toFixed(3)}`, time, speed: clip.speed, clipStart: clip.start, sourceIn: clip.source_in };
-      const existing = wants.get(clip.media);
+      const base = { key: momentKey(clip), media: clip.media, time, speed: clip.speed, clipStart: clip.start, sourceIn: clip.source_in };
+      const existing = wants.get(base.key);
       if (clip.type === "audio") {
         let gain = 10 ** (clip.volume_db / 20);
         const local = frame - clip.start;
@@ -597,13 +782,13 @@ class Preview {
           existing.audible = true;
           existing.volume = gain;
         } else if (!existing) {
-          wants.set(clip.media, { ...base, audible: true, volume: gain, rank: 0 });
+          wants.set(base.key, { ...base, audible: true, volume: gain, rank: 0 });
         }
       } else {
-        const rank = 1 + videoTracks.findIndex((candidate) => candidate.id === clip.track);
+        const rank = this.ranks.get(clip.track) ?? 1;
         if (!existing || Math.abs(existing.time - time) >= 0.1) {
           // Picture wins the element; sound from a different moment is dropped.
-          wants.set(clip.media, { ...base, audible: false, volume: 1, rank });
+          wants.set(base.key, { ...base, audible: false, volume: 1, rank });
         } else {
           existing.rank = Math.max(existing.rank, rank);
         }
@@ -616,12 +801,22 @@ class Preview {
   private upcoming(frame: number): Map<string, Want> {
     const project = this.project!;
     const fps = project.settings.fps;
-    const starts = [...new Set(project.clips.filter((clip) => clip.start > frame && clip.start <= frame + fps * PREROLL).map((clip) => clip.start))].sort(
-      (a, b) => a - b,
-    );
+    let lo = 0;
+    let hi = this.clips.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.clips[mid].start <= frame) lo = mid + 1;
+      else hi = mid;
+    }
     const next = new Map<string, Want>();
-    for (const start of starts) {
-      for (const [id, want] of this.wants(start)) if (!next.has(id) && want.clipStart === start) next.set(id, want);
+    for (let i = lo; i < this.clips.length; ) {
+      const start = this.clips[i].start;
+      if (start > frame + fps * PREROLL) break;
+      const from = i;
+      while (i < this.clips.length && this.clips[i].start === start) i++;
+      for (const [id, want] of this.wants(start, this.clips.slice(from, i))) {
+        if (![...next.values()].some((cue) => cue.media === want.media && cue.rank === want.rank)) next.set(id, want);
+      }
     }
     return next;
   }
@@ -639,11 +834,13 @@ class Preview {
 
     // What plays now: on the roll already cued for this moment, else the nearest.
     for (const [id, want] of wants) {
-      const rolls = this.rolls(id);
+      const count = [...wants.values()].filter((candidate) => candidate.media === want.media).length;
+      const rolls = this.rolls(want.media, count);
       const video =
         rolls.find((candidate) => this.owner.get(candidate) === want.key) ??
-        rolls.reduce((best, candidate) => (Math.abs(candidate.currentTime - want.time) < Math.abs(best.currentTime - want.time) ? candidate : best));
+        rolls.filter((candidate) => !busy.has(candidate)).reduce((best, candidate) => (Math.abs(candidate.currentTime - want.time) < Math.abs(best.currentTime - want.time) ? candidate : best));
       busy.add(video);
+      const changed = this.owner.get(video) !== want.key || this.active.get(id) !== video;
       this.owner.set(video, want.key);
       this.active.set(id, video);
       video.preload = "auto";
@@ -654,18 +851,20 @@ class Preview {
       const drift = Math.abs(video.currentTime - want.time);
       // The clock follows the master, so it only needs re-cueing when it is
       // far off; followers stay within FOLLOWER_DRIFT.
-      const limit = hard ? 0.5 / fps : id === master ? 0.5 : FOLLOWER_DRIFT;
-      if (drift > limit && !this.seeking.has(video)) this.seekVideo(video, want.time);
+      const limit = hard || changed ? 0.5 / fps : id === master ? 0.5 : FOLLOWER_DRIFT;
+      if (drift > limit) this.seekVideo(video, want.time);
       // play() on an ended element would restart it from the top.
-      if (video.paused && !video.ended) void video.play().catch(() => {});
+      if (playhead.playing && video.paused && !video.ended) void video.play().catch(() => {});
     }
 
     // What plays next: cued paused on its first frame on a free roll, so the cut never seeks.
-    for (const [id, cue] of next) {
-      const now = wants.get(id);
+    for (const cue of next.values()) {
+      const now = [...wants.values()].find((want) => want.media === cue.media && want.speed === cue.speed && Math.abs(want.time + ((cue.clipStart - frame) / fps) * want.speed - cue.time) < 0.1);
       // The same source carrying straight on (a split): the playing roll covers it.
       if (now && Math.abs(now.time + ((cue.clipStart - frame) / fps) * now.speed - cue.time) < 0.1) continue;
-      const rolls = this.rolls(id, now ? 2 : 1);
+      const count = [...wants.values()].filter((want) => want.media === cue.media).length;
+      const cues = [...next.values()].filter((want) => want.media === cue.media).length;
+      const rolls = this.rolls(cue.media, count ? Math.max(ROLLS, count + cues) : cues);
       const video = rolls.find((candidate) => !busy.has(candidate) && this.owner.get(candidate) === cue.key) ?? rolls.find((candidate) => !busy.has(candidate));
       if (!video) continue;
       busy.add(video);
@@ -678,8 +877,8 @@ class Preview {
       if (playhead.playing && until <= runIn && atCut >= 0) {
         // Aim a frame past the cut: a roll that's late would show footage from before its in point
         // for a moment (a visible glitch), while one a frame early just skips a frame nobody sees.
-        const behind = atCut + 2.5 / fps - video.currentTime;
-        if (Math.abs(behind) > 0.3 && !this.seeking.has(video)) this.seekVideo(video, atCut + 2.5 / fps);
+        const behind = atCut + 0.5 * cue.speed / fps - video.currentTime;
+        if (Math.abs(behind) > 0.3) this.seekVideo(video, atCut + 0.5 * cue.speed / fps);
         // play() starts a beat late: run fast (or slow) in proportion to the gap so it closes before
         // the cut, without seeking. Steps of 5% keep rate writes rare.
         const nudge = Math.round(Math.max(-0.3, Math.min(0.3, behind * 2.5)) * 20) / 20;
@@ -692,9 +891,11 @@ class Preview {
         if (!video.paused) video.pause();
         setIfChanged(video, "muted", true);
         const waitAt = cue.time - runIn * cue.speed;
-        if (Math.abs(video.currentTime - waitAt) > 0.5 / fps && !this.seeking.has(video)) this.seekVideo(video, waitAt);
+        if (Math.abs(video.currentTime - waitAt) > 0.5 / fps) this.seekVideo(video, waitAt);
       }
     }
+
+    for (const key of this.active.keys()) if (!wants.has(key)) this.active.delete(key);
 
     // Everything else rests. A roll that just finished runs on silently for a moment: pausing it
     // at the cut makes the browser rework its audio, which hitches the roll taking over.
@@ -722,7 +923,8 @@ class Preview {
       return;
     }
     const frame = Math.floor(playhead.frame);
-    let sources: { media: string; time: number }[] = [];
+    if (!playhead.playing) this.syncElements(false);
+    let sources: { clip: string; media: string; time: number }[] = [];
     try {
       sources = JSON.parse(this.use((engine) => engine.sources(frame)) ?? "[]");
     } catch {
@@ -731,21 +933,41 @@ class Preview {
     // While playing, a roll still short of its clip's in point would flash footage from before the
     // cut: keep the frame already shown for that instant instead.
     const playing = playhead.playing ? this.wants(frame) : null;
-    for (const { media, time } of sources) {
-      const video = this.shown(media);
-      if (!video) continue;
-      const want = playing?.get(media);
-      if (want && video.currentTime < want.sourceIn - 0.25 / project.settings.fps && this.uploaded.has(media)) continue;
+    let waiting = false;
+    let changedPicture = false;
+    for (const { clip: clipId, media, time } of sources) {
+      const clip = this.clipsById.get(clipId);
+      const key = clip && (clip.type === "video" || clip.type === "audio") ? momentKey(clip) : [...this.active.keys()].find((key) => key.startsWith(`${media}@`));
+      const video = key ? this.shown(key) : undefined;
+      const texture = clipId ?? media;
+      if (!video) {
+        waiting = true;
+        continue;
+      }
+      const want = key ? playing?.get(key) : undefined;
+      const presented = this.presented.get(video);
+      if (want && (presented?.time ?? video.currentTime) < want.sourceIn - 0.25 / project.settings.fps) {
+        waiting = true;
+        continue;
+      }
       video.preload = "auto";
       if (!playhead.playing) {
         // Show the source frame nearest `time` (the export's rule, see render.rs): an element
         // shows the frame on screen at its time, so aim half a source frame later.
-        const fps = mediaOf(project, media)?.fps || 30;
+        const fps = this.media.get(media)?.fps || 30;
         const target = time + 0.5 / fps;
         const settled = !this.seeking.has(video) && Math.abs(video.currentTime - target) < 0.5 / fps;
         if (!settled) this.seekVideo(video, target);
       }
-      if (video.readyState < 2) continue;
+      // currentTime changes before the decoded picture does. Never copy the
+      // old picture while seeking, including when a newer scrub is queued.
+      if (video.readyState < 2 || video.seeking || this.seeking.has(video) || this.pending.has(video) || (this.callbacks.has(video) && !presented)) {
+        waiting = true;
+        continue;
+      }
+      const serial = presented?.serial ?? video.currentTime;
+      const copied = this.copied.get(texture);
+      if (copied?.video === video && copied.serial === serial) continue;
       // Building a VideoFrame fails cleanly when the element has nothing to
       // show yet; the next seeked/loadeddata event redraws.
       let picture: VideoFrame | null = null;
@@ -753,13 +975,20 @@ class Preview {
         picture = new VideoFrame(video);
       } catch {
         this.retryWhenPresented(video);
+        waiting = true;
         continue;
       }
       const taken = picture;
-      this.use((engine) => engine.uploadFrame(media, taken));
-      this.uploaded.add(media);
+      this.use((engine) => engine.uploadFrame(texture, taken));
+      changedPicture = true;
+      if (this.engine) this.copied.set(texture, { video, serial });
       taken.close();
     }
+    // Present a complete scene: hold the outgoing picture while an incoming
+    // roll decodes, rather than flashing black or mixing old and new frames.
+    this.setBuffering(waiting);
+    if (waiting) return;
+    if (!changedPicture && this.renderedFrame === frame) return;
     // Match the canvas first (a no-op when unchanged): a resize can land while the
     // engine is still starting, and a stale size stretches the picture.
     const canvas = this.canvas;
@@ -767,6 +996,9 @@ class Preview {
       if (canvas) engine.resize(canvas.width, canvas.height);
       engine.render(frame);
     });
+    if (this.engine) this.renderedFrame = frame;
+    const visible = new Set(sources.map((source) => source.clip ?? source.media));
+    for (const key of this.copied.keys()) if (!visible.has(key)) this.copied.delete(key);
     // A frame that rendered means any earlier restart worked.
     if (this.engine) this.restarts = 0;
   }
@@ -787,6 +1019,24 @@ class Preview {
   private notify() {
     for (const listener of this.listeners) listener();
   }
+
+  private setBuffering(waiting: boolean) {
+    if (waiting) {
+      if (!this.buffering && this.bufferingTimer === undefined) this.bufferingTimer = setTimeout(() => {
+        this.bufferingTimer = undefined;
+        this.buffering = true;
+        this.notify();
+      }, 150);
+    } else {
+      clearTimeout(this.bufferingTimer);
+      this.bufferingTimer = undefined;
+      if (this.buffering) { this.buffering = false; this.notify(); }
+    }
+  }
+}
+
+function momentKey(clip: Extract<Clip, { type: "video" | "audio" }>) {
+  return `${clip.media}@${clip.start}@${clip.source_in}@${clip.speed}`;
 }
 
 /** Assigns a media property only when it differs (rate and mute writes can stall playback). */
@@ -798,7 +1048,12 @@ export const preview = new Preview();
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") preview.wake();
+  else {
+    preview.remember();
+    preview.pause();
+  }
 });
+window.addEventListener("pagehide", () => preview.remember());
 
 // Handle for tests and agents driving the page (e.g. Playwright).
 (window as unknown as { __edit?: unknown }).__edit = { preview, playhead };

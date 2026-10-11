@@ -92,6 +92,16 @@ pub struct TextSpec<'a> {
     pub pad: f32,
     /// Wrap at this width (output pixels); `None` breaks only at newlines.
     pub max_width: Option<f32>,
+    /// A small line above the text in its own colour (who's speaking).
+    pub label: Option<LabelSpec<'a>>,
+}
+
+pub struct LabelSpec<'a> {
+    pub text: &'a str,
+    pub px: f32,
+    pub color: Rgba,
+    /// Space between the text's line box and the label's (output pixels).
+    pub above: f32,
 }
 
 /// Premultiplied RGBA8.
@@ -101,6 +111,8 @@ pub struct TextImage {
     pub pixels: Vec<u8>,
     /// The laid-out lines' box (widest line × line height × lines), centred in the image.
     pub block: [f32; 2],
+    /// The label's line box (width, height) and how far its centre sits above the image's.
+    pub label: Option<[f32; 3]>,
 }
 
 #[derive(Default)]
@@ -137,7 +149,7 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
     let line_advance = px * spec.line_height.max(0.1);
 
     // Wrap to the width (greedy, by words; an overlong word breaks by letters).
-    let advance = |text: &str| -> f32 {
+    let measure = |text: &str, px: f32| -> f32 {
         let mut pen = 0.0_f32;
         let mut previous: Option<char> = None;
         for ch in text.chars() {
@@ -153,6 +165,7 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
             0.0
         }
     };
+    let advance = |text: &str| measure(text, px);
     let mut wrapped: Vec<String> = Vec::new();
     for paragraph in spec.text.split('\n') {
         let Some(max) = spec.max_width.filter(|max| *max > px) else {
@@ -215,14 +228,33 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
     let text_height =
         line_metrics.ascent - line_metrics.descent + line_advance * (lines.len() as f32 - 1.0);
     let pad = spec.pad.max(0.0).ceil();
-    let width = ((block_width + 2.0 * pad).ceil() as u32).clamp(1, MAX_TEXT_DIMENSION);
-    let height = ((text_height + 2.0 * pad).ceil() as u32).clamp(1, MAX_TEXT_DIMENSION);
+    // The label sits centred above the lines; the image grows evenly so the lines stay centred.
+    let label = spec
+        .label
+        .as_ref()
+        .filter(|label| !label.text.trim().is_empty())
+        .and_then(|label| {
+            let px = label.px.clamp(1.0, 2000.0);
+            let metrics = font.horizontal_line_metrics(px)?;
+            let line = px * spec.line_height.max(0.1);
+            let offset = line_advance * lines.len() as f32 / 2.0 + label.above + line / 2.0;
+            Some((label, px, metrics, measure(label.text, px), line, offset))
+        });
+    let content_width = label
+        .as_ref()
+        .map_or(block_width, |label| block_width.max(label.3));
+    let half_height = label.as_ref().map_or(text_height / 2.0, |label| {
+        (text_height / 2.0).max(label.5 + label.4 / 2.0)
+    });
+    let width = ((content_width + 2.0 * pad).ceil() as u32).clamp(1, MAX_TEXT_DIMENSION);
+    let height = ((half_height * 2.0 + 2.0 * pad).ceil() as u32).clamp(1, MAX_TEXT_DIMENSION);
+    let top = pad + half_height - text_height / 2.0;
 
     let mut placed = Vec::new();
     let mut index = 0;
     for (row, (glyphs, line_width)) in lines.iter().enumerate() {
-        let left = pad + (block_width - line_width) / 2.0;
-        let baseline = pad + line_metrics.ascent + line_advance * row as f32;
+        let left = pad + (content_width - line_width) / 2.0;
+        let baseline = top + line_metrics.ascent + line_advance * row as f32;
         for &(ch, x) in glyphs {
             placed.push(Placed {
                 ch,
@@ -264,11 +296,46 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
             alpha,
         );
     }
+    let tracking = spec.tracking;
+    if let Some((label_spec, px, metrics, label_width, _, offset)) = &label {
+        let centre = pad + half_height - offset;
+        let baseline = centre + (metrics.ascent + metrics.descent) / 2.0;
+        let mut pen = pad + (content_width - label_width) / 2.0;
+        let mut previous: Option<char> = None;
+        let [r, g, b, a] = label_spec.color.0;
+        for ch in label_spec.text.chars() {
+            if let Some(prev) = previous {
+                pen += font.horizontal_kern(prev, ch, *px).unwrap_or(0.0);
+            }
+            let (glyph, bitmap) = cache.glyph(book, face, ch, *px);
+            let advance = glyph.advance_width;
+            if !ch.is_whitespace() && glyph.width > 0 && glyph.height > 0 {
+                let left = pen + glyph.xmin as f32;
+                let top = baseline - glyph.ymin as f32 - glyph.height as f32;
+                blit(
+                    &mut pixels,
+                    width,
+                    height,
+                    bitmap,
+                    glyph.width,
+                    glyph.height,
+                    left,
+                    top,
+                    1.0,
+                    [r, g, b],
+                    a,
+                );
+            }
+            pen += advance + tracking;
+            previous = Some(ch);
+        }
+    }
     Some(TextImage {
         width,
         height,
         pixels,
         block: [block_width, line_advance * lines.len() as f32],
+        label: label.map(|(_, _, _, label_width, line, offset)| [label_width, line, offset]),
     })
 }
 

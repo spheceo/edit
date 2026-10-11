@@ -38,6 +38,29 @@ pub enum Layer {
         color: Rgba,
         opacity: f32,
     },
+    Waveform {
+        clip: String,
+        /// The sound heard now, which the waveform shows.
+        sources: Vec<WaveSource>,
+        /// Seconds on the timeline: the line's tangle moves on with time.
+        seconds: f32,
+        style: WaveformStyle,
+        transform: Transform,
+        opacity: f32,
+    },
+}
+
+/// One sound a waveform shows: where its media is now, how fast it plays,
+/// how loud it's heard (linear), and the stretch of the media its clip plays
+/// (seconds), outside which it's silent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaveSource {
+    pub media: String,
+    pub time: f64,
+    pub speed: f64,
+    pub gain: f32,
+    pub from: f64,
+    pub to: f64,
 }
 
 /// The picture beneath an adjustment layer, moved by its shake: offset in
@@ -82,16 +105,18 @@ pub struct SourceRequest {
 pub fn evaluate(project: &Project, frame: i64) -> Scene {
     let fps = project.fps();
     let mut layers = Vec::new();
+    let active: std::collections::HashMap<_, _> = project
+        .clips
+        .iter()
+        .filter(|clip| clip.contains(frame))
+        .map(|clip| (clip.track.as_str(), clip))
+        .collect();
     for track in project
         .tracks
         .iter()
         .filter(|track| track.kind == TrackKind::Video && !track.hidden)
     {
-        let Some(clip) = project
-            .clips
-            .iter()
-            .find(|clip| clip.track == track.id && clip.contains(frame))
-        else {
+        let Some(clip) = active.get(track.id.as_str()) else {
             continue;
         };
         let local = (frame - clip.start) as f32;
@@ -200,6 +225,27 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
             }
             ClipContent::Solid { fill, opacity } => Layer::Solid {
                 color: *fill,
+                opacity: anim("opacity", *opacity) * fade,
+            },
+            ClipContent::Waveform {
+                media,
+                style,
+                transform,
+                opacity,
+            } => Layer::Waveform {
+                clip: clip.id.clone(),
+                sources: heard(project, frame, media.as_deref()),
+                seconds,
+                style: WaveformStyle {
+                    gain: anim("gain", style.gain),
+                    glow: Glow {
+                        radius: anim("glow.radius", style.glow.radius),
+                        strength: anim("glow.strength", style.glow.strength),
+                        ..style.glow
+                    },
+                    ..style.clone()
+                },
+                transform: animated_transform(transform),
                 opacity: anim("opacity", *opacity) * fade,
             },
             ClipContent::Audio { .. } => continue,
@@ -495,6 +541,45 @@ pub struct AudioSegment {
     pub volume_db: f32,
     pub fade_in: f64,
     pub fade_out: f64,
+}
+
+/// What's heard at `frame` (audio clips on unmuted tracks), only `media`'s if given.
+fn heard(project: &Project, frame: i64, media: Option<&str>) -> Vec<WaveSource> {
+    let fps = project.fps();
+    project
+        .clips
+        .iter()
+        .filter(|clip| clip.contains(frame))
+        .filter(|clip| {
+            project
+                .track(&clip.track)
+                .is_some_and(|track| track.kind == TrackKind::Audio && !track.muted)
+        })
+        .filter_map(|clip| {
+            let ClipContent::Audio {
+                media: source,
+                source_in,
+                speed,
+                volume_db,
+            } = &clip.content
+            else {
+                return None;
+            };
+            if media.is_some_and(|wanted| wanted != source) {
+                return None;
+            }
+            let local = (frame - clip.start) as f32;
+            let db = animated(clip, "volume_db", local, *volume_db);
+            Some(WaveSource {
+                media: source.clone(),
+                time: source_in + (frame - clip.start) as f64 / fps * speed,
+                speed: *speed,
+                gain: 10f32.powf(db / 20.0) * fade_factor(clip, local),
+                from: *source_in,
+                to: source_in + clip.duration as f64 / fps * speed,
+            })
+        })
+        .collect()
 }
 
 pub fn audio_segments(project: &Project) -> Vec<AudioSegment> {

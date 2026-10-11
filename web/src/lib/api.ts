@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 
+import type { Encoders, ExportOptions } from "./exporting";
 import type { MediaStatus, Project, ProjectSummary, ScriptJob, Transcript } from "./types";
 
 export class ApiError extends Error {
@@ -22,21 +23,25 @@ const restarting = async (response: Response) =>
   (response.status === 503 && Boolean(await response.clone().json().then((body) => body?.restarting).catch(() => false)));
 
 /**
- * fetch that waits out a server restart (cargo watch, a crash) instead of
- * failing: unreachable means the request never arrived, so retrying is safe.
+ * Retry reads while the server restarts. A failed network response cannot
+ * tell us whether a mutation landed, so mutations are never replayed here.
  */
 export async function fetchRetrying(url: string, init?: RequestInit, patienceMs = 120_000): Promise<Response> {
   const started = Date.now();
+  const retryable = !init?.method || ["GET", "HEAD", "OPTIONS"].includes(init.method.toUpperCase());
   for (let attempt = 0; ; attempt++) {
     let response: Response | null = null;
     try {
       response = await fetch(url, init);
+      if (!retryable) return response;
       if (!(await restarting(response))) {
         if (useConnection.getState().down) useConnection.setState({ down: false });
         return response;
       }
     } catch (error) {
-      if (init?.signal?.aborted) throw error;
+      // A lost response does not mean the server didn't apply a mutation.
+      // Retrying POST can duplicate paid work, projects or media imports.
+      if (!retryable || init?.signal?.aborted) throw error;
     }
     if (Date.now() - started > patienceMs) {
       if (response) return response;
@@ -96,7 +101,11 @@ export const api = {
     }),
   mediaStatus: (id: string) => request<{ media: Record<string, MediaStatus> }>("GET", `/api/projects/${id}/media-status`),
   browse: (path?: string) => request<FsListing>("GET", `/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
-  exportProject: (id: string, path?: string) => request<{ path: string }>("POST", `/api/projects/${id}/export`, { path }),
+  exportProject: (id: string, path: string, options: ExportOptions) =>
+    request<{ path: string }>("POST", `/api/projects/${id}/export`, { path, options }),
+  exportEncoders: () => request<Encoders>("GET", "/api/export/encoders"),
+  /** Shows a finished export in Finder on the machine running Edit. */
+  revealExport: (path: string) => request<{ ok: boolean }>("POST", "/api/exports/reveal", { path }),
   transcribe: (id: string, media: string) => request<{ status: MediaStatus }>("POST", `/api/projects/${id}/media/${media}/transcribe`),
   transcript: (id: string, media: string) => request<Transcript>("GET", `/api/projects/${id}/media/${media}/transcript`),
   cancelExport: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/export/cancel`),

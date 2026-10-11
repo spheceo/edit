@@ -5,6 +5,8 @@
 
 mod eval;
 mod model;
+mod sections;
 
 pub use eval::*;
 pub use model::*;
+pub use sections::*;

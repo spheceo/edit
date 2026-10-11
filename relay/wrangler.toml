@@ -6,17 +6,7 @@ compatibility_date = "2026-09-07"
 workers_dev = true
 preview_urls = false
 
-# install.sh is served as text (imported by src/index.ts).
-[[rules]]
-type = "Text"
-globs = ["**/*.sh"]
-fallthrough = true
-
 [vars]
-# Where releases live. The repo is private: set a fine-grained token with
-# read-only Contents access to it via `bunx wrangler secret put GITHUB_TOKEN`.
-RELEASES_REPO = "spheceo/edit"
-
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
 DAILY_BYTES_PER_IP = "72000000"   # ~5 hours

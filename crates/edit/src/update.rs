@@ -1,12 +1,11 @@
-//! Self-update. Releases come through Edit's relay (the repo is private; the
-//! relay holds a read-only GitHub token). `GET /api/update` says whether a
-//! newer version is out; `POST /api/update` downloads it, checks its SHA-256,
+//! Self-update from the repo's GitHub Releases (`just publish` makes them).
+//! `GET /api/update` says whether a newer version is out; `POST /api/update` downloads it, checks its SHA-256,
 //! swaps it in for the running binary and restarts in place. On Unix that's an
 //! exec, so `edit serve` keeps its terminal, PID and flags, and the open
 //! editor reloads once the new version answers.
 //!
-//! Only release builds update themselves (CI builds with EDIT_RELEASE=1); a
-//! dev build would otherwise swap out target/debug/edit.
+//! Only release builds update themselves (`just publish` builds with
+//! EDIT_RELEASE=1); a dev build would otherwise swap out target/debug/edit.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,9 +13,11 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const REPO: &str = "spheceo/edit";
 
 /// A new release shows up within this long of the editor asking.
 const CHECK_EVERY: Duration = Duration::from_secs(10 * 60);
@@ -26,7 +27,7 @@ pub fn enabled() -> bool {
     cfg!(unix) && option_env!("EDIT_RELEASE").is_some()
 }
 
-/// The release archive for this machine, as CI names it.
+/// The release archive for this machine, as `just publish` names it.
 fn asset_target() -> &'static str {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "aarch64-apple-darwin"
@@ -39,11 +40,10 @@ fn asset_target() -> &'static str {
     }
 }
 
-/// The newest release, as the relay describes it.
-#[derive(Clone, Debug, Deserialize)]
+/// The newest release with a build for this machine.
+#[derive(Clone, Debug)]
 pub struct Release {
     pub tag: String,
-    pub version: String,
     url: String,
     size: u64,
     sha256: String,
@@ -179,41 +179,76 @@ impl Updater {
     }
 }
 
-/// Asks the relay for the newest release; `None` when this one is current.
+/// Asks GitHub for the newest release; `None` when this one is current (or
+/// the newest has no build for this machine).
 pub fn check() -> Result<Option<Release>, String> {
-    let url = format!(
-        "{}/v1/releases/latest?target={}",
-        crate::transcribe::relay(),
-        asset_target()
-    );
+    let (code, body) = fetch(&format!(
+        "https://api.github.com/repos/{REPO}/releases/latest"
+    ))?;
+    if code == 404 {
+        return Ok(None); // nothing released yet
+    }
+    if code != 200 {
+        return Err(format!("GitHub answered {code}: {}", body.trim()));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| format!("unexpected answer: {error}"))?;
+    let tag = value["tag_name"]
+        .as_str()
+        .ok_or("a release without a tag")?;
+    if !newer(tag, VERSION) {
+        return Ok(None);
+    }
+    let name = format!("edit-{}.tar.gz", asset_target());
+    let Some(asset) = value["assets"]
+        .as_array()
+        .and_then(|assets| assets.iter().find(|asset| asset["name"] == name.as_str()))
+    else {
+        return Ok(None);
+    };
+    let url = asset["browser_download_url"]
+        .as_str()
+        .ok_or("an asset without a download link")?
+        .to_owned();
+    // GitHub hashes uploads itself; the .sha256 beside the archive is the fallback.
+    let sha256 = match asset["digest"]
+        .as_str()
+        .and_then(|digest| digest.strip_prefix("sha256:"))
+    {
+        Some(digest) => digest.to_owned(),
+        None => {
+            let (code, body) = fetch(&format!("{url}.sha256"))?;
+            let digest = body.split_whitespace().next().unwrap_or_default();
+            if code != 200 || digest.is_empty() {
+                return Err(format!("{tag} has no checksum for {name}"));
+            }
+            digest.to_owned()
+        }
+    };
+    Ok(Some(Release {
+        tag: tag.to_owned(),
+        url,
+        size: asset["size"].as_u64().unwrap_or(0),
+        sha256,
+    }))
+}
+
+/// GETs `url` with curl (following redirects): the status code and body.
+fn fetch(url: &str) -> Result<(u16, String), String> {
     let output = Command::new("curl")
-        .args(["-sS", "--max-time", "10", "-w", "\n%{http_code}", &url])
+        .args(["-sSL", "--max-time", "10", "-w", "\n%{http_code}", url])
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("curl: {error}"))?;
     if !output.status.success() {
         return Err(format!(
-            "could not reach the relay: {}",
+            "could not reach GitHub: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let (body, code) = text.rsplit_once('\n').unwrap_or((&text, "0"));
-    if code.trim() != "200" {
-        return Err(format!(
-            "the relay answered {}: {}",
-            code.trim(),
-            body.trim()
-        ));
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|error| format!("unexpected answer: {error}"))?;
-    if value["tag"].is_null() {
-        return Ok(None);
-    }
-    let release: Release =
-        serde_json::from_value(value).map_err(|error| format!("unexpected answer: {error}"))?;
-    Ok(newer(&release.version, VERSION).then_some(release))
+    Ok((code.trim().parse().unwrap_or(0), body.to_owned()))
 }
 
 /// Whether `version` ("0.2.0") is newer than `current`.

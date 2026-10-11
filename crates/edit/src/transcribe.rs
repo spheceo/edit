@@ -10,7 +10,7 @@ use serde_json::Value;
 
 const DEFAULT_RELAY: &str = "https://edit-relay.sphe-g-personal.workers.dev";
 
-pub(crate) fn relay() -> String {
+fn relay() -> String {
     std::env::var("EDIT_RELAY_URL").unwrap_or_else(|_| DEFAULT_RELAY.to_owned())
 }
 

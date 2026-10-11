@@ -11,7 +11,7 @@ Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as t
 - `crates/edit-wasm` — wasm-bindgen wrapper; `just wasm` writes `web/src/engine/pkg` (generated, gitignored).
 - `crates/edit` — `edit serve`: REST + websocket events, FFmpeg media jobs, native frame renders, export, MCP at `/mcp` (`?project=` scopes a connection to one project), and `agent.rs`, the Codex app-server bridge behind the agent panel.
 - `assets/sfx/` — sound effects compiled into the `edit` binary (`crates/edit/src/sfx.rs`), so every install has them; written on first use to `~/.edit/sfx/<name>-<hash>.wav` (a new version is a new file, so old projects keep theirs). Each ships with a "hit" marker (media markers) that `add_sound_effect` lines up on the cut. `shutter.wav` is the first shutter from https://youtu.be/R24UqkKj90w, trimmed to 0.17 s.
-- `relay/` — Cloudflare Worker (`edit-relay`) that holds API keys and rate-limits paid calls, and serves releases and the installer (see Releases). Edit installs never get keys. Deploy from `relay/` with `bunx wrangler deploy`.
+- `relay/` — Cloudflare Worker (`edit-relay`) that holds API keys and rate-limits paid calls. Edit installs never get keys. Deploy from `relay/` with `bunx wrangler deploy`.
 - `web/` — React UI. Per-frame work (playhead, timeline canvas, preview) runs outside React; see `src/lib/playback.ts`.
 
 When the model changes, update `edit-core`, `web/src/lib/types.ts`, the param tables in `web/src/lib/edit.ts`, and the model description in `crates/edit/src/mcp.rs` together.
@@ -24,9 +24,9 @@ Preview/export parity can be verified in a browser: `window.__edit.preview.engin
 
 ## Releases and self-update
 
-Versions go up a patch at a time (v0.0.1, v0.0.2, …), never minor or major. With everything committed, run `just publish` on an Apple Silicon Mac: it runs the checks, bumps the patch in `Cargo.toml` / `Cargo.lock` / `web/package.json` (committed as "Release vX.Y.Z"), builds `edit-aarch64-apple-darwin.tar.gz` (+ `.sha256`), pushes the `vX.Y.Z` tag and uploads a GitHub Release (a draft until the upload finishes). There's no CI build (Actions minutes on a private repo), and Apple Silicon is the only target; adding one means building its archive somewhere and adding it to `install.sh`.
+Versions go up a patch at a time (v0.0.1, v0.0.2, …), never minor or major. With everything committed, run `just publish` on an Apple Silicon Mac: it runs the checks, bumps the patch in `Cargo.toml` / `Cargo.lock` / `web/package.json` (committed as "Release vX.Y.Z"), builds `edit-aarch64-apple-darwin.tar.gz` (+ `.sha256`), pushes the `vX.Y.Z` tag and uploads a GitHub Release (a draft until the upload finishes). There's no CI build and Apple Silicon is the only target; adding one means building its archive (Actions minutes are free on a public repo) and adding it to `install.sh`.
 
-The repo is private, so installs never talk to GitHub: the relay serves `/v1/releases/latest?target=`, `/v1/releases/download/<tag>/<asset>` and `/install.sh` using a read-only `GITHUB_TOKEN` secret. `crates/edit/src/update.rs` checks the relay, and the editor's "Update to vX" button (`web/src/lib/update.ts`) downloads, verifies, swaps the binary and execs it in place; the page reloads when the new version answers. Only builds made with `EDIT_RELEASE=1` (`just publish`) update themselves, so dev builds never replace `target/`.
+The repo is public: installs read GitHub Releases directly, no token. `install.sh` (`curl -fsSL https://raw.githubusercontent.com/spheceo/edit/main/install.sh | sh`) fetches the latest archive; `crates/edit/src/update.rs` checks `releases/latest` (GitHub's own SHA-256 digest, or the `.sha256` beside the archive), and the editor's "Update to vX" button (`web/src/lib/update.ts`) downloads, verifies, swaps the binary and execs it in place; the page reloads when the new version answers. Only builds made with `EDIT_RELEASE=1` (`just publish`) update themselves, so dev builds never replace `target/`.
 
 ## Brand
 

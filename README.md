@@ -62,3 +62,7 @@ just check   # fmt, clippy, tests, typecheck
 ```
 
 Data lives in `~/.edit` (`EDIT_HOME` overrides): `projects/*.json` and `cache/` (proxies, thumbnails, waveforms). Exports default to `~/Movies/Edit/`.
+
+## Test cases to revisit
+
+- **911 audio waveform:** [this Doc](https://docs.google.com/document/d/1kQewvwefZeotaWWz1g78VDYVoI3ku8TrJDL2p-4EQlo/edit?tab=t.0) has a 911 call to test the glowing waveform against. It should lie almost flat when the sound is low, with a little movement, and spike on speech and loud sounds.

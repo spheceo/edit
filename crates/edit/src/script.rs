@@ -1592,13 +1592,7 @@ pub async fn realign(app: &App, id: &str) -> Result<Vec<serde_json::Value>, Stri
                         *source_in = new_in;
                     }
                     other.duration = duration;
-                } else if other.start >= old_end
-                    || (other.end() == old_end
-                        && matches!(
-                            other.content,
-                            ClipContent::Adjustment { .. } | ClipContent::Solid { .. }
-                        ))
-                {
+                } else if other.start >= old_end || other.marks_cut(old_end) {
                     other.start += delta;
                 }
             }

@@ -350,10 +350,24 @@ pub fn shake_offset(
     };
     let at = |back: f32| {
         if drop {
-            // Accelerating all the way, so it's fastest (and most blurred) at the cut.
-            let p = ((time.local - back) / time.length.max(1e-3)).clamp(0.0, 1.0);
-            let moved = amount * p * p * p;
-            return (moved * along_x, moved * along_y, shake.rotation * p * p * p);
+            // A whip through the cut at the clip's middle: the picture accelerates
+            // away up to the cut, then the next shot comes in from the other side
+            // and settles, so it's fastest (and most blurred) either side of the
+            // cut. Measured mid-frame, so the frames either side mirror each other.
+            let half = time.length.max(1e-3) / 2.0;
+            let at = |local: f32| (local + time.frame / 2.0) / half;
+            let (now, then) = (at(time.local), at(time.local - back));
+            let p = if now < 1.0 {
+                then.clamp(0.0, 1.0).powi(3)
+            } else {
+                // Its blur stays on its own side of the cut.
+                -(2.0 - then.clamp(1.0, 2.0)).powi(3)
+            };
+            return (
+                amount * p * along_x,
+                amount * p * along_y,
+                shake.rotation * p,
+            );
         }
         let t = (time.seconds - back) * shake.frequency.max(0.0);
         let strength = shake
@@ -890,30 +904,49 @@ mod tests {
                 frame,
             )
         };
-        // The vertical preset is a drop: straight down, faster every frame, ending far down.
+        // The vertical preset is a whip down through the cut at its middle: the
+        // old shot drops away faster every frame, the new one comes in from
+        // above, slowing to rest, and each frame is blurred along the drop.
         let vertical = Shake {
             preset: ShakePreset::Vertical,
             ..Shake::default()
         }
         .resolved();
-        let mut last = 0.0_f32;
+        let whip = |index: u32| {
+            shake_offset(
+                "c1",
+                &vertical,
+                ShakeTime {
+                    seconds: 10.0,
+                    local: index as f32 / 30.0,
+                    length: 6.0 / 30.0,
+                    frame: 1.0 / 30.0,
+                },
+                frame,
+            )
+        };
         let mut last_step = 0.0_f32;
-        for step in 1..=15 {
-            let shaken = at(&vertical, step as f32 / 30.0);
+        for index in 0..6 {
+            let shaken = whip(index);
             assert_eq!((shaken.x, shaken.from_x), (0.0, 0.0));
             assert!(shaken.mirror && shaken.zoom == 1.0);
-            assert!(shaken.y > last, "only ever down");
-            assert!(shaken.y - last >= last_step, "accelerating");
             assert!(shaken.y > shaken.from_y, "blurred along the drop");
-            last_step = shaken.y - last;
-            last = shaken.y;
+            // The new shot settles the way the old one fell away.
+            assert!((shaken.y + whip(5 - index).y).abs() < 1e-3);
+            if (1..3).contains(&index) {
+                let step = shaken.y - whip(index - 1).y;
+                assert!(step > last_step, "only down, accelerating into the cut");
+                last_step = step;
+            }
         }
-        assert!(last > vertical.amount * 0.8);
-        let end = at(&vertical, 14.0 / 30.0);
+        let before = whip(2);
+        let after = whip(3);
+        assert!(before.y > vertical.amount * 0.5, "far down at the cut");
+        assert!(whip(5).y.abs() < 5.0, "at rest by the end");
         assert!(
-            end.y - end.from_y > 100.0,
-            "a heavy streak at the cut: {}",
-            end.y - end.from_y
+            before.y - before.from_y > 100.0 && after.y - after.from_y > 100.0,
+            "a heavy streak either side of the cut: {}",
+            before.y - before.from_y
         );
         // A wiggle lands somewhere new every frame rather than gliding.
         let earthquake = Shake {

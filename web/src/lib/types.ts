@@ -188,7 +188,7 @@ export interface Shake {
   motion_blur?: number;
   /** Past the frame's edges: mirror the picture, or zoom so they never show. */
   edges?: ShakeEdges;
-  /** Random jolts, or one accelerating move (down / right; a negative amount goes up / left). */
+  /** Random jolts, or a whip through a cut at the clip's middle (down / right; a negative amount goes up / left). */
   motion?: ShakeMotion;
 }
 

@@ -218,6 +218,16 @@ impl Clip {
         frame >= self.start && frame < self.end()
     }
 
+    /// An adjustment or solid that belongs to the cut at `frame` and moves with
+    /// it: one ending on it (a dip into it) or centred on it (a whip through it).
+    pub fn marks_cut(&self, frame: i64) -> bool {
+        matches!(
+            self.content,
+            ClipContent::Adjustment { .. } | ClipContent::Solid { .. }
+        ) && (self.end() == frame
+            || (self.start < frame && self.start + self.duration / 2 == frame))
+    }
+
     pub fn media_id(&self) -> Option<&str> {
         match &self.content {
             ClipContent::Video { media, .. } | ClipContent::Audio { media, .. } => Some(media),
@@ -745,9 +755,10 @@ pub enum ShakeMotion {
     /// Random jolts `frequency` times a second, shaped by the envelope.
     #[default]
     Wiggle,
-    /// One move that accelerates across the clip, `amount` px by its end:
-    /// down (vertical) or right (horizontal); a negative amount goes up or
-    /// left. With motion blur it's a slam into the next shot.
+    /// A whip through a cut at the clip's middle: the picture accelerates away
+    /// until the cut, then the next shot comes in from the other side and
+    /// settles; `amount` px is a full move each side. Down (vertical) or right
+    /// (horizontal); a negative amount goes up or left.
     Drop,
 }
 

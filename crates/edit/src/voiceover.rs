@@ -117,11 +117,7 @@ pub async fn place(app: &App, id: &str, media: Option<Vec<String>>) -> Result<Va
                 let partner = other.id == card.id || (card.link.is_some() && other.link == card.link);
                 if partner {
                     other.duration = duration;
-                } else if other.start >= old_end
-                    || (other.end() == old_end
-                        && other.start > card.start
-                        && matches!(other.content, ClipContent::Adjustment { .. } | ClipContent::Solid { .. }))
-                {
+                } else if other.start >= old_end || (other.start > card.start && other.marks_cut(old_end)) {
                     other.start += delta;
                 }
             }

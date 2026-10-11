@@ -116,6 +116,9 @@ class Preview {
   /** Sound clips scheduled in this run of playback. */
   private scheduled = new Map<string, AudioBufferSourceNode>();
   private queued = 0;
+  /** Bumped by every attach and detach, so a slow attach can't land on a canvas that moved on. */
+  private generation = 0;
+  private attaching = false;
   private clockStart = 0;
   private frameAtStart = 0;
   private loop = 0;
@@ -129,6 +132,7 @@ class Preview {
   async attach(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.error = null;
+    const generation = ++this.generation;
     if (!("gpu" in navigator)) {
       this.error =
         location.hostname === "localhost" || location.protocol === "https:"
@@ -137,6 +141,7 @@ class Preview {
       this.notify();
       return;
     }
+    this.attaching = true;
     try {
       wasmReady ??= init();
       fontBytes ??= Promise.all(
@@ -151,15 +156,41 @@ class Preview {
       await wasmReady;
       const engine = await createEngine(canvas);
       for (const [family, weight, bytes] of await fontBytes) engine.addFont(family, weight, bytes);
+      if (generation !== this.generation) {
+        engine.free(); // detached, or attached again, while this one started
+        return;
+      }
       this.retire();
       this.engine = engine;
       if (this.project) engine.setProject(JSON.stringify(this.project));
       this.notify();
       this.invalidate();
     } catch (error) {
+      if (generation !== this.generation) return;
       this.error = `Preview failed to start: ${error}`;
       this.notify();
+    } finally {
+      if (generation === this.generation) this.attaching = false;
     }
+  }
+
+  /**
+   * The page is visible again. The browser may have dropped the GPU device
+   * (or the canvas contents) while it was hidden, so redraw, which rebuilds
+   * the engine if needed, or retry an engine that failed to start.
+   */
+  wake() {
+    if (this.canvas && !this.engine && !this.attaching) void this.attach(this.canvas);
+    else this.invalidate();
+  }
+
+  /** The GPU device went away (see Engine.isLost): start over on the same canvas. */
+  private recover() {
+    if (!this.canvas || this.attaching) return;
+    console.warn("edit: preview lost its GPU device; restarting it");
+    this.retire();
+    this.uploaded.clear();
+    void this.attach(this.canvas);
   }
 
   /**
@@ -198,6 +229,8 @@ class Preview {
 
   detach() {
     this.canvas = null;
+    this.generation++;
+    this.attaching = false;
     this.pause();
     this.retire();
     for (const video of this.allVideos()) {
@@ -683,6 +716,11 @@ class Preview {
   private draw() {
     const project = this.project;
     if (!this.engine || !project) return;
+    // A lost device draws nothing and reports no error: the canvas would just stay black.
+    if (this.use((engine) => engine.isLost())) {
+      this.recover();
+      return;
+    }
     const frame = Math.floor(playhead.frame);
     let sources: { media: string; time: number }[] = [];
     try {
@@ -757,6 +795,10 @@ function setIfChanged<K extends "playbackRate" | "volume" | "muted">(video: HTML
 }
 
 export const preview = new Preview();
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") preview.wake();
+});
 
 // Handle for tests and agents driving the page (e.g. Playwright).
 (window as unknown as { __edit?: unknown }).__edit = { preview, playhead };

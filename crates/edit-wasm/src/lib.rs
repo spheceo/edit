@@ -3,6 +3,9 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use edit_core::{evaluate, sources_at, Project};
 use edit_render::{wgpu, Renderer};
 use wasm_bindgen::prelude::*;
@@ -23,6 +26,8 @@ pub struct Engine {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     project: Option<Project>,
+    /// Set when the browser takes the GPU device away (see `is_lost`).
+    lost: Arc<AtomicBool>,
 }
 
 /// Creates the engine on `canvas`. Fails when the browser has no WebGPU.
@@ -52,6 +57,17 @@ pub async fn create_engine(canvas: HtmlCanvasElement) -> Result<Engine, JsValue>
         })
         .await
         .map_err(js_error)?;
+    let lost = Arc::new(AtomicBool::new(false));
+    {
+        let lost = Arc::clone(&lost);
+        device.set_device_lost_callback(move |reason, message| {
+            // Freeing an engine destroys its device too; only an unexpected loss is news.
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                web_sys::console::warn_1(&format!("edit: GPU device lost: {message}").into());
+            }
+            lost.store(true, Ordering::Release);
+        });
+    }
     // Read the size only now: the canvas may have resized while the GPU was being set up.
     let (width, height) = (canvas.width().max(1), canvas.height().max(1));
     let caps = surface.get_capabilities(&adapter);
@@ -79,6 +95,7 @@ pub async fn create_engine(canvas: HtmlCanvasElement) -> Result<Engine, JsValue>
         surface,
         config,
         project: None,
+        lost,
     })
 }
 
@@ -151,6 +168,20 @@ impl Engine {
     #[wasm_bindgen(js_name = forgetVideo)]
     pub fn forget_video(&mut self, media: &str) {
         self.renderer.forget_video(media);
+    }
+
+    /// Whether the GPU device is gone: the browser can drop it (a tab left in
+    /// the background, a GPU switch or driver reset), after which drawing
+    /// silently does nothing. The page then builds a new engine.
+    #[wasm_bindgen(js_name = isLost)]
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+
+    /// Drops the GPU device the way the browser can, to test recovery.
+    #[wasm_bindgen(js_name = loseDevice)]
+    pub fn lose_device(&self) {
+        self.renderer.device().destroy();
     }
 
     /// Canvas backing-store size changed.

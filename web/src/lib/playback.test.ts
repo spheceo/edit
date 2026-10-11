@@ -23,6 +23,7 @@ vi.mock("./decoder", async (original) => {
     requestAudio = decoding.requestAudio;
     requestImage = decoding.requestImage;
     forget = decoding.forget;
+    nearbyPicture() { return undefined; }
     retain() {}
     dispose() { decoding.dispose(); decoding.frames.clear(); }
   } };
@@ -141,9 +142,9 @@ describe("preview seeks and lifetime", () => {
     if (first.type !== "video") throw new Error("fixture");
     first.duration = 15;
     p.clips.push({ ...first, id: "c2", start: 15, source_in: 8 });
-    preview.setProject(p, {}); draw();
-    expect(decoding.requestVideo.mock.calls.map((call) => call[2])).toEqual(["v:c1", "v:c2"]);
-    expect(decoding.requestVideo.mock.calls[1][3]).toBeCloseTo(8);
+    preview.setProject(p, {}); draw(); preview.play(); draw();
+    expect(decoding.requestVideo.mock.calls.map((call) => call[2])).toEqual(["v:c1", "v:c1", "v:c2"]);
+    expect(decoding.requestVideo.mock.calls[2][3]).toBeCloseTo(8);
   });
 
   it("runs picture and sound on the audio clock, and stops scheduled sound on a seek", () => {
@@ -164,6 +165,34 @@ describe("preview seeks and lifetime", () => {
     expect(playhead.frame).toBe(30);
     preview.pause();
     expect(playhead.playing).toBe(false);
+  });
+
+  it("does not stop or replay audio when a video frame is late", async () => {
+    const p = fixture(); p.media[0].has_audio = true;
+    p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
+    p.clips.push({ id: "a", type: "audio", track: "a1", media: "m1", start: 0, duration: 90,
+      source_in: 2, speed: 1, volume_db: 0, fade_in: 0, fade_out: 0, color: "blue" });
+    for (let chunk = 4; chunk < 10; chunk++) decoding.sound.set(chunk,
+      { start: chunk * 0.5, sampleRate: 48000, channels: [new Float32Array(24000)] });
+    preview.setProject(p, {}); draw(); await complete(0); preview.play(); draw();
+    const nodes = [...clock.nodes];
+    clock.currentTime = 0.2; draw(); // Missing frame 4 must not rewind the audio clock.
+    expect(playhead.frame).toBeCloseTo(4.5);
+    expect(nodes.every((node) => node.stop.mock.calls.length === 0)).toBe(true);
+    await complete(4);
+    clock.currentTime = 0.3; draw();
+    expect(playhead.frame).toBeCloseTo(7.5);
+    expect(nodes.every((node) => node.stop.mock.calls.length === 0)).toBe(true);
+  });
+
+  it("does not decode audio or upcoming cuts while scrubbing", () => {
+    const p = fixture(); p.media[0].has_audio = true;
+    p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
+    p.clips.push({ id: "a", type: "audio", track: "a1", media: "m1", start: 0, duration: 90,
+      source_in: 2, speed: 1, volume_db: 0, fade_in: 0, fade_out: 0, color: "blue" });
+    preview.setProject(p, {}); draw(); preview.seek(15); draw();
+    expect(decoding.requestAudio).not.toHaveBeenCalled();
+    expect(decoding.requestVideo.mock.calls.every((call) => call[7] === false)).toBe(true);
   });
 
   it("freezes both clocks when decoded audio is missing", () => {

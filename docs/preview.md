@@ -14,7 +14,10 @@ prefetch work; jobs for removed lanes and replaced sources are cancelled.
 The main thread owns LRU caches of decoded `VideoFrame`s (128 MiB) and PCM audio
 (32 MiB). Frame eviction calls `close()`. One frame larger than the video budget
 is allowed so large sources can still be displayed. Prefetch batches adapt to frame
-size and concurrent sources. Project switches and detach terminate workers and
+size, playback speed and concurrent sources. Scrubbing only requests the desired
+picture; it does not launch audio or upcoming-cut decodes. Playback batches are
+allowed to finish instead of being continually replaced by new prefetch requests.
+Project switches and detach terminate workers and
 release all cached resources. Image files decode through `createImageBitmap`.
 
 Source video timestamps select the nearest source frame, matching export. During
@@ -23,15 +26,20 @@ the latest requested position remains queued and lands exactly when ready. Older
 completion messages cannot move the displayed scrub sequence backwards.
 
 Playback uses `AudioContext.currentTime` for both picture and sound. PCM is decoded
-in half-second source chunks, trimmed at AAC sample boundaries and scheduled with
+as continuous runs with decoder preroll, then stored in half-second source chunks.
+Keeping the decoder open across chunks preserves AAC's overlap state. PCM is
+trimmed at sample boundaries and scheduled with
 clip offsets, volume keyframes and fades. Non-unit speeds use worker-side WSOLA
-stretching with neighboring context to preserve pitch. Buffering stops scheduled
-audio and resets the common clock; seeking, editing, pausing and visibility changes
-also clear scheduled nodes. Upcoming picture cuts and sound are warmed one second
+stretching with neighboring context to preserve pitch. Startup waits for picture
+and half a second of audio. During playback the audio clock continues when video
+is late: the compositor uses a nearby cached picture within the same clip or
+holds the displayed scene while the decoder catches up. Seeking, editing, pausing
+and visibility changes clear scheduled nodes. Upcoming picture cuts and sound are warmed one second
 ahead, including different moments from the same file.
 
 `window.__edit.preview.diagnostics` reports the displayed frame, cache bytes,
-decoded frames, requests, cache hits and scheduled audio nodes. Use these alongside
+decoded frames, requests, cache hits, video misses, audio underruns and scheduled
+audio nodes. Use these alongside
 browser tracing when checking cold seeks, repeated forward/reverse scrubs and cuts.
 Unsupported codecs surface an error; completion of the H.264/AAC proxy changes the
 source URL and clears the error. There is no hidden HTML video playback path.
@@ -40,3 +48,8 @@ Run `just check` and `bun run --cwd web build`. Browser verification should incl
 the teen hit-and-run map/date reveal, rapid scrubbing, cold seeks across bodycam
 sources, playback across cuts, slow/fast audio, pause/resume, mute/fades, source-to-
 proxy replacement, project switches and GPU recovery.
+
+For audio regressions, compare decoded PCM at chunk joins against a continuous
+decode of the same file, and measure audio-clock resets during real editor playback.
+The loading badge only appears after 600 ms; its absence does not prove that short
+stalls or audio interruptions are absent.

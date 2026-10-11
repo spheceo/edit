@@ -81,18 +81,36 @@ async function decodeVideo(job: Extract<DecodeJob, { type: "video" }>, file: Fil
 
 async function decodeAudio(job: Extract<DecodeJob, { type: "audio" }>, file: File, lane: Lane) {
   const sink = await audioSink(file);
-  for (const chunk of job.chunks) {
-    if (lane.cancelled) break;
-    const start = chunk * AUDIO_CHUNK_SECONDS;
-    const context = job.speed === 1 ? 0 : 0.15;
-    const readStart = Math.max(0, start - context);
-    const readEnd = start + AUDIO_CHUNK_SECONDS + context;
-    let pcm: PcmChunk | null = null;
-    for await (const sample of sink.samples(readStart, readEnd)) {
-      try {
-        pcm ??= { start, sampleRate: sample.sampleRate, channels: Array.from({ length: sample.numberOfChannels },
-          () => new Float32Array(Math.round((readEnd - readStart) * sample.sampleRate))) };
-        const offset = Math.round((sample.timestamp - readStart) * pcm.sampleRate);
+  // AAC needs preceding packets to reconstruct its overlap window. One decoder
+  // stays alive across the whole batch; chunk boundaries are storage boundaries.
+  const context = 0.15;
+  const buffers = job.chunks.map((chunk) => ({ chunk, start: chunk * AUDIO_CHUNK_SECONDS,
+    readStart: Math.max(0, chunk * AUDIO_CHUNK_SECONDS - context),
+    readEnd: (chunk + 1) * AUDIO_CHUNK_SECONDS + context, pcm: null as PcmChunk | null }));
+  if (!buffers.length) return;
+  let next = 0;
+  const emit = (buffer: typeof buffers[number]) => {
+    const pcm = buffer.pcm;
+    if (!pcm) throw new Error("No audio samples at the requested source time");
+    const channels = stretchAudio(pcm.channels, pcm.sampleRate, job.speed);
+    const from = Math.round((buffer.start - buffer.readStart) / job.speed * pcm.sampleRate);
+    const count = Math.round(AUDIO_CHUNK_SECONDS / job.speed * pcm.sampleRate);
+    pcm.channels = channels.map((channel) => channel.slice(from, from + count));
+    scope.postMessage({ type: "audio", id: job.id, key: job.key, chunk: buffer.chunk, speed: job.speed, pcm }, pcm.channels.map((c) => c.buffer));
+    buffer.pcm = null;
+  };
+  for await (const sample of sink.samples(buffers[0].readStart, buffers.at(-1)!.readEnd)) {
+    try {
+      if (lane.cancelled) break;
+      const sampleEnd = sample.timestamp + sample.duration;
+      for (let i = next; i < buffers.length; i++) {
+        const buffer = buffers[i];
+        if (buffer.readStart >= sampleEnd) break;
+        if (buffer.readEnd <= sample.timestamp) continue;
+        const pcm = buffer.pcm ??= { start: buffer.start, sampleRate: sample.sampleRate,
+          channels: Array.from({ length: sample.numberOfChannels },
+            () => new Float32Array(Math.round((buffer.readEnd - buffer.readStart) * sample.sampleRate))) };
+        const offset = Math.round((sample.timestamp - buffer.readStart) * pcm.sampleRate);
         const from = Math.max(0, -offset);
         const count = Math.min(sample.numberOfFrames - from, pcm.channels[0].length - Math.max(0, offset));
         if (count <= 0) continue;
@@ -100,21 +118,13 @@ async function decodeAudio(job: Extract<DecodeJob, { type: "audio" }>, file: Fil
           sample.copyTo(pcm.channels[channel].subarray(Math.max(0, offset), Math.max(0, offset) + count),
             { planeIndex: channel, format: "f32-planar", frameOffset: from, frameCount: count });
         }
-      } finally { sample.close(); }
-      if (lane.cancelled) break;
-    }
-    if (pcm && !lane.cancelled) {
-      if (job.speed !== 1) {
-        const stretched = stretchAudio(pcm.channels, pcm.sampleRate, job.speed);
-        const from = Math.round((start - readStart) / job.speed * pcm.sampleRate);
-        const count = Math.round(AUDIO_CHUNK_SECONDS / job.speed * pcm.sampleRate);
-        pcm.channels = stretched.map((channel) => channel.slice(from, from + count));
       }
-      scope.postMessage({ type: "audio", id: job.id, key: job.key, chunk, speed: job.speed, pcm }, pcm.channels.map((c) => c.buffer));
-    }
-    if (!pcm && !lane.cancelled) throw new Error("No audio samples at the requested source time");
-    if (lane.latest) break;
+      while (next < buffers.length && sampleEnd >= buffers[next].readEnd - 0.5 / sample.sampleRate) emit(buffers[next++]);
+      if (lane.latest && next > 0) break;
+    } finally { sample.close(); }
   }
+  // The file can end inside the final storage chunk; its remainder is silence.
+  if (!lane.cancelled && !lane.latest) while (next < buffers.length) emit(buffers[next++]);
 }
 
 async function run(job: DecodeJob, lane: Lane) {

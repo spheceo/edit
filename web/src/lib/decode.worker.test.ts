@@ -3,7 +3,7 @@ import type { DecodeRequest, DecodeResponse } from "./decoder.protocol";
 
 const decoding = vi.hoisted(() => ({
   gate: null as Promise<void> | null,
-  closed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(),
+  closed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(), audioRanges: vi.fn(),
 }));
 vi.mock("mediabunny", () => ({
   ALL_FORMATS: [],
@@ -24,9 +24,10 @@ vi.mock("mediabunny", () => ({
     }
   },
   AudioSampleSink: class {
-    async *samples(start: number) {
-      for (const timestamp of [start - 0.02, start + 0.02, start + 0.48]) {
-        yield { timestamp, numberOfFrames: 40, numberOfChannels: 2, sampleRate: 1000,
+    async *samples(start: number, end: number) {
+      decoding.audioRanges(start, end);
+      for (let timestamp = Math.floor(start / 0.04) * 0.04; timestamp < end; timestamp += 0.04) {
+        yield { timestamp, duration: 0.04, numberOfFrames: 40, numberOfChannels: 2, sampleRate: 1000,
           close: () => decoding.closed(timestamp),
           copyTo: (destination: Float32Array, options: { planeIndex: number; frameOffset: number }) => {
             for (let i = 0; i < destination.length; i++) destination[i] = Math.round(timestamp * 1000) + options.frameOffset + i + options.planeIndex * 1000;
@@ -82,6 +83,20 @@ describe("decoder worker scheduling and PCM boundaries", () => {
     expect([...response.pcm.channels[0].slice(0, 20)]).toEqual(Array.from({ length: 20 }, (_, i) => i + 500));
     expect(response.pcm.channels[0][499]).toBe(999);
     expect(response.pcm.channels[1][0]).toBe(1500);
-    expect(decoding.closed).toHaveBeenCalledTimes(3);
+    expect(decoding.closed).toHaveBeenCalledTimes(21);
+    expect(decoding.audioRanges).toHaveBeenCalledWith(0.35, 1.15);
   });
+  it("keeps one audio decoder alive across multiple storage chunks and primes its overlap window", async () => {
+    send({ type: "audio", id: 1, key: "file", url: "/file", lane: "a:clip", chunks: [1, 2, 3], speed: 1 });
+    await vi.waitFor(() => expect(messages.some((m) => m.type === "done")).toBe(true));
+    expect(decoding.audioRanges).toHaveBeenCalledOnce();
+    expect(decoding.audioRanges).toHaveBeenCalledWith(0.35, 2.15);
+    const pcm = messages.filter((m) => m.type === "audio");
+    expect(pcm.map((m) => m.chunk)).toEqual([1, 2, 3]);
+    for (const response of pcm) {
+      expect(response.pcm.channels[0][0]).toBe(response.chunk * 500);
+      expect(response.pcm.channels[0][499]).toBe((response.chunk + 1) * 500 - 1);
+    }
+  });
+
 });

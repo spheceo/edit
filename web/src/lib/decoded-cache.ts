@@ -14,6 +14,7 @@ export class DecodedCache<T> {
   }
 
   has(key: string) { return this.entries.has(key); }
+  keys() { return this.entries.keys(); }
 
   set(key: string, value: T, bytes: number) {
     this.delete(key);

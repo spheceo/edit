@@ -55,6 +55,7 @@ class Preview {
   private project: Project | null = null;
   private clips: Clip[] = [];
   private clipsByTrack = new Map<string, Clip[]>();
+  private clipsById = new Map<string, Clip>();
   private tracks = new Map<string, Track>();
   private media = new Map<string, Media>();
   private sources = new Map<string, string>();
@@ -76,6 +77,7 @@ class Preview {
   private clockStart = 0;
   private frameAtStart = 0;
   private runningClock = false;
+  private playbackStats = { videoMisses: 0, audioUnderruns: 0 };
   private loop = 0;
   private listeners = new Set<Listener>();
   private decoder = new Decoder(() => this.invalidate(), (error) => {
@@ -86,7 +88,7 @@ class Preview {
   });
 
   get diagnostics() {
-    return { ...this.decoder.stats, renderedFrame: this.renderedFrame,
+    return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.renderedFrame,
       videoCacheBytes: this.decoder.pictures.bytes, videoCacheFrames: this.decoder.pictures.size,
       audioCacheBytes: this.decoder.sound.bytes, scheduledAudio: this.scheduled.size };
   }
@@ -249,6 +251,7 @@ class Preview {
     this.seekSerial++;
     this.renderedScrub = -1;
     this.clips = [...project.clips].sort((a, b) => a.start - b.start);
+    this.clipsById = new Map(project.clips.map((clip) => [clip.id, clip]));
     this.clipsByTrack.clear();
     for (const clip of this.clips) {
       const clips = this.clipsByTrack.get(clip.track) ?? [];
@@ -366,7 +369,7 @@ class Preview {
     this.clockStart = (this.audio?.currentTime ?? 0) + START_LEAD;
   }
 
-  /** Audio hardware is the only clock. Buffering freezes both sound and picture. */
+  /** Audio hardware is the only clock. Video may drop frames, but never resets sound. */
   private tick() {
     if (!this.project || !this.audio || this.audio.state !== "running") return;
     if (!this.engine) { this.resetClock(); this.setBuffering(true); return; }
@@ -383,10 +386,7 @@ class Preview {
     }
     const sources = this.sceneSources(Math.floor(frame));
     this.warm(Math.floor(frame), sources);
-    const ready = this.picturesReady(sources) && this.audioReady(frame);
-    if (!ready) {
-      // Hold the last complete scene; scheduled sound must stop too, or it drifts.
-      this.resetClock();
+    if (!this.runningClock && (!this.picturesReady(sources) || !this.audioReady(frame, 0.5))) {
       this.setBuffering(true);
       return;
     }
@@ -397,6 +397,7 @@ class Preview {
       this.runningClock = true;
     }
     playhead.frame = frame;
+    if (!this.audioReady(frame, 0)) this.playbackStats.audioUnderruns++;
     this.scheduleAudio(frame);
     this.draw();
     if (performance.now() - this.persistedAt >= 1000) this.remember();
@@ -443,9 +444,11 @@ class Preview {
     if (!media || !url) return;
     const lane = `v:${source.clip ?? source.media}`;
     lanes.add(lane);
+    const clip = this.clipsById.get(source.clip);
+    const speed = clip?.type === "video" ? clip.speed : 1;
     if (media.kind === "image") this.decoder.requestImage(url, url);
-    else this.decoder.requestVideo(url, url, lane, videoTime(source.time, media.fps, media.duration), media.fps || 30, media.duration,
-      playhead.playing ? 1 : this.direction);
+    else this.decoder.requestVideo(url, url, lane, source.time, media.fps || 30, media.duration,
+      playhead.playing ? 1 : this.direction, playhead.playing, speed / this.project!.settings.fps);
   }
 
   private warm(frame: number, sources: PictureSource[]) {
@@ -453,6 +456,8 @@ class Preview {
     const fps = this.project.settings.fps;
     const lanes = new Set<string>();
     for (const source of sources) this.requestPicture(source, lanes);
+    // Scrubbing needs one picture, not concurrent audio and future-cut decodes.
+    if (!playhead.playing) { this.decoder.retain(lanes); return; }
     const active = this.activeClips(frame);
     // Cue upcoming cuts, including a different moment of the same source.
     let lo = 0, hi = this.clips.length;
@@ -477,13 +482,21 @@ class Preview {
     this.decoder.retain(lanes);
   }
 
-  private audioReady(frame: number) {
+  private audioReady(frame: number, ahead: number) {
     if (!this.project) return true;
-    return this.activeClips(frame).every((clip) => {
+    const fps = this.project.settings.fps;
+    const until = frame + ahead * fps;
+    return this.clips.every((clip) => {
+      if (clip.start > until || clipEnd(clip) <= frame) return true;
       if (!this.audible(clip)) return true;
       const media = this.media.get(clip.media)!;
-      const time = clip.source_in + (frame - clip.start) / this.project!.settings.fps * clip.speed;
-      return time >= media.duration || Boolean(this.decoder.pcm(this.sources.get(clip.media)!, Math.floor(time / AUDIO_CHUNK_SECONDS), clip.speed));
+      const time = clip.source_in + Math.max(0, frame - clip.start) / fps * clip.speed;
+      if (time >= media.duration) return true;
+      const end = Math.min(media.duration, clip.source_in + (Math.min(until, clipEnd(clip)) - clip.start) / fps * clip.speed);
+      const first = Math.floor((time + 1e-8) / AUDIO_CHUNK_SECONDS);
+      const last = Math.max(first, Math.floor((end - 1e-8) / AUDIO_CHUNK_SECONDS));
+      for (let chunk = first; chunk <= last; chunk++) if (!this.decoder.pcm(this.sources.get(clip.media)!, chunk, clip.speed)) return false;
+      return true;
     });
   }
 
@@ -574,10 +587,29 @@ class Preview {
         selected = completed[1].sources;
         this.renderedScrub = completed[1].serial;
       }
-    } else if (!ready) { this.setBuffering(true); return; }
-    let changed = false;
+    }
+    const pictures: VideoFrame[] = [];
     for (const source of selected) {
-      const picture = this.picture(source)!;
+      let picture = this.picture(source);
+      if (!picture && playhead.playing) {
+        const media = this.media.get(source.media);
+        const clip = this.clipsById.get(source.clip);
+        if (media && clip?.type === "video") {
+          const time = videoTime(source.time, media.fps, media.duration);
+          picture = this.decoder.nearbyPicture(this.sources.get(source.media)!, time, 0.12 * clip.speed,
+            Math.max(0, clip.source_in - 0.5 / (media.fps || 30)), clip.source_in + clip.duration / this.project.settings.fps * clip.speed);
+        }
+      }
+      if (!picture) {
+        if (playhead.playing) this.playbackStats.videoMisses++;
+        this.setBuffering(true);
+        return;
+      }
+      pictures.push(picture);
+    }
+    let changed = false;
+    for (const [index, source] of selected.entries()) {
+      const picture = pictures[index];
       const key = source.clip ?? source.media;
       if (this.copied.get(key) === picture) continue;
       this.use((engine) => engine.uploadFrame(key, picture));

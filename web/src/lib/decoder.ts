@@ -77,6 +77,19 @@ export class Decoder {
     return frame;
   }
 
+  nearbyPicture(key: string, time: number, distance: number, from: number, to: number) {
+    const prefix = `${key}|v`;
+    let best: string | undefined;
+    let gap = distance;
+    for (const cached of this.pictures.keys()) {
+      if (!cached.startsWith(prefix)) continue;
+      const at = Number(cached.slice(prefix.length)) / 1e6;
+      const delta = Math.abs(at - time);
+      if (at >= from && at <= to && delta <= gap) { gap = delta; best = cached; }
+    }
+    return best ? this.pictures.get(best) : undefined;
+  }
+
   pcm(key: string, chunk: number, speed = 1) { return this.sound.get(audioKey(key, chunk, speed)); }
 
   requestImage(key: string, url: string) {
@@ -98,23 +111,24 @@ export class Decoder {
     this.images.set(key, loading);
   }
 
-  requestVideo(key: string, url: string, lane: string, time: number, fps: number, duration: number, direction = 1) {
-    const wanted = frameKey(key, time);
+  requestVideo(key: string, url: string, lane: string, time: number, fps: number, duration: number, direction = 1, playing = false, step = 1 / fps) {
+    const wanted = frameKey(key, videoTime(time, fps, duration));
     const active = this.flights.get(lane);
-    if (!this.pictures.has(wanted) && active?.key === key && active.values.has(wanted)) return;
-    const simultaneous = Math.max(1, new Set([...this.flights.values()].map((flight) => flight.key)).size);
+    if (active?.key === key && active.values.has(wanted)) return;
+    const simultaneous = Math.max(1, [...this.flights.keys()].filter((lane) => lane.startsWith("v:")).length);
     const bytes = this.pictureSizes.get(key) ?? 1920 * 1080 * 4;
-    const batch = Math.max(1, Math.min(24, Math.floor(this.pictures.budget / bytes / simultaneous / 2)));
+    const batch = playing ? Math.max(1, Math.min(24, Math.floor(this.pictures.budget / bytes / simultaneous / 2))) : 1;
+    const spacing = Math.max(1 / fps, step);
     let ahead = 0;
     for (let i = 0; i < batch; i++) {
-      if (!this.pictures.has(frameKey(key, videoTime(time + i * direction / fps, fps, duration)))) break;
+      if (!this.pictures.has(frameKey(key, videoTime(time + i * direction * spacing, fps, duration)))) break;
       ahead++;
     }
     // Refill in batches instead of opening a new codec for every displayed frame.
     if (ahead >= Math.max(1, Math.floor(batch / 3))) return;
     const times: number[] = [];
     for (let i = 0; i < batch; i++) {
-      const next = videoTime(time + i * direction / fps, fps, duration);
+      const next = videoTime(time + i * direction * spacing, fps, duration);
       if (!this.pictures.has(frameKey(key, next)) && !times.includes(next)) times.push(next);
     }
     if (!times.length) return;
@@ -130,8 +144,12 @@ export class Decoder {
   requestAudio(key: string, url: string, lane: string, time: number, duration: number, speed = 1) {
     const first = Math.max(0, Math.floor(time / AUDIO_CHUNK_SECONDS));
     const active = this.flights.get(lane);
+    if (active?.key === key && active.values.has(audioKey(key, first, speed))) return;
     const chunks: number[] = [];
-    const ahead = Math.max(4, Math.min(48, Math.ceil(1.2 * speed / AUDIO_CHUNK_SECONDS) + 1));
+    const ahead = Math.max(8, Math.min(64, Math.ceil(3 * speed / AUDIO_CHUNK_SECONDS) + 1));
+    let buffered = 0;
+    while (buffered < ahead && this.sound.has(audioKey(key, first + buffered, speed))) buffered++;
+    if (buffered * AUDIO_CHUNK_SECONDS >= 1.5 * speed) return;
     for (let chunk = first; chunk < first + ahead && chunk * AUDIO_CHUNK_SECONDS < duration; chunk++) {
       if (!this.sound.has(audioKey(key, chunk, speed))) chunks.push(chunk);
     }

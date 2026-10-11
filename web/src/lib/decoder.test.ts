@@ -87,4 +87,45 @@ describe("worker decoder client", () => {
     expect(decoder.pcm("file", 4, 4)).toBe(pcm);
     expect(decoder.sound.bytes).toBe(96000);
   });
+
+  it("does not replace a playing audio batch each time one of its chunks arrives", () => {
+    decoder.requestAudio("file", "/file", "a:c1", 2, 100);
+    const worker = WorkerStub.workers[0], job = worker.job;
+    if (job.type !== "audio") throw new Error("expected audio");
+    worker.emit({ type: "audio", id: job.id, key: job.key, chunk: 4, speed: 1,
+      pcm: { start: 2, sampleRate: 48000, channels: [new Float32Array(24000)] } });
+    decoder.requestAudio("file", "/file", "a:c1", 2.1, 100);
+    decoder.requestAudio("file", "/file", "a:c1", 2.6, 100);
+    expect(worker.messages).toHaveLength(1);
+    expect(job.chunks.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("only decodes the requested scrub frame, and prefetches playback at the clip's source stride", () => {
+    decoder.requestVideo("file", "/file", "v:c1", 2.13, 30, 100);
+    const worker = WorkerStub.workers[0];
+    if (worker.job.type !== "video") throw new Error("expected video");
+    expect(worker.job.times).toHaveLength(1);
+    decoder.requestVideo("file", "/file", "v:c1", 5.13, 29.981, 100, 1, true, 2 / 30);
+    const job = worker.job;
+    if (job.type !== "video") throw new Error("expected video");
+    expect(job.times.length).toBeGreaterThan(1);
+    expect(job.times[1]).toBe(videoTime(5.13 + 2 / 30, 29.981, 100));
+    const id = job.id;
+    worker.emit({ type: "video", id, key: "file", time: job.times[0], frame: frame() });
+    decoder.requestVideo("file", "/file", "v:c1", 5.13 + 2 / 30, 29.981, 100, 1, true, 2 / 30);
+    expect(worker.job.id).toBe(id);
+  });
+
+  it("keeps nearby playback pictures inside the current clip's source interval", () => {
+    for (const time of [2, 8, 8.1]) {
+      decoder.requestVideo("file", "/file", "v:c1", time, 30, 100);
+      const worker = WorkerStub.workers[0], job = worker.job;
+      if (job.type !== "video") throw new Error("expected video");
+      worker.emit({ type: "video", id: job.id, key: "file", time: job.times[0], frame: frame() });
+      worker.emit({ type: "done", id: job.id, lane: job.lane });
+    }
+    expect(decoder.nearbyPicture("file", 8.08, 0.12, 8.02, 8.2)).toBeDefined();
+    expect(decoder.nearbyPicture("file", 8.08, 0.12, 5, 6)).toBeUndefined();
+    expect(decoder.nearbyPicture("file", 4, 0.12, 0, 10)).toBeUndefined();
+  });
 });

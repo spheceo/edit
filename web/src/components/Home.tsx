@@ -123,7 +123,7 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
         className="group cursor-pointer"
         onClick={() => !renaming && navigate(`/p/${project.id}`)}
       >
-        <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-line bg-panel transition-[border-color,transform] duration-200 group-hover:-translate-y-0.5 group-hover:border-line-strong">
+        <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-line bg-panel transition-[border-color] duration-200 group-hover:border-line-strong">
           {project.duration_frames > 0 ? (
             <img
               src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=480`}

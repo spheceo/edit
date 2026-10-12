@@ -18,6 +18,7 @@ export const SHORTCUTS: { group: string; keys: [string, string][] }[] = [
       ["↑ ↓", "Previous / next edit"],
       ["I / O", "Mark in / out (play stops at out)"],
       ["⌥I / ⌥O / ⌥X", "Clear in / out / both"],
+      ["F", "Full screen viewer (Esc to leave)"],
     ],
   },
   {

@@ -17,7 +17,7 @@ import { SidePanel } from "./SidePanel";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
 import { spring, Spinner } from "./ui";
-import { Viewer } from "./Viewer";
+import { toggleFullscreen, Viewer } from "./Viewer";
 
 const MEDIA_WIDTH = 280;
 const SIDE_WIDTH = 296;
@@ -295,6 +295,9 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
         state.edit((draft) => addMarker(draft, state.selection, frame));
       } else if (key === "n") {
         state.toggle("snapping");
+      } else if (key === "f") {
+        handled();
+        toggleFullscreen();
       } else if (key === "g") {
         useView.setState({ graph: !useView.getState().graph });
       } else if (key === "t") {

@@ -173,6 +173,9 @@ fn schema() -> Value {
     })
 }
 
+/// How much of the footage the speaker captions' black box hides.
+pub const CAPTION_BOX_OPACITY: f32 = 0.45;
+
 /// The house caption look (Repack's subtitle style) at this project's size.
 pub fn caption_style(width: u32, height: u32) -> TextStyle {
     let k = height as f32 / 1080.0;
@@ -188,7 +191,9 @@ pub fn caption_style(width: u32, height: u32) -> TextStyle {
             ..Glow::default()
         },
         max_width: Some((width as f32 * 0.42).round()),
+        // See-through, so the footage shows behind the words (subtitles are opaque).
         background: Some(TextBox {
+            opacity: CAPTION_BOX_OPACITY,
             pad_x: 12.0 * k,
             pad_y: 8.0 * k,
             ..TextBox::default()

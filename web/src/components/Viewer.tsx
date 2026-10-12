@@ -1,4 +1,4 @@
-import { Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
+import { Maximize, Minimize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { paramAt, projectDuration, setParam } from "../lib/edit";
@@ -9,10 +9,27 @@ import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
-import { IconButton } from "./ui";
+import { cx, IconButton } from "./ui";
 
 const useFrame = () => useSyncExternalStore(playhead.subscribe, () => Math.floor(playhead.frame));
 const usePlaying = () => useSyncExternalStore(playhead.subscribe, () => playhead.playing);
+const useFullscreen = () => useSyncExternalStore(
+  (listener) => {
+    document.addEventListener("fullscreenchange", listener);
+    return () => document.removeEventListener("fullscreenchange", listener);
+  },
+  () => document.fullscreenElement !== null && document.fullscreenElement === viewer,
+);
+
+/** In fullscreen the controls and cursor fade after this long without the mouse moving. */
+const IDLE_MS = 2500;
+let viewer: HTMLElement | null = null;
+
+/** Fills the screen with the viewer alone (F); Esc or F again comes back. */
+export function toggleFullscreen() {
+  if (document.fullscreenElement) void document.exitFullscreen();
+  else void viewer?.requestFullscreen().catch(() => {});
+}
 
 export function Viewer() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -21,6 +38,15 @@ export function Viewer() {
   const media = useEditor((state) => state.media);
   const [error, setError] = useState<string | null>(null);
   const [buffering, setBuffering] = useState(false);
+  const fullscreen = useFullscreen();
+  const [idle, setIdle] = useState(false);
+  const idleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const wake = () => {
+    setIdle(false);
+    clearTimeout(idleTimer.current);
+    if (fullscreen) idleTimer.current = setTimeout(() => setIdle(true), IDLE_MS);
+  };
+  useEffect(() => { wake(); return () => clearTimeout(idleTimer.current); }, [fullscreen]);
 
   const versionKey = JSON.stringify(Object.fromEntries(Object.entries(media).map(([id, status]) => [id, status.proxy === "ready" ? "preview" : "source"])));
   const versions = useMemo(() => JSON.parse(versionKey) as Record<string, string>, [versionKey]);
@@ -58,11 +84,20 @@ export function Viewer() {
 
   const empty = project && project.clips.length === 0;
 
+  const hidden = fullscreen && idle;
   return (
-    <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
+    <section
+      ref={(element) => { viewer = element; }}
+      onPointerMove={fullscreen ? wake : undefined}
+      className={fullscreen
+        ? cx("relative flex bg-black", hidden && "cursor-none")
+        : "flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel"}
+    >
       <div ref={wrapRef} className="relative min-h-0 flex-1 bg-black">
-        <canvas ref={canvasRef} className="absolute inset-0 size-full" onPointerDown={(event) => dragTransform(event, wrapRef.current!)}
-          onContextMenu={(event) => openMenu(event, viewerMenu())}
+        {/* Fullscreen is for watching: a click plays or pauses instead of moving the selection. */}
+        <canvas ref={canvasRef} className="absolute inset-0 size-full"
+          onPointerDown={(event) => { if (fullscreen) preview.toggle(); else dragTransform(event, wrapRef.current!); }}
+          onContextMenu={(event) => { if (!fullscreen) openMenu(event, viewerMenu()); }}
         />
         {error && (
           <div className="absolute inset-0 flex items-center justify-center p-8 text-center text-muted">
@@ -80,7 +115,11 @@ export function Viewer() {
           </div>
         )}
       </div>
-      <Transport />
+      <div className={fullscreen
+        ? cx("absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur transition-opacity duration-300", hidden && "pointer-events-none opacity-0")
+        : undefined}>
+        <Transport fullscreen={fullscreen} />
+      </div>
     </section>
   );
 }
@@ -126,7 +165,7 @@ function dragTransform(event: React.PointerEvent, wrap: HTMLDivElement) {
   target.addEventListener("pointercancel", up);
 }
 
-function Transport() {
+function Transport({ fullscreen }: { fullscreen: boolean }) {
   const frame = useFrame();
   const playing = usePlaying();
   const fps = useEditor((state) => state.project?.settings.fps ?? 30);
@@ -135,7 +174,7 @@ function Transport() {
   const span = inOutSpan(duration, points);
   return (
     <div className="flex h-11 shrink-0 items-center border-t border-line px-3">
-      <div className="w-[150px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
+      <div className="w-[180px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
       <div className="flex flex-1 items-center justify-center gap-0.5">
         <IconButton label="Go to start (Home)" onClick={goToStart}>
           <SkipBack size={15} />
@@ -158,20 +197,25 @@ function Transport() {
           <SkipForward size={15} />
         </IconButton>
       </div>
-      {span ? (
-        <button
-          onClick={clearInOut}
-          title="In to out: what play stops at and export renders. Click (or ⌥X) to clear."
-          className="group flex w-[150px] items-center justify-end gap-1.5 font-mono text-[13px] text-fg tabular"
-        >
-          <span className="rounded bg-white/10 px-1 font-sans text-[10px] font-medium tracking-wide text-muted uppercase group-hover:bg-white/15 group-hover:text-fg">
-            In–Out
-          </span>
-          {timecode(span[1] - span[0], fps)}
-        </button>
-      ) : (
-        <div className="w-[150px] text-right font-mono text-[13px] text-faint tabular">{timecode(duration, fps)}</div>
-      )}
+      <div className="flex w-[180px] items-center justify-end gap-2">
+        {span ? (
+          <button
+            onClick={clearInOut}
+            title="In to out: what play stops at and export renders. Click (or ⌥X) to clear."
+            className="group flex items-center gap-1.5 font-mono text-[13px] text-fg tabular"
+          >
+            <span className="rounded bg-white/10 px-1 font-sans text-[10px] font-medium tracking-wide text-muted uppercase group-hover:bg-white/15 group-hover:text-fg">
+              In–Out
+            </span>
+            {timecode(span[1] - span[0], fps)}
+          </button>
+        ) : (
+          <div className="font-mono text-[13px] text-faint tabular">{timecode(duration, fps)}</div>
+        )}
+        <IconButton label={fullscreen ? "Exit full screen (F)" : "Full screen (F)"} onClick={toggleFullscreen}>
+          {fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
+        </IconButton>
+      </div>
     </div>
   );
 }

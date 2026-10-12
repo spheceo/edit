@@ -66,6 +66,7 @@ House editing style (videos cut from a script of police footage):
 - When the user corrects something or tells you how they like it, apply it everywhere it fits in the project, not just the one spot they pointed at.
 - Every footage range must play from its first word to its last (the Doc's "first....last" note). If one stops or starts a word short (e.g. it cuts at "hit that" when the range ends on "priuses"), run realign_script, then re-caption the clips it changed.
 - Redactions in the footage are deliberate; never cover or move them.
+- FACTS: when the editing needs a fact (how a name is spelled, the date or exact place for a title or map_view, who the victim was, the charges or outcome for an outro), check the saved articles with case_articles (find "<name>") rather than guessing; the transcript and script come first, the articles fill what they don't say. If none are saved, research the case first.
 - RESEARCH (when the user asks for images of a case), in this order: 1) Start from what the project already says: the script and the transcripts (read_transcript, media_transcript): the date, the city and street, the department, ages, vehicles, what happened, any names said. 2) Find the news articles about THIS case with search_web built from those details, and check each matches (same date, place and events) before trusting it. 3) Read them (read_page) for the key details the footage doesn't give: full names, the victim, the exact location, the charges and outcome, and save every matching one with add_article (a short summary of what it adds): the user reads them in the project, and their photos go into the review. 4) Then collect_images, only for what's wanted: the scene of THIS incident (the crash, the wreck, the street as reported on the day), the people involved (victims by name, adult suspects by name, mugshots), and the vehicles involved, each query naming the case (names, place, date, "Kent hit-and-run"). Nothing else unless the user asks: no generic references, stock photos, maps, logos, buildings, court interiors or other incidents. 5) Weed it: go through every waiting image with look_at_found and reject_found anything that isn't the scene or the people involved (or what was asked), so the user only reviews real candidates. A minor whose face the footage redacts is never shown, even when the news names them: never search for them by name or collect images of them, and reject any that turn up.
 - track_region pins anything (text, an overlay) to a moving face or object."#;
 
@@ -327,6 +328,15 @@ fn tools() -> Vec<Value> {
                 "summary": { "type": "string", "description": "What it adds to the case in two or three sentences (who, where, what it reports that the footage doesn't)." }
             }),
             &["url", "summary"],
+        ),
+        tool(
+            "case_articles",
+            "The news articles saved for this project (add_article), read from the saved copies (no web needed): without id, each one's title, outlet, date and what it adds; with id, its full text. Check them for facts the editing needs (spellings of names, the date and place, the victim, charges and outcome) instead of guessing.",
+            json!({
+                "id": { "type": "string", "description": "An article's id to read in full." },
+                "find": { "type": "string", "description": "Only the passages that mention this (a name, a street, a word), across every article." }
+            }),
+            &[],
         ),
         tool(
             "look_at_found",
@@ -907,6 +917,83 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 article.outlet,
                 article.published.as_deref().map(|date| format!(", {date}")).unwrap_or_default()
             )))
+        }
+        "case_articles" => {
+            let articles = crate::research::articles(store.home(), &id);
+            if articles.is_empty() {
+                return Ok(text("no articles saved for this project yet (research the case: search_web, read_page, add_article)"));
+            }
+            if let Some(wanted) = args["id"].as_str() {
+                let article = articles
+                    .iter()
+                    .find(|article| article.id == wanted)
+                    .ok_or_else(|| format!("no article {wanted}"))?;
+                return Ok(text(format!(
+                    "{} ({}{})\n{}\n\n{}",
+                    article.title,
+                    article.outlet,
+                    article
+                        .published
+                        .as_deref()
+                        .map(|date| format!(", {date}"))
+                        .unwrap_or_default(),
+                    article.url,
+                    article.text
+                )));
+            }
+            if let Some(find) = args["find"].as_str().filter(|find| !find.trim().is_empty()) {
+                let needle = find.to_ascii_lowercase();
+                let mut found = Vec::new();
+                for article in &articles {
+                    // Each mention with the sentence or so around it.
+                    // ASCII lowercasing keeps byte positions, so they index the text itself.
+                    let lower = article.text.to_ascii_lowercase();
+                    let mut from = 0;
+                    while let Some(at) = lower[from..].find(&needle).map(|at| at + from) {
+                        let start = article.text[..at]
+                            .char_indices()
+                            .rev()
+                            .nth(200)
+                            .map_or(0, |(index, _)| index);
+                        let end = article.text[at..]
+                            .char_indices()
+                            .nth(needle.len() + 200)
+                            .map_or(article.text.len(), |(index, _)| at + index);
+                        found.push(format!(
+                            "[{} · {}] …{}…",
+                            article.outlet,
+                            article.id,
+                            &article.text[start..end]
+                        ));
+                        from = end.min(lower.len());
+                    }
+                }
+                return Ok(text(if found.is_empty() {
+                    format!("\"{find}\" isn't in the saved articles")
+                } else {
+                    found.join("\n\n")
+                }));
+            }
+            Ok(text(
+                articles
+                    .iter()
+                    .map(|article| {
+                        format!(
+                            "{} · {} ({}{})\n   {}",
+                            article.id,
+                            article.title,
+                            article.outlet,
+                            article
+                                .published
+                                .as_deref()
+                                .map(|date| format!(", {date}"))
+                                .unwrap_or_default(),
+                            article.summary
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ))
         }
         "look_at_found" => {
             let offset = args["offset"].as_u64().unwrap_or(0) as usize;

@@ -101,7 +101,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   sideTab: (["info", "presets", "library", "transcript"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
   workspace: readSetting("edit.workspace") === "script" ? "script" : "edit",
   scriptJob: null,
-  timelineHeight: Number(readSetting("edit.timelineHeight")) || 340,
+  // Until resized, the timeline takes a bit over half the window (the tracks are where the work is).
+  timelineHeight: Number(readSetting("edit.timelineHeight")) || Math.round(Math.max(160, Math.min(window.innerHeight - 260, window.innerHeight * 0.55))),
   toasts: [],
   agentActive: 0,
 

@@ -52,11 +52,11 @@ House editing style (videos cut from a script of police footage):
 - CUT-INS (the black narration cards) may carry stylised text and graphics.
 - B-ROLL IN CUT-INS: use source footage for B-roll, not AI-generated images. A cut-in's voice-over is covered by B-roll that shows what it says, never generic footage. Read the narration, then find the moments that back it up in the source footage (media_transcript to find who says what where; look_at_media to see it): someone confused when the words say they had no idea, the wreck or a shocked witness when they say a devastating crash. Time each shot to the words it shows (media_transcript with words: true on the voice-over gives exact times; a voice-over clip's timeline time = clip start + word time - its source_in): a shot showing \"the teenagers and the missing driver\" starts just before those words and lasts until they're said. Short cut-ins (under ~10 s) get two shots, longer ones more, each a few seconds, butted end to end and filling the cut-in from its first frame to its last, on a video track above the card. Each shot is picture only, slowed (speed about 0.5) and then made smooth with smooth_slow_motion, with a slow push-in (scale keyframes from 1 to about 1.08 across the shot, ease linear). The vertical drop into the cut-in still applies.
 - PUSH-INS (the slow zoom across a B-roll shot and anything pinned to it; the moving map is linear by itself) are ease linear: a constant-speed zoom, a straight line on the graph, never in_out (no slow start, rush and slow stop).
-- GLITCH TRANSITIONS: into and out of B-roll (a cut-in covered by B-roll, the date cut-in included), the cut gets a glitch instead of the vertical drop: an adjustment {grade all 0, glitch {amount 90} (default 6 tall bands)} 8 frames straddling the cut (start = cut - 4), on a track above everything there, with the library's glitch sound lined up on the cut, trimmed to the glitch (add_from_library seconds ~0.3, so it lasts as long as the picture glitches; level as an accent).
+- GLITCH TRANSITIONS: into and out of B-roll (a cut-in covered by B-roll, the date cut-in included), the cut gets a glitch instead of the vertical drop: an adjustment {grade all 0, glitch {amount 90} (default 6 tall bands)} 8 frames straddling the cut (start = cut - 4), on a track above everything there, with the library's glitch sound lined up on the cut, trimmed to the glitch (add_from_library seconds ~0.3, so it lasts as long as the picture glitches), quiet: about 10 LU under the speech around it (texture on the cut, not a hit).
 - B-ROLL LOOK: B-roll reads apart from the footage: an adjustment over each B-roll stretch (the cut-in's span, beneath its text and callouts) {grade {saturation -0.6, vignette 0.3}}; a shot that gets a person's vignette (INTRODUCING A PERSON) carries that instead, desaturated the same way.
 - THE DATE CUT-IN (the "On <date>…" cut-in that opens the story) opens on where it happened: map_view of the place the narration names (the department, the station or the street; add the city and state), as a moving shot with the defaults and seconds = how long it's on screen, unless the user asks for another angle (each new view is a paid map session). Full frame at scale 1 from source_in 0, no scale keyframes: the camera slowly circles right and closes in. While the narration says the date, darken the background heavily with an adjustment beneath the text and show the date large and centered, in white (Geist 600, ~120 at 1080p, soft glow radius 40, strength 0.85, one line like "July 13th, 2024", rising into place letter by letter (animation {preset "rise", duration 14, stagger 1.5}, in frames), with shadow {color [0,0,0,1], opacity 1, distance 6, angle 112, size 10, blur 20}). Fade the date out after the spoken year, then lift the extra darkening and reveal the red building marker and floating place label together. Set map_view highlight_after to the reveal time in source seconds and highlight_fade to ~0.4 s; start the label at that time with a matching fade. The label sits just above the building (x = building.x, box bottom ~30 px above building.top, kept inside the frame), white (Geist 600, ~44 at 1080p, glow off), in an opaque black box (pad_x 20, pad_y 12) with a red border (2 px, border_color [1,0.1,0.1,1]) and shadow (opacity 0.85, distance 8, size 2, blur 18). Pin it using building_track x and y, same offsets and linear easing; when the label starts later, subtract its source start frame from tracking frames and interpolate its initial position. No state or city text. Then the cut-in's other B-roll.
 - CALLS WITHOUT PICTURE in the story (a 911 call, a voicemail): cover them with B-roll that moves slowly (a push-in), the glowing waveform and its dark vignette on top (see PHONE CALLS), and subtitles as everywhere after the intro.
-- VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Once B-roll covers a cut-in from its first frame to its last, the card and its words were only placeholders: delete the black card and the words, and move its voice-over onto A1, the footage's own sound track (free there, since B-roll is picture only), coloured purple, which no other audio uses, so the narration sits in line with the rest of the sound and still stands out. Until then, leave the card and words in place.
+- VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. They play at the footage's loudness, so narration and what's said on screen sound equally loud: place_voiceovers sets that; for voice-overs already placed, run set_loudness on them (no loudness = match the footage). Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Once B-roll covers a cut-in from its first frame to its last, the card and its words were only placeholders: delete the black card and the words, and move its voice-over onto A1, the footage's own sound track (free there, since B-roll is picture only), coloured purple, which no other audio uses, so the narration sits in line with the rest of the sound and still stands out. Until then, leave the card and words in place.
 - MUSIC AND SOUND EFFECTS come from the team's library (list_library, then add_from_library), when the user asks for them. They set the video's vibe, so choose it deliberately before placing anything: read the script and footage, decide the case's tone and tell the user which you chose and why. A murder or really dark case (death, abuse, a disturbing scene) gets the dark beds: drones, low tones, tension. A lighter or upbeat case (an entitled driver, an absurd arrest, someone getting their comeuppance) gets music with energy and play and lighter sound design, never horror drones, eerie beds or heartbeats. Move the music with the story (tension into a build-up, revelation at the reveal), never at random. If nothing in the library fits the tone, say so rather than forcing a track that doesn't. Pick by the library's notes and usage guide (a shutter on crime scene images, a hit on a reveal, mugshot or chapter title, a riser building into a reveal or hard cut). Play only the part a note names ("first ~20 seconds", via seconds) and fade music out over ~1.5 s when it's cut short. LEVELS: set them with add_from_library's loudness (LUFS), never a guessed volume_db, measured against the speech: run measure_audio over the span first. Music sits about 12 LU under the speech it plays beneath (voice-over or footage; about 16 under where the note says "low volume") and never competes with it; with nothing said over it, it can rise to about 6 under the speech around it. A sound marks something that happens on screen and matches how it happens: a click for something that pops on, never for a fade (the place label fades in: no click). Accents must be clearly heard: a hit or stinger on a drop or reveal about as loud as the speech around it, risers, whooshes and shutters about 3–4 below that, small clicks about 8 below. Afterwards run measure_audio again: every sound you added is heard, and none drowns out a word.
 - PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
@@ -302,6 +302,15 @@ fn tools() -> Vec<Value> {
                 "fade_out": { "type": "number", "description": "Seconds of fade at the end, e.g. 1.5 when music is cut short. Default 0." }
             }),
             &["id", "times"],
+        ),
+        tool(
+            "set_loudness",
+            "Set audio clips to a loudness as heard (LUFS): measures what each plays and sets its volume_db (peaks kept under -1 dBFS). Without loudness, they match the footage's own sound across the timeline (its average loudness), as voice-overs should.",
+            json!({
+                "clip_ids": { "type": "array", "items": { "type": "string" } },
+                "loudness": { "type": "number", "description": "LUFS (default: the footage's average loudness)." }
+            }),
+            &["clip_ids"],
         ),
         tool(
             "measure_audio",
@@ -798,6 +807,54 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 },
             )?;
             Ok(text(format!("{placed}{level}")))
+        }
+        "set_loudness" => {
+            let clip_ids: Vec<String> = serde_json::from_value(args["clip_ids"].clone())
+                .map_err(|error| error.to_string())?;
+            let project = store.get(&id).ok_or("project vanished")?.project;
+            let target = args["loudness"].as_f64();
+            let (target, gains) = tokio::task::spawn_blocking(move || {
+                let target = match target {
+                    Some(target) => target,
+                    None => crate::library::footage_loudness(&project)?,
+                };
+                let gains = clip_ids
+                    .iter()
+                    .map(|clip_id| {
+                        let clip = project
+                            .clip(clip_id)
+                            .ok_or_else(|| format!("no clip {clip_id}"))?;
+                        Ok((
+                            clip_id.clone(),
+                            crate::library::gain_to(&project, clip, target)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok::<_, String>((target, gains))
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            store.update(&id, ORIGIN, |project| {
+                for (clip_id, gain) in &gains {
+                    if let Some(ClipContent::Audio { volume_db, .. }) = project
+                        .clips
+                        .iter_mut()
+                        .find(|clip| &clip.id == clip_id)
+                        .map(|clip| &mut clip.content)
+                    {
+                        *volume_db = *gain as f32;
+                    }
+                }
+                Ok(())
+            })?;
+            Ok(text(format!(
+                "set to {target:.1} LUFS: {}",
+                gains
+                    .iter()
+                    .map(|(clip_id, gain)| format!("{clip_id} volume {gain:+.1} dB"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )))
         }
         "measure_audio" => {
             let live = store.get(&id).ok_or("project vanished")?;

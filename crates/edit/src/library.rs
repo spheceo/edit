@@ -382,6 +382,11 @@ pub async fn import(
 /// heard at its peak). Padded with silence so a click shorter than the
 /// window still measures.
 pub fn loudness(path: &Path, from: f64, seconds: f64) -> Result<f64, String> {
+    levels(path, from, seconds).map(|(lufs, _)| lufs)
+}
+
+/// The loudness as `loudness` measures it, and the sample peak (dBFS).
+pub fn levels(path: &Path, from: f64, seconds: f64) -> Result<(f64, f64), String> {
     let output = Command::new("ffmpeg")
         .args([
             "-hide_banner",
@@ -401,7 +406,7 @@ pub fn loudness(path: &Path, from: f64, seconds: f64) -> Result<f64, String> {
             "-map",
             "0:a:0",
             "-af",
-            "apad=pad_dur=0.5,ebur128",
+            "apad=pad_dur=0.5,ebur128=peak=sample",
             "-f",
             "null",
             "-",
@@ -416,21 +421,79 @@ pub fn loudness(path: &Path, from: f64, seconds: f64) -> Result<f64, String> {
             .and_then(|rest| rest.split_whitespace().next())
             .and_then(|number| number.parse::<f64>().ok())
     };
-    let peak = log
+    let loudest = log
         .lines()
         .filter(|line| line.contains(" M:"))
         .filter_map(|line| value(line, " M:"))
         .fold(f64::NEG_INFINITY, f64::max);
-    let integrated = log
-        .lines()
-        .rev()
-        .find(|line| line.trim_start().starts_with("I:"))
-        .and_then(|line| value(line, "I:"));
-    match integrated {
-        Some(integrated) if seconds > 3.0 && integrated > -70.0 => Ok(integrated),
-        _ if peak > -70.0 => Ok(peak),
+    let summary = |key: &str| {
+        log.lines()
+            .rev()
+            .find(|line| line.trim_start().starts_with(key))
+            .and_then(|line| value(line, key))
+    };
+    let peak = summary("Peak:").unwrap_or(0.0);
+    match summary("I:") {
+        Some(integrated) if seconds > 3.0 && integrated > -70.0 => Ok((integrated, peak)),
+        _ if loudest > -70.0 => Ok((loudest, peak)),
         _ => Err("that stretch of the sound is silent".into()),
     }
+}
+
+/// The gain (dB) that brings an audio clip to `target` LUFS as heard, kept
+/// so its peaks stay at or under -1 dBFS.
+pub fn gain_to(
+    project: &edit_core::Project,
+    clip: &edit_core::Clip,
+    target: f64,
+) -> Result<f64, String> {
+    let edit_core::ClipContent::Audio {
+        media,
+        source_in,
+        speed,
+        ..
+    } = &clip.content
+    else {
+        return Err(format!("{} isn't audio", clip.id));
+    };
+    let media = project.media(media).ok_or("missing media")?;
+    let seconds = clip.duration as f64 / project.fps() * speed;
+    let (lufs, peak) = levels(Path::new(&media.path), *source_in, seconds)?;
+    Ok((target - lufs).min(-1.0 - peak).clamp(-40.0, 36.0))
+}
+
+/// How loud the footage's own sound is across the timeline, in LUFS: its
+/// clips (sound from video, not effects or voice-overs) averaged by energy
+/// over their length, each as heard.
+pub fn footage_loudness(project: &edit_core::Project) -> Result<f64, String> {
+    let fps = project.fps();
+    let (mut energy, mut seconds) = (0.0, 0.0);
+    for clip in &project.clips {
+        let edit_core::ClipContent::Audio {
+            media,
+            source_in,
+            speed,
+            volume_db,
+        } = &clip.content
+        else {
+            continue;
+        };
+        let Some(media) = project.media(media) else {
+            continue;
+        };
+        let length = clip.duration as f64 / fps;
+        if media.kind != edit_core::MediaKind::Video || media.is_sound_effect() || length < 1.0 {
+            continue;
+        }
+        if let Ok((lufs, _)) = levels(Path::new(&media.path), *source_in, length * speed) {
+            energy += length * 10f64.powf((lufs + f64::from(*volume_db)) / 10.0);
+            seconds += length;
+        }
+    }
+    if seconds == 0.0 {
+        return Err("no footage sound on the timeline to match".into());
+    }
+    Ok(10.0 * (energy / seconds).log10())
 }
 
 /// Seconds into the sound of its loudest 10 ms.

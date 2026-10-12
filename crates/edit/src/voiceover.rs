@@ -162,6 +162,43 @@ pub async fn place(app: &App, id: &str, media: Option<Vec<String>>) -> Result<Va
         }
         Ok(report)
     })?;
+    // Voice-overs sit at the footage's loudness, so the narration is as loud as what's said on screen.
+    let placed: Vec<String> = report
+        .iter()
+        .filter_map(|entry| entry["clip"].as_str().map(str::to_owned))
+        .collect();
+    let project = app.store.get(id).ok_or("project vanished")?.project;
+    let gains = tokio::task::spawn_blocking(move || {
+        let target = crate::library::footage_loudness(&project)?;
+        Ok::<_, String>(
+            placed
+                .iter()
+                .filter_map(|clip_id| {
+                    let clip = project.clip(clip_id)?;
+                    Some((
+                        clip_id.clone(),
+                        crate::library::gain_to(&project, clip, target).ok()?,
+                    ))
+                })
+                .collect::<Vec<_>>(),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .unwrap_or_default();
+    app.store.update(id, "agent", |project| {
+        for (clip_id, gain) in &gains {
+            if let Some(ClipContent::Audio { volume_db, .. }) = project
+                .clips
+                .iter_mut()
+                .find(|clip| &clip.id == clip_id)
+                .map(|clip| &mut clip.content)
+            {
+                *volume_db = *gain as f32;
+            }
+        }
+        Ok(())
+    })?;
     Ok(json!(report))
 }
 

@@ -53,6 +53,7 @@ House editing style (videos cut from a script of police footage):
 - THE DATE CUT-IN (the "On <date>…" cut-in that opens the story) opens on where it happened: map_view of the place the narration names (the department, the station or the street; add the city and state), as a moving shot with the defaults and seconds = how long it's on screen, unless the user asks for another angle (each new view is a paid map session). Full frame at scale 1 from source_in 0, no scale keyframes: the camera slowly circles right and closes in. While the narration says the date, darken the background heavily with an adjustment beneath the text and show the date large and centered, in white (Geist 600, ~120 at 1080p, soft glow radius 40, strength 0.85, one line like "July 13th, 2024", rising into place letter by letter (animation {preset "rise", duration 14, stagger 1.5}, in frames), with shadow {color [0,0,0,1], opacity 1, distance 6, angle 112, size 10, blur 20}). Fade the date out after the spoken year, then lift the extra darkening and reveal the red building marker and floating place label together. Set map_view highlight_after to the reveal time in source seconds and highlight_fade to ~0.4 s; start the label at that time with a matching fade. The label sits just above the building (x = building.x, box bottom ~30 px above building.top, kept inside the frame), white (Geist 600, ~44 at 1080p, glow off), in an opaque black box (pad_x 20, pad_y 12) with a red border (2 px, border_color [1,0.1,0.1,1]) and shadow (opacity 0.85, distance 8, size 2, blur 18). Pin it using building_track x and y, same offsets and linear easing; when the label starts later, subtract its source start frame from tracking frames and interpolate its initial position. No state or city text. Then the cut-in's other B-roll.
 - CALLS WITHOUT PICTURE in the story (a 911 call, a voicemail): cover them with B-roll that moves slowly (a push-in), the glowing waveform and its dark vignette on top (see PHONE CALLS), and subtitles as everywhere after the intro.
 - VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Leave the cut-in cards and their words in place unless the user asks to remove them.
+- MUSIC AND SOUND EFFECTS come from the team's library (list_library, then add_from_library), when the user asks for them. Pick by the library's notes and usage guide (a shutter on crime scene images, a hit on a reveal, mugshot or chapter title, a riser building into a reveal or hard cut). Music sits under the narration and never competes with it: start around -20 dB and go lower where the note says "low volume"; play only the part the note names ("first ~20 seconds", via seconds) and fade it out over ~1.5 s when it's cut short.
 - PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
   - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: run add_subtitles (it defaults to everything after the intro). They sit bottom middle on the subtitles track, no animation, no tracking: white words without glow in a pure black box (opaque, unlike the intro captions' see-through 0.45 box), the speaker's name above in their colour ("Officer:"). The intro keeps its own speaker captions (caption_speakers), glow and all. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own.
@@ -275,6 +276,26 @@ fn tools() -> Vec<Value> {
                 "volume_db": { "type": "number", "description": "Default 0." }
             }),
             &["sound", "times"],
+        ),
+        tool(
+            "list_library",
+            "The team's sound library (a Google Drive folder): music by mood and sound effects by kind, each with its id and the team's note on how it's used (\"first ~20 seconds\", \"very low volume\"), then the library's usage guide (what each category is for). Read it before picking music or a sound effect.",
+            json!({
+                "refresh": { "type": "boolean", "description": "Read Drive again now (it's re-read every 2 minutes anyway), e.g. after a sound was added there." }
+            }),
+            &[],
+        ),
+        tool(
+            "add_from_library",
+            "Place a sound or music from the team's library (list_library) at timeline times, on a free audio track (downloaded from Drive the first time; large music can take a minute). A short sound effect is lined up by its \"hit\" marker (its loudest moment, found automatically; see media markers): for a cut, give the cut's time and the hit lands on it; a riser builds into the time. Music and long beds start at the time. The same sound already within 0.5 s of a time is replaced, so placing again never doubles up.",
+            json!({
+                "id": { "type": "string", "description": "The sound's id from list_library." },
+                "times": { "type": "array", "items": { "type": "number" }, "description": "Seconds on the timeline." },
+                "volume_db": { "type": "number", "description": "Default 0." },
+                "seconds": { "type": "number", "description": "Play at most this long (e.g. a track's \"first ~20 seconds\")." },
+                "fade_out": { "type": "number", "description": "Seconds of fade at the end, e.g. 1.5 when music is cut short. Default 0." }
+            }),
+            &["id", "times"],
         ),
         tool(
             "realign_script",
@@ -645,81 +666,86 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .into_iter()
                 .next()
                 .ok_or_else(|| format!("couldn't import {name}: {errors:?}"))?;
-            let (_, placed) = store.update(&id, ORIGIN, |project| {
-                let fps = project.fps();
-                let media = project
-                    .media
-                    .iter_mut()
-                    .find(|media| media.id == media_id)
-                    .ok_or("sound media vanished")?;
-                // The sound's markers come with it (kept if the user has moved them).
-                if media.markers.is_empty() {
-                    media.markers = sound.markers();
+            let markers = sound.markers();
+            let placed = place_sound(
+                store,
+                &id,
+                &media_id,
+                name,
+                markers,
+                &times,
+                Sound {
+                    volume_db,
+                    seconds: None,
+                    fade_out: 0.0,
+                    color: ClipColor::Yellow,
+                },
+            )?;
+            Ok(text(placed))
+        }
+        "list_library" => {
+            let library = std::sync::Arc::clone(&app.library);
+            let refresh = args["refresh"].as_bool().unwrap_or(false);
+            let listing = tokio::task::spawn_blocking(move || library.list(refresh))
+                .await
+                .map_err(|error| error.to_string())??;
+            let mut out = String::from(
+                "The team's sound library (Google Drive). Place one with add_from_library {id}.\n",
+            );
+            let mut heading = ("", "");
+            for sound in &listing.sounds {
+                if heading != (sound.kind, sound.category.as_str()) {
+                    heading = (sound.kind, sound.category.as_str());
+                    let kind = if sound.kind == "music" {
+                        "Music"
+                    } else {
+                        "Sound effects"
+                    };
+                    out.push_str(&format!("\n{kind} / {}:\n", sound.category));
                 }
-                let hit = media
-                    .markers
-                    .iter()
-                    .find(|marker| marker.name == crate::sfx::HIT)
-                    .or(media.markers.first())
-                    .map_or(0.0, |marker| marker.time);
-                let length = ((media.duration * fps).floor() as i64).max(1);
-                let mut placed = Vec::new();
-                let mut replaced = 0;
-                for time in &times {
-                    // This sound already near the time (any version of it) gives way to the new one.
-                    let (near0, near1) = (((time - 0.5) * fps) as i64, ((time + 0.5) * fps) as i64);
-                    let before = project.clips.len();
-                    project.clips.retain(|clip| {
-                        !(clip.name.as_deref() == Some(name)
-                            && matches!(clip.content, ClipContent::Audio { .. })
-                            && clip.start < near1
-                            && clip.end() > near0)
-                    });
-                    replaced += before - project.clips.len();
-                    // Its hit marker lands on the time given.
-                    let mut start = ((time - hit) * fps).round() as i64;
-                    let mut duration = length;
-                    let mut source_in = 0.0;
-                    // A hit on frame 0: drop the bit before it.
-                    if start < 0 {
-                        source_in = -start as f64 / fps;
-                        duration += start;
-                        start = 0;
-                    }
-                    if duration < 1 {
-                        continue;
-                    }
-                    // Never on A1: that's the footage's own sound.
-                    let track =
-                        free_track_from(project, TrackKind::Audio, 1, start, start + duration);
-                    let clip_id = project.fresh_id("c");
-                    project.clips.push(Clip {
-                        id: clip_id,
-                        track,
-                        start,
-                        duration,
-                        color: ClipColor::Yellow,
-                        name: Some(name.to_owned()),
-                        link: None,
-                        fade_in: 0,
-                        fade_out: 0,
-                        keyframes: Default::default(),
-                        content: ClipContent::Audio {
-                            media: media_id.clone(),
-                            source_in,
-                            speed: 1.0,
-                            volume_db,
-                        },
-                    });
-                    placed.push(format!("{time:.2}s"));
-                }
-                Ok((placed, replaced))
-            })?;
-            let (placed, replaced) = placed;
-            Ok(text(format!(
-                "placed {name} at {} (replacing {replaced} already near those times)",
-                placed.join(", ")
-            )))
+                out.push_str(&format!(
+                    "- {} | {}{}\n",
+                    sound.id,
+                    sound.name,
+                    sound
+                        .note
+                        .as_ref()
+                        .map(|note| format!(" — {note}"))
+                        .unwrap_or_default()
+                ));
+            }
+            if !listing.guide.is_empty() {
+                out.push_str(&format!(
+                    "\nUsage guide (from the library's Doc):\n{}\n",
+                    listing.guide
+                ));
+            }
+            Ok(text(out))
+        }
+        "add_from_library" => {
+            let sound_id = args["id"].as_str().ok_or("id is required")?;
+            let times: Vec<f64> =
+                serde_json::from_value(args["times"].clone()).map_err(|error| error.to_string())?;
+            let (media_id, sound) = crate::library::import(app, &id, sound_id, ORIGIN).await?;
+            let placed = place_sound(
+                store,
+                &id,
+                &media_id,
+                &sound.name,
+                Vec::new(),
+                &times,
+                Sound {
+                    volume_db: args["volume_db"].as_f64().unwrap_or(0.0) as f32,
+                    seconds: args["seconds"].as_f64().filter(|seconds| *seconds > 0.0),
+                    fade_out: args["fade_out"].as_f64().unwrap_or(0.0).max(0.0),
+                    color: if sound.kind == "music" {
+                        ClipColor::Green
+                    } else {
+                        ClipColor::Yellow
+                    },
+                },
+            )?;
+            Ok(text(placed))
         }
         "realign_script" => {
             let changed = crate::script::realign(app, &id).await?;
@@ -1116,6 +1142,107 @@ fn free_track(project: &mut Project, kind: TrackKind, start: i64, end: i64) -> S
 }
 
 /// The lowest track of `kind` free for the span, after the first `skip` of them.
+/// How a sound is placed.
+struct Sound {
+    volume_db: f32,
+    /// Plays at most this long.
+    seconds: Option<f64>,
+    /// Seconds of fade at the end.
+    fade_out: f64,
+    color: ClipColor,
+}
+
+/// Places a sound already in the project's media at timeline times (seconds)
+/// on a free audio track, its "hit" marker (else its start) on each time.
+/// The same sound already within 0.5 s of a time gives way. `markers` are
+/// given to the media if it has none yet.
+fn place_sound(
+    store: &crate::store::Store,
+    id: &str,
+    media_id: &str,
+    name: &str,
+    markers: Vec<edit_core::Marker>,
+    times: &[f64],
+    sound: Sound,
+) -> Result<String, String> {
+    let (_, (placed, replaced)) = store.update(id, ORIGIN, |project| {
+        let fps = project.fps();
+        let media = project
+            .media
+            .iter_mut()
+            .find(|media| media.id == media_id)
+            .ok_or("sound media vanished")?;
+        // The sound's markers come with it (kept if the user has moved them).
+        if media.markers.is_empty() {
+            media.markers = markers;
+        }
+        let hit = media
+            .markers
+            .iter()
+            .find(|marker| marker.name == crate::sfx::HIT)
+            .or(media.markers.first())
+            .map_or(0.0, |marker| marker.time);
+        let mut length = ((media.duration * fps).floor() as i64).max(1);
+        if let Some(seconds) = sound.seconds {
+            length = length.min(((seconds * fps).round() as i64).max(1));
+        }
+        let mut placed = Vec::new();
+        let mut replaced = 0;
+        for time in times {
+            // This sound already near the time (any version of it) gives way to the new one.
+            let (near0, near1) = (((time - 0.5) * fps) as i64, ((time + 0.5) * fps) as i64);
+            let before = project.clips.len();
+            project.clips.retain(|clip| {
+                !(clip.name.as_deref() == Some(name)
+                    && matches!(clip.content, ClipContent::Audio { .. })
+                    && clip.start < near1
+                    && clip.end() > near0)
+            });
+            replaced += before - project.clips.len();
+            // Its hit marker lands on the time given.
+            let mut start = ((time - hit) * fps).round() as i64;
+            let mut duration = length;
+            let mut source_in = 0.0;
+            // A hit on frame 0: drop the bit before it.
+            if start < 0 {
+                source_in = -start as f64 / fps;
+                duration += start;
+                start = 0;
+            }
+            if duration < 1 {
+                continue;
+            }
+            // Never on A1: that's the footage's own sound.
+            let track = free_track_from(project, TrackKind::Audio, 1, start, start + duration);
+            let clip_id = project.fresh_id("c");
+            project.clips.push(Clip {
+                id: clip_id,
+                track,
+                start,
+                duration,
+                color: sound.color,
+                name: Some(name.to_owned()),
+                link: None,
+                fade_in: 0,
+                fade_out: ((sound.fade_out * fps).round() as i64).min(duration),
+                keyframes: Default::default(),
+                content: ClipContent::Audio {
+                    media: media_id.to_owned(),
+                    source_in,
+                    speed: 1.0,
+                    volume_db: sound.volume_db,
+                },
+            });
+            placed.push(format!("{time:.2}s"));
+        }
+        Ok((placed, replaced))
+    })?;
+    Ok(format!(
+        "placed {name} at {} (replacing {replaced} already near those times)",
+        placed.join(", ")
+    ))
+}
+
 fn free_track_from(
     project: &mut Project,
     kind: TrackKind,

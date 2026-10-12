@@ -237,19 +237,21 @@ pub fn is_date_card(text: &str) -> bool {
 }
 
 impl Media {
-    /// A sound effect (a bundled sound, or any very short audio): it's heard,
-    /// never transcribed.
+    /// A sound effect (a bundled sound, one from the team's library, or any
+    /// very short audio): it's heard, never transcribed.
     pub fn is_sound_effect(&self) -> bool {
         self.kind == MediaKind::Audio
             && (self.duration <= SOUND_EFFECT_SECONDS || in_sfx_folder(&self.path))
     }
 }
 
-/// Bundled sounds are written to `<Edit's home>/sfx/` (crates/edit/src/sfx.rs).
+/// Bundled sounds are written to `<Edit's home>/sfx/` (crates/edit/src/sfx.rs),
+/// the team library's sounds and music to `<Edit's home>/library/<music|sfx>/<checksum>/`
+/// (library.rs).
 fn in_sfx_folder(path: &str) -> bool {
-    let mut parts = path.rsplit(['/', '\\']);
-    parts.next();
-    parts.next() == Some("sfx")
+    let mut parts = path.rsplit(['/', '\\']).skip(1);
+    let parent = parts.next();
+    parent == Some("sfx") || parts.nth(1) == Some("library")
 }
 
 #[cfg(test)]
@@ -395,6 +397,12 @@ mod tests {
         assert!(sound("/Users/me/.edit/sfx/shutter-1a2b.wav", 0.17).is_sound_effect());
         assert!(sound("/Users/me/.edit/sfx/riser-9f.wav", 8.0).is_sound_effect());
         assert!(sound("/x/whoosh.wav", 1.2).is_sound_effect());
+        assert!(sound(
+            "/Users/me/.edit/library/music/0a1b2c3d4e5f/Drone.wav",
+            240.0
+        )
+        .is_sound_effect());
+        assert!(!sound("/x/library/voiceover.wav", 42.0).is_sound_effect());
         assert!(!sound("/x/voiceover.wav", 42.0).is_sound_effect());
     }
 }

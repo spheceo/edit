@@ -28,7 +28,7 @@ export interface Toast {
 }
 
 export type Tool = "select" | "razor";
-export type SideTab = "info" | "presets" | "transcript";
+export type SideTab = "info" | "presets" | "library" | "transcript";
 /** Edit: bin, panels and viewer. Script: viewer beside the script, as Repack's split view. */
 export type Workspace = "edit" | "script";
 
@@ -98,7 +98,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   showMedia: true,
   showInspector: true,
   showAgent: readSetting("edit.showAgent") !== "false",
-  sideTab: (["info", "presets", "transcript"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
+  sideTab: (["info", "presets", "library", "transcript"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
   workspace: readSetting("edit.workspace") === "script" ? "script" : "edit",
   scriptJob: null,
   timelineHeight: Number(readSetting("edit.timelineHeight")) || 340,

@@ -3,11 +3,12 @@ import { useEffect, useRef } from "react";
 
 import { useEditor, type SideTab } from "../lib/store";
 import { Inspector } from "./Inspector";
+import { Library } from "./Library";
 import { Presets } from "./Presets";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { Tabs } from "./ui";
 
-/** Info (inspector), Presets and Transcript, next to the media bin. */
+/** Info (inspector), Presets, Library and Transcript, next to the media bin. */
 export function SidePanel() {
   const tab = useEditor((state) => state.sideTab);
   const setTab = useEditor((state) => state.setSideTab);
@@ -31,6 +32,7 @@ export function SidePanel() {
           tabs={[
             { value: "info", label: "Info" },
             { value: "presets", label: "Presets" },
+            { value: "library", label: "Library" },
             { value: "transcript", label: "Transcript" },
           ]}
         />
@@ -44,7 +46,7 @@ export function SidePanel() {
           transition={{ duration: 0.12 }}
           className="flex min-h-0 flex-1 flex-col"
         >
-          {tab === "info" ? <Inspector /> : <div className="min-h-0 flex-1 overflow-y-auto p-2">{tab === "presets" ? <Presets /> : <TranscriptPanel />}</div>}
+          {tab === "info" ? <Inspector /> : <div className="min-h-0 flex-1 overflow-y-auto p-2">{tab === "presets" ? <Presets /> : tab === "library" ? <Library /> : <TranscriptPanel />}</div>}
         </motion.div>
       </AnimatePresence>
     </section>

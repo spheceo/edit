@@ -901,15 +901,19 @@ export type MediaFolder = (typeof MEDIA_FOLDERS)[number]["id"];
 
 export function folderOf(media: Media): MediaFolder {
   if (media.kind === "image") return "images";
-  if (media.kind === "audio") return isSoundEffect(media) ? "sfx" : "audio";
+  if (media.kind === "audio") return isSoundEffect(media) && !/[\\/]library[\\/]music[\\/]/.test(media.path) ? "sfx" : "audio";
   return "footage";
 }
 
 /** Audio this short is a sound effect, not something said (seconds); as Media::is_sound_effect. */
 const SOUND_EFFECT_SECONDS = 3;
 
-/** A sound effect (a bundled sound, or any very short audio): heard, never transcribed. */
+/** A sound effect (a bundled sound, one from the team's library, or any very short audio): heard, never transcribed. */
 export function isSoundEffect(media: Media) {
-  // Bundled sounds live in <Edit's home>/sfx (crates/edit/src/sfx.rs).
-  return media.kind === "audio" && (media.duration <= SOUND_EFFECT_SECONDS || /[\\/]sfx[\\/][^\\/]+$/.test(media.path));
+  // Bundled sounds live in <Edit's home>/sfx (crates/edit/src/sfx.rs), the
+  // library's in <Edit's home>/library/<music|sfx>/<checksum> (library.rs).
+  return (
+    media.kind === "audio" &&
+    (media.duration <= SOUND_EFFECT_SECONDS || /[\\/]sfx[\\/][^\\/]+$/.test(media.path) || /[\\/]library[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+$/.test(media.path))
+  );
 }

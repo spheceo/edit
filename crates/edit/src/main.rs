@@ -2,6 +2,7 @@ mod agent;
 mod broll;
 mod captions;
 mod export;
+mod library;
 mod mcp;
 mod media;
 mod render;
@@ -36,6 +37,8 @@ USAGE
 ENV
   EDIT_HOME   data directory (default ~/.edit)
   EDIT_HOSTS  extra Host names to accept, comma-separated
+  GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DOCS_REFRESH_TOKEN
+              a Google sign-in that can read the team's sound library in Drive
 ";
 
 fn main() {
@@ -148,6 +151,7 @@ fn serve(home: PathBuf, host: Option<String>, port: u16) {
             updater: update::Updater::new(home.clone()),
             agents: agent::Agents::new(Arc::clone(&store), home.clone(), port),
             scripts: Arc::new(script::Jobs::default()),
+            library: Arc::new(library::Library::default()),
             media: media::Processor::new(Arc::clone(&store)),
             store,
             frames: render::FrameRenderer::start(cache),

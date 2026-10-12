@@ -194,6 +194,8 @@ describe("media bin", () => {
     expect(folderOf(file("b", "audio", "/x/song.mp3"))).toBe("audio");
     expect(folderOf({ ...file("w", "audio", "/x/whoosh.wav"), duration: 1.2 })).toBe("sfx");
     expect(folderOf(file("c", "audio", "/Users/me/.edit/sfx/shutter-1a2b.wav"))).toBe("sfx");
+    expect(folderOf(file("d", "audio", "/Users/me/.edit/library/sfx/0a1b2c3d4e5f/Riser.wav"))).toBe("sfx");
+    expect(folderOf(file("e", "audio", "/Users/me/.edit/library/music/0a1b2c3d4e5f/Drone.wav"))).toBe("audio");
     expect(folderOf(file("d", "image", "/x/logo.png"))).toBe("images");
   });
 });

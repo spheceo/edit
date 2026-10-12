@@ -33,6 +33,7 @@ pub struct App {
     pub machine: Arc<str>,
     pub agents: Arc<crate::agent::Agents>,
     pub scripts: Arc<crate::script::Jobs>,
+    pub library: Arc<crate::library::Library>,
     pub updater: Arc<crate::update::Updater>,
 }
 
@@ -73,6 +74,8 @@ pub fn router(app: App) -> Router {
             post(upload_media).layer(DefaultBodyLimit::disable()),
         )
         .route("/api/projects/{id}/media-status", get(media_status))
+        .route("/api/library", get(library))
+        .route("/api/projects/{id}/library", post(library_import))
         .route(
             "/api/projects/{id}/media/{media}/transcribe",
             post(transcribe_media),
@@ -728,6 +731,44 @@ async fn import_media(
         Json(json!({ "rev": rev, "added": added, "errors": errors, "project": project }))
             .into_response(),
     )
+}
+
+#[derive(Deserialize)]
+struct LibraryQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+/// The team's sound library (Drive), with its usage guide.
+async fn library(State(app): State<App>, Query(query): Query<LibraryQuery>) -> ApiResult {
+    let library = Arc::clone(&app.library);
+    let listing = tokio::task::spawn_blocking(move || library.list(query.refresh))
+        .await
+        .map_err(|error| bad(error.to_string()))?
+        .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error))?;
+    Ok(Json(&*listing).into_response())
+}
+
+#[derive(Deserialize)]
+struct LibraryImportBody {
+    sound: String,
+    origin: String,
+}
+
+/// Downloads a library sound (first time) and adds it to the project's media.
+async fn library_import(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<LibraryImportBody>,
+) -> ApiResult {
+    let (media, _) = crate::library::import(&app, &id, &body.sound, &body.origin)
+        .await
+        .map_err(bad)?;
+    let live = app
+        .store
+        .get(&id)
+        .ok_or_else(|| not_found("no such project"))?;
+    Ok(Json(json!({ "rev": live.rev, "media": media, "project": live.project })).into_response())
 }
 
 async fn media_status(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {

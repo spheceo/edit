@@ -85,6 +85,17 @@ export interface FsListing {
   places: { name: string; path: string }[];
 }
 
+/** A sound in the team's library (Google Drive). */
+export interface LibrarySound {
+  /** The Drive file id. */
+  id: string;
+  name: string;
+  kind: "music" | "sfx";
+  category: string;
+  note?: string;
+  bytes: number;
+}
+
 export const api = {
   projects: () => request<{ projects: ProjectSummary[] }>("GET", "/api/projects"),
   createProject: (body: { name: string; width: number; height: number; fps: number }) =>
@@ -99,6 +110,10 @@ export const api = {
       place,
       origin,
     }),
+  library: (refresh = false) => request<{ sounds: LibrarySound[]; guide: string }>("GET", `/api/library${refresh ? "?refresh=true" : ""}`),
+  /** Downloads a library sound (first time) and adds it to the project's media. */
+  importLibrary: (id: string, sound: string, origin: string) =>
+    request<{ rev: number; media: string; project: Project }>("POST", `/api/projects/${id}/library`, { sound, origin }),
   mediaStatus: (id: string) => request<{ media: Record<string, MediaStatus> }>("GET", `/api/projects/${id}/media-status`),
   browse: (path?: string) => request<FsListing>("GET", `/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   exportProject: (id: string, path: string, options: ExportOptions) =>

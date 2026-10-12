@@ -16,7 +16,7 @@ import { ScriptPanel } from "./ScriptPanel";
 import { SidePanel } from "./SidePanel";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
-import { spring, Spinner } from "./ui";
+import { cx, spring, Spinner } from "./ui";
 import { toggleFullscreen, Viewer } from "./Viewer";
 
 const MEDIA_WIDTH = 280;
@@ -52,6 +52,7 @@ export function Editor({ id }: { id: string }) {
   const showAgent = useEditor((state) => state.showAgent);
   const workspace = useEditor((state) => state.workspace);
   const timelineHeight = useEditor((state) => state.timelineHeight);
+  const [resizing, setResizing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,8 +109,12 @@ export function Editor({ id }: { id: string }) {
               <ScriptPanel />
             </SlideIn>
           </div>
-          <ResizeBar />
-          <div className="shrink-0" style={{ height: timelineHeight }}>
+          <ResizeBar resizing={resizing} setResizing={setResizing} />
+          <div
+            className="shrink-0"
+            // A reset glides to the default; while dragged it follows the pointer at once.
+            style={{ height: timelineHeight, transition: resizing ? "none" : "height 0.32s cubic-bezier(0.2, 0.7, 0.2, 1)" }}
+          >
             <Timeline />
           </div>
         </div>
@@ -192,23 +197,42 @@ function useFileDrop() {
   return active;
 }
 
-function ResizeBar() {
+/** The divider above the timeline (as Repack's panel gutters): a pill that grows when
+ * you're on it and turns playhead red while dragged; double-click resets the height. */
+function ResizeBar({ resizing, setResizing }: { resizing: boolean; setResizing: (resizing: boolean) => void }) {
   const drag = useRef<{ y: number; height: number } | null>(null);
+  const end = () => {
+    drag.current = null;
+    setResizing(false);
+  };
   return (
     <div
-      className="group flex h-2 shrink-0 cursor-row-resize items-center justify-center"
+      title="Drag to resize · double-click to reset"
+      className={cx(
+        "group relative z-10 flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center",
+        // A wider reach than the gap itself, so it's easy to catch.
+        "before:absolute before:inset-x-0 before:-inset-y-[5px] before:content-['']",
+      )}
       onPointerDown={(event) => {
         (event.target as HTMLElement).setPointerCapture(event.pointerId);
         drag.current = { y: event.clientY, height: useEditor.getState().timelineHeight };
+        setResizing(true);
       }}
       onPointerMove={(event) => {
         if (!drag.current) return;
         const height = drag.current.height - (event.clientY - drag.current.y);
         useEditor.getState().setTimelineHeight(Math.min(window.innerHeight - 260, Math.max(160, height)));
       }}
-      onPointerUp={() => (drag.current = null)}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onDoubleClick={() => useEditor.getState().resetTimelineHeight()}
     >
-      <div className="h-[3px] w-10 rounded-full bg-white/0 transition-colors group-hover:bg-white/25" />
+      <div
+        className={cx(
+          "h-[3px] rounded-[3px] transition-[width,background-color] duration-200 ease-out",
+          resizing ? "w-[72px] bg-playhead" : "w-9 bg-transparent group-hover:w-14 group-hover:bg-[#5a5a5a]",
+        )}
+      />
     </div>
   );
 }

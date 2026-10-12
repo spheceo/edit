@@ -4,8 +4,13 @@ import { create } from "zustand";
 import { applyAgentEvent, openAgent } from "./agent";
 import { api, ApiError, useConnection } from "./api";
 import { validateProject } from "./edit";
-import { readSetting, writeSetting } from "./storage";
+import { forgetSetting, readSetting, writeSetting } from "./storage";
 import type { MediaStatus, Project, ScriptJob } from "./types";
+
+/** Until resized, the timeline takes a bit over half the window: the tracks are where the work is. */
+export function defaultTimelineHeight() {
+  return Math.round(Math.max(160, Math.min(window.innerHeight - 260, window.innerHeight * 0.55)));
+}
 
 export const clientId = `ui-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -75,6 +80,8 @@ interface EditorState {
   setSideTab(tab: SideTab): void;
   setWorkspace(workspace: Workspace): void;
   setTimelineHeight(height: number): void;
+  /** Back to the default height (the divider's double-click). */
+  resetTimelineHeight(): void;
   toast(text: string, tone?: Toast["tone"]): void;
   dismiss(id: number): void;
 }
@@ -101,8 +108,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   sideTab: (["info", "presets", "library", "transcript"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
   workspace: readSetting("edit.workspace") === "script" ? "script" : "edit",
   scriptJob: null,
-  // Until resized, the timeline takes a bit over half the window (the tracks are where the work is).
-  timelineHeight: Number(readSetting("edit.timelineHeight")) || Math.round(Math.max(160, Math.min(window.innerHeight - 260, window.innerHeight * 0.55))),
+  timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
   toasts: [],
   agentActive: 0,
 
@@ -209,6 +215,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   setTimelineHeight: (height) => {
     writeSetting("edit.timelineHeight", String(Math.round(height)));
     set({ timelineHeight: height });
+  },
+  resetTimelineHeight: () => {
+    forgetSetting("edit.timelineHeight");
+    set({ timelineHeight: defaultTimelineHeight() });
   },
   toast: (text, tone = "info") => {
     const id = ++toastId;

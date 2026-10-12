@@ -15,6 +15,14 @@ export function writeSetting(key: string, value: string) {
   }
 }
 
+export function forgetSetting(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // As above: preferences are optional.
+  }
+}
+
 export function savedFrame(project: string): number {
   const value = Number(readSetting(`edit.playhead.${project}`));
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;

@@ -59,6 +59,15 @@ dev: wasm web-install
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p web/dist
+    # The sound library reads Google Drive; while testing it borrows Repack's
+    # sign-in from Infisical (just these three, not the rest of Repack's secrets).
+    if command -v infisical >/dev/null; then
+        for name in GOOGLE_DRIVE_CLIENT_ID GOOGLE_DRIVE_CLIENT_SECRET GOOGLE_DOCS_REFRESH_TOKEN; do
+            if [ -z "${!name:-}" ] && value="$(infisical secrets get "$name" --projectId=cdf4a0c5-eca4-4415-af3a-40871af285f3 --env=dev --plain --silent 2>/dev/null)"; then
+                export "$name=$value"
+            fi
+        done
+    fi
     cargo watch -q -w crates/edit -w crates/edit-core -w crates/edit-render -x 'run -q -p edit -- serve' &
     SERVER=$!
     # The browser engine shares edit-core/edit-render: rebuild it too (Vite reloads it).

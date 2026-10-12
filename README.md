@@ -63,6 +63,18 @@ just check   # fmt, clippy, tests, typecheck
 
 Data lives in `~/.edit` (`EDIT_HOME` overrides): `projects/*.json` and `cache/` (proxies, thumbnails, waveforms). Exports default to `~/Movies/Edit/`.
 
+## Sound library
+
+Music and sound effects come from the team's "Music & SFX Library" folder in Google Drive ([03] Media / Repack): a folder per mood or kind, an index of notes per file and a usage guide the agent reads. Edit downloads a sound the first time it's used (Library tab, or the agent's `add_from_library`). `just dev` reads the Google sign-in from Infisical. To add a sound, put it in the right folder in Drive and give it a note in the index.
+
+Still missing, taken out of the guide and index until there's a real file (12 Oct 2026):
+
+- **Gunshot:** there was only a YouTube reference (no audio). Needs a licensed pistol shot, for when the narration describes a shooting.
+- **Typewriter:** listed, never added.
+- **Upbeat music:** nearly every track is dark or tense, so lighter cases have little to choose from.
+
+The guide's "Pulse" link was a touchscreen-tapping sound, not a heartbeat. It now sits under Clicks as "Touchscreen taps".
+
 ## Test cases to revisit
 
 - **911 audio waveform:** [this Doc](https://docs.google.com/document/d/1kQewvwefZeotaWWz1g78VDYVoI3ku8TrJDL2p-4EQlo/edit?tab=t.0) has a 911 call to test the glowing waveform against. It should lie almost flat when the sound is low, with a little movement, and spike on speech and loud sounds.

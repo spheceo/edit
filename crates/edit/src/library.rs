@@ -6,8 +6,8 @@
 //!
 //! The folder is private, so Edit needs a Google sign-in that can read it:
 //! GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and
-//! GOOGLE_DOCS_REFRESH_TOKEN. For testing these are Repack's (same names), e.g.
-//! `infisical run --projectId cdf4a0c5-eca4-4415-af3a-40871af285f3 -- just dev`.
+//! GOOGLE_DOCS_REFRESH_TOKEN. For testing these are Repack's (same names),
+//! which `just dev` reads from Infisical.
 //!
 //! Beside the sounds sit an index (a .txt with a note per file, "first ~20
 //! seconds, low volume") and a usage guide (a Doc on what each category is
@@ -230,7 +230,7 @@ impl Library {
         ]
         .map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()));
         let (Some(id), Some(secret), Some(refresh)) = (id, secret, refresh) else {
-            return Err("The sound library needs a Google Drive sign-in: start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set (for now Repack's, through infisical).".into());
+            return Err("The sound library needs a Google Drive sign-in: start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set (`just dev` reads Repack's from Infisical).".into());
         };
         let config = [
             ("client_id", id),

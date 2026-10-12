@@ -39,8 +39,22 @@ function usePanelScale() {
   return value;
 }
 
-function SlideIn({ show, width: base, side, children }: { show: boolean; width: number; side: "left" | "right"; children: React.ReactNode }) {
-  const width = Math.round(base * usePanelScale());
+function SlideIn({
+  show,
+  width: base,
+  side,
+  fixed = false,
+  children,
+}: {
+  show: boolean;
+  width: number;
+  side: "left" | "right";
+  /** Keeps its width on wide windows (the chat reads best narrow). */
+  fixed?: boolean;
+  children: React.ReactNode;
+}) {
+  const scale = usePanelScale();
+  const width = fixed ? base : Math.round(base * scale);
   return (
     <AnimatePresence initial={false}>
       {show && (
@@ -134,7 +148,7 @@ export function Editor({ id }: { id: string }) {
             <Timeline />
           </div>
         </div>
-        <SlideIn show={showAgent} width={AGENT_WIDTH} side="right">
+        <SlideIn show={showAgent} width={AGENT_WIDTH} side="right" fixed>
           <AgentPanel />
         </SlideIn>
       </div>

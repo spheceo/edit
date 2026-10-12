@@ -127,16 +127,18 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
     }
   };
 
-  const clear = async () => {
-    if (!window.confirm(`Remove the ${counts.new} images waiting for review? Kept and rejected ones stay.`)) return;
+  const clear = async (status: "new" | "rejected") => {
+    const what = status === "new" ? `the ${counts.new} images waiting for review` : `the ${counts.rejected} rejected images`;
+    if (!window.confirm(`Delete ${what}? Kept ones stay.`)) return;
     try {
-      const { removed } = await api.clearResearch(project.id);
-      toast(`Removed ${removed} unreviewed images`);
+      const { removed } = await api.clearResearch(project.id, status);
+      toast(`Deleted ${removed} ${status === "new" ? "unreviewed" : "rejected"} images`);
       refresh();
     } catch (error) {
       toast((error as Error).message, "error");
     }
   };
+
 
   useEffect(() => {
     if (!open || tab === "articles") return;
@@ -232,8 +234,8 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
               {collecting ? <Spinner /> : "Search"}
             </Button>
           </form>
-          {tab === "new" && counts.new > 0 && (
-            <IconButton label="Remove all images waiting for review" onClick={() => void clear()}>
+          {(tab === "new" || tab === "rejected") && counts[tab] > 0 && (
+            <IconButton label={tab === "new" ? "Delete all images waiting for review" : "Delete all rejected images"} onClick={() => void clear(tab)}>
               <Trash2 size={14} />
             </IconButton>
           )}

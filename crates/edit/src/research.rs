@@ -364,12 +364,15 @@ fn site(url: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Removes the found images nobody has reviewed yet (and their files).
-pub fn clear_unreviewed(home: &Path, project: &str) -> Result<usize, String> {
+/// Removes the found images with a status (new: unreviewed, rejected) and their files.
+pub fn clear(home: &Path, project: &str, status: &str) -> Result<usize, String> {
+    if status == "kept" {
+        return Err("kept images stay (they're in the media bin)".into());
+    }
     let _guard = INDEX.lock().unwrap();
     let (gone, kept): (Vec<Item>, Vec<Item>) = read_index(home, project)
         .into_iter()
-        .partition(|item| item.status == "new");
+        .partition(|item| item.status == status);
     for item in &gone {
         let _ = std::fs::remove_file(&item.file);
     }

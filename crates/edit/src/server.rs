@@ -833,12 +833,26 @@ async fn research_collect(
     Ok(Json(json!({ "started": true })).into_response())
 }
 
-/// Drops the found images nobody has reviewed yet.
-async fn research_clear(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {
+#[derive(Deserialize)]
+struct ClearQuery {
+    #[serde(default = "unreviewed")]
+    status: String,
+}
+
+fn unreviewed() -> String {
+    "new".into()
+}
+
+/// Deletes the found images with a status: unreviewed (default) or rejected.
+async fn research_clear(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    Query(query): Query<ClearQuery>,
+) -> ApiResult {
     app.store
         .get(&id)
         .ok_or_else(|| not_found("no such project"))?;
-    let removed = crate::research::clear_unreviewed(app.store.home(), &id).map_err(bad)?;
+    let removed = crate::research::clear(app.store.home(), &id, &query.status).map_err(bad)?;
     Ok(Json(json!({ "removed": removed })).into_response())
 }
 

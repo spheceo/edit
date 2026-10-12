@@ -144,8 +144,9 @@ export const api = {
     request<{ rev: number; media: string; project: Project }>("POST", `/api/projects/${id}/library`, { sound, origin }),
   research: (id: string) =>
     request<{ items: FoundImage[]; articles: FoundArticle[]; collecting: boolean }>("GET", `/api/projects/${id}/research`),
-  /** Drops the found images nobody has reviewed yet. */
-  clearResearch: (id: string) => request<{ removed: number }>("POST", `/api/projects/${id}/research/clear`),
+  /** Deletes the found images with a status (unreviewed or rejected). */
+  clearResearch: (id: string, status: "new" | "rejected") =>
+    request<{ removed: number }>("POST", `/api/projects/${id}/research/clear?status=${status}`),
   collectResearch: (id: string, queries: string[], perQuery: number) =>
     request<{ started: boolean }>("POST", `/api/projects/${id}/research`, { queries, per_query: perQuery }),
   /** Keeping adds the image to the media bin (once). */

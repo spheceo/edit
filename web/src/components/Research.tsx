@@ -43,16 +43,24 @@ const site = (url: string) => {
   }
 };
 
-/** The media bin's button: how many found images wait for review. */
-export function ResearchButton({ onOpen }: { onOpen: () => void }) {
+/** The media bin's way in: a folder-like tile with how many found images wait for review. */
+export function ResearchTile({ onOpen }: { onOpen: () => void }) {
   const project = useEditor((state) => state.project)!;
   const { items, collecting } = useResearch(project.id, false);
   const waiting = items.filter((item) => item.status === "new").length;
   return (
-    <Button size="sm" variant="ghost" onClick={onOpen} title={`Research: images found for this project${waiting ? ` (${waiting} to review)` : ""}`}>
-      {collecting ? <Spinner /> : <Images size={13} />}
-      {waiting > 0 && <span className="rounded-full bg-playhead/90 px-1.5 text-[10px] leading-4 font-semibold text-white tabular-nums">{waiting}</span>}
-    </Button>
+    <button onClick={onOpen} title="Review images found for this project" className="group block w-full text-left">
+      <div className="relative flex aspect-video items-center justify-center rounded-lg bg-raised ring-1 ring-line transition-[box-shadow] group-hover:ring-line-strong">
+        {collecting ? <Spinner /> : <Images size={22} strokeWidth={1.6} className="text-rose-300 transition-transform duration-150 group-hover:scale-105" />}
+        {waiting > 0 && (
+          <span className="absolute top-1.5 right-1.5 rounded-full bg-playhead px-1.5 text-[10px] leading-4 font-semibold text-white tabular-nums">{waiting}</span>
+        )}
+      </div>
+      <div className="mt-1 flex items-baseline justify-between gap-2 px-0.5 text-[12px] text-muted group-hover:text-fg">
+        <span className="truncate">Research</span>
+        <span className="shrink-0 font-mono text-[11px] text-faint tabular">{items.length}</span>
+      </div>
+    </button>
   );
 }
 

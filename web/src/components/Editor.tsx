@@ -26,7 +26,21 @@ const AGENT_WIDTH = 340;
 const SCRIPT_WIDTH = 440;
 
 /** A panel that springs open and closed, keeping its gap to the viewer. */
-function SlideIn({ show, width, side, children }: { show: boolean; width: number; side: "left" | "right"; children: React.ReactNode }) {
+/** Panels keep their share of the window: sized for a ~1640 px wide window and
+ * grown in step on wider ones (an ultrawide), so the viewer doesn't take all the extra width. */
+function usePanelScale() {
+  const scale = () => Math.min(2.4, Math.max(1, window.innerWidth / 1640));
+  const [value, setValue] = useState(scale);
+  useEffect(() => {
+    const onResize = () => setValue(scale());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return value;
+}
+
+function SlideIn({ show, width: base, side, children }: { show: boolean; width: number; side: "left" | "right"; children: React.ReactNode }) {
+  const width = Math.round(base * usePanelScale());
   return (
     <AnimatePresence initial={false}>
       {show && (

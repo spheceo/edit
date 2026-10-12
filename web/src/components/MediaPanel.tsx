@@ -11,7 +11,7 @@ import { useEditor } from "../lib/store";
 import { shortDuration } from "../lib/time";
 import type { Media, MediaStatus } from "../lib/types";
 import { cancelUpload, uploadFiles, useUploads, type Upload } from "../lib/upload";
-import { ResearchButton } from "./Research";
+import { ResearchTile } from "./Research";
 import { Button, cx, IconButton, ProgressRing, spring } from "./ui";
 
 export const MEDIA_MIME = "application/x-edit-media";
@@ -54,7 +54,6 @@ export function MediaPanel({ onImport, onResearch }: { onImport: () => void; onR
           )}
         </div>
         <div className="flex shrink-0 items-center">
-          <ResearchButton onOpen={onResearch} />
           <UploadButton />
           <Button size="sm" variant="ghost" onClick={onImport} title={`Add files already on ${machine} (⌘I)`}>
             <HardDrive size={13} /> {machine}
@@ -63,7 +62,7 @@ export function MediaPanel({ onImport, onResearch }: { onImport: () => void; onR
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <MediaGrid onImport={onImport} folder={folder} open={setOpened} show={show} uses={uses} />
+        <MediaGrid onImport={onImport} onResearch={onResearch} folder={folder} open={setOpened} show={show} uses={uses} />
       </div>
     </section>
   );
@@ -135,12 +134,14 @@ function UploadButton() {
 
 function MediaGrid({
   onImport,
+  onResearch,
   folder,
   open,
   show,
   uses,
 }: {
   onImport: () => void;
+  onResearch: () => void;
   folder: MediaFolder | null;
   open: (folder: MediaFolder) => void;
   show: Show;
@@ -173,7 +174,7 @@ function MediaGrid({
   const nothing = folder ? !items.length : !folders.length;
   return (
     <>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(116px,1fr))] gap-2">
         {uploads.map((upload) => (
           <UploadTile key={upload.id} upload={upload} />
         ))}
@@ -188,6 +189,11 @@ function MediaGrid({
                 <FolderTile folder={entry.id} label={entry.label} count={entry.items.length} onOpen={() => open(entry.id)} />
               </motion.div>
             ))}
+        {!folder && (
+          <motion.div initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ ...spring, delay: folders.length * 0.03 }}>
+            <ResearchTile onOpen={onResearch} />
+          </motion.div>
+        )}
       </div>
       {nothing && project.media.length > 0 && (
         <div className="px-4 py-8 text-center text-[12px] text-muted">

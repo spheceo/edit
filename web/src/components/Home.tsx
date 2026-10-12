@@ -83,6 +83,18 @@ export function Home() {
   );
 }
 
+/** The card's picture: a frame near the start rather than the first (often a
+ * dip from black), between 1 s in and 15% of the way (at most the first
+ * minute), picked per project so it stays the same between visits. */
+function coverFrame(project: ProjectSummary) {
+  const total = project.duration_frames;
+  const from = Math.min(total - 1, Math.round(project.fps));
+  const to = Math.max(from, Math.min(Math.round(total * 0.15), Math.round(project.fps * 60)));
+  let hash = 2166136261;
+  for (const c of project.id) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619) >>> 0;
+  return from + (hash % (to - from + 1));
+}
+
 function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; index: number; onChanged: () => void }) {
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -114,7 +126,7 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
         <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-line bg-panel transition-[border-color,transform] duration-200 group-hover:-translate-y-0.5 group-hover:border-line-strong">
           {project.duration_frames > 0 ? (
             <img
-              src={`/api/projects/${project.id}/frame/0.png?max=480`}
+              src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=480`}
               loading="lazy"
               alt=""
               className="max-h-full max-w-full opacity-0 transition-opacity duration-300"

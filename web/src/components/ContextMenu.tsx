@@ -46,16 +46,17 @@ export function openMenu(
 /** The button whose menu a press just closed: its click should not reopen it. */
 let closedFrom: Element | null = null;
 
-/** Opens a dropdown under `button`, or closes it if this button's menu is open. */
-export function toggleMenu(button: Element, items: MenuItem[], options: { width?: number } = {}) {
+/** Opens a dropdown under `button` (or at `at`), or closes it if this button's menu is open. */
+export function toggleMenu(button: Element, items: MenuItem[], options: { width?: number; at?: { x: number; y: number } } = {}) {
   if (closedFrom === button) {
     closedFrom = null;
     return;
   }
   const box = button.getBoundingClientRect();
-  const width = Math.max(options.width ?? 0, box.width);
-  // Right-aligned with the button, which sits at the end of its row.
-  openMenu({ clientX: box.right - width, clientY: box.bottom + 4, preventDefault: () => {} }, items, { width, owner: button });
+  const width = options.at ? (options.width ?? box.width) : Math.max(options.width ?? 0, box.width);
+  // By default right-aligned with the button, which sits at the end of its row.
+  const at = options.at ?? { x: box.right - width, y: box.bottom + 4 };
+  openMenu({ clientX: at.x, clientY: at.y, preventDefault: () => {} }, items, { width, owner: button });
 }
 
 const closeMenu = () => useMenu.setState({ menu: null });

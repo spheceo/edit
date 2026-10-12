@@ -47,7 +47,7 @@ import {
 import { buildTurns, callTitle, formatWorked, groupSummary, type Turn } from "../lib/agentTurns";
 import { useMachine } from "../lib/api";
 import { useEditor } from "../lib/store";
-import { openMenu, type MenuItem } from "./ContextMenu";
+import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { cx, IconButton } from "./ui";
 
 /** OpenAI's mark (same path phi uses). */
@@ -463,7 +463,8 @@ function Composer({ disabled }: { disabled: boolean }) {
 
   const pick = (event: React.MouseEvent<HTMLButtonElement>, items: MenuItem[], width: number) => {
     const box = event.currentTarget.getBoundingClientRect();
-    openMenu({ clientX: box.left, clientY: box.top - 4, preventDefault: () => {} }, items, { width });
+    // Clicking the picker again closes its menu.
+    toggleMenu(event.currentTarget, items, { width, at: { x: box.left, y: box.top - 4 } });
   };
 
   return (

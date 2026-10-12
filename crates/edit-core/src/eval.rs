@@ -222,6 +222,8 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         vignette_y: anim("vignette_y", grade.vignette_y),
                         vignette_size: anim("vignette_size", grade.vignette_size),
                         vignette_aspect: grade.vignette_aspect,
+                        focus_exposure: grade.focus_exposure,
+                        vignette_saturation: grade.vignette_saturation,
                     },
                     glitch: GlitchFrame {
                         // Amounts are at 1080p.

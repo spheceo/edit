@@ -24,6 +24,10 @@ struct Grade {
     slices: f32,
     rgb: f32,
     seed: f32,
+    // Inside the vignette's clear area: extra stops; where it falls: extra saturation.
+    focus_exposure: f32,
+    vignette_saturation: f32,
+    _q: vec2f,
 };
 
 @group(0) @binding(0) var<uniform> g: Grade;
@@ -67,15 +71,15 @@ fn hash(n: f32) -> f32 {
 }
 
 // How far the glitch slides the band at height `y` (frame widths). Bands of
-// uneven height: coarse ones, some cut again finer; about half of each move.
+// uneven height: tall ones, now and then one cut again; about half of each move.
 fn glitch_slide(y: f32) -> f32 {
     let coarse = floor(y * g.slices);
-    let fine = floor(y * g.slices * 4.0);
+    let fine = floor(y * g.slices * 3.0);
     var slide = 0.0;
     if (hash(coarse) > 0.45) {
         slide = (hash(coarse + 31.0) * 2.0 - 1.0);
     }
-    if (hash(fine + 57.0) > 0.8) {
+    if (hash(fine + 57.0) > 0.88) {
         slide += (hash(fine + 91.0) * 2.0 - 1.0) * 0.5;
     }
     return slide * g.glitch;
@@ -102,17 +106,19 @@ fn fs(in: VsOut) -> @location(0) vec4f {
         base.r = textureSampleLevel(src, samp, edge(shaken(start + split, g.shake, g.turn)), 0.0).r;
         base.b = textureSampleLevel(src, samp, edge(shaken(start - split, g.shake, g.turn)), 0.0).b;
     }
-    var lin = to_linear(max(base.rgb, vec3f(0.0))) * exp2(g.exposure);
+    // The vignette: 0 in its clear area, 1 where it's fully dark.
+    var d = (in.uv - 0.5) * vec2f(g.aspect, 1.0) - g.vignette_at;
+    d.x = d.x / g.vignette_aspect;
+    let r = length(d) / (length(vec2f(g.aspect, 1.0) * 0.5) * g.vignette_size);
+    let falloff = smoothstep(0.35, 1.0, r);
+    var lin = to_linear(max(base.rgb, vec3f(0.0))) * exp2(g.exposure + g.focus_exposure * (1.0 - falloff));
     let t = g.temperature;
     lin = lin * vec3f(1.0 + 0.18 * t, 1.0 + 0.02 * t, 1.0 - 0.18 * t);
     var s = to_srgb(max(lin, vec3f(0.0)));
     s = (s - 0.5) * (1.0 + g.contrast) + 0.5;
     let luma = dot(s, vec3f(0.2126, 0.7152, 0.0722));
-    s = mix(vec3f(luma), s, 1.0 + g.saturation);
-    var d = (in.uv - 0.5) * vec2f(g.aspect, 1.0) - g.vignette_at;
-    d.x = d.x / g.vignette_aspect;
-    let r = length(d) / (length(vec2f(g.aspect, 1.0) * 0.5) * g.vignette_size);
-    s = s * (1.0 - g.vignette * smoothstep(0.35, 1.0, r));
+    s = mix(vec3f(luma), s, max(1.0 + g.saturation + g.vignette_saturation * falloff, 0.0));
+    s = s * (1.0 - g.vignette * falloff);
     s = max(s, vec3f(0.0));
     return vec4f(mix(base.rgb, s, g.opacity), base.a);
 }

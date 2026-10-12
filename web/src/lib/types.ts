@@ -118,6 +118,10 @@ export interface Leader {
   color?: Rgba;
   /** Frames from the clip's start it takes to draw in. */
   draw?: number;
+  /** Where it meets the box: the nearest edge, or the middle of the side facing the point. */
+  attach?: "nearest" | "side";
+  /** Frames the box (and its words' animation) takes to come in once the line arrives. */
+  fade?: number;
 }
 
 export interface TextLabel {
@@ -184,13 +188,17 @@ export interface Grade {
   vignette_size?: number;
   /** The clear area's width / height (1 = round). */
   vignette_aspect?: number;
+  /** Stops added inside the clear area only. */
+  focus_exposure?: number;
+  /** Saturation change where the vignette falls only (-1..1). */
+  vignette_saturation?: number;
 }
 
 /** A digital glitch on everything below: horizontal bands of uneven height slide sideways, a new pattern each frame. */
 export interface Glitch {
   /** Pixels at 1080p the bands slide (0 = off). */
   amount: number;
-  /** Bands across the height (14). */
+  /** Bands across the height (6). */
   slices?: number;
   /** Colour split as a share of each band's slide (0.08). */
   rgb?: number;

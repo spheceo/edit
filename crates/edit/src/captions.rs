@@ -1134,6 +1134,7 @@ fn to_source(
 /// Tracks `region` ([x0, y0, x1, y1] project pixels from the top-left, as at
 /// timeline `time`) in the footage there, and keys clip `follow` to move with
 /// it for its whole length: centred on it, or just above or below it.
+#[allow(clippy::too_many_arguments)]
 pub async fn follow_region(
     app: &App,
     project_id: &str,
@@ -1142,6 +1143,7 @@ pub async fn follow_region(
     follow: &str,
     place: &str,
     what: &str,
+    offset: [f64; 2],
 ) -> Result<String, String> {
     let project = app.store.get(project_id).ok_or("no such project")?.project;
     let fps = project.fps();
@@ -1273,8 +1275,8 @@ pub async fn follow_region(
             handle_in: None,
             handle_out: None,
         };
-        xs.push(key(x));
-        ys.push(key(y));
+        xs.push(key(x + offset[0]));
+        ys.push(key(y + offset[1]));
     }
     if xs.len() < 2 {
         return Err(

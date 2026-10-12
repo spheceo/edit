@@ -67,6 +67,9 @@ struct GradeUniforms {
     glitch_slices: f32,
     glitch_rgb: f32,
     glitch_seed: f32,
+    focus_exposure: f32,
+    vignette_saturation: f32,
+    _pad2: [f32; 2],
 }
 
 #[repr(C)]
@@ -584,6 +587,22 @@ impl Renderer {
                     if *opacity <= 0.0 || text.is_empty() || self.fonts.is_empty() {
                         continue;
                     }
+                    // A callout's line draws first; once it reaches the box, the
+                    // box fades in and the words start their animation.
+                    let (line_opacity, line_frame) = (*opacity, *local_frame);
+                    let (shown, words_frame) =
+                        style
+                            .leader
+                            .as_deref()
+                            .map_or((1.0, *local_frame), |leader| {
+                                (
+                                    ((*local_frame - leader.draw) / leader.fade.max(1e-3))
+                                        .clamp(0.0, 1.0),
+                                    *local_frame - leader.draw,
+                                )
+                            });
+                    let opacity = &(*opacity * shown);
+                    let local_frame = &words_frame;
                     if !self.prepare_text(
                         &mut encoder,
                         &mut slots,
@@ -602,8 +621,8 @@ impl Renderer {
                         ..*transform
                     };
                     let scale = transform.scale.max(0.0);
-                    // 0. A callout's line, drawn in from its point to the box's
-                    // nearest edge (under the box, so it ends cleanly at it).
+                    // 0. A callout's line, drawn in from its point to the box
+                    // (under the box, so it ends cleanly at it).
                     if let Some(leader) = style.leader.as_deref() {
                         let pad = style.background.map_or([0.0, 0.0], |background| {
                             [
@@ -615,15 +634,24 @@ impl Renderer {
                             slot.block[0] / 2.0 + pad[0] * scale,
                             slot.block[1] / 2.0 + pad[1] * scale,
                         ];
-                        let (dx, dy) = (placed.x - leader.x, placed.y - leader.y);
+                        let (to_x, to_y) = match leader.attach {
+                            // The middle of the side facing the point.
+                            edit_core::LeaderAttach::Side => (
+                                placed.x + half[0] * if leader.x < placed.x { -1.0 } else { 1.0 },
+                                placed.y,
+                            ),
+                            // Where the way to the centre crosses the edge (box unturned).
+                            edit_core::LeaderAttach::Nearest => {
+                                let (dx, dy) = (placed.x - leader.x, placed.y - leader.y);
+                                let inside = (half[0] / dx.abs().max(1e-3))
+                                    .min(half[1] / dy.abs().max(1e-3))
+                                    .min(1.0);
+                                (placed.x - dx * inside, placed.y - dy * inside)
+                            }
+                        };
+                        let (dx, dy) = (to_x - leader.x, to_y - leader.y);
                         let length = (dx * dx + dy * dy).sqrt();
-                        // The share of the way that's inside the box (unturned).
-                        let inside = (half[0] / dx.abs().max(1e-3))
-                            .min(half[1] / dy.abs().max(1e-3))
-                            .min(1.0);
-                        let drawn = length
-                            * (1.0 - inside)
-                            * (*local_frame / leader.draw.max(1e-3)).clamp(0.0, 1.0);
+                        let drawn = length * (line_frame / leader.draw.max(1e-3)).clamp(0.0, 1.0);
                         if drawn > 0.5 {
                             let (ux, uy) = (dx / length, dy / length);
                             let line = Transform {
@@ -636,7 +664,7 @@ impl Renderer {
                                 &line,
                                 [drawn, leader.width * scale],
                                 half_canvas,
-                                *opacity,
+                                line_opacity,
                                 leader.color.0,
                                 MODE_SOLID,
                             );
@@ -940,6 +968,9 @@ impl Renderer {
                         glitch_slices: glitch.slices.max(1.0),
                         glitch_rgb: glitch.rgb,
                         glitch_seed: glitch.seed,
+                        focus_exposure: grade.focus_exposure,
+                        vignette_saturation: grade.vignette_saturation,
+                        _pad2: [0.0; 2],
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));

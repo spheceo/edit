@@ -509,6 +509,27 @@ pub struct Leader {
     /// Frames from the clip's start it takes to draw from the point to the box.
     #[serde(default = "default_leader_draw")]
     pub draw: f32,
+    /// Where it meets the box.
+    #[serde(default)]
+    pub attach: LeaderAttach,
+    /// Frames the box (and its words, which start their animation then)
+    /// takes to fade in once the line reaches it.
+    #[serde(default = "default_leader_fade")]
+    pub fade: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaderAttach {
+    /// The nearest point of the box's edge, on the way to its centre.
+    #[default]
+    Nearest,
+    /// The middle of the box's side facing the point (a box off to the side).
+    Side,
+}
+
+fn default_leader_fade() -> f32 {
+    8.0
 }
 
 fn default_leader_width() -> f32 {
@@ -973,6 +994,13 @@ pub struct Grade {
     /// The clear area's width over its height: 1 = round, 0.6 = tall (a standing person).
     #[serde(default = "one_f32", skip_serializing_if = "is_one")]
     pub vignette_aspect: f32,
+    /// Stops added inside the vignette's clear area only (lifts the person it's on).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub focus_exposure: f32,
+    /// Saturation change where the vignette falls only, -1..1 (-0.7 = the
+    /// surroundings nearly grey while the person keeps their colour).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub vignette_saturation: f32,
 }
 
 impl Default for Grade {
@@ -987,6 +1015,8 @@ impl Default for Grade {
             vignette_y: 0.0,
             vignette_size: 1.0,
             vignette_aspect: 1.0,
+            focus_exposure: 0.0,
+            vignette_saturation: 0.0,
         }
     }
 }
@@ -1008,7 +1038,7 @@ pub struct Glitch {
 }
 
 fn default_glitch_slices() -> f32 {
-    14.0
+    6.0
 }
 
 fn default_glitch_rgb() -> f32 {
@@ -1540,6 +1570,8 @@ fn content_finite(content: &ClipContent) -> bool {
                 grade.vignette_y,
                 grade.vignette_size,
                 grade.vignette_aspect,
+                grade.focus_exposure,
+                grade.vignette_saturation,
                 glitch.amount,
                 glitch.slices,
                 glitch.rgb,
@@ -1586,7 +1618,7 @@ fn content_finite(content: &ClipContent) -> bool {
                 })
                 && style.leader.as_deref().is_none_or(|leader| {
                     finite(&leader.color.0)
-                        && finite(&[leader.x, leader.y, leader.width, leader.draw])
+                        && finite(&[leader.x, leader.y, leader.width, leader.draw, leader.fade])
                 })
                 && style.shadow.is_none_or(|shadow| {
                     finite(&shadow.color.0)

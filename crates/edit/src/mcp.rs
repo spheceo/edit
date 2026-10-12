@@ -66,6 +66,7 @@ House editing style (videos cut from a script of police footage):
 - When the user corrects something or tells you how they like it, apply it everywhere it fits in the project, not just the one spot they pointed at.
 - Every footage range must play from its first word to its last (the Doc's "first....last" note). If one stops or starts a word short (e.g. it cuts at "hit that" when the range ends on "priuses"), run realign_script, then re-caption the clips it changed.
 - Redactions in the footage are deliberate; never cover or move them.
+- RESEARCH (when the user asks for images of a case): read the coverage first (search_web, read_page) for the names, the place, the date and what happened, then collect_images with specific queries from that (each person by name with the place, mugshots, the scene and street, the department, news stills), several angles, enough for the user to choose from. The user reviews them; only use found images they kept (they're in the media bin). A minor whose face the footage redacts is never shown, even when the news names them: never search for them by name or collect images of them, never use one that turns up (tell the user which, so they reject it).
 - track_region pins anything (text, an overlay) to a moving face or object."#;
 
 pub async fn reject_get() -> Response {
@@ -302,6 +303,30 @@ fn tools() -> Vec<Value> {
                 "fade_out": { "type": "number", "description": "Seconds of fade at the end, e.g. 1.5 when music is cut short. Default 0." }
             }),
             &["id", "times"],
+        ),
+        tool(
+            "search_web",
+            "Search the web privately from this machine (its own Chrome, headless, a throwaway profile: nothing in anyone's search history). Returns titles, links and snippets. Use it to learn a case from the news (names, the place, the date, what happened) before collecting images.",
+            json!({ "query": { "type": "string" } }),
+            &["query"],
+        ),
+        tool(
+            "read_page",
+            "The readable text of a web page (a news story from search_web), the same private way.",
+            json!({
+                "url": { "type": "string" },
+                "limit": { "type": "integer", "description": "Characters to return (default 12000)." }
+            }),
+            &["url"],
+        ),
+        tool(
+            "collect_images",
+            "Search images for each query (Bing, privately from this machine) and download the results into the project's Research review, where the user looks through them and keeps the ones they want (kept images land in the media bin). Skips duplicates and anything smaller than 360 px. Takes a minute or two. Make the queries specific, from what search_web and read_page found: names with the place, the street, \"<name> mugshot\", \"<place> crash scene\", the department.",
+            json!({
+                "queries": { "type": "array", "items": { "type": "string" } },
+                "per_query": { "type": "integer", "description": "Results to try per query (default 40, up to 150)." }
+            }),
+            &["queries"],
         ),
         tool(
             "set_loudness",
@@ -807,6 +832,57 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 },
             )?;
             Ok(text(format!("{placed}{level}")))
+        }
+        "search_web" => {
+            let query = args["query"]
+                .as_str()
+                .ok_or("query is required")?
+                .to_owned();
+            let found = tokio::task::spawn_blocking(move || crate::research::search_web(&query))
+                .await
+                .map_err(|error| error.to_string())??;
+            Ok(text(if found.is_empty() {
+                "nothing found".to_owned()
+            } else {
+                found
+                    .iter()
+                    .enumerate()
+                    .map(|(index, found)| {
+                        format!(
+                            "{}. {}\n   {}\n   {}",
+                            index + 1,
+                            found.title,
+                            found.url,
+                            found.snippet
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }))
+        }
+        "read_page" => {
+            let url = args["url"].as_str().ok_or("url is required")?.to_owned();
+            let limit = args["limit"].as_u64().unwrap_or(12_000).clamp(500, 60_000) as usize;
+            let page = tokio::task::spawn_blocking(move || crate::research::read_page(&url, limit))
+                .await
+                .map_err(|error| error.to_string())??;
+            Ok(text(page))
+        }
+        "collect_images" => {
+            let queries: Vec<String> = serde_json::from_value(args["queries"].clone())
+                .map_err(|error| error.to_string())?;
+            let per_query = args["per_query"].as_u64().unwrap_or(40).clamp(1, 150) as usize;
+            let home = store.home().to_path_buf();
+            let project = id.clone();
+            let (added, had, failed) = tokio::task::spawn_blocking(move || {
+                crate::research::collect(&home, &project, &queries, per_query)
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            let total = crate::research::items(store.home(), &id).len();
+            Ok(text(format!(
+                "added {added} new images to the Research review ({had} already there, {failed} couldn't be used: blocked, not an image or too small); {total} in all. The user reviews them in the media bin's Research view; the ones they keep land in the media bin."
+            )))
         }
         "set_loudness" => {
             let clip_ids: Vec<String> = serde_json::from_value(args["clip_ids"].clone())

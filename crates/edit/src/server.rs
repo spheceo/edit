@@ -77,6 +77,15 @@ pub fn router(app: App) -> Router {
         .route("/api/library", get(library))
         .route("/api/projects/{id}/library", post(library_import))
         .route(
+            "/api/projects/{id}/research",
+            get(research_items).post(research_collect),
+        )
+        .route("/api/projects/{id}/research/{item}", post(research_review))
+        .route(
+            "/api/projects/{id}/research/{item}/image",
+            get(research_image),
+        )
+        .route(
             "/api/projects/{id}/media/{media}/transcribe",
             post(transcribe_media),
         )
@@ -769,6 +778,131 @@ async fn library_import(
         .get(&id)
         .ok_or_else(|| not_found("no such project"))?;
     Ok(Json(json!({ "rev": live.rev, "media": media, "project": live.project })).into_response())
+}
+
+/// Images found for the project, for review.
+async fn research_items(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    app.store
+        .get(&id)
+        .ok_or_else(|| not_found("no such project"))?;
+    let home = app.store.home().to_path_buf();
+    Ok(Json(json!({
+        "items": crate::research::items(&home, &id),
+        "collecting": crate::research::collecting(&id),
+    }))
+    .into_response())
+}
+
+#[derive(Deserialize)]
+struct CollectBody {
+    queries: Vec<String>,
+    #[serde(default)]
+    per_query: Option<usize>,
+}
+
+/// Starts collecting images for searches (in the background; poll the list).
+async fn research_collect(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<CollectBody>,
+) -> ApiResult {
+    app.store
+        .get(&id)
+        .ok_or_else(|| not_found("no such project"))?;
+    let queries: Vec<String> = body
+        .queries
+        .into_iter()
+        .map(|query| query.trim().to_owned())
+        .filter(|query| !query.is_empty())
+        .collect();
+    if queries.is_empty() {
+        return Err(bad("say what to search for"));
+    }
+    if crate::research::collecting(&id) {
+        return Err(bad("already collecting images for this project"));
+    }
+    let home = app.store.home().to_path_buf();
+    let per_query = body.per_query.unwrap_or(40).clamp(1, 150);
+    tokio::task::spawn_blocking(move || {
+        if let Err(error) = crate::research::collect(&home, &id, &queries, per_query) {
+            eprintln!("edit: research: {error}");
+        }
+    });
+    Ok(Json(json!({ "started": true })).into_response())
+}
+
+#[derive(Deserialize)]
+struct ReviewBody {
+    status: String,
+    origin: String,
+}
+
+/// Keeps (into the media bin) or rejects a found image.
+async fn research_review(
+    State(app): State<App>,
+    UrlPath((id, item)): UrlPath<(String, String)>,
+    Json(body): Json<ReviewBody>,
+) -> ApiResult {
+    if !matches!(body.status.as_str(), "new" | "kept" | "rejected") {
+        return Err(bad("status is new, kept or rejected"));
+    }
+    let home = app.store.home().to_path_buf();
+    let found = crate::research::items(&home, &id)
+        .into_iter()
+        .find(|found| found.id == item)
+        .ok_or_else(|| not_found("no such found image"))?;
+    let mut media = found.media.clone();
+    // Kept the first time: into the media bin, named after its caption.
+    if body.status == "kept" && media.is_none() {
+        let (_, added, errors) =
+            import_paths(&app, &id, vec![found.file.clone()], false, &body.origin)
+                .await
+                .map_err(bad)?;
+        let media_id = added
+            .into_iter()
+            .next()
+            .ok_or_else(|| bad(format!("couldn't add it to the media bin: {errors:?}")))?;
+        let name: String = found.title.chars().take(80).collect();
+        if !name.trim().is_empty() {
+            app.store
+                .update(&id, &body.origin, |project| {
+                    if let Some(media) = project.media.iter_mut().find(|media| media.id == media_id)
+                    {
+                        media.name = name.clone();
+                    }
+                    Ok(())
+                })
+                .map_err(|error| bad(format!("{error:?}")))?;
+        }
+        media = Some(media_id);
+    }
+    let updated = crate::research::update(&home, &id, &item, |found| {
+        found.status = body.status.clone();
+        found.media = media.clone();
+    })
+    .map_err(bad)?;
+    let live = app
+        .store
+        .get(&id)
+        .ok_or_else(|| not_found("no such project"))?;
+    Ok(Json(json!({ "item": updated, "rev": live.rev, "project": live.project })).into_response())
+}
+
+async fn research_image(
+    State(app): State<App>,
+    UrlPath((id, item)): UrlPath<(String, String)>,
+    request: Request,
+) -> ApiResult {
+    let home = app.store.home().to_path_buf();
+    let found = crate::research::items(&home, &id)
+        .into_iter()
+        .find(|found| found.id == item)
+        .ok_or_else(|| not_found("no such found image"))?;
+    Ok(ServeFile::new(&found.file)
+        .oneshot(request)
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .into_response())
 }
 
 async fn media_status(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {

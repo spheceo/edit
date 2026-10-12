@@ -10,6 +10,7 @@ import { goToEnd, goToStart, useView } from "../lib/timelineView";
 import { uploadFiles } from "../lib/upload";
 import { ExportDialog } from "./ExportDialog";
 import { FileBrowser } from "./FileBrowser";
+import { Research } from "./Research";
 import { AgentPanel } from "./AgentPanel";
 import { MediaPanel } from "./MediaPanel";
 import { ScriptPanel } from "./ScriptPanel";
@@ -54,6 +55,7 @@ export function Editor({ id }: { id: string }) {
   const timelineHeight = useEditor((state) => state.timelineHeight);
   const [resizing, setResizing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [researching, setResearching] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,7 +101,7 @@ export function Editor({ id }: { id: string }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">
             <SlideIn show={workspace === "edit" && showMedia} width={MEDIA_WIDTH} side="left">
-              <MediaPanel onImport={() => setImporting(true)} />
+              <MediaPanel onImport={() => setImporting(true)} onResearch={() => setResearching(true)} />
             </SlideIn>
             <SlideIn show={workspace === "edit" && showInspector} width={SIDE_WIDTH} side="left">
               <SidePanel />
@@ -123,6 +125,7 @@ export function Editor({ id }: { id: string }) {
         </SlideIn>
       </div>
       <FileBrowser open={importing} onClose={() => setImporting(false)} />
+      <Research open={researching} onClose={() => setResearching(false)} />
       <AnimatePresence>
         {dropping && (
           <motion.div

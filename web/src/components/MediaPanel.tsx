@@ -11,6 +11,7 @@ import { useEditor } from "../lib/store";
 import { shortDuration } from "../lib/time";
 import type { Media, MediaStatus } from "../lib/types";
 import { cancelUpload, uploadFiles, useUploads, type Upload } from "../lib/upload";
+import { ResearchButton } from "./Research";
 import { Button, cx, IconButton, ProgressRing, spring } from "./ui";
 
 export const MEDIA_MIME = "application/x-edit-media";
@@ -26,7 +27,7 @@ const FOLDER_TINT: Record<MediaFolder, string> = {
   images: "text-violet-300",
 };
 
-export function MediaPanel({ onImport }: { onImport: () => void }) {
+export function MediaPanel({ onImport, onResearch }: { onImport: () => void; onResearch: () => void }) {
   const machine = useMachine();
   const project = useEditor((state) => state.project)!;
   const [opened, setOpened] = useState<MediaFolder | null>(null);
@@ -53,6 +54,7 @@ export function MediaPanel({ onImport }: { onImport: () => void }) {
           )}
         </div>
         <div className="flex shrink-0 items-center">
+          <ResearchButton onOpen={onResearch} />
           <UploadButton />
           <Button size="sm" variant="ghost" onClick={onImport} title={`Add files already on ${machine} (⌘I)`}>
             <HardDrive size={13} /> {machine}

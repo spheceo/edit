@@ -6,6 +6,7 @@ mod library;
 mod mcp;
 mod media;
 mod render;
+mod research;
 mod script;
 mod server;
 mod sfx;

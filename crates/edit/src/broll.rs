@@ -468,7 +468,7 @@ fn fetch(url: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn chrome() -> Option<PathBuf> {
+pub(crate) fn chrome() -> Option<PathBuf> {
     [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",

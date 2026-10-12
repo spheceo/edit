@@ -670,7 +670,7 @@ fn quote(value: &str) -> Result<String, String> {
     ))
 }
 
-fn encode(value: &str) -> String {
+pub(crate) fn encode(value: &str) -> String {
     value
         .bytes()
         .map(|byte| match byte {

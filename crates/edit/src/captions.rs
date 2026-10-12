@@ -198,10 +198,11 @@ pub fn caption_style(width: u32, height: u32) -> TextStyle {
             pad_y: 8.0 * k,
             ..TextBox::default()
         }),
+        // A wide, soft shadow that spreads well past the box.
         shadow: Some(TextShadow {
             distance: 3.0 * k,
-            size: 6.0 * k,
-            blur: 8.0 * k,
+            size: 9.0 * k,
+            blur: 14.0 * k,
             ..TextShadow::default()
         }),
         label: None,

@@ -1,28 +1,31 @@
-import { Check, ExternalLink, Images, Search, X } from "lucide-react";
+import { Check, ExternalLink, Images, Newspaper, Search, Trash2, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, type FoundImage } from "../lib/api";
+import { api, type FoundArticle, type FoundImage } from "../lib/api";
 import { clientId, useEditor } from "../lib/store";
 import { Button, cx, IconButton, Modal, Spinner } from "./ui";
 
-type Tab = "new" | "kept" | "rejected";
+type Tab = "new" | "kept" | "rejected" | "articles";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "new", label: "To review" },
   { id: "kept", label: "Kept" },
   { id: "rejected", label: "Rejected" },
+  { id: "articles", label: "Articles" },
 ];
 
 /** The project's found images, polled while anything might be adding to them. */
 export function useResearch(projectId: string, fast: boolean) {
   const [items, setItems] = useState<FoundImage[]>([]);
+  const [articles, setArticles] = useState<FoundArticle[]>([]);
   const [collecting, setCollecting] = useState(false);
   const refresh = useCallback(() => {
     api
       .research(projectId)
       .then((research) => {
         setItems(research.items);
+        setArticles(research.articles);
         setCollecting(research.collecting);
       })
       .catch(() => {});
@@ -32,7 +35,7 @@ export function useResearch(projectId: string, fast: boolean) {
     const timer = setInterval(refresh, collecting || fast ? 2000 : 6000);
     return () => clearInterval(timer);
   }, [refresh, collecting, fast]);
-  return { items, setItems, collecting, setCollecting, refresh };
+  return { items, setItems, articles, collecting, setCollecting, refresh };
 }
 
 const site = (url: string) => {
@@ -68,7 +71,7 @@ export function ResearchTile({ onOpen }: { onOpen: () => void }) {
 export function Research({ open, onClose }: { open: boolean; onClose: () => void }) {
   const project = useEditor((state) => state.project)!;
   const toast = useEditor((state) => state.toast);
-  const { items, setItems, collecting, setCollecting, refresh } = useResearch(project.id, open);
+  const { items, setItems, articles, collecting, setCollecting, refresh } = useResearch(project.id, open);
   const [tab, setTab] = useState<Tab>("new");
   const [focus, setFocus] = useState(0);
   const [looking, setLooking] = useState(false);
@@ -76,7 +79,15 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
   const grid = useRef<HTMLDivElement>(null);
 
   const shown = useMemo(() => items.filter((item) => item.status === tab).reverse(), [items, tab]);
-  const counts = useMemo(() => Object.fromEntries(TABS.map(({ id }) => [id, items.filter((item) => item.status === id).length])), [items]);
+  const counts: Record<Tab, number> = useMemo(
+    () => ({
+      new: items.filter((item) => item.status === "new").length,
+      kept: items.filter((item) => item.status === "kept").length,
+      rejected: items.filter((item) => item.status === "rejected").length,
+      articles: articles.length,
+    }),
+    [items, articles],
+  );
   const current = shown[Math.min(focus, shown.length - 1)];
 
   useEffect(() => setFocus((index) => Math.max(0, Math.min(index, shown.length - 1))), [shown.length]);
@@ -116,8 +127,19 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
     }
   };
 
+  const clear = async () => {
+    if (!window.confirm(`Remove the ${counts.new} images waiting for review? Kept and rejected ones stay.`)) return;
+    try {
+      const { removed } = await api.clearResearch(project.id);
+      toast(`Removed ${removed} unreviewed images`);
+      refresh();
+    } catch (error) {
+      toast((error as Error).message, "error");
+    }
+  };
+
   useEffect(() => {
-    if (!open) return;
+    if (!open || tab === "articles") return;
     const columns = () => {
       const tiles = grid.current?.querySelectorAll("[data-index]");
       if (!tiles || tiles.length < 2) return 1;
@@ -162,7 +184,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, shown.length, current, looking, review]);
+  }, [open, tab, shown.length, current, looking, review]);
 
   const imageUrl = (item: FoundImage) => `/api/projects/${project.id}/research/${item.id}/image`;
 
@@ -210,11 +232,19 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
               {collecting ? <Spinner /> : "Search"}
             </Button>
           </form>
+          {tab === "new" && counts.new > 0 && (
+            <IconButton label="Remove all images waiting for review" onClick={() => void clear()}>
+              <Trash2 size={14} />
+            </IconButton>
+          )}
           <IconButton label="Close" onClick={onClose}>
             <X size={15} />
           </IconButton>
         </header>
         <div className="relative min-h-0 flex-1">
+          {tab === "articles" ? (
+            <Articles articles={articles} />
+          ) : (
           <div ref={grid} className="h-full overflow-y-auto p-3">
             {shown.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-muted">
@@ -245,6 +275,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
               </div>
             )}
           </div>
+          )}
           <AnimatePresence>
             {looking && current && (
               <motion.div
@@ -280,6 +311,65 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
         </footer>
       </div>
     </Modal>
+  );
+}
+
+/** The case's news coverage, saved by research: a list beside a reader. */
+function Articles({ articles }: { articles: FoundArticle[] }) {
+  const [chosen, setChosen] = useState<string | null>(null);
+  const article = articles.find((candidate) => candidate.id === chosen) ?? articles[0];
+  if (!article) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-muted">
+        <Newspaper size={22} className="text-faint" />
+        No articles yet. Ask the agent to research the case.
+      </div>
+    );
+  }
+  const date = (value?: string) => {
+    const time = value ? Date.parse(value) : NaN;
+    return Number.isNaN(time) ? value : new Date(time).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  };
+  return (
+    <div className="flex h-full">
+      <div className="w-80 shrink-0 overflow-y-auto border-r border-line p-2">
+        {articles.map((candidate) => (
+          <button
+            key={candidate.id}
+            onClick={() => setChosen(candidate.id)}
+            className={cx(
+              "mb-1 block w-full rounded-lg p-2.5 text-left transition-colors",
+              candidate.id === article.id ? "bg-active" : "hover:bg-hover",
+            )}
+          >
+            <div className="line-clamp-2 text-[13px] font-medium">{candidate.title || candidate.url}</div>
+            <div className="mt-0.5 text-[11px] text-muted">
+              {candidate.outlet}
+              {candidate.published ? ` · ${date(candidate.published)}` : ""}
+            </div>
+          </button>
+        ))}
+      </div>
+      <article className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
+        <div className="mx-auto max-w-[68ch]">
+          <div className="text-[12px] text-muted">
+            {article.outlet}
+            {article.published ? ` · ${date(article.published)}` : ""}
+          </div>
+          <h2 className="mt-1 text-[20px] leading-snug font-semibold">{article.title}</h2>
+          <a href={article.url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-[12px] text-muted hover:text-fg">
+            Open the original <ExternalLink size={11} />
+          </a>
+          {article.summary && (
+            <p className="mt-4 rounded-lg border border-line bg-raised px-3.5 py-3 text-[13px] leading-relaxed">
+              <span className="font-medium">What it adds: </span>
+              {article.summary}
+            </p>
+          )}
+          <p className="mt-5 text-[14px] leading-7 whitespace-pre-line text-fg/85">{article.text}</p>
+        </div>
+      </article>
+    </div>
   );
 }
 

@@ -66,7 +66,7 @@ House editing style (videos cut from a script of police footage):
 - When the user corrects something or tells you how they like it, apply it everywhere it fits in the project, not just the one spot they pointed at.
 - Every footage range must play from its first word to its last (the Doc's "first....last" note). If one stops or starts a word short (e.g. it cuts at "hit that" when the range ends on "priuses"), run realign_script, then re-caption the clips it changed.
 - Redactions in the footage are deliberate; never cover or move them.
-- RESEARCH (when the user asks for images of a case), in this order: 1) Start from what the project already says: the script and the transcripts (read_transcript, media_transcript): the date, the city and street, the department, ages, vehicles, what happened, any names said. 2) Find the news articles about THIS case with search_web built from those details, and check each matches (same date, place and events) before trusting it. 3) Read them (read_page) for the key details the footage doesn't give: full names, the victim, the exact location, the charges and outcome. 4) Only then collect_images, with specific queries from those details (each person by name with the place, mugshots, the scene and street, the department, news stills), several angles, enough for the user to choose from. The user reviews them; only use found images they kept (they're in the media bin). A minor whose face the footage redacts is never shown, even when the news names them: never search for them by name or collect images of them, never use one that turns up (tell the user which, so they reject it).
+- RESEARCH (when the user asks for images of a case), in this order: 1) Start from what the project already says: the script and the transcripts (read_transcript, media_transcript): the date, the city and street, the department, ages, vehicles, what happened, any names said. 2) Find the news articles about THIS case with search_web built from those details, and check each matches (same date, place and events) before trusting it. 3) Read them (read_page) for the key details the footage doesn't give: full names, the victim, the exact location, the charges and outcome, and save every matching one with add_article (a short summary of what it adds): the user reads them in the project, and their photos go into the review. 4) Then collect_images, only for what's wanted: the scene of THIS incident (the crash, the wreck, the street as reported on the day), the people involved (victims by name, adult suspects by name, mugshots), and the vehicles involved, each query naming the case (names, place, date, "Kent hit-and-run"). Nothing else unless the user asks: no generic references, stock photos, maps, logos, buildings, court interiors or other incidents. 5) Weed it: go through every waiting image with look_at_found and reject_found anything that isn't the scene or the people involved (or what was asked), so the user only reviews real candidates. A minor whose face the footage redacts is never shown, even when the news names them: never search for them by name or collect images of them, and reject any that turn up.
 - track_region pins anything (text, an overlay) to a moving face or object."#;
 
 pub async fn reject_get() -> Response {
@@ -318,6 +318,30 @@ fn tools() -> Vec<Value> {
                 "limit": { "type": "integer", "description": "Characters to return (default 12000)." }
             }),
             &["url"],
+        ),
+        tool(
+            "add_article",
+            "Save a news article about THIS case into the project (the user reads it in the Research view: its text, outlet and date), and put the photos it carries into the review: an article's own photos are of the case, the best images there are. Only for articles you've checked match the case.",
+            json!({
+                "url": { "type": "string" },
+                "summary": { "type": "string", "description": "What it adds to the case in two or three sentences (who, where, what it reports that the footage doesn't)." }
+            }),
+            &["url", "summary"],
+        ),
+        tool(
+            "look_at_found",
+            "A contact sheet of found images still waiting for the user's review, numbered, with their ids and pages, so you can weed out what's off-target before the user looks (reject_found).",
+            json!({
+                "offset": { "type": "integer", "description": "Skip this many (default 0)." },
+                "count": { "type": "integer", "description": "How many (default 24, up to 36)." }
+            }),
+            &[],
+        ),
+        tool(
+            "reject_found",
+            "Reject found images (by id from look_at_found) that aren't of the scene, the people involved or what the user asked for. The user can still see them under Rejected.",
+            json!({ "ids": { "type": "array", "items": { "type": "string" } } }),
+            &["ids"],
         ),
         tool(
             "collect_images",
@@ -867,6 +891,83 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .await
                 .map_err(|error| error.to_string())??;
             Ok(text(page))
+        }
+        "add_article" => {
+            let url = args["url"].as_str().ok_or("url is required")?.to_owned();
+            let summary = args["summary"].as_str().unwrap_or_default().to_owned();
+            let (home, project) = (store.home().to_path_buf(), id.clone());
+            let (article, photos) = tokio::task::spawn_blocking(move || {
+                crate::research::add_article(&home, &project, &url, &summary)
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            Ok(text(format!(
+                "saved \"{}\" ({}{}) to the project's articles, and added {photos} of its photos to the review",
+                article.title,
+                article.outlet,
+                article.published.as_deref().map(|date| format!(", {date}")).unwrap_or_default()
+            )))
+        }
+        "look_at_found" => {
+            let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+            let count = args["count"].as_u64().unwrap_or(24).clamp(1, 36) as usize;
+            let waiting: Vec<_> = crate::research::items(store.home(), &id)
+                .into_iter()
+                .filter(|item| item.status == "new")
+                .collect();
+            let total = waiting.len();
+            let shown: Vec<_> = waiting.into_iter().skip(offset).take(count).collect();
+            if shown.is_empty() {
+                return Ok(text(format!(
+                    "no found images waiting from {offset} ({total} waiting)"
+                )));
+            }
+            let files: Vec<String> = shown.iter().map(|item| item.file.clone()).collect();
+            let thumbs = tokio::task::spawn_blocking(move || {
+                files
+                    .iter()
+                    .map(|file| {
+                        crate::research::thumbnail(std::path::Path::new(file)).unwrap_or(
+                            crate::render::RgbaImage {
+                                width: 320,
+                                height: 240,
+                                pixels: vec![0; 320 * 240 * 4],
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+            let png = encode_png(&tile(&thumbs, 6))?;
+            let list = shown
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    format!(
+                        "{} {} — {} ({})",
+                        offset + index + 1,
+                        item.id,
+                        item.title,
+                        item.page
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(image(
+                &png,
+                format!(
+                    "found images {}–{} of {total} waiting, left to right then down:\n{list}",
+                    offset + 1,
+                    offset + shown.len()
+                ),
+            ))
+        }
+        "reject_found" => {
+            let ids: Vec<String> =
+                serde_json::from_value(args["ids"].clone()).map_err(|error| error.to_string())?;
+            let count = crate::research::reject(store.home(), &id, &ids)?;
+            Ok(text(format!("rejected {count}")))
         }
         "collect_images" => {
             let queries: Vec<String> = serde_json::from_value(args["queries"].clone())

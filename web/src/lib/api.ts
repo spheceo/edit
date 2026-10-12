@@ -112,6 +112,18 @@ export interface FoundImage {
   media?: string;
 }
 
+/** A news article about the case, saved by research. */
+export interface FoundArticle {
+  id: string;
+  url: string;
+  title: string;
+  outlet: string;
+  published?: string;
+  /** What it adds to the case. */
+  summary: string;
+  text: string;
+}
+
 export const api = {
   projects: () => request<{ projects: ProjectSummary[] }>("GET", "/api/projects"),
   createProject: (body: { name: string; width: number; height: number; fps: number }) =>
@@ -130,7 +142,10 @@ export const api = {
   /** Downloads a library sound (first time) and adds it to the project's media. */
   importLibrary: (id: string, sound: string, origin: string) =>
     request<{ rev: number; media: string; project: Project }>("POST", `/api/projects/${id}/library`, { sound, origin }),
-  research: (id: string) => request<{ items: FoundImage[]; collecting: boolean }>("GET", `/api/projects/${id}/research`),
+  research: (id: string) =>
+    request<{ items: FoundImage[]; articles: FoundArticle[]; collecting: boolean }>("GET", `/api/projects/${id}/research`),
+  /** Drops the found images nobody has reviewed yet. */
+  clearResearch: (id: string) => request<{ removed: number }>("POST", `/api/projects/${id}/research/clear`),
   collectResearch: (id: string, queries: string[], perQuery: number) =>
     request<{ started: boolean }>("POST", `/api/projects/${id}/research`, { queries, per_query: perQuery }),
   /** Keeping adds the image to the media bin (once). */

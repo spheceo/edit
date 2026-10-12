@@ -212,7 +212,12 @@ pub fn read_page(url: &str, limit: usize) -> Result<String, String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("give a web address (http or https)".into());
     }
-    let mut text = dump(url)?;
+    Ok(readable(&dump(url)?).chars().take(limit).collect())
+}
+
+/// A page's readable text: scripts, styles and tags dropped.
+fn readable(page: &str) -> String {
+    let mut text = page.to_owned();
     // Drop what's never read: scripts, styles, svg and the like.
     for tag in ["script", "style", "noscript", "svg", "template"] {
         let (open, close) = (format!("<{tag}"), format!("</{tag}>"));
@@ -227,7 +232,192 @@ pub fn read_page(url: &str, limit: usize) -> Result<String, String> {
         kept.push_str(rest);
         text = kept;
     }
-    Ok(text_of(&text).chars().take(limit).collect())
+    text_of(&text)
+}
+
+/// A news article about the case, kept for the user to read in the project.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Article {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    /// The site (KING 5, Kent Reporter).
+    pub outlet: String,
+    /// As the page gives it (ISO), if it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<String>,
+    /// What it adds to the case, in the agent's words.
+    pub summary: String,
+    /// Its readable text.
+    pub text: String,
+}
+
+pub fn articles(home: &Path, project: &str) -> Vec<Article> {
+    std::fs::read(dir(home, project).join("articles.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Saves an article to the project (its text, title, outlet and date read
+/// from the page), and puts the photos it carries into the review: they're
+/// of this case, unlike most image search results. Returns the article and
+/// how many photos were added.
+pub fn add_article(
+    home: &Path,
+    project: &str,
+    url: &str,
+    summary: &str,
+) -> Result<(Article, usize), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("give a web address (http or https)".into());
+    }
+    let page = dump(url)?;
+    let metas = metas(&page);
+    let meta = |names: &[&str]| {
+        names.iter().find_map(|name| {
+            metas
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        })
+    };
+    let title = meta(&["og:title", "twitter:title"]).unwrap_or_else(|| {
+        page.split("<title")
+            .nth(1)
+            .and_then(|rest| rest.split_once('>'))
+            .map(|(_, rest)| text_of(rest.split("</title>").next().unwrap_or("")))
+            .unwrap_or_default()
+    });
+    let outlet = meta(&["og:site_name", "application-name"]).unwrap_or_else(|| site(url));
+    let article = Article {
+        id: hex(&Sha256::digest(url.as_bytes()))
+            .chars()
+            .take(16)
+            .collect(),
+        url: url.to_owned(),
+        title: title.clone(),
+        outlet: outlet.clone(),
+        published: meta(&["article:published_time", "datePublished", "pubdate"]),
+        summary: summary.to_owned(),
+        text: readable(&page).chars().take(60_000).collect(),
+    };
+    {
+        let _guard = INDEX.lock().unwrap();
+        std::fs::create_dir_all(dir(home, project)).map_err(|error| error.to_string())?;
+        let mut all = articles(home, project);
+        all.retain(|known| known.url != article.url);
+        all.push(article.clone());
+        let bytes = serde_json::to_vec_pretty(&all).map_err(|error| error.to_string())?;
+        crate::store::write_atomic(&dir(home, project).join("articles.json"), &bytes)
+            .map_err(|error| error.to_string())?;
+    }
+    // Its photos: the lead image and the ones in the story itself.
+    let body = page
+        .split("<article")
+        .nth(1)
+        .map(|rest| rest.split("</article>").next().unwrap_or(rest))
+        .unwrap_or(&page);
+    let mut images: Vec<String> = meta(&["og:image", "twitter:image"]).into_iter().collect();
+    for tag in body.split("<img").skip(1) {
+        let source = attribute(&format!(" {tag}"), "src")
+            .or_else(|| attribute(&format!(" {tag}"), "data-src"))
+            .unwrap_or_default();
+        let lower = source.to_lowercase();
+        let decoration = [
+            "logo", "icon", "avatar", "sprite", "pixel", "badge", ".svg", ".gif",
+        ]
+        .iter()
+        .any(|word| lower.contains(word));
+        if source.starts_with("http") && !decoration && !images.contains(&source) {
+            images.push(source);
+        }
+    }
+    images.truncate(12);
+    let hits: Vec<Hit> = images
+        .into_iter()
+        .map(|image| (image, url.to_owned(), title.clone()))
+        .collect();
+    let (added, ..) = store_hits(home, project, &format!("article: {outlet}"), hits)?;
+    Ok((article, added))
+}
+
+/// `<meta>` tags: (property or name, content).
+fn metas(page: &str) -> Vec<(String, String)> {
+    page.split("<meta")
+        .skip(1)
+        .filter_map(|tag| {
+            let tag = format!(" {tag}");
+            let key = attribute(&tag, "property")
+                .or_else(|| attribute(&tag, "name"))
+                .or_else(|| attribute(&tag, "itemprop"))?;
+            Some((key, attribute(&tag, "content")?))
+        })
+        .collect()
+}
+
+fn site(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .map(|host| host.trim_start_matches("www.").to_owned())
+        .unwrap_or_default()
+}
+
+/// Removes the found images nobody has reviewed yet (and their files).
+pub fn clear_unreviewed(home: &Path, project: &str) -> Result<usize, String> {
+    let _guard = INDEX.lock().unwrap();
+    let (gone, kept): (Vec<Item>, Vec<Item>) = read_index(home, project)
+        .into_iter()
+        .partition(|item| item.status == "new");
+    for item in &gone {
+        let _ = std::fs::remove_file(&item.file);
+    }
+    write_index(home, project, &kept)?;
+    Ok(gone.len())
+}
+
+/// Rejects found images (the agent's own pass before the user looks).
+pub fn reject(home: &Path, project: &str, ids: &[String]) -> Result<usize, String> {
+    let _guard = INDEX.lock().unwrap();
+    let mut items = read_index(home, project);
+    let mut count = 0;
+    for item in items
+        .iter_mut()
+        .filter(|item| ids.contains(&item.id) && item.status == "new")
+    {
+        item.status = "rejected".into();
+        count += 1;
+    }
+    write_index(home, project, &items)?;
+    Ok(count)
+}
+
+/// A found image shrunk into a 320×240 cell (letterboxed), for contact sheets.
+pub fn thumbnail(path: &Path) -> Option<crate::render::RgbaImage> {
+    let (width, height) = (320, 240);
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(path)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            &format!("scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    (output.stdout.len() == (width * height * 4) as usize).then_some(crate::render::RgbaImage {
+        width,
+        height,
+        pixels: output.stdout,
+    })
 }
 
 /// Searches images for each query (Bing), downloads them, and adds the new
@@ -260,8 +450,6 @@ fn collect_inner(
     queries: &[String],
     per_query: usize,
 ) -> Result<(usize, usize, usize), String> {
-    let folder = dir(home, project);
-    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     let seen: HashSet<String> = items(home, project)
         .iter()
         .flat_map(|item| [item.id.clone(), item.image.clone()])
@@ -291,7 +479,7 @@ fn collect_inner(
             first += PAGE;
         }
         hits.truncate(per_query);
-        let fresh: Vec<Hit> = hits
+        let hits: Vec<Hit> = hits
             .into_iter()
             .filter(|(image, ..)| {
                 let new = !seen.contains(image);
@@ -301,32 +489,54 @@ fn collect_inner(
                 new
             })
             .collect();
-        // A few downloads at a time.
-        for batch in fresh.chunks(8) {
-            let results: Vec<Option<Item>> = std::thread::scope(|scope| {
-                let handles: Vec<_> = batch
-                    .iter()
-                    .map(|hit| scope.spawn(|| download(&folder, hit, query)))
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|handle| handle.join().ok().flatten())
-                    .collect()
-            });
-            let _guard = INDEX.lock().unwrap();
-            let mut index = read_index(home, project);
-            for result in results {
-                match result {
-                    Some(item) if index.iter().any(|known| known.id == item.id) => had += 1,
-                    Some(item) => {
-                        index.push(item);
-                        added += 1;
-                    }
-                    None => failed += 1,
+        let (new, already, broken) = store_hits(home, project, query, hits)?;
+        added += new;
+        had += already;
+        failed += broken;
+    }
+    Ok((added, had, failed))
+}
+
+/// Downloads hits (a few at a time) into the review: (added, already there, failed).
+fn store_hits(
+    home: &Path,
+    project: &str,
+    query: &str,
+    hits: Vec<Hit>,
+) -> Result<(usize, usize, usize), String> {
+    let folder = dir(home, project);
+    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    let (mut added, mut had, mut failed) = (0, 0, 0);
+    for batch in hits.chunks(8) {
+        let results: Vec<Option<Item>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|hit| scope.spawn(|| download(&folder, hit, query)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().ok().flatten())
+                .collect()
+        });
+        let _guard = INDEX.lock().unwrap();
+        let mut index = read_index(home, project);
+        for result in results {
+            match result {
+                Some(item)
+                    if index
+                        .iter()
+                        .any(|known| known.id == item.id || known.image == item.image) =>
+                {
+                    had += 1
                 }
+                Some(item) => {
+                    index.push(item);
+                    added += 1;
+                }
+                None => failed += 1,
             }
-            write_index(home, project, &index)?;
         }
+        write_index(home, project, &index)?;
     }
     Ok((added, had, failed))
 }

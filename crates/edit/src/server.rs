@@ -80,6 +80,7 @@ pub fn router(app: App) -> Router {
             "/api/projects/{id}/research",
             get(research_items).post(research_collect),
         )
+        .route("/api/projects/{id}/research/clear", post(research_clear))
         .route("/api/projects/{id}/research/{item}", post(research_review))
         .route(
             "/api/projects/{id}/research/{item}/image",
@@ -788,6 +789,7 @@ async fn research_items(State(app): State<App>, UrlPath(id): UrlPath<String>) ->
     let home = app.store.home().to_path_buf();
     Ok(Json(json!({
         "items": crate::research::items(&home, &id),
+        "articles": crate::research::articles(&home, &id),
         "collecting": crate::research::collecting(&id),
     }))
     .into_response())
@@ -829,6 +831,15 @@ async fn research_collect(
         }
     });
     Ok(Json(json!({ "started": true })).into_response())
+}
+
+/// Drops the found images nobody has reviewed yet.
+async fn research_clear(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    app.store
+        .get(&id)
+        .ok_or_else(|| not_found("no such project"))?;
+    let removed = crate::research::clear_unreviewed(app.store.home(), &id).map_err(bad)?;
+    Ok(Json(json!({ "removed": removed })).into_response())
 }
 
 #[derive(Deserialize)]

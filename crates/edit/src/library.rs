@@ -377,6 +377,62 @@ pub async fn import(
     Ok((media_id, sound))
 }
 
+/// How loud `seconds` of a sound from `from` are, in LUFS: integrated over
+/// the stretch when it's longer than 3 s, else its loudest 400 ms (a hit is
+/// heard at its peak). Padded with silence so a click shorter than the
+/// window still measures.
+pub fn loudness(path: &Path, from: f64, seconds: f64) -> Result<f64, String> {
+    let output = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-nostats",
+            "-protocol_whitelist",
+            "file,pipe",
+        ])
+        .args([
+            "-ss",
+            &format!("{:.3}", from.max(0.0)),
+            "-t",
+            &format!("{:.3}", seconds.max(0.05)),
+        ])
+        .arg("-i")
+        .arg(path)
+        .args([
+            "-map",
+            "0:a:0",
+            "-af",
+            "apad=pad_dur=0.5,ebur128",
+            "-f",
+            "null",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    let log = String::from_utf8_lossy(&output.stderr);
+    let value = |line: &str, key: &str| {
+        line.split(key)
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|number| number.parse::<f64>().ok())
+    };
+    let peak = log
+        .lines()
+        .filter(|line| line.contains(" M:"))
+        .filter_map(|line| value(line, " M:"))
+        .fold(f64::NEG_INFINITY, f64::max);
+    let integrated = log
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with("I:"))
+        .and_then(|line| value(line, "I:"));
+    match integrated {
+        Some(integrated) if seconds > 3.0 && integrated > -70.0 => Ok(integrated),
+        _ if peak > -70.0 => Ok(peak),
+        _ => Err("that stretch of the sound is silent".into()),
+    }
+}
+
 /// Seconds into the sound of its loudest 10 ms.
 fn loudest(path: &Path) -> Result<f64, String> {
     const RATE: usize = 8000;

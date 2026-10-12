@@ -53,7 +53,7 @@ House editing style (videos cut from a script of police footage):
 - THE DATE CUT-IN (the "On <date>…" cut-in that opens the story) opens on where it happened: map_view of the place the narration names (the department, the station or the street; add the city and state), as a moving shot with the defaults and seconds = how long it's on screen, unless the user asks for another angle (each new view is a paid map session). Full frame at scale 1 from source_in 0, no scale keyframes: the camera slowly circles right and closes in. While the narration says the date, darken the background heavily with an adjustment beneath the text and show the date large and centered, in white (Geist 600, ~120 at 1080p, soft glow radius 40, strength 0.85, one line like "July 13th, 2024", rising into place letter by letter (animation {preset "rise", duration 14, stagger 1.5}, in frames), with shadow {color [0,0,0,1], opacity 1, distance 6, angle 112, size 10, blur 20}). Fade the date out after the spoken year, then lift the extra darkening and reveal the red building marker and floating place label together. Set map_view highlight_after to the reveal time in source seconds and highlight_fade to ~0.4 s; start the label at that time with a matching fade. The label sits just above the building (x = building.x, box bottom ~30 px above building.top, kept inside the frame), white (Geist 600, ~44 at 1080p, glow off), in an opaque black box (pad_x 20, pad_y 12) with a red border (2 px, border_color [1,0.1,0.1,1]) and shadow (opacity 0.85, distance 8, size 2, blur 18). Pin it using building_track x and y, same offsets and linear easing; when the label starts later, subtract its source start frame from tracking frames and interpolate its initial position. No state or city text. Then the cut-in's other B-roll.
 - CALLS WITHOUT PICTURE in the story (a 911 call, a voicemail): cover them with B-roll that moves slowly (a push-in), the glowing waveform and its dark vignette on top (see PHONE CALLS), and subtitles as everywhere after the intro.
 - VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Leave the cut-in cards and their words in place unless the user asks to remove them.
-- MUSIC AND SOUND EFFECTS come from the team's library (list_library, then add_from_library), when the user asks for them. They set the video's vibe, so choose it deliberately before placing anything: read the script and footage, decide the case's tone and tell the user which you chose and why. A murder or really dark case (death, abuse, a disturbing scene) gets the dark beds: drones, low tones, tension. A lighter or upbeat case (an entitled driver, an absurd arrest, someone getting their comeuppance) gets music with energy and play and lighter sound design, never horror drones, eerie beds or heartbeats. Move the music with the story (tension into a build-up, revelation at the reveal), never at random. If nothing in the library fits the tone, say so rather than forcing a track that doesn't. Pick by the library's notes and usage guide (a shutter on crime scene images, a hit on a reveal, mugshot or chapter title, a riser building into a reveal or hard cut). Music sits under the narration and never competes with it: start around -20 dB and go lower where the note says "low volume"; play only the part the note names ("first ~20 seconds", via seconds) and fade it out over ~1.5 s when it's cut short.
+- MUSIC AND SOUND EFFECTS come from the team's library (list_library, then add_from_library), when the user asks for them. They set the video's vibe, so choose it deliberately before placing anything: read the script and footage, decide the case's tone and tell the user which you chose and why. A murder or really dark case (death, abuse, a disturbing scene) gets the dark beds: drones, low tones, tension. A lighter or upbeat case (an entitled driver, an absurd arrest, someone getting their comeuppance) gets music with energy and play and lighter sound design, never horror drones, eerie beds or heartbeats. Move the music with the story (tension into a build-up, revelation at the reveal), never at random. If nothing in the library fits the tone, say so rather than forcing a track that doesn't. Pick by the library's notes and usage guide (a shutter on crime scene images, a hit on a reveal, mugshot or chapter title, a riser building into a reveal or hard cut). Play only the part a note names ("first ~20 seconds", via seconds) and fade music out over ~1.5 s when it's cut short. LEVELS: set them with add_from_library's loudness (LUFS), never a guessed volume_db, measured against the speech: run measure_audio over the span first. Music sits about 12 LU under the speech it plays beneath (voice-over or footage; about 16 under where the note says "low volume") and never competes with it; with nothing said over it, it can rise to about 6 under the speech around it. Accents must be clearly heard: a hit or stinger on a drop or reveal about as loud as the speech around it, risers, whooshes and shutters about 3–4 below that, small clicks about 8 below. Afterwards run measure_audio again: every sound you added is heard, and none drowns out a word.
 - PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
   - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: run add_subtitles (it defaults to everything after the intro). They sit bottom middle on the subtitles track, no animation, no tracking: white words without glow in a pure black box (opaque, unlike the intro captions' see-through 0.45 box), the speaker's name above in their colour ("Officer:"). The intro keeps its own speaker captions (caption_speakers), glow and all. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own.
@@ -291,11 +291,21 @@ fn tools() -> Vec<Value> {
             json!({
                 "id": { "type": "string", "description": "The sound's id from list_library." },
                 "times": { "type": "array", "items": { "type": "number" }, "description": "Seconds on the timeline." },
-                "volume_db": { "type": "number", "description": "Default 0." },
+                "loudness": { "type": "number", "description": "How loud it's heard, in LUFS (see the house style's levels): the tool measures the part that plays (a short sound by its loudest moment) and sets the volume to match. Prefer this to volume_db: library files differ in loudness by 20 dB or more." },
+                "volume_db": { "type": "number", "description": "A raw gain instead of loudness. Default 0." },
                 "seconds": { "type": "number", "description": "Play at most this long (e.g. a track's \"first ~20 seconds\")." },
                 "fade_out": { "type": "number", "description": "Seconds of fade at the end, e.g. 1.5 when music is cut short. Default 0." }
             }),
             &["id", "times"],
+        ),
+        tool(
+            "measure_audio",
+            "How loud each audio clip is as heard (after its volume) over a span of the timeline, in LUFS: integrated over stretches longer than 3 s, a short sound by its loudest moment. Use it to set music under the speech and voice-overs there, and to check a mix after placing sounds.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
+                "end": { "type": "number", "description": "Seconds on the timeline (default the end)." }
+            }),
+            &[],
         ),
         tool(
             "realign_script",
@@ -727,6 +737,27 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             let times: Vec<f64> =
                 serde_json::from_value(args["times"].clone()).map_err(|error| error.to_string())?;
             let (media_id, sound) = crate::library::import(app, &id, sound_id, ORIGIN).await?;
+            let seconds = args["seconds"].as_f64().filter(|seconds| *seconds > 0.0);
+            let mut volume_db = args["volume_db"].as_f64().unwrap_or(0.0);
+            let mut level = String::new();
+            if let Some(target) = args["loudness"].as_f64() {
+                let media = store
+                    .get(&id)
+                    .and_then(|live| live.project.media(&media_id).cloned())
+                    .ok_or("sound media vanished")?;
+                let length = seconds.unwrap_or(media.duration).min(media.duration);
+                let measured = tokio::task::spawn_blocking(move || {
+                    crate::library::loudness(std::path::Path::new(&media.path), 0.0, length)
+                })
+                .await
+                .map_err(|error| error.to_string())??;
+                // Never boost a near-silent stretch into noise.
+                volume_db = (target - measured).clamp(-40.0, 12.0);
+                level = format!(
+                    "; it measures {measured:.1} LUFS, so volume {volume_db:+.1} dB puts it at {:.1} LUFS",
+                    measured + volume_db
+                );
+            }
             let placed = place_sound(
                 store,
                 &id,
@@ -735,8 +766,8 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 Vec::new(),
                 &times,
                 Sound {
-                    volume_db: args["volume_db"].as_f64().unwrap_or(0.0) as f32,
-                    seconds: args["seconds"].as_f64().filter(|seconds| *seconds > 0.0),
+                    volume_db: volume_db as f32,
+                    seconds,
                     fade_out: args["fade_out"].as_f64().unwrap_or(0.0).max(0.0),
                     color: if sound.kind == "music" {
                         ClipColor::Green
@@ -745,7 +776,75 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     },
                 },
             )?;
-            Ok(text(placed))
+            Ok(text(format!("{placed}{level}")))
+        }
+        "measure_audio" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let project = live.project;
+            let fps = project.fps();
+            let start = (args["start"].as_f64().unwrap_or(0.0) * fps).round() as i64;
+            let end = args["end"]
+                .as_f64()
+                .map_or(project.duration(), |end| (end * fps).round() as i64);
+            let mut spans = Vec::new();
+            for clip in &project.clips {
+                let ClipContent::Audio {
+                    media,
+                    source_in,
+                    speed,
+                    volume_db,
+                } = &clip.content
+                else {
+                    continue;
+                };
+                let (from, to) = (clip.start.max(start), clip.end().min(end));
+                let Some(media) = project.media(media).filter(|_| to > from) else {
+                    continue;
+                };
+                let source = source_in + (from - clip.start) as f64 / fps * speed;
+                let seconds = (to - from) as f64 / fps * speed;
+                spans.push((
+                    clip.id.clone(),
+                    clip.name.clone().unwrap_or_else(|| media.name.clone()),
+                    clip.track.clone(),
+                    from as f64 / fps,
+                    to as f64 / fps,
+                    media.path.clone(),
+                    source,
+                    seconds,
+                    f64::from(*volume_db),
+                ));
+            }
+            spans.sort_by(|a, b| a.3.total_cmp(&b.3));
+            if spans.len() > 40 {
+                return Err(format!(
+                    "{} audio clips in that span; measure a shorter one",
+                    spans.len()
+                ));
+            }
+            let labels: std::collections::HashMap<String, String> = project
+                .tracks
+                .iter()
+                .filter_map(|track| Some((track.id.clone(), project.track_label(&track.id)?)))
+                .collect();
+            let lines = tokio::task::spawn_blocking(move || {
+                spans
+                    .into_iter()
+                    .map(|(clip, name, track, from, to, path, source, seconds, gain)| {
+                        let heard = crate::library::loudness(std::path::Path::new(&path), source, seconds)
+                            .map_or_else(|error| error, |lufs| format!("{:.1} LUFS", lufs + gain));
+                        let track = labels.get(&track).cloned().unwrap_or(track);
+                        format!("{clip} {track} {from:.2}–{to:.2}s {name}: {heard} (volume {gain:+.1} dB)")
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+            Ok(text(if lines.is_empty() {
+                "no audio in that span".to_owned()
+            } else {
+                lines.join("\n")
+            }))
         }
         "realign_script" => {
             let changed = crate::script::realign(app, &id).await?;

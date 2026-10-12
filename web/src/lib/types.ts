@@ -105,6 +105,19 @@ export interface TextStyle {
   shadow?: TextShadow;
   /** A small line above the text in its own colour (and box): who's speaking ("Officer:"). */
   label?: TextLabel;
+  /** A callout: a line from a point (a chin) to the box, drawn in when the clip starts. */
+  leader?: Leader;
+}
+
+/** A callout's line: from (x, y) (project px from the frame centre) to the nearest edge of the text's box. */
+export interface Leader {
+  x: number;
+  y: number;
+  /** Project pixels. */
+  width?: number;
+  color?: Rgba;
+  /** Frames from the clip's start it takes to draw in. */
+  draw?: number;
 }
 
 export interface TextLabel {
@@ -164,6 +177,23 @@ export interface Grade {
   saturation: number;
   temperature: number;
   vignette: number;
+  /** Where the vignette's light falls (project px from the frame centre); absent = centred. */
+  vignette_x?: number;
+  vignette_y?: number;
+  /** How far the clear area reaches (1 = whole frame). */
+  vignette_size?: number;
+  /** The clear area's width / height (1 = round). */
+  vignette_aspect?: number;
+}
+
+/** A digital glitch on everything below: horizontal bands of uneven height slide sideways, a new pattern each frame. */
+export interface Glitch {
+  /** Pixels at 1080p the bands slide (0 = off). */
+  amount: number;
+  /** Bands across the height (14). */
+  slices?: number;
+  /** Colour split as a share of each band's slide (0.08). */
+  rgb?: number;
 }
 
 export type ShakePreset = "none" | "handheld" | "vertical" | "horizontal" | "impact" | "earthquake";
@@ -264,6 +294,7 @@ export interface AdjustmentClip extends ClipBase {
   type: "adjustment";
   grade: Grade;
   shake?: Shake;
+  glitch?: Glitch;
   opacity: number;
 }
 
@@ -420,8 +451,8 @@ export interface Transcript {
 export const ANIMATABLE: Record<ClipType, string[]> = {
   video: ["opacity", "x", "y", "scale", "rotation", "shake"],
   audio: ["volume_db"],
-  text: ["opacity", "x", "y", "scale", "rotation", "shake", "size", "tracking", "glow.radius", "glow.strength"],
-  adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette"],
+  text: ["opacity", "x", "y", "scale", "rotation", "shake", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"],
+  adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "glitch"],
   solid: ["opacity"],
   waveform: ["opacity", "x", "y", "scale", "rotation", "gain", "glow.radius", "glow.strength"],
 };

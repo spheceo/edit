@@ -47,6 +47,12 @@ const PARAM_INFO: Record<string, { label: string; color: string; format: (value:
   saturation: { label: "Saturation", color: "#38bdf8", format: (v) => v.toFixed(2) },
   temperature: { label: "Temperature", color: "#fb923c", format: (v) => v.toFixed(2) },
   vignette: { label: "Vignette", color: "#a78bfa", format: (v) => v.toFixed(2) },
+  vignette_x: { label: "Vignette X", color: "#f87171", format: (v) => `${Math.round(v)} px` },
+  vignette_y: { label: "Vignette Y", color: "#86efac", format: (v) => `${Math.round(v)} px` },
+  vignette_size: { label: "Vignette size", color: "#c4b5fd", format: (v) => v.toFixed(2) },
+  glitch: { label: "Glitch", color: "#2dd4bf", format: (v) => `${Math.round(v)} px` },
+  "leader.x": { label: "Line start X", color: "#f87171", format: (v) => `${Math.round(v)} px` },
+  "leader.y": { label: "Line start Y", color: "#86efac", format: (v) => `${Math.round(v)} px` },
 };
 
 const EASES: { ease: Ease; label: string }[] = [

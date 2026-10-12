@@ -116,8 +116,10 @@ fn renders_gradient_glowing_title_and_grade() {
                     saturation: -0.3,
                     temperature: 0.0,
                     vignette: 0.6,
+                    ..Grade::default()
                 },
                 shake: Default::default(),
+                glitch: Default::default(),
                 opacity: 1.0,
             },
             Layer::Text {

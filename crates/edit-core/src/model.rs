@@ -236,6 +236,9 @@ impl Clip {
     }
 }
 
+// Text carries the most settings; a project holds a few hundred clips, so the
+// size is fine and boxing it would only add a hop to every match.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClipContent {
@@ -274,12 +277,14 @@ pub enum ClipContent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         word_times: Vec<f32>,
     },
-    /// Applies a grade, and camera shake, to everything composited beneath it.
+    /// Applies a grade, camera shake and a glitch to everything composited beneath it.
     Adjustment {
         #[serde(default)]
         grade: Grade,
         #[serde(default, skip_serializing_if = "Shake::is_off")]
         shake: Shake,
+        #[serde(default, skip_serializing_if = "Glitch::is_off")]
+        glitch: Glitch,
         #[serde(default = "one_f32")]
         opacity: f32,
     },
@@ -435,6 +440,10 @@ fn is_zero(value: &f32) -> bool {
     *value == 0.0
 }
 
+fn is_one(value: &f32) -> bool {
+    *value == 1.0
+}
+
 impl Default for Transform {
     fn default() -> Self {
         Self {
@@ -478,6 +487,40 @@ pub struct TextStyle {
     /// text has one): who's speaking ("Officer:").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<TextLabel>,
+    /// A straight line from a point in the picture (a person's chin) to the
+    /// text's box, drawn in from the point when the clip starts: a callout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<Box<Leader>>,
+}
+
+/// A callout's line: from (x, y) to the nearest edge of the text's box.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Leader {
+    /// The point it starts from: project pixels from the frame centre (y down).
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    /// Project pixels.
+    #[serde(default = "default_leader_width")]
+    pub width: f32,
+    #[serde(default = "default_leader_color")]
+    pub color: Rgba,
+    /// Frames from the clip's start it takes to draw from the point to the box.
+    #[serde(default = "default_leader_draw")]
+    pub draw: f32,
+}
+
+fn default_leader_width() -> f32 {
+    3.0
+}
+
+fn default_leader_color() -> Rgba {
+    Rgba([1.0, 0.1, 0.1, 1.0])
+}
+
+fn default_leader_draw() -> f32 {
+    10.0
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -624,6 +667,7 @@ impl Default for TextStyle {
             background: None,
             shadow: None,
             label: None,
+            leader: None,
         }
     }
 }
@@ -899,8 +943,8 @@ impl Shake {
     }
 }
 
-/// A basic grade. All zeros is identity.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+/// A basic grade. All zeros (and a vignette of size 1, round, centred) is identity.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Grade {
     /// Stops.
     #[serde(default)]
@@ -917,6 +961,74 @@ pub struct Grade {
     /// 0..1.
     #[serde(default)]
     pub vignette: f32,
+    /// Where the vignette's light falls: project pixels from the frame centre
+    /// (y down), so it can sit on a person and follow them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub vignette_x: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub vignette_y: f32,
+    /// How far the clear area reaches: 1 = the whole frame's vignette, 0.5 = half as far.
+    #[serde(default = "one_f32", skip_serializing_if = "is_one")]
+    pub vignette_size: f32,
+    /// The clear area's width over its height: 1 = round, 0.6 = tall (a standing person).
+    #[serde(default = "one_f32", skip_serializing_if = "is_one")]
+    pub vignette_aspect: f32,
+}
+
+impl Default for Grade {
+    fn default() -> Self {
+        Self {
+            exposure: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+            temperature: 0.0,
+            vignette: 0.0,
+            vignette_x: 0.0,
+            vignette_y: 0.0,
+            vignette_size: 1.0,
+            vignette_aspect: 1.0,
+        }
+    }
+}
+
+/// A digital glitch on everything beneath an adjustment layer: the picture
+/// is cut into horizontal bands of uneven height and some slide sideways,
+/// a new pattern every frame, with only a touch of colour split.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Glitch {
+    /// How far the bands slide at most, in pixels at 1080p (0 = off).
+    #[serde(default)]
+    pub amount: f32,
+    /// How many bands the frame is cut into.
+    #[serde(default = "default_glitch_slices")]
+    pub slices: f32,
+    /// Colour split as a share of each band's slide (0 = none).
+    #[serde(default = "default_glitch_rgb")]
+    pub rgb: f32,
+}
+
+fn default_glitch_slices() -> f32 {
+    14.0
+}
+
+fn default_glitch_rgb() -> f32 {
+    0.08
+}
+
+impl Default for Glitch {
+    fn default() -> Self {
+        Self {
+            amount: 0.0,
+            slices: default_glitch_slices(),
+            rgb: default_glitch_rgb(),
+        }
+    }
+}
+
+impl Glitch {
+    pub fn is_off(&self) -> bool {
+        self.amount == 0.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -973,6 +1085,8 @@ pub fn animatable_params(content: &ClipContent) -> &'static [&'static str] {
             "tracking",
             "glow.radius",
             "glow.strength",
+            "leader.x",
+            "leader.y",
         ],
         ClipContent::Adjustment { .. } => &[
             "opacity",
@@ -982,6 +1096,10 @@ pub fn animatable_params(content: &ClipContent) -> &'static [&'static str] {
             "saturation",
             "temperature",
             "vignette",
+            "vignette_x",
+            "vignette_y",
+            "vignette_size",
+            "glitch",
         ],
         ClipContent::Solid { .. } => &["opacity"],
         ClipContent::Waveform { .. } => &[
@@ -1408,6 +1526,7 @@ fn content_finite(content: &ClipContent) -> bool {
         ClipContent::Adjustment {
             grade,
             shake,
+            glitch,
             opacity,
         } => {
             let shake = shake.resolved();
@@ -1417,6 +1536,13 @@ fn content_finite(content: &ClipContent) -> bool {
                 grade.saturation,
                 grade.temperature,
                 grade.vignette,
+                grade.vignette_x,
+                grade.vignette_y,
+                grade.vignette_size,
+                grade.vignette_aspect,
+                glitch.amount,
+                glitch.slices,
+                glitch.rgb,
                 shake.amount,
                 shake.frequency,
                 shake.rotation,
@@ -1457,6 +1583,10 @@ fn content_finite(content: &ClipContent) -> bool {
                             background.border,
                         ])
                         && background.border >= 0.0
+                })
+                && style.leader.as_deref().is_none_or(|leader| {
+                    finite(&leader.color.0)
+                        && finite(&[leader.x, leader.y, leader.width, leader.draw])
                 })
                 && style.shadow.is_none_or(|shadow| {
                     finite(&shadow.color.0)

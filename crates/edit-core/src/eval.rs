@@ -32,6 +32,7 @@ pub enum Layer {
         grade: Grade,
         /// How the picture beneath moves this frame.
         shake: ShakeOffset,
+        glitch: GlitchFrame,
         opacity: f32,
     },
     Solid {
@@ -48,6 +49,17 @@ pub enum Layer {
         transform: Transform,
         opacity: f32,
     },
+}
+
+/// An adjustment's glitch this frame: how far its bands slide (project px),
+/// how many there are, the colour split, and which pattern (a new one every
+/// frame, different per clip).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlitchFrame {
+    pub amount: f32,
+    pub slices: f32,
+    pub rgb: f32,
+    pub seed: f32,
 }
 
 /// One sound a waveform shows: where its media is now, how fast it plays,
@@ -175,6 +187,10 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 style.tracking = anim("tracking", style.tracking);
                 style.glow.radius = anim("glow.radius", style.glow.radius);
                 style.glow.strength = anim("glow.strength", style.glow.strength);
+                if let Some(leader) = &mut style.leader {
+                    leader.x = anim("leader.x", leader.x);
+                    leader.y = anim("leader.y", leader.y);
+                }
                 Layer::Text {
                     clip: clip.id.clone(),
                     text,
@@ -188,6 +204,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
             ClipContent::Adjustment {
                 grade,
                 shake,
+                glitch,
                 opacity,
             } => {
                 let settings = shake.resolved();
@@ -201,6 +218,19 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         saturation: anim("saturation", grade.saturation),
                         temperature: anim("temperature", grade.temperature),
                         vignette: anim("vignette", grade.vignette),
+                        vignette_x: anim("vignette_x", grade.vignette_x),
+                        vignette_y: anim("vignette_y", grade.vignette_y),
+                        vignette_size: anim("vignette_size", grade.vignette_size),
+                        vignette_aspect: grade.vignette_aspect,
+                    },
+                    glitch: GlitchFrame {
+                        // Amounts are at 1080p.
+                        amount: anim("glitch", glitch.amount) * project.settings.height as f32
+                            / 1080.0,
+                        slices: glitch.slices.max(1.0),
+                        rgb: glitch.rgb,
+                        seed: ((seed_of(&clip.id) ^ (frame as u32).wrapping_mul(0x9E37_79B9)) % 997)
+                            as f32,
                     },
                     shake: shake_offset(
                         &clip.id,

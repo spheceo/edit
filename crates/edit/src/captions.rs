@@ -206,6 +206,7 @@ pub fn caption_style(width: u32, height: u32) -> TextStyle {
             ..TextShadow::default()
         }),
         label: None,
+        leader: None,
     }
 }
 
@@ -1140,6 +1141,7 @@ pub async fn follow_region(
     region: [f64; 4],
     follow: &str,
     place: &str,
+    what: &str,
 ) -> Result<String, String> {
     let project = app.store.get(project_id).ok_or("no such project")?.project;
     let fps = project.fps();
@@ -1242,6 +1244,15 @@ pub async fn follow_region(
             (sample.x + w / 2.0, sample.y + h / 2.0),
         );
         let (x, y) = match place {
+            // A point (the vignette's centre, a callout's start): the box's edge.
+            "above" | "below" if what != "position" => (
+                (x0 + x1) / 2.0,
+                if place == "above" {
+                    y0.min(y1)
+                } else {
+                    y0.max(y1)
+                },
+            ),
             "above" | "below" => anchor(
                 [y0, x0, y1, x1],
                 if place == "above" {
@@ -1277,8 +1288,13 @@ pub async fn follow_region(
             .iter_mut()
             .find(|clip| clip.id == follow)
             .ok_or("clip vanished")?;
-        clip.keyframes.insert("x".into(), xs);
-        clip.keyframes.insert("y".into(), ys);
+        let (x, y) = match what {
+            "vignette" => ("vignette_x", "vignette_y"),
+            "leader" => ("leader.x", "leader.y"),
+            _ => ("x", "y"),
+        };
+        clip.keyframes.insert(x.into(), xs);
+        clip.keyframes.insert(y.into(), ys);
         Ok(())
     })?;
     Ok(format!("{follow} now follows the box ({place}) with {count} tracked positions from the footage of {}", footage.id))

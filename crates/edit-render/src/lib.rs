@@ -57,6 +57,16 @@ struct GradeUniforms {
     from_y: f32,
     from_turn: f32,
     mirror: f32,
+    /// The vignette's centre (frame heights from the frame centre), reach and width over height.
+    vignette_x: f32,
+    vignette_y: f32,
+    vignette_size: f32,
+    vignette_aspect: f32,
+    /// The glitch: band slide (frame widths), band count, colour split, pattern.
+    glitch: f32,
+    glitch_slices: f32,
+    glitch_rgb: f32,
+    glitch_seed: f32,
 }
 
 #[repr(C)]
@@ -592,6 +602,61 @@ impl Renderer {
                         ..*transform
                     };
                     let scale = transform.scale.max(0.0);
+                    // 0. A callout's line, drawn in from its point to the box's
+                    // nearest edge (under the box, so it ends cleanly at it).
+                    if let Some(leader) = style.leader.as_deref() {
+                        let pad = style.background.map_or([0.0, 0.0], |background| {
+                            [
+                                background.pad_x + background.border,
+                                background.pad_y + background.border,
+                            ]
+                        });
+                        let half = [
+                            slot.block[0] / 2.0 + pad[0] * scale,
+                            slot.block[1] / 2.0 + pad[1] * scale,
+                        ];
+                        let (dx, dy) = (placed.x - leader.x, placed.y - leader.y);
+                        let length = (dx * dx + dy * dy).sqrt();
+                        // The share of the way that's inside the box (unturned).
+                        let inside = (half[0] / dx.abs().max(1e-3))
+                            .min(half[1] / dy.abs().max(1e-3))
+                            .min(1.0);
+                        let drawn = length
+                            * (1.0 - inside)
+                            * (*local_frame / leader.draw.max(1e-3)).clamp(0.0, 1.0);
+                        if drawn > 0.5 {
+                            let (ux, uy) = (dx / length, dy / length);
+                            let line = Transform {
+                                x: leader.x + ux * drawn / 2.0,
+                                y: leader.y + uy * drawn / 2.0,
+                                rotation: uy.atan2(ux).to_degrees(),
+                                ..placed
+                            };
+                            let uniforms = quad_uniforms(
+                                &line,
+                                [drawn, leader.width * scale],
+                                half_canvas,
+                                *opacity,
+                                leader.color.0,
+                                MODE_SOLID,
+                            );
+                            let offset = slots.push(
+                                &self.queue,
+                                &self.uniforms,
+                                bytemuck::bytes_of(&uniforms),
+                            );
+                            let group = self.bind(&self.blank.view);
+                            draw(
+                                &mut encoder,
+                                &self.over_pipeline,
+                                &self.accum[current].view,
+                                &group,
+                                offset,
+                                4,
+                                None,
+                            );
+                        }
+                    }
                     // 1. The box behind the lines.
                     if let Some(background) = style.background {
                         let size = [
@@ -843,9 +908,10 @@ impl Renderer {
                 Layer::Adjustment {
                     grade,
                     shake,
+                    glitch,
                     opacity,
                 } => {
-                    let still = *shake == edit_core::ShakeOffset::default();
+                    let still = *shake == edit_core::ShakeOffset::default() && glitch.amount == 0.0;
                     if still && (*opacity <= 0.0 || *grade == Grade::default()) {
                         continue;
                     }
@@ -866,6 +932,14 @@ impl Renderer {
                         from_y: shake.from_y / self.height as f32,
                         from_turn: shake.from_rotation.to_radians(),
                         mirror: if shake.mirror { 1.0 } else { 0.0 },
+                        vignette_x: grade.vignette_x / self.height as f32,
+                        vignette_y: grade.vignette_y / self.height as f32,
+                        vignette_size: grade.vignette_size.max(0.01),
+                        vignette_aspect: grade.vignette_aspect.max(0.05),
+                        glitch: glitch.amount / self.width as f32,
+                        glitch_slices: glitch.slices.max(1.0),
+                        glitch_rgb: glitch.rgb,
+                        glitch_seed: glitch.seed,
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));

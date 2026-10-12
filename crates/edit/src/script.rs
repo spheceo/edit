@@ -1719,6 +1719,7 @@ pub fn cut_in_style(width: u32, height: u32, text: &str) -> TextStyle {
         background: None,
         shadow: None,
         label: None,
+        leader: None,
     }
 }
 

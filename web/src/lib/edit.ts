@@ -500,14 +500,23 @@ const params: Record<string, [Getter, Setter]> = {
   saturation: [(c) => (c.type === "adjustment" ? c.grade.saturation : 0), (c, v) => c.type === "adjustment" && (c.grade.saturation = v)],
   temperature: [(c) => (c.type === "adjustment" ? c.grade.temperature : 0), (c, v) => c.type === "adjustment" && (c.grade.temperature = v)],
   vignette: [(c) => (c.type === "adjustment" ? c.grade.vignette : 0), (c, v) => c.type === "adjustment" && (c.grade.vignette = v)],
+  vignette_x: [(c) => (c.type === "adjustment" ? (c.grade.vignette_x ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.vignette_x = v)],
+  vignette_y: [(c) => (c.type === "adjustment" ? (c.grade.vignette_y ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.vignette_y = v)],
+  vignette_size: [(c) => (c.type === "adjustment" ? (c.grade.vignette_size ?? 1) : 1), (c, v) => c.type === "adjustment" && (c.grade.vignette_size = v)],
+  glitch: [
+    (c) => (c.type === "adjustment" ? (c.glitch?.amount ?? 0) : 0),
+    (c, v) => c.type === "adjustment" && (c.glitch = { ...c.glitch, amount: v }),
+  ],
+  "leader.x": [(c) => (c.type === "text" ? (c.style.leader?.x ?? 0) : 0), (c, v) => c.type === "text" && c.style.leader && (c.style.leader.x = v)],
+  "leader.y": [(c) => (c.type === "text" ? (c.style.leader?.y ?? 0) : 0), (c, v) => c.type === "text" && c.style.leader && (c.style.leader.y = v)],
 };
 
 /** Mirrors edit-core::animatable_params. */
 function animatableParams(clip: Clip): string[] {
   switch (clip.type) {
     case "video": return ["x", "y", "scale", "rotation", "shake", "opacity"];
-    case "text": return ["x", "y", "scale", "rotation", "shake", "opacity", "size", "tracking", "glow.radius", "glow.strength"];
-    case "adjustment": return ["shake", "exposure", "contrast", "saturation", "temperature", "vignette", "opacity"];
+    case "text": return ["x", "y", "scale", "rotation", "shake", "opacity", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"];
+    case "adjustment": return ["shake", "glitch", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "opacity"];
     case "solid": return ["opacity"];
     case "waveform": return ["x", "y", "scale", "rotation", "opacity", "gain", "glow.radius", "glow.strength"];
     case "audio": return ["volume_db"];

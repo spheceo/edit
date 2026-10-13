@@ -15,6 +15,8 @@ Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as t
 - `relay/` — Cloudflare Worker (`edit-relay`) that holds API keys (ElevenLabs; Google Maps for `map_view`, whose page in `crates/edit/src/map_page.html` loads 3D tiles through it) and rate-limits paid calls. Edit installs never get keys. Deploy from `relay/` with `bunx wrangler deploy`.
 - `web/` — React UI. Per-frame work (playhead, timeline canvas, preview) runs outside React; see `src/lib/playback.ts`.
 
+Projects are `~/.edit/projects/<id>.json`, written atomically. Before a save replaces one, the previous version is copied to `projects/history/<id>/<ms>.json` (at most every 10 minutes, the last 30 kept); deleting moves it (and its chat) to `projects/deleted/`. A project file that won't load is listed with its `problem` and never written over.
+
 When the model changes, update `edit-core`, `web/src/lib/types.ts`, the param tables in `web/src/lib/edit.ts`, and the model description in `crates/edit/src/mcp.rs` together.
 
 ## Checks

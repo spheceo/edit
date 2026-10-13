@@ -420,6 +420,8 @@ export interface ProjectSummary {
   fps: number;
   duration_frames: number;
   clips: number;
+  /** Why it can't be opened (its file is left as it is). */
+  problem?: string;
 }
 
 export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";

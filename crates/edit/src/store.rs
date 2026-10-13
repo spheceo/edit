@@ -12,6 +12,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
+/// How often a project's previous version is kept, and how many are kept.
+const HISTORY_EVERY_MS: u64 = 10 * 60 * 1000;
+const HISTORY_KEEP: usize = 30;
+
 pub struct Store {
     home: PathBuf,
     projects: Mutex<HashMap<String, Live>>,
@@ -36,6 +40,9 @@ pub struct ProjectSummary {
     pub fps: u32,
     pub duration_frames: i64,
     pub clips: usize,
+    /// Why it can't be opened (its file is kept as it is).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
 }
 
 pub enum UpdateError {
@@ -106,15 +113,36 @@ impl Store {
             let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 continue;
             };
-            let Some(live) = self.get(id) else {
-                continue;
-            };
             let modified_ms = entry
                 .metadata()
                 .and_then(|meta| meta.modified())
                 .ok()
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .map_or(0, |duration| duration.as_millis() as u64);
+            let live = match self.load(id) {
+                Ok(live) => live,
+                // Shown, not hidden: a project that won't open must not look deleted.
+                Err(Some(problem)) => {
+                    let name = std::fs::read(&path)
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                        .and_then(|value| value["name"].as_str().map(str::to_owned))
+                        .unwrap_or_else(|| id.to_owned());
+                    out.push(ProjectSummary {
+                        id: id.to_owned(),
+                        name,
+                        modified_ms,
+                        width: 0,
+                        height: 0,
+                        fps: 0,
+                        duration_frames: 0,
+                        clips: 0,
+                        problem: Some(problem),
+                    });
+                    continue;
+                }
+                Err(None) => continue,
+            };
             out.push(ProjectSummary {
                 id: live.project.id.clone(),
                 name: live.project.name.clone(),
@@ -124,6 +152,7 @@ impl Store {
                 fps: live.project.settings.fps,
                 duration_frames: live.project.duration(),
                 clips: live.project.clips.len(),
+                problem: None,
             });
         }
         out.sort_by_key(|summary| std::cmp::Reverse(summary.modified_ms));
@@ -131,21 +160,37 @@ impl Store {
     }
 
     pub fn get(&self, id: &str) -> Option<Live> {
+        self.load(id).ok()
+    }
+
+    /// The project, or why not: `None` when there's no such project, else
+    /// what's wrong with its file (which is left untouched).
+    fn load(&self, id: &str) -> Result<Live, Option<String>> {
         if !valid_id(id) {
-            return None;
+            return Err(None);
         }
         let mut projects = self.projects.lock();
         if let Some(live) = projects.get(id) {
-            return Some(live.clone());
+            return Ok(live.clone());
         }
-        let text = std::fs::read_to_string(self.path(id)).ok()?;
-        let project: Project = serde_json::from_str(&text).ok()?;
-        if project.id != id || project.validate().is_err() {
-            return None;
-        }
-        let live = Live { rev: 1, project };
-        projects.insert(id.to_owned(), live.clone());
-        Some(live)
+        let text = match std::fs::read_to_string(self.path(id)) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(None),
+            Err(error) => return Err(Some(format!("can't read it: {error}"))),
+        };
+        let problem = match serde_json::from_str::<Project>(&text) {
+            Ok(project) if project.id != id => format!("its file holds project {}", project.id),
+            Ok(project) => match project.validate() {
+                Ok(()) => {
+                    let live = Live { rev: 1, project };
+                    projects.insert(id.to_owned(), live.clone());
+                    return Ok(live);
+                }
+                Err(error) => format!("it doesn't validate: {error}"),
+            },
+            Err(error) => format!("it can't be read: {error}"),
+        };
+        Err(Some(problem))
     }
 
     pub fn create(&self, name: &str, settings: Settings) -> Result<Live, String> {
@@ -173,8 +218,15 @@ impl Store {
         if active.as_deref() == Some(id) {
             *active = None;
         }
-        let _ = std::fs::remove_file(self.chat_path(id));
-        std::fs::remove_file(self.path(id)).is_ok()
+        // Kept aside rather than erased, so a deletion can be undone by hand.
+        let bin = self.home.join("projects").join("deleted");
+        let _ = std::fs::create_dir_all(&bin);
+        let stamp = now_ms();
+        let _ = std::fs::rename(
+            self.chat_path(id),
+            bin.join(format!("{id}-{stamp}.chat.json")),
+        );
+        std::fs::rename(self.path(id), bin.join(format!("{id}-{stamp}.json"))).is_ok()
     }
 
     /// Replaces the project if `base_rev` is current. `origin` lets clients skip their own echo.
@@ -248,10 +300,44 @@ impl Store {
     }
 
     fn write(&self, project: &Project) -> std::io::Result<()> {
-        write_atomic(
-            &self.path(&project.id),
-            &serde_json::to_vec_pretty(project)?,
-        )
+        let path = self.path(&project.id);
+        // A bad save (a bug, an agent gone wrong) can always be walked back.
+        if let Err(error) = self.keep_history(&project.id, &path) {
+            eprintln!("edit: keeping history for {}: {error}", project.id);
+        }
+        write_atomic(&path, &serde_json::to_vec_pretty(project)?)
+    }
+
+    /// Copies the saved file to `projects/history/<id>/` before it's replaced,
+    /// at most every `HISTORY_EVERY`, keeping the last `HISTORY_KEEP`.
+    fn keep_history(&self, id: &str, path: &Path) -> std::io::Result<()> {
+        if !path.is_file() {
+            return Ok(());
+        }
+        let dir = self.home.join("projects").join("history").join(id);
+        std::fs::create_dir_all(&dir)?;
+        let mut kept: Vec<(u64, PathBuf)> = std::fs::read_dir(&dir)?
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let stamp = path.file_stem()?.to_str()?.parse().ok()?;
+                Some((stamp, path))
+            })
+            .collect();
+        kept.sort_unstable();
+        let now = now_ms();
+        if kept
+            .last()
+            .is_some_and(|(stamp, _)| now.saturating_sub(*stamp) < HISTORY_EVERY_MS)
+        {
+            return Ok(());
+        }
+        std::fs::copy(path, dir.join(format!("{now}.json")))?;
+        kept.push((now, PathBuf::new()));
+        for (_, old) in kept.iter().take(kept.len().saturating_sub(HISTORY_KEEP)) {
+            let _ = std::fs::remove_file(old);
+        }
+        Ok(())
     }
 
     pub fn set_active(&self, id: &str) {
@@ -317,6 +403,57 @@ pub fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nothing_is_lost_quietly() {
+        let dir = std::env::temp_dir().join(format!(
+            "edit-store-safety-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let store = Store::open(dir.clone()).unwrap();
+        // A file that won't parse is listed with why, not hidden, and left alone.
+        let broken = dir.join("projects").join("p1-1.json");
+        std::fs::write(&broken, br#"{"id": "p1-1", "name": "Old one", "clips": 7}"#).unwrap();
+        let listed = store.list();
+        let summary = listed.iter().find(|summary| summary.id == "p1-1").unwrap();
+        assert_eq!(summary.name, "Old one");
+        assert!(summary
+            .problem
+            .as_deref()
+            .unwrap()
+            .contains("can't be read"));
+        assert!(store.get("p1-1").is_none());
+        assert!(broken.is_file());
+
+        // Saving keeps the previous version (once per interval).
+        let live = store.create("kept", Settings::default()).unwrap();
+        let id = live.project.id.clone();
+        let mut renamed = live.project.clone();
+        renamed.name = "renamed".into();
+        store
+            .replace(&id, Some(live.rev), renamed.clone(), "test")
+            .ok()
+            .unwrap();
+        store.replace(&id, None, renamed, "test").ok().unwrap();
+        let history: Vec<_> = std::fs::read_dir(dir.join("projects/history").join(&id))
+            .unwrap()
+            .collect();
+        assert_eq!(history.len(), 1);
+
+        // Deleting moves it aside.
+        assert!(store.delete(&id));
+        assert!(store.get(&id).is_none());
+        let bin: Vec<String> = std::fs::read_dir(dir.join("projects/deleted"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(bin
+            .iter()
+            .any(|name| name.starts_with(&id) && name.ends_with(".json")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn stale_writer_gets_a_conflict_and_deleted_projects_stay_deleted() {

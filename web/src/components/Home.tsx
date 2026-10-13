@@ -1,4 +1,4 @@
-import { Ellipsis, Pencil, Plus, Trash2 } from "lucide-react";
+import { Ellipsis, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -121,10 +121,19 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
         animate={{ opacity: 1, y: 0 }}
         transition={{ ...spring, delay: Math.min(index, 12) * 0.03 }}
         className="group cursor-pointer"
-        onClick={() => !renaming && navigate(`/p/${project.id}`)}
+        onClick={() => {
+          if (renaming) return;
+          if (project.problem) toast(`“${project.name}” can't be opened: ${project.problem}`, "error");
+          else navigate(`/p/${project.id}`);
+        }}
       >
         <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-line bg-panel transition-[border-color] duration-200 group-hover:border-line-strong">
-          {project.duration_frames > 0 ? (
+          {project.problem ? (
+            <div className="flex flex-col items-center gap-2 px-6 text-center text-[12px] text-muted">
+              <TriangleAlert size={20} className="text-amber-400" />
+              Can't be opened
+            </div>
+          ) : project.duration_frames > 0 ? (
             <img
               src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=480`}
               loading="lazy"
@@ -172,15 +181,17 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
           ) : (
             <div className="truncate font-medium">{project.name}</div>
           )}
-          <div className="mt-0.5 text-[12px] text-muted tabular">
-            {project.width}×{project.height} · {project.fps}fps · {shortDuration(seconds)} · {ago(project.modified_ms)}
+          <div className="mt-0.5 truncate text-[12px] text-muted tabular" title={project.problem}>
+            {project.problem
+              ? `${project.problem} · ${ago(project.modified_ms)}`
+              : `${project.width}×${project.height} · ${project.fps}fps · ${shortDuration(seconds)} · ${ago(project.modified_ms)}`}
           </div>
         </div>
       </motion.div>
       <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
         <div className="p-6">
           <h2 className="text-[15px] font-semibold">Delete “{project.name}”?</h2>
-          <p className="mt-2 text-[13px] leading-relaxed text-muted">The project and its edit are removed. Your footage files stay where they are.</p>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted">The project and its edit are removed (a copy is kept in Edit's data folder). Your footage files stay where they are.</p>
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setDeleting(false)}>
               Cancel

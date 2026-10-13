@@ -12,6 +12,7 @@ pub fn run(url: Url) -> ! {
     let local = url.clone();
     let result = tauri::Builder::default()
         .setup(move |app| {
+            show_as_edit();
             let stays_inside = local.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(local.clone()))
                 .title("Edit")
@@ -95,3 +96,69 @@ pub fn adopt_shell_env() {
         }
     }
 }
+
+/// Run as a bare binary rather than from Edit.app, macOS shows the app (Dock,
+/// app switcher) by its file name, "edit". Give LaunchServices its display
+/// name instead, as Chromium does for its helpers. A bundle would do it too,
+/// but then macOS asks for folder access the terminal already has. The calls
+/// are private, so they're looked up at run time and skipped if missing.
+#[cfg(target_os = "macos")]
+fn show_as_edit() {
+    use std::ffi::{c_char, c_void, CString};
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringCreateWithCString(
+            allocator: *const c_void,
+            text: *const c_char,
+            encoding: u32,
+        ) -> *const c_void;
+    }
+    extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+    const RTLD_DEFAULT: *mut c_void = -2_isize as *mut c_void;
+    const UTF8: u32 = 0x0800_0100;
+    const DEFAULT_SESSION: i32 = -2;
+    type CurrentApp = unsafe extern "C" fn() -> *const c_void;
+    type SetInformation = unsafe extern "C" fn(
+        i32,
+        *const c_void,
+        *const c_void,
+        *const c_void,
+        *mut *const c_void,
+    ) -> i32;
+    let find = |name: &str| {
+        let name = CString::new(name).expect("symbol name");
+        // SAFETY: looking a symbol up by a valid C string.
+        unsafe { dlsym(RTLD_DEFAULT, name.as_ptr()) }
+    };
+    let (current, set, key) = (
+        find("_LSGetCurrentApplicationASN"),
+        find("_LSSetApplicationInformationItem"),
+        find("_kLSDisplayNameKey"),
+    );
+    if current.is_null() || set.is_null() || key.is_null() {
+        return;
+    }
+    // SAFETY: the symbols have these signatures (as Chromium declares them);
+    // `key` points at a CFStringRef; the name string lives for the process.
+    unsafe {
+        let current: CurrentApp = std::mem::transmute(current);
+        let set: SetInformation = std::mem::transmute(set);
+        let app = current();
+        if app.is_null() {
+            return;
+        }
+        let name = CFStringCreateWithCString(std::ptr::null(), c"Edit".as_ptr(), UTF8);
+        set(
+            DEFAULT_SESSION,
+            app,
+            *(key as *const *const c_void),
+            name,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_as_edit() {}

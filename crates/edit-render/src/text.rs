@@ -114,6 +114,9 @@ pub struct TextImage {
     pub pixels: Vec<u8>,
     /// The laid-out lines' box (widest line × line height × lines), centred in the image.
     pub block: [f32; 2],
+    /// The box around the glyphs drawn (all of them unless `shown_glyphs`): its
+    /// centre's offset from the image's, and its size. A background grows with it.
+    pub shown_box: [f32; 4],
     /// The label's line box (width, height) and how far its centre sits above the image's.
     pub label: Option<[f32; 3]>,
 }
@@ -337,11 +340,55 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
             previous = Some(ch);
         }
     }
+    let block = [block_width, line_advance * lines.len() as f32];
+    let shown_box = match spec.shown_glyphs {
+        None => [0.0, 0.0, block[0], block[1]],
+        Some(shown) => {
+            // Each line from its start to the end of its last glyph shown (all
+            // of it once every glyph is), down to the last line with any.
+            let (mut left, mut right, mut rows) = (f32::MAX, f32::MIN, 0);
+            let mut index = 0;
+            for (row, (glyphs, line_width)) in lines.iter().enumerate() {
+                let start = -line_width / 2.0;
+                let (mut end, mut whole) = (None, true);
+                for &(ch, x) in glyphs.iter().filter(|(ch, _)| !ch.is_whitespace()) {
+                    if index >= shown {
+                        whole = false;
+                        break;
+                    }
+                    index += 1;
+                    end = Some(x + font.metrics(ch, px).advance_width);
+                }
+                if let Some(end) = end {
+                    let end = if whole {
+                        *line_width
+                    } else {
+                        end.min(*line_width)
+                    };
+                    left = left.min(start);
+                    right = right.max(start + end);
+                    rows = row + 1;
+                }
+            }
+            if rows == 0 {
+                [0.0, 0.0, 0.0, 0.0]
+            } else {
+                let height = line_advance * rows as f32;
+                [
+                    (left + right) / 2.0,
+                    (height - block[1]) / 2.0,
+                    right - left,
+                    height,
+                ]
+            }
+        }
+    };
     Some(TextImage {
         width,
         height,
         pixels,
-        block: [block_width, line_advance * lines.len() as f32],
+        block,
+        shown_box,
         label: label.map(|(_, _, _, label_width, line, offset)| [label_width, line, offset]),
     })
 }

@@ -142,8 +142,11 @@ struct TextSlot {
     shadow_layer: Option<usize>,
     /// Output pixels the text image covers (equal to its texel size).
     size: [f32; 2],
-    /// The lines' box inside the image (for the background).
+    /// The lines' box inside the image (for a callout's line).
     block: [f32; 2],
+    /// The box around the glyphs shown: centre offset from the image's, size
+    /// (for the background, which grows with the words).
+    shown_box: [f32; 4],
     /// The label's line box (width, height) and how far its centre sits above the image's.
     label: Option<[f32; 3]>,
     last_used: u64,
@@ -687,12 +690,22 @@ impl Renderer {
                             );
                         }
                     }
-                    // 1. The box behind the lines.
-                    if let Some(background) = style.background {
+                    // 1. The box behind the lines, around the words shown so far.
+                    if let Some(background) = style
+                        .background
+                        .filter(|_| slot.shown_box[2] > 0.0 && slot.shown_box[3] > 0.0)
+                    {
+                        let [dx, dy, w, h] = slot.shown_box;
                         let size = [
-                            slot.block[0] + 2.0 * background.pad_x * scale,
-                            slot.block[1] + 2.0 * background.pad_y * scale,
+                            w + 2.0 * background.pad_x * scale,
+                            h + 2.0 * background.pad_y * scale,
                         ];
+                        let (sin, cos) = transform.rotation.to_radians().sin_cos();
+                        let boxed = Transform {
+                            x: placed.x + dx * cos - dy * sin,
+                            y: placed.y + dx * sin + dy * cos,
+                            ..placed
+                        };
                         // A shadow, cast by the box (the text's own would be hidden
                         // behind it): the box grown by `size`, blurred by `blur`,
                         // worked out exactly in the shader (a Gaussian-blurred box).
@@ -707,8 +720,8 @@ impl Renderer {
                             let reach =
                                 shadow.size * scale + background.border * scale + 3.0 * sigma;
                             let moved = Transform {
-                                x: placed.x + shadow.distance * scale * angle.sin(),
-                                y: placed.y - shadow.distance * scale * angle.cos(),
+                                x: boxed.x + shadow.distance * scale * angle.sin(),
+                                y: boxed.y - shadow.distance * scale * angle.cos(),
                                 ..placed
                             };
                             let mut tint = shadow.color.0;
@@ -743,7 +756,7 @@ impl Renderer {
                         let mut tint = background.color.0;
                         tint[3] *= background.opacity;
                         let uniforms =
-                            quad_uniforms(&placed, size, half_canvas, *opacity, tint, MODE_SOLID);
+                            quad_uniforms(&boxed, size, half_canvas, *opacity, tint, MODE_SOLID);
                         let offset =
                             slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));
                         let group = self.bind(&self.blank.view);
@@ -760,7 +773,6 @@ impl Renderer {
                         if background.border > 0.0 {
                             let line = background.border * scale;
                             let [w, h] = size;
-                            let (sin, cos) = transform.rotation.to_radians().sin_cos();
                             let strips = [
                                 ([w + 2.0 * line, line], [0.0, -(h + line) / 2.0]),
                                 ([w + 2.0 * line, line], [0.0, (h + line) / 2.0]),
@@ -769,8 +781,8 @@ impl Renderer {
                             ];
                             for (strip, [dx, dy]) in strips {
                                 let edge = Transform {
-                                    x: placed.x + dx * cos - dy * sin,
-                                    y: placed.y + dx * sin + dy * cos,
+                                    x: boxed.x + dx * cos - dy * sin,
+                                    y: boxed.y + dx * sin + dy * cos,
                                     ..placed
                                 };
                                 let uniforms = quad_uniforms(
@@ -1242,7 +1254,9 @@ impl Renderer {
                 image.height,
                 image.block,
             );
-            self.texts.get_mut(clip).expect("text slot").label = image.label;
+            let slot = self.texts.get_mut(clip).expect("text slot");
+            slot.label = image.label;
+            slot.shown_box = image.shown_box;
         }
         self.blur_glows(
             encoder,
@@ -1291,6 +1305,7 @@ impl Renderer {
                     shadow_layer: None,
                     size: [width as f32, height as f32],
                     block,
+                    shown_box: [0.0, 0.0, block[0], block[1]],
                     label: None,
                     last_used: frame,
                 },
@@ -1300,6 +1315,7 @@ impl Renderer {
         slot.key = key;
         slot.glow_key = 0;
         slot.block = block;
+        slot.shown_box = [0.0, 0.0, block[0], block[1]];
         slot.label = None;
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {

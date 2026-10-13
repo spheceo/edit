@@ -4,13 +4,14 @@
 //! places a story happens, from Google's photorealistic 3D map drawn in the
 //! local Chrome.
 
+use parking_lot::Mutex;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
@@ -509,7 +510,7 @@ fn map_jobs() -> &'static Mutex<HashMap<String, MapJob>> {
 
 /// `GET /api/maps/{token}`
 pub async fn map_page(UrlPath(token): UrlPath<String>) -> Response {
-    match map_jobs().lock().unwrap().get(&token) {
+    match map_jobs().lock().get(&token) {
         Some(job) => Html(job.page.clone()).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -517,12 +518,7 @@ pub async fn map_page(UrlPath(token): UrlPath<String>) -> Response {
 
 /// `POST /api/maps/{token}/frame/{index}`: one frame of a moving shot (image/jpeg).
 pub async fn map_frame(UrlPath((token, index)): UrlPath<(String, u32)>, body: Bytes) -> StatusCode {
-    let Some(dir) = map_jobs()
-        .lock()
-        .unwrap()
-        .get(&token)
-        .map(|job| job.frames.clone())
-    else {
+    let Some(dir) = map_jobs().lock().get(&token).map(|job| job.frames.clone()) else {
         return StatusCode::NOT_FOUND;
     };
     match std::fs::write(dir.join(format!("frame-{index:05}.jpg")), body) {
@@ -541,7 +537,6 @@ pub async fn map_shot(
 ) -> StatusCode {
     let waiting = map_jobs()
         .lock()
-        .unwrap()
         .get_mut(&token)
         .and_then(|job| job.done.take());
     let Some(waiting) = waiting else {
@@ -587,7 +582,7 @@ async fn render_map(config: &Value, width: u32, height: u32, frames: &Path) -> M
     ]);
     let (sender, receiver) = oneshot::channel();
     let page = MAP_PAGE.replace("__CONFIG__", &config.to_string().replace("</", "<\\/"));
-    map_jobs().lock().unwrap().insert(
+    map_jobs().lock().insert(
         token.clone(),
         MapJob {
             page,
@@ -630,7 +625,7 @@ async fn render_map(config: &Value, width: u32, height: u32, frames: &Path) -> M
         }
         Err(error) => Err(format!("chrome: {error}")),
     };
-    map_jobs().lock().unwrap().remove(&token);
+    map_jobs().lock().remove(&token);
     let _ = std::fs::remove_dir_all(&profile);
     answer
 }

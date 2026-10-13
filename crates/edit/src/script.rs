@@ -6,11 +6,12 @@
 //! Edit, resumable downloads, and no API key. Drive's "can't scan this file
 //! for viruses" page is skipped with `confirm=t`, or by following its form.
 
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, Instant};
 
 use edit_core::{
@@ -736,11 +737,11 @@ pub struct Jobs(Mutex<HashMap<String, Job>>);
 
 impl Jobs {
     pub fn get(&self, project: &str) -> Option<Job> {
-        self.0.lock().unwrap().get(project).cloned()
+        self.0.lock().get(project).cloned()
     }
 
     fn claim(&self, app: &App, project: &str, job: Job) -> bool {
-        let mut jobs = self.0.lock().unwrap();
+        let mut jobs = self.0.lock();
         if jobs
             .get(project)
             .is_some_and(|job| matches!(job.state, "downloading" | "transcribing" | "placing"))
@@ -756,7 +757,7 @@ impl Jobs {
 
     fn set(&self, app: &App, project: &str, edit: impl FnOnce(&mut Job)) {
         let job = {
-            let mut jobs = self.0.lock().unwrap();
+            let mut jobs = self.0.lock();
             let job = jobs.entry(project.to_owned()).or_insert_with(|| Job {
                 state: "downloading",
                 error: None,
@@ -956,7 +957,7 @@ pub fn download(
     static DOWNLOADS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
     let lock = {
-        let mut downloads = DOWNLOADS.lock().unwrap();
+        let mut downloads = DOWNLOADS.lock();
         downloads.retain(|_, lock| lock.strong_count() > 0);
         let lock = downloads
             .get(dir)
@@ -965,7 +966,7 @@ pub fn download(
         downloads.insert(dir.to_path_buf(), Arc::downgrade(&lock));
         lock
     };
-    let _guard = lock.lock().unwrap();
+    let _guard = lock.lock();
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     if let Ok(name) = std::fs::read_to_string(dir.join(".done")) {
         let path = dir.join(name.trim());
@@ -1371,106 +1372,116 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
     let app = app.clone();
     let id = project_id.to_owned();
     tokio::spawn(async move {
-        let mut done: Vec<(String, Vec<Excerpt>)> = Vec::new();
-        for (index, file) in files.iter().enumerate() {
-            app.scripts
-                .set(&app, &id, |job| job.files[index].state = "downloading");
-            let dir = app.store.drive_dir().join(file);
-            let result = {
-                let (app, id, file) = (app.clone(), id.clone(), file.clone());
-                tokio::task::spawn_blocking(move || {
-                    let last = Mutex::new(Instant::now() - Duration::from_secs(1));
-                    download(&dir, &file, &|bytes, total, name| {
-                        let mut last = last.lock().unwrap();
-                        if last.elapsed() < Duration::from_millis(350) {
-                            return;
-                        }
-                        *last = Instant::now();
-                        app.scripts.set(&app, &id, |job| {
-                            let entry = &mut job.files[index];
-                            entry.bytes = bytes;
-                            entry.total = total;
-                            entry.name = Some(name.to_owned());
-                        });
-                    })
-                })
-                .await
-                .unwrap_or_else(|error| Err(error.to_string()))
-            };
-            // Then only the parts the script uses become media.
-            let result = match result {
-                Ok(path) => {
-                    app.scripts
-                        .set(&app, &id, |job| job.files[index].state = "cutting");
-                    let ranges = app
-                        .store
-                        .get(&id)
-                        .map(|live| file_ranges(&live.project, file))
-                        .unwrap_or_default();
-                    let cut = tokio::task::spawn_blocking({
-                        let path = path.clone();
-                        move || excerpts(&path, &ranges)
+        let (job_app, job_id) = (app.clone(), id.clone());
+        let work = async move {
+            let mut done: Vec<(String, Vec<Excerpt>)> = Vec::new();
+            for (index, file) in files.iter().enumerate() {
+                app.scripts
+                    .set(&app, &id, |job| job.files[index].state = "downloading");
+                let dir = app.store.drive_dir().join(file);
+                let result = {
+                    let (app, id, file) = (app.clone(), id.clone(), file.clone());
+                    tokio::task::spawn_blocking(move || {
+                        let last = Mutex::new(Instant::now() - Duration::from_secs(1));
+                        download(&dir, &file, &|bytes, total, name| {
+                            let mut last = last.lock();
+                            if last.elapsed() < Duration::from_millis(350) {
+                                return;
+                            }
+                            *last = Instant::now();
+                            app.scripts.set(&app, &id, |job| {
+                                let entry = &mut job.files[index];
+                                entry.bytes = bytes;
+                                entry.total = total;
+                                entry.name = Some(name.to_owned());
+                            });
+                        })
                     })
                     .await
-                    .unwrap_or_else(|error| Err(error.to_string()));
-                    cut.map(|cut| (path, cut))
+                    .unwrap_or_else(|error| Err(error.to_string()))
+                };
+                // Then only the parts the script uses become media.
+                let result = match result {
+                    Ok(path) => {
+                        app.scripts
+                            .set(&app, &id, |job| job.files[index].state = "cutting");
+                        let ranges = app
+                            .store
+                            .get(&id)
+                            .map(|live| file_ranges(&live.project, file))
+                            .unwrap_or_default();
+                        let cut = tokio::task::spawn_blocking({
+                            let path = path.clone();
+                            move || excerpts(&path, &ranges)
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(error.to_string()));
+                        cut.map(|cut| (path, cut))
+                    }
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok((path, cut)) => {
+                        let (bytes, name) = (
+                            std::fs::metadata(&path).map_or(0, |meta| meta.len()),
+                            path.file_name()
+                                .map(|name| name.to_string_lossy().to_string()),
+                        );
+                        app.scripts.set(&app, &id, |job| {
+                            let entry = &mut job.files[index];
+                            entry.state = "done";
+                            entry.bytes = bytes;
+                            entry.total = Some(bytes);
+                            entry.name = name;
+                        });
+                        done.push((file.clone(), cut));
+                    }
+                    Err(error) => app.scripts.set(&app, &id, |job| {
+                        job.files[index].state = "failed";
+                        job.files[index].error = Some(error);
+                    }),
                 }
-                Err(error) => Err(error),
-            };
-            match result {
-                Ok((path, cut)) => {
-                    let (bytes, name) = (
-                        std::fs::metadata(&path).map_or(0, |meta| meta.len()),
-                        path.file_name()
-                            .map(|name| name.to_string_lossy().to_string()),
-                    );
-                    app.scripts.set(&app, &id, |job| {
-                        let entry = &mut job.files[index];
-                        entry.state = "done";
-                        entry.bytes = bytes;
-                        entry.total = Some(bytes);
-                        entry.name = name;
-                    });
-                    done.push((file.clone(), cut));
-                }
-                Err(error) => app.scripts.set(&app, &id, |job| {
-                    job.files[index].state = "failed";
-                    job.files[index].error = Some(error);
-                }),
             }
-        }
-        app.scripts.set(&app, &id, |job| job.state = "placing");
-        let result = place(&app, &id, done, recut).await;
-        let placed = result.is_ok();
-        app.scripts.set(&app, &id, |job| {
-            let failed = job
-                .files
-                .iter()
-                .filter(|file| file.state == "failed")
-                .count();
-            job.state = if result.is_err() || failed > 0 {
-                "failed"
-            } else {
-                "done"
-            };
-            job.error = result.err().or_else(|| {
-                (failed > 0).then(|| {
-                    format!(
-                        "{failed} of {} files couldn't be downloaded.",
-                        job.files.len()
-                    )
-                })
+            app.scripts.set(&app, &id, |job| job.state = "placing");
+            let result = place(&app, &id, done, recut).await;
+            let placed = result.is_ok();
+            app.scripts.set(&app, &id, |job| {
+                let failed = job
+                    .files
+                    .iter()
+                    .filter(|file| file.state == "failed")
+                    .count();
+                job.state = if result.is_err() || failed > 0 {
+                    "failed"
+                } else {
+                    "done"
+                };
+                job.error = result.err().or_else(|| {
+                    (failed > 0).then(|| {
+                        format!(
+                            "{failed} of {} files couldn't be downloaded.",
+                            job.files.len()
+                        )
+                    })
+                });
             });
-        });
-        // A new edit starts with the case's research, so the articles and
-        // images are waiting by the time the editing gets to them.
-        let home = app.store.home();
-        let researched = !crate::research::articles(home, &id).is_empty()
-            || !crate::research::items(home, &id).is_empty();
-        if placed && !recut && !researched {
-            if let Err(error) = app.agents.send(&id, RESEARCH.to_owned(), None, None).await {
-                eprintln!("edit: research didn't start for {id}: {error}");
+            // A new edit starts with the case's research, so the articles and
+            // images are waiting by the time the editing gets to them.
+            let home = app.store.home();
+            let researched = !crate::research::articles(home, &id).is_empty()
+                || !crate::research::items(home, &id).is_empty();
+            if placed && !recut && !researched {
+                if let Err(error) = app.agents.send(&id, RESEARCH.to_owned(), None, None).await {
+                    eprintln!("edit: research didn't start for {id}: {error}");
+                }
             }
+        };
+        // A crash fails the import instead of leaving it mid-way for good.
+        if let Err(error) = crate::guard::catch_async("the script import", work).await {
+            job_app.scripts.set(&job_app, &job_id, |job| {
+                job.state = "failed";
+                job.error = Some(error);
+            });
         }
     });
 }

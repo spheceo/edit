@@ -3,9 +3,9 @@
 //! Scribe's voice numbers with a role, and a name when the footage says one.
 //! The labels are saved into the transcript itself.
 
+use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -71,7 +71,7 @@ pub fn set_role(
         return Err(format!("role is one of {}", ROLES.join(", ")));
     }
     let target = app.media.paths(source).transcript;
-    let _guard = TRANSCRIPT_EDITS.lock().unwrap();
+    let _guard = TRANSCRIPT_EDITS.lock();
     let mut transcript = read(&target).ok_or("no transcript")?;
     transcript.roles.insert(voice.to_owned(), role.to_owned());
     match label.map(str::trim).filter(|label| !label.is_empty()) {
@@ -133,8 +133,11 @@ pub fn watch(app: App) {
                 Ok(event)
                     if event["type"] == "media" && event["status"]["transcript"] == "ready" =>
                 {
+                    // One bad file mustn't stop the watching.
                     if let Some(path) = event["path"].as_str() {
-                        ensure(&app, Path::new(path));
+                        let _ = crate::guard::catch("naming speakers", || {
+                            ensure(&app, Path::new(path))
+                        });
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -159,7 +162,7 @@ pub fn ensure(app: &App, source: &Path) {
         return;
     }
     {
-        let mut naming = NAMING.lock().unwrap();
+        let mut naming = NAMING.lock();
         if !naming
             .get_or_insert_with(HashSet::new)
             .insert(source.to_path_buf())
@@ -169,12 +172,14 @@ pub fn ensure(app: &App, source: &Path) {
     }
     let (app, source) = (app.clone(), source.to_path_buf());
     tokio::spawn(async move {
-        if let Err(error) = name(&app, &source, &target).await {
+        let named = crate::guard::catch_async("naming speakers", name(&app, &source, &target))
+            .await
+            .and_then(|result| result);
+        if let Err(error) = named {
             eprintln!("edit: naming speakers in {}: {error}", source.display());
         }
         NAMING
             .lock()
-            .unwrap()
             .get_or_insert_with(HashSet::new)
             .remove(&source);
     });
@@ -333,7 +338,7 @@ async fn name(app: &App, source: &Path, target: &Path) -> Result<(), String> {
         .await?;
     let named: Named = serde_json::from_str(answer.trim()).map_err(|error| error.to_string())?;
     // Re-read so nothing written meanwhile is lost, then save the names into it.
-    let _guard = TRANSCRIPT_EDITS.lock().unwrap();
+    let _guard = TRANSCRIPT_EDITS.lock();
     let mut transcript = read(target).ok_or("no transcript")?;
     for speaker in &named.speakers {
         transcript

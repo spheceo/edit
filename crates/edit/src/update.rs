@@ -8,10 +8,11 @@
 //! Only release builds update themselves (the workflow builds with
 //! EDIT_RELEASE=1); a dev build would otherwise swap out target/debug/edit.
 
+use parking_lot::Mutex;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -100,7 +101,7 @@ impl Updater {
     /// The current state, asking the relay first if it's been a while.
     pub async fn status(self: &Arc<Self>) -> Status {
         let due = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let due = enabled()
                 && !state.checking
                 && state.phase == Phase::Idle
@@ -114,7 +115,7 @@ impl Updater {
                 .await
                 .ok()
                 .and_then(Result::ok);
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.checking = false;
             if let Some(found) = found {
                 state.latest = found;
@@ -125,7 +126,7 @@ impl Updater {
     }
 
     fn snapshot(&self) -> Status {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         Status {
             current: VERSION,
             latest: state.latest.as_ref().map(|release| release.tag.clone()),
@@ -142,7 +143,7 @@ impl Updater {
             return Err("this build doesn't update itself; pull and rebuild".to_owned());
         }
         let release = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             if state.phase != Phase::Idle {
                 drop(state);
                 return Ok(self.snapshot());
@@ -156,12 +157,15 @@ impl Updater {
         let this = Arc::clone(self);
         std::thread::spawn(move || {
             let staged = this.home.join("updates");
-            let result = install(&release, &staged, |progress| {
-                this.state.lock().unwrap().progress = progress;
-            });
+            let result = crate::guard::catch("the update", || {
+                install(&release, &staged, |progress| {
+                    this.state.lock().progress = progress;
+                })
+            })
+            .and_then(|result| result);
             match result {
                 Ok(exe) => {
-                    this.state.lock().unwrap().phase = Phase::Restarting;
+                    this.state.lock().phase = Phase::Restarting;
                     println!("edit: updated to {}; restarting", release.tag);
                     // Let the request that started this (and a status poll) answer first.
                     std::thread::sleep(Duration::from_millis(500));
@@ -169,7 +173,7 @@ impl Updater {
                 }
                 Err(error) => {
                     eprintln!("edit: update to {} failed: {error}", release.tag);
-                    let mut state = this.state.lock().unwrap();
+                    let mut state = this.state.lock();
                     state.phase = Phase::Idle;
                     state.progress = 0.0;
                     state.error = Some(error);

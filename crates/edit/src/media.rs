@@ -5,12 +5,13 @@
 //! a few frames to land anywhere and plays forward on one decoder. Sound is a
 //! separate AAC file, so decoding it never downloads the picture.
 
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use edit_core::MediaKind;
@@ -231,7 +232,7 @@ impl Processor {
 
     pub fn status(&self, source: &Path) -> MediaStatus {
         let key = media_key(source);
-        if let Some(status) = self.status.lock().unwrap().get(&key) {
+        if let Some(status) = self.status.lock().get(&key) {
             return status.clone();
         }
         self.status_from_disk(source)
@@ -276,7 +277,7 @@ impl Processor {
     fn set(&self, source: &Path, change: impl FnOnce(&mut MediaStatus)) {
         let key = media_key(source);
         let status = {
-            let mut map = self.status.lock().unwrap();
+            let mut map = self.status.lock();
             let entry = map
                 .entry(key)
                 .or_insert_with(|| self.status_from_disk(source));
@@ -293,7 +294,7 @@ impl Processor {
     /// Starts whatever work is missing for `source`. Safe to call repeatedly.
     pub fn ensure(self: &Arc<Self>, source: PathBuf, probe: Probe) {
         let key = media_key(&source);
-        if !self.processing.lock().unwrap().insert(key.clone()) {
+        if !self.processing.lock().insert(key.clone()) {
             return;
         }
         let paths = self.paths(&source);
@@ -308,7 +309,8 @@ impl Processor {
                 return;
             };
             let worker = Arc::clone(&this);
-            let _ = tokio::task::spawn_blocking(move || {
+            let job_source = source.clone();
+            let outcome = tokio::task::spawn_blocking(move || {
                 let status = worker.status(&source);
                 let paths = worker.paths(&source);
                 if probe.kind == MediaKind::Video && status.thumbs != Stage::Ready {
@@ -360,7 +362,26 @@ impl Processor {
                 }
             })
             .await;
-            this.processing.lock().unwrap().remove(&key);
+            // A crash mid-way leaves no stage "working" (and the file can be processed again).
+            if let Err(error) = outcome {
+                let message = error
+                    .try_into_panic()
+                    .map(|payload| crate::guard::message(&*payload))
+                    .unwrap_or_else(|error| error.to_string());
+                eprintln!(
+                    "edit: processing {} crashed: {message}",
+                    job_source.display()
+                );
+                this.set(&job_source, |status| {
+                    for stage in [&mut status.thumbs, &mut status.peaks, &mut status.proxy] {
+                        if *stage == Stage::Working {
+                            *stage = Stage::Failed;
+                        }
+                    }
+                    status.error = Some(format!("processing crashed ({message})"));
+                });
+            }
+            this.processing.lock().remove(&key);
         });
     }
 }
@@ -370,7 +391,7 @@ impl Processor {
     pub fn transcribe(self: &Arc<Self>, source: PathBuf, has_audio: bool) -> MediaStatus {
         {
             let key = media_key(&source);
-            let mut statuses = self.status.lock().unwrap();
+            let mut statuses = self.status.lock();
             let current = statuses
                 .entry(key)
                 .or_insert_with(|| self.status_from_disk(&source));
@@ -389,12 +410,18 @@ impl Processor {
         let this = Arc::clone(self);
         let target = self.paths(&source).transcript;
         let job_source = source.clone();
-        tokio::task::spawn_blocking(move || match crate::transcribe::run(&job_source, &target) {
-            Ok(()) => this.set(&job_source, |status| status.transcript = Stage::Ready),
-            Err(error) => this.set(&job_source, |status| {
-                status.transcript = Stage::Failed;
-                status.transcript_error = Some(error);
-            }),
+        tokio::task::spawn_blocking(move || {
+            match crate::guard::catch("transcription", || {
+                crate::transcribe::run(&job_source, &target)
+            })
+            .and_then(|result| result)
+            {
+                Ok(()) => this.set(&job_source, |status| status.transcript = Stage::Ready),
+                Err(error) => this.set(&job_source, |status| {
+                    status.transcript = Stage::Failed;
+                    status.transcript_error = Some(error);
+                }),
+            }
         });
         self.status(&source)
     }

@@ -1,10 +1,10 @@
 //! Projects on disk plus the live revision every client and agent edits against.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use edit_core::{Project, Settings};
@@ -134,7 +134,7 @@ impl Store {
         if !valid_id(id) {
             return None;
         }
-        let mut projects = self.projects.lock().unwrap();
+        let mut projects = self.projects.lock();
         if let Some(live) = projects.get(id) {
             return Some(live.clone());
         }
@@ -159,7 +159,7 @@ impl Store {
         project.validate()?;
         self.write(&project).map_err(|error| error.to_string())?;
         let live = Live { rev: 1, project };
-        self.projects.lock().unwrap().insert(id, live.clone());
+        self.projects.lock().insert(id, live.clone());
         Ok(live)
     }
 
@@ -167,9 +167,9 @@ impl Store {
         if !valid_id(id) {
             return false;
         }
-        let mut projects = self.projects.lock().unwrap();
+        let mut projects = self.projects.lock();
         projects.remove(id);
-        let mut active = self.active.lock().unwrap();
+        let mut active = self.active.lock();
         if active.as_deref() == Some(id) {
             *active = None;
         }
@@ -223,7 +223,7 @@ impl Store {
         project: Project,
         origin: &str,
     ) -> Result<Live, UpdateError> {
-        let mut projects = self.projects.lock().unwrap();
+        let mut projects = self.projects.lock();
         // Another writer may have landed between read and commit.
         let current = projects.get(id).ok_or(UpdateError::NotFound)?;
         if current.rev != rev {
@@ -255,7 +255,7 @@ impl Store {
     }
 
     pub fn set_active(&self, id: &str) {
-        *self.active.lock().unwrap() = Some(id.to_owned());
+        *self.active.lock() = Some(id.to_owned());
     }
 
     /// Explicit id, else the project the UI has open, else the most recent.
@@ -266,7 +266,7 @@ impl Store {
                 .map(|_| id.to_owned())
                 .ok_or_else(|| format!("no project {id}"));
         }
-        if let Some(id) = self.active.lock().unwrap().clone() {
+        if let Some(id) = self.active.lock().clone() {
             return Ok(id);
         }
         self.list()

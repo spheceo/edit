@@ -13,12 +13,13 @@
 //! seconds, low volume") and a usage guide (a Doc on what each category is
 //! for); both are read with the listing.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -84,11 +85,11 @@ impl Library {
     /// is a couple of minutes old, Drive is read again behind the answer.
     pub fn list(self: &Arc<Self>, refresh: bool) -> Result<Arc<Listing>, String> {
         if !refresh {
-            if let Some((at, listing)) = &*self.listing.lock().unwrap() {
+            if let Some((at, listing)) = &*self.listing.lock() {
                 if at.elapsed() >= FRESH && !self.refreshing.swap(true, Ordering::SeqCst) {
                     let library = Arc::clone(self);
                     std::thread::spawn(move || {
-                        let _ = library.reread();
+                        let _ = crate::guard::catch("rereading the library", || library.reread());
                         library.refreshing.store(false, Ordering::SeqCst);
                     });
                 }
@@ -100,7 +101,7 @@ impl Library {
 
     fn reread(&self) -> Result<Arc<Listing>, String> {
         let listing = Arc::new(self.read()?);
-        *self.listing.lock().unwrap() = Some((Instant::now(), Arc::clone(&listing)));
+        *self.listing.lock() = Some((Instant::now(), Arc::clone(&listing)));
         Ok(listing)
     }
 
@@ -217,7 +218,7 @@ impl Library {
     }
 
     fn token(&self) -> Result<String, String> {
-        let mut cached = self.token.lock().unwrap();
+        let mut cached = self.token.lock();
         if let Some((token, until)) = &*cached {
             if Instant::now() < *until {
                 return Ok(token.clone());
@@ -273,14 +274,8 @@ impl Library {
             .join(sound.kind)
             .join(sound.md5.get(..12).unwrap_or(&sound.md5));
         let path = dir.join(safe_name(&sound.file));
-        let lock = Arc::clone(
-            self.downloads
-                .lock()
-                .unwrap()
-                .entry(sound.id.clone())
-                .or_default(),
-        );
-        let _guard = lock.lock().unwrap();
+        let lock = Arc::clone(self.downloads.lock().entry(sound.id.clone()).or_default());
+        let _guard = lock.lock();
         if path.is_file() {
             return Ok(path);
         }

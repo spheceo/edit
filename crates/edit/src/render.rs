@@ -1,12 +1,13 @@
 //! Native rendering: single frames (for agents) and full exports. Both run
 //! the same `edit-render` compositor the browser preview runs as WASM.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use edit_core::{audio_segments, evaluate, AudioSegment, Layer, Media, Project};
@@ -248,12 +249,12 @@ impl FrameRenderer {
                 if job.reply.is_closed() {
                     continue;
                 }
-                let result = (|| {
+                let caught = crate::guard::catch("rendering a frame", || {
                     let settings = job.project.settings;
-                    if renderer.is_none() {
-                        renderer = Some(new_renderer(settings.width, settings.height)?);
-                    }
-                    let renderer = renderer.as_mut().expect("renderer");
+                    let renderer = match &mut renderer {
+                        Some(renderer) => renderer,
+                        empty => empty.insert(new_renderer(settings.width, settings.height)?),
+                    };
                     // Media ids are per project: another project's may be other files.
                     if job.project.id != last_project {
                         renderer.clear_peaks();
@@ -270,7 +271,12 @@ impl FrameRenderer {
                         )?);
                     }
                     Ok(images)
-                })();
+                });
+                // A crash may leave the GPU state half-way: start afresh next time.
+                if caught.is_err() {
+                    renderer = None;
+                }
+                let result = caught.and_then(|result| result);
                 let _ = job.reply.send(result);
             }
         });
@@ -288,7 +294,6 @@ impl FrameRenderer {
         let (reply, response) = tokio::sync::oneshot::channel();
         self.jobs
             .lock()
-            .unwrap()
             .try_send(FrameJob {
                 project,
                 frames,
@@ -484,21 +489,16 @@ impl Drop for ExportFile {
 impl Exports {
     /// Whether `path` is a file this server exported (and so may be downloaded or revealed).
     pub fn exported(&self, path: &Path) -> bool {
-        self.finished
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|done| done == path)
+        self.finished.lock().iter().any(|done| done == path)
     }
 
     pub fn running(&self) -> bool {
-        !self.jobs.lock().unwrap().is_empty()
+        !self.jobs.lock().is_empty()
     }
 
     pub fn cancel(&self, project: &str) -> bool {
         self.jobs
             .lock()
-            .unwrap()
             .get(project)
             .map(|job| job.cancel.store(true, Ordering::Release))
             .is_some()
@@ -547,7 +547,7 @@ impl Exports {
         }
         let cancel = Arc::new(AtomicBool::new(false));
         {
-            let mut jobs = self.jobs.lock().unwrap();
+            let mut jobs = self.jobs.lock();
             if jobs.contains_key(&project.id) {
                 return Err("an export is already running for this project".to_owned());
             }
@@ -582,7 +582,7 @@ impl Exports {
             };
             emit("running", 0.0, json!({}));
             let started = Instant::now();
-            let result = (|| {
+            let result = crate::guard::catch("the export", || {
                 // FFmpeg writes beside the destination; only a complete export
                 // replaces it. Failure/cancellation cannot destroy an older file.
                 let mut name = output.as_os_str().to_owned();
@@ -612,13 +612,14 @@ impl Exports {
                     return Err("cancelled".to_owned());
                 }
                 std::fs::rename(&temporary.0, &output).map_err(|error| error.to_string())?;
-                let mut finished = this.finished.lock().unwrap();
+                let mut finished = this.finished.lock();
                 finished.retain(|done| done != &output);
                 finished.push(output.clone());
                 let excess = finished.len().saturating_sub(50);
                 finished.drain(..excess);
                 Ok(())
-            })();
+            })
+            .and_then(|result| result);
             match result {
                 Ok(()) => emit(
                     "done",
@@ -633,7 +634,7 @@ impl Exports {
                 }
                 Err(error) => emit("failed", 0.0, json!({ "error": error })),
             }
-            this.jobs.lock().unwrap().remove(&id);
+            this.jobs.lock().remove(&id);
         });
         Ok(final_path)
     }

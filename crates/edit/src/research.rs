@@ -7,11 +7,12 @@
 //! Found images are collected per project in `<home>/research/<project>/`
 //! for the user to review; the ones they keep go into the media bin.
 
+use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{mpsc, Mutex};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -65,11 +66,11 @@ pub fn dir(home: &Path, project: &str) -> PathBuf {
 }
 
 pub fn collecting(project: &str) -> bool {
-    COLLECTING.lock().unwrap().iter().any(|id| id == project)
+    COLLECTING.lock().iter().any(|id| id == project)
 }
 
 pub fn items(home: &Path, project: &str) -> Vec<Item> {
-    let _guard = INDEX.lock().unwrap();
+    let _guard = INDEX.lock();
     read_index(home, project)
 }
 
@@ -93,7 +94,7 @@ pub fn update(
     id: &str,
     change: impl FnOnce(&mut Item),
 ) -> Result<Item, String> {
-    let _guard = INDEX.lock().unwrap();
+    let _guard = INDEX.lock();
     let mut items = read_index(home, project);
     let item = items
         .iter_mut()
@@ -303,7 +304,7 @@ pub fn add_article(
         text: readable(&page).chars().take(60_000).collect(),
     };
     {
-        let _guard = INDEX.lock().unwrap();
+        let _guard = INDEX.lock();
         std::fs::create_dir_all(dir(home, project)).map_err(|error| error.to_string())?;
         let mut all = articles(home, project);
         all.retain(|known| known.url != article.url);
@@ -369,7 +370,7 @@ pub fn clear(home: &Path, project: &str, status: &str) -> Result<usize, String> 
     if status == "kept" {
         return Err("kept images stay (they're in the media bin)".into());
     }
-    let _guard = INDEX.lock().unwrap();
+    let _guard = INDEX.lock();
     let (gone, kept): (Vec<Item>, Vec<Item>) = read_index(home, project)
         .into_iter()
         .partition(|item| item.status == status);
@@ -382,7 +383,7 @@ pub fn clear(home: &Path, project: &str, status: &str) -> Result<usize, String> 
 
 /// Rejects found images (the agent's own pass before the user looks).
 pub fn reject(home: &Path, project: &str, ids: &[String]) -> Result<usize, String> {
-    let _guard = INDEX.lock().unwrap();
+    let _guard = INDEX.lock();
     let mut items = read_index(home, project);
     let mut count = 0;
     for item in items
@@ -433,14 +434,18 @@ pub fn collect(
     per_query: usize,
 ) -> Result<(usize, usize, usize), String> {
     {
-        let mut collecting = COLLECTING.lock().unwrap();
+        let mut collecting = COLLECTING.lock();
         if collecting.iter().any(|id| id == project) {
             return Err("already collecting images for this project; wait for it to finish".into());
         }
         collecting.push(project.to_owned());
     }
-    let result = collect_inner(home, project, queries, per_query);
-    COLLECTING.lock().unwrap().retain(|id| id != project);
+    // Released even if it crashes, or the project could never collect again.
+    let result = crate::guard::catch("collecting images", || {
+        collect_inner(home, project, queries, per_query)
+    })
+    .and_then(|result| result);
+    COLLECTING.lock().retain(|id| id != project);
     result
 }
 
@@ -521,7 +526,7 @@ fn store_hits(
                 .map(|handle| handle.join().ok().flatten())
                 .collect()
         });
-        let _guard = INDEX.lock().unwrap();
+        let _guard = INDEX.lock();
         let mut index = read_index(home, project);
         for result in results {
             match result {

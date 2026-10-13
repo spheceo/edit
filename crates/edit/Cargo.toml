@@ -17,7 +17,7 @@ serde_json.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.6", features = ["fs", "catch-panic"] }
 rust-embed = "8"
 mime_guess = "2"
 base64 = "0.22"
@@ -26,6 +26,7 @@ pollster = "1"
 futures-util = "0.3"
 sha2 = "0.11"
 tauri = { version = "2", features = [] }
+parking_lot = "0.12"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

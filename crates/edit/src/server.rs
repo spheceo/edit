@@ -129,6 +129,10 @@ pub fn router(app: App) -> Router {
         .route("/mcp", post(crate::mcp::handle).get(crate::mcp::reject_get))
         .fallback(get(static_asset))
         .layer(middleware::from_fn_with_state(app.clone(), check_host))
+        // A handler that panics answers with an error; the server carries on.
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            crate::guard::panic_response,
+        ))
         .with_state(app)
 }
 

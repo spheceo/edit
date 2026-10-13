@@ -3,6 +3,7 @@ mod app;
 mod broll;
 mod captions;
 mod export;
+mod guard;
 mod library;
 mod mcp;
 mod media;

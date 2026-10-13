@@ -6,12 +6,13 @@
 //! other MCP servers, apps and plugins are switched off and the sandbox is
 //! read-only: the agent edits through Edit's tools and nothing else.
 
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -163,7 +164,7 @@ impl Agents {
             .await?;
         codex.notify("initialized", Value::Null);
         // Threads from a previous process must be resumed before new turns.
-        self.threads.lock().unwrap().clear();
+        self.threads.lock().clear();
         *slot = Some(Arc::clone(&codex));
         Ok(codex)
     }
@@ -172,13 +173,14 @@ impl Agents {
 
     /// Cached models, refreshed in the background once a day (or now with `refresh`).
     pub async fn models(self: &Arc<Self>, refresh: bool) -> Result<Value, String> {
-        let cached = self.models.lock().unwrap().clone();
+        let cached = self.models.lock().clone();
         match cached {
             Some(cache) if !refresh => {
                 if now_ms().saturating_sub(cache.fetched_ms) > MODELS_TTL_MS {
                     let this = Arc::clone(self);
                     tokio::spawn(async move {
-                        let _ = this.fetch_models().await;
+                        let _ = crate::guard::catch_async("refreshing models", this.fetch_models())
+                            .await;
                     });
                 }
                 Ok(json!({ "models": cache.models, "fetched_ms": cache.fetched_ms }))
@@ -193,7 +195,7 @@ impl Agents {
     async fn fetch_models(self: &Arc<Self>) -> Result<ModelCache, String> {
         if self.refreshing.swap(true, Ordering::AcqRel) {
             // Another refresh is in flight; serve what we have.
-            if let Some(cache) = self.models.lock().unwrap().clone() {
+            if let Some(cache) = self.models.lock().clone() {
                 return Ok(cache);
             }
         }
@@ -248,7 +250,7 @@ impl Agents {
                 self.dir.join("models.json"),
                 serde_json::to_vec_pretty(&cache).unwrap_or_default(),
             );
-            *self.models.lock().unwrap() = Some(cache.clone());
+            *self.models.lock() = Some(cache.clone());
             Ok(cache)
         }
         .await;
@@ -280,7 +282,7 @@ impl Agents {
     }
 
     fn with_chat<T>(&self, project: &str, edit: impl FnOnce(&mut Chat) -> T) -> T {
-        let mut chats = self.chats.lock().unwrap();
+        let mut chats = self.chats.lock();
         let chat = chats
             .entry(project.to_owned())
             .or_insert_with(|| self.load(project));
@@ -353,7 +355,7 @@ impl Agents {
         effort: Option<String>,
     ) -> Result<(), String> {
         let live = self.store.get(project).ok_or("no such project")?;
-        if !self.sending.lock().unwrap().insert(project.to_owned()) {
+        if !self.sending.lock().insert(project.to_owned()) {
             return Err("the agent is already starting a turn".to_owned());
         }
         struct Sending<'a> {
@@ -362,7 +364,7 @@ impl Agents {
         }
         impl Drop for Sending<'_> {
             fn drop(&mut self) {
-                self.agents.sending.lock().unwrap().remove(self.project);
+                self.agents.sending.lock().remove(self.project);
             }
         }
         let _sending = Sending {
@@ -381,7 +383,7 @@ impl Agents {
                 chat.thread.clone(),
                 chat.thread
                     .as_ref()
-                    .is_some_and(|thread| self.threads.lock().unwrap().contains_key(thread)),
+                    .is_some_and(|thread| self.threads.lock().contains_key(thread)),
             )
         });
         let workspace = self.dir.join("workspace");
@@ -427,7 +429,6 @@ impl Agents {
         };
         self.threads
             .lock()
-            .unwrap()
             .insert(thread.clone(), project.to_owned());
         let (model, effort) = self.with_chat(project, |chat| {
             chat.thread = Some(thread.clone());
@@ -507,7 +508,7 @@ impl Agents {
             .ok_or("Codex didn't start a thread")?
             .to_owned();
         let (done, answer) = tokio::sync::oneshot::channel();
-        self.asks.lock().unwrap().insert(
+        self.asks.lock().insert(
             thread.clone(),
             Ask {
                 text: String::new(),
@@ -529,13 +530,13 @@ impl Agents {
             },
             Err(error) => Err(error),
         };
-        self.asks.lock().unwrap().remove(&thread);
+        self.asks.lock().remove(&thread);
         result
     }
 
     /// Routes a notification to a one-off question; true when it was one.
     fn answer(&self, thread: &str, method: &str, params: &Value) -> bool {
-        let mut asks = self.asks.lock().unwrap();
+        let mut asks = self.asks.lock();
         let Some(ask) = asks.get_mut(thread) else {
             return false;
         };
@@ -645,13 +646,30 @@ impl Agents {
     fn on_message(&self, message: Value) {
         let method = message["method"].as_str().unwrap_or_default();
         let params = &message["params"];
+        // The process is gone: no turn of it will ever complete, so end them now.
+        if method == EXITED {
+            let running: Vec<String> = self
+                .chats
+                .lock()
+                .iter()
+                .filter(|(_, chat)| chat.running)
+                .map(|(project, _)| project.clone())
+                .collect();
+            for project in running {
+                self.finish(
+                    &project,
+                    Some("Codex stopped unexpectedly; send your message again.".to_owned()),
+                );
+            }
+            return;
+        }
         let Some(thread) = params["threadId"].as_str() else {
             return;
         };
         if self.answer(thread, method, params) {
             return;
         }
-        let Some(project) = self.threads.lock().unwrap().get(thread).cloned() else {
+        let Some(project) = self.threads.lock().get(thread).cloned() else {
             return;
         };
         match method {
@@ -861,6 +879,9 @@ fn find_codex() -> Option<PathBuf> {
 
 type Reply = tokio::sync::oneshot::Sender<Result<Value, String>>;
 
+/// Sent to `on_message` (by Edit, not Codex) when Codex's output ends.
+const EXITED: &str = "edit/codexExited";
+
 struct Codex {
     stdin: Mutex<ChildStdin>,
     pending: Arc<Mutex<HashMap<u64, Reply>>>,
@@ -905,49 +926,52 @@ impl Codex {
         });
         let writer = Arc::downgrade(&codex);
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                let Ok(message) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                let has_method = message.get("method").is_some();
-                match (message.get("id"), has_method) {
-                    // Response to one of our requests.
-                    (Some(id), false) => {
-                        if let Some(reply) = id
-                            .as_u64()
-                            .and_then(|id| pending.lock().unwrap().remove(&id))
-                        {
-                            let result = match message.get("error") {
-                                Some(error) => Err(error["message"]
-                                    .as_str()
-                                    .unwrap_or("Codex error")
-                                    .to_owned()),
-                                None => Ok(message["result"].clone()),
-                            };
-                            let _ = reply.send(result);
+            // Whatever happens reading, Codex is marked gone after, and its callers answered.
+            let _ = crate::guard::catch("reading from Codex", || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
+                    let has_method = message.get("method").is_some();
+                    match (message.get("id"), has_method) {
+                        // Response to one of our requests.
+                        (Some(id), false) => {
+                            if let Some(reply) =
+                                id.as_u64().and_then(|id| pending.lock().remove(&id))
+                            {
+                                let result = match message.get("error") {
+                                    Some(error) => Err(error["message"]
+                                        .as_str()
+                                        .unwrap_or("Codex error")
+                                        .to_owned()),
+                                    None => Ok(message["result"].clone()),
+                                };
+                                let _ = reply.send(result);
+                            }
                         }
-                    }
-                    // A request from Codex (approvals, elicitations): Edit's
-                    // tools are pre-approved and nothing else is allowed.
-                    (Some(id), true) => {
-                        if let Some(codex) = writer.upgrade() {
-                            codex.write(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "Edit only allows its own tools" } }));
+                        // A request from Codex (approvals, elicitations): Edit's
+                        // tools are pre-approved and nothing else is allowed.
+                        (Some(id), true) => {
+                            if let Some(codex) = writer.upgrade() {
+                                codex.write(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "Edit only allows its own tools" } }));
+                            }
                         }
+                        (None, true) => on_message(message),
+                        _ => {}
                     }
-                    (None, true) => on_message(message),
-                    _ => {}
                 }
-            }
+            });
             alive.store(false, Ordering::Release);
-            for (_, reply) in pending.lock().unwrap().drain() {
+            for (_, reply) in pending.lock().drain() {
                 let _ = reply.send(Err("Codex stopped".to_owned()));
             }
+            on_message(json!({ "method": EXITED }));
         });
         Ok(codex)
     }
 
     fn write(&self, message: &Value) {
-        let mut stdin = self.stdin.lock().unwrap();
+        let mut stdin = self.stdin.lock();
         let _ = writeln!(stdin, "{message}");
         let _ = stdin.flush();
     }
@@ -958,13 +982,13 @@ impl Codex {
         }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (reply, response) = tokio::sync::oneshot::channel();
-        self.pending.lock().unwrap().insert(id, reply);
+        self.pending.lock().insert(id, reply);
         self.write(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
         match tokio::time::timeout(timeout, response).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("Codex stopped".to_owned()),
             Err(_) => {
-                self.pending.lock().unwrap().remove(&id);
+                self.pending.lock().remove(&id);
                 Err(format!("Codex didn't answer {method} in time"))
             }
         }
@@ -981,6 +1005,6 @@ impl Codex {
 
 impl Drop for Codex {
     fn drop(&mut self) {
-        let _ = self._child.lock().map(|mut child| child.kill());
+        let _ = self._child.lock().kill();
     }
 }

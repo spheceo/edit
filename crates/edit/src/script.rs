@@ -459,8 +459,9 @@ pub fn parse(html: &str) -> Parsed {
         let ranges = find_ranges(&para.text);
         if ranges.is_empty() {
             let text = collapse(&para.text);
-            // Before the first footage, only real paragraphs count (not the title, "Assets:", durations).
-            if text.is_empty() || (!seen_footage && text.len() < 80) {
+            // The video opens on the first timestamp: anything before it is the
+            // Doc's heading (title, "Assets:", durations), never a cut-in.
+            if text.is_empty() || !seen_footage {
                 continue;
             }
             let notes = notes(&para.refs.iter().collect::<Vec<_>>(), &comments);
@@ -1933,6 +1934,7 @@ mod tests {
 
     const DOC: &str = r##"<html><head><title>Kent crash</title><style>.c1{color:red}</style></head><body>
 <p><span>Kent crash</span></p><p><span>Total Duration: 27m</span></p>
+<p><span>FOIA Kent Police - Mother Finds Out Her Son Caused The Crash That Killed Her Neighbour Months Later</span></p>
 <p><span>(</span><a href="https://www.google.com/url?q=https://drive.google.com/file/d/1H9hY3w4LjzWlSAqY8hfp3I5Ft5PP0X9Y/view?usp%3Dsharing%26t%3D91.506&amp;sa=D">01:31 - 01:</a><a href="https://www.google.com/url?q=https://drive.google.com/file/d/1H9hY3w4LjzWlSAqY8hfp3I5Ft5PP0X9Y/view?usp%3Dsharing%26t%3D91.506&amp;sa=D">37</a><sup><a href="#cmnt1" id="cmnt_ref1">[a]</a></sup><sup><a href="#cmnt2" id="cmnt_ref2">[b]</a></sup><sup><a href="#cmnt3" id="cmnt_ref3">[c]</a></sup><span>) (</span><a href="https://www.google.com/url?q=https://drive.google.com/file/d/1N4zyXbvBcdg9Y1ZzpeZ6-0e_TgB_rMC9/view?usp%3Dsharing%26t%3D68.674&amp;sa=D">01:08 - 01:10</a><span>)</span></p>
 <p><span>This mother had absolutely no idea that her son&rsquo;s role&hellip;</span></p>
 <p><span>A second paragraph of the same cut-in.</span><sup><a href="#cmnt4" id="cmnt_ref4">[d]</a></sup></p>

@@ -140,6 +140,7 @@ fn renders_gradient_glowing_title_and_grade() {
                 },
                 local_frame: 9.0,
                 opacity: 1.0,
+                shown_glyphs: None,
             },
         ],
     };
@@ -204,6 +205,7 @@ fn renders_repack_subtitle_style() {
                 animation: TextAnimation::default(),
                 local_frame: 0.0,
                 opacity: 1.0,
+                shown_glyphs: None,
             },
         ],
     };

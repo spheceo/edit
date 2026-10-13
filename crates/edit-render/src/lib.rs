@@ -583,6 +583,7 @@ impl Renderer {
                     animation,
                     local_frame,
                     opacity,
+                    shown_glyphs,
                 } => {
                     if *opacity <= 0.0 || text.is_empty() || self.fonts.is_empty() {
                         continue;
@@ -612,6 +613,7 @@ impl Renderer {
                         transform,
                         animation,
                         *local_frame,
+                        *shown_glyphs,
                     ) {
                         continue;
                     }
@@ -1137,6 +1139,7 @@ impl Renderer {
         transform: &Transform,
         animation: &edit_core::TextAnimation,
         local_frame: f32,
+        shown_glyphs: Option<usize>,
     ) -> bool {
         let scale = transform.scale.max(0.0);
         let px = style.size * scale;
@@ -1180,6 +1183,7 @@ impl Renderer {
             value.to_bits().hash(&mut hasher);
         }
         format!("{animation:?}").hash(&mut hasher);
+        shown_glyphs.hash(&mut hasher);
         format!("{:?}", style.label).hash(&mut hasher);
         if animating {
             local_frame.to_bits().hash(&mut hasher);
@@ -1209,6 +1213,7 @@ impl Renderer {
                     line_height: style.line_height,
                     animation,
                     local_frame,
+                    shown_glyphs,
                     pad,
                     max_width: style.max_width.map(|width| width * scale),
                     label: style.label.as_ref().map(|label| {

@@ -88,6 +88,9 @@ pub struct TextSpec<'a> {
     pub line_height: f32,
     pub animation: &'a TextAnimation,
     pub local_frame: f32,
+    /// Draw only this many glyphs (not counting whitespace); the rest keep
+    /// their place. `None`: all.
+    pub shown_glyphs: Option<usize>,
     /// Transparent border so glows and animated glyphs never clip.
     pub pad: f32,
     /// Wrap at this width (output pixels); `None` breaks only at newlines.
@@ -270,7 +273,11 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
 
     let mut pixels = vec![0_u8; width as usize * height as usize * 4];
     let [r, g, b, a] = spec.color.0;
-    for glyph in placed.iter().filter(|glyph| !glyph.ch.is_whitespace()) {
+    let shown = spec.shown_glyphs.unwrap_or(usize::MAX);
+    for glyph in placed
+        .iter()
+        .filter(|glyph| !glyph.ch.is_whitespace() && glyph.index < shown)
+    {
         let (alpha, rise, scale) = glyph_reveal(spec.animation, spec.local_frame, glyph.index, px);
         let alpha = alpha * a;
         if alpha <= 0.0 || scale <= 0.0 {

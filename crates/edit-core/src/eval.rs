@@ -27,6 +27,9 @@ pub enum Layer {
         /// Frames since the clip started.
         local_frame: f32,
         opacity: f32,
+        /// Glyphs drawn so far, not counting whitespace (`None`: all). The
+        /// rest keep their place unseen, so the text is laid out once, whole.
+        shown_glyphs: Option<usize>,
     },
     Adjustment {
         grade: Grade,
@@ -167,20 +170,25 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 word_times,
             } => {
                 // Words: only those said so far, in place of a glyph animation.
-                let (text, animation) = if animation.preset == TextPreset::Words {
-                    let shown = words_shown(text, word_times, animation.stagger, local);
-                    if shown.is_empty() {
+                // The whole line is laid out from the first word, so each word
+                // lands where it ends up and nothing shifts as the line fills.
+                let (shown_glyphs, animation) = if animation.preset == TextPreset::Words {
+                    let shown = words_shown(text, word_times, animation.stagger, local)
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .count();
+                    if shown == 0 {
                         continue;
                     }
                     (
-                        shown,
+                        Some(shown),
                         TextAnimation {
                             preset: TextPreset::None,
                             ..*animation
                         },
                     )
                 } else {
-                    (text.clone(), *animation)
+                    (None, *animation)
                 };
                 let mut style = style.clone();
                 style.size = anim("size", style.size);
@@ -193,12 +201,13 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 }
                 Layer::Text {
                     clip: clip.id.clone(),
-                    text,
+                    text: text.clone(),
                     style,
                     transform: animated_transform(transform),
                     animation,
                     local_frame: local,
                     opacity: anim("opacity", *opacity) * fade,
+                    shown_glyphs,
                 }
             }
             ClipContent::Adjustment {
@@ -898,6 +907,39 @@ mod tests {
         assert_eq!(words_shown(text, &times, 4.0, 99.0), text);
         // Without times, one word every `stagger` frames.
         assert_eq!(words_shown("a b c", &[], 4.0, 5.0), "a b");
+    }
+
+    #[test]
+    fn words_keep_the_whole_line_laid_out() {
+        let mut project = project();
+        project.clips[1].keyframes = Default::default();
+        project.clips[1].content = ClipContent::Text {
+            text: "So, did you".into(),
+            style: TextStyle::default(),
+            transform: Transform::default(),
+            animation: TextAnimation {
+                preset: TextPreset::Words,
+                duration: 12.0,
+                stagger: 4.0,
+            },
+            opacity: 1.0,
+            word_times: vec![0.0, 10.0, 12.0],
+        };
+        let shown = |frame| {
+            evaluate(&project, frame)
+                .layers
+                .into_iter()
+                .find_map(|layer| match layer {
+                    Layer::Text {
+                        text, shown_glyphs, ..
+                    } => Some((text, shown_glyphs)),
+                    _ => None,
+                })
+        };
+        // The clip starts at 30: the first word, then two, the full text throughout.
+        assert_eq!(shown(30), Some(("So, did you".into(), Some(3))));
+        assert_eq!(shown(40), Some(("So, did you".into(), Some(6))));
+        assert_eq!(shown(29), None);
     }
 
     #[test]

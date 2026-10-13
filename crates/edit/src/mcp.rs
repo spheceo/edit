@@ -7,8 +7,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine as _;
 use edit_core::{
-    animatable_params, Clip, ClipColor, ClipContent, Keyframe, Project, TextAnimation, TextStyle,
-    TrackKind, Transform,
+    animatable_params, Clip, ClipColor, ClipContent, Keyframe, Project, ScriptBlock, TextAnimation,
+    TextStyle, TrackKind, Transform,
 };
 use serde_json::{json, Value};
 
@@ -30,7 +30,7 @@ Model (JSON):
   - type "solid": fill [r,g,b,a], opacity — flashes, dips to black
   - type "waveform": media? (only that media's sound; default everything heard), style {kind line|bars (line: tangled glowing strands that zigzag with the sound, the house look; bars: mirrored bars), color [r,g,b,a] (rich red [1,0.03,0.03,1] by default), strands (2, line), bars (48, bars), width (1400 px), height (360 px, the loudest swing), fill (0.5, bars' share of their slots), window (1.6 s of sound across the width, centred on now), gain (1), glow (the text glow: enabled, color?, radius, strength)}, transform, opacity — a glowing waveform of what's heard
 - media: {id, name, path, kind, duration, …, markers?: [{time (SECONDS into the media), name}]} — markers are points in the source that every clip of it carries (a sound effect's "hit"; the user adds them with M).
-- script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?, voiceover? (the voice-over clip reading it)}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. The video opens on the Doc's first timestamp: anything before it (the title, a "FOIA <name> - <headline>" heading, "Assets:", durations) is the Doc's heading, never a cut-in; if an import made one, delete it (card, words and its script block) and close the gap. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
+- script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?, voiceover? (the voice-over clip reading it)}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. The video opens on the Doc's first timestamp: anything before it (the title, a "FOIA <name> - <headline>" heading, "Assets:", durations) is the Doc's heading, never a cut-in; if an import made one, delete its card and words with delete_clips {close_gap: true, drop_from_script: true}, so the video starts on the first footage. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
 - mark_in, mark_out (optional): the in and out points (I / O), frames; mark_out is the last frame in (inclusive). Playback stops at the out point and export renders just that span when no range is given. They're part of the project (set_in_out), so setting them is an undo step like any edit.
 - keyframes: {param: [{frame (relative to clip start), value, ease linear|in_out|in|out|hold (preset for the segment to the next key), optional handle_in / handle_out {speed = value units per frame at the key, influence 0..1 of the segment} = After Effects-style bezier handles that override the preset at that end}]}. Animatable params: video x,y,scale,rotation,shake,opacity; text also size,tracking,glow.radius,glow.strength; waveform x,y,scale,rotation,opacity,gain,glow.radius,glow.strength; adjustment shake (amount),glitch (amount),exposure,contrast,saturation,temperature,vignette,vignette_x,vignette_y,vignette_size,opacity; text leader.x,leader.y; solid opacity; audio volume_db.
 Validation: collection IDs are nonempty and unique; next_id is a nonnegative safe integer; timeline start/duration/fades are nonnegative safe integer frames (duration positive), source_in is finite and nonnegative, all numeric parameters are finite, keyframes are in strictly increasing frame order, and script file is a Drive ID with no path separators and a positive source range. Project dimensions are 1..8192.
@@ -205,7 +205,11 @@ fn tools() -> Vec<Value> {
         tool(
             "delete_clips",
             "Delete clips by id.",
-            json!({ "clip_ids": { "type": "array", "items": { "type": "string" } } }),
+            json!({
+                "clip_ids": { "type": "array", "items": { "type": "string" } },
+                "close_gap": { "type": "boolean", "description": "Then close the gap: where nothing on any track plays any more in the span they left, everything after it slides back by that much (all tracks together, so picture and sound stay in sync; the in/out points move too)." },
+                "drop_from_script": { "type": "boolean", "description": "Also remove the script's narration blocks these clips were the cut-in cards of (for a card that never belonged in the video, such as the Doc's heading imported as a cut-in)." }
+            }),
             &["clip_ids"],
         ),
         tool(
@@ -677,12 +681,32 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
         "delete_clips" => {
             let ids: Vec<String> = serde_json::from_value(args["clip_ids"].clone())
                 .map_err(|error| error.to_string())?;
-            let (_, removed) = store.update(&id, ORIGIN, |project| {
-                let before = project.clips.len();
-                project.clips.retain(|clip| !ids.contains(&clip.id));
-                Ok(before - project.clips.len())
+            let close_gap = args["close_gap"].as_bool().unwrap_or(false);
+            let drop_from_script = args["drop_from_script"].as_bool().unwrap_or(false);
+            let (_, (removed, closed)) = store.update(&id, ORIGIN, |project| {
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut project.clips)
+                    .into_iter()
+                    .partition(|clip| ids.contains(&clip.id));
+                project.clips = kept;
+                if drop_from_script {
+                    if let Some(script) = &mut project.script {
+                        script.blocks.retain(|block| {
+                            !matches!(block, ScriptBlock::Narration { clip: Some(card), .. } if ids.contains(card))
+                        });
+                    }
+                }
+                let closed = if close_gap {
+                    close_gaps(project, &gone)
+                } else {
+                    0
+                };
+                Ok((gone.len(), closed))
             })?;
-            Ok(text(format!("deleted {removed} clip(s)")))
+            Ok(text(if closed > 0 {
+                format!("deleted {removed} clip(s); closed {closed} frame(s) of gap")
+            } else {
+                format!("deleted {removed} clip(s)")
+            }))
         }
         "set_keyframes" => {
             let clip_id = args["clip_id"]
@@ -1760,9 +1784,52 @@ fn merge(target: &mut Value, patch: &Value) {
     }
 }
 
+/// Closes the spans `gone` left where nothing else plays: everything after
+/// each slides back by its length, all tracks together. Returns frames closed.
+fn close_gaps(project: &mut Project, gone: &[Clip]) -> i64 {
+    let mut spans: Vec<(i64, i64)> = gone.iter().map(|clip| (clip.start, clip.end())).collect();
+    spans.sort_unstable();
+    let mut merged: Vec<(i64, i64)> = Vec::new();
+    for (start, end) in spans {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    let mut closed = 0;
+    // Latest first, so closing one never moves another.
+    for (start, end) in merged.into_iter().rev() {
+        if project
+            .clips
+            .iter()
+            .any(|clip| clip.start < end && clip.end() > start)
+        {
+            continue;
+        }
+        let length = end - start;
+        for clip in &mut project.clips {
+            if clip.start >= end {
+                clip.start -= length;
+            }
+        }
+        for mark in [&mut project.mark_in, &mut project.mark_out]
+            .into_iter()
+            .flatten()
+        {
+            if *mark >= end {
+                *mark -= length;
+            } else if *mark > start {
+                *mark = start;
+            }
+        }
+        closed += length;
+    }
+    closed
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{merge, tidy_tracks, Clip, Project, TrackKind};
+    use super::{close_gaps, merge, tidy_tracks, Clip, Project, TrackKind};
     use serde_json::json;
 
     #[test]
@@ -1794,6 +1861,31 @@ mod tests {
         assert_eq!(track_of("flash"), v3);
         assert_eq!((moved, removed), (2, 1));
         assert!(!project.tracks.iter().any(|track| track.id == v4));
+    }
+
+    #[test]
+    fn closing_a_gap_moves_every_track_together() {
+        let mut project = Project::new("p".into(), "t".into(), Default::default());
+        let clip = |id: &str, track: &str, start: i64, duration: i64| {
+            serde_json::from_value::<Clip>(json!({
+                "id": id, "track": track, "start": start, "duration": duration,
+                "type": "solid", "fill": [0, 0, 0, 1]
+            }))
+            .unwrap()
+        };
+        let (v1, v2) = (project.tracks[0].id.clone(), project.tracks[1].id.clone());
+        let heading = [clip("card", &v1, 0, 90), clip("words", &v2, 0, 90)];
+        project.clips = vec![clip("footage", &v1, 90, 100), clip("caption", &v2, 120, 30)];
+        project.mark_out = Some(150);
+        assert_eq!(close_gaps(&mut project, &heading), 90);
+        assert_eq!(project.clip("footage").unwrap().start, 0);
+        assert_eq!(project.clip("caption").unwrap().start, 30);
+        assert_eq!(project.mark_out, Some(60));
+        // Something still playing in the span keeps it open.
+        let mut project = Project::new("p".into(), "t".into(), Default::default());
+        project.clips = vec![clip("music", &v2, 0, 300), clip("footage", &v1, 90, 100)];
+        assert_eq!(close_gaps(&mut project, &[clip("card", &v1, 0, 90)]), 0);
+        assert_eq!(project.clip("footage").unwrap().start, 90);
     }
 
     #[test]

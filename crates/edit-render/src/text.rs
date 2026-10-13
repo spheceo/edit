@@ -127,14 +127,14 @@ pub struct GlyphCache {
 }
 
 impl GlyphCache {
-    fn glyph(&mut self, book: &FontBook, face: usize, ch: char, px: f32) -> &(Metrics, Vec<u8>) {
+    fn glyph(&mut self, font: &Font, face: usize, ch: char, px: f32) -> &(Metrics, Vec<u8>) {
         let key = (face, ch, (px * 4.0).round() as u32);
         if self.glyphs.len() > 4096 {
             self.glyphs.clear();
         }
         self.glyphs
             .entry(key)
-            .or_insert_with(|| book.faces[face].font.rasterize(ch, key.2 as f32 / 4.0))
+            .or_insert_with(|| font.rasterize(ch, key.2 as f32 / 4.0))
     }
 }
 
@@ -149,7 +149,7 @@ pub const MAX_TEXT_DIMENSION: u32 = 8192;
 
 pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Option<TextImage> {
     let face = book.pick(spec.family, spec.weight)?;
-    let font = &book.faces[face].font;
+    let font = &book.faces.get(face)?.font;
     let px = spec.px.clamp(1.0, 2000.0);
     let line_metrics = font.horizontal_line_metrics(px)?;
     let line_advance = px * spec.line_height.max(0.1);
@@ -286,7 +286,7 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
         if alpha <= 0.0 || scale <= 0.0 {
             continue;
         }
-        let (metrics, bitmap) = cache.glyph(book, face, glyph.ch, px);
+        let (metrics, bitmap) = cache.glyph(font, face, glyph.ch, px);
         if metrics.width == 0 || metrics.height == 0 {
             continue;
         }
@@ -317,7 +317,7 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
             if let Some(prev) = previous {
                 pen += font.horizontal_kern(prev, ch, *px).unwrap_or(0.0);
             }
-            let (glyph, bitmap) = cache.glyph(book, face, ch, *px);
+            let (glyph, bitmap) = cache.glyph(font, face, ch, *px);
             let advance = glyph.advance_width;
             if !ch.is_whitespace() && glyph.width > 0 && glyph.height > 0 {
                 let left = pen + glyph.xmin as f32;
@@ -420,7 +420,9 @@ fn blit(
         if x < 0 || y < 0 || x >= src_w as i64 || y >= src_h as i64 {
             0.0
         } else {
-            f32::from(coverage[y as usize * src_w + x as usize]) / 255.0
+            coverage
+                .get(y as usize * src_w + x as usize)
+                .map_or(0.0, |&value| f32::from(value) / 255.0)
         }
     };
     for y in y0..y1 {
@@ -442,14 +444,16 @@ fn blit(
                 continue;
             }
             let offset = (y as usize * dst_w as usize + x as usize) * 4;
-            let px = &mut dst[offset..offset + 4];
+            let Some([pr, pg, pb, pa]) = dst.get_mut(offset..offset + 4) else {
+                continue;
+            };
             let keep = 1.0 - src_a;
-            for channel in 0..3 {
-                let value = rgb[channel] * src_a + f32::from(px[channel]) / 255.0 * keep;
-                px[channel] = (value * 255.0).round().clamp(0.0, 255.0) as u8;
+            for (out, color) in [pr, pg, pb].into_iter().zip(rgb) {
+                let value = color * src_a + f32::from(*out) / 255.0 * keep;
+                *out = (value * 255.0).round().clamp(0.0, 255.0) as u8;
             }
-            let value = src_a + f32::from(px[3]) / 255.0 * keep;
-            px[3] = (value * 255.0).round().clamp(0.0, 255.0) as u8;
+            let value = src_a + f32::from(*pa) / 255.0 * keep;
+            *pa = (value * 255.0).round().clamp(0.0, 255.0) as u8;
         }
     }
 }

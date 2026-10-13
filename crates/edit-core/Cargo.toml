@@ -8,3 +8,6 @@ description = "Edit's project model and timeline evaluation, shared by the brows
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true

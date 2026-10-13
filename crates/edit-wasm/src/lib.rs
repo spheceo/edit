@@ -72,13 +72,18 @@ pub async fn create_engine(canvas: HtmlCanvasElement) -> Result<Engine, JsValue>
     // Read the size only now: the canvas may have resized while the GPU was being set up.
     let (width, height) = (canvas.width().max(1), canvas.height().max(1));
     let caps = surface.get_capabilities(&adapter);
+    // Empty when this GPU can't draw to the canvas at all.
+    let (Some(&first_format), Some(&alpha_mode)) = (caps.formats.first(), caps.alpha_modes.first())
+    else {
+        return Err(js_error("this GPU can't draw to the canvas"));
+    };
     // Pixels are already sRGB-encoded, so present through a non-sRGB view.
     let format = caps
         .formats
         .iter()
         .copied()
         .find(|format| !format.is_srgb())
-        .unwrap_or(caps.formats[0]);
+        .unwrap_or(first_format);
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
@@ -86,7 +91,7 @@ pub async fn create_engine(canvas: HtmlCanvasElement) -> Result<Engine, JsValue>
         height,
         present_mode: wgpu::PresentMode::Fifo,
         desired_maximum_frame_latency: 1,
-        alpha_mode: caps.alpha_modes[0],
+        alpha_mode,
         view_formats: vec![],
         color_space: wgpu::SurfaceColorSpace::Auto,
     };

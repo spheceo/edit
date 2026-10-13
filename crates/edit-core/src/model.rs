@@ -1474,7 +1474,9 @@ impl Project {
                 if keys
                     .iter()
                     .any(|key| !key.frame.is_finite() || !key.value.is_finite())
-                    || keys.windows(2).any(|pair| pair[0].frame >= pair[1].frame)
+                    || keys
+                        .windows(2)
+                        .any(|pair| matches!(pair, [a, b] if a.frame >= b.frame))
                 {
                     return Err(format!(
                         "clip {} {param}: keys must be finite and in strictly increasing order",
@@ -1500,7 +1502,7 @@ impl Project {
         let mut ordered: Vec<_> = self.clips.iter().collect();
         ordered.sort_unstable_by(|a, b| (&a.track, a.start).cmp(&(&b.track, b.start)));
         for pair in ordered.windows(2) {
-            let [clip, other] = pair else { unreachable!() };
+            let [clip, other] = pair else { continue };
             if clip.track == other.track && other.start < clip.end() {
                 return Err(format!(
                     "clips {} and {} overlap on track {}",

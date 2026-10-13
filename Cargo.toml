@@ -16,6 +16,19 @@ wgpu = "30"
 fontdue = "0.9"
 bytemuck = { version = "1", features = ["derive"] }
 
+# Edit must not fail unexpectedly: no panicking shortcuts outside tests (see
+# clippy.toml). Handle the failure, or prove it can't happen and say why in an
+# #[allow] beside it.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+
 # The renderer runs per frame while scrubbing; keep dev builds fast enough to judge feel.
 [profile.dev.package."*"]
 opt-level = 2

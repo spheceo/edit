@@ -3,6 +3,8 @@
 use edit_core::*;
 use edit_render::{text::BUNDLED_FONTS, Renderer};
 
+// A test helper: failing here should fail the test.
+#[allow(clippy::unwrap_used)]
 fn renderer(width: u32, height: u32) -> Option<Renderer> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
@@ -18,6 +20,8 @@ fn renderer(width: u32, height: u32) -> Option<Renderer> {
     Some(renderer)
 }
 
+// A test helper: failing here should fail the test.
+#[allow(clippy::unwrap_used)]
 fn save(name: &str, width: u32, height: u32, pixels: &[u8]) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/render-tests");
     std::fs::create_dir_all(&dir).unwrap();

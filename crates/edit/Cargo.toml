@@ -30,3 +30,6 @@ parking_lot = "0.12"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[lints]
+workspace = true

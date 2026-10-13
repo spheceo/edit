@@ -318,7 +318,8 @@ pub fn words_shown(text: &str, times: &[f32], stagger: f32, local: f32) -> Strin
         }
         end = index + c.len_utf8();
     }
-    text[..end].to_owned()
+    // `end` always follows a char, so this is the whole prefix.
+    text.get(..end).unwrap_or_default().to_owned()
 }
 
 fn seed_of(text: &str) -> u32 {
@@ -474,7 +475,7 @@ pub fn sample(keys: &[Keyframe], frame: f32) -> Option<f32> {
         return Some(first.value);
     }
     for pair in keys.windows(2) {
-        let (from, to) = (pair[0], pair[1]);
+        let &[from, to] = pair else { continue };
         if frame < to.frame {
             if from.ease == Ease::Hold {
                 return Some(from.value);

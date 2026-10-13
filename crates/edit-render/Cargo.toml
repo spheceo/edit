@@ -18,3 +18,10 @@ bundled-fonts = []
 [dev-dependencies]
 pollster = "1"
 png = "0.18"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "render"
+required-features = ["bundled-fonts"]

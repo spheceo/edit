@@ -3,6 +3,7 @@
 
 pub mod text;
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
@@ -418,22 +419,37 @@ impl Renderer {
     /// The texture a media's current frame should be uploaded into, sized
     /// `width`×`height`. Usable as a `copy_external_image_to_texture` target.
     pub fn video_texture(&mut self, media: &str, width: u32, height: u32) -> &wgpu::Texture {
-        let stale = self
-            .videos
-            .get(media)
-            .is_none_or(|target| target.width != width.max(1) || target.height != height.max(1));
-        if stale {
-            let target = Target::new(
+        let make = || {
+            Target::new(
                 &self.device,
                 "edit video",
                 width,
                 height,
                 SOURCE_FORMAT,
                 wgpu::TextureUsages::COPY_DST,
-            );
-            self.videos.insert(media.to_owned(), target);
+            )
+        };
+        let target = match self.videos.entry(media.to_owned()) {
+            Entry::Occupied(entry) => {
+                let target = entry.into_mut();
+                if target.width != width.max(1) || target.height != height.max(1) {
+                    *target = make();
+                }
+                target
+            }
+            Entry::Vacant(entry) => entry.insert(make()),
+        };
+        &target.texture
+    }
+
+    /// One of the two composite targets `render` ping-pongs between (0 or 1).
+    fn accum(&self, index: usize) -> &Target {
+        let [first, second] = &self.accum;
+        if index == 0 {
+            first
+        } else {
+            second
         }
-        &self.videos[media].texture
     }
 
     /// Native path: upload a decoded RGBA8 frame.
@@ -508,7 +524,7 @@ impl Renderer {
         let mut slots = SlotWriter::default();
         let mut current = 0_usize;
 
-        clear(&mut encoder, &self.accum[current].view);
+        clear(&mut encoder, &self.accum(current).view);
 
         for layer in &scene.layers {
             match layer {
@@ -543,7 +559,7 @@ impl Renderer {
                     draw(
                         &mut encoder,
                         &self.over_pipeline,
-                        &self.accum[current].view,
+                        &self.accum(current).view,
                         &group,
                         offset,
                         4,
@@ -571,7 +587,7 @@ impl Renderer {
                     draw(
                         &mut encoder,
                         &self.over_pipeline,
-                        &self.accum[current].view,
+                        &self.accum(current).view,
                         &group,
                         offset,
                         4,
@@ -620,7 +636,9 @@ impl Renderer {
                     ) {
                         continue;
                     }
-                    let slot = &self.texts[clip];
+                    let Some(slot) = self.texts.get(clip) else {
+                        continue;
+                    };
                     let placed = Transform {
                         scale: 1.0,
                         ..*transform
@@ -682,7 +700,7 @@ impl Renderer {
                             draw(
                                 &mut encoder,
                                 &self.over_pipeline,
-                                &self.accum[current].view,
+                                &self.accum(current).view,
                                 &group,
                                 offset,
                                 4,
@@ -746,7 +764,7 @@ impl Renderer {
                             draw(
                                 &mut encoder,
                                 &self.over_pipeline,
-                                &self.accum[current].view,
+                                &self.accum(current).view,
                                 &group,
                                 offset,
                                 4,
@@ -763,7 +781,7 @@ impl Renderer {
                         draw(
                             &mut encoder,
                             &self.over_pipeline,
-                            &self.accum[current].view,
+                            &self.accum(current).view,
                             &group,
                             offset,
                             4,
@@ -801,7 +819,7 @@ impl Renderer {
                                 draw(
                                     &mut encoder,
                                     &self.over_pipeline,
-                                    &self.accum[current].view,
+                                    &self.accum(current).view,
                                     &group,
                                     offset,
                                     4,
@@ -839,7 +857,7 @@ impl Renderer {
                             draw(
                                 &mut encoder,
                                 &self.over_pipeline,
-                                &self.accum[current].view,
+                                &self.accum(current).view,
                                 &group,
                                 offset,
                                 4,
@@ -875,7 +893,7 @@ impl Renderer {
                             draw(
                                 &mut encoder,
                                 &self.over_pipeline,
-                                &self.accum[current].view,
+                                &self.accum(current).view,
                                 &group,
                                 offset,
                                 4,
@@ -988,11 +1006,11 @@ impl Renderer {
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));
-                    let group = self.bind(&self.accum[current].view);
+                    let group = self.bind(&self.accum(current).view);
                     draw(
                         &mut encoder,
                         &self.adjust_pipeline,
-                        &self.accum[1 - current].view,
+                        &self.accum(1 - current).view,
                         &group,
                         offset,
                         3,
@@ -1004,7 +1022,7 @@ impl Renderer {
         }
 
         let present = self.present_pipeline(OUTPUT_FORMAT);
-        let group = self.bind(&self.accum[current].view);
+        let group = self.bind(&self.accum(current).view);
         let offset = slots.push(&self.queue, &self.uniforms, &[0; 16]);
         draw(
             &mut encoder,
@@ -1131,9 +1149,11 @@ impl Renderer {
             .get_mapped_range()
             .map_err(|error| format!("GPU readback failed: {error}"))?;
         let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-        for row in 0..height as usize {
-            let start = row * padded as usize;
-            pixels.extend_from_slice(&mapped[start..start + width as usize * 4]);
+        for row in mapped.chunks(padded as usize).take(height as usize) {
+            let row = row
+                .get(..width as usize * 4)
+                .ok_or("GPU readback came back short")?;
+            pixels.extend_from_slice(row);
         }
         drop(mapped);
         buffer.unmap();
@@ -1254,9 +1274,10 @@ impl Renderer {
                 image.height,
                 image.block,
             );
-            let slot = self.texts.get_mut(clip).expect("text slot");
-            slot.label = image.label;
-            slot.shown_box = image.shown_box;
+            if let Some(slot) = self.texts.get_mut(clip) {
+                slot.label = image.label;
+                slot.shown_box = image.shown_box;
+            }
         }
         self.blur_glows(
             encoder,
@@ -1311,7 +1332,9 @@ impl Renderer {
                 },
             );
         }
-        let slot = self.texts.get_mut(clip).expect("text slot");
+        let Some(slot) = self.texts.get_mut(clip) else {
+            return;
+        };
         slot.key = key;
         slot.glow_key = 0;
         slot.block = block;
@@ -1351,7 +1374,9 @@ impl Renderer {
         shadow_layer: Option<usize>,
     ) {
         let frame = self.frame_counter;
-        let slot = self.texts.get_mut(clip).expect("text slot");
+        let Some(slot) = self.texts.get_mut(clip) else {
+            return;
+        };
         slot.last_used = frame;
         slot.glow_layers = glow_layers;
         slot.shadow_layer = shadow_layer;
@@ -1381,10 +1406,9 @@ impl Renderer {
                         )
                     };
                     let pair = (make("edit glow scratch"), make("edit glow"));
-                    if index < layers.len() {
-                        layers[index] = pair;
-                    } else {
-                        layers.push(pair);
+                    match layers.get_mut(index) {
+                        Some(layer) => *layer = pair,
+                        None => layers.push(pair),
                     }
                 }
                 let horizontal = BlurUniforms {
@@ -1406,7 +1430,9 @@ impl Renderer {
                     slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&horizontal));
                 let v_offset =
                     slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&vertical));
-                let (scratch, out) = &layers[index];
+                let Some((scratch, out)) = layers.get(index) else {
+                    continue;
+                };
                 let first = self.bind(&image_view);
                 draw(
                     encoder,
@@ -1429,7 +1455,9 @@ impl Renderer {
                 );
             }
             layers.truncate(sigmas.len());
-            self.texts.get_mut(clip).expect("text slot").glows = layers;
+            if let Some(slot) = self.texts.get_mut(clip) {
+                slot.glows = layers;
+            }
         }
     }
 
@@ -1532,10 +1560,7 @@ impl Renderer {
         };
         let half_canvas = [self.width as f32 / 2.0, self.height as f32 / 2.0];
         if let Some(tint) = glow {
-            for (_, layer) in slot.glows[..slot.glow_layers.min(slot.glows.len())]
-                .iter()
-                .rev()
-            {
+            for (_, layer) in slot.glows.iter().take(slot.glow_layers).rev() {
                 let uniforms =
                     quad_uniforms(placed, slot.size, half_canvas, opacity, tint, MODE_GLOW);
                 let offset = slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));
@@ -1543,7 +1568,7 @@ impl Renderer {
                 draw(
                     encoder,
                     &self.over_pipeline,
-                    &self.accum[current].view,
+                    &self.accum(current).view,
                     &group,
                     offset,
                     4,
@@ -1568,7 +1593,7 @@ impl Renderer {
         draw(
             encoder,
             &self.over_pipeline,
-            &self.accum[current].view,
+            &self.accum(current).view,
             &group,
             offset,
             4,
@@ -1894,12 +1919,13 @@ pub fn rasterize_line(
             })
             .collect();
         for pair in curve.windows(2) {
+            let &[from, to] = pair else { continue };
             stroke(
                 &mut pixels,
                 width,
                 height,
-                pair[0],
-                pair[1],
+                from,
+                to,
                 (thickness, 3.2 * scale),
                 style.color,
                 strength,
@@ -1942,7 +1968,16 @@ fn smooth(points: &[(f32, f32)], steps: usize) -> Vec<(f32, f32)> {
     if points.len() < 3 {
         return points.to_vec();
     }
-    let at = |index: isize| points[index.clamp(0, points.len() as isize - 1) as usize];
+    let Some(&last) = points.last() else {
+        return Vec::new();
+    };
+    // Clamped into range, so `last` is never the fallback.
+    let at = |index: isize| {
+        points
+            .get(index.clamp(0, points.len() as isize - 1) as usize)
+            .copied()
+            .unwrap_or(last)
+    };
     let mut out = Vec::with_capacity(points.len() * steps);
     for index in 0..points.len() as isize - 1 {
         let (p0, p1, p2, p3) = (at(index - 1), at(index), at(index + 1), at(index + 2));
@@ -1958,7 +1993,7 @@ fn smooth(points: &[(f32, f32)], steps: usize) -> Vec<(f32, f32)> {
             out.push((blend(p0.0, p1.0, p2.0, p3.0), blend(p0.1, p1.1, p2.1, p3.1)));
         }
     }
-    out.push(*points.last().expect("points"));
+    out.push(last);
     out
 }
 
@@ -2000,27 +2035,30 @@ fn stroke(
                 continue;
             }
             let at = ((y * width + x) * 4) as usize;
-            let existing = f32::from(pixels[at + 3]) / 255.0;
+            let Some([pr, pg, pb, pa]) = pixels.get_mut(at..at + 4) else {
+                continue;
+            };
+            let existing = f32::from(*pa) / 255.0;
             if over {
                 // Over what's there (the core over its strand).
                 let keep = 1.0 - coverage;
                 let blend = |channel: f32, old: u8| {
                     (channel * coverage * 255.0 + f32::from(old) * keep).round() as u8
                 };
-                pixels[at] = blend(r, pixels[at]);
-                pixels[at + 1] = blend(g, pixels[at + 1]);
-                pixels[at + 2] = blend(bl, pixels[at + 2]);
-                pixels[at + 3] = ((coverage + existing * keep) * 255.0).round().min(255.0) as u8;
+                *pr = blend(r, *pr);
+                *pg = blend(g, *pg);
+                *pb = blend(bl, *pb);
+                *pa = ((coverage + existing * keep) * 255.0).round().min(255.0) as u8;
                 continue;
             }
             // Strands keep their brightest: joints between segments don't double up.
             if coverage <= existing {
                 continue;
             }
-            pixels[at] = (r * coverage * 255.0).round() as u8;
-            pixels[at + 1] = (g * coverage * 255.0).round() as u8;
-            pixels[at + 2] = (bl * coverage * 255.0).round() as u8;
-            pixels[at + 3] = (coverage * 255.0).round() as u8;
+            *pr = (r * coverage * 255.0).round() as u8;
+            *pg = (g * coverage * 255.0).round() as u8;
+            *pb = (bl * coverage * 255.0).round() as u8;
+            *pa = (coverage * 255.0).round() as u8;
         }
     }
 }
@@ -2068,12 +2106,15 @@ pub fn rasterize_waveform(
                     continue;
                 }
                 let at = ((y * width + x) * 4) as usize;
-                let existing = f32::from(pixels[at + 3]) / 255.0;
+                let Some([pr, pg, pb, pa]) = pixels.get_mut(at..at + 4) else {
+                    continue;
+                };
+                let existing = f32::from(*pa) / 255.0;
                 let alpha = coverage.max(existing);
-                pixels[at] = (r * alpha * 255.0).round() as u8;
-                pixels[at + 1] = (g * alpha * 255.0).round() as u8;
-                pixels[at + 2] = (b * alpha * 255.0).round() as u8;
-                pixels[at + 3] = (alpha * 255.0).round() as u8;
+                *pr = (r * alpha * 255.0).round() as u8;
+                *pg = (g * alpha * 255.0).round() as u8;
+                *pb = (b * alpha * 255.0).round() as u8;
+                *pa = (alpha * 255.0).round() as u8;
             }
         }
     }

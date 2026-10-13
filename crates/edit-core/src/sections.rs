@@ -178,8 +178,9 @@ fn intro_end(project: &Project, blocks: &[Placed]) -> Option<i64> {
         .iter()
         .position(|block| block.cut_in.is_none())
         .unwrap_or(blocks.len());
-    if let Some(card) = blocks[after_teasers..]
+    if let Some(card) = blocks
         .iter()
+        .skip(after_teasers)
         .find(|block| block.cut_in.is_some_and(is_date_card))
     {
         return Some(card.start);
@@ -189,11 +190,15 @@ fn intro_end(project: &Project, blocks: &[Placed]) -> Option<i64> {
         .iter()
         .position(|block| block.cut_in.is_none() && block.end - block.start >= full)
     {
-        Some(mut index) => {
-            while index > 0 && blocks[index - 1].cut_in.is_some() {
-                index -= 1;
-            }
-            Some(blocks[index].start)
+        Some(index) => {
+            // Back up over the cut-ins right before it.
+            let leading = blocks
+                .iter()
+                .take(index)
+                .rev()
+                .take_while(|block| block.cut_in.is_some())
+                .count();
+            blocks.get(index - leading).map(|block| block.start)
         }
         None => blocks
             .iter()

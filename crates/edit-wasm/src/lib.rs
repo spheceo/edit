@@ -258,13 +258,12 @@ impl Engine {
         let (width, height) = self.renderer.size();
         let (cw, ch) = (self.config.width as f32, self.config.height as f32);
         let fit = (cw / width as f32).min(ch / height as f32);
-        let (w, h) = (width as f32 * fit, height as f32 * fit);
-        let viewport = [
-            ((cw - w) / 2.0).floor(),
-            ((ch - h) / 2.0).floor(),
-            w.round(),
-            h.round(),
-        ];
+        // Round and clamp before centring: a hair over the canvas would floor
+        // the offset to -1, and WebKit rejects a viewport that leaves the
+        // target, dropping the whole frame (Chrome allows it).
+        let w = (width as f32 * fit).round().min(cw);
+        let h = (height as f32 * fit).round().min(ch);
+        let viewport = [((cw - w) / 2.0).floor(), ((ch - h) / 2.0).floor(), w, h];
         self.renderer
             .present(&view, self.config.format, viewport, wgpu::Color::BLACK);
         self.renderer.queue().present(texture);

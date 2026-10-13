@@ -127,9 +127,22 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
     }
   };
 
+  // The desktop app's webview has no window.confirm, so the bin asks for a second click.
+  const [armed, setArmed] = useState<"new" | "rejected" | null>(null);
+  useEffect(() => {
+    if (!armed) return;
+    const timeout = setTimeout(() => setArmed(null), 3000);
+    return () => clearTimeout(timeout);
+  }, [armed]);
+
   const clear = async (status: "new" | "rejected") => {
-    const what = status === "new" ? `the ${counts.new} images waiting for review` : `the ${counts.rejected} rejected images`;
-    if (!window.confirm(`Delete ${what}? Kept ones stay.`)) return;
+    if (armed !== status) {
+      const what = status === "new" ? `the ${counts.new} images waiting for review` : `the ${counts.rejected} rejected images`;
+      setArmed(status);
+      toast(`Click the bin again to delete ${what}. Kept ones stay.`);
+      return;
+    }
+    setArmed(null);
     try {
       const { removed } = await api.clearResearch(project.id, status);
       toast(`Deleted ${removed} ${status === "new" ? "unreviewed" : "rejected"} images`);
@@ -235,7 +248,11 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
             </Button>
           </form>
           {(tab === "new" || tab === "rejected") && counts[tab] > 0 && (
-            <IconButton label={tab === "new" ? "Delete all images waiting for review" : "Delete all rejected images"} onClick={() => void clear(tab)}>
+            <IconButton
+              label={armed === tab ? "Click again to delete" : tab === "new" ? "Delete all images waiting for review" : "Delete all rejected images"}
+              className={armed === tab ? "bg-red-500/20 text-red-300 hover:bg-red-500/30 hover:text-red-200" : undefined}
+              onClick={() => void clear(tab)}
+            >
               <Trash2 size={14} />
             </IconButton>
           )}

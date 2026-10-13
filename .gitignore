@@ -13,3 +13,6 @@
 /relay/.wrangler/
 /relay/.dev.vars
 *.tsbuildinfo
+
+# Tauri build output
+/crates/edit/gen/

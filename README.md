@@ -1,13 +1,14 @@
 <h1 align="center">Edit</h1>
 
-Edit is a local, agent-driven video editor. A Rust binary serves the editor to your browser; projects and media never leave your machine. Codex or Claude Code connect over MCP and edit the same project you're looking at — their changes appear live and undo with ⌘Z.
+Edit is a local, agent-driven video editor. A Rust binary opens the editor in its own window (a Tauri webview onto the same server it can run headless for a browser); projects and media never leave your machine. Codex or Claude Code connect over MCP and edit the same project you're looking at — their changes appear live and undo with ⌘Z.
 
 ```sh
-just serve            # build everything, serve on http://localhost:7700
+just app              # build everything, open the desktop app
+just serve            # build everything, serve on http://localhost:7700 (no window)
 edit mcp              # how to connect Claude Code / Codex
 ```
 
-Requirements: Rust, Bun, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`), `wasm-bindgen-cli` matching `crates/edit-wasm` (`cargo install wasm-bindgen-cli --version 0.2.129`), and a WebGPU browser (Chrome, Edge, Arc, Safari 26+).
+Requirements: Rust, Bun, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`), `wasm-bindgen-cli` matching `crates/edit-wasm` (`cargo install wasm-bindgen-cli --version 0.2.129`), and macOS 26+ for WebGPU in the app's window (or a WebGPU browser: Chrome, Edge, Arc, Safari 26+).
 
 ## How it fits together
 
@@ -15,7 +16,7 @@ Requirements: Rust, Bun, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`), `wasm-bindge
 crates/edit-core     project model + frame evaluation (shared, compiles to WASM)
 crates/edit-render   wgpu compositor: video, text, glow, grade, solids
 crates/edit-wasm     the compositor in the browser (WebGPU)
-crates/edit          `edit serve`: API, media jobs, native render + export, MCP
+crates/edit          `edit` (the window) / `edit serve`: API, media jobs, native render + export, MCP
 web/                 React UI (Vite, Tailwind, motion)
 relay/               Cloudflare Worker holding API keys (transcription)
 ```
@@ -58,6 +59,7 @@ tailscale serve --bg http://127.0.0.1:7700   # then open https://<machine>.<tail
 
 ```sh
 just dev     # server on :7700 + Vite hot reload on :5173
+just bundle  # Edit.app in target/release/bundle/macos
 just check   # fmt, clippy, tests, typecheck
 ```
 

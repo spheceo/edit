@@ -20,6 +20,15 @@ web: wasm web-install
 serve: web
     cargo run -p edit -- serve
 
+# Build everything and open the desktop app (its own server on :7700, or a
+# window onto the one already running there, e.g. `just dev`'s)
+app: web
+    cargo run -p edit -- app
+
+# Edit.app (target/release/bundle/macos); like `release`, it doesn't update itself
+bundle: web
+    cd crates/edit && bunx @tauri-apps/cli@2 build --bundles app
+
 # Release binary with the UI embedded (doesn't update itself; see `publish`)
 release: web
     cargo build -p edit --release

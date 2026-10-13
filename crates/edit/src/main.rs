@@ -1,4 +1,5 @@
 mod agent;
+mod app;
 mod broll;
 mod captions;
 mod export;
@@ -25,6 +26,9 @@ const DEFAULT_PORT: u16 = 7700;
 const HELP: &str = "edit — a local, agent-driven video editor
 
 USAGE
+  edit [app] [--port N] [--home DIR]
+      Open the editor in its own window (the server below runs inside it; if
+      an Edit is already serving on the port, the window opens onto that).
   edit serve [--port N] [--host ADDR] [--home DIR]
       Serve the editor. Binds 127.0.0.1 and this machine's Tailscale IP.
       Open http://localhost:7700 (WebGPU needs localhost or HTTPS; for other
@@ -50,20 +54,23 @@ fn main() {
             .and_then(|index| args.get(index + 1))
             .cloned()
     };
+    let port = || {
+        flag("--port")
+            .map(|port| {
+                port.parse()
+                    .unwrap_or_else(|_| fail("--port must be a number"))
+            })
+            .unwrap_or(DEFAULT_PORT)
+    };
+    let home = || {
+        flag("--home")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("EDIT_HOME").map(PathBuf::from))
+            .unwrap_or_else(default_home)
+    };
     match args.first().map(String::as_str) {
-        Some("serve") => {
-            let port = flag("--port")
-                .map(|port| {
-                    port.parse()
-                        .unwrap_or_else(|_| fail("--port must be a number"))
-                })
-                .unwrap_or(DEFAULT_PORT);
-            let home = flag("--home")
-                .map(PathBuf::from)
-                .or_else(|| std::env::var_os("EDIT_HOME").map(PathBuf::from))
-                .unwrap_or_else(default_home);
-            serve(home, flag("--host"), port);
-        }
+        Some("serve") => serve(home(), flag("--host"), port()),
+        Some("app") | Some("--port" | "--home") | None => app(home(), port()),
         Some("mcp") => {
             let port = flag("--port").unwrap_or_else(|| DEFAULT_PORT.to_string());
             println!(
@@ -76,12 +83,12 @@ fn main() {
                 .unwrap_or_else(default_home),
         ),
         Some("--version" | "-V" | "version") => println!("edit {}", env!("CARGO_PKG_VERSION")),
-        Some("--help" | "-h" | "help") | None => print!("{HELP}"),
+        Some("--help" | "-h" | "help") => print!("{HELP}"),
         Some(other) => fail(&format!("unknown command {other}\n\n{HELP}")),
     }
 }
 
-fn fail(message: &str) -> ! {
+pub(crate) fn fail(message: &str) -> ! {
     eprintln!("edit: {message}");
     std::process::exit(2);
 }
@@ -107,96 +114,116 @@ fn hostname() -> Option<String> {
 fn serve(home: PathBuf, host: Option<String>, port: u16) {
     let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|error| fail(&error.to_string()));
     runtime.block_on(async move {
-        for tool in ["ffmpeg", "ffprobe"] {
-            if std::process::Command::new(tool)
-                .arg("-version")
-                .output()
-                .is_err()
-            {
-                eprintln!(
-                    "edit: warning: {tool} not found on PATH; importing and export need FFmpeg"
-                );
-            }
-        }
-        let store = Arc::new(
-            store::Store::open(home.clone())
-                .unwrap_or_else(|error| fail(&format!("{}: {error}", home.display()))),
-        );
-        let mut allowed = vec![
-            "localhost".to_owned(),
-            "127.0.0.1".to_owned(),
-            "::1".to_owned(),
-        ];
-        if let Some(name) = hostname() {
-            allowed.push(name);
-        }
-        if let Some(ip) = server::tailscale_ip() {
-            allowed.push(ip.to_string());
-        }
-        if let Some(name) = server::tailscale_name() {
-            allowed.push(name);
-        }
-        if let Some(host) = &host {
-            allowed.push(host.to_ascii_lowercase());
-        }
-        if let Ok(extra) = std::env::var("EDIT_HOSTS") {
-            allowed.extend(
-                extra
-                    .split(',')
-                    .map(|host| host.trim().to_ascii_lowercase())
-                    .filter(|host| !host.is_empty()),
-            );
-        }
-        let cache = store.cache_dir();
-        let app = server::App {
-            updater: update::Updater::new(home.clone()),
-            agents: agent::Agents::new(Arc::clone(&store), home.clone(), port),
-            scripts: Arc::new(script::Jobs::default()),
-            library: Arc::new(library::Library::default()),
-            media: media::Processor::new(Arc::clone(&store)),
-            store,
-            frames: render::FrameRenderer::start(cache),
-            exports: Arc::new(render::Exports::default()),
-            allowed_hosts: Arc::new(allowed),
-            machine: hostname()
-                .unwrap_or_else(|| "this machine".to_owned())
-                .into(),
-        };
-        speakers::watch(app.clone());
-        let router = server::router(app);
-        let mut handles = Vec::new();
-        for address in server::bind_addresses(host.as_deref(), port) {
-            match tokio::net::TcpListener::bind(address).await {
-                Ok(listener) => {
-                    println!("edit: http://{address}");
-                    let _ = broll::LISTENING.set(listener.local_addr().unwrap_or(address));
-                    let router = router.clone();
-                    handles.push(tokio::spawn(async move {
-                        if let Err(error) = axum::serve(listener, router).await {
-                            eprintln!("edit: {address}: {error}");
-                        }
-                    }));
-                }
-                Err(error) => eprintln!("edit: could not bind {address}: {error}"),
-            }
-        }
-        if handles.is_empty() {
-            fail(&format!("nothing to listen on (is port {port} taken?)"));
-        }
-        println!("edit: data in {}", home.display());
-        if update::enabled() {
-            std::thread::spawn(|| {
-                if let Ok(Some(release)) = update::check() {
-                    println!(
-                        "edit: {} is out (this is {}); update from the editor or run `edit update`",
-                        release.tag,
-                        update::VERSION
-                    );
-                }
-            });
-        }
-        for handle in handles {
+        for handle in start(home, host, port).await {
             let _ = handle.await;
         }
     });
+}
+
+/// The desktop app: the same server, in this process, with a window onto it.
+fn app(home: PathBuf, port: u16) {
+    app::adopt_shell_env();
+    let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|error| fail(&error.to_string()));
+    // Something already on the port is most likely another Edit (`edit serve`,
+    // `just dev`, the app opened twice): open onto it rather than run a second
+    // server over the same projects.
+    let taken = std::net::TcpListener::bind(("127.0.0.1", port)).is_err();
+    if !taken {
+        runtime.block_on(start(home, None, port));
+    }
+    let url = format!("http://127.0.0.1:{port}/")
+        .parse()
+        .unwrap_or_else(|_| fail("bad URL"));
+    app::run(url);
+}
+
+/// Opens the store and starts listening; the server runs on the handles.
+async fn start(home: PathBuf, host: Option<String>, port: u16) -> Vec<tokio::task::JoinHandle<()>> {
+    for tool in ["ffmpeg", "ffprobe"] {
+        if std::process::Command::new(tool)
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            eprintln!("edit: warning: {tool} not found on PATH; importing and export need FFmpeg");
+        }
+    }
+    let store = Arc::new(
+        store::Store::open(home.clone())
+            .unwrap_or_else(|error| fail(&format!("{}: {error}", home.display()))),
+    );
+    let mut allowed = vec![
+        "localhost".to_owned(),
+        "127.0.0.1".to_owned(),
+        "::1".to_owned(),
+    ];
+    if let Some(name) = hostname() {
+        allowed.push(name);
+    }
+    if let Some(ip) = server::tailscale_ip() {
+        allowed.push(ip.to_string());
+    }
+    if let Some(name) = server::tailscale_name() {
+        allowed.push(name);
+    }
+    if let Some(host) = &host {
+        allowed.push(host.to_ascii_lowercase());
+    }
+    if let Ok(extra) = std::env::var("EDIT_HOSTS") {
+        allowed.extend(
+            extra
+                .split(',')
+                .map(|host| host.trim().to_ascii_lowercase())
+                .filter(|host| !host.is_empty()),
+        );
+    }
+    let cache = store.cache_dir();
+    let app = server::App {
+        updater: update::Updater::new(home.clone()),
+        agents: agent::Agents::new(Arc::clone(&store), home.clone(), port),
+        scripts: Arc::new(script::Jobs::default()),
+        library: Arc::new(library::Library::default()),
+        media: media::Processor::new(Arc::clone(&store)),
+        store,
+        frames: render::FrameRenderer::start(cache),
+        exports: Arc::new(render::Exports::default()),
+        allowed_hosts: Arc::new(allowed),
+        machine: hostname()
+            .unwrap_or_else(|| "this machine".to_owned())
+            .into(),
+    };
+    speakers::watch(app.clone());
+    let router = server::router(app);
+    let mut handles = Vec::new();
+    for address in server::bind_addresses(host.as_deref(), port) {
+        match tokio::net::TcpListener::bind(address).await {
+            Ok(listener) => {
+                println!("edit: http://{address}");
+                let _ = broll::LISTENING.set(listener.local_addr().unwrap_or(address));
+                let router = router.clone();
+                handles.push(tokio::spawn(async move {
+                    if let Err(error) = axum::serve(listener, router).await {
+                        eprintln!("edit: {address}: {error}");
+                    }
+                }));
+            }
+            Err(error) => eprintln!("edit: could not bind {address}: {error}"),
+        }
+    }
+    if handles.is_empty() {
+        fail(&format!("nothing to listen on (is port {port} taken?)"));
+    }
+    println!("edit: data in {}", home.display());
+    if update::enabled() {
+        std::thread::spawn(|| {
+            if let Ok(Some(release)) = update::check() {
+                println!(
+                    "edit: {} is out (this is {}); update from the editor or run `edit update`",
+                    release.tag,
+                    update::VERSION
+                );
+            }
+        });
+    }
+    handles
 }

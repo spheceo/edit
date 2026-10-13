@@ -122,6 +122,7 @@ fn serve(home: PathBuf, host: Option<String>, port: u16) {
 
 /// The desktop app: the same server, in this process, with a window onto it.
 fn app(home: PathBuf, port: u16) {
+    app::run_as_edit(&home);
     app::adopt_shell_env();
     let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|error| fail(&error.to_string()));
     // Something already on the port is most likely another Edit (`edit serve`,

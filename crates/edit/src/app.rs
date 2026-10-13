@@ -1,6 +1,7 @@
 //! The desktop app: a native window (Tauri) onto the same server `edit serve`
 //! runs, so the UI, REST, websocket and MCP all work exactly as in a browser.
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -12,7 +13,6 @@ pub fn run(url: Url) -> ! {
     let local = url.clone();
     let result = tauri::Builder::default()
         .setup(move |app| {
-            show_as_edit();
             let stays_inside = local.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(local.clone()))
                 .title("Edit")
@@ -99,68 +99,58 @@ pub fn adopt_shell_env() {
     }
 }
 
-/// Run as a bare binary rather than from Edit.app, macOS shows the app (Dock,
-/// app switcher) by its file name, "edit". Give LaunchServices its display
-/// name instead, as Chromium does for its helpers. A bundle would do it too,
-/// but then macOS asks for folder access the terminal already has. The calls
-/// are private, so they're looked up at run time and skipped if missing.
-#[cfg(target_os = "macos")]
-fn show_as_edit() {
-    use std::ffi::{c_char, c_void, CString};
-    #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
-        fn CFStringCreateWithCString(
-            allocator: *const c_void,
-            text: *const c_char,
-            encoding: u32,
-        ) -> *const c_void;
-    }
-    extern "C" {
-        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    }
-    const RTLD_DEFAULT: *mut c_void = -2_isize as *mut c_void;
-    const UTF8: u32 = 0x0800_0100;
-    const DEFAULT_SESSION: i32 = -2;
-    type CurrentApp = unsafe extern "C" fn() -> *const c_void;
-    type SetInformation = unsafe extern "C" fn(
-        i32,
-        *const c_void,
-        *const c_void,
-        *const c_void,
-        *mut *const c_void,
-    ) -> i32;
-    let find = |name: &str| {
-        let name = CString::new(name).expect("symbol name");
-        // SAFETY: looking a symbol up by a valid C string.
-        unsafe { dlsym(RTLD_DEFAULT, name.as_ptr()) }
-    };
-    let (current, set, key) = (
-        find("_LSGetCurrentApplicationASN"),
-        find("_LSSetApplicationInformationItem"),
-        find("_kLSDisplayNameKey"),
-    );
-    if current.is_null() || set.is_null() || key.is_null() {
-        return;
-    }
-    // SAFETY: the symbols have these signatures (as Chromium declares them);
-    // `key` points at a CFStringRef; the name string lives for the process.
-    unsafe {
-        let current: CurrentApp = std::mem::transmute(current);
-        let set: SetInformation = std::mem::transmute(set);
-        let app = current();
-        if app.is_null() {
-            return;
-        }
-        let name = CFStringCreateWithCString(std::ptr::null(), c"Edit".as_ptr(), UTF8);
-        set(
-            DEFAULT_SESSION,
-            app,
-            *(key as *const *const c_void),
-            name,
-            std::ptr::null_mut(),
-        );
+/// Where `run_as_edit` came from: the binary to update.
+const ORIGINAL: &str = "EDIT_EXE";
+
+/// The binary that was started (not the `Edit` link `run_as_edit` runs as).
+pub fn original_exe() -> std::io::Result<PathBuf> {
+    match std::env::var_os(ORIGINAL) {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => std::env::current_exe(),
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn show_as_edit() {}
+/// macOS shows a bare binary in the Dock by its file name, so the `edit`
+/// binary would hover as "edit". Outside an app bundle, the window becomes the
+/// same program run as `Edit`: a hard link (a copy across disks) in the data
+/// folder, exec'd in place, so it keeps this process, its terminal and the
+/// terminal's folder access (a wrapper bundle would ask for its own). Returns
+/// only if that couldn't be done.
+pub fn run_as_edit(home: &Path) {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::process::CommandExt;
+        let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) else {
+            return;
+        };
+        if exe.file_name().is_some_and(|name| name == "Edit")
+            || exe.to_string_lossy().contains(".app/Contents/MacOS/")
+        {
+            return;
+        }
+        // Its own folder: "Edit" and "edit" are one name on a case-insensitive disk.
+        let link = home.join("bin").join("Edit");
+        let fresh = || -> std::io::Result<()> {
+            std::fs::create_dir_all(link.parent().expect("has a folder"))?;
+            let _ = std::fs::remove_file(&link);
+            std::fs::hard_link(&exe, &link).or_else(|_| std::fs::copy(&exe, &link).map(|_| ()))
+        };
+        let same = std::fs::metadata(&link)
+            .ok()
+            .zip(std::fs::metadata(&exe).ok())
+            .is_some_and(|(link, exe)| {
+                use std::os::unix::fs::MetadataExt;
+                link.ino() == exe.ino() && link.dev() == exe.dev()
+            });
+        if !same && fresh().is_err() {
+            return;
+        }
+        let error = Command::new(&link)
+            .args(std::env::args_os().skip(1))
+            .env(ORIGINAL, &exe)
+            .exec();
+        eprintln!("edit: couldn't run as Edit ({error})");
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = home;
+}

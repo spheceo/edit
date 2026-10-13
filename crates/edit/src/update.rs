@@ -369,7 +369,8 @@ fn sha256(path: &Path) -> Result<String, String> {
 /// the final rename is atomic (and works when ~/.edit is on another disk); a
 /// fresh file rather than an overwrite also keeps macOS's signature check happy.
 fn swap_in(new: &Path) -> Result<PathBuf, String> {
-    let exe = std::env::current_exe()
+    // The binary that was started, not the `Edit` link the app runs as.
+    let exe = crate::app::original_exe()
         .and_then(std::fs::canonicalize)
         .map_err(|error| format!("could not find the running binary: {error}"))?;
     let dir = exe.parent().ok_or("the running binary has no folder")?;

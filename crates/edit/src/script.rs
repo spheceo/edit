@@ -1441,6 +1441,7 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
         }
         app.scripts.set(&app, &id, |job| job.state = "placing");
         let result = place(&app, &id, done, recut).await;
+        let placed = result.is_ok();
         app.scripts.set(&app, &id, |job| {
             let failed = job
                 .files
@@ -1461,8 +1462,21 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                 })
             });
         });
+        // A new edit starts with the case's research, so the articles and
+        // images are waiting by the time the editing gets to them.
+        let home = app.store.home();
+        let researched = !crate::research::articles(home, &id).is_empty()
+            || !crate::research::items(home, &id).is_empty();
+        if placed && !recut && !researched {
+            if let Err(error) = app.agents.send(&id, RESEARCH.to_owned(), None, None).await {
+                eprintln!("edit: research didn't start for {id}: {error}");
+            }
+        }
     });
 }
+
+/// What the agent is asked once a script is first laid out.
+const RESEARCH: &str = "The script is imported and laid out. Research the case now (RESEARCH in your house style): start from the script and the transcripts, find the news articles about this case, check each matches and save it, then collect images of the scene, the people involved and the vehicles, and weed out anything off-target so only real candidates wait for review. Don't change the timeline. Finish with a short summary: the key facts the articles add, how many articles you saved and how many images are waiting.";
 
 /// Imports the excerpts, transcribes the footage, finds each range's exact
 /// cut from its cue words, and puts every block it can on the timeline.

@@ -16,6 +16,8 @@ pub fn run(url: Url) -> ! {
             let stays_inside = local.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(local.clone()))
                 .title("Edit")
+                // The page shows its own title; the bar keeps just the traffic lights.
+                .hidden_title(true)
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(960.0, 600.0)
                 // Let the page take file drops itself (the timeline uploads them).

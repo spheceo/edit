@@ -545,6 +545,11 @@ fn cue_words(notes: &[String]) -> Option<[String; 2]> {
 
 /// Room left before the first word and after the last, so cuts breathe.
 pub const WORD_PAD: f64 = 0.08;
+/// Speech closer than this to the cut runs straight on: no room is left (it
+/// would catch the next word), and the cut goes in the quietest instant
+/// within `SETTLE` of the word's edge (transcript times are a little loose).
+const RUN_ON: f64 = 0.3;
+const SETTLE: f64 = 0.06;
 /// How far from the written time a cue word may be found.
 const CUE_SEARCH: f64 = 3.0;
 
@@ -609,12 +614,29 @@ fn edit_distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+/// The quietest moment between `from` and `to` (seconds) in a media file's
+/// peaks (one level per 1/`PEAKS_PER_SECOND` s), nearest `near` among equals.
+fn quietest(peaks: &[u8], from: f64, to: f64, near: f64) -> Option<f64> {
+    let rate = f64::from(crate::media::PEAKS_PER_SECOND);
+    let first = (from * rate).ceil().max(0.0) as usize;
+    let last = ((to * rate).floor().max(0.0) as usize).min(peaks.len().checked_sub(1)?);
+    (first..=last)
+        .map(|index| (peaks[index], index as f64 / rate))
+        .min_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then((a.1 - near).abs().total_cmp(&(b.1 - near).abs()))
+        })
+        .map(|(_, at)| at)
+}
+
 /// Finds a range's first and last words near where it's written to start and
 /// end (the same word, else the closest spelling of it), and returns where to
 /// cut: just before the first, just after the last (never into a
-/// neighbouring word). Times are in the transcript's clock.
+/// neighbouring word; when speech runs straight on, right at the word, in the
+/// quietest instant `peaks` show there). Times are in the transcript's clock.
 pub fn align(
     words: &[crate::transcribe::Word],
+    peaks: Option<&[u8]>,
     cue: &[String; 2],
     start: f64,
     end: f64,
@@ -640,9 +662,21 @@ pub fn align(
             .checked_sub(1)
             .map(|previous| words[previous].end)
             .filter(|previous| *previous <= word.start);
-        (word.start - WORD_PAD)
-            .max(before.unwrap_or(f64::MIN))
-            .max(0.0)
+        match before.filter(|before| word.start - before < RUN_ON) {
+            Some(before) => peaks
+                .and_then(|peaks| {
+                    let from = (word.start - SETTLE).max(before);
+                    quietest(
+                        peaks,
+                        from,
+                        word.start + SETTLE.min(word.end - word.start) / 2.0,
+                        word.start,
+                    )
+                })
+                .unwrap_or(word.start),
+            None => (word.start - WORD_PAD).max(before.unwrap_or(f64::MIN)),
+        }
+        .max(0.0)
     });
     let cut_out = last.map(|index| {
         let word = &words[index];
@@ -650,7 +684,20 @@ pub fn align(
             .get(index + 1)
             .map(|next| next.start)
             .filter(|next| *next >= word.end);
-        (word.end + WORD_PAD).min(after.unwrap_or(f64::MAX))
+        match after.filter(|after| after - word.end < RUN_ON) {
+            Some(after) => peaks
+                .and_then(|peaks| {
+                    let to = (word.end + SETTLE).min(after);
+                    quietest(
+                        peaks,
+                        word.end - SETTLE.min(word.end - word.start) / 2.0,
+                        to,
+                        word.end,
+                    )
+                })
+                .unwrap_or(word.end),
+            None => (word.end + WORD_PAD).min(after.unwrap_or(f64::MAX)),
+        }
     });
     match (cut_in, cut_out) {
         // Out before in: one side matched the wrong word.
@@ -1502,12 +1549,18 @@ async fn place(
                         ..
                     } = block
                     {
-                        let Some(words) = media.as_ref().and_then(|media| transcripts.get(media))
+                        let Some(heard) = media.as_ref().and_then(|media| transcripts.get(media))
                         else {
                             continue;
                         };
                         let offset = media_start.unwrap_or(0.0);
-                        let (cut_in, cut_out) = align(words, cue, *start - offset, *end - offset);
+                        let (cut_in, cut_out) = align(
+                            &heard.words,
+                            heard.peaks.as_deref(),
+                            cue,
+                            *start - offset,
+                            *end - offset,
+                        );
                         *cut = (cut_in.is_some() || cut_out.is_some()).then(|| {
                             [
                                 cut_in.map_or(*start, |at| at + offset),
@@ -1555,11 +1608,17 @@ pub async fn realign(app: &App, id: &str) -> Result<Vec<serde_json::Value>, Stri
             else {
                 continue;
             };
-            let Some(words) = transcripts.get(media.as_str()) else {
+            let Some(heard) = transcripts.get(media.as_str()) else {
                 continue;
             };
             let offset = media_start.unwrap_or(0.0);
-            let (cut_in, cut_out) = align(words, cue, *start - offset, *end - offset);
+            let (cut_in, cut_out) = align(
+                &heard.words,
+                heard.peaks.as_deref(),
+                cue,
+                *start - offset,
+                *end - offset,
+            );
             let found = [
                 cut_in.map_or(*start, |at| at + offset),
                 cut_out.map_or(*end, |at| at + offset),
@@ -1618,10 +1677,13 @@ pub async fn realign(app: &App, id: &str) -> Result<Vec<serde_json::Value>, Stri
 /// Transcribes each media the script plays (through Edit's relay) and waits
 /// for the words. Media without sound, or whose transcription fails, are
 /// left out: their ranges keep the times the Doc wrote.
-async fn transcripts(
-    app: &App,
-    project: &Project,
-) -> HashMap<String, Vec<crate::transcribe::Word>> {
+/// What's said in a media file, and how loud it is moment to moment.
+struct Heard {
+    words: Vec<crate::transcribe::Word>,
+    peaks: Option<Vec<u8>>,
+}
+
+async fn transcripts(app: &App, project: &Project) -> HashMap<String, Heard> {
     let used: HashSet<&str> = project
         .script
         .iter()
@@ -1658,7 +1720,8 @@ async fn transcripts(
                         })
                         .map(|transcript| transcript.words);
                     if let Some(words) = words {
-                        out.insert(item.id.clone(), words);
+                        let peaks = std::fs::read(app.media.paths(&path).peaks).ok();
+                        out.insert(item.id.clone(), Heard { words, peaks });
                     }
                     break;
                 }
@@ -2264,10 +2327,10 @@ mod tests {
             word("Prius", 84.14, 84.36),
             word("car.", 84.4, 84.7),
         ];
-        let (_, cut_out) = align(&words, &["i".into(), "priuses".into()], 77.0, 82.0);
-        // Just after the "Prius" nearest the written end, not short of it.
+        let (_, cut_out) = align(&words, None, &["i".into(), "priuses".into()], 77.0, 82.0);
+        // Right after the "Prius" nearest the written end, not short of it.
         let cut_out = cut_out.expect("found the last word");
-        assert!(cut_out > 82.12 && cut_out <= 82.14, "{cut_out}");
+        assert!((82.12..=82.14).contains(&cut_out), "{cut_out}");
         assert_eq!(likeness("Prius", "priuses"), Some(1));
         assert_eq!(likeness("Prious", "prius"), Some(1));
         assert_eq!(likeness("Prius", "prius"), Some(0));
@@ -2296,19 +2359,40 @@ mod tests {
             word("perhaps?", 95.9, 96.62),
             word("Yes.", 96.66, 97.1),
         ];
-        let (cut_in, cut_out) = align(&words, &["A".into(), "perhaps?".into()], 91.506, 97.0);
+        let (cut_in, cut_out) = align(&words, None, &["A".into(), "perhaps?".into()], 91.506, 97.0);
         // The nearest "A" to 91.5 (not the later "a"), a little room before it, never into "Okay.".
         assert!((cut_in.unwrap() - (91.70 - WORD_PAD)).abs() < 1e-9);
-        // Just after "perhaps?", but not into "Yes." 40 ms later.
-        assert!((cut_out.unwrap() - 96.66).abs() < 1e-9);
+        // "Yes." follows 40 ms after "perhaps?": no room, right at its end.
+        assert!((cut_out.unwrap() - 96.62).abs() < 1e-9);
+        // With the sound to go by, in the quietest instant near that end
+        // (transcript times are loose): the dip at 96.60, not the quieter one
+        // inside "Yes.".
+        let mut peaks = vec![200_u8; 9800];
+        peaks[9660] = 40;
+        peaks[9670] = 10;
+        let (_, cut_out) = align(
+            &words,
+            Some(&peaks),
+            &["A".into(), "perhaps?".into()],
+            91.506,
+            97.0,
+        );
+        assert!((cut_out.unwrap() - 96.60).abs() < 1e-9, "{cut_out:?}");
         // A described sound can't be found in speech: that side keeps the Doc's time.
         assert_eq!(
-            align(&words, &["*Victim".into(), "perhaps?".into()], 91.5, 97.0).0,
+            align(
+                &words,
+                None,
+                &["*Victim".into(), "perhaps?".into()],
+                91.5,
+                97.0
+            )
+            .0,
             None
         );
         // Words far from where the range is written don't count.
         assert_eq!(
-            align(&words, &["Okay.".into(), "Yes.".into()], 40.0, 50.0),
+            align(&words, None, &["Okay.".into(), "Yes.".into()], 40.0, 50.0),
             (None, None)
         );
     }

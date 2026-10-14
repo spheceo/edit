@@ -50,6 +50,8 @@ struct Line {
     name: Option<String>,
     /// Their colour in the editors' code ("#00e5c7"), when named.
     color: Option<String>,
+    /// Their role in the transcript (officer, narrator, dispatch…; "other" when unknown).
+    role: String,
 }
 
 impl Line {
@@ -128,6 +130,7 @@ fn lines_of(clip: &str, words: &[Word]) -> Vec<Line> {
                 voice: word.speaker.clone(),
                 name: None,
                 color: None,
+                role: "other".into(),
             }),
         }
     }
@@ -431,14 +434,17 @@ pub fn intro(project: &Project) -> Option<(i64, i64)> {
 }
 
 /// The lines spoken in `clips` (video or audio clips of footage) between
-/// `from` and `to` (timeline frames), each with its speaker's name and colour
-/// when the transcript has them, transcribing media that hasn't been yet.
+/// `from` and `to` (timeline frames), each with its speaker's name, colour
+/// and role when the transcript has them, transcribing media that hasn't
+/// been yet. `capped`: each word ends when it could have been said
+/// (`subtitles::longest_ms`), not over the silence after it.
 async fn spoken_lines(
     app: &App,
     project: &Project,
     clips: &[&Clip],
     from: i64,
     to: i64,
+    capped: bool,
 ) -> Result<Vec<Line>, String> {
     let fps = project.fps();
     let mut lines: Vec<Line> = Vec::new();
@@ -477,21 +483,38 @@ async fn spoken_lines(
             .words
             .iter()
             .filter(|word| word.start >= visible_from && word.end <= visible_to + 0.05)
-            .cloned()
+            .map(|word| if capped { cap(word) } else { word.clone() })
             .collect();
-        lines.extend(lines_of(&clip.id, &words).into_iter().map(|mut line| {
-            line.name = line
-                .voice
-                .as_ref()
-                .and_then(|voice| transcript.speakers.get(voice).cloned());
-            line.color = line
-                .voice
-                .as_ref()
-                .and_then(|voice| transcript.colors.get(voice).cloned());
-            line
-        }));
+        lines.extend(
+            lines_of(&clip.id, &words)
+                .into_iter()
+                .map(|line| named(line, transcript)),
+        );
     }
     Ok(lines)
+}
+
+/// A word ending when it could have been said (`subtitles::longest_ms`),
+/// not stretched over the silence after it.
+fn cap(word: &Word) -> Word {
+    Word {
+        end: word
+            .end
+            .min(word.start + crate::subtitles::longest_ms(&word.text) / 1000.0),
+        ..word.clone()
+    }
+}
+
+/// A line with its speaker's name, colour and role from the transcript.
+fn named(mut line: Line, transcript: &crate::transcribe::Transcript) -> Line {
+    let Some(voice) = line.voice.clone() else {
+        return line;
+    };
+    line.name = transcript.speakers.get(&voice).cloned();
+    line.color = transcript.colors.get(&voice).cloned();
+    let name = line.name.clone().unwrap_or_else(|| voice.clone());
+    line.role = crate::subtitles::role_of(transcript.roles.get(&voice), &name);
+    line
 }
 
 /// The subtitle look after the intro at this project's size: white words in
@@ -530,39 +553,163 @@ const MIN_SUBTITLE: f64 = 0.25;
 /// Time a longer line squeezed by crosstalk is given to be read (seconds).
 const READ_SUBTITLE: f64 = 0.6;
 
+/// A subtitle moved, resized or keyframed by hand (to dodge a blur, say):
+/// what a re-run keeps for the new subtitles over the same moment.
+#[derive(Clone, Debug, PartialEq)]
+struct Adjusted {
+    start: i64,
+    end: i64,
+    transform: Transform,
+    max_width: Option<f32>,
+    size: f32,
+    keyframes: std::collections::BTreeMap<String, Vec<Keyframe>>,
+}
+
+/// `clip`'s hand adjustments, when it's a subtitle whose transform, width or
+/// size isn't what add_subtitles gives (`style`, `transform`), or that has keyframes.
+fn adjusted(clip: &Clip, style: &TextStyle, transform: &Transform) -> Option<Adjusted> {
+    let ClipContent::Text {
+        style: own,
+        transform: placed,
+        ..
+    } = &clip.content
+    else {
+        return None;
+    };
+    let changed = placed != transform
+        || own.max_width != style.max_width
+        || own.size != style.size
+        || !clip.keyframes.is_empty();
+    changed.then(|| Adjusted {
+        start: clip.start,
+        end: clip.end(),
+        transform: *placed,
+        max_width: own.max_width,
+        size: own.size,
+        keyframes: clip.keyframes.clone(),
+    })
+}
+
+/// The adjusted old subtitle a new one from `start` to `end` (frames)
+/// takes after: of those up at the same time, the one overlapping it most.
+fn carried(old: &[Adjusted], start: i64, end: i64) -> Option<&Adjusted> {
+    old.iter()
+        .map(|old| (old.end.min(end) - old.start.max(start), old))
+        .filter(|(overlap, _)| *overlap > 0)
+        .max_by_key(|(overlap, _)| *overlap)
+        .map(|(_, old)| old)
+}
+
+/// Each line's words on the timeline (`spans`, any unit of time, in order
+/// of the lines), lines crammed faster than anyone talks given time to be
+/// read from the gap before them (`subtitles::uncram`, which works in ms).
+fn uncrammed(spans: &[(f64, f64)], texts: &[String]) -> Vec<(f64, f64)> {
+    let mut timed: Vec<crate::subtitles::Line> = spans
+        .iter()
+        .zip(texts)
+        .enumerate()
+        .map(
+            |(index, (&(start_ms, end_ms), text))| crate::subtitles::Line {
+                start_ms,
+                end_ms,
+                text: text.clone(),
+                speaker: index.to_string(),
+            },
+        )
+        .collect();
+    crate::subtitles::uncram(&mut timed);
+    let mut out = spans.to_vec();
+    for line in timed {
+        if let Some(slot) = line
+            .speaker
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| out.get_mut(index))
+        {
+            *slot = (line.start_ms, line.end_ms);
+        }
+    }
+    out
+}
+
+/// A line's text with the house words said in it starred out.
+fn starred_text(line: &Line, found: &[crate::subtitles::Found]) -> String {
+    let first = (line.start() * 1000.0).round();
+    let last = line
+        .words
+        .last()
+        .map_or(first, |word| (word.start * 1000.0).round());
+    let mine: Vec<&crate::subtitles::Suggestion> = found
+        .iter()
+        .filter(|found| {
+            found.clip == line.clip
+                && found.suggestion.at_ms >= first
+                && found.suggestion.at_ms <= last
+        })
+        .map(|found| &found.suggestion)
+        .collect();
+    crate::subtitles::star(&line.text(), &mine)
+}
+
 /// Plain subtitles for everything said between `from` and `to` (timeline
 /// frames): Repack's style, bottom middle, no animation and no tracking, in
 /// each speaker's colour. They come from the footage's sound (so B-roll over
-/// it changes nothing), skip throwaway lines, start on the cut when a line
-/// starts just after one and leave no hairline gaps. Replaces subtitles made
-/// before in that span.
-pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Result<Value, String> {
+/// it changes nothing), skip throwaway lines and the narrator, radio and
+/// background talk, end each word when it could have been said, give lines
+/// crammed into too little time a moment to be read, start on the cut when
+/// a line starts just after one and leave no hairline gaps. The house words
+/// (and the neglect list's when `neglect`) are muted in the footage's sound
+/// and starred out on screen. Replaces subtitles and mutes made before in
+/// that span, keeping where and how big subtitles moved by hand were.
+pub async fn subtitles(
+    app: &App,
+    project_id: &str,
+    from: i64,
+    to: i64,
+    neglect: bool,
+) -> Result<Value, String> {
     let project = app.store.get(project_id).ok_or("no such project")?.project;
     let fps = project.fps();
-    let audible: Vec<String> = project
-        .tracks
-        .iter()
-        .filter(|track| track.kind == TrackKind::Audio && !track.muted)
-        .map(|track| track.id.clone())
-        .collect();
     // The footage's own sound: audio clips of video files (not sound effects or music).
-    let mut sound: Vec<&Clip> = project
-        .clips
+    let mut sound = crate::subtitles::footage_sound(&project, from, to);
+    sound.sort_by_key(|clip| clip.start);
+    let mut lines = spoken_lines(app, &project, &sound, from, to, true).await?;
+    let said = lines.len();
+    lines.retain(|line| !throwaway(line));
+    let before = lines.len();
+    lines.retain(|line| !crate::subtitles::hidden_role(&line.role));
+    let hidden = before - lines.len();
+    let house = crate::subtitles::house_words(app, &project, from, to, neglect).await?;
+    let texts: Vec<String> = lines
         .iter()
-        .filter(|clip| {
-            audible.contains(&clip.track)
-                && clip.start < to
-                && clip.end() > from
-                && matches!(&clip.content, ClipContent::Audio { media, .. }
-                    if project.media(media).is_some_and(|media| media.kind == edit_core::MediaKind::Video))
+        .map(|line| starred_text(line, &house.found))
+        .collect();
+    // Each line's words on the timeline (frames), crammed ones given time to be read.
+    let spans: Vec<(f64, f64)> = lines
+        .iter()
+        .map(|line| {
+            let Some(ClipContent::Audio {
+                source_in, speed, ..
+            }) = project.clip(&line.clip).map(|clip| &clip.content)
+            else {
+                return (0.0, 0.0);
+            };
+            let start = project.clip(&line.clip).map_or(0, |clip| clip.start) as f64;
+            let at = |seconds: f64| (start + (seconds - source_in) / speed * fps) / fps * 1000.0;
+            (at(line.start()), at(line.end()))
         })
         .collect();
-    sound.sort_by_key(|clip| clip.start);
-    let mut lines = spoken_lines(app, &project, &sound, from, to).await?;
-    lines.retain(|line| !throwaway(line));
+    let spans: Vec<(f64, f64)> = uncrammed(&spans, &texts)
+        .into_iter()
+        .map(|(start, end)| (start / 1000.0 * fps, end / 1000.0 * fps))
+        .collect();
     let (width, height) = (project.settings.width, project.settings.height);
     let style = subtitle_style(width, height);
-    let (live, placed) = app.store.update(project_id, "agent", |project| {
+    let transform = Transform {
+        y: height as f32 * 0.4,
+        ..Transform::default()
+    };
+    let (live, (placed, kept)) = app.store.update(project_id, "agent", |project| {
         let old: HashSet<String> = project
             .clips
             .iter()
@@ -575,27 +722,30 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
             })
             .map(|clip| clip.id.clone())
             .collect();
+        let moved: Vec<Adjusted> = project
+            .clips
+            .iter()
+            .filter(|clip| old.contains(&clip.id))
+            .filter_map(|clip| adjusted(clip, &style, &transform))
+            .collect();
         project.clips.retain(|clip| !old.contains(&clip.id));
+        crate::subtitles::write_mutes(project, &house.mutes);
         let snap = (SNAP * fps).round() as i64;
         let least = (MIN_SUBTITLE * fps).round() as i64;
         // Last line first, so each knows where the next one it must give way to starts.
         let mut slots = Vec::new();
         let mut next_start: HashMap<String, i64> = HashMap::new();
-        for line in lines.iter().rev() {
+        for (index, line) in lines.iter().enumerate().rev() {
             let Some(clip) = project.clip(&line.clip).cloned() else {
                 continue;
             };
-            let ClipContent::Audio {
-                source_in, speed, ..
-            } = clip.content
-            else {
+            let ClipContent::Audio { speed, .. } = clip.content else {
                 continue;
             };
-            let on_timeline =
-                |seconds: f64| clip.start as f64 + (seconds - source_in) / speed * fps;
-            let mut start = (on_timeline(line.start()).floor() as i64)
-                .max(clip.start)
-                .max(from);
+            let Some(&(said_from, said_to)) = spans.get(index) else {
+                continue;
+            };
+            let mut start = (said_from.floor() as i64).max(clip.start).max(from);
             if start - clip.start <= snap {
                 start = clip.start.max(from);
             }
@@ -605,7 +755,7 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
                 .unwrap_or(i64::MAX)
                 .min(clip.end())
                 .min(to);
-            let natural = on_timeline(line.end() + HOLD).ceil() as i64;
+            let natural = (said_to + HOLD / speed * fps).ceil() as i64;
             let mut end = natural.min(until).max(start);
             if until - end <= snap {
                 end = until.max(start);
@@ -615,7 +765,7 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
                 continue;
             }
             next_start.insert(line.clip.clone(), start);
-            slots.push((line, start, end, natural));
+            slots.push((index, line, start, end, natural));
         }
         slots.reverse();
         // Crosstalk: a line squeezed by the next one gets time to be read,
@@ -625,24 +775,24 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
             let Some([current, next, ..]) = slots.get_mut(index..) else {
                 continue;
             };
-            let (line, start, end, natural) = *current;
+            let (_, line, start, end, natural) = *current;
             let need = (start + read).min(natural.max(start + least));
-            let (next_line, next_start, next_end, _) = *next;
+            let (_, next_line, next_start, next_end, _) = *next;
             if end < need
                 && next_line.clip == line.clip
                 && next_start < need
                 && need <= next_end - least
             {
-                current.2 = need;
-                next.1 = need;
+                current.3 = need;
+                next.2 = need;
             }
         }
-        slots.retain(|(_, start, end, _)| end > start);
-        let mut placed = 0;
+        slots.retain(|(_, _, start, end, _)| end > start);
+        let (mut placed, mut kept) = (0, 0);
         // Every subtitle on the subtitles' own track, one after another.
         let track = project.subtitles_track();
         let mut free_from = 0;
-        for (line, start, end, _) in slots {
+        for (index, line, start, end, _) in slots {
             let start = start.max(free_from);
             let busy = project
                 .clips
@@ -661,6 +811,28 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
                 .or_else(|| line.voice.clone())
                 .unwrap_or_else(|| "Speaker".into());
             let color = line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE);
+            let mut line_style = TextStyle {
+                label: Some(TextLabel {
+                    text: format!("{who}:"),
+                    color,
+                    size: (LABEL_SIZE * height as f32 / 1080.0).round(),
+                }),
+                ..style.clone()
+            };
+            let mut line_transform = transform;
+            let mut keyframes = std::collections::BTreeMap::new();
+            if let Some(old) = carried(&moved, start, end) {
+                line_transform = old.transform;
+                line_style.max_width = old.max_width;
+                line_style.size = old.size;
+                // Keyframes are frames into the clip: shifted to the new start.
+                let shift = (old.start - start) as f32;
+                keyframes = old.keyframes.clone();
+                for key in keyframes.values_mut().flatten() {
+                    key.frame += shift;
+                }
+                kept += 1;
+            }
             let track = track.clone();
             let id = project.fresh_id("c");
             project.clips.push(Clip {
@@ -673,22 +845,12 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
                 link: None,
                 fade_in: 0,
                 fade_out: 0,
-                keyframes: Default::default(),
+                keyframes,
                 content: ClipContent::Text {
-                    text: line.text(),
                     // White words; who says them above, in their colour.
-                    style: TextStyle {
-                        label: Some(TextLabel {
-                            text: format!("{who}:"),
-                            color,
-                            size: (LABEL_SIZE * height as f32 / 1080.0).round(),
-                        }),
-                        ..style.clone()
-                    },
-                    transform: Transform {
-                        y: height as f32 * 0.4,
-                        ..Transform::default()
-                    },
+                    text: texts.get(index).cloned().unwrap_or_else(|| line.text()),
+                    style: line_style,
+                    transform: line_transform,
                     animation: TextAnimation::default(),
                     opacity: 1.0,
                     word_times: Vec::new(),
@@ -696,9 +858,16 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
             });
             placed += 1;
         }
-        Ok(placed)
+        Ok((placed, kept))
     })?;
-    Ok(json!({ "rev": live.rev, "lines": lines.len(), "placed": placed }))
+    Ok(json!({
+        "rev": live.rev,
+        "lines": said,
+        "hidden": hidden,
+        "placed": placed,
+        "kept_hand_adjustments": kept,
+        "mutes": house.listed,
+    }))
 }
 
 /// Captions every line spoken in the footage between `from` and `to` (timeline frames).
@@ -732,7 +901,7 @@ pub async fn caption_speakers(
         .collect();
     footage.sort_by_key(|clip| clip.start);
 
-    let mut lines = spoken_lines(app, &project, &footage, from, to).await?;
+    let mut lines = spoken_lines(app, &project, &footage, from, to, false).await?;
     lines.retain(|line| !throwaway(line));
     if lines.is_empty() {
         return Err("No speech in that part of the timeline (is the footage transcribed?).".into());
@@ -1402,6 +1571,7 @@ mod tests {
             voice: None,
             name: None,
             color: None,
+            role: "other".into(),
         };
         assert!(throwaway(&line(&["like"])));
         assert!(throwaway(&line(&["Um,", "like..."])));
@@ -1500,5 +1670,201 @@ mod tests {
         assert_eq!(pick("injured.", None), Side::Below);
         // Pushed beside by something below, the next line keeps that side while it fits.
         assert_eq!(pick("injured.", Some(Side::Right)), Side::Right);
+    }
+
+    #[test]
+    fn stretched_words_end_when_they_could_be_said() {
+        // "right." stretched over 9 s of silence: capped, the pause splits the line.
+        let words = [
+            word("All", 0.0, 0.2, "s0"),
+            word("right.", 0.25, 9.4, "s0"),
+            word("Anything", 9.5, 9.7, "s0"),
+            word("else?", 9.75, 10.0, "s0"),
+        ];
+        assert_eq!(lines_of("c1", &words).len(), 1);
+        let capped: Vec<Word> = words.iter().map(cap).collect();
+        assert!((capped[1].end - 1.35).abs() < 1e-9);
+        let lines: Vec<String> = lines_of("c1", &capped).iter().map(Line::text).collect();
+        assert_eq!(lines, ["All right.", "Anything else?"]);
+        // Numbers keep their time.
+        assert_eq!(cap(&word("$8,320", 0.0, 3.0, "s0")).end, 3.0);
+    }
+
+    #[test]
+    fn crammed_lines_get_time_to_be_read() {
+        let spans = [(234_750.0, 236_000.0), (244_380.0, 244_790.0)];
+        let texts = [
+            "All right.".to_owned(),
+            "Anything in your pocket?".to_owned(),
+        ];
+        let out = uncrammed(&spans, &texts);
+        assert_eq!(out[0], spans[0]);
+        // Read time taken from the gap before it; it still ends with its words.
+        assert_eq!(out[1].1, 244_790.0);
+        assert!((out[1].0 - (244_790.0 - 21.0 * 60.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn narrator_radio_and_background_talk_are_not_subtitled() {
+        let transcript = crate::transcribe::Transcript {
+            model: "test".into(),
+            language: None,
+            words: Vec::new(),
+            speakers: [
+                ("s0".to_owned(), "Officer".to_owned()),
+                ("s1".to_owned(), "Narrator".to_owned()),
+                ("s2".to_owned(), "Dispatch".to_owned()),
+            ]
+            .into(),
+            roles: [
+                ("s0".to_owned(), "officer".to_owned()),
+                ("s2".to_owned(), "dispatch".to_owned()),
+                (
+                    crate::speakers::BACKGROUND.to_owned(),
+                    crate::speakers::BACKGROUND.to_owned(),
+                ),
+            ]
+            .into(),
+            colors: [("s0".to_owned(), "#00e5c7".to_owned())].into(),
+        };
+        let words = [
+            word("Hands", 0.0, 0.2, "s0"),
+            word("up.", 0.25, 0.5, "s0"),
+            word("In", 1.0, 1.1, "s1"),
+            word("2019,", 1.15, 1.5, "s1"),
+            word("Unit", 2.0, 2.2, "s2"),
+            word("four.", 2.25, 2.5, "s2"),
+            word("Ma'am,", 3.0, 3.2, crate::speakers::BACKGROUND),
+        ];
+        let lines: Vec<Line> = lines_of("c1", &words)
+            .into_iter()
+            .map(|line| named(line, &transcript))
+            .collect();
+        let shown: Vec<String> = lines
+            .iter()
+            .filter(|line| !crate::subtitles::hidden_role(&line.role))
+            .map(Line::text)
+            .collect();
+        assert_eq!(shown, ["Hands up."]);
+        // The narrator read from its name, with no role given.
+        assert_eq!(lines[1].role, "narrator");
+        assert_eq!(lines[0].color.as_deref(), Some("#00e5c7"));
+    }
+
+    #[test]
+    fn stars_house_words_in_the_line_they_are_said_in() {
+        let line = Line {
+            clip: "a1".into(),
+            words: vec![
+                word("What", 10.0, 10.2, "s0"),
+                word("the", 10.25, 10.4, "s0"),
+                word("fuck.", 10.45, 10.7, "s0"),
+            ],
+            voice: Some("s0".into()),
+            name: None,
+            color: None,
+            role: "officer".into(),
+        };
+        let words: Vec<crate::subtitles::TimedWord> =
+            crate::subtitles::timed_words(&line.words, 0.0, 100.0);
+        let found: Vec<crate::subtitles::Found> =
+            crate::subtitles::suggestions(&words, false, 0.0, 100_000.0)
+                .into_iter()
+                .map(|suggestion| crate::subtitles::Found {
+                    clip: "a1".into(),
+                    timeline_ms: (suggestion.at_ms, suggestion.end_ms),
+                    suggestion,
+                })
+                .collect();
+        assert_eq!(starred_text(&line, &found), "What the f***.");
+        // Found in another clip's sound: left alone.
+        let other = Line {
+            clip: "a2".into(),
+            ..line.clone()
+        };
+        assert_eq!(starred_text(&other, &found), "What the fuck.");
+    }
+
+    fn subtitle_clip(start: i64, duration: i64, transform: Transform, style: TextStyle) -> Clip {
+        Clip {
+            id: format!("s{start}"),
+            track: "v9".into(),
+            start,
+            duration,
+            color: ClipColor::Cyan,
+            name: Some(format!("{SUBTITLE} · Officer")),
+            link: None,
+            fade_in: 0,
+            fade_out: 0,
+            keyframes: Default::default(),
+            content: ClipContent::Text {
+                text: "Hands up.".into(),
+                style,
+                transform,
+                animation: TextAnimation::default(),
+                opacity: 1.0,
+                word_times: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_rerun_keeps_subtitles_moved_by_hand() {
+        let style = subtitle_style(1920, 1080);
+        let placed = Transform {
+            y: 1080.0 * 0.4,
+            ..Transform::default()
+        };
+        // As add_subtitles left it: nothing to keep.
+        assert_eq!(
+            adjusted(
+                &subtitle_clip(0, 30, placed, style.clone()),
+                &style,
+                &placed
+            ),
+            None
+        );
+        // Its speaker's label differs per line: not an adjustment.
+        let labelled = TextStyle {
+            label: Some(TextLabel {
+                text: "Officer:".into(),
+                color: Rgba::WHITE,
+                size: 26.0,
+            }),
+            ..style.clone()
+        };
+        assert_eq!(
+            adjusted(&subtitle_clip(0, 30, placed, labelled), &style, &placed),
+            None
+        );
+        // Moved up off a blur, and another narrowed.
+        let moved = Transform {
+            y: -300.0,
+            ..placed
+        };
+        let narrow = TextStyle {
+            max_width: Some(700.0),
+            size: 40.0,
+            ..style.clone()
+        };
+        let old: Vec<Adjusted> = [
+            subtitle_clip(100, 50, moved, style.clone()),
+            subtitle_clip(150, 50, placed, narrow),
+            subtitle_clip(300, 50, placed, style.clone()),
+        ]
+        .iter()
+        .filter_map(|clip| adjusted(clip, &style, &placed))
+        .collect();
+        assert_eq!(old.len(), 2);
+        // A new line over most of the first takes its place; mostly over the second, its width and size.
+        assert_eq!(carried(&old, 95, 140).map(|old| old.transform), Some(moved));
+        let second = carried(&old, 140, 190);
+        assert_eq!(
+            second.map(|old| (old.max_width, old.size)),
+            Some((Some(700.0), 40.0))
+        );
+        // Over only unadjusted ones, or nothing: the house place.
+        assert_eq!(carried(&old, 300, 350), None);
+        assert_eq!(carried(&old, 200, 260), None);
     }
 }

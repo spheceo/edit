@@ -1985,6 +1985,8 @@ struct WatchBody {
     /// Watch again even where an answer is cached.
     #[serde(default)]
     force: bool,
+    /// Set the segments; default only for a subtitled video.
+    segments: Option<bool>,
 }
 
 /// The watcher over a subtitled video's footage, as the agent's watch_footage tool.
@@ -1994,7 +1996,10 @@ async fn watch_footage(
     body: Option<Json<WatchBody>>,
 ) -> ApiResult {
     let body = body.map(|Json(body)| body).unwrap_or_default();
-    let options = crate::watch::Options { force: body.force };
+    let options = crate::watch::Options {
+        force: body.force,
+        segments: body.segments,
+    };
     let summary = crate::diag::time_async(
         "watch",
         "watch footage",

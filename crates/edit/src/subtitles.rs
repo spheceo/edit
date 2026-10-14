@@ -605,7 +605,7 @@ pub(crate) fn silent_role(role: &str) -> bool {
 
 /// A voice's role: the one the transcript gives, else read from its name
 /// (only what decides whether it shows: narrator or radio).
-fn role_of(role: Option<&String>, name: &str) -> String {
+pub(crate) fn role_of(role: Option<&String>, name: &str) -> String {
     if let Some(role) = role {
         return role.clone();
     }
@@ -768,7 +768,10 @@ pub fn uncram(lines: &mut [Line]) {
         let span = line.end_ms - line.start_ms;
         if chars >= 8.0 && span < chars / CRAMMED_CPS * 1000.0 {
             let needed = (chars * READ_MS_PER_CHAR).max(READ_MS);
-            line.start_ms = line.start_ms.min((line.end_ms - needed).max(before)).max(0.0);
+            line.start_ms = line
+                .start_ms
+                .min((line.end_ms - needed).max(before))
+                .max(0.0);
             if line.end_ms - line.start_ms < needed {
                 line.end_ms = line.start_ms + needed;
             }
@@ -866,18 +869,7 @@ pub async fn repack_subtitles(
         };
         let visible_from = source_in + ((from.max(clip.start) - clip.start) as f64 / fps) * speed;
         let visible_to = source_in + ((to.min(clip.end()) - clip.start) as f64 / fps) * speed;
-        let words: Vec<TimedWord> = transcript
-            .words
-            .iter()
-            .filter(|word| word.start >= visible_from && word.end <= visible_to + 0.05)
-            .map(|word| TimedWord {
-                text: word.text.trim().to_owned(),
-                start_ms: word.start * 1000.0,
-                end_ms: (word.end * 1000.0).min(word.start * 1000.0 + longest_ms(&word.text)),
-                speaker: word.speaker.clone(),
-            })
-            .filter(|word| !word.text.is_empty())
-            .collect();
+        let words = timed_words(&transcript.words, visible_from, visible_to);
         let on_timeline = |source_ms: f64| {
             (clip.start as f64 / fps + (source_ms / 1000.0 - source_in) / speed) * 1000.0
         };
@@ -970,16 +962,7 @@ pub async fn repack_subtitles(
                 && clip.start < to
                 && clip.end() > from)
         });
-        for clip in &mut project.clips {
-            let Some((visible_from, visible_to, new)) = mutes.get(&clip.id) else {
-                continue;
-            };
-            if let ClipContent::Audio { mutes, .. } = &mut clip.content {
-                mutes.retain(|mute| mute.to <= *visible_from || mute.from >= *visible_to);
-                mutes.extend(new.iter().copied());
-                mutes.sort_by(|a, b| a.from.total_cmp(&b.from));
-            }
-        }
+        write_mutes(project, &mutes);
         tracks.push(project.subtitles_track());
         tracks.extend(stacked);
         let base_y = height as f32 * 0.4;
@@ -1120,6 +1103,199 @@ pub(crate) fn footage_sound(project: &Project, from: i64, to: i64) -> Vec<&Clip>
                     if project.media(media).is_some_and(|media| media.kind == MediaKind::Video && media.has_audio))
         })
         .collect()
+}
+
+/// Mutes for footage sound clips: per clip, the stretch of its source looked
+/// at (seconds) and the mutes found in it.
+pub(crate) type ClipMutes = HashMap<String, (f64, f64, Vec<Mute>)>;
+
+/// Writes `mutes` onto their audio clips: each clip's mutes inside the
+/// stretch looked at are replaced, the rest kept.
+pub(crate) fn write_mutes(project: &mut Project, mutes: &ClipMutes) {
+    for clip in &mut project.clips {
+        let Some((visible_from, visible_to, new)) = mutes.get(&clip.id) else {
+            continue;
+        };
+        if let ClipContent::Audio { mutes, .. } = &mut clip.content {
+            mutes.retain(|mute| mute.to <= *visible_from || mute.from >= *visible_to);
+            mutes.extend(new.iter().copied());
+            mutes.sort_by(|a, b| a.from.total_cmp(&b.from));
+        }
+    }
+}
+
+/// A house word found in the footage's sound.
+pub(crate) struct Found {
+    /// The footage sound clip it's in.
+    pub clip: String,
+    /// In ms of that clip's source.
+    pub suggestion: Suggestion,
+    /// When it's said on the timeline (ms), first word's start to the mute's end.
+    pub timeline_ms: (f64, f64),
+}
+
+/// The house words said in the footage's sound between `from` and `to`
+/// (timeline frames), as repack_subtitles finds them.
+pub(crate) struct HouseWords {
+    pub mutes: ClipMutes,
+    pub found: Vec<Found>,
+    /// Each one for the agent: term, timeline seconds, starred, clip.
+    pub listed: Vec<Value>,
+}
+
+/// A clip's transcript words between `from` and `to` (source seconds), each
+/// ending when it could have been said (`longest_ms`).
+pub(crate) fn timed_words(words: &[crate::transcribe::Word], from: f64, to: f64) -> Vec<TimedWord> {
+    words
+        .iter()
+        .filter(|word| word.start >= from && word.end <= to + 0.05)
+        .map(|word| TimedWord {
+            text: word.text.trim().to_owned(),
+            start_ms: word.start * 1000.0,
+            end_ms: (word.end * 1000.0).min(word.start * 1000.0 + longest_ms(&word.text)),
+            speaker: word.speaker.clone(),
+        })
+        .filter(|word| !word.text.is_empty())
+        .collect()
+}
+
+/// Finds the house words (and the neglect list's when `neglect`) said in the
+/// footage between `from` and `to` (timeline frames), and the mutes for them.
+pub(crate) async fn house_words(
+    app: &App,
+    project: &Project,
+    from: i64,
+    to: i64,
+    neglect: bool,
+) -> Result<HouseWords, String> {
+    let fps = project.fps();
+    let mut sound = footage_sound(project, from, to);
+    sound.sort_by_key(|clip| clip.start);
+    let mut transcripts: HashMap<String, crate::transcribe::Transcript> = HashMap::new();
+    let mut out = HouseWords {
+        mutes: HashMap::new(),
+        found: Vec::new(),
+        listed: Vec::new(),
+    };
+    for clip in sound {
+        let ClipContent::Audio {
+            media,
+            source_in,
+            speed,
+            ..
+        } = &clip.content
+        else {
+            continue;
+        };
+        let Some(media) = project.media(media) else {
+            continue;
+        };
+        if !transcripts.contains_key(&media.id) {
+            let transcript = crate::captions::transcript_of(app, media).await?;
+            transcripts.insert(media.id.clone(), transcript);
+        }
+        let Some(transcript) = transcripts.get(&media.id) else {
+            continue;
+        };
+        let visible_from = source_in + ((from.max(clip.start) - clip.start) as f64 / fps) * speed;
+        let visible_to = source_in + ((to.min(clip.end()) - clip.start) as f64 / fps) * speed;
+        let words = timed_words(&transcript.words, visible_from, visible_to);
+        let on_timeline = |source_ms: f64| {
+            (clip.start as f64 / fps + (source_ms / 1000.0 - source_in) / speed) * 1000.0
+        };
+        let entry =
+            out.mutes
+                .entry(clip.id.clone())
+                .or_insert((visible_from, visible_to, Vec::new()));
+        for suggestion in suggestions(&words, neglect, visible_from * 1000.0, visible_to * 1000.0) {
+            entry.2.push(Mute {
+                from: suggestion.start_ms / 1000.0,
+                to: suggestion.end_ms / 1000.0,
+            });
+            out.listed.push(json!({
+                "term": suggestion.term,
+                "time": (on_timeline(suggestion.at_ms) / 10.0).round() / 100.0,
+                "starred": suggestion.starred,
+                "clip": clip.id,
+            }));
+            out.found.push(Found {
+                clip: clip.id.clone(),
+                timeline_ms: (
+                    on_timeline(suggestion.at_ms),
+                    on_timeline(suggestion.end_ms),
+                ),
+                suggestion,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The starred words of `found` said while a subtitle from `start` to `end`
+/// (timeline frames) is up, give or take half a second.
+fn said_during(found: &[Found], start: i64, end: i64, fps: f64) -> Vec<&Suggestion> {
+    let (from_ms, to_ms) = (
+        start as f64 / fps * 1000.0 - 500.0,
+        end as f64 / fps * 1000.0 + 500.0,
+    );
+    found
+        .iter()
+        .filter(|found| found.timeline_ms.0 < to_ms && found.timeline_ms.1 > from_ms)
+        .map(|found| &found.suggestion)
+        .collect()
+}
+
+/// Mutes the house words in the footage's sound between `from` and `to`
+/// (timeline frames) and stars them out in the subtitles already there,
+/// moving nothing: for subtitles finished by hand. Replaces the mutes made
+/// before in that span.
+pub async fn mute_house_words(
+    app: &App,
+    project_id: &str,
+    from: i64,
+    to: i64,
+    neglect: bool,
+) -> Result<Value, String> {
+    if to <= from {
+        return Err("the span is empty".into());
+    }
+    let project = app.store.get(project_id).ok_or("no such project")?.project;
+    let fps = project.fps();
+    let house = house_words(app, &project, from, to, neglect).await?;
+    let (live, starred) = app.store.update(project_id, "agent", |project| {
+        write_mutes(project, &house.mutes);
+        Ok(star_subtitles(project, &house.found, from, to, fps))
+    })?;
+    Ok(json!({
+        "rev": live.rev,
+        "subtitles_starred": starred,
+        "mutes": house.listed,
+    }))
+}
+
+/// Stars out `found` in the subtitles between `from` and `to` (timeline
+/// frames) that are up while each is said; how many changed. Words keep
+/// their places, so per-word timing (`word_times`) still fits.
+fn star_subtitles(project: &mut Project, found: &[Found], from: i64, to: i64, fps: f64) -> usize {
+    let mut changed = 0;
+    for clip in &mut project.clips {
+        let subtitle = clip
+            .name
+            .as_deref()
+            .is_some_and(|name| name.starts_with(NAME));
+        if !subtitle || clip.start >= to || clip.end() <= from {
+            continue;
+        }
+        let mine = said_during(found, clip.start, clip.end(), fps);
+        if let ClipContent::Text { text, .. } = &mut clip.content {
+            let starred = star(text, &mine);
+            if starred != *text {
+                *text = starred;
+                changed += 1;
+            }
+        }
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -1468,5 +1644,111 @@ mod tests {
             ("shit".into(), Some("s**t".into()))
         );
         assert_eq!(parse_term("nigger"), ("nigger".into(), None));
+    }
+
+    fn project_with(clips: Value) -> Project {
+        let mut project = Project::new("p".into(), "t".into(), Default::default());
+        project.media = serde_json::from_value(json!([
+            { "id": "m", "name": "bodycam", "path": "/tmp/bodycam.mp4", "kind": "video", "duration": 600.0, "has_audio": true }
+        ]))
+        .unwrap();
+        project.tracks = serde_json::from_value(json!([
+            { "id": "v1", "kind": "video" },
+            { "id": "v2", "kind": "video", "subtitles": true },
+            { "id": "a1", "kind": "audio" }
+        ]))
+        .unwrap();
+        project.clips = serde_json::from_value(clips).unwrap();
+        project
+    }
+
+    #[test]
+    fn mutes_go_on_their_clip_in_source_seconds() {
+        // Two cuts of one file: the second plays its source from 120 s.
+        let mut project = project_with(json!([
+            { "id": "a", "track": "a1", "start": 0, "duration": 300, "color": "blue",
+              "type": "audio", "media": "m", "source_in": 10.0,
+              "mutes": [{ "from": 11.0, "to": 11.5 }, { "from": 50.0, "to": 50.5 }] },
+            { "id": "b", "track": "a1", "start": 300, "duration": 300, "color": "blue",
+              "type": "audio", "media": "m", "source_in": 120.0,
+              "mutes": [{ "from": 121.0, "to": 121.2 }] }
+        ]));
+        let mut mutes: ClipMutes = HashMap::new();
+        // Clip a was looked at from 10 s to 20 s of its source.
+        mutes.insert(
+            "a".into(),
+            (
+                10.0,
+                20.0,
+                vec![Mute {
+                    from: 12.0,
+                    to: 12.4,
+                }],
+            ),
+        );
+        write_mutes(&mut project, &mutes);
+        let of = |id: &str| match project.clip(id).map(|clip| &clip.content) {
+            Some(ClipContent::Audio { mutes, .. }) => mutes.clone(),
+            _ => Vec::new(),
+        };
+        // The old one inside the span replaced, the one after kept; b untouched.
+        assert_eq!(
+            of("a"),
+            [
+                Mute {
+                    from: 12.0,
+                    to: 12.4
+                },
+                Mute {
+                    from: 50.0,
+                    to: 50.5
+                }
+            ]
+        );
+        assert_eq!(
+            of("b"),
+            [Mute {
+                from: 121.0,
+                to: 121.2
+            }]
+        );
+    }
+
+    #[test]
+    fn stars_subtitles_in_place_keeping_their_words() {
+        let mut project = project_with(json!([
+            { "id": "s1", "track": "v2", "start": 30, "duration": 60, "color": "cyan",
+              "name": "Subtitle · Officer", "type": "text", "text": "What the fuck, man",
+              "transform": { "x": 0, "y": -300, "scale": 1, "rotation": 0 },
+              "word_times": [0, 5, 10, 20] },
+            { "id": "s2", "track": "v2", "start": 300, "duration": 60, "color": "cyan",
+              "name": "Subtitle · Officer", "type": "text", "text": "fuck off" },
+            { "id": "t", "track": "v1", "start": 30, "duration": 60, "color": "cyan",
+              "name": "Title", "type": "text", "text": "fuck" }
+        ]));
+        let words = [word("fuck,", 1500.0, 1800.0, "a")];
+        let found: Vec<Found> = suggestions(&words, false, 0.0, 10_000.0)
+            .into_iter()
+            .map(|suggestion| Found {
+                clip: "a".into(),
+                timeline_ms: (suggestion.at_ms, suggestion.end_ms),
+                suggestion,
+            })
+            .collect();
+        assert_eq!(star_subtitles(&mut project, &found, 0, 900, 30.0), 1);
+        let text = |id: &str| match project.clip(id).map(|clip| &clip.content) {
+            Some(ClipContent::Text {
+                text,
+                transform,
+                word_times,
+                ..
+            }) => (text.clone(), transform.y, word_times.len()),
+            _ => (String::new(), 0.0, 0),
+        };
+        // Starred where it's said, kept where it was put, one word per time.
+        assert_eq!(text("s1"), ("What the f***, man".into(), -300.0, 4));
+        // Not up while it's said, or not a subtitle: left alone.
+        assert_eq!(text("s2").0, "fuck off");
+        assert_eq!(text("t").0, "fuck");
     }
 }

@@ -553,7 +553,7 @@ const MIN_SUBTITLE: f64 = 0.25;
 /// Time a longer line squeezed by crosstalk is given to be read (seconds).
 const READ_SUBTITLE: f64 = 0.6;
 
-/// A subtitle moved, resized or keyframed by hand (to dodge a blur, say):
+/// A subtitle moved, resized or keyframed by hand (by the user, say):
 /// what a re-run keeps for the new subtitles over the same moment.
 #[derive(Clone, Debug, PartialEq)]
 struct Adjusted {

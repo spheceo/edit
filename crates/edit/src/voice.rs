@@ -36,7 +36,7 @@ pub struct VoiceSettings {
 }
 
 fn default_model() -> String {
-    "eleven_multilingual_v2".to_owned()
+    "eleven_v4".to_owned()
 }
 fn half() -> f32 {
     0.5
@@ -78,6 +78,10 @@ pub struct Take {
     pub duration: Option<f64>,
     #[serde(default)]
     pub characters: usize,
+    /// ElevenLabs' id for the request that made it: the next line's take can
+    /// follow on from it (request stitching).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -392,6 +396,18 @@ impl Voices {
             },
             "previous_text": neighbour(-1),
             "next_text": neighbour(1),
+            // The take chosen for the line before, if made with this model:
+            // this line carries on from how that one was actually said.
+            "previous_request_ids": index
+                .checked_sub(1)
+                .and_then(|before| project.lines.get(before))
+                .and_then(|before| {
+                    let chosen = before.chosen.as_deref()?;
+                    before.takes.iter().find(|take| take.id == chosen)
+                })
+                .filter(|take| take.settings.model_id == settings.model_id)
+                .and_then(|take| take.request_id.clone())
+                .map(|id| vec![id]),
             "output_format": "mp3_44100_128",
         });
         let take_id = format!("t{}", now_ms());
@@ -400,7 +416,7 @@ impl Voices {
             std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
         }
         let subject = format!("{} line {}", project.name, index + 1);
-        crate::diag::time_on("voice", "voice: generate a line", &subject, || {
+        let request_id = crate::diag::time_on("voice", "voice: generate a line", &subject, || {
             speak(&body, &path)
         })?;
         let duration = crate::media::probe(&path).ok().map(|probe| probe.duration);
@@ -419,6 +435,7 @@ impl Voices {
             text,
             settings,
             duration,
+            request_id,
         });
         line.chosen = Some(take_id);
         self.save(&mut project)?;
@@ -516,11 +533,14 @@ pub fn narration_lines(project: &edit_core::Project) -> Vec<(String, Option<Stri
 }
 
 /// Sends `body` to the relay's /v1/speech and writes the audio to `path`.
-fn speak(body: &Value, path: &Path) -> Result<(), String> {
+/// Returns ElevenLabs' request id, for stitching the next line onto it.
+fn speak(body: &Value, path: &Path) -> Result<Option<String>, String> {
     let partial = path.with_extension("partial");
     let result = relay_call("POST", "/v1/speech", Some(body), &partial);
     match result {
-        Ok(()) => std::fs::rename(&partial, path).map_err(|error| error.to_string()),
+        Ok(request) => std::fs::rename(&partial, path)
+            .map(|()| request)
+            .map_err(|error| error.to_string()),
         Err(error) => {
             let _ = std::fs::remove_file(&partial);
             Err(error)
@@ -534,7 +554,7 @@ fn relay_json(method: &str, route: &str, body: Option<&Value>) -> Result<Value, 
         std::process::id(),
         now_ms()
     ));
-    let result = relay_call(method, route, body, &scratch).and_then(|()| {
+    let result = relay_call(method, route, body, &scratch).and_then(|_| {
         let bytes = std::fs::read(&scratch).map_err(|error| error.to_string())?;
         serde_json::from_slice(&bytes).map_err(|error| format!("the relay's answer: {error}"))
     });
@@ -543,8 +563,14 @@ fn relay_json(method: &str, route: &str, body: Option<&Value>) -> Result<Value, 
 }
 
 /// One relay request through curl (like transcription): the answer goes to
-/// `out`; a failure comes back with the relay's (or ElevenLabs') reason.
-fn relay_call(method: &str, route: &str, body: Option<&Value>, out: &Path) -> Result<(), String> {
+/// `out`; a failure comes back with the relay's (or ElevenLabs') reason. On
+/// success, the request id the relay passed on, if any.
+fn relay_call(
+    method: &str,
+    route: &str,
+    body: Option<&Value>,
+    out: &Path,
+) -> Result<Option<String>, String> {
     let mut config =
         crate::transcribe::relay_config(std::env::var("EDIT_RELAY_TOKEN").ok().as_deref())?;
     let mut command = Command::new("curl");
@@ -558,7 +584,7 @@ fn relay_call(method: &str, route: &str, body: Option<&Value>, out: &Path) -> Re
             "--max-time",
             "300",
             "-w",
-            "%{http_code}",
+            "%{http_code} %header{x-request-id}",
             "-o",
         ])
         .arg(out);
@@ -586,9 +612,11 @@ fn relay_call(method: &str, route: &str, body: Option<&Value>, out: &Path) -> Re
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    let code = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let written = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let (code, request) = written.split_once(' ').unwrap_or((&written, ""));
+    let request = request.trim();
     if code == "200" {
-        return Ok(());
+        return Ok((!request.is_empty()).then(|| request.to_owned()));
     }
     let answer = std::fs::read(out).unwrap_or_default();
     let message = serde_json::from_slice::<Value>(&answer)
@@ -637,6 +665,7 @@ mod tests {
             settings: VoiceSettings::default(),
             duration: Some(1.0),
             characters: 4,
+            request_id: None,
         });
         voices.save(&mut stored).unwrap();
         std::fs::write(voices.take_path(&project.id, "t1").unwrap(), b"mp3").unwrap();

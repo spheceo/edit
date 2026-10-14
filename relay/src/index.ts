@@ -10,7 +10,8 @@ declare const FixedLengthStream: { new(size: number): { readable: ReadableStream
  *   GET  /v1/outline?lat=…&lon=…  the building there (Google Geocoding v4 destinations)
  *   GET  /v1/voices        ElevenLabs voices on the account (id, name, labels, preview)
  *   POST /v1/speech        JSON { voice_id, model_id, text, voice_settings?, previous_text?,
- *                          next_text?, seed?, output_format? } → audio (ElevenLabs text to speech)
+ *                          next_text?, previous_request_ids?, seed?, output_format? }
+ *                          → audio (ElevenLabs text to speech; x-request-id for stitching)
  *   GET  /health
  *
  * Spend is bounded three ways: a burst limit per IP, a daily byte quota per
@@ -229,7 +230,7 @@ async function speech(request: Request, env: Env): Promise<Response> {
   if (!limits.every((value) => Number.isSafeInteger(value) && value > 0)) return json(503, { error: "Voice budget is misconfigured." });
   let body: {
     voice_id?: unknown; model_id?: unknown; text?: unknown; voice_settings?: unknown;
-    previous_text?: unknown; next_text?: unknown; seed?: unknown; output_format?: unknown;
+    previous_text?: unknown; next_text?: unknown; previous_request_ids?: unknown; seed?: unknown; output_format?: unknown;
   };
   try {
     body = await request.json();
@@ -238,7 +239,7 @@ async function speech(request: Request, env: Env): Promise<Response> {
   }
   const text = typeof body.text === "string" ? body.text.trim() : "";
   const voice = typeof body.voice_id === "string" ? body.voice_id : "";
-  const model = typeof body.model_id === "string" ? body.model_id : "eleven_multilingual_v2";
+  const model = typeof body.model_id === "string" ? body.model_id : "eleven_v4";
   const format = typeof body.output_format === "string" ? body.output_format : "mp3_44100_128";
   if (!text) return json(400, { error: "Nothing to say." });
   if (text.length > limits[0]) return json(413, { error: `That's ${text.length} characters; split it into lines of at most ${limits[0]}.` });
@@ -254,7 +255,12 @@ async function speech(request: Request, env: Env): Promise<Response> {
   const reserved = await budget.fetch(new Request("https://budget/speech", { method: "POST", body: JSON.stringify({ client, chars: text.length }) }));
   if (!reserved.ok) return reserved;
 
-  const context = (value: unknown) => (typeof value === "string" && value.trim() ? value.slice(-1000) : undefined);
+  // Eleven v3 can't stitch requests; the others take the lines around and the take before.
+  const stitch = model !== "eleven_v3";
+  const context = (value: unknown) => (stitch && typeof value === "string" && value.trim() ? value.slice(-1000) : undefined);
+  const before = stitch && Array.isArray(body.previous_request_ids)
+    ? body.previous_request_ids.filter((id): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(id)).slice(0, 3)
+    : [];
   const upstream = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=${format}`, {
     method: "POST",
     headers: { "xi-api-key": key, "content-type": "application/json", accept: "audio/*" },
@@ -263,7 +269,8 @@ async function speech(request: Request, env: Env): Promise<Response> {
       model_id: model,
       voice_settings: typeof body.voice_settings === "object" && body.voice_settings ? body.voice_settings : undefined,
       previous_text: context(body.previous_text),
-      next_text: typeof body.next_text === "string" && body.next_text.trim() ? body.next_text.slice(0, 1000) : undefined,
+      next_text: stitch && typeof body.next_text === "string" && body.next_text.trim() ? body.next_text.slice(0, 1000) : undefined,
+      previous_request_ids: before.length ? before : undefined,
       seed: Number.isSafeInteger(body.seed) ? body.seed : undefined,
     }),
   });

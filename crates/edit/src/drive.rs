@@ -187,7 +187,10 @@ fn upload(
                 "POST",
             ),
         };
-        let (code, answer) = curl(&config, &["--max-time", "60", "-X", method, "-D", "-", &url])?;
+        let (code, answer) = curl(
+            &config,
+            &["--max-time", "60", "-X", method, "-D", "-", &url],
+        )?;
         Ok((code, String::from_utf8_lossy(&answer).into_owned()))
     };
     let (mut code, mut answer) = session(replacing)?;

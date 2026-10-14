@@ -748,6 +748,19 @@ pub fn fill_segments(given: Vec<edit_core::Segment>, duration: i64) -> Vec<edit_
     out
 }
 
+/// The longest anyone takes to say `word` (ms): transcription sometimes
+/// stretches a word's end over the silence after it ("right." for 9 s), which
+/// would hold its subtitle up and rush the next. About a second for a short
+/// word, more for a long one; numbers ("$8,320") are said in many words, so
+/// they keep their time.
+pub fn longest_ms(word: &str) -> f64 {
+    if word.chars().any(|c| c.is_ascii_digit()) {
+        return f64::INFINITY;
+    }
+    let letters = word.chars().filter(|c| c.is_alphabetic()).count() as f64;
+    (120.0 * letters + 500.0).max(1000.0)
+}
+
 /// Between two subtitles stacked because their people talk at once, in 1080p pixels.
 const STACK_GAP: f32 = 12.0;
 
@@ -831,7 +844,7 @@ pub async fn repack_subtitles(
             .map(|word| TimedWord {
                 text: word.text.trim().to_owned(),
                 start_ms: word.start * 1000.0,
-                end_ms: word.end * 1000.0,
+                end_ms: (word.end * 1000.0).min(word.start * 1000.0 + longest_ms(&word.text)),
                 speaker: word.speaker.clone(),
             })
             .filter(|word| !word.text.is_empty())
@@ -1299,6 +1312,15 @@ mod tests {
                 (300, 500, SegmentKind::Narration)
             ]
         );
+    }
+
+    #[test]
+    fn stretched_words_end_when_they_could_be_said() {
+        // "right." stretched over 9.4 s of silence ends within ~1.2 s.
+        assert!((longest_ms("right.") - 1100.0).abs() < 1e-9);
+        assert_eq!(longest_ms("too."), 1000.0);
+        assert!(longest_ms("$8,320").is_infinite());
+        assert!(longest_ms("methamphetamine") > 2000.0);
     }
 
     #[test]

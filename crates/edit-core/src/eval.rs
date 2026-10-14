@@ -172,23 +172,30 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 // Words: only those said so far, in place of a glyph animation.
                 // The whole line is laid out from the first word, so each word
                 // lands where it ends up and nothing shifts as the line fills.
-                let (shown_glyphs, animation) = if animation.preset == TextPreset::Words {
-                    let shown = words_shown(text, word_times, animation.stagger, local)
-                        .chars()
-                        .filter(|c| !c.is_whitespace())
-                        .count();
-                    if shown == 0 {
-                        continue;
+                let still = TextAnimation {
+                    preset: TextPreset::None,
+                    ..*animation
+                };
+                let (text, shown_glyphs, animation) = match animation.preset {
+                    TextPreset::Words => {
+                        let shown = words_shown(text, word_times, animation.stagger, local)
+                            .chars()
+                            .filter(|c| !c.is_whitespace())
+                            .count();
+                        if shown == 0 {
+                            continue;
+                        }
+                        (text.clone(), Some(shown), still)
                     }
-                    (
-                        Some(shown),
-                        TextAnimation {
-                            preset: TextPreset::None,
-                            ..*animation
-                        },
-                    )
-                } else {
-                    (None, *animation)
+                    // Word: just the latest, laid out on its own.
+                    TextPreset::Word => {
+                        let said = words_shown(text, word_times, animation.stagger, local);
+                        let Some(word) = said.split_whitespace().last() else {
+                            continue;
+                        };
+                        (word.to_owned(), None, still)
+                    }
+                    _ => (text.clone(), None, *animation),
                 };
                 let mut style = style.clone();
                 style.size = anim("size", style.size);
@@ -201,7 +208,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 }
                 Layer::Text {
                     clip: clip.id.clone(),
-                    text: text.clone(),
+                    text,
                     style,
                     transform: animated_transform(transform),
                     animation,
@@ -663,7 +670,7 @@ pub fn glyph_reveal(
     let t = ((local_frame - start) / duration).clamp(0.0, 1.0);
     match animation.preset {
         // Words are revealed in `evaluate`, which hands the glyphs over already chosen.
-        TextPreset::None | TextPreset::Words => (1.0, 0.0, 1.0),
+        TextPreset::None | TextPreset::Words | TextPreset::Word => (1.0, 0.0, 1.0),
         TextPreset::Fade => {
             let t = (local_frame / duration).clamp(0.0, 1.0);
             (ease(Ease::Out, t), 0.0, 1.0)
@@ -938,6 +945,22 @@ mod tests {
                 })
         };
         // The clip starts at 30: the first word, then two, the full text throughout.
+        let word = |frame| {
+            let mut project = project.clone();
+            if let ClipContent::Text { animation, .. } = &mut project.clips[1].content {
+                animation.preset = TextPreset::Word;
+            }
+            evaluate(&project, frame)
+                .layers
+                .into_iter()
+                .find_map(|layer| match layer {
+                    Layer::Text { text, .. } => Some(text),
+                    _ => None,
+                })
+        };
+        assert_eq!(word(30).as_deref(), Some("So,"));
+        assert_eq!(word(40).as_deref(), Some("did"));
+        assert_eq!(word(45).as_deref(), Some("you"));
         assert_eq!(shown(30), Some(("So, did you".into(), Some(3))));
         assert_eq!(shown(40), Some(("So, did you".into(), Some(6))));
         assert_eq!(shown(29), None);

@@ -167,7 +167,7 @@ export const HOUSE_SHADOW: TextShadow = {
   blur: 8,
 };
 
-export type TextPreset = "none" | "fade" | "rise" | "pop" | "typewriter" | "words";
+export type TextPreset = "none" | "fade" | "rise" | "pop" | "typewriter" | "words" | "word";
 
 export interface TextAnimation {
   preset: TextPreset;
@@ -294,7 +294,7 @@ export interface TextClip extends ClipBase {
   transform: Transform;
   animation: TextAnimation;
   opacity: number;
-  /** Frames from the clip start at which each word appears (the "words" preset). */
+  /** Frames from the clip start at which each word appears (the "words" and "word" presets). */
   word_times?: number[];
 }
 

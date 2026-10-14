@@ -526,6 +526,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                     { value: "pop", label: "Pop" },
                     { value: "typewriter", label: "Typewriter" },
                     { value: "words", label: "Word by word" },
+                    { value: "word", label: "One word at a time" },
                   ]}
                 />
               </Row>

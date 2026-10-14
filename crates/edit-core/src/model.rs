@@ -749,6 +749,9 @@ pub enum TextPreset {
     /// Words appear one at a time, no motion: at the clip's `word_times` when
     /// given (synced to speech), else every `stagger` frames.
     Words,
+    /// Only the word being said shows, alone, each replacing the last: timed
+    /// like `Words`. For punchy lines.
+    Word,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]

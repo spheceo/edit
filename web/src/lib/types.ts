@@ -449,6 +449,8 @@ export interface ProjectSummary {
   fps: number;
   duration_frames: number;
   clips: number;
+  /** A subtitled video: Repack-style subtitles (repack_subtitles) over its footage. */
+  subtitles?: boolean;
   /** Why it can't be opened (its file is left as it is). */
   problem?: string;
 }

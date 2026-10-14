@@ -1,4 +1,4 @@
-import { AudioLines, Ellipsis, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { AudioLines, Captions, Ellipsis, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -155,6 +155,12 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
             />
           ) : (
             <Mark size={36} cut="#0a0a0a" />
+          )}
+          {project.subtitles && (
+            <div className="absolute top-2 left-2 flex h-6 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-fg">
+              <Captions size={13} />
+              Subtitles
+            </div>
           )}
           <button
             title="More"

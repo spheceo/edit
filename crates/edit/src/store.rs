@@ -40,6 +40,9 @@ pub struct ProjectSummary {
     pub fps: u32,
     pub duration_frames: i64,
     pub clips: usize,
+    /// A subtitled video: it has Repack-style subtitles (`repack_subtitles`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub subtitles: bool,
     /// Why it can't be opened (its file is kept as it is).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
@@ -137,6 +140,7 @@ impl Store {
                         fps: 0,
                         duration_frames: 0,
                         clips: 0,
+                        subtitles: false,
                         problem: Some(problem),
                     });
                     continue;
@@ -152,6 +156,7 @@ impl Store {
                 fps: live.project.settings.fps,
                 duration_frames: live.project.duration(),
                 clips: live.project.clips.len(),
+                subtitles: crate::subtitles::is_subtitled(&live.project),
                 problem: None,
             });
         }

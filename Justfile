@@ -26,8 +26,19 @@ app: web
     cargo run -p edit -- app
 
 # Edit.app (target/release/bundle/macos); like `release`, it doesn't update itself
-bundle: web
-    cd crates/edit && bunx @tauri-apps/cli@2 build --bundles app
+bundle: web ffmpeg
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$PWD/target/ffmpeg/$(rustc -vV | sed -n 's/^host: //p')"
+    # FFmpeg goes into Edit.app/Contents/Resources (crates/edit/src/tools.rs).
+    cd crates/edit && bunx @tauri-apps/cli@2 build --bundles app \
+        --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\"}}}"
+
+# The FFmpeg Edit ships with, for this Mac (target/ffmpeg/<target>)
+ffmpeg:
+    #!/usr/bin/env bash
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    scripts/ffmpeg.sh "$host" "target/ffmpeg/$host"
 
 # Release binary with the UI embedded (doesn't update itself; see `publish`)
 release: web

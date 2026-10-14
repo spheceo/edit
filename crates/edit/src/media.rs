@@ -51,7 +51,7 @@ pub fn is_media_path(path: &Path) -> bool {
 }
 
 pub fn probe(path: &Path) -> Result<Probe, String> {
-    let output = Command::new("ffprobe")
+    let output = Command::new(crate::tools::ffprobe())
         .args([
             "-v",
             "error",
@@ -486,7 +486,7 @@ fn make_proxy(
     let video = probe.kind == MediaKind::Video;
     let video_tmp = paths.proxy.with_extension("partial.mp4");
     let audio_tmp = paths.audio.with_extension("partial.m4a");
-    let mut command = Command::new("ffmpeg");
+    let mut command = Command::new(crate::tools::ffmpeg());
     command
         .args([
             "-hide_banner",
@@ -621,7 +621,7 @@ fn make_thumbs(source: &Path, probe: &Probe, paths: &CachePaths) -> Result<u32, 
     let frames_dir = paths.thumbs.with_extension("frames");
     let _ = std::fs::remove_dir_all(&frames_dir);
     std::fs::create_dir_all(&frames_dir).map_err(|error| error.to_string())?;
-    run(Command::new("ffmpeg")
+    run(Command::new(crate::tools::ffmpeg())
         .args(["-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-protocol_whitelist", "file,pipe", "-i"])
         .arg(source)
         .args([
@@ -647,7 +647,7 @@ fn make_thumbs(source: &Path, probe: &Probe, paths: &CachePaths) -> Result<u32, 
         return Err("no thumbnails could be decoded".to_owned());
     }
     let tmp = paths.thumbs.with_extension("partial.jpg");
-    let result = run(Command::new("ffmpeg")
+    let result = run(Command::new(crate::tools::ffmpeg())
         .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(frames_dir.join("%04d.jpg"))
         .args([
@@ -674,7 +674,7 @@ fn make_thumbs(source: &Path, probe: &Probe, paths: &CachePaths) -> Result<u32, 
 fn make_peaks(source: &Path, out: &Path) -> Result<(), String> {
     let rate = PEAKS_PER_SECOND * 40;
     let tmp = out.with_extension("partial");
-    let mut child = Command::new("ffmpeg")
+    let mut child = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
             "-loglevel",

@@ -127,7 +127,7 @@ fn decode(
     width: usize,
     height: usize,
 ) -> Result<Vec<Vec<u8>>, String> {
-    let mut child = Command::new("ffmpeg")
+    let mut child = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
             "-loglevel",

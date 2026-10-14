@@ -1120,7 +1120,7 @@ pub struct Excerpt {
 }
 
 fn duration_of(path: &Path) -> Result<f64, String> {
-    let output = Command::new("ffprobe")
+    let output = Command::new(crate::tools::ffprobe())
         .args([
             "-v",
             "error",
@@ -1144,7 +1144,7 @@ fn duration_of(path: &Path) -> Result<f64, String> {
 fn keyframe_before(path: &Path, time: f64) -> f64 {
     for window in [20.0, 120.0, 600.0] {
         let from = (time - window).max(0.0);
-        let output = Command::new("ffprobe")
+        let output = Command::new(crate::tools::ffprobe())
             .args([
                 "-v",
                 "error",
@@ -1266,7 +1266,7 @@ pub fn excerpts(source: &Path, ranges: &[(f64, f64)]) -> Result<Vec<Excerpt>, St
                 }
             }
             let partial = Partial(partial);
-            let status = Command::new("ffmpeg")
+            let status = Command::new(crate::tools::ffmpeg())
                 .args([
                     "-v",
                     "error",
@@ -2191,7 +2191,11 @@ mod tests {
 
     #[test]
     fn concurrent_local_excerpts_keep_exact_ranges_and_separate_temporary_files() {
-        if Command::new("ffmpeg").arg("-version").output().is_err() {
+        if Command::new(crate::tools::ffmpeg())
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let dir = std::env::temp_dir().join(format!(
@@ -2201,7 +2205,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("source.mp4");
-        assert!(Command::new("ffmpeg")
+        assert!(Command::new(crate::tools::ffmpeg())
             .args([
                 "-v",
                 "error",

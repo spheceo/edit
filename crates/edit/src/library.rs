@@ -390,7 +390,7 @@ pub fn loudness(path: &Path, from: f64, seconds: f64) -> Result<f64, String> {
 
 /// The loudness as `loudness` measures it, and the sample peak (dBFS).
 pub fn levels(path: &Path, from: f64, seconds: f64) -> Result<(f64, f64), String> {
-    let output = Command::new("ffmpeg")
+    let output = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
             "-nostats",
@@ -502,7 +502,7 @@ pub fn footage_loudness(project: &edit_core::Project) -> Result<f64, String> {
 /// Seconds into the sound of its loudest 10 ms.
 fn loudest(path: &Path) -> Result<f64, String> {
     const RATE: usize = 8000;
-    let output = Command::new("ffmpeg")
+    let output = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
             "-loglevel",

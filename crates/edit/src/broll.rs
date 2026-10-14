@@ -67,7 +67,7 @@ pub fn still_video(image: &Path, dir: &Path) -> Result<PathBuf, String> {
         return Ok(out);
     }
     let partial = dir.join(format!("{stem}-{key}.partial.mp4"));
-    let status = Command::new("ffmpeg")
+    let status = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
             "-loglevel",
@@ -300,7 +300,7 @@ pub async fn smooth_slow_motion(
         let (input, start) = (PathBuf::from(&source.path), *source_in);
         let speed = *speed;
         let result = tokio::task::spawn_blocking(move || {
-            Command::new("ffmpeg")
+            Command::new(crate::tools::ffmpeg())
                 .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", &format!("{start:.4}"), "-t", &format!("{length:.4}"), "-i"])
                 .arg(&input)
                 .args([
@@ -806,7 +806,7 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
 /// A moving map shot's frames (`frame-00000.jpg`…) as footage at `fps`.
 fn frames_video(frames: &Path, fps: u32, out: &Path) -> Result<(), String> {
     let partial = out.with_extension("partial.mp4");
-    let output = Command::new("ffmpeg")
+    let output = Command::new(crate::tools::ffmpeg())
         .args(["-hide_banner", "-loglevel", "error", "-y", "-framerate"])
         .arg(fps.to_string())
         .arg("-i")

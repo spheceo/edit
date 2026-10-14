@@ -402,7 +402,7 @@ pub fn reject(home: &Path, project: &str, ids: &[String]) -> Result<usize, Strin
 /// A found image shrunk into a 320×240 cell (letterboxed), for contact sheets.
 pub fn thumbnail(path: &Path) -> Option<crate::render::RgbaImage> {
     let (width, height) = (320, 240);
-    let output = Command::new("ffmpeg")
+    let output = Command::new(crate::tools::ffmpeg())
         .args(["-hide_banner", "-loglevel", "error", "-i"])
         .arg(path)
         .args([
@@ -626,7 +626,7 @@ fn download(folder: &Path, (image, page, title): &Hit, query: &str) -> Option<It
 }
 
 fn dimensions(path: &Path) -> Option<(u32, u32)> {
-    let output = Command::new("ffprobe")
+    let output = Command::new(crate::tools::ffprobe())
         .args([
             "-v",
             "error",

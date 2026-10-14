@@ -10,6 +10,7 @@ import type { ProjectSummary } from "../lib/types";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Mark } from "./Logo";
+import { SetupCard } from "./SetupCard";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, spring } from "./ui";
 
@@ -50,6 +51,8 @@ export function Home() {
             </Button>
           </div>
         </header>
+
+        <SetupCard />
 
         {projects && projects.length === 0 && (
           <motion.div

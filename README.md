@@ -8,7 +8,7 @@ just serve            # build everything, serve on http://localhost:7700 (no win
 edit mcp              # how to connect Claude Code / Codex
 ```
 
-Requirements: Rust, Bun, FFmpeg (`ffmpeg` and `ffprobe` on `PATH`), `wasm-bindgen-cli` matching `crates/edit-wasm` (`cargo install wasm-bindgen-cli --version 0.2.129`), and macOS 26+ for WebGPU in the app's window (or a WebGPU browser: Chrome, Edge, Arc, Safari 26+).
+Requirements to build: Rust, Bun, FFmpeg on `PATH` for dev builds (releases ship their own: `scripts/ffmpeg.sh`), `wasm-bindgen-cli` matching `crates/edit-wasm` (`cargo install wasm-bindgen-cli --version 0.2.129`), and macOS 26+ for WebGPU in the app's window (or a WebGPU browser: Chrome, Edge, Arc, Safari 26+).
 
 ## How it fits together
 

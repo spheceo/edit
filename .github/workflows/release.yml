@@ -87,12 +87,17 @@ jobs:
       # EDIT_RELEASE turns on self-update (crates/edit/src/update.rs).
       - name: Build
         run: EDIT_RELEASE=1 cargo build --release --locked -p edit --target ${{ matrix.target }}
+      # FFmpeg ships beside `edit` (crates/edit/src/tools.rs), pinned in scripts/ffmpeg.sh.
       - name: Package
         run: |
           set -euo pipefail
           name="edit-${{ matrix.target }}.tar.gz"
-          mkdir dist
-          tar -czf "dist/$name" -C "target/${{ matrix.target }}/release" edit
+          mkdir dist package
+          cp "target/${{ matrix.target }}/release/edit" package/
+          scripts/ffmpeg.sh "${{ matrix.target }}" ffmpeg
+          cp ffmpeg/ffmpeg package/edit-ffmpeg
+          cp ffmpeg/ffprobe package/edit-ffprobe
+          tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe
           (cd dist && shasum -a 256 "$name" > "$name.sha256")
           echo "NAME=$name" >> "$GITHUB_ENV"
       - name: Upload to the release

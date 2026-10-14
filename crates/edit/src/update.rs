@@ -311,7 +311,14 @@ pub fn install(
     if !binary.is_file() {
         return Err("the update has no edit binary".to_owned());
     }
-    let exe = swap_in(&binary)?;
+    // The FFmpeg shipped with it goes beside it first, so the new version finds its own.
+    for tool in ["edit-ffmpeg", "edit-ffprobe"] {
+        let shipped = staged.join(tool);
+        if shipped.is_file() {
+            swap_in(&shipped, tool)?;
+        }
+    }
+    let exe = swap_in(&binary, "edit")?;
     let _ = std::fs::remove_dir_all(staged);
     progress(1.0);
     Ok(exe)
@@ -377,13 +384,19 @@ fn sha256(path: &Path) -> Result<String, String> {
 /// Replaces the running binary with `new`. The copy lands beside it first so
 /// the final rename is atomic (and works when ~/.edit is on another disk); a
 /// fresh file rather than an overwrite also keeps macOS's signature check happy.
-fn swap_in(new: &Path) -> Result<PathBuf, String> {
+/// `name` is "edit" (the running binary) or a tool shipped beside it.
+fn swap_in(new: &Path, name: &str) -> Result<PathBuf, String> {
     // The binary that was started, not the `Edit` link the app runs as.
-    let exe = crate::app::original_exe()
+    let running = crate::app::original_exe()
         .and_then(std::fs::canonicalize)
         .map_err(|error| format!("could not find the running binary: {error}"))?;
-    let dir = exe.parent().ok_or("the running binary has no folder")?;
-    let temp = dir.join(".edit-update");
+    let dir = running.parent().ok_or("the running binary has no folder")?;
+    let exe = if name == "edit" {
+        running.clone()
+    } else {
+        dir.join(name)
+    };
+    let temp = dir.join(format!(".{name}-update"));
     let unwritable = |error: std::io::Error| {
         format!(
             "can't write to {} ({error}); reinstall with the install script",

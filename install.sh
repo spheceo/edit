@@ -4,8 +4,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/spheceo/edit/main/install.sh | sh
 #
 # Downloads the newest `edit` from GitHub Releases, checks its SHA-256 and
-# puts it in ~/.local/bin (or $EDIT_INSTALL_DIR). Later versions install
-# themselves from the editor (or `edit update`).
+# puts it in ~/.local/bin (or $EDIT_INSTALL_DIR), with the FFmpeg it ships
+# with beside it (edit-ffmpeg, edit-ffprobe: they don't shadow your own). Later versions install themselves from
+# the editor (or `edit update`).
 
 set -eu
 
@@ -39,8 +40,12 @@ fi
 
 mkdir -p "$PREFIX"
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
-chmod +x "$TMP/edit"
-mv "$TMP/edit" "$PREFIX/edit"
+for tool in edit edit-ffmpeg edit-ffprobe; do
+  # Older releases had no FFmpeg; Edit then uses the one on PATH.
+  [ -f "$TMP/$tool" ] || continue
+  chmod +x "$TMP/$tool"
+  mv "$TMP/$tool" "$PREFIX/$tool"
+done
 
 echo
 echo "$("$PREFIX/edit" --version) is in $PREFIX/edit."
@@ -48,7 +53,8 @@ case ":$PATH:" in
   *":$PREFIX:"*) ;;
   *) echo "Add it to your PATH (e.g. in ~/.zshrc):  export PATH=\"\$PATH:$PREFIX\"" ;;
 esac
-command -v ffmpeg >/dev/null 2>&1 || echo "Edit needs FFmpeg for importing and export: brew install ffmpeg"
+[ -x "$PREFIX/edit-ffmpeg" ] || command -v ffmpeg >/dev/null 2>&1 || echo "Edit needs FFmpeg for importing and export: brew install ffmpeg"
+command -v codex >/dev/null 2>&1 || echo "The agent panel needs Codex: npm install -g @openai/codex, then codex login"
 echo
 echo "Start it with:  edit serve"
 echo "Updates show up in the editor; one click installs and restarts."

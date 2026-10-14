@@ -63,6 +63,7 @@ pub fn router(app: App) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/diagnostics", get(diagnostics))
+        .route("/api/setup", get(setup))
         .route("/api/diagnostics/client", post(client_log))
         .route("/api/update", get(update_status).post(update_install))
         .route("/api/projects", get(list_projects).post(create_project))
@@ -265,7 +266,7 @@ async fn health(State(app): State<App>) -> Json<Value> {
 
 /// Everything a problem report needs from the server side.
 async fn diagnostics(State(app): State<App>) -> Json<Value> {
-    let tool_version = |tool: &str| {
+    let tool_version = |tool: &std::ffi::OsStr| {
         std::process::Command::new(tool)
             .arg("-version")
             .output()
@@ -283,10 +284,57 @@ async fn diagnostics(State(app): State<App>) -> Json<Value> {
         "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
         "uptime": crate::diag::human(crate::diag::uptime()),
         "home": app.store.home(),
-        "ffmpeg": tool_version("ffmpeg"),
+        "ffmpeg": tool_version(crate::tools::ffmpeg()).map(|version| {
+            let from = if crate::tools::bundled() { "shipped with Edit" } else { "from PATH" };
+            format!("{version} ({from})")
+        }),
         "lines": crate::diag::lines(400),
         "timings": crate::diag::timings(),
     }))
+}
+
+/// What this machine still needs before everything in Edit works.
+async fn setup(State(app): State<App>) -> Json<Value> {
+    let ffmpeg = tokio::task::spawn_blocking(|| {
+        std::process::Command::new(crate::tools::ffmpeg())
+            .arg("-version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    })
+    .await
+    .unwrap_or(false);
+    let agents = app.agents.clone();
+    let codex = tokio::task::spawn_blocking(move || agents.status())
+        .await
+        .unwrap_or_else(|_| json!({ "ready": false, "state": "missing" }));
+    let chrome = crate::broll::chrome().is_some();
+    let codex_fix = match codex.get("state").and_then(Value::as_str) {
+        Some("logged_out") => "codex login",
+        _ => "npm install -g @openai/codex && codex login",
+    };
+    Json(json!({ "checks": [
+        {
+            "id": "ffmpeg",
+            "ok": ffmpeg,
+            "title": "FFmpeg",
+            "why": "Importing footage, previews and export. Reinstalling Edit brings it back.",
+            "fix": "curl -fsSL https://raw.githubusercontent.com/spheceo/edit/main/install.sh | sh",
+        },
+        {
+            "id": "codex",
+            "ok": codex.get("ready").and_then(Value::as_bool).unwrap_or(false),
+            "title": if codex.get("state").and_then(Value::as_str) == Some("logged_out") { "Codex sign-in" } else { "Codex" },
+            "why": "The agent panel.",
+            "fix": codex_fix,
+        },
+        {
+            "id": "chrome",
+            "ok": chrome,
+            "title": "Google Chrome (or Chromium)",
+            "why": "Map shots and research.",
+            "fix": "https://www.google.com/chrome/",
+        },
+    ]}))
 }
 
 #[derive(Deserialize)]

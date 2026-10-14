@@ -48,7 +48,7 @@ pub struct Transcript {
 pub fn run(source: &Path, target: &Path) -> Result<(), String> {
     let config = relay_config(std::env::var("EDIT_RELAY_TOKEN").ok().as_deref())?;
     let audio = target.with_extension("ogg");
-    let encoded = Command::new("ffmpeg")
+    let encoded = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
             "-loglevel",

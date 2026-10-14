@@ -82,7 +82,7 @@ impl VideoReader {
     fn restart(&mut self, time: f64) -> Result<(), String> {
         self.stop();
         let time = time.max(0.0);
-        let mut child = Command::new("ffmpeg")
+        let mut child = Command::new(crate::tools::ffmpeg())
             .args([
                 "-hide_banner",
                 "-loglevel",
@@ -185,7 +185,7 @@ pub(crate) fn grab_frame(
     let (w, h) = decode_size(media, width, height);
     // An accurate seek returns the first frame at or after its time: half a frame early is the nearest.
     let time = time - 0.5 / if media.fps > 0.0 { media.fps } else { 30.0 };
-    let output = Command::new("ffmpeg")
+    let output = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
             "-loglevel",
@@ -719,7 +719,7 @@ fn export(
     let offset = plan.start as f64 / project.fps();
     let video = options.format.has_video();
 
-    let mut command = Command::new("ffmpeg");
+    let mut command = Command::new(crate::tools::ffmpeg());
     command.args(["-hide_banner", "-loglevel", "error", "-y"]);
     let mut inputs = 0;
     if video {

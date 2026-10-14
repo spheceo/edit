@@ -399,7 +399,7 @@ async fn transcript_of(app: &App, media: &Media) -> Result<crate::transcribe::Tr
 }
 
 fn still(media: &Path, time: f64, out: &Path) -> Result<(), String> {
-    let status = Command::new("ffmpeg")
+    let status = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
             "-loglevel",

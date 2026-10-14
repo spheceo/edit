@@ -15,6 +15,7 @@ mod server;
 mod sfx;
 mod speakers;
 mod store;
+mod tools;
 mod track;
 mod transcribe;
 mod update;
@@ -143,18 +144,30 @@ fn app(home: PathBuf, port: u16) {
 /// Opens the store and starts listening; the server runs on the handles.
 async fn start(home: PathBuf, host: Option<String>, port: u16) -> Vec<tokio::task::JoinHandle<()>> {
     diag::open(&home);
-    for tool in ["ffmpeg", "ffprobe"] {
-        if std::process::Command::new(tool)
+    for (tool, path) in [("ffmpeg", tools::ffmpeg()), ("ffprobe", tools::ffprobe())] {
+        if std::process::Command::new(path)
             .arg("-version")
             .output()
             .is_err()
         {
             diag::warn(
                 "edit",
-                format!("{tool} not found on PATH; importing and export need FFmpeg"),
+                format!("{tool} not found; importing and export need FFmpeg"),
             );
         }
     }
+    diag::info(
+        "edit",
+        format!(
+            "FFmpeg: {} ({})",
+            tools::ffmpeg().to_string_lossy(),
+            if tools::bundled() {
+                "shipped with Edit"
+            } else {
+                "from PATH"
+            }
+        ),
+    );
     let store = Arc::new(
         store::Store::open(home.clone())
             .unwrap_or_else(|error| fail(&format!("{}: {error}", home.display()))),

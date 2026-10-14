@@ -26,6 +26,7 @@ pub(crate) fn role_title(role: &str) -> &'static str {
         "bystander" => "Bystander",
         "narrator" => "Narrator",
         "dispatch" => "Dispatch",
+        BACKGROUND => "Background talk",
         _ => "Other",
     }
 }
@@ -67,8 +68,8 @@ pub fn set_role(
     role: &str,
     label: Option<&str>,
 ) -> Result<Transcript, String> {
-    if !ROLES.contains(&role) {
-        return Err(format!("role is one of {}", ROLES.join(", ")));
+    if !ROLES.contains(&role) && role != BACKGROUND {
+        return Err(format!("role is one of {}, {BACKGROUND}", ROLES.join(", ")));
     }
     let target = app.media.paths(source).transcript;
     let _guard = TRANSCRIPT_EDITS.lock();
@@ -140,6 +141,11 @@ pub const ROLES: [&str; 10] = [
     "dispatch",
     "other",
 ];
+
+/// The voice (and role) the watcher gives a second conversation going on
+/// behind the one the footage follows: hidden like the narrator, and never
+/// offered to a model as a role.
+pub const BACKGROUND: &str = "background";
 
 /// Files being named now, so each is named once.
 static NAMING: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
@@ -399,7 +405,10 @@ async fn name(app: &App, source: &Path, target: &Path) -> Result<(), String> {
 /// role's own colour, the rest shades for a second or third person in it.
 fn palette(role: &str, victim_present: bool) -> &'static [&'static str] {
     match role {
-        "officer" => &["#00e5c7", "#7af2e1", "#b5f8ee", "#00c4aa"],
+        // A second officer is paler than the first, a third deeper; the rest
+        // stand too close to those to be told apart, so are picked only when
+        // the first ones are not in use.
+        "officer" => &["#00e5c7", "#b5f8ee", "#009e8c", "#7af2e1", "#00c4aa"],
         "leader" => &["#0090e5", "#5cb6f0", "#33a3eb", "#9dd2f6"],
         "suspect" => &["#ffff00", "#fff47a", "#ffe94d", "#ffffa8"],
         // When a victim is in the scene, witnesses are white so the two stay apart.
@@ -409,10 +418,54 @@ fn palette(role: &str, victim_present: bool) -> &'static [&'static str] {
         "bystander" => &["#ffffff", "#e6e6e6", "#f3ecdf"],
         "narrator" => &["#ffffff"],
         "dispatch" => &["#b9c7d4", "#d5dee6", "#9fb1c1"],
-        _ => &[
-            "#3ddc84", "#ffb3d9", "#b8f23a", "#9cff8a", "#a6e3ff", "#ffd59e",
-        ],
+        _ => &OTHER,
     }
+}
+
+const OTHER: [&str; 6] = [
+    "#3ddc84", "#ffb3d9", "#b8f23a", "#9cff8a", "#a6e3ff", "#ffd59e",
+];
+
+/// Colours for a person whose role has no shade left that stands apart:
+/// light ones no role starts with.
+const SPARE: [&str; 4] = ["#c9a8ff", "#ff9e9e", "#e0ff8a", "#ffc2f0"];
+
+/// How far apart (CIE76 ΔE) two people's colours must be. Officer shades
+/// 12–17 apart read as one teal under the glow: producers couldn't tell
+/// officers apart (Repack, Grandmother, 2026-10-13).
+const DISTINCT: f64 = 20.0;
+
+/// "#rrggbb" in CIELAB, to judge how far apart two colours look.
+fn lab(hex: &str) -> [f64; 3] {
+    let channel = |at: usize| {
+        let v = hex
+            .get(at..at + 2)
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+            .map_or(0.0, |v| f64::from(v) / 255.0);
+        if v > 0.04045 {
+            ((v + 0.055) / 1.055).powf(2.4)
+        } else {
+            v / 12.92
+        }
+    };
+    let (r, g, b) = (channel(1), channel(3), channel(5));
+    let f = |t: f64| {
+        if t > 0.008856 {
+            t.cbrt()
+        } else {
+            7.787 * t + 16.0 / 116.0
+        }
+    };
+    let x = f((r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047);
+    let y = f(r * 0.2126 + g * 0.7152 + b * 0.0722);
+    let z = f((r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883);
+    [116.0 * y - 16.0, 500.0 * (x - y), 200.0 * (y - z)]
+}
+
+/// How far apart two colours look (CIE76 ΔE).
+fn apart(a: &str, b: &str) -> f64 {
+    let ([l1, a1, b1], [l2, a2, b2]) = (lab(a), lab(b));
+    ((l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)).sqrt()
 }
 
 /// A role read from a label when none was given ("Raven (Officer)" → officer).
@@ -500,8 +553,11 @@ pub fn role_from_label(label: &str) -> &'static str {
     }
 }
 
-/// Colours for a transcript's voices by role: whoever says most in a role
-/// gets its own colour, the next its next shade, and so on.
+/// Colours for a transcript's voices by role (Repack's speakerColors):
+/// whoever says most in a role gets its own colour, the next the next shade
+/// that stands apart (DISTINCT) from every colour taken, and once the role
+/// has none left, a spare colour: two people never look alike. The narrator
+/// and background talk are white and take no colour from anyone.
 pub fn colors(transcript: &Transcript) -> BTreeMap<String, String> {
     let mut words: BTreeMap<&str, usize> = BTreeMap::new();
     for word in &transcript.words {
@@ -527,12 +583,28 @@ pub fn colors(transcript: &Transcript) -> BTreeMap<String, String> {
     let mut taken: HashSet<&str> = HashSet::new();
     let mut out = BTreeMap::new();
     for (voice, _) in voices {
-        let palette = palette(role(voice), victim);
-        // Every palette has colours; past its last, voices share its first.
-        let Some(color) = palette
-            .iter()
-            .find(|color| !taken.contains(*color))
-            .or_else(|| palette.first())
+        let role = role(voice);
+        // Off screen unless turned on: white, never in the way.
+        if role == "narrator" || role == BACKGROUND {
+            out.insert(voice.to_owned(), "#ffffff".to_owned());
+            continue;
+        }
+        let nearest = |color: &str| {
+            taken
+                .iter()
+                .map(|other| apart(color, other))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let choices = || palette(role, victim).iter().chain(&OTHER).chain(&SPARE);
+        // More people than colours that stand apart: the least alike.
+        let Some(color) = choices()
+            .find(|color| nearest(color) >= DISTINCT)
+            .or_else(|| {
+                choices().fold(None, |best: Option<&&str>, color| match best {
+                    Some(best) if nearest(color) <= nearest(best) => Some(best),
+                    _ => Some(color),
+                })
+            })
             .copied()
         else {
             continue;
@@ -611,14 +683,71 @@ mod tests {
             colors: BTreeMap::new(),
         };
         let colors = colors(&transcript);
-        // Officers: the one who says most is the role's own teal, the other its next shade.
+        // Officers: the one who says most is the role's own teal, the other its pale teal.
         assert_eq!(colors["speaker_1"], "#00e5c7");
-        assert_eq!(colors["speaker_3"], "#7af2e1");
+        assert_eq!(colors["speaker_3"], "#b5f8ee");
         assert_eq!(colors["speaker_2"], "#e57e00");
         // No role given: read from the label (none here → other).
         assert_eq!(colors["speaker_0"], "#3ddc84");
         assert_eq!(role_from_label("Raven (Officer)"), "officer");
         assert_eq!(role_from_label("Mother"), "witness");
+    }
+
+    #[test]
+    fn no_two_people_look_alike() {
+        // Six officers, two sergeants, a suspect, two witnesses, a narrator
+        // and background talk, most spoken first.
+        let cast = [
+            "officer", "officer", "officer", "officer", "officer", "officer", "leader", "leader",
+            "suspect", "witness", "witness", "narrator", BACKGROUND,
+        ];
+        let mut words = Vec::new();
+        for (i, _) in cast.iter().enumerate() {
+            for _ in 0..(cast.len() - i) {
+                words.push(Word {
+                    text: "x".into(),
+                    start: 0.0,
+                    end: 0.1,
+                    speaker: Some(format!("speaker_{i:02}")),
+                });
+            }
+        }
+        let transcript = Transcript {
+            model: "scribe_v2".into(),
+            language: None,
+            words,
+            speakers: BTreeMap::new(),
+            roles: cast
+                .iter()
+                .enumerate()
+                .map(|(i, role)| (format!("speaker_{i:02}"), (*role).to_owned()))
+                .collect(),
+            colors: BTreeMap::new(),
+        };
+        let colors = colors(&transcript);
+        // Officers go teal, pale teal, deep teal, then spare colours.
+        let officers: Vec<&str> = (0..6)
+            .map(|i| colors[&format!("speaker_{i:02}")].as_str())
+            .collect();
+        assert_eq!(officers[..3], ["#00e5c7", "#b5f8ee", "#009e8c"]);
+        assert_eq!(colors["speaker_06"], "#0090e5");
+        assert_eq!(colors["speaker_08"], "#ffff00");
+        assert_eq!(colors["speaker_09"], "#e57e00");
+        // Hidden voices are white and take nobody's colour.
+        assert_eq!(colors["speaker_11"], "#ffffff");
+        assert_eq!(colors["speaker_12"], "#ffffff");
+        let shown: Vec<&String> = colors
+            .iter()
+            .filter(|(voice, _)| !["speaker_11", "speaker_12"].contains(&voice.as_str()))
+            .map(|(_, color)| color)
+            .collect();
+        for (i, a) in shown.iter().enumerate() {
+            for b in shown.iter().skip(i + 1) {
+                assert!(apart(a, b) >= DISTINCT, "{a} and {b}: {}", apart(a, b));
+            }
+        }
+        // The old officer shades stood 12–17 apart.
+        assert!(apart("#00e5c7", "#00c4aa") < DISTINCT);
     }
 
     #[test]

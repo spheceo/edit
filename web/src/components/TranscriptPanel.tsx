@@ -59,6 +59,8 @@ const ROLES: [string, string, string][] = [
   ["bystander", "Bystander", "#ffffff"],
   ["narrator", "Narrator", "#ffffff"],
   ["dispatch", "Dispatch / radio", "#b9c7d4"],
+  // Set by the watcher on a second conversation behind the one followed: hidden like the narrator.
+  ["background", "Background talk", "#ffffff"],
   ["other", "Other", "#3ddc84"],
 ];
 

@@ -482,8 +482,10 @@ pub struct Line {
 /// Repack's `shownCues`, one at a time: each held `hold_ms` after its last
 /// word but never past the next one's start or `until_ms`; one starting while
 /// another is up waits for it; one left no time is dropped. Lines of `silent`
-/// speakers (radio) are left out first and cut nothing short; lines of
-/// `hidden` ones (the narrator too) still end the line before them, then go.
+/// speakers (radio, background talk: they talk over the conversation rather
+/// than instead of it) are left out first and cut nothing short; lines of
+/// `hidden` ones that aren't silent (only the narrator) still end the line
+/// before them, then go.
 ///
 /// `together` (interrogations): people talking over each other are shown at
 /// once. Each person's lines go one at a time; a line ends at the next one
@@ -586,6 +588,19 @@ pub fn shown(
     }
     out.retain(|cue| cue.end_ms > cue.start_ms && !hidden(&cue.speaker));
     out
+}
+
+/// Whether a role's lines are hidden: the narrator, radio traffic and
+/// background talk (a second conversation behind the one followed).
+pub(crate) fn hidden_role(role: &str) -> bool {
+    matches!(role, "narrator" | "dispatch" | crate::speakers::BACKGROUND)
+}
+
+/// Whether a hidden role's lines also cut nothing short: every hidden one
+/// but the narrator, since they talk over the conversation rather than
+/// instead of it (Repack's silentRadio).
+pub(crate) fn silent_role(role: &str) -> bool {
+    hidden_role(role) && role != "narrator"
 }
 
 /// A voice's role: the one the transcript gives, else read from its name
@@ -878,8 +893,8 @@ pub async fn repack_subtitles(
         from as f64 / fps * 1000.0,
         to as f64 / fps * 1000.0,
         overlap,
-        |key| role(key) == "dispatch",
-        |key| matches!(role(key), "dispatch" | "narrator"),
+        |key| silent_role(role(key)),
+        |key| hidden_role(role(key)),
     );
     let (width, height) = (project.settings.width, project.settings.height);
     let frame = |ms: f64| (ms / 1000.0 * fps).round() as i64;
@@ -1032,7 +1047,7 @@ pub async fn repack_subtitles(
                 "role": voice.role,
                 "color": voice.color,
                 "lines": counts.get(key.as_str()).copied().unwrap_or(0),
-                "shown": !matches!(voice.role.as_str(), "narrator" | "dispatch"),
+                "shown": !hidden_role(&voice.role),
             })
         })
         .collect();
@@ -1198,6 +1213,31 @@ mod tests {
             |speaker| speaker == "radio" || speaker == "narrator",
         );
         assert_eq!(times(&out), [(0.0, 700.0, "a")]);
+        // Background talk is hidden and, like radio, cuts nothing short;
+        // only the narrator does.
+        let role = |speaker: &str| match speaker {
+            "narrator" => "narrator",
+            "behind" => crate::speakers::BACKGROUND,
+            _ => "officer",
+        };
+        let out = shown(
+            &[
+                line(0.0, 500.0, "a"),
+                line(600.0, 1200.0, "behind"),
+                line(2000.0, 2300.0, "b"),
+                line(2500.0, 2600.0, "narrator"),
+            ],
+            1000.0,
+            0.0,
+            9000.0,
+            false,
+            |speaker| silent_role(role(speaker)),
+            |speaker| hidden_role(role(speaker)),
+        );
+        assert_eq!(times(&out), [(0.0, 1500.0, "a"), (2000.0, 2500.0, "b")]);
+        assert!(hidden_role("dispatch") && silent_role("dispatch"));
+        assert!(hidden_role("narrator") && !silent_role("narrator"));
+        assert!(!hidden_role("officer") && !silent_role("officer"));
     }
 
     #[test]

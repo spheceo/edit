@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::server::App;
+use crate::speakers::BACKGROUND;
 use crate::subtitles::{segment, TimedWord};
 
 const GATEWAY: &str = "https://ai-gateway.vercel.sh/v1/chat/completions";
@@ -45,6 +46,8 @@ Decide by what you see and hear: whose mouth, head and hands move while the line
 People: give each person who speaks a letter (A, B, C…). Describe how they look (hair, clothes, build, anything held) and where they are in the picture (which seat, which side), so they can be recognised in other clips of the same footage. Give a name only when the footage says it (they are addressed by it or say it of themselves); otherwise "". Give their role: "officer", "leader" for a detective, sergeant or whoever leads the police side, "suspect", "victim", "witness", "medic", "bystander", "narrator", "dispatch" for police radio traffic and dispatchers heard over the radio (a 911 call-taker talking with a caller is "officer"), or "other". Someone heard but not seen is on_screen false. A voice-over that tells the story to viewers, speaks of the people in the third person and is never answered is the narrator; a news reader, a 911 call or a courtroom clip is someone else.
 
 Answer every line with who says it and how sure you are: "high" when you see them say it or clearly know the voice, "medium" when the voice or the conversation points to them, "low" when it is a guess; when not high, also give in "or" who else it could be. A line two people share goes to whoever says most of it.
+
+Background: viewers follow one conversation at a time, the one the camera is on. When a second conversation goes on at the same moment, apart from it (a medic quietly asking someone else questions behind an officer who is talking with the suspect), list the numbers of that second conversation's lines in "background", and still give each a speaker in "lines". Only lines of a separate conversation that overlaps the one followed: never someone who joins in, interrupts or answers the people in it, and never a conversation that is the only one going on. Otherwise "background" is empty.
 
 Segments: cover every second of the clip, in order and without overlaps, with stretches (seconds into the clip) of one kind each: "footage" for live footage whose speech gets subtitles; "captioned" where the picture ALREADY has subtitles or captions burned in (an intro or cold open made earlier, often with coloured subtitle boxes), whoever speaks; "narration" where a narrator's voice-over plays over maps, photos, documents or B-roll; "other" for title cards, maps or footage without speech, music. Give each a short note of what is in it ("cold open with subtitles", "map of the street"). Stretches shorter than about two seconds belong to their neighbours.
 
@@ -193,6 +196,9 @@ pub struct Answer {
     pub lines: Vec<Said>,
     #[serde(default)]
     pub segments: Vec<Stretch>,
+    /// Lines of another conversation heard behind the one the footage follows.
+    #[serde(default)]
+    pub background: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -231,7 +237,7 @@ pub struct Stretch {
 fn schema() -> Value {
     json!({
         "type": "object", "additionalProperties": false,
-        "required": ["people", "lines", "segments"],
+        "required": ["people", "lines", "segments", "background"],
         "properties": {
             "people": { "type": "array", "items": {
                 "type": "object", "additionalProperties": false,
@@ -264,7 +270,8 @@ fn schema() -> Value {
                     "kind": { "type": "string", "enum": ["footage", "captioned", "narration", "other"] },
                     "note": { "type": "string" }
                 }
-            } }
+            } },
+            "background": { "type": "array", "items": { "type": "integer" } }
         }
     })
 }
@@ -318,8 +325,9 @@ fn prompt(
 /// The cache key of a window's answer: the file, the stretch and its lines.
 fn cache_key(media_key: &str, window: &Window, lines: &[WatchLine]) -> String {
     let mut hasher = Sha256::new();
+    // The instructions too: changed ones can't reuse a stale answer.
     hasher.update(format!(
-        "{MODEL}\n{media_key}\n{:.3}\n{:.3}\n",
+        "{MODEL}\n{WATCH_SYSTEM}\n{media_key}\n{:.3}\n{:.3}\n",
         window.start, window.end
     ));
     for line in lines {
@@ -609,7 +617,8 @@ pub async fn watch_window(
 /// Each letter of a window as a voice of the transcript: the label most of
 /// its lines carry, unless a letter with more lines took that label first;
 /// then a voice split off that label (the same one across windows, by label
-/// and role), made as needed.
+/// and role), made as needed. Lines in the background count for no one, and
+/// a letter with only those has no voice.
 pub fn voices_for(
     answer: &Answer,
     labels: &[Option<String>],
@@ -618,13 +627,21 @@ pub fn voices_for(
 ) -> BTreeMap<String, String> {
     let mut counts: BTreeMap<&str, BTreeMap<Option<&str>, usize>> = BTreeMap::new();
     for line in &answer.lines {
-        let Some(label) = usize::try_from(line.n).ok().and_then(|n| labels.get(n)) else {
+        // Background talk is no one person: it says nothing of who a letter is.
+        if answer.background.contains(&line.n) {
+            continue;
+        }
+        let Some(label) = usize::try_from(line.n)
+            .ok()
+            .and_then(|n| labels.get(n))
+            .map(|label| label.as_deref().filter(|label| *label != BACKGROUND))
+        else {
             continue;
         };
         *counts
             .entry(line.who.as_str())
             .or_default()
-            .entry(label.as_deref())
+            .entry(label)
             .or_default() += 1;
     }
     let mut letters: Vec<(&str, usize, Option<&str>)> = counts
@@ -670,6 +687,37 @@ pub fn voices_for(
         };
         claimed.insert(voice.clone());
         out.insert(letter.to_owned(), voice);
+    }
+    out
+}
+
+/// The lines of a window whose voice changes, and to whom: a line of a
+/// conversation in the background to the hidden BACKGROUND voice, any other
+/// to its letter's voice unless that is only a guess.
+pub fn reassigned(
+    answer: &Answer,
+    voices: &BTreeMap<String, String>,
+    labels: &[Option<String>],
+) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    for line in &answer.lines {
+        let Some((n, label)) = usize::try_from(line.n)
+            .ok()
+            .and_then(|n| Some((n, labels.get(n)?.as_deref())))
+        else {
+            continue;
+        };
+        let voice = if answer.background.contains(&line.n) {
+            BACKGROUND
+        } else {
+            match voices.get(&line.who) {
+                Some(voice) if line.sure != "low" => voice.as_str(),
+                _ => continue,
+            }
+        };
+        if label != Some(voice) {
+            out.push((n, voice.to_owned()));
+        }
     }
     out
 }
@@ -939,19 +987,13 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
                 "where": person.place,
             }));
         }
-        for line in &answer.lines {
-            let (Some(voice), Some(watched)) = (
-                voices.get(&line.who),
-                usize::try_from(line.n).ok().and_then(|n| lines.get(n)),
-            ) else {
+        for (n, voice) in reassigned(answer, &voices, &labels) {
+            let Some(watched) = lines.get(n) else {
                 continue;
             };
-            if line.sure == "low" || watched.label.as_deref() == Some(voice.as_str()) {
-                continue;
-            }
             changes.entry(part.media.clone()).or_default().push((
                 watched.words.clone(),
-                voice.clone(),
+                voice,
                 watched.text.clone(),
                 on_timeline(watched.start),
                 watched.label.clone(),
@@ -1009,6 +1051,17 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
                         word.speaker = Some(voice.clone());
                     }
                 }
+            }
+            // Hidden until its role is changed by hand.
+            if list.iter().any(|(_, voice, ..)| voice == BACKGROUND) {
+                transcript
+                    .roles
+                    .entry(BACKGROUND.to_owned())
+                    .or_insert_with(|| BACKGROUND.to_owned());
+                transcript
+                    .speakers
+                    .entry(BACKGROUND.to_owned())
+                    .or_insert_with(|| crate::speakers::role_title(BACKGROUND).to_owned());
             }
             for ((media, voice), (roles, names)) in said {
                 if media != media_id {
@@ -1177,6 +1230,7 @@ mod tests {
                 })
                 .collect(),
             segments: Vec::new(),
+            background: Vec::new(),
         }
     }
 
@@ -1209,6 +1263,57 @@ mod tests {
         let again = voices_for(&watched, &labels, &mut splits, &mut known);
         assert_eq!(again.get("B").map(String::as_str), Some("speaker_3"));
         assert_eq!(known.len(), 4);
+    }
+
+    #[test]
+    fn background_talk_goes_to_a_hidden_voice() {
+        let s = |v: &str| Some(v.to_owned());
+        // A (officer) talks with B (suspect); C, a medic, questions D
+        // behind them in lines 2 and 4. Line 5 was background talk before.
+        let labels = [
+            s("speaker_0"),
+            s("speaker_1"),
+            s("speaker_0"),
+            s("speaker_0"),
+            s("speaker_2"),
+            s(BACKGROUND),
+        ];
+        let mut watched = answer(
+            &[
+                ("A", "officer"),
+                ("B", "suspect"),
+                ("C", "medic"),
+                ("D", "witness"),
+            ],
+            &["A", "B", "C", "A", "D", "B"],
+        );
+        watched.background = vec![2, 4];
+        let mut known: BTreeSet<String> = ["speaker_0", "speaker_1", "speaker_2", BACKGROUND]
+            .map(String::from)
+            .into();
+        let voices = voices_for(&watched, &labels, &mut BTreeMap::new(), &mut known);
+        // The background lines say nothing of who C and D are, and the
+        // background voice is never a person's.
+        assert_eq!(voices.get("A").map(String::as_str), Some("speaker_0"));
+        assert_eq!(voices.get("C"), None);
+        assert_eq!(voices.get("D"), None);
+        assert_ne!(voices.get("B").map(String::as_str), Some(BACKGROUND));
+        let moved = reassigned(&watched, &voices, &labels);
+        let voice_of = |n: usize| {
+            moved
+                .iter()
+                .find(|(line, _)| *line == n)
+                .map(|(_, voice)| voice.as_str())
+        };
+        assert_eq!(voice_of(2), Some(BACKGROUND));
+        assert_eq!(voice_of(4), Some(BACKGROUND));
+        // Line 5 is followed again: back to its speaker.
+        assert_eq!(voice_of(5), voices.get("B").map(String::as_str));
+        assert_eq!(voice_of(0), None);
+        assert_eq!(voice_of(3), None);
+        // Hidden in repack_subtitles, without cutting the line before short.
+        assert!(crate::subtitles::hidden_role(BACKGROUND));
+        assert!(crate::subtitles::silent_role(BACKGROUND));
     }
 
     #[test]

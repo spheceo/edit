@@ -16,3 +16,6 @@
 
 # Tauri build output
 /crates/edit/gen/
+
+# Mood-board stills from other channels: kept locally, not published
+/docs/moodboard/shots/

@@ -35,7 +35,12 @@ struct LayerUniforms {
     /// The Gaussian's sigma in pixels, for a box shadow.
     blur: f32,
     _pad: [u32; 2],
+    /// The part of the texture drawn (x0, y0, x1, y1; all of it 0, 0, 1, 1);
+    /// for a gradient, where it starts and ends (x0 clear, y0 full).
+    uv: [f32; 4],
 }
+
+const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -89,6 +94,7 @@ const MODE_GLOW: u32 = 2;
 const MODE_PREMULTIPLIED: u32 = 3;
 const MODE_SHADOW: u32 = 4;
 const MODE_BOX_SHADOW: u32 = 5;
+const MODE_GRADIENT: u32 = 6;
 
 struct Target {
     texture: wgpu::Texture,
@@ -533,6 +539,7 @@ impl Renderer {
                     media,
                     transform,
                     opacity,
+                    crop,
                     ..
                 } => {
                     let Some(video) = self.videos.get(clip).or_else(|| self.videos.get(media))
@@ -545,14 +552,33 @@ impl Renderer {
                     let fit = (self.width as f32 / video.width as f32)
                         .min(self.height as f32 / video.height as f32);
                     let size = [video.width as f32 * fit, video.height as f32 * fit];
-                    let uniforms = quad_uniforms(
-                        transform,
-                        size,
-                        half_canvas,
-                        *opacity,
-                        [1.0; 4],
-                        MODE_STRAIGHT,
-                    );
+                    // A crop draws less of the picture where it was: a smaller quad,
+                    // moved towards the side that's kept, turned and scaled with it.
+                    let kept = [
+                        (1.0 - crop.left - crop.right).max(0.01),
+                        (1.0 - crop.top - crop.bottom).max(0.01),
+                    ];
+                    let shift = [
+                        (crop.left - crop.right) / 2.0 * size[0] * transform.scale,
+                        (crop.top - crop.bottom) / 2.0 * size[1] * transform.scale,
+                    ];
+                    let (sin, cos) = transform.rotation.to_radians().sin_cos();
+                    let placed = Transform {
+                        x: transform.x + shift[0] * cos - shift[1] * sin,
+                        y: transform.y + shift[0] * sin + shift[1] * cos,
+                        ..*transform
+                    };
+                    let uniforms = LayerUniforms {
+                        uv: [crop.left, crop.top, 1.0 - crop.right, 1.0 - crop.bottom],
+                        ..quad_uniforms(
+                            &placed,
+                            [size[0] * kept[0], size[1] * kept[1]],
+                            half_canvas,
+                            *opacity,
+                            [1.0; 4],
+                            MODE_STRAIGHT,
+                        )
+                    };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));
                     let group = self.bind(&video.view);
@@ -566,7 +592,11 @@ impl Renderer {
                         None,
                     );
                 }
-                Layer::Solid { color, opacity } => {
+                Layer::Solid {
+                    color,
+                    opacity,
+                    gradient,
+                } => {
                     if *opacity <= 0.0 {
                         continue;
                     }
@@ -577,9 +607,15 @@ impl Renderer {
                         rotation: 0.0,
                         opacity: *opacity,
                         tint: color.0,
-                        mode: MODE_SOLID,
+                        mode: if gradient.is_some() {
+                            MODE_GRADIENT
+                        } else {
+                            MODE_SOLID
+                        },
                         blur: 0.0,
                         _pad: [0; 2],
+                        uv: gradient
+                            .map_or(WHOLE, |gradient| [gradient.from, gradient.to, 0.0, 0.0]),
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));
@@ -1201,6 +1237,7 @@ impl Renderer {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
         style.font.hash(&mut hasher);
+        style.align.hash(&mut hasher);
         style.weight.hash(&mut hasher);
         for value in [
             px,
@@ -1248,6 +1285,7 @@ impl Renderer {
                     shown_glyphs,
                     pad,
                     max_width: style.max_width.map(|width| width * scale),
+                    align: style.align,
                     label: style.label.as_ref().map(|label| {
                         // In its own box sitting right on the text's box (no gap); a
                         // little air when there's no box.
@@ -1673,6 +1711,7 @@ fn quad_uniforms(
         mode,
         blur: 0.0,
         _pad: [0; 2],
+        uv: WHOLE,
     }
 }
 

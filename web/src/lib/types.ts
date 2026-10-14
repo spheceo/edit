@@ -107,6 +107,8 @@ export interface TextStyle {
   label?: TextLabel;
   /** A callout: a line from a point (a chin) to the box, drawn in when the clip starts. */
   leader?: Leader;
+  /** How the lines line up with each other (default center). */
+  align?: "left" | "center" | "right";
 }
 
 /** A callout's line: from (x, y) (project px from the frame centre) to the nearest edge of the text's box. */
@@ -277,6 +279,21 @@ export interface VideoClip extends ClipBase {
   speed: number;
   transform: Transform;
   opacity: number;
+  /** Shares of the picture cut off each side (edit-core Crop). */
+  crop?: Crop;
+}
+
+export interface Crop {
+  left?: number;
+  right?: number;
+  top?: number;
+  bottom?: number;
+}
+
+/** A solid fading across the frame: clear at `from`, full at `to` (shares of its width). */
+export interface Gradient {
+  from: number;
+  to: number;
 }
 
 export interface AudioClip extends ClipBase {
@@ -310,6 +327,7 @@ export interface SolidClip extends ClipBase {
   type: "solid";
   fill: Rgba;
   opacity: number;
+  gradient?: Gradient | null;
 }
 
 /** How a waveform looks (edit-core WaveformStyle). Sizes are project pixels. */

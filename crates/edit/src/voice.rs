@@ -445,6 +445,21 @@ impl Voices {
         Ok(project)
     }
 
+    /// Each line's chosen take, in order (line number, label, file).
+    pub fn chosen_takes(&self, id: &str) -> Result<Vec<(usize, Option<String>, PathBuf)>, String> {
+        let project = self.get(id)?;
+        Ok(project
+            .lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                let path = self.take_path(id, line.chosen.as_deref()?).ok()?;
+                path.is_file()
+                    .then(|| (index + 1, line.label.clone(), path))
+            })
+            .collect())
+    }
+
     /// The account's voices (from the relay), kept for ten minutes.
     pub fn voices(&self, refresh: bool) -> Result<Value, String> {
         if !refresh {

@@ -91,6 +91,7 @@ export const voiceApi = {
   remove: (id: string) => call<{ ok: boolean }>("DELETE", `/api/voice/${id}`),
   generate: (id: string, line: string) => call<{ project: VoiceProject }>("POST", `/api/voice/${id}/lines/${line}/generate`),
   deleteTake: (id: string, line: string, take: string) => call<{ project: VoiceProject }>("DELETE", `/api/voice/${id}/lines/${line}/takes/${take}`),
+  send: (id: string, project: string) => call<{ media: string[]; report: unknown }>("POST", `/api/voice/${id}/send`, { project }),
   voices: (refresh = false) => call<{ voices: Voice[] }>("GET", `/api/voice/voices${refresh ? "?refresh=true" : ""}`),
 };
 

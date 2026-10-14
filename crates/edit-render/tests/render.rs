@@ -56,6 +56,7 @@ fn keeps_uniforms_independent_beyond_512_draws() {
                     ..Default::default()
                 },
                 opacity: 1.0,
+                crop: Default::default(),
             })
             .collect(),
     };
@@ -112,6 +113,7 @@ fn renders_gradient_glowing_title_and_grade() {
                 source_time: 0.0,
                 transform: Transform::default(),
                 opacity: 1.0,
+                crop: Default::default(),
             },
             Layer::Adjustment {
                 grade: Grade {
@@ -200,7 +202,7 @@ fn renders_repack_subtitle_style() {
         width: w,
         height: h,
         layers: vec![
-            Layer::Video { clip: "c1".into(), media: "m1".into(), source_time: 0.0, transform: Transform::default(), opacity: 1.0 },
+            Layer::Video { clip: "c1".into(), media: "m1".into(), source_time: 0.0, transform: Transform::default(), opacity: 1.0, crop: Default::default() },
             Layer::Text {
                 clip: "s1".into(),
                 text: "This is how a subtitle looks in Repack's house style, wrapping onto a second line when it runs long".into(),
@@ -244,6 +246,7 @@ fn independent_moments_of_one_source_do_not_share_a_texture() {
             ..Default::default()
         },
         opacity: 1.0,
+        crop: Default::default(),
     };
     renderer.render(&Scene {
         width: 80,
@@ -255,4 +258,77 @@ fn independent_moments_of_one_source_do_not_share_a_texture() {
     let right = (20 * 80 + 60) * 4;
     assert!(pixels[left] > 240 && pixels[left + 2] < 10);
     assert!(pixels[right] < 10 && pixels[right + 2] > 240);
+}
+
+#[test]
+fn crops_a_picture_and_fades_a_gradient() {
+    let Some(mut renderer) = renderer(100, 40) else {
+        return;
+    };
+    // Left half red, right half blue.
+    let mut picture = Vec::new();
+    for _ in 0..2 {
+        picture.extend_from_slice(&[255, 0, 0, 255, 0, 0, 255, 255]);
+    }
+    renderer.upload_video_rgba("halves", 2, 2, &picture);
+    renderer.render(&Scene {
+        width: 100,
+        height: 40,
+        layers: vec![
+            // Fit to the 40-high frame (40×40, centred), its right half cut off:
+            // only red, 20 wide, still where the left half was.
+            Layer::Video {
+                clip: "c1".into(),
+                media: "halves".into(),
+                source_time: 0.0,
+                transform: Transform::default(),
+                opacity: 1.0,
+                crop: Crop {
+                    right: 0.5,
+                    ..Crop::default()
+                },
+            },
+            // Black, clear at 60% across, full by 90%.
+            Layer::Solid {
+                color: Rgba([0.0, 0.0, 0.0, 1.0]),
+                opacity: 1.0,
+                gradient: Some(Gradient { from: 0.6, to: 0.9 }),
+            },
+        ],
+    });
+    let pixels = renderer.read_output().unwrap();
+    save("crop-gradient.png", 100, 40, &pixels);
+    let at = |x: usize| {
+        let i = (20 * 100 + x) * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    // The kept (red) half, where the left half of the picture was.
+    assert!(at(40)[0] > 240 && at(40)[2] < 10, "{:?}", at(40));
+    // Where the cut-off blue half was: nothing drawn.
+    assert!(at(60)[2] < 10, "{:?}", at(60));
+    // Clear before the gradient starts.
+    assert!(at(35)[0] > 240, "{:?}", at(35));
+
+    // Over white: untouched before 60%, darker on the way, black past 90%.
+    renderer.render(&Scene {
+        width: 100,
+        height: 40,
+        layers: vec![
+            Layer::Solid {
+                color: Rgba::WHITE,
+                opacity: 1.0,
+                gradient: None,
+            },
+            Layer::Solid {
+                color: Rgba([0.0, 0.0, 0.0, 1.0]),
+                opacity: 1.0,
+                gradient: Some(Gradient { from: 0.6, to: 0.9 }),
+            },
+        ],
+    });
+    let pixels = renderer.read_output().unwrap();
+    let grey = |x: usize| pixels[(20 * 100 + x) * 4];
+    assert!(grey(50) > 250, "{}", grey(50));
+    assert!(grey(75) > 20 && grey(75) < 235, "{}", grey(75));
+    assert!(grey(95) < 5, "{}", grey(95));
 }

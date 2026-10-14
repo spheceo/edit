@@ -23,11 +23,11 @@ Model (JSON):
 - settings: {width, height, fps}. Timeline times (clip.start, clip.duration, fade_in, fade_out, keyframe.frame) are integer FRAMES at settings.fps. source_in is SECONDS into the media.
 - tracks: video tracks composite in list order (first = bottom, label V1); audio tracks mix. A track holds non-overlapping clips. Video-type clips go on video tracks; audio clips on audio tracks. One video track may be the subtitles' own (subtitles: true): always the top video track, holding only subtitles (add_subtitles puts them there; new tracks go beneath it; tidy_tracks leaves it alone). Put nothing else on it.
 - clip: {id, track, start, duration, color (blue|cyan|green|yellow|orange|red|purple|pink), link?, fade_in, fade_out, keyframes, type, ...}
-  - type "video": media, source_in, speed (0.05..20), transform {x, y (px from frame centre, y down), scale (1 = fit frame), rotation (deg clockwise), shake (px of handheld camera wobble, 0 = still)}, opacity 0..1
+  - type "video" (also images): media, source_in, speed (0.05..20), transform {x, y (px from frame centre, y down), scale (1 = fit frame), rotation (deg clockwise), shake (px of handheld camera wobble, 0 = still)}, opacity 0..1, optional crop {left, right, top, bottom} = shares of the picture cut off each side (0..1); what's left stays where it was in the picture (move it with x/y)
   - type "audio": media, source_in, speed, volume_db
-  - type "text": text (\n for lines), style {font "Geist" (weight 400|500|600|700|900) or "Montserrat" (600 only), size px, color [r,g,b,a] 0..1, tracking px, line_height, glow {enabled (default true), color [r,g,b,a] or null = text colour (default null), radius = blur px (default 46), strength = opacity 0..1 (default 0.5)}, optional max_width px (wrap lines), optional background {color, opacity (0.75), pad_x (12), pad_y (8), border px (0 = none), border_color (white)} = a box behind the lines (border: a line around it, outside it), optional shadow {color, opacity (0.65), distance px (3), angle degrees clockwise from up (112), size px (6), blur px (8)} (with a background, the box casts it), optional label {text, color, size px (26)} = a small line centred above the text in its own colour, in its own box when there's a background (who's speaking: "Officer:"), optional leader {x, y (px from frame centre, y down: the point it starts from, e.g. a person's chin), width px (3), color (red [1,0.1,0.1,1]), draw (frames, 10), attach nearest|side (nearest: where the way to the box's centre crosses its edge; side: the middle of the box's side facing the point, for a box set off to the side), fade (frames, 8)} = a callout: a straight line from that point to the box, drawn in from the point over `draw` frames when the clip starts; then the box fades in over `fade` frames and the words start their animation (e.g. rise with a stagger) (pin the point to a face with track_region target "leader")}. Subtitle house style after the intro (at 1080p; scale by height/1080): Montserrat 600, size 48, white, line_height 1.15, glow off, max_width = 0.8*width - 24, background pure black (color [0,0,0,1], opacity 1, default padding), no shadow, label {text "<speaker>:", color = the speaker's colour, size 26}, transform.y = 0.4*height, animation none, transform (as video, shake included), animation {preset none|fade|rise|pop|typewriter|words|word, duration frames, stagger frames}, opacity, word_times (frames from the clip start at which each word appears, for preset "words": words pop in one at a time, no motion, synced to speech; without word_times one every `stagger` frames. The whole line is laid out from the first word, so each word appears where it ends up and nothing already shown moves; preset "word" is timed the same but shows only the word being said, alone and centred, each replacing the last)
+  - type "text": text (\n for lines), style {font "Geist" (weight 400|500|600|700|900) or "Montserrat" (600 only), size px, color [r,g,b,a] 0..1, tracking px, line_height, glow {enabled (default true), color [r,g,b,a] or null = text colour (default null), radius = blur px (default 46), strength = opacity 0..1 (default 0.5)}, optional max_width px (wrap lines), align left|center|right (how the lines line up with each other, default center; the block stays where transform places it), optional background {color, opacity (0.75), pad_x (12), pad_y (8), border px (0 = none), border_color (white)} = a box behind the lines (border: a line around it, outside it), optional shadow {color, opacity (0.65), distance px (3), angle degrees clockwise from up (112), size px (6), blur px (8)} (with a background, the box casts it), optional label {text, color, size px (26)} = a small line centred above the text in its own colour, in its own box when there's a background (who's speaking: "Officer:"), optional leader {x, y (px from frame centre, y down: the point it starts from, e.g. a person's chin), width px (3), color (red [1,0.1,0.1,1]), draw (frames, 10), attach nearest|side (nearest: where the way to the box's centre crosses its edge; side: the middle of the box's side facing the point, for a box set off to the side), fade (frames, 8)} = a callout: a straight line from that point to the box, drawn in from the point over `draw` frames when the clip starts; then the box fades in over `fade` frames and the words start their animation (e.g. rise with a stagger) (pin the point to a face with track_region target "leader")}. Subtitle house style after the intro (at 1080p; scale by height/1080): Montserrat 600, size 48, white, line_height 1.15, glow off, max_width = 0.8*width - 24, background pure black (color [0,0,0,1], opacity 1, default padding), no shadow, label {text "<speaker>:", color = the speaker's colour, size 26}, transform.y = 0.4*height, animation none, transform (as video, shake included), animation {preset none|fade|rise|pop|typewriter|words|word, duration frames, stagger frames}, opacity, word_times (frames from the clip start at which each word appears, for preset "words": words pop in one at a time, no motion, synced to speech; without word_times one every `stagger` frames. The whole line is laid out from the first word, so each word appears where it ends up and nothing already shown moves; preset "word" is timed the same but shows only the word being said, alone and centred, each replacing the last)
   - type "adjustment": grade {exposure stops, contrast -1..1, saturation -1..1, temperature -1..1, vignette 0..1, vignette_x, vignette_y (px from frame centre, y down: where the light falls; default 0 = centred; follow a person with track_region target "vignette"), vignette_size (1 = the whole frame's vignette, 0.5 = the clear area half as far), vignette_aspect (clear area width / height: 1 round, ~0.6 tall for a standing person), focus_exposure (stops added inside the clear area only: lifts the person), vignette_saturation (-1..1, saturation change where the vignette falls only: grey surroundings, the person keeps their colour)}, glitch {amount (px at 1080p the bands slide, 0 = off), slices (bands across the height, 6: few and tall), rgb (colour split as a share of each band's slide, 0.08: barely any)} = a digital glitch transition: the picture beneath cut into horizontal bands of uneven height, some sliding sideways, a new pattern every frame, shake {preset none|handheld|vertical|horizontal|impact|earthquake, and optionally any of motion wiggle|drop, amount (px at 1080p), frequency (wiggles/s), rotation (deg of tilt), direction both|vertical|horizontal, envelope steady|build|hit|swell (wiggle only), motion_blur (frames of movement smeared), edges mirror|zoom — each overrides the preset}, opacity — grades and moves everything below it, modelled on Sapphire S_Shake (heavy motion blur, picture mirrored past its edges). motion "wiggle" = random jolts; motion "drop" = a whip through a cut at the clip's middle: the picture accelerates away until the cut, then the next shot comes in from the other side and settles (amount px = a full move each side), down (vertical) or right (horizontal), negative amount for up/left. Presets: vertical = a whip straight down through the cut, 540px, blur 2 (the house slam into a cut: it only goes down, fast, heavily blurred, never up and down); horizontal = the same sideways; impact 160px wiggle 30/s, 3° tilt, hit; earthquake 60px wiggle 16/s; handheld 8px 1.2/s, sharp, zoomed (subtle).
-  - type "solid": fill [r,g,b,a], opacity — flashes, dips to black
+  - type "solid": fill [r,g,b,a], opacity, optional gradient {from, to} = fades across the frame left to right: clear at `from`, full at `to` (shares of the frame width; `to` below `from` fades the other way) — flashes, dips to black, a black gradient over part of the picture
   - type "waveform": media? (only that media's sound; default everything heard), style {kind line|bars (line: tangled glowing strands that zigzag with the sound, the house look; bars: mirrored bars), color [r,g,b,a] (rich red [1,0.03,0.03,1] by default), strands (2, line), bars (48, bars), width (1400 px), height (360 px, the loudest swing), fill (0.5, bars' share of their slots), window (1.6 s of sound across the width, centred on now), gain (1), glow (the text glow: enabled, color?, radius, strength)}, transform, opacity — a glowing waveform of what's heard
 - media: {id, name, path, kind, duration, …, markers?: [{time (SECONDS into the media), name}]} — markers are points in the source that every clip of it carries (a sound effect's "hit"; the user adds them with M).
 - script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?, voiceover? (the voice-over clip reading it)}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. The video opens on the Doc's first timestamp: anything before it (the title, a "FOIA <name> - <headline>" heading, "Assets:", durations) is the Doc's heading, never a cut-in; if an import made one, delete its card and words with delete_clips {close_gap: true, drop_from_script: true}, so the video starts on the first footage. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
@@ -51,6 +51,12 @@ House editing style (videos cut from a script of police footage):
 - OFFICER POV NAME: not yet; the team hasn't decided. Don't put the officer's name on bodycam footage unless the user asks for it.
 - CAMERA SHUTTERS always come with a white flash as long as the vertical drop (6 frames), centred on the shutter's hit: a solid {fill [1,1,1,1]} from 3 frames before the hit to 3 after, opacity keyframed from 1 down to 0 across it (ease out), on a track above everything there.
 - INTRODUCING A PERSON over B-roll (the narration says who they are: "this mother"; or someone it names as a group, marking the one on screen, e.g. the boy as "The teenager"): keep the eye on them. 1) A body vignette: an adjustment over their shot {grade {saturation -0.6 (as all B-roll), vignette 0.75 (the rest of the frame darker, not black), vignette_size ~0.9, vignette_aspect ~0.65 (tall, their whole body lit, not just the face), focus_exposure 0.3 (lifts them), vignette_saturation -0.35 (the surroundings greyer still)}}, its centre following them (track_region target "vignette", place "on", a box around their torso); check with render_frame that their whole body stays lit. 2) A callout: a label saying who they are, in the house label style (white Geist 600 ~44 at 1080p, glow off, opaque black box pad_x 20 pad_y 12, red border 2 px [1,0.1,0.1,1], the same shadow as the place label), set off below and to the side with more room (right unless there's more space left), clear of their face and body and never over or beside anyone else (it would read as naming them, so the line never crosses another person), following their face (track_region on the label, place "below", offset ~[±260, 120]); a leader from the neck, just under the chin (style.leader {attach "side"}, default red line; track_region target "leader", place "below", the box around their face), a short diagonal reaching the start of the box: about 300 px at 1080p, the box roughly a hand's reach from their body, never far off across the frame. The line draws in, then the box fades in and the words rise in one by one (animation {preset "rise", duration 10, stagger 1.5}).
+- THE OUTRO (sections.outro: the cut-ins after the last footage; their voice-over says what happened to the people arrested) shows each person's CHARGES, one screen per person, in the order they were arrested, held for as long as the voice-over talks about them:
+  - Left: their picture, filling the frame's height. A mugshot or news photo from research (collect_images names them; use_found brings one into the project); if none is found, a clear frame of them from the footage, usually towards the end (look_at_media, then still_frame). An image clip (type "video" with the image media), scale so its height = the frame's, x so its left edge sits on the frame's left edge, a slow push-in (scale ×1.04 across, ease linear), desaturated a little (an adjustment {grade {saturation -0.3}} over it only).
+  - A black gradient over it covering most of the frame: a solid {fill [0,0,0,1], gradient {from 0.18, to 0.38}} on the track above the picture, so the person shows on the left third and fades into black.
+  - Right: the charges in red glowing text, left-aligned, a block whose left edge sits at ~41% of the frame width (x = -width/2 + 0.41*width + half the block's width; check with render_frame), vertically centred: "Charges:" then one charge per line starting "- " (from case_articles, the script or the narration, worded as the court or police did; never guessed). Style: Geist 700, size 44 at 1080p, color [1,0.12,0.12,1], glow {enabled, color null (red), radius 26, strength 0.85}, line_height 1.3, align left, no box, max_width 0.52*width; animation rise (duration 12, stagger 0.6) as the voice-over reaches the charges.
+  - Two or more people charged together (the same charges, one sentence of narration): one screen for them, their pictures stacked in a horizontal split on the left (each scaled to fill the frame's height, then cropped to half: crop {top 0.25, bottom 0.25}, one moved up by a quarter of the frame height, the other down), the gradient and the shared charges as above. Different charges: a screen each.
+  - Between the outro's screens a short crossfade (10 frames); into the outro from the story, the usual transition rules apply. A soft low hit as each set of charges appears, ~6 LU under the voice-over.
 - CUT-INS (the black narration cards) may carry stylised text and graphics.
 - B-ROLL IN CUT-INS: use source footage for B-roll, not AI-generated images. A cut-in's voice-over is covered by B-roll that shows what it says, never generic footage. Read the narration, then find the moments that back it up in the source footage (media_transcript to find who says what where; look_at_media to see it): someone confused when the words say they had no idea, the wreck or a shocked witness when they say a devastating crash. Time each shot to the words it shows (media_transcript with words: true on the voice-over gives exact times; a voice-over clip's timeline time = clip start + word time - its source_in): a shot showing \"the teenagers and the missing driver\" starts just before those words and lasts until they're said. Short cut-ins (under ~10 s) get two shots, longer ones more, each a few seconds, butted end to end and filling the cut-in from its first frame to its last, on a video track above the card. Each shot is picture only, slowed (speed about 0.5) and then made smooth with smooth_slow_motion, with a slow push-in (scale keyframes from 1 to about 1.08 across the shot, ease linear). The vertical drop into the cut-in still applies.
 - PUSH-INS (the slow zoom across a B-roll shot and anything pinned to it; the moving map is linear by itself) are ease linear: a constant-speed zoom, a straight line on the graph, never in_out (no slow start, rush and slow stop).
@@ -72,6 +78,7 @@ House editing style (videos cut from a script of police footage):
 - When the user corrects something or tells you how they like it, apply it everywhere it fits in the project, not just the one spot they pointed at.
 - Every footage range must play from its first word to its last (the Doc's "first....last" note). If one stops or starts a word short (e.g. it cuts at "hit that" when the range ends on "priuses"), run realign_script, then re-caption the clips it changed. A range ends right on its last word: with a pause after it, a breath of room; when the speaker runs straight on, no room at all (the cut sits in the dip right after the word, so none of the next word is heard). realign_script cuts this way; if a cut still catches the start of the next word, realign it.
 - Redactions in the footage are deliberate; never cover or move them.
+- VOICE-OVERS GENERATED IN EDIT (its voice-over projects, ElevenLabs) arrive as audio media named "<voice-over> - Cut-in N" and are laid on their cut-ins already (place_voiceovers did it); treat them like recorded ones.
 - FACTS: when the editing needs a fact (how a name is spelled, the date or exact place for a title or map_view, who the victim was, the charges or outcome for an outro), check the saved articles with case_articles (find "<name>") rather than guessing; the transcript and script come first, the articles fill what they don't say. If none are saved, research the case first.
 - RESEARCH (when the user asks for images of a case), in this order: 1) Start from what the project already says: the script and the transcripts (read_transcript, media_transcript): the date, the city and street, the department, ages, vehicles, what happened, any names said. 2) Find the news articles about THIS case with search_web built from those details, and check each matches (same date, place and events) before trusting it. 3) Read them (read_page) for the key details the footage doesn't give: full names, the victim, the exact location, the charges and outcome, and save every matching one with add_article (a short summary of what it adds): the user reads them in the project, and their photos go into the review. 4) Then collect_images, only for what's wanted: the scene of THIS incident (the crash, the wreck, the street as reported on the day), the people involved (victims by name, adult suspects by name, mugshots), and the vehicles involved, each query naming the case (names, place, date, "Kent hit-and-run"). Nothing else unless the user asks: no generic references, stock photos, maps, logos, buildings, court interiors or other incidents. 5) Weed it: go through every waiting image with look_at_found and reject_found anything that isn't the scene or the people involved (or what was asked), so the user only reviews real candidates. A minor whose face the footage redacts is never shown, even when the news names them: never search for them by name or collect images of them, and reject any that turn up.
 - track_region pins anything (text, an overlay) to a moving face or object."#;
@@ -245,6 +252,22 @@ fn tools() -> Vec<Value> {
             "Import media files by absolute path. place=true also appends them to the end of the timeline.",
             json!({ "paths": { "type": "array", "items": { "type": "string" } }, "place": { "type": "boolean" } }),
             &["paths"],
+        ),
+        tool(
+            "use_found",
+            "Keep a found image (from collect_images / look_at_found, by its id) and put it in the project's media; returns the media id to place, e.g. a mugshot for the outro.",
+            json!({ "found_id": { "type": "string" } }),
+            &["found_id"],
+        ),
+        tool(
+            "still_frame",
+            "Save one frame of a video media as a still image in the project (a new image media, returned), e.g. a clear shot of a person for the outro when no mugshot is found. time = SECONDS into the media (look_at_media / media_transcript to find a good one).",
+            json!({
+                "media_id": { "type": "string" },
+                "time": { "type": "number" },
+                "name": { "type": "string", "description": "What it shows (\"Latricia Crawley\"); names the file." }
+            }),
+            &["media_id", "time"],
         ),
         tool(
             "look_at_media",
@@ -773,6 +796,76 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     format!("; errors: {errors:?}")
                 }
             )))
+        }
+        "use_found" => {
+            let found = args["found_id"].as_str().ok_or("found_id is required")?;
+            let item = crate::server::review_found(app, &id, found, "kept", ORIGIN).await?;
+            match item.media {
+                Some(media) => Ok(text(format!(
+                    "kept {found}: media {media} ({})",
+                    item.title
+                ))),
+                None => Err("it was kept but isn't in the media bin".to_owned()),
+            }
+        }
+        "still_frame" => {
+            let media_id = args["media_id"].as_str().ok_or("media_id is required")?;
+            let time = args["time"].as_f64().ok_or("time is required")?;
+            let live = store.get(&id).ok_or("no such project")?;
+            let media = live
+                .project
+                .media(media_id)
+                .ok_or_else(|| format!("no media {media_id}"))?;
+            if !(0.0..=media.duration).contains(&time) {
+                return Err(format!("time must be 0 to {:.2} s", media.duration));
+            }
+            let source = std::path::PathBuf::from(&media.path);
+            let label: String = args["name"]
+                .as_str()
+                .unwrap_or("still")
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == ' ' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .take(60)
+                .collect();
+            let dir = store.uploads_dir(&id);
+            std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+            let out = dir.join(format!("{} {:.2}s.png", label.trim(), time));
+            let output = std::process::Command::new(crate::tools::ffmpeg())
+                .args(["-hide_banner", "-loglevel", "error", "-y", "-ss"])
+                .arg(format!("{time:.3}"))
+                .arg("-i")
+                .arg(&source)
+                .args(["-frames:v", "1"])
+                .arg(&out)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .map_err(|error| format!("ffmpeg: {error}"))?;
+            if !output.status.success() || !out.is_file() {
+                return Err(format!(
+                    "couldn't take the frame: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            let (_, added, errors) = crate::server::import_paths(
+                app,
+                &id,
+                vec![out.to_string_lossy().into_owned()],
+                false,
+                ORIGIN,
+            )
+            .await?;
+            match added.first() {
+                Some(still) => Ok(text(format!(
+                    "saved the frame at {time:.2} s as image media {still}"
+                ))),
+                None => Err(format!("couldn't import the frame: {errors:?}")),
+            }
         }
         "add_sound_effect" => {
             let name = args["sound"].as_str().ok_or("sound is required")?;

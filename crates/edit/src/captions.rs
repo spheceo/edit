@@ -14,8 +14,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use edit_core::{
-    Clip, ClipColor, ClipContent, Ease, Glow, Keyframe, Media, Project, Rgba, TextAnimation,
-    TextBox, TextLabel, TextPreset, TextShadow, TextStyle, TrackKind, Transform,
+    Clip, ClipColor, ClipContent, Ease, Glow, Keyframe, Media, Project, Rgba, TextAlign,
+    TextAnimation, TextBox, TextLabel, TextPreset, TextShadow, TextStyle, TrackKind, Transform,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -226,6 +226,7 @@ pub fn caption_style(width: u32, height: u32) -> TextStyle {
         }),
         label: None,
         leader: None,
+        align: TextAlign::Center,
     }
 }
 

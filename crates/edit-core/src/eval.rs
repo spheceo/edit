@@ -17,6 +17,7 @@ pub enum Layer {
         source_time: f64,
         transform: Transform,
         opacity: f32,
+        crop: Crop,
     },
     Text {
         clip: String,
@@ -41,6 +42,7 @@ pub enum Layer {
     Solid {
         color: Rgba,
         opacity: f32,
+        gradient: Option<Gradient>,
     },
     Waveform {
         clip: String,
@@ -154,12 +156,14 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 speed,
                 transform,
                 opacity,
+                crop,
             } => Layer::Video {
                 clip: clip.id.clone(),
                 media: media.clone(),
                 source_time: source_in + f64::from(local) / fps * speed,
                 transform: animated_transform(transform),
                 opacity: anim("opacity", *opacity) * fade,
+                crop: *crop,
             },
             ClipContent::Text {
                 text,
@@ -264,9 +268,14 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                     opacity: anim("opacity", *opacity) * fade,
                 }
             }
-            ClipContent::Solid { fill, opacity } => Layer::Solid {
+            ClipContent::Solid {
+                fill,
+                opacity,
+                gradient,
+            } => Layer::Solid {
                 color: *fill,
                 opacity: anim("opacity", *opacity) * fade,
+                gradient: *gradient,
             },
             ClipContent::Waveform {
                 media,
@@ -727,6 +736,7 @@ mod tests {
                 speed: 2.0,
                 transform: Transform::default(),
                 opacity: 1.0,
+                crop: Default::default(),
             },
         });
         project.clips.push(Clip {
@@ -762,6 +772,7 @@ mod tests {
             content: ClipContent::Solid {
                 fill: Rgba::WHITE,
                 opacity: 1.0,
+                gradient: None,
             },
         });
         project

@@ -236,6 +236,34 @@ impl Clip {
     }
 }
 
+/// How much of a picture is cut off each side, as shares of its width and height.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct Crop {
+    #[serde(default)]
+    pub left: f32,
+    #[serde(default)]
+    pub right: f32,
+    #[serde(default)]
+    pub top: f32,
+    #[serde(default)]
+    pub bottom: f32,
+}
+
+impl Crop {
+    pub fn is_none(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A solid that fades across the frame, left to right: clear at `from` and
+/// full at `to` (shares of the frame width, 0 the left edge, 1 the right; `to`
+/// below `from` fades the other way).
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Gradient {
+    pub from: f32,
+    pub to: f32,
+}
+
 // Text carries the most settings; a project holds a few hundred clips, so the
 // size is fine and boxing it would only add a hop to every match.
 #[allow(clippy::large_enum_variant)]
@@ -253,6 +281,9 @@ pub enum ClipContent {
         transform: Transform,
         #[serde(default = "one_f32")]
         opacity: f32,
+        /// Cut off the picture's edges (a split screen's halves).
+        #[serde(default, skip_serializing_if = "Crop::is_none")]
+        crop: Crop,
     },
     Audio {
         media: String,
@@ -294,6 +325,9 @@ pub enum ClipContent {
         fill: Rgba,
         #[serde(default = "one_f32")]
         opacity: f32,
+        /// Fades across the frame instead of covering it evenly.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gradient: Option<Gradient>,
     },
     /// A glowing waveform of the sound heard on the timeline (phone calls,
     /// voice notes): mirrored bars over a stretch of time centred on now.
@@ -491,6 +525,24 @@ pub struct TextStyle {
     /// text's box, drawn in from the point when the clip starts: a callout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leader: Option<Box<Leader>>,
+    /// How lines line up with each other (the block stays where it's placed).
+    #[serde(default, skip_serializing_if = "TextAlign::is_center")]
+    pub align: TextAlign,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum TextAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+impl TextAlign {
+    pub fn is_center(&self) -> bool {
+        *self == Self::Center
+    }
 }
 
 /// A callout's line: from (x, y) to the nearest edge of the text's box.
@@ -689,6 +741,7 @@ impl Default for TextStyle {
             shadow: None,
             label: None,
             leader: None,
+            align: TextAlign::Center,
         }
     }
 }
@@ -1436,6 +1489,27 @@ impl Project {
                     ));
                 }
             }
+            if let ClipContent::Video { crop, .. } = &clip.content {
+                let sides = [crop.left, crop.right, crop.top, crop.bottom];
+                if sides.iter().any(|side| !(0.0..1.0).contains(side))
+                    || crop.left + crop.right >= 0.99
+                    || crop.top + crop.bottom >= 0.99
+                {
+                    return Err(format!(
+                        "clip {} crop sides must be 0 to 1 and leave some of the picture",
+                        clip.id
+                    ));
+                }
+            }
+            if let ClipContent::Solid {
+                gradient: Some(gradient),
+                ..
+            } = &clip.content
+            {
+                if (gradient.from - gradient.to).abs() < 1e-3 {
+                    return Err(format!("clip {} gradient from and to must differ", clip.id));
+                }
+            }
             if let ClipContent::Video {
                 speed, source_in, ..
             }
@@ -1534,10 +1608,25 @@ fn content_finite(content: &ClipContent) -> bool {
     let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
     match content {
         ClipContent::Video {
-            transform, opacity, ..
-        } => transform_finite(transform) && opacity.is_finite(),
+            transform,
+            opacity,
+            crop,
+            ..
+        } => {
+            transform_finite(transform)
+                && opacity.is_finite()
+                && finite(&[crop.left, crop.right, crop.top, crop.bottom])
+        }
         ClipContent::Audio { volume_db, .. } => volume_db.is_finite(),
-        ClipContent::Solid { fill, opacity } => finite(&fill.0) && opacity.is_finite(),
+        ClipContent::Solid {
+            fill,
+            opacity,
+            gradient,
+        } => {
+            finite(&fill.0)
+                && opacity.is_finite()
+                && gradient.is_none_or(|gradient| finite(&[gradient.from, gradient.to]))
+        }
         ClipContent::Waveform {
             style,
             transform,
@@ -1658,6 +1747,7 @@ mod validation_tests {
             content: ClipContent::Solid {
                 fill: Rgba::BLACK,
                 opacity: 1.0,
+                gradient: None,
             },
         });
         project
@@ -1693,6 +1783,7 @@ mod validation_tests {
         p.clips[0].content = ClipContent::Solid {
             fill: Rgba::BLACK,
             opacity: f32::NAN,
+            gradient: None,
         };
         assert!(p.validate().is_err());
         let mut p = project();

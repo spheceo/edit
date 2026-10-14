@@ -80,6 +80,8 @@ pub fn bundled_font_bytes(file: &str) -> Option<&'static [u8]> {
 /// What to draw: style values already scaled to output pixels.
 pub struct TextSpec<'a> {
     pub text: &'a str,
+    /// How lines line up with each other within the block.
+    pub align: edit_core::TextAlign,
     pub family: &'a str,
     pub weight: u16,
     pub px: f32,
@@ -259,7 +261,7 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
     let mut placed = Vec::new();
     let mut index = 0;
     for (row, (glyphs, line_width)) in lines.iter().enumerate() {
-        let left = pad + (content_width - line_width) / 2.0;
+        let left = pad + line_offset(spec.align, content_width, *line_width);
         let baseline = top + line_metrics.ascent + line_advance * row as f32;
         for &(ch, x) in glyphs {
             placed.push(Placed {
@@ -349,7 +351,7 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
             let (mut left, mut right, mut rows) = (f32::MAX, f32::MIN, 0);
             let mut index = 0;
             for (row, (glyphs, line_width)) in lines.iter().enumerate() {
-                let start = -line_width / 2.0;
+                let start = line_offset(spec.align, block[0], *line_width) - block[0] / 2.0;
                 let (mut end, mut whole) = (None, true);
                 for &(ch, x) in glyphs.iter().filter(|(ch, _)| !ch.is_whitespace()) {
                     if index >= shown {
@@ -455,5 +457,14 @@ fn blit(
             let value = src_a + f32::from(*pa) / 255.0 * keep;
             *pa = (value * 255.0).round().clamp(0.0, 255.0) as u8;
         }
+    }
+}
+
+/// Where a line starts within a block `block` wide.
+fn line_offset(align: edit_core::TextAlign, block: f32, line: f32) -> f32 {
+    match align {
+        edit_core::TextAlign::Left => 0.0,
+        edit_core::TextAlign::Center => (block - line) / 2.0,
+        edit_core::TextAlign::Right => block - line,
     }
 }

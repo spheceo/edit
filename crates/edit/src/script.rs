@@ -15,8 +15,8 @@ use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, Instant};
 
 use edit_core::{
-    Clip, ClipColor, ClipContent, Glow, Project, Rgba, Script, ScriptBlock, TextAnimation,
-    TextStyle, TrackKind, Transform,
+    Clip, ClipColor, ClipContent, Glow, Project, Rgba, Script, ScriptBlock, TextAlign,
+    TextAnimation, TextStyle, TrackKind, Transform,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -1854,6 +1854,7 @@ pub fn cut_in_style(width: u32, height: u32, text: &str) -> TextStyle {
         shadow: None,
         label: None,
         leader: None,
+        align: TextAlign::Center,
     }
 }
 
@@ -1962,6 +1963,7 @@ fn lay_out(project: &mut Project) {
                         speed: 1.0,
                         transform: Transform::default(),
                         opacity: 1.0,
+                        crop: Default::default(),
                     },
                 });
                 if media.has_audio {
@@ -2010,6 +2012,7 @@ fn lay_out(project: &mut Project) {
                     content: ClipContent::Solid {
                         fill: Rgba::BLACK,
                         opacity: 1.0,
+                        gradient: None,
                     },
                 });
                 let words = project.fresh_id("c");

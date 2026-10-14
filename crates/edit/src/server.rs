@@ -72,6 +72,7 @@ pub fn router(app: App) -> Router {
             get(voice_get).put(voice_update).delete(voice_delete),
         )
         .route("/api/voice/{id}/full.mp3", get(voice_full))
+        .route("/api/voice/{id}/send", post(voice_send))
         .route(
             "/api/voice/{id}/lines/{line}/generate",
             post(voice_generate),
@@ -422,6 +423,51 @@ async fn voice_full(
         .await
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
         .into_response())
+}
+
+#[derive(Deserialize)]
+struct VoiceSend {
+    project: String,
+}
+
+/// Puts a voice-over's chosen takes into a video project and lays them on its
+/// cut-ins (matched by their words, as with any recorded voice-over).
+async fn voice_send(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<VoiceSend>,
+) -> ApiResult {
+    let voice = app.voices.get(&id).map_err(not_found)?;
+    let takes = app.voices.chosen_takes(&id).map_err(bad)?;
+    if takes.is_empty() {
+        return Err(bad("No lines have a chosen take yet."));
+    }
+    app.store
+        .get(&body.project)
+        .ok_or_else(|| not_found("no such project"))?;
+    let dir = app.store.uploads_dir(&body.project).join("voice-over");
+    std::fs::create_dir_all(&dir).map_err(|error| bad(error.to_string()))?;
+    let mut paths = Vec::new();
+    for (number, label, take) in takes {
+        let name = label.unwrap_or_else(|| format!("Line {number}"));
+        let file = dir.join(format!("{} - {name}.mp3", voice.name.replace('/', "-")));
+        std::fs::copy(&take, &file).map_err(|error| bad(error.to_string()))?;
+        paths.push(file.to_string_lossy().into_owned());
+    }
+    let (_, added, errors) = import_paths(&app, &body.project, paths, false, "voice")
+        .await
+        .map_err(bad)?;
+    if added.is_empty() {
+        return Err(bad(format!("Couldn't import the takes: {errors:?}")));
+    }
+    let report = crate::diag::time_async(
+        "voice",
+        "voice: place in a project",
+        crate::voiceover::place(&app, &body.project, Some(added.clone())),
+    )
+    .await
+    .map_err(bad)?;
+    Ok(Json(json!({ "media": added, "report": report })).into_response())
 }
 
 #[derive(Deserialize)]
@@ -987,6 +1033,7 @@ pub fn place_at_end(project: &mut Project, media_id: &str) {
                     speed: 1.0,
                     transform: Transform::default(),
                     opacity: 1.0,
+                    crop: Default::default(),
                 },
             });
         }
@@ -1166,46 +1213,53 @@ async fn research_review(
     if !matches!(body.status.as_str(), "new" | "kept" | "rejected") {
         return Err(bad("status is new, kept or rejected"));
     }
-    let home = app.store.home().to_path_buf();
-    let found = crate::research::items(&home, &id)
-        .into_iter()
-        .find(|found| found.id == item)
-        .ok_or_else(|| not_found("no such found image"))?;
-    let mut media = found.media.clone();
-    // Kept the first time: into the media bin, named after its caption.
-    if body.status == "kept" && media.is_none() {
-        let (_, added, errors) =
-            import_paths(&app, &id, vec![found.file.clone()], false, &body.origin)
-                .await
-                .map_err(bad)?;
-        let media_id = added
-            .into_iter()
-            .next()
-            .ok_or_else(|| bad(format!("couldn't add it to the media bin: {errors:?}")))?;
-        let name: String = found.title.chars().take(80).collect();
-        if !name.trim().is_empty() {
-            app.store
-                .update(&id, &body.origin, |project| {
-                    if let Some(media) = project.media.iter_mut().find(|media| media.id == media_id)
-                    {
-                        media.name = name.clone();
-                    }
-                    Ok(())
-                })
-                .map_err(|error| bad(format!("{error:?}")))?;
-        }
-        media = Some(media_id);
-    }
-    let updated = crate::research::update(&home, &id, &item, |found| {
-        found.status = body.status.clone();
-        found.media = media.clone();
-    })
-    .map_err(bad)?;
+    let updated = review_found(&app, &id, &item, &body.status, &body.origin)
+        .await
+        .map_err(bad)?;
     let live = app
         .store
         .get(&id)
         .ok_or_else(|| not_found("no such project"))?;
     Ok(Json(json!({ "item": updated, "rev": live.rev, "project": live.project })).into_response())
+}
+
+/// Sets a found image's status; kept the first time, it goes into the media
+/// bin, named after its caption. Returns it (with its media, once kept).
+pub async fn review_found(
+    app: &App,
+    id: &str,
+    item: &str,
+    status: &str,
+    origin: &str,
+) -> Result<crate::research::Item, String> {
+    let home = app.store.home().to_path_buf();
+    let found = crate::research::items(&home, id)
+        .into_iter()
+        .find(|found| found.id == item)
+        .ok_or("no such found image")?;
+    let mut media = found.media.clone();
+    if status == "kept" && media.is_none() {
+        let (_, added, errors) =
+            import_paths(app, id, vec![found.file.clone()], false, origin).await?;
+        let media_id = added
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("couldn't add it to the media bin: {errors:?}"))?;
+        let name: String = found.title.chars().take(80).collect();
+        if !name.trim().is_empty() {
+            app.store.update(id, origin, |project| {
+                if let Some(media) = project.media.iter_mut().find(|media| media.id == media_id) {
+                    media.name = name.clone();
+                }
+                Ok(())
+            })?;
+        }
+        media = Some(media_id);
+    }
+    crate::research::update(&home, id, item, |found| {
+        found.status = status.to_owned();
+        found.media = media.clone();
+    })
 }
 
 async fn research_image(

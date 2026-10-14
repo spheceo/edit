@@ -1,7 +1,7 @@
 // A voice-over project: the script as lines, each spoken by the chosen
 // ElevenLabs voice into takes; play them, pick one, regenerate, download.
 
-import { Check, ChevronLeft, Download, Pause, Play, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { Check, ChevronLeft, Download, Pause, Play, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { copyText } from "../lib/diagnostics";
@@ -30,6 +30,7 @@ export function VoiceEditor({ id }: { id: string }) {
   const [speaking, setSpeaking] = useState<Set<string>>(new Set());
   const [playing, setPlaying] = useState<string | null>(null);
   const [pasting, setPasting] = useState(false);
+  const [sending, setSending] = useState(false);
   const audio = useRef<HTMLAudioElement | null>(null);
   const latest = useRef<VoiceProject | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -201,6 +202,25 @@ export function VoiceEditor({ id }: { id: string }) {
             {spoken}/{project.lines.length} lines · {seconds(total)} · {characters.toLocaleString()} characters
           </span>
           <AppMenu />
+          {project.source && (
+            <Button
+              disabled={!spoken || sending}
+              title="Put the chosen takes on that project's cut-ins"
+              onClick={() => {
+                setSending(true);
+                void voiceApi
+                  .send(id, project.source!)
+                  .then(({ media }) => {
+                    toast(`Placed ${media.length} takes on the project's cut-ins`);
+                    navigate(`/p/${project.source}`);
+                  })
+                  .catch((error) => toast((error as Error).message, "error"))
+                  .finally(() => setSending(false));
+              }}
+            >
+              {sending ? <Spinner /> : <Send size={14} />} Use in the project
+            </Button>
+          )}
           <Button disabled={!spoken} onClick={() => play(`/api/voice/${id}/full.mp3?at=${Date.now()}`, "full")}>
             {playing === "full" ? <Pause size={14} /> : <Play size={14} />} Play all
           </Button>

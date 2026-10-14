@@ -796,6 +796,11 @@ export function validateProject(project: Project): string | null {
     if ((clip.type === "audio") !== (track.kind === "audio")) return `a clip is on the wrong kind of track`;
     if ((clip.type === "video" || clip.type === "audio") && !mediaOf(project, clip.media)) return `a clip's media is missing`;
     if ((clip.type === "video" || clip.type === "audio") && (clip.source_in < 0 || clip.speed < 0.05 || clip.speed > 20)) return `source timing or speed is invalid`;
+    if (clip.type === "video" && clip.crop) {
+      const { left = 0, right = 0, top = 0, bottom = 0 } = clip.crop;
+      if ([left, right, top, bottom].some((side) => !(side >= 0 && side < 1)) || left + right >= 0.99 || top + bottom >= 0.99) return `a crop must leave some of the picture`;
+    }
+    if (clip.type === "solid" && clip.gradient && Math.abs(clip.gradient.from - clip.gradient.to) < 1e-3) return `a gradient's from and to must differ`;
     if (clip.fade_in < 0 || clip.fade_out < 0 || !Number.isSafeInteger(clip.fade_in) || !Number.isSafeInteger(clip.fade_out)) return `fades must be nonnegative integer frames`;
     for (const [param, keys] of Object.entries(clip.keyframes ?? {})) {
       if (!animatableParams(clip).includes(param)) return `a clip cannot animate ${param}`;

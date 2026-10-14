@@ -10,12 +10,15 @@ struct Layer {
     opacity: f32,
     tint: vec4f,
     // 0 straight-alpha texture, 1 solid tint, 2 glow mask (tinted alpha), 3 premultiplied texture, 4 shadow,
-    // 5 box shadow
+    // 5 box shadow, 6 gradient (tint fading across the quad)
     mode: u32,
     // Box shadow: the Gaussian's sigma in pixels.
     blur: f32,
     _p1: u32,
     _p2: u32,
+    // The part of the texture drawn (x0, y0, x1, y1): a crop. A gradient: clear
+    // at x = uv.x, full at x = uv.y (shares of the quad's width).
+    uv: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> u: Layer;
@@ -25,6 +28,8 @@ struct Layer {
 struct VsOut {
     @builtin(position) pos: vec4f,
     @location(0) uv: vec2f,
+    // Where in the quad (0..1 across and down), whatever part of the texture it shows.
+    @location(1) corner: vec2f,
 };
 
 @vertex
@@ -36,7 +41,8 @@ fn vs(@builtin(vertex_index) i: u32) -> VsOut {
     let p = vec2f(local.x * c - local.y * s, local.x * s + local.y * c) + u.center;
     var out: VsOut;
     out.pos = vec4f(p.x / u.half_canvas.x, -p.y / u.half_canvas.y, 0.0, 1.0);
-    out.uv = corner;
+    out.uv = mix(u.uv.xy, u.uv.zw, corner);
+    out.corner = corner;
     return out;
 }
 
@@ -79,9 +85,14 @@ fn fs(in: VsOut) -> @location(0) vec4f {
         }
         case 5u: {
             // The quad is the shape plus 3 sigma all round.
-            let p = (in.uv - 0.5) * u.size;
+            let p = (in.corner - 0.5) * u.size;
             let half = max(u.size * 0.5 - 3.0 * u.blur, vec2f(0.0));
             let a = box_blur(p, half, u.blur) * u.tint.a * u.opacity;
+            return vec4f(u.tint.rgb * a, a);
+        }
+        case 6u: {
+            let t = clamp((in.corner.x - u.uv.x) / (u.uv.y - u.uv.x), 0.0, 1.0);
+            let a = smoothstep(0.0, 1.0, t) * u.tint.a * u.opacity;
             return vec4f(u.tint.rgb * a, a);
         }
         default: {

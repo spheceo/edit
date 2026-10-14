@@ -121,9 +121,14 @@ pub fn start(store: Arc<Store>, library: Arc<Library>, project: &Project, path: 
         let subject = format!("{} ({})", path.display(), id);
         let result = crate::diag::time_on("drive", "drive upload", &subject, || {
             crate::guard::catch("the Drive upload", || {
-                upload(&library, &path, &name, &into, replacing.as_deref(), |progress| {
-                    emit("uploading", json!({ "progress": progress }))
-                })
+                upload(
+                    &library,
+                    &path,
+                    &name,
+                    &into,
+                    replacing.as_deref(),
+                    |progress| emit("uploading", json!({ "progress": progress })),
+                )
             })
             .and_then(|result| result)
         });
@@ -587,9 +592,14 @@ mod tests {
         assert!(status.success());
         let library = Library::default();
         let mut seen = Vec::new();
-        let file = upload(&library, &path, "edit-upload-test.mp4", &folder(true), None, |share| {
-            seen.push(share)
-        })
+        let file = upload(
+            &library,
+            &path,
+            "edit-upload-test.mp4",
+            &folder(true),
+            None,
+            |share| seen.push(share),
+        )
         .unwrap();
         eprintln!(
             "uploaded {} bytes, progress {seen:?}",

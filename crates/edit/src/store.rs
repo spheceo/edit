@@ -389,7 +389,7 @@ fn next_file_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id

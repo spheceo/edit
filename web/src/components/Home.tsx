@@ -1,4 +1,4 @@
-import { Ellipsis, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { AudioLines, Ellipsis, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -11,6 +11,7 @@ import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Mark } from "./Logo";
 import { SetupCard } from "./SetupCard";
+import { VoiceOvers } from "./VoiceOvers";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, spring } from "./ui";
 
@@ -25,6 +26,7 @@ const RATES = [24, 25, 30, 60];
 export function Home() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [creating, setCreating] = useState(false);
+  const [creatingVoice, setCreatingVoice] = useState(false);
   const toast = useEditor((state) => state.toast);
 
   const refresh = () =>
@@ -46,6 +48,9 @@ export function Home() {
           <div className="flex items-center gap-1.5">
             <UpdateButton />
             <AppMenu />
+            <Button onClick={() => setCreatingVoice(true)}>
+              <AudioLines size={15} /> New voice-over
+            </Button>
             <Button variant="primary" onClick={() => setCreating(true)}>
               <Plus size={15} strokeWidth={2.2} /> New project
             </Button>
@@ -80,6 +85,9 @@ export function Home() {
             </div>
           </>
         )}
+      </div>
+      <div className="mx-auto max-w-[1040px] px-8 pb-16">
+        <VoiceOvers projects={projects ?? []} creating={creatingVoice} onCloseCreate={() => setCreatingVoice(false)} />
       </div>
       <NewProject open={creating} onClose={() => setCreating(false)} />
     </div>

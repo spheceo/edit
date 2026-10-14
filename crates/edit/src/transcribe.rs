@@ -149,7 +149,7 @@ pub fn run(source: &Path, target: &Path) -> Result<(), String> {
 
 /// Optional private-relay authentication. Feed curl's config through stdin so
 /// the token isn't exposed in process arguments. Reject config/header injection.
-fn relay_config(token: Option<&str>) -> Result<String, String> {
+pub(crate) fn relay_config(token: Option<&str>) -> Result<String, String> {
     match token.filter(|token| !token.is_empty()) {
         Some(token) if token.chars().any(char::is_control) => {
             Err("EDIT_RELAY_TOKEN contains a control character".to_owned())

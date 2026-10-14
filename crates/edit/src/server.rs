@@ -35,6 +35,7 @@ pub struct App {
     pub scripts: Arc<crate::script::Jobs>,
     pub library: Arc<crate::library::Library>,
     pub updater: Arc<crate::update::Updater>,
+    pub voices: Arc<crate::voice::Voices>,
 }
 
 #[derive(rust_embed::Embed)]
@@ -64,6 +65,21 @@ pub fn router(app: App) -> Router {
         .route("/api/health", get(health))
         .route("/api/diagnostics", get(diagnostics))
         .route("/api/setup", get(setup))
+        .route("/api/voice", get(voice_list).post(voice_create))
+        .route("/api/voice/voices", get(voice_voices))
+        .route(
+            "/api/voice/{id}",
+            get(voice_get).put(voice_update).delete(voice_delete),
+        )
+        .route("/api/voice/{id}/full.mp3", get(voice_full))
+        .route(
+            "/api/voice/{id}/lines/{line}/generate",
+            post(voice_generate),
+        )
+        .route(
+            "/api/voice/{id}/lines/{line}/takes/{take}",
+            get(voice_take).delete(voice_delete_take),
+        )
         .route("/api/diagnostics/client", post(client_log))
         .route("/api/update", get(update_status).post(update_install))
         .route("/api/projects", get(list_projects).post(create_project))
@@ -291,6 +307,136 @@ async fn diagnostics(State(app): State<App>) -> Json<Value> {
         "lines": crate::diag::lines(400),
         "timings": crate::diag::timings(),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Voice-overs (crate::voice): their own projects, for now.
+
+async fn voice_list(State(app): State<App>) -> Json<Value> {
+    Json(json!({ "projects": app.voices.list() }))
+}
+
+#[derive(Deserialize)]
+struct VoiceCreate {
+    #[serde(default)]
+    name: String,
+    /// A video project whose cut-ins become the lines.
+    #[serde(default)]
+    from_project: Option<String>,
+}
+
+async fn voice_create(State(app): State<App>, Json(body): Json<VoiceCreate>) -> ApiResult {
+    let (name, lines) = match &body.from_project {
+        Some(id) => {
+            let live = app
+                .store
+                .get(id)
+                .ok_or_else(|| not_found("no such project"))?;
+            let lines = crate::voice::narration_lines(&live.project);
+            if lines.is_empty() {
+                return Err(bad("That project's script has no cut-ins to voice."));
+            }
+            let name = if body.name.trim().is_empty() {
+                format!("{} (voice-over)", live.project.name)
+            } else {
+                body.name.clone()
+            };
+            (name, lines)
+        }
+        None => (body.name.clone(), Vec::new()),
+    };
+    let project = app
+        .voices
+        .create(&name, body.from_project.clone(), lines)
+        .map_err(bad)?;
+    Ok(Json(json!({ "project": project })).into_response())
+}
+
+async fn voice_get(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    let project = app.voices.get(&id).map_err(not_found)?;
+    Ok(Json(json!({ "project": project })).into_response())
+}
+
+async fn voice_update(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    Json(changes): Json<crate::voice::Changes>,
+) -> ApiResult {
+    let project = app.voices.update(&id, changes).map_err(bad)?;
+    Ok(Json(json!({ "project": project })).into_response())
+}
+
+async fn voice_delete(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    app.voices.delete(&id).map_err(bad)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+async fn voice_generate(
+    State(app): State<App>,
+    UrlPath((id, line)): UrlPath<(String, String)>,
+) -> ApiResult {
+    let voices = Arc::clone(&app.voices);
+    let project = tokio::task::spawn_blocking(move || voices.generate(&id, &line))
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .map_err(bad)?;
+    Ok(Json(json!({ "project": project })).into_response())
+}
+
+async fn voice_delete_take(
+    State(app): State<App>,
+    UrlPath((id, line, take)): UrlPath<(String, String, String)>,
+) -> ApiResult {
+    let project = app.voices.delete_take(&id, &line, &take).map_err(bad)?;
+    Ok(Json(json!({ "project": project })).into_response())
+}
+
+async fn voice_take(
+    State(app): State<App>,
+    UrlPath((id, _line, take)): UrlPath<(String, String, String)>,
+    request: Request,
+) -> ApiResult {
+    let path = app.voices.take_path(&id, &take).map_err(not_found)?;
+    if !path.is_file() {
+        return Err(not_found("no such take"));
+    }
+    Ok(ServeFile::new(&path)
+        .oneshot(request)
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .into_response())
+}
+
+async fn voice_full(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    request: Request,
+) -> ApiResult {
+    let voices = Arc::clone(&app.voices);
+    let path = tokio::task::spawn_blocking(move || voices.full(&id))
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .map_err(bad)?;
+    Ok(ServeFile::new(&path)
+        .oneshot(request)
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .into_response())
+}
+
+#[derive(Deserialize)]
+struct VoicesQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+async fn voice_voices(State(app): State<App>, Query(query): Query<VoicesQuery>) -> ApiResult {
+    let voices = Arc::clone(&app.voices);
+    let listing = tokio::task::spawn_blocking(move || voices.voices(query.refresh))
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .map_err(bad)?;
+    Ok(Json(listing).into_response())
 }
 
 /// What this machine still needs before everything in Edit works.

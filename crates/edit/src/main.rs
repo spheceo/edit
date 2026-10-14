@@ -19,6 +19,7 @@ mod tools;
 mod track;
 mod transcribe;
 mod update;
+mod voice;
 mod voiceover;
 
 use std::path::PathBuf;
@@ -200,6 +201,7 @@ async fn start(home: PathBuf, host: Option<String>, port: u16) -> Vec<tokio::tas
     let cache = store.cache_dir();
     let app = server::App {
         updater: update::Updater::new(home.clone()),
+        voices: Arc::new(voice::Voices::new(&home)),
         agents: agent::Agents::new(Arc::clone(&store), home.clone(), port),
         scripts: Arc::new(script::Jobs::default()),
         library: Arc::new(library::Library::default()),

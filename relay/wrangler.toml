@@ -19,6 +19,13 @@ MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
 DAILY_MAP_SESSIONS_PER_IP = "15"
 DAILY_MAP_SESSIONS_TOTAL = "30"
 
+# Voice generation (text to speech, billed per character): one request's
+# limit, and a day's characters per IP and across everyone. A 10-minute
+# narration is ~9,000 characters; retakes count again.
+MAX_SPEECH_CHARS = "5000"
+DAILY_SPEECH_CHARS_PER_IP = "60000"
+DAILY_SPEECH_CHARS_TOTAL = "150000"
+
 # Bursts: a few requests a minute per IP.
 [[ratelimits]]
 name = "BURST"
@@ -26,6 +33,15 @@ namespace_id = "7701"
 
 [ratelimits.simple]
 limit = 4
+period = 60
+
+# Voice lines come in runs (generate every line): more per minute.
+[[ratelimits]]
+name = "SPEECH_BURST"
+namespace_id = "7702"
+
+[ratelimits.simple]
+limit = 30
 period = 60
 
 # Atomic daily reservations, including requests still in flight.

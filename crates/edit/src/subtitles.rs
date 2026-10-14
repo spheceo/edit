@@ -656,15 +656,27 @@ pub struct Options {
     pub overlap: bool,
 }
 
-/// Whether `project` is a subtitled video: it has subtitles made by
-/// repack_subtitles (the normal edit's add_subtitles names them "Caption").
+/// Whether `project` is a subtitled video: subtitles over its footage and
+/// nothing else (an edit's subtitles carry the same name, among cut-ins,
+/// B-roll and sound).
 pub fn is_subtitled(project: &Project) -> bool {
     let prefix = format!("{NAME} · ");
-    project.clips.iter().any(|clip| {
+    let subtitle = |clip: &Clip| {
         clip.name
             .as_deref()
             .is_some_and(|name| name.starts_with(&prefix))
-    })
+    };
+    let footage = |clip: &Clip| match &clip.content {
+        ClipContent::Video { media, .. } | ClipContent::Audio { media, .. } => project
+            .media(media)
+            .is_some_and(|media| media.kind == MediaKind::Video),
+        _ => false,
+    };
+    project.clips.iter().any(subtitle)
+        && project
+            .clips
+            .iter()
+            .all(|clip| subtitle(clip) || footage(clip))
 }
 
 /// Between two subtitles stacked because their people talk at once, in 1080p pixels.

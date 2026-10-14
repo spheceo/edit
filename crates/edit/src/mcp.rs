@@ -72,7 +72,7 @@ House editing style (videos cut from a script of police footage):
 - PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
   - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: run add_subtitles (it defaults to everything after the intro). They sit bottom middle on the subtitles track, no animation, no tracking: white words without glow in a pure black box (opaque, unlike the intro captions' see-through 0.45 box), the speaker's name above in their colour ("Officer:"). The intro keeps its own speaker captions (caption_speakers), glow and all. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own.
-- SUBTITLE VIDEOS (Repack style): when the user asks for a subtitled video or a "sub video" (subtitles for the whole video and nothing else), run repack_subtitles over the whole timeline (no start/end), with neglect: true when the case involves child abuse or neglect, and overlap: true for interrogation footage (people talk over each other there; each line gets its own stacked box). It puts every line said in the footage on the subtitles track in Repack's house style (Montserrat 48 in the speaker's colour with a glow, 75% black box, soft shadow, bottom middle, held a second after the last word, one at a time; the narrator and radio hidden), mutes the house words in the footage's sound and stars them out on screen. Then check a few frames with render_frame (a line with a starred word among them), read the mutes it returns back to the user (each word and its time, starred or mute-only) so they can review them, and add no other edits unless asked. A re-run replaces its own subtitles and mutes (and add_subtitles' in that span). In the normal edit workflow keep using add_subtitles as described above.
+- SUBTITLE VIDEOS (Repack style): when the user asks for a subtitled video or a "sub video" (subtitles for the whole video and nothing else), first run watch_footage (it corrects who says each line and marks the segments: only footage gets subtitles, not an intro that already has them burned in, nor narration), then run repack_subtitles over the whole timeline (no start/end), with neglect: true when the case involves child abuse or neglect, and overlap: true for interrogation footage (people talk over each other there; each line gets its own stacked box). It puts every line said in the footage on the subtitles track in Repack's house style (Montserrat 48 in the speaker's colour with a glow, 75% black box, soft shadow, bottom middle, held a second after the last word, one at a time; the narrator and radio hidden), mutes the house words in the footage's sound and stars them out on screen. Then check a few frames with render_frame (a line with a starred word among them), read the mutes it returns back to the user (each word and its time, starred or mute-only) so they can review them, and add no other edits unless asked. A re-run replaces its own subtitles and mutes (and add_subtitles' in that span). In the normal edit workflow keep using add_subtitles as described above.
 - Be precise, and fill in the small gaps yourself: skip throwaway moments (a lone "like" or "um", a blip that adds nothing to the story) rather than captioning them; when something starts or ends within ~0.2 s of a cut or of the next caption, snap it to that edge so there are no slivers or hairline gaps.
 - Keep the layers tidy: a clip shouldn't float on a track with nothing under it. After adding or removing layers, run tidy_tracks; it moves clips down into empty space below them (keeping what's above what) and drops empty tracks.
 - SCOPE: do the part of the edit that's asked for, and nothing past it. "Edit the intro" = the intro section only (sections.intro): its teasers, the cut-ins between them and their B-roll, captions, transitions and their sound; not the date cut-in (it opens the story) or any later cut-in or B-roll. "Subtitles" = add_subtitles (everything after the intro). Music, the date cut-in's map and other cut-ins' B-roll wait until they're asked for. When it's unclear whether something is in (music under the intro, say), ask instead of doing it, and say at the end what you left for later.
@@ -499,6 +499,14 @@ fn tools() -> Vec<Value> {
                 "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, slap, blood, etc. Default false." },
                 "hold_ms": { "type": "number", "description": "How long a subtitle stays after its last word unless the next starts first (default 1000)." },
                 "overlap": { "type": "boolean", "description": "Interrogation footage: people talking over each other are shown together, each line its own box stacked above the one already up (each person's lines still one at a time). Default false." }
+            }),
+            &[],
+        ),
+        tool(
+            "watch_footage",
+            "The watcher for a subtitled video: Gemini watches the footage (a few minutes at a time, with sound) and says who speaks each subtitle line, correcting the speakers in the transcript (a voice the transcriber merged with another becomes its own, named when the footage says the name), and marks the video's segments (footage to subtitle, already subtitled e.g. a cold open with burned-in subtitles, narration, other). Answers are cached per window, so a re-run costs nothing unless force. Returns the windows watched, the cost (USD), the lines re-assigned (count and examples), the people seen per window and the segments. Run repack_subtitles after it.",
+            json!({
+                "force": { "type": "boolean", "description": "Watch again even where an answer is cached (costs again). Default false." }
             }),
             &[],
         ),
@@ -1490,6 +1498,21 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 "subtitled {:.2}–{:.2}s: {}",
                 from as f64 / fps,
                 to as f64 / fps,
+                serde_json::to_string(&summary).unwrap_or_default()
+            )))
+        }
+        "watch_footage" => {
+            let options = crate::watch::Options {
+                force: args["force"].as_bool().unwrap_or(false),
+            };
+            let summary = crate::diag::time_async(
+                "watch",
+                "watch footage",
+                crate::watch::watch_footage(app, &id, options),
+            )
+            .await?;
+            Ok(text(format!(
+                "watched: {}",
                 serde_json::to_string(&summary).unwrap_or_default()
             )))
         }

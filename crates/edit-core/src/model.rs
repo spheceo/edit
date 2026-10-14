@@ -1449,7 +1449,7 @@ impl Project {
             || self
                 .segments
                 .windows(2)
-                .any(|pair| pair[1].start < pair[0].end)
+                .any(|pair| matches!(pair, [a, b] if b.start < a.end))
         {
             return Err(
                 "segments must be sorted, from frame 0, non-empty and never overlap".to_owned(),

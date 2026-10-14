@@ -1,5 +1,5 @@
 import { Eye, EyeOff, Lock, LockOpen, Magnet, MousePointer2, Plus, Scissors, Spline, Volume2, VolumeX } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { mediaUrl } from "../lib/api";
 import { CLIP_HEX } from "../lib/colors";
@@ -162,6 +162,26 @@ export function Timeline() {
   }, [size.w, project]);
 
   useEffect(() => () => useView.setState({ fitted: false, scrollX: 0, scrollY: 0 }), [project.id]);
+
+  // Tracks come and go (the agent drafts on new tracks above, then tidies them
+  // down): keep the top lane in view where it was on screen, so the lanes being
+  // watched don't jump. Before paint, so nothing flickers.
+  const seenRows = useRef<Row[]>(rows);
+  useLayoutEffect(() => {
+    const before = seenRows.current;
+    seenRows.current = rows;
+    if (before === rows || !before.length) return;
+    const { scrollY } = useView.getState();
+    const visible = before.filter((row) => row.y + row.h > scrollY + RULER);
+    const anchor = visible.map((row) => [row, rows.find((now) => now.track.id === row.track.id)] as const).find(([, now]) => now);
+    if (!anchor) return;
+    const [was, now] = anchor;
+    const moved = now!.y - was.y;
+    if (!moved) return;
+    const overflow = Math.max(0, contentHeight - size.h);
+    useView.setState({ scrollY: Math.min(overflow, Math.max(0, scrollY + moved)) });
+    // Rows are rebuilt each render; compare by the tracks they show.
+  }, [rows.map((row) => `${row.track.id}:${row.y}`).join("|")]);
 
   // Redraw on anything that changes pixels.
   useEffect(() => {

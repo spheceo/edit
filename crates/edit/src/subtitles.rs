@@ -1048,7 +1048,7 @@ pub async fn repack_subtitles(
 
 /// The footage's own sound in the span: audio clips of video files (not
 /// music or sound effects) on tracks that are heard.
-fn footage_sound(project: &Project, from: i64, to: i64) -> Vec<&Clip> {
+pub(crate) fn footage_sound(project: &Project, from: i64, to: i64) -> Vec<&Clip> {
     project
         .clips
         .iter()

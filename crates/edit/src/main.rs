@@ -22,6 +22,7 @@ mod transcribe;
 mod update;
 mod voice;
 mod voiceover;
+mod watch;
 
 use std::path::PathBuf;
 use std::sync::Arc;

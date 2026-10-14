@@ -131,6 +131,7 @@ pub fn router(app: App) -> Router {
             "/api/projects/{id}/repack-subtitles",
             post(repack_subtitles),
         )
+        .route("/api/projects/{id}/watch", post(watch_footage))
         .route("/api/scripts/preview", post(script_preview))
         .route("/api/projects/{id}/script", post(script_attach))
         .route(
@@ -1925,6 +1926,31 @@ async fn repack_subtitles(
         "subtitles",
         "repack subtitles",
         crate::subtitles::repack_subtitles(&app, &id, options),
+    )
+    .await
+    .map_err(bad)?;
+    Ok(Json(summary).into_response())
+}
+
+#[derive(Default, Deserialize)]
+struct WatchBody {
+    /// Watch again even where an answer is cached.
+    #[serde(default)]
+    force: bool,
+}
+
+/// The watcher over a subtitled video's footage, as the agent's watch_footage tool.
+async fn watch_footage(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    body: Option<Json<WatchBody>>,
+) -> ApiResult {
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let options = crate::watch::Options { force: body.force };
+    let summary = crate::diag::time_async(
+        "watch",
+        "watch footage",
+        crate::watch::watch_footage(&app, &id, options),
     )
     .await
     .map_err(bad)?;

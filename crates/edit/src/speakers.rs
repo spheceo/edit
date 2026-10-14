@@ -15,7 +15,7 @@ use crate::server::App;
 use crate::transcribe::{Transcript, Word};
 
 /// A role as a label word.
-fn role_title(role: &str) -> &'static str {
+pub(crate) fn role_title(role: &str) -> &'static str {
     match role {
         "officer" => "Officer",
         "leader" => "Sergeant",
@@ -89,6 +89,28 @@ pub fn set_role(
             }
         }
     }
+    transcript.colors = colors(&transcript);
+    crate::store::write_atomic(
+        &target,
+        &serde_json::to_vec(&transcript).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    app.store
+        .emit(json!({ "type": "transcript", "path": source.to_string_lossy() }));
+    Ok(transcript)
+}
+
+/// Changes a file's transcript with `edit` (re-read under the lock, so
+/// nothing written meanwhile is lost), recolours it and saves it.
+pub fn edit_transcript(
+    app: &App,
+    source: &Path,
+    edit: impl FnOnce(&mut Transcript),
+) -> Result<Transcript, String> {
+    let target = app.media.paths(source).transcript;
+    let _guard = TRANSCRIPT_EDITS.lock();
+    let mut transcript = read(&target).ok_or("no transcript")?;
+    edit(&mut transcript);
     transcript.colors = colors(&transcript);
     crate::store::write_atomic(
         &target,

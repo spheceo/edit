@@ -1891,6 +1891,8 @@ struct RepackSubtitlesBody {
     #[serde(default)]
     neglect: bool,
     hold_ms: Option<f64>,
+    #[serde(default)]
+    overlap: bool,
 }
 
 /// Repack's subtitles and mutes for a span (all of it by default), as the agent's repack_subtitles tool.
@@ -1917,6 +1919,7 @@ async fn repack_subtitles(
             .hold_ms
             .filter(|hold| hold.is_finite() && (0.0..=3000.0).contains(hold))
             .unwrap_or(crate::subtitles::DEFAULT_HOLD_MS),
+        overlap: body.overlap,
     };
     let summary = crate::diag::time_async(
         "subtitles",

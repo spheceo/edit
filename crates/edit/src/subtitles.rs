@@ -484,11 +484,17 @@ pub struct Line {
 /// another is up waits for it; one left no time is dropped. Lines of `silent`
 /// speakers (radio) are left out first and cut nothing short; lines of
 /// `hidden` ones (the narrator too) still end the line before them, then go.
+///
+/// `together` (interrogations): people talking over each other are shown at
+/// once. Each person's lines go one at a time; a line ends at the next one
+/// that doesn't talk over it (the same person's, or anyone's starting after
+/// it is said).
 pub fn shown(
     lines: &[Line],
     hold_ms: f64,
     from_ms: f64,
     until_ms: f64,
+    together: bool,
     silent: impl Fn(&str) -> bool,
     hidden: impl Fn(&str) -> bool,
 ) -> Vec<Line> {
@@ -518,8 +524,43 @@ pub fn shown(
         }
     }
     let mut shown_until = 0.0f64;
+    let mut speaker_until: HashMap<&str, f64> = HashMap::new();
     let mut out = Vec::new();
     for (i, cue) in cues.iter().enumerate() {
+        if together {
+            let tied = cues
+                .iter()
+                .skip(i + 1)
+                .take_while(|next| next.start_ms == cue.start_ms)
+                .any(|next| next.speaker == cue.speaker);
+            let cut_at = cues
+                .iter()
+                .skip(i + 1)
+                .find(|next| {
+                    next.start_ms > cue.start_ms
+                        && (next.speaker == cue.speaker || next.start_ms >= cue.end_ms)
+                })
+                .map_or(f64::INFINITY, |next| next.start_ms);
+            let mut end_ms = (cue.end_ms + if tied { 0.0 } else { hold_ms })
+                .min(until_ms)
+                .min(cut_at);
+            let start_ms = cue.start_ms.max(
+                speaker_until
+                    .get(cue.speaker.as_str())
+                    .copied()
+                    .unwrap_or(0.0),
+            );
+            if end_ms < start_ms {
+                end_ms = start_ms;
+            }
+            speaker_until.insert(&cue.speaker, end_ms);
+            out.push(Line {
+                start_ms,
+                end_ms,
+                ..cue.clone()
+            });
+            continue;
+        }
         let tied = cues
             .get(i + 1)
             .is_some_and(|next| next.start_ms == cue.start_ms);
@@ -611,6 +652,28 @@ pub struct Options {
     pub to: i64,
     pub neglect: bool,
     pub hold_ms: f64,
+    /// People talking over each other shown together, stacked (interrogations).
+    pub overlap: bool,
+}
+
+/// Between two subtitles stacked because their people talk at once, in 1080p pixels.
+const STACK_GAP: f32 = 12.0;
+
+/// About how tall a house-style subtitle's box is (project pixels): Montserrat
+/// SemiBold averages ~0.58 em a character, wrapped at 80% of the frame.
+fn box_height(text: &str, width: u32, k: f32) -> f32 {
+    let size = 48.0 * k;
+    let max_width = width as f32 * 0.8 - 24.0 * k;
+    let lines: f32 = text
+        .lines()
+        .map(|line| {
+            (line.chars().count() as f32 * 0.58 * size / max_width)
+                .ceil()
+                .max(1.0)
+        })
+        .sum::<f32>()
+        .max(1.0);
+    lines * size * 1.15 + 16.0 * k
 }
 
 /// One voice in the footage, for the summary and the subtitles' colour.
@@ -635,6 +698,7 @@ pub async fn repack_subtitles(
         to,
         neglect,
         hold_ms,
+        overlap,
     } = options;
     if to <= from {
         return Err("the span is empty".into());
@@ -736,12 +800,33 @@ pub async fn repack_subtitles(
         hold_ms,
         from as f64 / fps * 1000.0,
         to as f64 / fps * 1000.0,
+        overlap,
         |key| role(key) == "dispatch",
         |key| matches!(role(key), "dispatch" | "narrator"),
     );
     let (width, height) = (project.settings.width, project.settings.height);
     let frame = |ms: f64| (ms / 1000.0 * fps).round() as i64;
     let (live, (placed, skipped)) = app.store.update(project_id, "agent", |project| {
+        // Stacked lines (overlap) go on tracks of their own under the
+        // subtitles' track, made as needed; a re-run removes them by name.
+        let mut tracks: Vec<String> = Vec::new();
+        let stacked: Vec<String> = project
+            .tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Video && !track.subtitles)
+            .filter(|track| {
+                let mine = project.clips.iter().filter(|clip| clip.track == track.id);
+                let mut mine = mine.peekable();
+                mine.peek().is_some()
+                    && mine.all(|clip| {
+                        clip.name
+                            .as_deref()
+                            .is_some_and(|name| name.starts_with(NAME))
+                    })
+            })
+            .map(|track| track.id.clone())
+            .rev()
+            .collect();
         project.clips.retain(|clip| {
             !(clip
                 .name
@@ -760,19 +845,53 @@ pub async fn repack_subtitles(
                 mutes.sort_by(|a, b| a.from.total_cmp(&b.from));
             }
         }
-        let track = project.subtitles_track();
+        tracks.push(project.subtitles_track());
+        tracks.extend(stacked);
+        let base_y = height as f32 * 0.4;
+        let k = height as f32 / 1080.0;
+        // Lines up now: when each ends (frames), its centre and box height.
+        let mut open: Vec<(i64, f32, f32)> = Vec::new();
         let (mut placed, mut skipped) = (0, 0);
         for line in &shown {
             let start = frame(line.start_ms).max(from);
             let end = frame(line.end_ms).min(to);
-            let busy = project
-                .clips
-                .iter()
-                .any(|clip| clip.track == track && clip.start < end && start < clip.end());
-            if end <= start || busy {
+            if end <= start {
                 skipped += 1;
                 continue;
             }
+            let free = |project: &Project, track: &str| {
+                !project
+                    .clips
+                    .iter()
+                    .any(|clip| clip.track == track && clip.start < end && start < clip.end())
+            };
+            let track = match tracks.iter().find(|track| free(project, track)) {
+                Some(track) => track.clone(),
+                None if overlap => {
+                    let id = project.add_track(TrackKind::Video);
+                    tracks.push(id.clone());
+                    id
+                }
+                None => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            // Stacked: a line whose box would cover one already up goes above it.
+            open.retain(|(until, _, _)| *until > start);
+            let box_height = box_height(&line.text, width, k);
+            let mut y = base_y;
+            for _ in 0..=open.len() {
+                let Some(&(_, over_y, over_height)) =
+                    open.iter().find(|(_, other, other_height)| {
+                        (y - other).abs() < (box_height + other_height) / 2.0 + STACK_GAP * k / 2.0
+                    })
+                else {
+                    break;
+                };
+                y = over_y - over_height / 2.0 - STACK_GAP * k - box_height / 2.0;
+            }
+            open.push((end, y, box_height));
             let voice = voices.get(&line.speaker);
             let color = voice
                 .and_then(|voice| crate::captions::hex(&voice.color))
@@ -794,7 +913,7 @@ pub async fn repack_subtitles(
                     text: line.text.clone(),
                     style: house_style(width, height, color),
                     transform: Transform {
-                        y: height as f32 * 0.4,
+                        y,
                         ..Transform::default()
                     },
                     animation: TextAnimation::default(),
@@ -946,6 +1065,7 @@ mod tests {
             1000.0,
             0.0,
             6000.0,
+            false,
             none,
             none,
         );
@@ -963,6 +1083,7 @@ mod tests {
             1000.0,
             0.0,
             9000.0,
+            false,
             none,
             none,
         );
@@ -977,10 +1098,49 @@ mod tests {
             1000.0,
             0.0,
             9000.0,
+            false,
             |speaker| speaker == "radio",
             |speaker| speaker == "radio" || speaker == "narrator",
         );
         assert_eq!(times(&out), [(0.0, 700.0, "a")]);
+    }
+
+    #[test]
+    fn shows_people_talking_over_each_other_together() {
+        let none = |_: &str| false;
+        // b starts while a is still talking: both up; a's held until b's
+        // next line that starts after a is said, b's own next line cuts b.
+        let out = shown(
+            &[
+                line(0.0, 2000.0, "a"),
+                line(1000.0, 1500.0, "b"),
+                line(1800.0, 2600.0, "b"),
+                line(4000.0, 4500.0, "a"),
+            ],
+            1000.0,
+            0.0,
+            9000.0,
+            true,
+            none,
+            none,
+        );
+        assert_eq!(
+            times(&out),
+            [
+                (0.0, 3000.0, "a"),
+                (1000.0, 1800.0, "b"),
+                (1800.0, 3600.0, "b"),
+                (4000.0, 5500.0, "a")
+            ]
+        );
+    }
+
+    #[test]
+    fn box_heights_grow_with_wrapped_lines() {
+        let one = box_height("Short line", 1920, 1.0);
+        let two = box_height(&"word ".repeat(20), 1920, 1.0);
+        assert!((one - (48.0 * 1.15 + 16.0)).abs() < 0.01);
+        assert!(two > one * 1.5);
     }
 
     #[test]

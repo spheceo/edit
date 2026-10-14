@@ -525,10 +525,12 @@ impl Exports {
     }
 
     /// Starts exporting `project` as `options` ask; returns the file it will write
-    /// (`output` with the format's extension).
+    /// (`output` with the format's extension). A whole subtitled video is then
+    /// uploaded to the team's Drive (`crate::drive`).
     pub fn start(
         self: &Arc<Self>,
         store: Arc<Store>,
+        library: Arc<crate::library::Library>,
         project: Project,
         options: ExportOptions,
         output: PathBuf,
@@ -584,6 +586,7 @@ impl Exports {
         }
         let final_path = output.clone();
         let cache = store.cache_dir();
+        let upload = crate::drive::wanted(&project, &options, &plan);
         let this = Arc::clone(self);
         std::thread::spawn(move || {
             let id = project.id.clone();
@@ -666,6 +669,7 @@ impl Exports {
             if result.is_ok() {
                 crate::diag::record("export", "export", took, None);
             }
+            let done = result.is_ok();
             match result {
                 Ok(()) => emit(
                     "done",
@@ -673,6 +677,7 @@ impl Exports {
                     json!({
                         "seconds": started.elapsed().as_secs_f32(),
                         "bytes": std::fs::metadata(&output).map(|meta| meta.len()).ok(),
+                        "drive": upload,
                     }),
                 ),
                 Err(error) if cancel.load(Ordering::Acquire) => {
@@ -681,6 +686,9 @@ impl Exports {
                 Err(error) => emit("failed", 0.0, json!({ "error": error })),
             }
             this.jobs.lock().remove(&id);
+            if upload && done {
+                crate::drive::start(store, library, &project, output);
+            }
         });
         Ok(final_path)
     }

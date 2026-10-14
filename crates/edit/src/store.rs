@@ -43,6 +43,9 @@ pub struct ProjectSummary {
     /// A subtitled video: it has Repack-style subtitles (`repack_subtitles`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub subtitles: bool,
+    /// Its export on the team's Drive (a subtitled video's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drive: Option<edit_core::DriveFile>,
     /// Why it can't be opened (its file is kept as it is).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
@@ -141,6 +144,7 @@ impl Store {
                         duration_frames: 0,
                         clips: 0,
                         subtitles: false,
+                        drive: None,
                         problem: Some(problem),
                     });
                     continue;
@@ -157,6 +161,7 @@ impl Store {
                 duration_frames: live.project.duration(),
                 clips: live.project.clips.len(),
                 subtitles: crate::subtitles::is_subtitled(&live.project),
+                drive: live.project.drive.clone(),
                 problem: None,
             });
         }

@@ -1,8 +1,9 @@
-import { Check, ChevronDown, CircleAlert, Copy, Download, FolderOpen, ListOrdered } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, Cloud, CloudUpload, Copy, Download, ExternalLink, FolderOpen, ListOrdered, RotateCw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { api, useMachine } from "../lib/api";
+import { copyDriveLink, openDrive, uploadsToDrive, useDriveLink } from "../lib/drive";
 import { projectDuration } from "../lib/edit";
 import {
   chaptersInSpan,
@@ -30,8 +31,9 @@ import {
 import { inOutSpan, useInOut } from "../lib/inOut";
 import { playhead, preview } from "../lib/playback";
 import { readSetting, writeSetting } from "../lib/storage";
-import { flushSave, useEditor } from "../lib/store";
+import { flushSave, useEditor, type DriveState } from "../lib/store";
 import { shortDuration, timecode } from "../lib/time";
+import type { DriveFile } from "../lib/types";
 import { Button, cx, Modal, Select, spring, Switch, Tabs } from "./ui";
 
 type Settings = Omit<ExportOptions, "range" | "chapters">;
@@ -56,6 +58,8 @@ const FIELD = "h-8 justify-between bg-raised px-3 ring-1 ring-line hover:bg-hove
 export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const project = useEditor((state) => state.project);
   const exportState = useEditor((state) => state.exportState);
+  const driveState = useEditor((state) => state.driveState);
+  const drive = useDriveLink(project?.id ?? "", project?.drive);
   const toast = useEditor((state) => state.toast);
   const points = useInOut();
   const machine = useMachine();
@@ -129,6 +133,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const embedding = hasChapters(settings.format) && embed && spanChapters.length >= 2;
   const [width, height] = outputSize(settings, project.settings.width, project.settings.height);
   const bytes = estimateBytes(settings, width, height, seconds, outFps);
+  const toDrive = uploadsToDrive(project, settings.format, range, duration);
   const running = exportState?.state === "running";
   const busy = running || preparing;
   const available = (format: Format) =>
@@ -150,7 +155,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
       if (saved.project?.id !== project.id) return;
       if (saved.dirty) throw new Error("The latest changes couldn't be saved. Try exporting again once the connection returns.");
       if (saved.project !== intended) throw new Error("The project changed while preparing the export. Review the latest version and try again.");
-      useEditor.setState({ exportState: { state: "running", progress: 0, path } });
+      useEditor.setState({ exportState: { state: "running", progress: 0, path }, driveState: null });
       requested = true;
       renderStarted.current = performance.now();
       const options: ExportOptions = { ...settings, fps: settings.fps === fps ? null : settings.fps, range, chapters: embedding ? spanChapters : [] };
@@ -401,9 +406,20 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
                 className="h-9 w-full rounded-lg border border-line bg-black px-3 font-mono text-[12px] outline-none focus:border-line-strong disabled:opacity-50"
               />
             </Field>
+            {toDrive && (
+              <p className="-mt-2 flex items-center gap-1.5 text-[11px] text-faint">
+                <Cloud size={12} className="shrink-0" /> Then it uploads to the team's Subtitles folder on Drive, viewable by anyone with the link.
+              </p>
+            )}
           </div>
         </div>
 
+        <DriveRow
+          state={driveState}
+          drive={drive}
+          onRetry={exportState?.state === "done" ? () => void api.driveUpload(project.id, exportState.path).catch((error) => toast((error as Error).message, "error")) : null}
+          onCopy={(url) => void copyDriveLink(url, toast)}
+        />
         <div className="flex min-h-16 items-center gap-3 border-t border-line px-6 py-3">
           <div className="flex min-w-0 flex-1 items-center gap-x-3 text-[12px]">
             {exportState?.state === "running" && (
@@ -458,6 +474,57 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** The export's upload to Drive (a subtitled video's), then its link. */
+function DriveRow({
+  state,
+  drive,
+  onRetry,
+  onCopy,
+}: {
+  state: DriveState | null;
+  drive: DriveFile | null;
+  onRetry: (() => void) | null;
+  onCopy: (url: string) => void;
+}) {
+  const url = state?.state === "done" ? state.url : state ? null : drive?.url;
+  if (!state && !drive) return null;
+  return (
+    <div className="flex min-h-11 items-center gap-3 border-t border-line px-6 py-2 text-[12px]">
+      {state?.state === "uploading" && (
+        <span className="flex items-center gap-1.5 text-muted tabular">
+          <CloudUpload size={13} /> Uploading to Drive… {Math.round((state.progress ?? 0) * 100)}%
+        </span>
+      )}
+      {state?.state === "failed" && (
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-red-300">
+          <CircleAlert size={13} className="shrink-0" /> <span className="truncate">Drive upload failed: {state.error}</span>
+        </span>
+      )}
+      {state?.state === "failed" && onRetry && (
+        <Button size="sm" variant="ghost" onClick={onRetry}>
+          <RotateCw size={13} /> Upload again
+        </Button>
+      )}
+      {url && (
+        <>
+          <span className="flex min-w-0 items-center gap-1.5 text-muted">
+            <Cloud size={13} className="shrink-0" />
+            <span className="truncate">{state ? "Uploaded to Drive's Subtitles folder" : `On Drive: ${drive?.name}`}</span>
+          </span>
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            <Button size="sm" variant="subtle" onClick={() => onCopy(url)}>
+              <Copy size={13} /> Copy link
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => openDrive(url)}>
+              <ExternalLink size={13} /> Open on Drive
+            </Button>
+          </span>
+        </>
+      )}
+    </div>
   );
 }
 

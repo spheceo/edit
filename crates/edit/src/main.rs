@@ -3,6 +3,7 @@ mod app;
 mod broll;
 mod captions;
 mod diag;
+mod drive;
 mod export;
 mod guard;
 mod library;

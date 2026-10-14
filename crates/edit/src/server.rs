@@ -118,6 +118,10 @@ pub fn router(app: App) -> Router {
         .route("/api/projects/{id}/frame/{frame}", get(frame_png))
         .route("/api/projects/{id}/export", post(start_export))
         .route("/api/projects/{id}/export/cancel", post(cancel_export))
+        .route(
+            "/api/projects/{id}/drive",
+            get(drive_link).post(drive_upload),
+        )
         .route("/api/export/encoders", get(export_encoders))
         .route("/api/exports/file", get(exported_file))
         .route("/api/exports/reveal", post(reveal_export))
@@ -557,10 +561,10 @@ async fn update_status(State(app): State<App>) -> Json<crate::update::Status> {
 
 /// Downloads the newest release and restarts into it.
 async fn update_install(State(app): State<App>) -> ApiResult {
-    if app.exports.running() {
+    if app.exports.running() || crate::drive::uploading() {
         return Err(ApiError(
             StatusCode::CONFLICT,
-            "an export is running; update when it's done".to_owned(),
+            "an export or Drive upload is running; update when it's done".to_owned(),
         ));
     }
     let status = app.updater.start().map_err(bad)?;
@@ -1488,7 +1492,13 @@ async fn start_export(
         .unwrap_or_else(|| default_export_path(&live.project));
     let path = app
         .exports
-        .start(Arc::clone(&app.store), live.project, options, path)
+        .start(
+            Arc::clone(&app.store),
+            Arc::clone(&app.library),
+            live.project,
+            options,
+            path,
+        )
         .map_err(bad)?;
     Ok(Json(json!({ "path": path })).into_response())
 }
@@ -1554,6 +1564,44 @@ async fn reveal_export(State(app): State<App>, Json(body): Json<ExportedQuery>) 
         Ok(status) if status.success() => Ok(Json(json!({ "ok": true })).into_response()),
         _ => Err(bad("couldn't open a file browser on this machine")),
     }
+}
+
+/// The project's link to its export on Drive, once checked that the file is
+/// still there (a deleted or trashed one is unlinked).
+async fn drive_link(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    let (store, library) = (Arc::clone(&app.store), Arc::clone(&app.library));
+    let drive = tokio::task::spawn_blocking(move || crate::drive::checked(&store, &library, &id))
+        .await
+        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .map_err(not_found)?;
+    Ok(Json(json!({ "drive": drive })).into_response())
+}
+
+/// Uploads a finished export of a subtitled video to Drive again (after a
+/// failed upload); progress comes as `drive` events.
+async fn drive_upload(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<ExportedQuery>,
+) -> ApiResult {
+    let live = app
+        .store
+        .get(&id)
+        .ok_or_else(|| not_found("no such project"))?;
+    let path = PathBuf::from(&body.path);
+    if !app.exports.exported(&path) {
+        return Err(not_found("not an export from this session"));
+    }
+    if !crate::subtitles::is_subtitled(&live.project) {
+        return Err(bad("only subtitled videos go to Drive"));
+    }
+    crate::drive::start(
+        Arc::clone(&app.store),
+        Arc::clone(&app.library),
+        &live.project,
+        path,
+    );
+    Ok(Json(json!({ "ok": true })).into_response())
 }
 
 async fn cancel_export(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Json<Value> {

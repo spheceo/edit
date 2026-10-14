@@ -223,7 +223,9 @@ impl Library {
         Ok(body)
     }
 
-    fn token(&self) -> Result<String, String> {
+    /// An access token for the team's Google Drive sign-in (scope: all of
+    /// Drive), cached until shortly before it expires. Never log it.
+    pub(crate) fn token(&self) -> Result<String, String> {
         let mut cached = self.token.lock();
         if let Some((token, until)) = &*cached {
             if Instant::now() < *until {
@@ -237,7 +239,7 @@ impl Library {
         ]
         .map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()));
         let (Some(id), Some(secret), Some(refresh)) = (id, secret, refresh) else {
-            return Err("The sound library needs a Google Drive sign-in: start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set (`just dev` reads Repack's from Infisical).".into());
+            return Err("The sound library and Drive uploads need a Google Drive sign-in: start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set (`just dev` reads Repack's from Infisical).".into());
         };
         let config = [
             ("client_id", id),
@@ -607,7 +609,7 @@ fn clean_note(note: &str) -> Option<String> {
 /// Runs curl with `config` (headers, form fields) on stdin so the sign-in
 /// never shows in process arguments. Returns the status and the body (empty
 /// when `args` writes it to a file).
-fn curl(config: &str, args: &[&str]) -> Result<(u16, Vec<u8>), String> {
+pub(crate) fn curl(config: &str, args: &[&str]) -> Result<(u16, Vec<u8>), String> {
     let mut child = Command::new("curl")
         .args([
             "-sS",
@@ -664,7 +666,7 @@ fn drive_error(code: u16, body: &str) -> String {
 }
 
 /// A value for curl's config file, quoted.
-fn quote(value: &str) -> Result<String, String> {
+pub(crate) fn quote(value: &str) -> Result<String, String> {
     if value.chars().any(char::is_control) {
         return Err("a Google Drive setting contains a control character".into());
     }

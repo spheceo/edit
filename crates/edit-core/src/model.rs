@@ -35,6 +35,20 @@ pub struct Project {
     /// Empty: all of it is footage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub segments: Vec<Segment>,
+    /// The last whole export of a subtitled video, uploaded to the team's
+    /// "Subtitles" folder on Google Drive. Cleared when the file is gone from Drive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<DriveFile>,
+}
+
+/// A file on Google Drive.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct DriveFile {
+    pub file_id: String,
+    /// Where it opens: `https://drive.google.com/file/d/<file_id>/view`.
+    pub url: String,
+    pub name: String,
+    pub uploaded_ms: u64,
 }
 
 /// A stretch of a subtitled video (frames, `end` exclusive).
@@ -1287,6 +1301,7 @@ impl Project {
             mark_in: None,
             mark_out: None,
             segments: Vec::new(),
+            drive: None,
         };
         for kind in [
             TrackKind::Video,
@@ -1465,6 +1480,13 @@ impl Project {
             if start > end {
                 return Err("mark_in must not come after mark_out".to_owned());
             }
+        }
+        if self
+            .drive
+            .as_ref()
+            .is_some_and(|file| !file.url.starts_with("https://drive.google.com/"))
+        {
+            return Err("drive.url must be a https://drive.google.com/ link".to_owned());
         }
         if self.next_id > 9_007_199_254_740_991 {
             return Err("next_id must fit in a JavaScript safe integer".to_owned());
@@ -1948,5 +1970,23 @@ mod validation_tests {
             ],
         );
         assert!(p.validate().is_err());
+    }
+    #[test]
+    fn drive_links_go_to_drive() {
+        let mut p = project();
+        let file = |url: &str| DriveFile {
+            file_id: "f".into(),
+            url: url.into(),
+            name: "Case.mp4".into(),
+            uploaded_ms: 1,
+        };
+        p.drive = Some(file("https://drive.google.com/file/d/f/view"));
+        assert!(p.validate().is_ok());
+        let text = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<Project>(&text).unwrap(), p);
+        p.drive = Some(file("javascript:alert(1)"));
+        assert!(p.validate().is_err());
+        p.drive = None;
+        assert!(!serde_json::to_string(&p).unwrap().contains("\"drive\""));
     }
 }

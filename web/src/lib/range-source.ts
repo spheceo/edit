@@ -11,6 +11,9 @@ const LOOKAHEAD = 3;
 /** Blocks fetched past a sequential read, so playback never waits on a round trip. */
 const READAHEAD = 2;
 const RETRIES = 8;
+/** A read that hasn't finished by then is abandoned and tried again: a hung
+ * connection must not leave the preview waiting on a frame for good. */
+const READ_TIMEOUT_MS = 20_000;
 
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -36,12 +39,15 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
   async function fetchRange(start: number, end: number) {
     for (let attempt = 0; ; attempt++) {
       const started = performance.now();
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(new Error(`no answer in ${READ_TIMEOUT_MS / 1000} s`)), READ_TIMEOUT_MS);
       try {
-        const response = await fetcher(url, { headers: { Range: `bytes=${start}-${end - 1}` } });
+        const response = await fetcher(url, { headers: { Range: `bytes=${start}-${end - 1}` }, signal: abort.signal });
         // 503 is the dev server answering while `edit serve` restarts.
         if (response.status === 503 && attempt < RETRIES) throw new Error("restarting");
-        if (response.status !== 200 && response.status !== 206) throw new Error(`HTTP ${response.status}`);
+        if (response.status !== 200 && response.status !== 206) throw new Error(`HTTP ${response.status} reading ${url} (bytes ${start}-${end - 1})`);
         const body = new Uint8Array(await response.arrayBuffer());
+        clearTimeout(timer);
         const took = performance.now() - started;
         network.requests++;
         network.bytes += body.byteLength;
@@ -49,8 +55,9 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
         network.slowestMs = Math.max(network.slowestMs, took);
         return response.status === 200 ? body.slice(start, end) : body;
       } catch (error) {
+        clearTimeout(timer);
         network.failures++;
-        if (attempt >= RETRIES) throw error;
+        if (attempt >= RETRIES) throw abort.signal.aborted ? new Error(`${abort.signal.reason} reading ${url}`) : error;
         await wait(attempt);
       }
     }

@@ -3,12 +3,23 @@ import react from "@vitejs/plugin-react";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { createServer as createHttpServer, type ServerResponse } from "node:http";
+import { createServer as createHttpServer, request as createRequest, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { join } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 
 const server = process.env.EDIT_SERVER ?? "http://127.0.0.1:7700";
+
+let lastReport = 0;
+/** Tells Edit's log (Report a problem shows it) which request the proxy lost, at most once a second. */
+function reportProxyReset(request: { method?: string; url?: string }) {
+  if (Date.now() - lastReport < 1000) return;
+  lastReport = Date.now();
+  const body = JSON.stringify({ level: "warn", message: `dev proxy: connection to Edit reset on ${request.method ?? "?"} ${request.url ?? "?"} (answered 503)` });
+  const post = createRequest(`${server}/api/diagnostics/client`, { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) } });
+  post.on("error", () => {});
+  post.end(body);
+}
 
 /**
  * While `edit serve` restarts (cargo watch), answer quietly instead of
@@ -23,6 +34,8 @@ const quietWhileRestarting = {
       const code = (args[0] as NodeJS.ErrnoException | undefined)?.code;
       if (event !== "error" || (code !== "ECONNREFUSED" && code !== "ECONNRESET")) return emit(event, ...args);
       const target = args[2] as ServerResponse | Socket;
+      // A reset (not a restart: then Edit refuses outright) is worth seeing in Edit's log.
+      if (code === "ECONNRESET") reportProxyReset((args[1] as { method?: string; url?: string } | undefined) ?? {});
       if ("req" in target) {
         if (!target.headersSent) target.writeHead(503, { "content-type": "application/json", "retry-after": "1" });
         target.end(JSON.stringify({ error: "Edit's server is restarting", restarting: true }));

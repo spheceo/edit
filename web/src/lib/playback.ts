@@ -42,6 +42,8 @@ interface ScheduledSound { source: AudioBufferSourceNode; gain: GainNode }
 const BUFFERING_BADGE_MS = 600;
 /** Waiting this long for a frame is noted for problem reports, and the viewer offers one. */
 const STUCK_MS = 10_000;
+/** After a decoding failure, the preview tries again this soon. */
+const DECODE_RETRY_MS = 4_000;
 const LOOK_AHEAD = 1;
 const AUDIO_AHEAD = 0.8;
 const START_LEAD = 0.05;
@@ -93,11 +95,22 @@ class Preview {
   private loop = 0;
   private listeners = new Set<Listener>();
   private decoder = new Decoder(() => this.invalidate(), (error) => {
-    this.error = `Preview decoding failed: ${error}`; note("error", "preview", this.error);
+    const message = `Preview decoding failed: ${error}`;
+    this.error = message; note("error", "preview", this.error);
     this.pause();
     this.setBuffering(false);
     this.notify();
+    // Most failures are the network's (a dropped or slow connection): try again
+    // on its own shortly, rather than waiting for a reload.
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => {
+      if (this.error !== message) return;
+      this.error = null;
+      this.notify();
+      this.invalidate();
+    }, DECODE_RETRY_MS);
   });
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   get diagnostics() {
     return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.renderedFrame,

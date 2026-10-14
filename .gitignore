@@ -4,7 +4,7 @@
 # Web build output and the generated WASM engine
 /web/node_modules/
 /web/dist/
-/web/src/engine/pkg/
+/web/src/engine/pkg
 
 # macOS metadata
 .DS_Store

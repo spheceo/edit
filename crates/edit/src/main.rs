@@ -15,6 +15,7 @@ mod server;
 mod sfx;
 mod speakers;
 mod store;
+mod subtitles;
 mod tools;
 mod track;
 mod transcribe;

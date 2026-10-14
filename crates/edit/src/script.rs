@@ -1981,6 +1981,7 @@ fn lay_out(project: &mut Project) {
                             source_in: from,
                             speed: 1.0,
                             volume_db: 0.0,
+                            mutes: Vec::new(),
                         },
                     });
                 }

@@ -477,6 +477,7 @@ pub fn footage_loudness(project: &edit_core::Project) -> Result<f64, String> {
             source_in,
             speed,
             volume_db,
+            ..
         } = &clip.content
         else {
             continue;

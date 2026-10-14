@@ -748,6 +748,35 @@ pub fn fill_segments(given: Vec<edit_core::Segment>, duration: i64) -> Vec<edit_
     out
 }
 
+/// Faster than anyone talks (characters a second): the words' times are wrong.
+const CRAMMED_CPS: f64 = 25.0;
+/// How long a line needs to be read at least: this many ms a character…
+const READ_MS_PER_CHAR: f64 = 60.0;
+/// …and never less than this.
+const READ_MS: f64 = 800.0;
+
+/// Lines whose words are crammed faster than anyone talks ("Anything in your
+/// pocket?" in 0.4 s, after a word stretched over the silence where it was
+/// really said) get the time they need to be read: taken from the gap
+/// before them, where the words most likely were, else the next line waits
+/// (`shown` sequences them).
+pub fn uncram(lines: &mut [Line]) {
+    lines.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
+    let mut before = f64::NEG_INFINITY;
+    for line in lines.iter_mut() {
+        let chars = line.text.chars().filter(|c| !c.is_whitespace()).count() as f64;
+        let span = line.end_ms - line.start_ms;
+        if chars >= 8.0 && span < chars / CRAMMED_CPS * 1000.0 {
+            let needed = (chars * READ_MS_PER_CHAR).max(READ_MS);
+            line.start_ms = line.start_ms.min((line.end_ms - needed).max(before)).max(0.0);
+            if line.end_ms - line.start_ms < needed {
+                line.end_ms = line.start_ms + needed;
+            }
+        }
+        before = before.max(line.end_ms);
+    }
+}
+
 /// The longest anyone takes to say `word` (ms): transcription sometimes
 /// stretches a word's end over the silence after it ("right." for 9 s), which
 /// would hold its subtitle up and rush the next. About a second for a short
@@ -899,6 +928,7 @@ pub async fn repack_subtitles(
             }));
         }
     }
+    uncram(&mut lines);
     let role = |key: &str| voices.get(key).map_or("other", |voice| voice.role.as_str());
     let shown = shown(
         &lines,
@@ -1312,6 +1342,38 @@ mod tests {
                 (300, 500, SegmentKind::Narration)
             ]
         );
+    }
+
+    #[test]
+    fn crammed_lines_get_time_to_be_read() {
+        let line = |start_ms, end_ms, text: &str| Line {
+            start_ms,
+            end_ms,
+            text: text.into(),
+            speaker: "a".into(),
+        };
+        // 24 characters said in 0.4 s after a gap: starts earlier, in the gap.
+        let mut lines = vec![
+            line(234_750.0, 236_000.0, "All right."),
+            line(244_380.0, 244_790.0, "Anything in your pocket?"),
+            line(244_790.0, 246_000.0, "Hair is ..."),
+        ];
+        uncram(&mut lines);
+        assert_eq!(lines[1].end_ms, 244_790.0);
+        assert!((lines[1].start_ms - (244_790.0 - 21.0 * 60.0)).abs() < 1e-6);
+        // No gap before it: it runs on, and the next waits for it in `shown`.
+        let mut lines = vec![
+            line(0.0, 1000.0, "One two three."),
+            line(1000.0, 1300.0, "Four five six seven."),
+        ];
+        uncram(&mut lines);
+        assert_eq!(lines[1].start_ms, 1000.0);
+        assert!((lines[1].end_ms - (1000.0 + 17.0 * 60.0)).abs() < 1e-6);
+        // Quick short answers are left alone.
+        let mut lines = vec![line(0.0, 200.0, "Yes."), line(200.0, 500.0, "No.")];
+        uncram(&mut lines);
+        assert_eq!(lines[0].end_ms, 200.0);
+        assert_eq!(lines[1].start_ms, 200.0);
     }
 
     #[test]

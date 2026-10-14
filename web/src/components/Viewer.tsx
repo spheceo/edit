@@ -1,6 +1,7 @@
 import { Maximize, Minimize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { openReport } from "../lib/diagnostics";
 import { paramAt, projectDuration, setParam } from "../lib/edit";
 import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
 import { viewerMenu } from "../lib/menus";
@@ -38,6 +39,7 @@ export function Viewer() {
   const media = useEditor((state) => state.media);
   const [error, setError] = useState<string | null>(null);
   const [buffering, setBuffering] = useState(false);
+  const [stuck, setStuck] = useState(false);
   const fullscreen = useFullscreen();
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -53,7 +55,7 @@ export function Viewer() {
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); });
+    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); });
     void preview.attach(canvas);
     return () => {
       off();
@@ -100,14 +102,25 @@ export function Viewer() {
           onContextMenu={(event) => { if (!fullscreen) openMenu(event, viewerMenu()); }}
         />
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center p-8 text-center text-muted">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-8 text-center text-muted">
             <p className="max-w-[380px]">{error}</p>
+            <button className="text-[12px] text-faint underline underline-offset-2 hover:text-fg" onClick={() => openReport(`The preview failed: ${error}`)}>
+              Report this problem
+            </button>
           </div>
         )}
         {!error && buffering && (
           <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
             <span className="size-3 animate-spin rounded-full border border-white/20 border-t-white/80" /> Loading frame…
           </div>
+        )}
+        {!error && buffering && stuck && (
+          <button
+            className="absolute right-3 bottom-11 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted underline underline-offset-2 hover:text-fg"
+            onClick={() => openReport(`The preview has been stuck on "Loading frame…" at frame ${Math.floor(playhead.frame)}`)}
+          >
+            Stuck? Report it
+          </button>
         )}
         {!error && empty && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[13px] text-faint">

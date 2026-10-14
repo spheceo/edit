@@ -1,3 +1,5 @@
+import type { NetworkStats } from "./range-source";
+
 export const AUDIO_CHUNK_SECONDS = 0.5;
 
 export type DecodeRequest =
@@ -17,5 +19,5 @@ export interface PcmChunk {
 export type DecodeResponse =
   | { type: "video"; id: number; key: string; time: number; frame: VideoFrame }
   | { type: "audio"; id: number; key: string; chunk: number; speed: number; pcm: PcmChunk }
-  | { type: "done"; id: number; lane: string }
+  | { type: "done"; id: number; lane: string; network?: NetworkStats }
   | { type: "error"; id: number; key: string; lane: string; error: string };

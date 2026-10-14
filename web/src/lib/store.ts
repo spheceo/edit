@@ -3,6 +3,7 @@ import { create } from "zustand";
 
 import { applyAgentEvent, openAgent } from "./agent";
 import { api, ApiError, useConnection } from "./api";
+import { addContext, note } from "./diagnostics";
 import { validateProject } from "./edit";
 import { forgetSetting, readSetting, writeSetting } from "./storage";
 import type { MediaStatus, Project, ScriptJob } from "./types";
@@ -221,6 +222,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ timelineHeight: defaultTimelineHeight() });
   },
   toast: (text, tone = "info") => {
+    if (tone === "error") note("error", "ui", text);
     const id = ++toastId;
     set({ toasts: [...get().toasts.slice(-3), { id, text, tone }] });
     setTimeout(() => get().dismiss(id), tone === "error" ? 6000 : 3200);
@@ -416,4 +418,10 @@ window.addEventListener("pagehide", () => {
 });
 window.addEventListener("beforeunload", (event) => {
   if (useEditor.getState().dirty || useEditor.getState().saving) event.preventDefault();
+});
+
+addContext("Open project", () => {
+  const { project, rev } = useEditor.getState();
+  if (!project) return "none (home screen)";
+  return { id: project.id, name: project.name, rev, clips: project.clips.length, tracks: project.tracks.length, media: project.media.length, settings: project.settings };
 });

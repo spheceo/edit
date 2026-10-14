@@ -251,6 +251,7 @@ impl FrameRenderer {
                 if job.reply.is_closed() {
                     continue;
                 }
+                let rendering = std::time::Instant::now();
                 let caught = crate::guard::catch("rendering a frame", || {
                     let settings = job.project.settings;
                     let renderer = match &mut renderer {
@@ -279,6 +280,17 @@ impl FrameRenderer {
                     renderer = None;
                 }
                 let result = caught.and_then(|result| result);
+                let name = if job.frames.len() > 1 {
+                    "render: frames"
+                } else {
+                    "render: frame"
+                };
+                crate::diag::record(
+                    "render",
+                    name,
+                    rendering.elapsed(),
+                    result.as_ref().err().map(String::as_str),
+                );
                 let _ = job.reply.send(result);
             }
         });
@@ -628,6 +640,32 @@ impl Exports {
                 Ok(())
             })
             .and_then(|result| result);
+            let frames = (plan.end - plan.start).max(0);
+            let took = started.elapsed();
+            match &result {
+                Ok(()) => crate::diag::info(
+                    "export",
+                    format!(
+                        "{} exported {frames} frames in {} ({:.1} frames/s) to {}",
+                        project.name,
+                        crate::diag::human(took),
+                        frames as f64 / took.as_secs_f64().max(1e-3),
+                        output.display()
+                    ),
+                ),
+                Err(_) if cancel.load(Ordering::Acquire) => {
+                    crate::diag::info("export", format!("{} export cancelled", project.name));
+                }
+                Err(error) => crate::diag::record(
+                    "export",
+                    "export",
+                    took,
+                    Some(&format!("{}: {error}", project.name)),
+                ),
+            }
+            if result.is_ok() {
+                crate::diag::record("export", "export", took, None);
+            }
             match result {
                 Ok(()) => emit(
                     "done",

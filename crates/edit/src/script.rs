@@ -1409,19 +1409,22 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                     let (app, id, file) = (app.clone(), id.clone(), file.clone());
                     tokio::task::spawn_blocking(move || {
                         let last = Mutex::new(Instant::now() - Duration::from_secs(1));
-                        download(&dir, &file, &|bytes, total, name| {
-                            let mut last = last.lock();
-                            if last.elapsed() < Duration::from_millis(350) {
-                                return;
-                            }
-                            *last = Instant::now();
-                            app.scripts.set(&app, &id, |job| {
-                                if let Some(entry) = job.files.get_mut(index) {
-                                    entry.bytes = bytes;
-                                    entry.total = total;
-                                    entry.name = Some(name.to_owned());
+                        let drive = format!("Drive file {file}");
+                        crate::diag::time_on("script", "script: download", &drive, || {
+                            download(&dir, &file, &|bytes, total, name| {
+                                let mut last = last.lock();
+                                if last.elapsed() < Duration::from_millis(350) {
+                                    return;
                                 }
-                            });
+                                *last = Instant::now();
+                                app.scripts.set(&app, &id, |job| {
+                                    if let Some(entry) = job.files.get_mut(index) {
+                                        entry.bytes = bytes;
+                                        entry.total = total;
+                                        entry.name = Some(name.to_owned());
+                                    }
+                                });
+                            })
                         })
                     })
                     .await
@@ -1442,7 +1445,14 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                             .unwrap_or_default();
                         let cut = tokio::task::spawn_blocking({
                             let path = path.clone();
-                            move || excerpts(&path, &ranges)
+                            move || {
+                                crate::diag::time_on(
+                                    "script",
+                                    "script: cut excerpts",
+                                    &path.to_string_lossy(),
+                                    || excerpts(&path, &ranges),
+                                )
+                            }
                         })
                         .await
                         .unwrap_or_else(|error| Err(error.to_string()));
@@ -1476,7 +1486,9 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                 }
             }
             app.scripts.set(&app, &id, |job| job.state = "placing");
-            let result = place(&app, &id, done, recut).await;
+            let result =
+                crate::diag::time_async("script", "script: lay out", place(&app, &id, done, recut))
+                    .await;
             let placed = result.is_ok();
             app.scripts.set(&app, &id, |job| {
                 let failed = job
@@ -1505,7 +1517,7 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                 || !crate::research::items(home, &id).is_empty();
             if placed && !recut && !researched {
                 if let Err(error) = app.agents.send(&id, RESEARCH.to_owned(), None, None).await {
-                    eprintln!("edit: research didn't start for {id}: {error}");
+                    crate::diag::warn("script", format!("research didn't start for {id}: {error}"));
                 }
             }
         };

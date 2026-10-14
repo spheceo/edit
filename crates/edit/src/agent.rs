@@ -58,6 +58,9 @@ pub struct Chat {
     pub turn: Option<String>,
     #[serde(skip)]
     pub running: bool,
+    /// When the running turn started, to time it.
+    #[serde(skip)]
+    pub started: Option<std::time::Instant>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -280,7 +283,7 @@ impl Agents {
         };
         serde_json::from_slice(&bytes).unwrap_or_else(|error| {
             // Never overwrite a chat we can't read: set it aside and start fresh.
-            eprintln!("agent chat {}: {error}", path.display());
+            crate::diag::warn("agent", format!("agent chat {}: {error}", path.display()));
             let _ = std::fs::rename(
                 &path,
                 path.with_extension(format!("unreadable-{}", now_ms())),
@@ -443,6 +446,7 @@ impl Agents {
         let (model, effort) = self.with_chat(project, |chat| {
             chat.thread = Some(thread.clone());
             chat.running = true;
+            chat.started = Some(std::time::Instant::now());
             (chat.model.clone(), chat.effort.clone())
         });
         self.upsert(
@@ -632,6 +636,10 @@ impl Agents {
     }
 
     fn finish(&self, project: &str, error: Option<String>) {
+        let started = self.with_chat(project, |chat| chat.started.take());
+        if let Some(started) = started {
+            crate::diag::record("agent", "agent turn", started.elapsed(), error.as_deref());
+        }
         if let Some(message) = error {
             self.upsert(
                 project,

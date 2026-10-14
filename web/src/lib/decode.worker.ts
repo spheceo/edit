@@ -1,6 +1,6 @@
 import { ALL_FORMATS, AudioSampleSink, Input, StreamSource, VideoSampleSink, type VideoSample } from "mediabunny";
 import { stretchAudio } from "./audio-stretch";
-import { rangeReader } from "./range-source";
+import { network, rangeReader } from "./range-source";
 import { AUDIO_CHUNK_SECONDS, type DecodeJob, type DecodeRequest, type DecodeResponse, type PcmChunk } from "./decoder.protocol";
 
 // No DOM or audio context in this worker. Only demux, decode and transferable resources.
@@ -209,7 +209,7 @@ async function run(job: DecodeJob, lane: Lane) {
     running--;
     lane.running = null;
     if (lane.cancelled) closeCursor(lane);
-    scope.postMessage({ type: "done", id: job.id, lane: job.lane });
+    scope.postMessage({ type: "done", id: job.id, lane: job.lane, network: { ...network } });
     // Idle audio lanes hold nothing; video lanes keep their decoder until released.
     if (!lane.latest && !lane.cursor && lanes.get(job.lane) === lane) lanes.delete(job.lane);
     trimFiles();

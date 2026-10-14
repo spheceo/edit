@@ -325,7 +325,12 @@ impl Processor {
                 let paths = worker.paths(&source);
                 if probe.kind == MediaKind::Video && status.thumbs != Stage::Ready {
                     worker.set(&source, |status| status.thumbs = Stage::Working);
-                    match make_thumbs(&source, &probe, &paths) {
+                    match crate::diag::time_on(
+                        "media",
+                        "media: thumbnails",
+                        &source.to_string_lossy(),
+                        || make_thumbs(&source, &probe, &paths),
+                    ) {
                         Ok(count) => worker.set(&source, |status| {
                             status.thumbs = Stage::Ready;
                             status.thumb_count = count;
@@ -340,7 +345,12 @@ impl Processor {
                 }
                 if probe.has_audio && status.peaks != Stage::Ready {
                     worker.set(&source, |status| status.peaks = Stage::Working);
-                    match make_peaks(&source, &paths.peaks) {
+                    match crate::diag::time_on(
+                        "media",
+                        "media: waveform",
+                        &source.to_string_lossy(),
+                        || make_peaks(&source, &paths.peaks),
+                    ) {
                         Ok(()) => worker.set(&source, |status| status.peaks = Stage::Ready),
                         Err(error) => worker.set(&source, |status| {
                             status.peaks = Stage::Failed;
@@ -357,9 +367,16 @@ impl Processor {
                         status.proxy = Stage::Working;
                         status.error = None;
                     });
-                    match make_proxy(&source, &probe, &paths, |progress| {
-                        worker.set(&source, |status| status.proxy_progress = progress)
-                    }) {
+                    match crate::diag::time_on(
+                        "media",
+                        "media: preview copy",
+                        &source.to_string_lossy(),
+                        || {
+                            make_proxy(&source, &probe, &paths, |progress| {
+                                worker.set(&source, |status| status.proxy_progress = progress)
+                            })
+                        },
+                    ) {
                         Ok(()) => worker.set(&source, |status| {
                             status.proxy = Stage::Ready;
                             status.proxy_progress = 1.0;
@@ -378,9 +395,9 @@ impl Processor {
                     .try_into_panic()
                     .map(|payload| crate::guard::message(&*payload))
                     .unwrap_or_else(|error| error.to_string());
-                eprintln!(
-                    "edit: processing {} crashed: {message}",
-                    job_source.display()
+                crate::diag::error(
+                    "media",
+                    format!("processing {} crashed: {message}", job_source.display()),
                 );
                 this.set(&job_source, |status| {
                     for stage in [&mut status.thumbs, &mut status.peaks, &mut status.proxy] {
@@ -422,7 +439,12 @@ impl Processor {
         let job_source = source.clone();
         tokio::task::spawn_blocking(move || {
             match crate::guard::catch("transcription", || {
-                crate::transcribe::run(&job_source, &target)
+                crate::diag::time_on(
+                    "media",
+                    "media: transcription",
+                    &job_source.to_string_lossy(),
+                    || crate::transcribe::run(&job_source, &target),
+                )
             })
             .and_then(|result| result)
             {

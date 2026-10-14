@@ -17,6 +17,8 @@ Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as t
 
 Projects are `~/.edit/projects/<id>.json`, written atomically. Before a save replaces one, the previous version is copied to `projects/history/<id>/<ms>.json` (at most every 10 minutes, the last 30 kept); deleting moves it (and its chat) to `projects/deleted/`. A project file that won't load is listed with its `problem` and never written over.
 
+Diagnostics (`crates/edit/src/diag.rs`, `web/src/lib/diagnostics.ts`): the server logs what failed and times every request, agent tool call and turn, media job, script import step, render and export (`diag::record` / `time_on` / `time_async`); lines go to `~/.edit/logs/edit.log` and `GET /api/diagnostics` (version, recent log, per-operation timings). The UI notes its own errors, failed requests, request round-trips and preview waits, and "Report a problem" (⋯ menu, error toasts, the crash screen, a preview stuck on "Loading frame…") joins both into one text to copy. When something new can fail or take a while, time it and log the failure with what it was working on.
+
 When the model changes, update `edit-core`, `web/src/lib/types.ts`, the param tables in `web/src/lib/edit.ts`, and the model description in `crates/edit/src/mcp.rs` together.
 
 ## Checks

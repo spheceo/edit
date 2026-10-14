@@ -19,7 +19,7 @@ pub fn message(payload: &(dyn Any + Send)) -> String {
 
 fn crashed(what: &str, payload: &(dyn Any + Send)) -> String {
     let message = message(payload);
-    eprintln!("edit: {what} crashed: {message}");
+    crate::diag::error("crash", format!("{what} crashed: {message}"));
     format!("{what} crashed ({message}); this is a bug in Edit")
 }
 

@@ -303,7 +303,10 @@ impl Store {
         let path = self.path(&project.id);
         // A bad save (a bug, an agent gone wrong) can always be walked back.
         if let Err(error) = self.keep_history(&project.id, &path) {
-            eprintln!("edit: keeping history for {}: {error}", project.id);
+            crate::diag::warn(
+                "store",
+                format!("keeping history for {}: {error}", project.id),
+            );
         }
         write_atomic(&path, &serde_json::to_vec_pretty(project)?)
     }

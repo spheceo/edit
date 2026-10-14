@@ -139,7 +139,13 @@ async fn dispatch(app: &App, message: &Value, scope: Option<&str>) -> Option<Val
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            Ok(match call(app, name, &args, scope).await {
+            let called = crate::diag::time_async(
+                "agent",
+                &format!("tool {name}"),
+                call(app, name, &args, scope),
+            )
+            .await;
+            Ok(match called {
                 Ok(content) => json!({ "content": content, "isError": false }),
                 Err(error) => {
                     json!({ "content": [{ "type": "text", "text": error }], "isError": true })

@@ -3,6 +3,7 @@
 import init, { createEngine, type Engine } from "../engine/pkg/edit_wasm";
 import { fetchRetrying, mediaUrl } from "./api";
 import { Decoder, videoTime } from "./decoder";
+import { addContext, note, recordTiming } from "./diagnostics";
 import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
 import { clipEnd, paramAt, projectDuration, validateProject } from "./edit";
 import { savedFrame, saveFrame } from "./storage";
@@ -39,6 +40,8 @@ type AudioClip = Extract<Clip, { type: "audio" }>;
 interface PictureSource { clip: string; media: string; time: number }
 interface ScheduledSound { source: AudioBufferSourceNode; gain: GainNode }
 const BUFFERING_BADGE_MS = 600;
+/** Waiting this long for a frame is noted for problem reports, and the viewer offers one. */
+const STUCK_MS = 10_000;
 const LOOK_AHEAD = 1;
 const AUDIO_AHEAD = 0.8;
 const START_LEAD = 0.05;
@@ -50,6 +53,10 @@ class Preview {
   sections: Sections | null = null;
   error: string | null = null;
   buffering = false;
+  /** Waiting on a frame for long enough that something's probably wrong. */
+  stuck = false;
+  private waitingSince: number | undefined;
+  private stuckTimer: ReturnType<typeof setTimeout> | undefined;
   private bufferingTimer: ReturnType<typeof setTimeout> | undefined;
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
   private canvas: HTMLCanvasElement | null = null;
@@ -86,7 +93,7 @@ class Preview {
   private loop = 0;
   private listeners = new Set<Listener>();
   private decoder = new Decoder(() => this.invalidate(), (error) => {
-    this.error = `Preview decoding failed: ${error}`;
+    this.error = `Preview decoding failed: ${error}`; note("error", "preview", this.error);
     this.pause();
     this.setBuffering(false);
     this.notify();
@@ -95,7 +102,7 @@ class Preview {
   get diagnostics() {
     return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.renderedFrame,
       videoCacheBytes: this.decoder.pictures.bytes, videoCacheFrames: this.decoder.pictures.size,
-      audioCacheBytes: this.decoder.sound.bytes, scheduledAudio: this.scheduled.size };
+      audioCacheBytes: this.decoder.sound.bytes, scheduledAudio: this.scheduled.size, mediaReads: this.decoder.network };
   }
 
   onStatus = (listener: Listener) => {
@@ -145,7 +152,7 @@ class Preview {
       this.invalidate();
     } catch (error) {
       if (generation !== this.generation) return;
-      this.error = `Preview failed to start: ${error}`;
+      this.error = `Preview failed to start: ${error}`; note("error", "preview", this.error);
       this.setBuffering(false);
       this.notify();
     } finally {
@@ -189,7 +196,7 @@ class Preview {
         this.restarts += 1;
         void this.attach(this.canvas);
       } else {
-        this.error = "The preview stopped. Reload the page to restart it.";
+        this.error = "The preview stopped. Reload the page to restart it."; note("error", "preview", this.error);
         this.notify();
       }
       return undefined;
@@ -349,7 +356,7 @@ class Preview {
     // Unlock audio in the user gesture, even for edits whose first shot is silent.
     this.audio ??= new AudioContext({ latencyHint: "interactive" });
     void this.audio.resume().catch((error) => {
-      this.error = `Audio failed to start: ${error}`; this.pause(); this.notify();
+      this.error = `Audio failed to start: ${error}`; note("error", "preview", this.error); this.pause(); this.notify();
     });
     this.resetClock();
     playhead.emit();
@@ -655,10 +662,23 @@ class Preview {
   private notify() { for (const listener of this.listeners) listener(); }
   private setBuffering(waiting: boolean) {
     if (waiting) {
+      if (this.waitingSince === undefined) {
+        this.waitingSince = performance.now();
+        this.stuckTimer = setTimeout(() => {
+          this.stuck = true; this.notify();
+          note("warn", "preview", `Still waiting for frame ${Math.floor(playhead.frame)} after ${STUCK_MS / 1000} s`);
+        }, STUCK_MS);
+      }
       if (!this.buffering && this.bufferingTimer === undefined) this.bufferingTimer = setTimeout(() => {
         this.bufferingTimer = undefined; this.buffering = true; this.notify();
       }, BUFFERING_BADGE_MS);
     } else {
+      if (this.waitingSince !== undefined) {
+        recordTiming("preview: waiting for a frame", performance.now() - this.waitingSince);
+        this.waitingSince = undefined;
+        clearTimeout(this.stuckTimer);
+        if (this.stuck) { this.stuck = false; this.notify(); }
+      }
       clearTimeout(this.bufferingTimer); this.bufferingTimer = undefined;
       if (this.buffering) { this.buffering = false; this.notify(); }
     }
@@ -666,6 +686,14 @@ class Preview {
 }
 
 export const preview = new Preview();
+addContext("Preview", () => ({
+  error: preview.error,
+  waiting: preview.buffering,
+  stuck: preview.stuck,
+  playhead: Math.floor(playhead.frame),
+  playing: playhead.playing,
+  ...preview.diagnostics,
+}));
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") preview.wake();
   else { preview.remember(); preview.pause(); }

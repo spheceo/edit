@@ -1,6 +1,7 @@
 import { Bot, CircleAlert } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
+import { openReport } from "../lib/diagnostics";
 import { useEditor } from "../lib/store";
 import { cx, spring } from "./ui";
 
@@ -27,6 +28,20 @@ export function Toasts() {
             {toast.tone === "error" && <CircleAlert size={15} className="shrink-0 text-red-300" />}
             {toast.tone === "agent" && <Bot size={15} className="shrink-0 text-agent" />}
             <span className="text-left">{toast.text}</span>
+            {toast.tone === "error" && (
+              <span
+                role="button"
+                tabIndex={0}
+                className="ml-1 shrink-0 rounded-md bg-red-500/20 px-2 py-0.5 text-[12px] text-red-100 hover:bg-red-500/35"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  dismiss(toast.id);
+                  openReport(toast.text);
+                }}
+              >
+                Report
+              </span>
+            )}
           </motion.button>
         ))}
       </AnimatePresence>

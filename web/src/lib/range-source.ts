@@ -13,6 +13,18 @@ const READAHEAD = 2;
 const RETRIES = 8;
 
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
+
+/** How the media reads went in this worker (for problem reports: a slow connection shows here). */
+export interface NetworkStats {
+  requests: number;
+  bytes: number;
+  /** Time spent waiting on reads, summed. */
+  ms: number;
+  slowestMs: number;
+  failures: number;
+}
+
+export const network: NetworkStats = { requests: 0, bytes: 0, ms: 0, slowestMs: 0, failures: 0 };
 const wait = (attempt: number) => new Promise((resolve) => setTimeout(resolve, Math.min(2000, 250 * 2 ** attempt)));
 
 export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch(input, init)) {
@@ -23,14 +35,21 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
 
   async function fetchRange(start: number, end: number) {
     for (let attempt = 0; ; attempt++) {
+      const started = performance.now();
       try {
         const response = await fetcher(url, { headers: { Range: `bytes=${start}-${end - 1}` } });
         // 503 is the dev server answering while `edit serve` restarts.
         if (response.status === 503 && attempt < RETRIES) throw new Error("restarting");
-        if (response.status === 200) return new Uint8Array(await response.arrayBuffer()).slice(start, end);
-        if (response.status !== 206) throw new Error(`HTTP ${response.status}`);
-        return new Uint8Array(await response.arrayBuffer());
+        if (response.status !== 200 && response.status !== 206) throw new Error(`HTTP ${response.status}`);
+        const body = new Uint8Array(await response.arrayBuffer());
+        const took = performance.now() - started;
+        network.requests++;
+        network.bytes += body.byteLength;
+        network.ms += took;
+        network.slowestMs = Math.max(network.slowestMs, took);
+        return response.status === 200 ? body.slice(start, end) : body;
       } catch (error) {
+        network.failures++;
         if (attempt >= RETRIES) throw error;
         await wait(attempt);
       }

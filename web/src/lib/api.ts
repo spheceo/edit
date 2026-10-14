@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 
+import { note, recordTiming, routeOf } from "./diagnostics";
 import type { Encoders, ExportOptions } from "./exporting";
 import type { MediaStatus, Project, ProjectSummary, ScriptJob, Transcript } from "./types";
 
@@ -31,14 +32,19 @@ export async function fetchRetrying(url: string, init?: RequestInit, patienceMs 
   const retryable = !init?.method || ["GET", "HEAD", "OPTIONS"].includes(init.method.toUpperCase());
   for (let attempt = 0; ; attempt++) {
     let response: Response | null = null;
+    const route = routeOf(init?.method ?? "GET", url);
+    const sent = performance.now();
     try {
       response = await fetch(url, init);
+      recordTiming(route, performance.now() - sent, response.status >= 500);
       if (!retryable) return response;
       if (!(await restarting(response))) {
         if (useConnection.getState().down) useConnection.setState({ down: false });
         return response;
       }
     } catch (error) {
+      recordTiming(route, performance.now() - sent, true);
+      note("warn", "http", `${route}: no response (${error})`);
       // A lost response does not mean the server didn't apply a mutation.
       // Retrying POST can duplicate paid work, projects or media imports.
       if (!retryable || init?.signal?.aborted) throw error;
@@ -61,6 +67,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   const data = response.headers.get("content-type")?.includes("json") ? await response.json() : await response.text();
   if (!response.ok) {
     const message = typeof data === "object" && data && "error" in data ? String(data.error) : String(data);
+    note(response.status >= 500 ? "error" : "warn", "http", `${method} ${url} → ${response.status}: ${message}`);
     throw new ApiError(message, response.status, data);
   }
   return data as T;

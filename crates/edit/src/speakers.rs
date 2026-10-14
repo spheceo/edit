@@ -178,7 +178,10 @@ pub fn ensure(app: &App, source: &Path) {
             .await
             .and_then(|result| result);
         if let Err(error) = named {
-            eprintln!("edit: naming speakers in {}: {error}", source.display());
+            crate::diag::error(
+                "speakers",
+                format!("naming speakers in {}: {error}", source.display()),
+            );
         }
         NAMING
             .lock()

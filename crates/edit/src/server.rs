@@ -62,6 +62,8 @@ fn not_found(message: impl Into<String>) -> ApiError {
 pub fn router(app: App) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/diagnostics", get(diagnostics))
+        .route("/api/diagnostics/client", post(client_log))
         .route("/api/update", get(update_status).post(update_install))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
@@ -133,7 +135,53 @@ pub fn router(app: App) -> Router {
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(
             crate::guard::panic_response,
         ))
+        // Outermost, so it also sees requests the others turned away or that crashed.
+        .layer(middleware::from_fn(log_requests))
         .with_state(app)
+}
+
+/// Times every request (by route) and logs the ones that failed, with why.
+async fn log_requests(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let route = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| "(static)".to_owned(), |path| path.as_str().to_owned());
+    let path = request.uri().path().to_owned();
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    let took = started.elapsed();
+    let status = response.status();
+    let name = format!("{method} {route}");
+    if !status.is_client_error() && !status.is_server_error() {
+        crate::diag::record("http", &name, took, None);
+        return response;
+    }
+    // Errors answer with a small JSON body: read it for the log, then pass it on.
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 << 10)
+        .await
+        .unwrap_or_default();
+    let why = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| String::from_utf8_lossy(&bytes).chars().take(300).collect());
+    let failure = format!("{} {path}: {why}", status.as_u16());
+    if status.is_server_error() {
+        crate::diag::record("http", &name, took, Some(&failure));
+    } else {
+        crate::diag::record("http", &name, took, None);
+        // A missing thumbnail or frame is routine; other refusals are worth seeing.
+        if status != StatusCode::NOT_FOUND || method != axum::http::Method::GET {
+            crate::diag::warn("http", format!("{method} {failure}"));
+        }
+    }
+    Response::from_parts(parts, Body::from(bytes))
 }
 
 /// Host protects against DNS rebinding; Origin also protects local APIs and
@@ -213,6 +261,49 @@ fn same_origin(origin: &str, host: &str) -> bool {
 
 async fn health(State(app): State<App>) -> Json<Value> {
     Json(json!({ "name": "edit", "version": env!("CARGO_PKG_VERSION"), "machine": &*app.machine }))
+}
+
+/// Everything a problem report needs from the server side.
+async fn diagnostics(State(app): State<App>) -> Json<Value> {
+    let tool_version = |tool: &str| {
+        std::process::Command::new(tool)
+            .arg("-version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()
+                    .map(str::to_owned)
+            })
+    };
+    Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "machine": &*app.machine,
+        "os": format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        "uptime": crate::diag::human(crate::diag::uptime()),
+        "home": app.store.home(),
+        "ffmpeg": tool_version("ffmpeg"),
+        "lines": crate::diag::lines(400),
+        "timings": crate::diag::timings(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct ClientLog {
+    level: String,
+    message: String,
+}
+
+/// The UI's own problems, kept with the server's so one report has both.
+async fn client_log(Json(body): Json<ClientLog>) -> Json<Value> {
+    let message: String = body.message.chars().take(2000).collect();
+    match body.level.as_str() {
+        "error" => crate::diag::error("ui", message),
+        "warn" => crate::diag::warn("ui", message),
+        _ => crate::diag::info("ui", message),
+    }
+    Json(json!({ "ok": true }))
 }
 
 async fn update_status(State(app): State<App>) -> Json<crate::update::Status> {
@@ -836,9 +927,9 @@ async fn research_collect(
     let home = app.store.home().to_path_buf();
     let per_query = body.per_query.unwrap_or(40).clamp(1, 150);
     tokio::task::spawn_blocking(move || {
-        if let Err(error) = crate::research::collect(&home, &id, &queries, per_query) {
-            eprintln!("edit: research: {error}");
-        }
+        let _ = crate::diag::time_on("research", "research: collect images", &id, || {
+            crate::research::collect(&home, &id, &queries, per_query)
+        });
     });
     Ok(Json(json!({ "started": true })).into_response())
 }

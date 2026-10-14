@@ -1,3 +1,4 @@
+import type { NetworkStats } from "./range-source";
 import { DecodedCache } from "./decoded-cache";
 import { AUDIO_CHUNK_SECONDS, type DecodeRequest, type DecodeResponse, type PcmChunk } from "./decoder.protocol";
 
@@ -26,6 +27,8 @@ export class Decoder {
   readonly pictures = new DecodedCache<VideoFrame>(128 * MiB, (frame) => frame.close());
   readonly sound = new DecodedCache<PcmChunk>(32 * MiB, () => {});
   readonly stats = { videoRequests: 0, audioRequests: 0, decodedFrames: 0, cacheHits: 0 };
+  /** Each worker's media reads so far (bytes, time waiting), for problem reports. */
+  readonly network: Partial<Record<"video" | "audio", NetworkStats>> = {};
 
   constructor(private changed: () => void, private failed: (error: string) => void) {}
 
@@ -40,6 +43,7 @@ export class Decoder {
       }
       const generation = this.generation;
       worker.onmessage = ({ data }: MessageEvent<DecodeResponse>) => {
+        if (data.type === "done" && data.network) this.network[kind] = data.network;
         if (generation === this.generation) this.receive(data);
         else if (data.type === "video") data.frame.close();
       };

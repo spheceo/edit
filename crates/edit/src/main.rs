@@ -2,6 +2,7 @@ mod agent;
 mod app;
 mod broll;
 mod captions;
+mod diag;
 mod export;
 mod guard;
 mod library;
@@ -141,13 +142,17 @@ fn app(home: PathBuf, port: u16) {
 
 /// Opens the store and starts listening; the server runs on the handles.
 async fn start(home: PathBuf, host: Option<String>, port: u16) -> Vec<tokio::task::JoinHandle<()>> {
+    diag::open(&home);
     for tool in ["ffmpeg", "ffprobe"] {
         if std::process::Command::new(tool)
             .arg("-version")
             .output()
             .is_err()
         {
-            eprintln!("edit: warning: {tool} not found on PATH; importing and export need FFmpeg");
+            diag::warn(
+                "edit",
+                format!("{tool} not found on PATH; importing and export need FFmpeg"),
+            );
         }
     }
     let store = Arc::new(

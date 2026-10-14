@@ -172,7 +172,10 @@ impl Updater {
                     restart(&exe);
                 }
                 Err(error) => {
-                    eprintln!("edit: update to {} failed: {error}", release.tag);
+                    crate::diag::error(
+                        "update",
+                        format!("update to {} failed: {error}", release.tag),
+                    );
                     let mut state = this.state.lock();
                     state.phase = Phase::Idle;
                     state.progress = 0.0;

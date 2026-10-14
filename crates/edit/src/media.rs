@@ -186,6 +186,8 @@ pub enum Stage {
 pub struct MediaStatus {
     pub proxy: Stage,
     pub proxy_progress: f32,
+    /// The light preview (720p, ~1.5 Mbit/s) for watching from another machine.
+    pub light: Stage,
     pub thumbs: Stage,
     pub thumb_count: u32,
     pub peaks: Stage,
@@ -215,6 +217,8 @@ pub struct CachePaths {
     pub thumbs_meta: PathBuf,
     pub peaks: PathBuf,
     pub transcript: PathBuf,
+    /// The light preview picture, made from the preview once it's done.
+    pub light: PathBuf,
 }
 
 impl Processor {
@@ -237,6 +241,7 @@ impl Processor {
             thumbs_meta: dir.join("thumbs.json"),
             peaks: dir.join("peaks.bin"),
             transcript: dir.join("transcript.json"),
+            light: dir.join("preview-light.mp4"),
         }
     }
 
@@ -263,6 +268,11 @@ impl Processor {
                 Stage::Pending
             },
             proxy_progress: if proxied { 1.0 } else { 0.0 },
+            light: if paths.light.is_file() {
+                Stage::Ready
+            } else {
+                Stage::Pending
+            },
             thumbs: if thumb_count > 0 && paths.thumbs.is_file() {
                 Stage::Ready
             } else {
@@ -387,6 +397,25 @@ impl Processor {
                         }),
                     }
                 }
+                // Then the light one, from the preview (already scaled and tagged).
+                let proxied = worker.status(&source).proxy == Stage::Ready;
+                if probe.kind != MediaKind::Video {
+                    worker.set(&source, |status| status.light = Stage::Skipped);
+                } else if proxied && !paths.light.is_file() {
+                    worker.set(&source, |status| status.light = Stage::Working);
+                    match crate::diag::time_on(
+                        "media",
+                        "media: light preview",
+                        &source.to_string_lossy(),
+                        || make_light(&paths, &probe),
+                    ) {
+                        Ok(()) => worker.set(&source, |status| status.light = Stage::Ready),
+                        Err(error) => worker.set(&source, |status| {
+                            status.light = Stage::Failed;
+                            status.error = Some(error);
+                        }),
+                    }
+                }
             })
             .await;
             // A crash mid-way leaves no stage "working" (and the file can be processed again).
@@ -474,6 +503,59 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
         return Err(last.trim().to_owned());
     }
     Ok(output.stdout)
+}
+
+/// A 720p copy of the preview at ~1.5 Mbit/s (a quarter of the data), same
+/// half-second GOPs and no reordering: what a preview over the internet streams.
+fn make_light(paths: &CachePaths, probe: &Probe) -> Result<(), String> {
+    let partial = paths.light.with_extension("partial.mp4");
+    let gop = (probe.fps / 2.0).round().max(1.0).to_string();
+    let output = Command::new(crate::tools::ffmpeg())
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(&paths.proxy)
+        .args([
+            "-map",
+            "0:v:0",
+            "-vf",
+            "scale=w=-2:h='min(720,ih)'",
+            "-colorspace",
+            "bt709",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-color_range",
+            "tv",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "26",
+            "-maxrate",
+            "1500k",
+            "-bufsize",
+            "3000k",
+            "-g",
+            &gop,
+            "-bf",
+            "0",
+            "-an",
+            "-movflags",
+            "+faststart",
+        ])
+        .arg(&partial)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!(
+            "light preview: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    std::fs::rename(&partial, &paths.light).map_err(|error| error.to_string())
 }
 
 fn make_proxy(

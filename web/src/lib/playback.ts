@@ -289,8 +289,13 @@ class Preview {
     this.tracks = new Map(project.tracks.map((track) => [track.id, track]));
     this.media = new Map(project.media.map((media) => [media.id, media]));
     // Picture and sound are separate preview files, so decoding sound never downloads video.
-    const url = (media: Media, kind: "proxy" | "audio") =>
-      `${mediaUrl(project.id, media.id, kind)}?v=${encodeURIComponent(proxyVersions[media.id] ?? "source")}`;
+    // The light preview is picture only: sound keeps coming from the preview's.
+    const url = (media: Media, kind: "proxy" | "audio") => {
+      const version = proxyVersions[media.id] ?? "source";
+      const light = version === "light";
+      const file = kind === "proxy" && light ? "light" : kind;
+      return `${mediaUrl(project.id, media.id, file)}?v=${encodeURIComponent(light && kind === "audio" ? "preview" : version)}`;
+    };
     const nextSources = new Map(project.media.map((media) => [media.id, url(media, "proxy")]));
     const nextSounds = new Map(project.media.map((media) => [media.id, url(media, "audio")]));
     for (const [id, url] of this.sources) if (nextSources.get(id) !== url) this.decoder.forget(url);

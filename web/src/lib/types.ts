@@ -447,6 +447,8 @@ export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";
 export interface MediaStatus {
   proxy: Stage;
   proxy_progress: number;
+  /** The light (720p) preview, for watching from another machine. */
+  light?: Stage;
   thumbs: Stage;
   thumb_count: number;
   peaks: Stage;

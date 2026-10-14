@@ -1325,6 +1325,9 @@ async fn media_file(
                 source
             }
         }
+        // Only once it exists: the client asks for it by name when it's ready, so
+        // one URL never serves two different files.
+        "light" => paths.light,
         "thumbs" => paths.thumbs,
         "peaks" => paths.peaks,
         "transcript" => {

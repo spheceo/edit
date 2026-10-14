@@ -35,6 +35,9 @@ pub struct VoiceSettings {
     pub speed: f32,
 }
 
+/// The team's narration voice: new voice-overs start with it.
+const HOUSE_VOICE: &str = "gUABw7pXQjhjt0kNFBTF";
+
 fn default_model() -> String {
     "eleven_v4".to_owned()
 }
@@ -54,7 +57,7 @@ fn one() -> f32 {
 impl Default for VoiceSettings {
     fn default() -> Self {
         Self {
-            voice_id: None,
+            voice_id: Some(HOUSE_VOICE.to_owned()),
             voice_name: None,
             model_id: default_model(),
             stability: half(),

@@ -402,7 +402,10 @@ function VoicePanel({
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
         <div>
           <div className="mb-1.5 text-[12px] text-muted">
-            Speaker: <span className="text-fg">{settings.voice_name ?? "choose one"}</span>
+            Speaker:{" "}
+            <span className="text-fg">
+              {settings.voice_name ?? voices?.find((voice) => voice.voice_id === settings.voice_id)?.name ?? settings.voice_id ?? "choose one"}
+            </span>
           </div>
           {error ? (
             <div className="flex flex-col gap-2 rounded-lg border border-red-500/30 bg-red-950/40 p-2.5 text-[12px] text-red-100">
@@ -446,6 +449,21 @@ function VoicePanel({
             </>
           )}
         </div>
+        <label className="flex flex-col gap-1 text-[12px] text-muted">
+          Or a voice ID
+          <input
+            key={settings.voice_id ?? ""}
+            defaultValue={settings.voice_id ?? ""}
+            placeholder="e.g. from ElevenLabs' Voice Library"
+            onBlur={(event) => {
+              const id = event.currentTarget.value.trim();
+              if (!id || id === settings.voice_id) return;
+              onChange({ voice_id: id, voice_name: voices?.find((voice) => voice.voice_id === id)?.name ?? null });
+            }}
+            onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+            className="h-7 rounded-md border border-line bg-black/30 px-2 font-mono text-[12px] text-fg outline-none placeholder:font-sans placeholder:text-faint"
+          />
+        </label>
         <div className="flex items-center justify-between text-[12px]">
           <span className="text-muted">Model</span>
           <Select value={settings.model_id} options={MODELS} onChange={(model_id) => onChange({ model_id })} className="h-7 w-auto justify-end px-1.5 hover:bg-hover" />

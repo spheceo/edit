@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { api, useMachine } from "../lib/api";
-import { copyDriveLink, openDrive, uploadsToDrive, useDriveLink } from "../lib/drive";
+import { copyDriveLink, driveFolder, openDrive, uploadsToDrive, useDriveLink } from "../lib/drive";
 import { projectDuration } from "../lib/edit";
 import {
   chaptersInSpan,
@@ -408,7 +408,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
             </Field>
             {toDrive && (
               <p className="-mt-2 flex items-center gap-1.5 text-[11px] text-faint">
-                <Cloud size={12} className="shrink-0" /> Then it uploads to the team's Subtitles folder on Drive, viewable by anyone with the link.
+                <Cloud size={12} className="shrink-0" /> Then it uploads to the team's {project ? driveFolder(project) : "Render"} folder on Drive, viewable by anyone with the link.
               </p>
             )}
           </div>
@@ -477,7 +477,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   );
 }
 
-/** The export's upload to Drive (a subtitled video's), then its link. */
+/** The export's upload to Drive, then its link. */
 function DriveRow({
   state,
   drive,
@@ -512,7 +512,7 @@ function DriveRow({
         <>
           <span className="flex min-w-0 items-center gap-1.5 text-muted">
             <Cloud size={13} className="shrink-0" />
-            <span className="truncate">{state ? "Uploaded to Drive's Subtitles folder" : `On Drive: ${drive?.name}`}</span>
+            <span className="truncate">{state ? "Uploaded to Drive" : `On Drive: ${drive?.name}`}</span>
           </span>
           <span className="ml-auto flex shrink-0 items-center gap-1">
             <Button size="sm" variant="subtle" onClick={() => onCopy(url)}>

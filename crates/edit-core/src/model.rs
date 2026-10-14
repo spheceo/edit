@@ -30,6 +30,51 @@ pub struct Project {
     /// Out point (O): the last frame of that span (shown, inclusive); playback stops on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mark_out: Option<i64>,
+    /// A subtitled video's stretches and what each is (footage to subtitle,
+    /// picture already subtitled, narration…): sorted, never overlapping.
+    /// Empty: all of it is footage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<Segment>,
+}
+
+/// A stretch of a subtitled video (frames, `end` exclusive).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Segment {
+    pub start: i64,
+    pub end: i64,
+    pub kind: SegmentKind,
+    /// What's in it ("cold open", "map of the bank"), for people reading it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentKind {
+    /// Footage that gets subtitles.
+    Footage,
+    /// The picture already has subtitles burned in (an intro made before).
+    Captioned,
+    /// The narrator (a voice-over, never subtitled).
+    Narration,
+    /// Anything else not to subtitle: title cards, maps, music.
+    Other,
+}
+
+impl SegmentKind {
+    /// Whether lines said in it get subtitles.
+    pub fn subtitled(self) -> bool {
+        self == SegmentKind::Footage
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SegmentKind::Footage => "Footage",
+            SegmentKind::Captioned => "Already subtitled",
+            SegmentKind::Narration => "Narration",
+            SegmentKind::Other => "Not subtitled",
+        }
+    }
 }
 
 /// A script: footage ranges and the narration between them, in order.
@@ -1241,6 +1286,7 @@ impl Project {
             script: None,
             mark_in: None,
             mark_out: None,
+            segments: Vec::new(),
         };
         for kind in [
             TrackKind::Video,
@@ -1377,7 +1423,38 @@ impl Project {
         (end > start).then_some((start, end))
     }
 
+    /// Whether frames `[start, end)` hold anything to subtitle: all of it
+    /// without segments, else the frames inside footage segments.
+    pub fn subtitled_spans(&self, start: i64, end: i64) -> Vec<(i64, i64)> {
+        if self.segments.is_empty() {
+            return if end > start {
+                vec![(start, end)]
+            } else {
+                Vec::new()
+            };
+        }
+        self.segments
+            .iter()
+            .filter(|segment| segment.kind.subtitled())
+            .map(|segment| (segment.start.max(start), segment.end.min(end)))
+            .filter(|(from, to)| to > from)
+            .collect()
+    }
+
     pub fn validate(&self) -> Result<(), String> {
+        if self
+            .segments
+            .iter()
+            .any(|segment| segment.start < 0 || segment.end <= segment.start)
+            || self
+                .segments
+                .windows(2)
+                .any(|pair| pair[1].start < pair[0].end)
+        {
+            return Err(
+                "segments must be sorted, from frame 0, non-empty and never overlap".to_owned(),
+            );
+        }
         if self.mark_in.is_some_and(|frame| frame < 0)
             || self.mark_out.is_some_and(|frame| frame < 0)
         {

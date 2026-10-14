@@ -8,10 +8,13 @@
 //! - the outro: cut-ins after the last footage.
 //!
 //! Every cut-in is a B-roll spot, the intro's included.
+//!
+//! A subtitled video has no script: its parts are its segments (footage,
+//! already subtitled, narration…).
 
 use serde::Serialize;
 
-use crate::{Media, MediaKind, Project, ScriptBlock};
+use crate::{Media, MediaKind, Project, ScriptBlock, SegmentKind};
 
 /// Footage at least this long is the full footage that follows the intro (seconds).
 const FULL_FOOTAGE: f64 = 20.0;
@@ -27,6 +30,11 @@ pub enum SectionKind {
     Broll,
     Story,
     Outro,
+    /// A subtitled video's segments.
+    Footage,
+    Captioned,
+    Narration,
+    Other,
 }
 
 /// A stretch of the timeline, in frames (`end` exclusive).
@@ -50,6 +58,33 @@ pub struct Sections {
     pub parts: Vec<Section>,
 }
 
+/// A subtitled video's segments as parts.
+fn segment_sections(project: &Project) -> Sections {
+    let parts = project
+        .segments
+        .iter()
+        .map(|segment| Section {
+            kind: match segment.kind {
+                SegmentKind::Footage => SectionKind::Footage,
+                SegmentKind::Captioned => SectionKind::Captioned,
+                SegmentKind::Narration => SectionKind::Narration,
+                SegmentKind::Other => SectionKind::Other,
+            },
+            start: segment.start,
+            end: segment.end,
+            label: if segment.note.is_empty() {
+                segment.kind.label().to_owned()
+            } else {
+                format!("{} · {}", segment.kind.label(), segment.note)
+            },
+        })
+        .collect();
+    Sections {
+        parts,
+        ..Sections::default()
+    }
+}
+
 /// One script block on the timeline.
 struct Placed<'a> {
     cut_in: Option<&'a str>,
@@ -59,7 +94,7 @@ struct Placed<'a> {
 
 pub fn sections(project: &Project) -> Sections {
     let Some(script) = &project.script else {
-        return Sections::default();
+        return segment_sections(project);
     };
     let mut blocks: Vec<Placed> = script
         .blocks
@@ -136,6 +171,7 @@ pub fn sections(project: &Project) -> Sections {
             SectionKind::Broll => "B-roll".to_owned(),
             SectionKind::Story => "Story".to_owned(),
             SectionKind::Outro => "Outro".to_owned(),
+            _ => String::new(),
         };
         parts.push(Section {
             kind,

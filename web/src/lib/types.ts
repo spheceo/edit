@@ -396,6 +396,17 @@ export interface Project {
   mark_out?: number | null;
   /** A subtitled video's stretches: only footage gets subtitles (edit_core Segment). */
   segments?: Segment[];
+  /** Its last whole export, uploaded to the team's Subtitles folder on Drive (subtitled videos). Cleared when the file is gone from Drive. */
+  drive?: DriveFile | null;
+}
+
+/** A file on Google Drive (edit_core DriveFile). */
+export interface DriveFile {
+  file_id: string;
+  /** https://drive.google.com/file/d/<file_id>/view, viewable by anyone with the link. */
+  url: string;
+  name: string;
+  uploaded_ms: number;
 }
 
 export interface Script {
@@ -453,6 +464,8 @@ export interface ProjectSummary {
   clips: number;
   /** A subtitled video: Repack-style subtitles (repack_subtitles) over its footage. */
   subtitles?: boolean;
+  /** Its export on the team's Drive. */
+  drive?: DriveFile;
   /** Why it can't be opened (its file is left as it is). */
   problem?: string;
 }

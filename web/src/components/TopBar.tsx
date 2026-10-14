@@ -1,12 +1,14 @@
-import { ChevronLeft, Redo2, Share, Undo2 } from "lucide-react";
+import { ChevronLeft, Cloud, CloudUpload, Copy, ExternalLink, Redo2, Share, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { useConnection } from "../lib/api";
+import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { OpenAIMark } from "./AgentPanel";
 import { AppMenu } from "./AppMenu";
+import { toggleMenu } from "./ContextMenu";
 import { Mark } from "./Logo";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton, spring } from "./ui";
@@ -67,6 +69,7 @@ export function TopBar({ onExport }: { onExport: () => void }) {
           <OpenAIMark size={14} />
           {agentActive && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-agent" />}
         </IconButton>
+        <DriveButton />
         <AppMenu />
         <Button variant="primary" className="ml-1.5" onClick={onExport}>
           {exportState?.state === "running" ? (
@@ -78,6 +81,40 @@ export function TopBar({ onExport }: { onExport: () => void }) {
         </Button>
       </div>
     </header>
+  );
+}
+
+/** A subtitled video's export on the team's Drive: its upload, then its link. */
+function DriveButton() {
+  const projectId = useEditor((state) => state.project?.id ?? "");
+  const drive = useDriveLink(projectId, useEditor((state) => state.project?.drive));
+  const driveState = useEditor((state) => state.driveState);
+  const toast = useEditor((state) => state.toast);
+  if (driveState?.state === "uploading") {
+    return (
+      <span className="flex h-8 items-center gap-1.5 px-2 text-[12px] text-muted tabular" title="Uploading the export to the Subtitles folder on Drive">
+        <CloudUpload size={15} />
+        {Math.round((driveState.progress ?? 0) * 100)}%
+      </span>
+    );
+  }
+  if (!drive) return null;
+  return (
+    <IconButton
+      label={`On Drive: ${drive.name}`}
+      onClick={(event) =>
+        toggleMenu(
+          event.currentTarget,
+          [
+            { label: "Open on Drive", icon: <ExternalLink size={14} />, onSelect: () => openDrive(drive.url) },
+            { label: "Copy Drive link", icon: <Copy size={14} />, onSelect: () => void copyDriveLink(drive.url, toast) },
+          ],
+          { width: 190 },
+        )
+      }
+    >
+      <Cloud size={16} />
+    </IconButton>
   );
 }
 

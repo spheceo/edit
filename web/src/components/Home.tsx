@@ -1,8 +1,9 @@
-import { AudioLines, Captions, Ellipsis, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { AudioLines, Captions, Cloud, Copy, Ellipsis, ExternalLink, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { api } from "../lib/api";
+import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { clientId, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
@@ -110,6 +111,7 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const toast = useEditor((state) => state.toast);
+  const drive = useDriveLink(project.id, project.drive);
   const seconds = project.duration_frames / project.fps;
   const aspect = project.width / project.height;
 
@@ -156,10 +158,34 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
           ) : (
             <Mark size={36} cut="#0a0a0a" />
           )}
-          {project.subtitles && (
-            <div className="absolute top-2 left-2 flex h-6 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-fg">
-              <Captions size={13} />
-              Subtitles
+          {(project.subtitles || drive) && (
+            <div className="absolute top-2 left-2 flex gap-1">
+              {project.subtitles && (
+                <div className="flex h-6 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-fg">
+                  <Captions size={13} />
+                  Subtitles
+                </div>
+              )}
+              {drive && (
+                <button
+                  title={`On Drive: ${drive.name}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleMenu(
+                      event.currentTarget,
+                      [
+                        { label: "Copy Drive link", icon: <Copy size={14} />, onSelect: () => void copyDriveLink(drive.url, toast) },
+                        { label: "Open on Drive", icon: <ExternalLink size={14} />, onSelect: () => openDrive(drive.url) },
+                      ],
+                      { width: 180, at: { x: event.currentTarget.getBoundingClientRect().left, y: event.currentTarget.getBoundingClientRect().bottom + 4 } },
+                    );
+                  }}
+                  className="flex h-6 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-fg hover:bg-black"
+                >
+                  <Cloud size={13} />
+                  Drive
+                </button>
+              )}
             </div>
           )}
           <button

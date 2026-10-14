@@ -25,6 +25,17 @@ export interface ExportState {
   seconds?: number;
   /** Size of the finished file. */
   bytes?: number;
+  /** A Drive upload follows (a whole subtitled video). */
+  drive?: boolean;
+}
+
+/** The upload of an export to Drive (`drive` events from crates/edit/src/drive.rs). */
+export interface DriveState {
+  state: "uploading" | "done" | "failed";
+  progress?: number;
+  name?: string;
+  url?: string;
+  error?: string;
 }
 
 export interface Toast {
@@ -50,6 +61,7 @@ interface EditorState {
   selection: string[];
   media: Record<string, MediaStatus>;
   exportState: ExportState | null;
+  driveState: DriveState | null;
   tool: Tool;
   snapping: boolean;
   showMedia: boolean;
@@ -101,6 +113,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   selection: [],
   media: {},
   exportState: null,
+  driveState: null,
   tool: "select",
   snapping: true,
   showMedia: true,
@@ -116,7 +129,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   load: (rev, project) => {
     editorSession++;
     clearTimeout(saveTimer);
-    set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, media: {}, scriptJob: null });
+    set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, driveState: null, media: {}, scriptJob: null });
   },
   close: () => {
     editorSession++;
@@ -170,13 +183,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   undo: () => {
     const { past, project, future } = get();
     if (!past.length || !project) return;
-    set({ project: past[past.length - 1], past: past.slice(0, -1), future: [project, ...future], dirty: true });
+    // The Drive link follows Drive, not the edit: undo keeps it.
+    set({ project: { ...past[past.length - 1], drive: project.drive }, past: past.slice(0, -1), future: [project, ...future], dirty: true });
     scheduleSave(0);
   },
   redo: () => {
     const { past, project, future } = get();
     if (!future.length || !project) return;
-    set({ project: future[0], past: [...past, project], future: future.slice(1), dirty: true });
+    set({ project: { ...future[0], drive: project.drive }, past: [...past, project], future: future.slice(1), dirty: true });
     scheduleSave(0);
   },
 
@@ -392,6 +406,8 @@ export function connectEvents() {
       }
     } else if (event.type === "export" && project && event.id === project.id) {
       useEditor.setState({ exportState: event });
+    } else if (event.type === "drive" && project && event.id === project.id) {
+      useEditor.setState({ driveState: event });
     } else if (event.type === "script" && project && event.id === project.id) {
       useEditor.setState({ scriptJob: event.job });
     } else if (event.type === "transcript") {

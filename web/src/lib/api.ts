@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 import { note, recordTiming, routeOf } from "./diagnostics";
 import type { Encoders, ExportOptions } from "./exporting";
-import type { MediaStatus, Project, ProjectSummary, ScriptJob, Transcript } from "./types";
+import type { DriveFile, MediaStatus, Project, ProjectSummary, ScriptJob, Transcript } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -165,6 +165,10 @@ export const api = {
     request<{ path: string }>("POST", `/api/projects/${id}/export`, { path, options }),
   exportEncoders: () => request<Encoders>("GET", "/api/export/encoders"),
   /** Shows a finished export in Finder on the machine running Edit. */
+  /** The project's Drive link, checked that the file is still there (null once it's gone). */
+  driveLink: (id: string) => request<{ drive: DriveFile | null }>("GET", `/api/projects/${id}/drive`),
+  /** Uploads a finished export of a subtitled video to Drive again. */
+  driveUpload: (id: string, path: string) => request<{ ok: boolean }>("POST", `/api/projects/${id}/drive`, { path }),
   revealExport: (path: string) => request<{ ok: boolean }>("POST", "/api/exports/reveal", { path }),
   transcribe: (id: string, media: string) => request<{ status: MediaStatus }>("POST", `/api/projects/${id}/media/${media}/transcribe`),
   transcript: (id: string, media: string) => request<Transcript>("GET", `/api/projects/${id}/media/${media}/transcript`),

@@ -679,6 +679,60 @@ pub fn is_subtitled(project: &Project) -> bool {
             .all(|clip| subtitle(clip) || footage(clip))
 }
 
+/// Segments covering `[0, duration)`: the gaps between `given` (sorted) as
+/// footage, overlaps trimmed, and neighbours of one kind (and note) joined.
+pub fn fill_segments(given: Vec<edit_core::Segment>, duration: i64) -> Vec<edit_core::Segment> {
+    use edit_core::{Segment, SegmentKind};
+    let mut out: Vec<Segment> = Vec::new();
+    let mut at = 0;
+    let push = |out: &mut Vec<Segment>, segment: Segment| {
+        if segment.end <= segment.start {
+            return;
+        }
+        match out.last_mut() {
+            Some(last) if last.kind == segment.kind && last.note == segment.note => {
+                last.end = segment.end;
+            }
+            _ => out.push(segment),
+        }
+    };
+    for segment in given {
+        let start = segment.start.max(at);
+        let end = segment.end.min(duration);
+        if end <= start {
+            continue;
+        }
+        push(
+            &mut out,
+            Segment {
+                start: at,
+                end: start,
+                kind: SegmentKind::Footage,
+                note: String::new(),
+            },
+        );
+        push(
+            &mut out,
+            Segment {
+                start,
+                end,
+                ..segment
+            },
+        );
+        at = end;
+    }
+    push(
+        &mut out,
+        Segment {
+            start: at,
+            end: duration,
+            kind: SegmentKind::Footage,
+            note: String::new(),
+        },
+    );
+    out
+}
+
 /// Between two subtitles stacked because their people talk at once, in 1080p pixels.
 const STACK_GAP: f32 = 12.0;
 
@@ -829,7 +883,7 @@ pub async fn repack_subtitles(
     );
     let (width, height) = (project.settings.width, project.settings.height);
     let frame = |ms: f64| (ms / 1000.0 * fps).round() as i64;
-    let (live, (placed, skipped)) = app.store.update(project_id, "agent", |project| {
+    let (live, (placed, skipped, outside)) = app.store.update(project_id, "agent", |project| {
         // Stacked lines (overlap) go on tracks of their own under the
         // subtitles' track, made as needed; a re-run removes them by name.
         let mut tracks: Vec<String> = Vec::new();
@@ -875,9 +929,26 @@ pub async fn repack_subtitles(
         // Lines up now: when each ends (frames), its centre and box height.
         let mut open: Vec<(i64, f32, f32)> = Vec::new();
         let (mut placed, mut skipped) = (0, 0);
-        for line in &shown {
-            let start = frame(line.start_ms).max(from);
-            let end = frame(line.end_ms).min(to);
+        // Only inside footage segments: a line across a segment's edge shows
+        // only inside it (narration and already-subtitled stretches get none).
+        let pieces: Vec<(&Line, i64, i64)> = shown
+            .iter()
+            .flat_map(|line| {
+                let (start, end) = (frame(line.start_ms).max(from), frame(line.end_ms).min(to));
+                project
+                    .subtitled_spans(start, end)
+                    .into_iter()
+                    .map(move |(start, end)| (line, start, end))
+            })
+            .collect();
+        let mut outside = shown.len();
+        let mut counted = std::collections::HashSet::new();
+        for &(line, _, _) in &pieces {
+            if counted.insert(std::ptr::from_ref(line)) {
+                outside -= 1;
+            }
+        }
+        for (line, start, end) in pieces {
             if end <= start {
                 skipped += 1;
                 continue;
@@ -946,7 +1017,7 @@ pub async fn repack_subtitles(
             });
             placed += 1;
         }
-        Ok((placed, skipped))
+        Ok((placed, skipped, outside))
     })?;
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for line in &shown {
@@ -969,6 +1040,7 @@ pub async fn repack_subtitles(
         "rev": live.rev,
         "subtitles": placed,
         "skipped": skipped,
+        "outside_segments": outside,
         "speakers": speakers,
         "mutes": muted,
     }))
@@ -1154,6 +1226,37 @@ mod tests {
                 (1000.0, 1800.0, "b"),
                 (1800.0, 3600.0, "b"),
                 (4000.0, 5500.0, "a")
+            ]
+        );
+    }
+
+    #[test]
+    fn segments_fill_gaps_with_footage_and_join_neighbours() {
+        use edit_core::{Segment, SegmentKind};
+        let seg = |start, end, kind| Segment {
+            start,
+            end,
+            kind,
+            note: String::new(),
+        };
+        let out = fill_segments(
+            vec![
+                seg(0, 100, SegmentKind::Captioned),
+                seg(100, 150, SegmentKind::Captioned),
+                seg(140, 200, SegmentKind::Narration),
+                seg(300, 900, SegmentKind::Narration),
+            ],
+            500,
+        );
+        let kinds: Vec<(i64, i64, SegmentKind)> =
+            out.iter().map(|s| (s.start, s.end, s.kind)).collect();
+        assert_eq!(
+            kinds,
+            [
+                (0, 150, SegmentKind::Captioned),
+                (150, 200, SegmentKind::Narration),
+                (200, 300, SegmentKind::Footage),
+                (300, 500, SegmentKind::Narration)
             ]
         );
     }

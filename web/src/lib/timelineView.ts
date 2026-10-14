@@ -20,6 +20,11 @@ const SECTION_COLORS: Record<Section["kind"], string> = {
   broll: "251, 191, 36",
   story: "163, 163, 163",
   outro: "244, 114, 182",
+  // A subtitled video's segments: footage gets subtitles, the rest doesn't.
+  footage: "52, 211, 153",
+  captioned: "167, 139, 250",
+  narration: "251, 146, 60",
+  other: "115, 115, 115",
 };
 
 interface View {
@@ -157,7 +162,7 @@ function drawSections(ctx: CanvasRenderingContext2D, width: number, ppf: number,
     const x1 = part.end * ppf - scrollX;
     if (x1 < 0 || x0 > width) continue;
     const color = SECTION_COLORS[part.kind];
-    const quiet = part.kind === "story";
+    const quiet = part.kind === "story" || part.kind === "other";
     const left = Math.round(x0) + 1;
     const w = Math.round(x1) - left - 1;
     if (w < 1) continue;

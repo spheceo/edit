@@ -394,6 +394,8 @@ export interface Project {
   mark_in?: number | null;
   /** Out point (O): last frame of that span (inclusive); playback stops on it. */
   mark_out?: number | null;
+  /** A subtitled video's stretches: only footage gets subtitles (edit_core Segment). */
+  segments?: Segment[];
 }
 
 export interface Script {
@@ -500,9 +502,17 @@ export const ANIMATABLE: Record<ClipType, string[]> = {
   waveform: ["opacity", "x", "y", "scale", "rotation", "gain", "glow.radius", "glow.strength"],
 };
 
+/** A stretch of a subtitled video (frames, `end` exclusive) and what's in it. */
+export interface Segment {
+  start: number;
+  end: number;
+  kind: "footage" | "captioned" | "narration" | "other";
+  note?: string;
+}
+
 /** A stretch of the timeline (frames, `end` exclusive), found from the script (edit_core::sections). */
 export interface Section {
-  kind: "intro" | "broll" | "story" | "outro";
+  kind: "intro" | "broll" | "story" | "outro" | "footage" | "captioned" | "narration" | "other";
   start: number;
   end: number;
   /** "Intro 1/2", "B-roll", "Story", "Outro". */

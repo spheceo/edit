@@ -31,6 +31,7 @@ Model (JSON):
   - type "waveform": media? (only that media's sound; default everything heard), style {kind line|bars (line: tangled glowing strands that zigzag with the sound, the house look; bars: mirrored bars), color [r,g,b,a] (rich red [1,0.03,0.03,1] by default), strands (2, line), bars (48, bars), width (1400 px), height (360 px, the loudest swing), fill (0.5, bars' share of their slots), window (1.6 s of sound across the width, centred on now), gain (1), glow (the text glow: enabled, color?, radius, strength)}, transform, opacity — a glowing waveform of what's heard
 - media: {id, name, path, kind, duration, …, markers?: [{time (SECONDS into the media), name}]} — markers are points in the source that every clip of it carries (a sound effect's "hit"; the user adds them with M).
 - script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?, voiceover? (the voice-over clip reading it)}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. The video opens on the Doc's first timestamp: anything before it (the title, a "FOIA <name> - <headline>" heading, "Assets:", durations) is the Doc's heading, never a cut-in; if an import made one, delete its card and words with delete_clips {close_gap: true, drop_from_script: true}, so the video starts on the first footage. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
+- segments (optional, subtitled videos): [{start, end (frames, end exclusive), kind footage|captioned|narration|other, note}], sorted, never overlapping = what each stretch is: only footage gets subtitles; captioned = the picture already has subtitles burned in (an intro made earlier), narration = the narrator, other = title cards, maps, music. Empty = all footage. Set with set_segments; they show on the ruler.
 - mark_in, mark_out (optional): the in and out points (I / O), frames; mark_out is the last frame in (inclusive). Playback stops at the out point and export renders just that span when no range is given. They're part of the project (set_in_out), so setting them is an undo step like any edit.
 - keyframes: {param: [{frame (relative to clip start), value, ease linear|in_out|in|out|hold (preset for the segment to the next key), optional handle_in / handle_out {speed = value units per frame at the key, influence 0..1 of the segment} = After Effects-style bezier handles that override the preset at that end}]}. Animatable params: video x,y,scale,rotation,shake,opacity; text also size,tracking,glow.radius,glow.strength; waveform x,y,scale,rotation,opacity,gain,glow.radius,glow.strength; adjustment shake (amount),glitch (amount),exposure,contrast,saturation,temperature,vignette,vignette_x,vignette_y,vignette_size,opacity; text leader.x,leader.y; solid opacity; audio volume_db.
 Validation: collection IDs are nonempty and unique; next_id is a nonnegative safe integer; timeline start/duration/fades are nonnegative safe integer frames (duration positive), source_in is finite and nonnegative, all numeric parameters are finite, keyframes are in strictly increasing frame order, and script file is a Drive ID with no path separators and a positive source range. Project dimensions are 1..8192.
@@ -489,6 +490,19 @@ fn tools() -> Vec<Value> {
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." }
             }),
             &[],
+        ),
+        tool(
+            "set_segments",
+            "Sets a subtitled video's segments (replacing them all): what each stretch is, so repack_subtitles subtitles only the footage. Gaps between the ones given are footage. Re-run repack_subtitles after.",
+            json!({
+                "segments": { "type": "array", "items": { "type": "object", "properties": {
+                    "start": { "type": "number", "description": "Seconds on the timeline." },
+                    "end": { "type": "number", "description": "Seconds on the timeline." },
+                    "kind": { "type": "string", "enum": ["footage", "captioned", "narration", "other"] },
+                    "note": { "type": "string", "description": "What's in it, briefly." }
+                }, "required": ["start", "end", "kind"] } }
+            }),
+            &["segments"],
         ),
         tool(
             "repack_subtitles",
@@ -1492,6 +1506,40 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 to as f64 / fps,
                 serde_json::to_string(&summary).unwrap_or_default()
             )))
+        }
+        "set_segments" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let duration = live.project.duration();
+            let mut given: Vec<edit_core::Segment> = args["segments"]
+                .as_array()
+                .ok_or("segments must be a list")?
+                .iter()
+                .map(|segment| {
+                    let at = |key: &str| {
+                        segment[key]
+                            .as_f64()
+                            .map(|seconds| ((seconds * fps).round() as i64).clamp(0, duration))
+                            .ok_or(format!("each segment needs {key} (seconds)"))
+                    };
+                    Ok(edit_core::Segment {
+                        start: at("start")?,
+                        end: at("end")?,
+                        kind: serde_json::from_value(segment["kind"].clone())
+                            .map_err(|_| "kind is footage, captioned, narration or other")?,
+                        note: segment["note"].as_str().unwrap_or_default().to_owned(),
+                    })
+                })
+                .collect::<Result<_, String>>()?;
+            given.retain(|segment| segment.end > segment.start);
+            given.sort_by_key(|segment| segment.start);
+            let segments = crate::subtitles::fill_segments(given, duration);
+            let count = segments.len();
+            store.update(&id, "agent", |project| {
+                project.segments = segments;
+                Ok(())
+            })?;
+            Ok(text(format!("{count} segments set (gaps are footage)")))
         }
         "repack_subtitles" => {
             let live = store.get(&id).ok_or("project vanished")?;

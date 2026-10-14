@@ -1448,8 +1448,9 @@ impl Project {
             .any(|segment| segment.start < 0 || segment.end <= segment.start)
             || self
                 .segments
-                .windows(2)
-                .any(|pair| pair[1].start < pair[0].end)
+                .iter()
+                .zip(self.segments.iter().skip(1))
+                .any(|(before, after)| after.start < before.end)
         {
             return Err(
                 "segments must be sorted, from frame 0, non-empty and never overlap".to_owned(),

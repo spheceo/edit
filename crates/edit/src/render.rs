@@ -702,6 +702,62 @@ fn heard_segments(project: &Project, start: i64, end: i64) -> Vec<AudioSegment> 
         .collect()
 }
 
+/// One sound's filter chain, from input `input` to the label `[a{index}]`:
+/// its part of the source, mutes, tempo, volume, fades, and delay to its place.
+fn segment_chain(input: usize, index: usize, segment: &AudioSegment) -> String {
+    let mut chain = format!(
+        "[{input}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS",
+        segment.source_in,
+        segment.duration * segment.speed
+    );
+    // Mutes are in source seconds: here t = 0 is source_in, before any tempo change.
+    if let Some(mute) = mute_filter(segment) {
+        chain.push_str(&mute);
+    }
+    let mut tempo = segment.speed;
+    while (tempo - 1.0).abs() > 1e-6 {
+        let step = tempo.clamp(0.5, 2.0);
+        chain.push_str(&format!(",atempo={step:.6}"));
+        tempo /= step;
+    }
+    chain.push_str(&format!(",volume={:.3}dB", segment.volume_db));
+    if segment.fade_in > 0.0 {
+        chain.push_str(&format!(",afade=t=in:st=0:d={:.4}", segment.fade_in));
+    }
+    if segment.fade_out > 0.0 {
+        chain.push_str(&format!(
+            ",afade=t=out:st={:.4}:d={:.4}",
+            (segment.duration - segment.fade_out).max(0.0),
+            segment.fade_out
+        ));
+    }
+    let delay = (segment.start * 1000.0).round() as i64;
+    chain.push_str(&format!(",adelay={delay}|{delay}[a{index}]"));
+    chain
+}
+
+/// `,aeval=…` silencing a segment's mutes sample by sample, each ramped over
+/// MUTE_FADE_SECONDS with a cosine (as `edit_core::mute_gain`); None without
+/// any in the part it plays.
+fn mute_filter(segment: &AudioSegment) -> Option<String> {
+    let fade = edit_core::MUTE_FADE_SECONDS;
+    let length = segment.duration * segment.speed;
+    let gains: Vec<String> = segment
+        .mutes
+        .iter()
+        .map(|mute| (mute.from - segment.source_in, mute.to - segment.source_in))
+        .filter(|&(from, to)| to > -fade && from < length + fade)
+        .map(|(from, to)| {
+            format!("(1-cos(PI*min(max(max(({from:.6})-t,t-({to:.6})),0)/{fade:.6},1)))/2")
+        })
+        .collect();
+    let gain = gains
+        .into_iter()
+        .reduce(|all, next| format!("min({all},{next})"))?;
+    // c=same keeps the stereo layout, which encoders (AAC) need named.
+    Some(format!(",aeval=exprs='val(0)*{gain}|val(1)*{gain}':c=same"))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn export(
     project: &Project,
@@ -760,31 +816,7 @@ fn export(
             .arg(&media.path);
         let input = inputs;
         inputs += 1;
-        let mut chain = format!(
-            "[{input}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS",
-            segment.source_in,
-            segment.duration * segment.speed
-        );
-        let mut tempo = segment.speed;
-        while (tempo - 1.0).abs() > 1e-6 {
-            let step = tempo.clamp(0.5, 2.0);
-            chain.push_str(&format!(",atempo={step:.6}"));
-            tempo /= step;
-        }
-        chain.push_str(&format!(",volume={:.3}dB", segment.volume_db));
-        if segment.fade_in > 0.0 {
-            chain.push_str(&format!(",afade=t=in:st=0:d={:.4}", segment.fade_in));
-        }
-        if segment.fade_out > 0.0 {
-            chain.push_str(&format!(
-                ",afade=t=out:st={:.4}:d={:.4}",
-                (segment.duration - segment.fade_out).max(0.0),
-                segment.fade_out
-            ));
-        }
-        let delay = (segment.start * 1000.0).round() as i64;
-        chain.push_str(&format!(",adelay={delay}|{delay}[a{index}]"));
-        graph.push(chain);
+        graph.push(segment_chain(input, index, segment));
     }
     if !segments.is_empty() {
         let mixed: String = (0..segments.len())
@@ -935,4 +967,130 @@ fn render_frames(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use edit_core::Mute;
+
+    /// RMS of interleaved stereo f32 samples between two times (seconds).
+    fn rms(samples: &[f32], from: f64, to: f64) -> f64 {
+        let (a, b) = ((from * 48000.0) as usize * 2, (to * 48000.0) as usize * 2);
+        let part = &samples[a..b];
+        (part.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / part.len() as f64).sqrt()
+    }
+
+    /// The export's own chain, run through FFmpeg on a tone: silence inside a
+    /// mute, a cosine ramp outside it, the rest untouched.
+    #[test]
+    fn mutes_silence_the_source_with_ramps() {
+        let dir = std::env::temp_dir().join(format!("edit-mute-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tone = dir.join("tone.wav");
+        let made = Command::new(crate::tools::ffmpeg())
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg("sine=frequency=440:sample_rate=48000:duration=4")
+            .arg(&tone)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // The clip plays the source from 1 s; the mute is 2.0–2.5 s of the source.
+        let segment = AudioSegment {
+            clip: "a".into(),
+            media: "m".into(),
+            start: 0.0,
+            duration: 2.5,
+            source_in: 1.0,
+            speed: 1.0,
+            volume_db: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            mutes: vec![
+                Mute { from: 2.0, to: 2.5 },
+                Mute {
+                    from: 30.0,
+                    to: 31.0,
+                },
+            ],
+        };
+        let chain = segment_chain(0, 0, &segment);
+        assert_eq!(
+            chain.matches("cos(").count(),
+            2,
+            "only the mute it plays: {chain}"
+        );
+        let output = Command::new(crate::tools::ffmpeg())
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&tone)
+            .args([
+                "-filter_complex",
+                &chain,
+                "-map",
+                "[a0]",
+                "-f",
+                "f32le",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let samples: Vec<f32> = output
+            .stdout
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect();
+        // As the export encodes it.
+        let encoded = Command::new(crate::tools::ffmpeg())
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&tone)
+            .args([
+                "-filter_complex",
+                &chain,
+                "-map",
+                "[a0]",
+                "-c:a",
+                "aac",
+                "-f",
+                "null",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        let full = rms(&samples, 0.1, 0.9);
+        assert!(full > 0.05, "tone heard: {full}");
+        // Clip time 1.0–1.5 s is source 2.0–2.5 s.
+        assert!(rms(&samples, 1.0, 1.5) < 1e-4, "silent inside");
+        assert!(
+            (rms(&samples, 1.52, 2.4) - full).abs() < 0.01 * full,
+            "untouched after the fade"
+        );
+        assert!(
+            (rms(&samples, 0.1, 0.98) - full).abs() < 0.01 * full,
+            "untouched before"
+        );
+        // Halfway through the 12 ms fade the gain is about one half.
+        let ramp = rms(&samples, 1.5045, 1.5075) / full;
+        assert!((0.3..0.7).contains(&ramp), "ramping: {ramp}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

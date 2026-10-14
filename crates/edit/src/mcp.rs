@@ -24,7 +24,7 @@ Model (JSON):
 - tracks: video tracks composite in list order (first = bottom, label V1); audio tracks mix. A track holds non-overlapping clips. Video-type clips go on video tracks; audio clips on audio tracks. One video track may be the subtitles' own (subtitles: true): always the top video track, holding only subtitles (add_subtitles puts them there; new tracks go beneath it; tidy_tracks leaves it alone). Put nothing else on it.
 - clip: {id, track, start, duration, color (blue|cyan|green|yellow|orange|red|purple|pink), link?, fade_in, fade_out, keyframes, type, ...}
   - type "video" (also images): media, source_in, speed (0.05..20), transform {x, y (px from frame centre, y down), scale (1 = fit frame), rotation (deg clockwise), shake (px of handheld camera wobble, 0 = still)}, opacity 0..1, optional crop {left, right, top, bottom} = shares of the picture cut off each side (0..1); what's left stays where it was in the picture (move it with x/y)
-  - type "audio": media, source_in, speed, volume_db
+  - type "audio": media, source_in, speed, volume_db, optional mutes [{from, to}] = stretches of the source silenced (SECONDS of the media, like source_in; each fades out and back in over 12 ms just outside it), as repack_subtitles sets on swear words
   - type "text": text (\n for lines), style {font "Geist" (weight 400|500|600|700|900) or "Montserrat" (600 only), size px, color [r,g,b,a] 0..1, tracking px, line_height, glow {enabled (default true), color [r,g,b,a] or null = text colour (default null), radius = blur px (default 46), strength = opacity 0..1 (default 0.5)}, optional max_width px (wrap lines), align left|center|right (how the lines line up with each other, default center; the block stays where transform places it), optional background {color, opacity (0.75), pad_x (12), pad_y (8), border px (0 = none), border_color (white)} = a box behind the lines (border: a line around it, outside it), optional shadow {color, opacity (0.65), distance px (3), angle degrees clockwise from up (112), size px (6), blur px (8)} (with a background, the box casts it), optional label {text, color, size px (26)} = a small line centred above the text in its own colour, in its own box when there's a background (who's speaking: "Officer:"), optional leader {x, y (px from frame centre, y down: the point it starts from, e.g. a person's chin), width px (3), color (red [1,0.1,0.1,1]), draw (frames, 10), attach nearest|side (nearest: where the way to the box's centre crosses its edge; side: the middle of the box's side facing the point, for a box set off to the side), fade (frames, 8)} = a callout: a straight line from that point to the box, drawn in from the point over `draw` frames when the clip starts; then the box fades in over `fade` frames and the words start their animation (e.g. rise with a stagger) (pin the point to a face with track_region target "leader")}. Subtitle house style after the intro (at 1080p; scale by height/1080): Montserrat 600, size 48, white, line_height 1.15, glow off, max_width = 0.8*width - 24, background pure black (color [0,0,0,1], opacity 1, default padding), no shadow, label {text "<speaker>:", color = the speaker's colour, size 26}, transform.y = 0.4*height, animation none, transform (as video, shake included), animation {preset none|fade|rise|pop|typewriter|words|word, duration frames, stagger frames}, opacity, word_times (frames from the clip start at which each word appears, for preset "words": words pop in one at a time, no motion, synced to speech; without word_times one every `stagger` frames. The whole line is laid out from the first word, so each word appears where it ends up and nothing already shown moves; preset "word" is timed the same but shows only the word being said, alone and centred, each replacing the last)
   - type "adjustment": grade {exposure stops, contrast -1..1, saturation -1..1, temperature -1..1, vignette 0..1, vignette_x, vignette_y (px from frame centre, y down: where the light falls; default 0 = centred; follow a person with track_region target "vignette"), vignette_size (1 = the whole frame's vignette, 0.5 = the clear area half as far), vignette_aspect (clear area width / height: 1 round, ~0.6 tall for a standing person), focus_exposure (stops added inside the clear area only: lifts the person), vignette_saturation (-1..1, saturation change where the vignette falls only: grey surroundings, the person keeps their colour)}, glitch {amount (px at 1080p the bands slide, 0 = off), slices (bands across the height, 6: few and tall), rgb (colour split as a share of each band's slide, 0.08: barely any)} = a digital glitch transition: the picture beneath cut into horizontal bands of uneven height, some sliding sideways, a new pattern every frame, shake {preset none|handheld|vertical|horizontal|impact|earthquake, and optionally any of motion wiggle|drop, amount (px at 1080p), frequency (wiggles/s), rotation (deg of tilt), direction both|vertical|horizontal, envelope steady|build|hit|swell (wiggle only), motion_blur (frames of movement smeared), edges mirror|zoom — each overrides the preset}, opacity — grades and moves everything below it, modelled on Sapphire S_Shake (heavy motion blur, picture mirrored past its edges). motion "wiggle" = random jolts; motion "drop" = a whip through a cut at the clip's middle: the picture accelerates away until the cut, then the next shot comes in from the other side and settles (amount px = a full move each side), down (vertical) or right (horizontal), negative amount for up/left. Presets: vertical = a whip straight down through the cut, 540px, blur 2 (the house slam into a cut: it only goes down, fast, heavily blurred, never up and down); horizontal = the same sideways; impact 160px wiggle 30/s, 3° tilt, hit; earthquake 60px wiggle 16/s; handheld 8px 1.2/s, sharp, zoomed (subtle).
   - type "solid": fill [r,g,b,a], opacity, optional gradient {from, to} = fades across the frame left to right: clear at `from`, full at `to` (shares of the frame width; `to` below `from` fades the other way) — flashes, dips to black, a black gradient over part of the picture
@@ -72,6 +72,7 @@ House editing style (videos cut from a script of police footage):
 - PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
   - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: run add_subtitles (it defaults to everything after the intro). They sit bottom middle on the subtitles track, no animation, no tracking: white words without glow in a pure black box (opaque, unlike the intro captions' see-through 0.45 box), the speaker's name above in their colour ("Officer:"). The intro keeps its own speaker captions (caption_speakers), glow and all. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own.
+- SUBTITLE VIDEOS (Repack style): when the user asks for a subtitled video or a "sub video" (subtitles for the whole video and nothing else), run repack_subtitles over the whole timeline (no start/end), with neglect: true when the case involves child abuse or neglect. It puts every line said in the footage on the subtitles track in Repack's house style (Montserrat 48 in the speaker's colour with a glow, 75% black box, soft shadow, bottom middle, held a second after the last word, one at a time; the narrator and radio hidden), mutes the house words in the footage's sound and stars them out on screen. Then check a few frames with render_frame (a line with a starred word among them), read the mutes it returns back to the user (each word and its time, starred or mute-only) so they can review them, and add no other edits unless asked. A re-run replaces its own subtitles and mutes (and add_subtitles' in that span). In the normal edit workflow keep using add_subtitles as described above.
 - Be precise, and fill in the small gaps yourself: skip throwaway moments (a lone "like" or "um", a blip that adds nothing to the story) rather than captioning them; when something starts or ends within ~0.2 s of a cut or of the next caption, snap it to that edge so there are no slivers or hairline gaps.
 - Keep the layers tidy: a clip shouldn't float on a track with nothing under it. After adding or removing layers, run tidy_tracks; it moves clips down into empty space below them (keeping what's above what) and drops empty tracks.
 - SCOPE: do the part of the edit that's asked for, and nothing past it. "Edit the intro" = the intro section only (sections.intro): its teasers, the cut-ins between them and their B-roll, captions, transitions and their sound; not the date cut-in (it opens the story) or any later cut-in or B-roll. "Subtitles" = add_subtitles (everything after the intro). Music, the date cut-in's map and other cut-ins' B-roll wait until they're asked for. When it's unclear whether something is in (music under the intro, say), ask instead of doing it, and say at the end what you left for later.
@@ -486,6 +487,17 @@ fn tools() -> Vec<Value> {
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default: the end of the intro)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." }
+            }),
+            &[],
+        ),
+        tool(
+            "repack_subtitles",
+            "A subtitled video the Repack way: every line said in the footage (its own sound, transcribed if needed), split by Repack's rules, held a second after its last word (one at a time), in the house style in each speaker's colour, on the subtitles track; the narrator and radio are hidden. The house words are muted in the footage's sound (sample-accurate, 12 ms cosine ramps; written as `mutes` on its audio clips) and starred out on screen (\"f***\"); some are muted but stay readable. Replaces subtitles and mutes made before in the span (add_subtitles' too). Returns the subtitles placed, the speakers (name, role, colour, lines) and every mute (term, timeline time, starred).",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
+                "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
+                "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, slap, blood, etc. Default false." },
+                "hold_ms": { "type": "number", "description": "How long a subtitle stays after its last word unless the next starts first (default 1000)." }
             }),
             &[],
         ),
@@ -1284,6 +1296,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     source_in,
                     speed,
                     volume_db,
+                    ..
                 } = &clip.content
                 else {
                     continue;
@@ -1472,6 +1485,34 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     (seconds * fps).round() as i64
                 });
             let summary = crate::captions::subtitles(app, &id, from, to).await?;
+            Ok(text(format!(
+                "subtitled {:.2}–{:.2}s: {}",
+                from as f64 / fps,
+                to as f64 / fps,
+                serde_json::to_string(&summary).unwrap_or_default()
+            )))
+        }
+        "repack_subtitles" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let from = args["start"]
+                .as_f64()
+                .map_or(0, |seconds| (seconds * fps).round() as i64);
+            let to = args["end"]
+                .as_f64()
+                .map_or(live.project.duration(), |seconds| {
+                    (seconds * fps).round() as i64
+                });
+            let options = crate::subtitles::Options {
+                from,
+                to,
+                neglect: args["neglect"].as_bool().unwrap_or(false),
+                hold_ms: args["hold_ms"]
+                    .as_f64()
+                    .filter(|hold| hold.is_finite() && (0.0..=3000.0).contains(hold))
+                    .unwrap_or(crate::subtitles::DEFAULT_HOLD_MS),
+            };
+            let summary = crate::subtitles::repack_subtitles(app, &id, options).await?;
             Ok(text(format!(
                 "subtitled {:.2}–{:.2}s: {}",
                 from as f64 / fps,
@@ -1850,6 +1891,7 @@ fn place_sound(
                     source_in,
                     speed: 1.0,
                     volume_db: sound.volume_db,
+                    mutes: Vec::new(),
                 },
             });
             placed.push(format!("{time:.2}s"));

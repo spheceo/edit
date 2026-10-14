@@ -6,6 +6,7 @@ import { Decoder, videoTime } from "./decoder";
 import { addContext, note, recordTiming } from "./diagnostics";
 import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
 import { clipEnd, paramAt, projectDuration, validateProject } from "./edit";
+import { mutePoints } from "./mutes";
 import { savedFrame, saveFrame } from "./storage";
 import type { Clip, Media, Project, Sections, Track } from "./types";
 
@@ -38,7 +39,7 @@ let fontBytes: Promise<[string, number, Uint8Array][]> | null = null;
 
 type AudioClip = Extract<Clip, { type: "audio" }>;
 interface PictureSource { clip: string; media: string; time: number }
-interface ScheduledSound { source: AudioBufferSourceNode; gain: GainNode }
+interface ScheduledSound { source: AudioBufferSourceNode; gain: GainNode; mute?: GainNode }
 const BUFFERING_BADGE_MS = 600;
 /** Waiting this long for a frame is noted for problem reports, and the viewer offers one. */
 const STUCK_MS = 10_000;
@@ -592,11 +593,23 @@ class Preview {
           else gain.gain.linearRampToValueAtTime(volume, t);
           if (sample === end) break;
         }
-        source.connect(gain).connect(audio.destination);
+        // Mutes (source seconds) on a gain of their own, at their exact times with the export's cosine ramps.
+        let mute: GainNode | undefined;
+        if (clip.mutes?.length) {
+          mute = audio.createGain();
+          const playedFrom = start + late * fps;
+          const sourceAt = (frameAt: number) => clip.source_in + (frameAt - clip.start) / fps * clip.speed;
+          const contextAt = (time: number) => at + ((time - clip.source_in) / clip.speed * fps + clip.start - playedFrom) / fps;
+          mutePoints(clip.mutes, sourceAt(playedFrom), sourceAt(end)).forEach(([time, value], index) => {
+            if (index === 0) mute!.gain.setValueAtTime(value, at);
+            else mute!.gain.linearRampToValueAtTime(value, contextAt(time));
+          });
+          source.connect(gain).connect(mute).connect(audio.destination);
+        } else source.connect(gain).connect(audio.destination);
         source.start(at, Math.max(0, offset / clip.speed + late), length);
-        const scheduled = { source, gain };
+        const scheduled = { source, gain, mute };
         source.onended = () => {
-          source.disconnect(); gain.disconnect();
+          source.disconnect(); gain.disconnect(); mute?.disconnect();
           if (this.scheduled.get(key) === scheduled) this.scheduled.delete(key);
         };
         this.scheduled.set(key, scheduled);
@@ -605,10 +618,10 @@ class Preview {
   }
 
   private stopSounds() {
-    for (const { source, gain } of this.scheduled.values()) {
+    for (const { source, gain, mute } of this.scheduled.values()) {
       source.onended = null;
       try { source.stop(); } catch { /* Already ended. */ }
-      source.disconnect(); gain.disconnect();
+      source.disconnect(); gain.disconnect(); mute?.disconnect();
     }
     this.scheduled.clear();
   }

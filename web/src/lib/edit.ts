@@ -800,6 +800,7 @@ export function validateProject(project: Project): string | null {
       const { left = 0, right = 0, top = 0, bottom = 0 } = clip.crop;
       if ([left, right, top, bottom].some((side) => !(side >= 0 && side < 1)) || left + right >= 0.99 || top + bottom >= 0.99) return `a crop must leave some of the picture`;
     }
+    if (clip.type === "audio" && clip.mutes?.some((mute) => !(Number.isFinite(mute.from) && Number.isFinite(mute.to) && mute.from < mute.to))) return `a mute must run from before it ends`;
     if (clip.type === "solid" && clip.gradient && Math.abs(clip.gradient.from - clip.gradient.to) < 1e-3) return `a gradient's from and to must differ`;
     if (clip.fade_in < 0 || clip.fade_out < 0 || !Number.isSafeInteger(clip.fade_in) || !Number.isSafeInteger(clip.fade_out)) return `fades must be nonnegative integer frames`;
     for (const [param, keys] of Object.entries(clip.keyframes ?? {})) {

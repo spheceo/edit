@@ -593,6 +593,8 @@ pub struct AudioSegment {
     pub volume_db: f32,
     pub fade_in: f64,
     pub fade_out: f64,
+    /// Stretches silenced, in seconds of the source (see `Mute`).
+    pub mutes: Vec<Mute>,
 }
 
 /// What's heard at `frame` (audio clips on unmuted tracks), only `media`'s if given.
@@ -613,6 +615,7 @@ fn heard(project: &Project, frame: i64, media: Option<&str>) -> Vec<WaveSource> 
                 source_in,
                 speed,
                 volume_db,
+                ..
             } = &clip.content
             else {
                 return None;
@@ -650,6 +653,7 @@ pub fn audio_segments(project: &Project) -> Vec<AudioSegment> {
                 source_in,
                 speed,
                 volume_db,
+                mutes,
             } => Some(AudioSegment {
                 clip: clip.id.clone(),
                 media: media.clone(),
@@ -660,6 +664,7 @@ pub fn audio_segments(project: &Project) -> Vec<AudioSegment> {
                 volume_db: *volume_db,
                 fade_in: clip.fade_in as f64 / fps,
                 fade_out: clip.fade_out as f64 / fps,
+                mutes: mutes.clone(),
             }),
             _ => None,
         })

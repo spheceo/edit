@@ -6,6 +6,7 @@ Distilled from the team's doc "How we want our edits to be" and the videos it li
 - 🆕 added from this doc (see "What changed in Edit")
 - 🔜 worth building next
 - ❓ open question for the team
+- ⏸ on hold until the team confirms
 
 The stills in `shots/` are frames from other channels' videos, kept on this machine only (the repo is public; they're gitignored). The doc links each source video.
 
@@ -26,7 +27,7 @@ North star: **Code Blue Cam** (huge, branded, same kind of videos as ours). The 
 | ![](shots/cbc-floorplan-reconstruction.png) | **Reconstruction:** a floor plan drawn over the satellite view, people as dots (red = suspect, white = officers), doors marked in red. 🔜 a bigger feature; good for "what happened inside". |
 | ![](shots/cbc-pov-map-dots.png) | **Who's where:** coloured dots for people on a top-down view, while the call plays. 🔜 |
 | ![](shots/cbc-image-viewer-suspect.png) | **Suspect card** in a macOS-like "Image Viewer" window: name in red, age in white, in a bold condensed face, over the scene or a flat brand colour. 🔜 our "clean UI" twist (see below). |
-| ![](shots/cbc-pov-name-watermark-cyan-sub.png) | **Whose camera it is**, top-left: "Deputy Rassi", small white text. 🆕 the agent now does this (only when it's certain). Also a **faint logo watermark** dead centre, and the bodycam's own timestamp kept. |
+| ![](shots/cbc-pov-name-watermark-cyan-sub.png) | **Whose camera it is**, top-left: "Deputy Rassi", small white text. ⏸ on hold until the team confirms (the agent won't add it). Also a **faint logo watermark** dead centre, and the bodycam's own timestamp kept. |
 | ![](shots/cbc-bodycam-subs.png) | **Subtitles:** cyan, bold, in a tight black box, bottom centre. We keep **ours** (white, black box, the speaker's name above in their colour). |
 | ![](shots/cbc-positioned-subtitle.png) | **Subtitles move out of the way:** set high and left here so they don't cover the action. ✅ the agent places intro captions by the speaker; ❓ do the same with subtitles when the bottom is busy? |
 | ![](shots/cbc-focus-blur.png) | **Focus pull:** the edges blurred so the eye goes to the person (a blurred vignette). 🔜 we vignette and darken, but don't blur yet. |
@@ -43,7 +44,7 @@ North star: **Code Blue Cam** (huge, branded, same kind of videos as ours). The 
 - **Subtitles:** keep the current subtitle style and the current intro caption style (a little glow, black box). ✅
   - "Keyframe them a little more often": ❓ we read this as more movement on the intro captions (punch-ins, tracking the speaker). Is that right?
   - "At times only one word appears at a time." 🆕 a new **One word at a time** caption style, used on shouted peaks ("Shots fired!", "Drop it!").
-- **The POV officer's name, top-left**, from the incident report (whose Axon serial is whose). 🆕 the agent does this only when certain, and lists the cameras it couldn't place.
+- **The POV officer's name, top-left**, from the incident report (whose Axon serial is whose). ⏸ on hold until the team confirms; the agent won't add it unless asked.
 - **Our own assets:** the clean UI we're designing, used at certain times, and identifying people our way (✅ the callout label with a red line).
 
 ### Our bodycam recipe today (from the house style)
@@ -104,7 +105,7 @@ The same style as the interrogation, plus:
 ## What changed in Edit (from this doc)
 
 - 🆕 **One word at a time**, a caption animation (Inspector → Animate in): timed from the speech like word-by-word, but only the word being said shows, alone and centred. The agent uses it on a few shouted peaks.
-- 🆕 **Officer POV name**, a house-style rule: rank and surname small in the top-left while that officer's camera is on screen, only when certain.
+- ⏸ **Officer POV name**: rank and surname small in the top-left while that officer's camera is on screen. On hold until the team confirms.
 
 ## What we'd build next (in order)
 

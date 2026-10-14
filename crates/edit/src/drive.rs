@@ -93,6 +93,8 @@ pub fn start(store: Arc<Store>, library: Arc<Library>, project: &Project, path: 
         .unwrap_or("mp4")
         .to_ascii_lowercase();
     let name = upload_name(&project.name, &extension);
+    // A re-export replaces the file it made before, so its link stays the same.
+    let replacing = project.drive.as_ref().map(|file| file.file_id.clone());
     let number = {
         let mut next = NEXT_UPLOAD.lock();
         *next += 1;
@@ -111,7 +113,7 @@ pub fn start(store: Arc<Store>, library: Arc<Library>, project: &Project, path: 
         let subject = format!("{} ({})", path.display(), id);
         let result = crate::diag::time_on("drive", "drive upload", &subject, || {
             crate::guard::catch("the Drive upload", || {
-                upload(&library, &path, &name, |progress| {
+                upload(&library, &path, &name, replacing.as_deref(), |progress| {
                     emit("uploading", json!({ "progress": progress }))
                 })
             })
@@ -142,32 +144,59 @@ pub fn start(store: Arc<Store>, library: Arc<Library>, project: &Project, path: 
     });
 }
 
-/// Drive's resumable upload: a session for the file in the folder, then its
-/// bytes streamed from disk, then a link anyone can view.
+/// Drive's resumable upload: a session for the file in the folder (or for new
+/// contents of `replacing`, keeping its link; a new file if that one is gone),
+/// then its bytes streamed from disk, then a link anyone can view.
 fn upload(
     library: &Library,
     path: &Path,
     name: &str,
+    replacing: Option<&str>,
     progress: impl FnMut(f32),
 ) -> Result<DriveFile, String> {
     let size = std::fs::metadata(path)
         .map_err(|error| format!("can't read {}: {error}", path.display()))?
         .len();
     let mime = mime(path);
-    let metadata = json!({ "name": name, "parents": [folder()] }).to_string();
-    let config = [
-        format!("Authorization: Bearer {}", library.token()?),
-        "Content-Type: application/json; charset=UTF-8".to_owned(),
-        format!("X-Upload-Content-Type: {mime}"),
-        format!("X-Upload-Content-Length: {size}"),
-    ]
-    .iter()
-    .map(|header| Ok(format!("header = {}\n", quote(header)?)))
-    .chain([Ok(format!("data-binary = {}\n", quote(&metadata)?))])
-    .collect::<Result<String, String>>()?;
-    let url = format!("{UPLOAD}?uploadType=resumable&supportsAllDrives=true&fields=id");
-    let (code, answer) = curl(&config, &["--max-time", "60", "-D", "-", &url])?;
-    let answer = String::from_utf8_lossy(&answer);
+    let session = |replace: Option<&str>| -> Result<(u16, String), String> {
+        let metadata = match replace {
+            Some(_) => json!({ "name": name }),
+            None => json!({ "name": name, "parents": [folder()] }),
+        }
+        .to_string();
+        let config = [
+            format!("Authorization: Bearer {}", library.token()?),
+            "Content-Type: application/json; charset=UTF-8".to_owned(),
+            format!("X-Upload-Content-Type: {mime}"),
+            format!("X-Upload-Content-Length: {size}"),
+        ]
+        .iter()
+        .map(|header| Ok(format!("header = {}\n", quote(header)?)))
+        .chain([Ok(format!("data-binary = {}\n", quote(&metadata)?))])
+        .collect::<Result<String, String>>()?;
+        let (url, method) = match replace {
+            Some(file) => (
+                format!(
+                    "{UPLOAD}/{}?uploadType=resumable&supportsAllDrives=true&fields=id",
+                    crate::library::encode(file)
+                ),
+                "PATCH",
+            ),
+            None => (
+                format!("{UPLOAD}?uploadType=resumable&supportsAllDrives=true&fields=id"),
+                "POST",
+            ),
+        };
+        let (code, answer) = curl(&config, &["--max-time", "60", "-X", method, "-D", "-", &url])?;
+        Ok((code, String::from_utf8_lossy(&answer).into_owned()))
+    };
+    let (mut code, mut answer) = session(replacing)?;
+    let mut replaced = replacing.is_some();
+    if replaced && code == 404 {
+        // Deleted on Drive since: a new file, and a new link.
+        (code, answer) = session(None)?;
+        replaced = false;
+    }
     if code != 200 {
         return Err(drive_error(code, body_of(&answer)));
     }
@@ -180,7 +209,13 @@ fn upload(
         .ok()
         .and_then(|value| value.get("id")?.as_str().map(str::to_owned))
         .ok_or("Google Drive didn't say what the uploaded file is")?;
-    if let Err(error) = share(library, &file_id) {
+    // A replaced file's link was shared when it was first uploaded.
+    let shared = if replaced {
+        Ok(())
+    } else {
+        share(library, &file_id)
+    };
+    if let Err(error) = shared {
         // The team still sees it in the folder; only the link for others fails.
         crate::diag::warn(
             "drive",
@@ -540,7 +575,7 @@ mod tests {
         assert!(status.success());
         let library = Library::default();
         let mut seen = Vec::new();
-        let file = upload(&library, &path, "edit-upload-test.mp4", |share| {
+        let file = upload(&library, &path, "edit-upload-test.mp4", None, |share| {
             seen.push(share)
         })
         .unwrap();

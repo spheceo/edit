@@ -315,8 +315,11 @@ export async function syncScriptJob(id: string) {
     if (useEditor.getState().project?.id !== id) return;
     useEditor.setState({ scriptJob: job });
     const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing");
-    // A failed run waits for Retry; anything else unfinished carries on by itself.
-    if (unfinished && !running && job?.state !== "failed") {
+    // A failed run waits for Retry; an import that stopped part-way (blocks never
+    // placed) carries on by itself. A placed block whose clip is gone was removed
+    // on purpose (a cut-in card replaced by B-roll): never put it back.
+    const neverPlaced = project.script.blocks.some((block) => !block.clip);
+    if (unfinished && neverPlaced && !running && job?.state !== "failed") {
       const resumed = await api.resumeScript(id);
       if (useEditor.getState().project?.id === id) useEditor.setState({ scriptJob: resumed.job });
     }

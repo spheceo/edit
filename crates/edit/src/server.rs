@@ -304,9 +304,10 @@ async fn upload_media(
     let target_guard = PartialFile(Some(target.clone()));
     let mut temporary = target.as_os_str().to_owned();
     temporary.push(".uploading");
-    let partial = PartialFile(Some(PathBuf::from(temporary)));
+    let temporary = PathBuf::from(temporary);
+    let partial = PartialFile(Some(temporary.clone()));
     let result = async {
-        let path = partial.0.as_deref().expect("armed");
+        let path = temporary.as_path();
         let mut file = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -391,7 +392,7 @@ async fn reserve_upload(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
             Err(error) => return Err(error),
         }
     }
-    unreachable!()
+    Err(std::io::Error::other("no free name for the upload"))
 }
 
 async fn agent_status(State(app): State<App>) -> Json<Value> {
@@ -664,7 +665,12 @@ pub fn place_at_end(project: &mut Project, media_id: &str) {
         ClipColor::Orange,
         ClipColor::Pink,
     ];
-    let color = colors[project.clips.len() / 2 % colors.len()];
+    let color = colors
+        .iter()
+        .cycle()
+        .nth(project.clips.len() / 2)
+        .copied()
+        .unwrap_or(ClipColor::Blue);
     let video_track = project
         .tracks
         .iter()
@@ -1060,8 +1066,14 @@ async fn frame_png(
         .render(live.project, vec![frame], query.max.unwrap_or(0))
         .await
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
-    let png = encode_png(&images[0])
-        .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let image = images.first().ok_or_else(|| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the frame didn't render".to_owned(),
+        )
+    })?;
+    let png =
+        encode_png(image).map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
     Ok(([(header::CONTENT_TYPE, "image/png")], png).into_response())
 }
 
@@ -1398,7 +1410,8 @@ pub fn tailscale_name() -> Option<String> {
             .output()
             .ok()?;
         let status: Value = serde_json::from_slice(&output.stdout).ok()?;
-        let name = status["Self"]["DNSName"]
+        let name = status
+            .pointer("/Self/DNSName")?
             .as_str()?
             .trim_end_matches('.')
             .to_ascii_lowercase();

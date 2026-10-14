@@ -54,7 +54,7 @@ struct Line {
 
 impl Line {
     fn start(&self) -> f64 {
-        self.words[0].start
+        self.words.first().map_or(0.0, |word| word.start)
     }
     fn end(&self) -> f64 {
         self.words.last().map_or(0.0, |word| word.end)
@@ -88,28 +88,47 @@ fn voice_label(line: &Line) -> String {
     }
 }
 
+/// A box the model drew, [ymin, xmin, ymax, xmax] in 0–1000, as [x0, y0, x1, y1]
+/// source pixels; None unless it is four numbers with some size.
+fn box_pixels(b: &[f64], (width, height): (u32, u32)) -> Option<[f64; 4]> {
+    let &[ymin, xmin, ymax, xmax] = b else {
+        return None;
+    };
+    if !(ymax > ymin && xmax > xmin) {
+        return None;
+    }
+    let (mw, mh) = (f64::from(width), f64::from(height));
+    Some([
+        xmin / 1000.0 * mw,
+        ymin / 1000.0 * mh,
+        xmax / 1000.0 * mw,
+        ymax / 1000.0 * mh,
+    ])
+}
+
 /// Splits a clip's words into caption lines: at a pause, a change of voice,
 /// the end of a sentence (once a line has a few words), or nine words.
 fn lines_of(clip: &str, words: &[Word]) -> Vec<Line> {
     let mut lines: Vec<Line> = Vec::new();
     for word in words {
         let split = lines.last().is_none_or(|line| {
-            let last = line.words.last().unwrap();
+            let Some(last) = line.words.last() else {
+                return true;
+            };
             word.start - last.end >= 0.45
                 || word.speaker != line.voice
                 || line.words.len() >= 9
                 || (line.words.len() >= 4 && last.text.trim_end().ends_with(['.', '?', '!']))
         });
-        if split {
-            lines.push(Line {
+        match lines.last_mut() {
+            Some(line) if !split => line.words.push(word.clone()),
+            _ => lines.push(Line {
                 clip: clip.to_owned(),
                 words: vec![word.clone()],
                 voice: word.speaker.clone(),
                 name: None,
                 color: None,
-            });
-        } else {
-            lines.last_mut().unwrap().words.push(word.clone());
+            }),
         }
     }
     lines
@@ -290,8 +309,9 @@ fn choose(
     let pad = gap / 2.0;
     for side in sides {
         for share in WIDTHS {
+            let width = (frame.0 as f32 * share).round();
             let style = TextStyle {
-                max_width: Some((frame.0 as f32 * share).round()),
+                max_width: Some(width),
                 ..style.clone()
             };
             let size = caption_size(text, &style);
@@ -314,7 +334,7 @@ fn choose(
                 )
             };
             if !covers(&face) && !avoid.iter().any(covers) {
-                return (side, style.max_width.unwrap());
+                return (side, width);
             }
         }
     }
@@ -441,12 +461,14 @@ async fn spoken_lines(
         if !media.has_audio {
             continue;
         }
-        if !transcripts.contains_key(&media.id) {
-            transcripts.insert(media.id.clone(), transcript_of(app, media).await?);
-        }
+        let transcript = match transcripts.entry(media.id.clone()) {
+            std::collections::hash_map::Entry::Occupied(known) => known.into_mut(),
+            std::collections::hash_map::Entry::Vacant(new) => {
+                new.insert(transcript_of(app, media).await?)
+            }
+        };
         let visible_from = source_in + ((from.max(clip.start) - clip.start) as f64 / fps) * speed;
         let visible_to = source_in + ((to.min(clip.end()) - clip.start) as f64 / fps) * speed;
-        let transcript = &transcripts[&media.id];
         let words: Vec<Word> = transcript
             .words
             .iter()
@@ -596,16 +618,19 @@ pub async fn subtitles(app: &App, project_id: &str, from: i64, to: i64) -> Resul
         // and the next starts a moment later (keeping its own time to read).
         let read = (READ_SUBTITLE * fps).round() as i64;
         for index in 0..slots.len().saturating_sub(1) {
-            let (_, start, end, natural) = slots[index];
+            let Some([current, next, ..]) = slots.get_mut(index..) else {
+                continue;
+            };
+            let (line, start, end, natural) = *current;
             let need = (start + read).min(natural.max(start + least));
-            let (next_line, next_start, next_end, _) = slots[index + 1];
+            let (next_line, next_start, next_end, _) = *next;
             if end < need
-                && next_line.clip == slots[index].0.clip
+                && next_line.clip == line.clip
                 && next_start < need
                 && need <= next_end - least
             {
-                slots[index].2 = need;
-                slots[index + 1].1 = need;
+                current.2 = need;
+                next.1 = need;
             }
         }
         slots.retain(|(_, start, end, _)| end > start);
@@ -723,7 +748,9 @@ pub async fn caption_speakers(
     let mut images = Vec::new();
     let mut listing = Vec::new();
     for (n, line) in lines.iter().enumerate() {
-        let clip = clip_of(&line.clip).unwrap();
+        let Some(clip) = clip_of(&line.clip) else {
+            continue;
+        };
         let ClipContent::Video {
             media,
             source_in,
@@ -733,7 +760,9 @@ pub async fn caption_speakers(
         else {
             continue;
         };
-        let media = project.media(media).unwrap();
+        let Some(media) = project.media(media) else {
+            continue;
+        };
         let at = (line.start() + line.end()) / 2.0;
         let path = dir.join(format!("line-{n}.jpg"));
         let (source, at_clone, out) = (PathBuf::from(&media.path), at, path.clone());
@@ -791,11 +820,15 @@ pub async fn caption_speakers(
         let Some(line) = lines.get(said.n) else {
             continue;
         };
-        let clip = clip_of(&line.clip).unwrap();
+        let Some(clip) = clip_of(&line.clip) else {
+            continue;
+        };
         let ClipContent::Video { media, .. } = &clip.content else {
             continue;
         };
-        let media = project.media(media).unwrap().clone();
+        let Some(media) = project.media(media).cloned() else {
+            continue;
+        };
         let media_size = (media.width, media.height);
         // The speaker is whoever the model names as them in this still ("speaker_2 (Mother)", "Mother" or "speaker_2").
         let names = [
@@ -811,18 +844,7 @@ pub async fn caption_speakers(
                     .iter()
                     .any(|name| !name.is_empty() && seen.who.trim().eq_ignore_ascii_case(name))
             })
-            .map(|seen| &seen.face)
-            .filter(|face| face.len() == 4 && face[2] > face[0] && face[3] > face[1])
-            .map(|face| {
-                let (mw, mh) = (f64::from(media.width), f64::from(media.height));
-                // [ymin, xmin, ymax, xmax] 0–1000 → [x0, y0, x1, y1] source pixels.
-                [
-                    face[1] / 1000.0 * mw,
-                    face[0] / 1000.0 * mh,
-                    face[3] / 1000.0 * mw,
-                    face[2] / 1000.0 * mh,
-                ]
-            });
+            .and_then(|seen| box_pixels(&seen.face, media_size));
         let track = match face {
             Some(region) => {
                 let (path, at, from, to) = (
@@ -856,16 +878,7 @@ pub async fn caption_speakers(
                 .iter()
                 .map(|seen| &seen.face)
                 .chain(&said.overlays)
-                .filter(|b| b.len() == 4 && b[2] > b[0] && b[3] > b[1])
-                .map(|b| {
-                    let (mw, mh) = (f64::from(media_size.0), f64::from(media_size.1));
-                    [
-                        b[1] / 1000.0 * mw,
-                        b[0] / 1000.0 * mh,
-                        b[3] / 1000.0 * mw,
-                        b[2] / 1000.0 * mh,
-                    ]
-                })
+                .filter_map(|b| box_pixels(b, media_size))
                 .collect(),
             track,
         });
@@ -906,13 +919,17 @@ pub async fn caption_speakers(
         // Where each speaker's last caption in a clip sat.
         let mut sides: HashMap<(String, String), Side> = HashMap::new();
         for plan in &plans {
-            let line = &lines[plan.line];
-            let footage = project
+            let Some(line) = lines.get(plan.line) else {
+                continue;
+            };
+            let Some(footage) = project
                 .clips
                 .iter()
                 .find(|clip| clip.id == line.clip)
                 .cloned()
-                .unwrap();
+            else {
+                continue;
+            };
             let ClipContent::Video {
                 media,
                 source_in,
@@ -923,7 +940,9 @@ pub async fn caption_speakers(
             else {
                 continue;
             };
-            let media = project.media(media).unwrap().clone();
+            let Some(media) = project.media(media).cloned() else {
+                continue;
+            };
             let on_timeline =
                 |seconds: f64| footage.start as f64 + (seconds - source_in) / speed * fps;
             let snap = (SNAP * fps).round() as i64;
@@ -1062,11 +1081,17 @@ pub async fn caption_speakers(
             let track = free_track(project, start, end);
             let who = plan.who.clone();
             let id = project.fresh_id("c");
-            let color = colors[speakers
+            let color = colors
                 .iter()
-                .position(|speaker| speaker == &who)
-                .unwrap_or(0)
-                % colors.len()];
+                .cycle()
+                .nth(
+                    speakers
+                        .iter()
+                        .position(|speaker| speaker == &who)
+                        .unwrap_or(0),
+                )
+                .copied()
+                .unwrap_or(ClipColor::Cyan);
             project.clips.push(Clip {
                 id,
                 track,
@@ -1178,7 +1203,7 @@ pub async fn follow_region(
         ..
     } = &footage.content
     else {
-        unreachable!()
+        return Err("no footage at that time to track".to_owned());
     };
     let media = project.media(media).ok_or("missing media")?.clone();
     let target = project

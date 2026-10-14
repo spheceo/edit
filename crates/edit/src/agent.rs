@@ -211,7 +211,12 @@ impl Agents {
                         Duration::from_secs(30),
                     )
                     .await?;
-                for row in page["data"].as_array().cloned().unwrap_or_default() {
+                for row in page
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     if row["hidden"].as_bool().unwrap_or(false) {
                         continue;
                     }
@@ -237,7 +242,10 @@ impl Agents {
                         is_default: row["isDefault"].as_bool().unwrap_or(false),
                     });
                 }
-                cursor = page["nextCursor"].as_str().map(str::to_owned);
+                cursor = page
+                    .get("nextCursor")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 if cursor.is_none() {
                     break;
                 }
@@ -311,8 +319,10 @@ impl Agents {
 
     fn emit(&self, project: &str, event: Value) {
         let mut event = event;
-        event["type"] = json!("agent");
-        event["project"] = json!(project);
+        if let Some(fields) = event.as_object_mut() {
+            fields.insert("type".to_owned(), json!("agent"));
+            fields.insert("project".to_owned(), json!(project));
+        }
         self.store.emit(event);
     }
 
@@ -451,18 +461,23 @@ impl Agents {
             "input": [{ "type": "text", "text": text, "text_elements": [] }],
             "approvalPolicy": "never",
         });
-        if let Some(model) = model {
-            params["model"] = json!(model);
-        }
-        if let Some(effort) = effort {
-            params["effort"] = json!(effort);
+        if let Some(fields) = params.as_object_mut() {
+            if let Some(model) = model {
+                fields.insert("model".to_owned(), json!(model));
+            }
+            if let Some(effort) = effort {
+                fields.insert("effort".to_owned(), json!(effort));
+            }
         }
         match codex
             .call("turn/start", params, Duration::from_secs(30))
             .await
         {
             Ok(turn) => {
-                let id = turn["turn"]["id"].as_str().map(str::to_owned);
+                let id = turn
+                    .pointer("/turn/id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 self.with_chat(project, |chat| chat.turn = id);
                 self.save(project);
                 Ok(())
@@ -503,8 +518,9 @@ impl Agents {
                 Duration::from_secs(30),
             )
             .await?;
-        let thread = started["thread"]["id"]
-            .as_str()
+        let thread = started
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
             .ok_or("Codex didn't start a thread")?
             .to_owned();
         let (done, answer) = tokio::sync::oneshot::channel();
@@ -516,8 +532,8 @@ impl Agents {
             },
         );
         let mut params = json!({ "threadId": thread, "input": input, "model": model, "effort": effort, "approvalPolicy": "never" });
-        if let Some(schema) = schema {
-            params["outputSchema"] = schema;
+        if let (Some(schema), Some(fields)) = (schema, params.as_object_mut()) {
+            fields.insert("outputSchema".to_owned(), schema);
         }
         let result = match codex
             .call("turn/start", params, Duration::from_secs(60))
@@ -541,17 +557,21 @@ impl Agents {
             return false;
         };
         match method {
-            "item/completed" if params["item"]["type"] == "agentMessage" => {
-                ask.text = params["item"]["text"]
-                    .as_str()
+            "item/completed"
+                if params.pointer("/item/type").and_then(Value::as_str) == Some("agentMessage") =>
+            {
+                ask.text = params
+                    .pointer("/item/text")
+                    .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned();
             }
             "turn/completed" => {
                 let turn = &params["turn"];
                 let result = match turn["status"].as_str() {
-                    Some("failed") => Err(turn["error"]["message"]
-                        .as_str()
+                    Some("failed") => Err(turn
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
                         .unwrap_or("The model failed")
                         .to_owned()),
                     Some("interrupted") => Err("Stopped.".to_owned()),
@@ -587,8 +607,9 @@ impl Agents {
                 Duration::from_secs(30),
             )
             .await?;
-        started["thread"]["id"]
-            .as_str()
+        started
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| "Codex didn't start a thread".to_owned())
     }
@@ -644,8 +665,11 @@ impl Agents {
 
     /// Codex notifications, mapped onto the chat of the project their thread belongs to.
     fn on_message(&self, message: Value) {
-        let method = message["method"].as_str().unwrap_or_default();
-        let params = &message["params"];
+        let method = message
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let params = message.get("params").unwrap_or(&Value::Null);
         // The process is gone: no turn of it will ever complete, so end them now.
         if method == EXITED {
             let running: Vec<String> = self
@@ -724,8 +748,9 @@ impl Agents {
                             _ if done => "done",
                             _ => "running",
                         };
-                        let text = item["error"]["message"]
-                            .as_str()
+                        let text = item
+                            .pointer("/error/message")
+                            .and_then(Value::as_str)
                             .map(str::to_owned)
                             .unwrap_or_else(|| summarize_args(&item["arguments"]));
                         let detail = serde_json::to_string_pretty(&item["arguments"]).ok();
@@ -753,8 +778,9 @@ impl Agents {
             }
             "error" => {
                 if !params["willRetry"].as_bool().unwrap_or(false) {
-                    let message = params["error"]["message"]
-                        .as_str()
+                    let message = params
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
                         .unwrap_or("Codex reported an error")
                         .to_owned();
                     self.upsert(
@@ -772,8 +798,8 @@ impl Agents {
                 let turn = &params["turn"];
                 let error = match turn["status"].as_str() {
                     Some("failed") => Some(
-                        turn["error"]["message"]
-                            .as_str()
+                        turn.pointer("/error/message")
+                            .and_then(Value::as_str)
                             .unwrap_or("The turn failed")
                             .to_owned(),
                     ),
@@ -944,7 +970,9 @@ impl Codex {
                                         .as_str()
                                         .unwrap_or("Codex error")
                                         .to_owned()),
-                                    None => Ok(message["result"].clone()),
+                                    None => {
+                                        Ok(message.get("result").cloned().unwrap_or(Value::Null))
+                                    }
                                 };
                                 let _ = reply.send(result);
                             }
@@ -996,8 +1024,8 @@ impl Codex {
 
     fn notify(&self, method: &str, params: Value) {
         let mut message = json!({ "jsonrpc": "2.0", "method": method });
-        if !params.is_null() {
-            message["params"] = params;
+        if let (false, Some(fields)) = (params.is_null(), message.as_object_mut()) {
+            fields.insert("params".to_owned(), params);
         }
         self.write(&message);
     }

@@ -73,14 +73,23 @@ pub fn probe(path: &Path) -> Result<Probe, String> {
         ));
     }
     let info: Value = serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())?;
-    let streams = info["streams"].as_array().cloned().unwrap_or_default();
+    let streams = info
+        .get("streams")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let video = streams.iter().find(|stream| {
         stream["codec_type"] == "video"
-            && stream["disposition"]["attached_pic"].as_i64().unwrap_or(0) == 0
+            && stream
+                .pointer("/disposition/attached_pic")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                == 0
     });
     let has_audio = streams.iter().any(|stream| stream["codec_type"] == "audio");
-    let duration = info["format"]["duration"]
-        .as_str()
+    let duration = info
+        .pointer("/format/duration")
+        .and_then(Value::as_str)
         .and_then(|value| value.parse::<f64>().ok())
         .or_else(|| {
             video
@@ -139,8 +148,9 @@ fn rotation_of(stream: &Value) -> i64 {
             }
         }
     }
-    stream["tags"]["rotate"]
-        .as_str()
+    stream
+        .pointer("/tags/rotate")
+        .and_then(Value::as_str)
         .and_then(|value| value.parse().ok())
         .unwrap_or(0)
 }
@@ -243,7 +253,7 @@ impl Processor {
         let thumb_count = std::fs::read_to_string(&paths.thumbs_meta)
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .and_then(|meta| meta["count"].as_u64())
+            .and_then(|meta| meta.get("count").and_then(Value::as_u64))
             .unwrap_or(0) as u32;
         let proxied = paths.proxy_done.is_file();
         MediaStatus {

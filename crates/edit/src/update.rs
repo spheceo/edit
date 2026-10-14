@@ -198,15 +198,17 @@ pub fn check() -> Result<Option<Release>, String> {
     }
     let value: serde_json::Value =
         serde_json::from_str(&body).map_err(|error| format!("unexpected answer: {error}"))?;
-    let tag = value["tag_name"]
-        .as_str()
+    let tag = value
+        .get("tag_name")
+        .and_then(serde_json::Value::as_str)
         .ok_or("a release without a tag")?;
     if !newer(tag, VERSION) {
         return Ok(None);
     }
     let name = format!("edit-{}.tar.gz", asset_target());
-    let Some(asset) = value["assets"]
-        .as_array()
+    let Some(asset) = value
+        .get("assets")
+        .and_then(serde_json::Value::as_array)
         .and_then(|assets| assets.iter().find(|asset| asset["name"] == name.as_str()))
     else {
         return Ok(None);
@@ -360,7 +362,7 @@ fn sha256(path: &Path) -> Result<String, String> {
         if read == 0 {
             break;
         }
-        hasher.update(&buffer[..read]);
+        hasher.update(buffer.get(..read).unwrap_or_default());
     }
     Ok(hasher
         .finalize()

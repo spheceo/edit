@@ -127,7 +127,7 @@ impl Library {
             });
             let mut next = Vec::new();
             for ((_, path), children) in level.into_iter().zip(read) {
-                for entry in children? {
+                for entry in &children? {
                     let id = entry["id"].as_str().unwrap_or_default().to_owned();
                     let name = entry["name"].as_str().unwrap_or_default().to_owned();
                     let mime = entry["mimeType"].as_str().unwrap_or_default();
@@ -138,8 +138,8 @@ impl Library {
                             self.text(&format!("{API}/files/{id}/export?mimeType=text/plain"))?;
                     } else if path.is_empty() && name.ends_with(".txt") {
                         index = self.text(&format!("{API}/files/{id}?alt=media"))?;
-                    } else if let (Some((stem, extension)), false) =
-                        (name.rsplit_once('.'), path.is_empty())
+                    } else if let (Some((stem, extension)), Some((top, rest))) =
+                        (name.rsplit_once('.'), path.split_first())
                     {
                         if !AUDIO.contains(&extension.to_lowercase().as_str()) {
                             continue;
@@ -147,12 +147,12 @@ impl Library {
                         sounds.push(Sound {
                             // Every Epidemic download ends in its name; it says nothing.
                             name: stem.trim_end_matches(" - Epidemic Sound").to_owned(),
-                            kind: if path[0].eq_ignore_ascii_case("music") {
+                            kind: if top.eq_ignore_ascii_case("music") {
                                 "music"
                             } else {
                                 "sfx"
                             },
-                            category: path[1..].join(" / "),
+                            category: rest.join(" / "),
                             note: None,
                             bytes: entry["size"]
                                 .as_str()
@@ -195,8 +195,14 @@ impl Library {
             }
             let value: Value =
                 serde_json::from_str(&self.text(&url)?).map_err(|error| error.to_string())?;
-            files.extend(value["files"].as_array().cloned().unwrap_or_default());
-            match value["nextPageToken"].as_str() {
+            files.extend(
+                value
+                    .get("files")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+            match value.get("nextPageToken").and_then(Value::as_str) {
                 Some(next) => page = next.to_owned(),
                 None => return Ok(files),
             }
@@ -252,13 +258,15 @@ impl Library {
             &["--max-time", "30", "https://oauth2.googleapis.com/token"],
         )?;
         let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        let token = value["access_token"]
-            .as_str()
+        let token = value
+            .get("access_token")
+            .and_then(Value::as_str)
             .filter(|_| code == 200)
             .ok_or_else(|| format!("Google refused the Drive sign-in ({code})."))?
             .to_owned();
-        let lasts = value["expires_in"]
-            .as_u64()
+        let lasts = value
+            .get("expires_in")
+            .and_then(Value::as_u64)
             .unwrap_or(3600)
             .saturating_sub(120);
         *cached = Some((token.clone(), Instant::now() + Duration::from_secs(lasts)));
@@ -587,10 +595,9 @@ fn clean_note(note: &str) -> Option<String> {
         })
     };
     let parts: Vec<&str> = note.split(", ").collect();
-    let parts = if parts.first().is_some_and(|part| label(part)) {
-        &parts[1..]
-    } else {
-        &parts[..]
+    let parts = match parts.split_first() {
+        Some((first, rest)) if label(first) => rest,
+        _ => &parts,
     };
     let note = parts.join(", ");
     (!note.is_empty()).then_some(note)
@@ -634,7 +641,7 @@ fn curl(config: &str, args: &[&str]) -> Result<(u16, Vec<u8>), String> {
     }
     let mut body = output.stdout;
     let split = body.iter().rposition(|byte| *byte == b'\n').unwrap_or(0);
-    let code = String::from_utf8_lossy(&body[split..])
+    let code = String::from_utf8_lossy(body.get(split..).unwrap_or_default())
         .trim()
         .parse()
         .unwrap_or(0);
@@ -644,8 +651,9 @@ fn curl(config: &str, args: &[&str]) -> Result<(u16, Vec<u8>), String> {
 
 fn drive_error(code: u16, body: &str) -> String {
     let value: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-    let message = value["error"]["message"]
-        .as_str()
+    let message = value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
         .unwrap_or("request failed");
     match code {
         401 | 403 => format!("Google Drive refused the sound library ({code}): {message}"),

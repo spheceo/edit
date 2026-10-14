@@ -60,7 +60,7 @@ pub fn track(
     );
     let centre = (((x0 + x1) / 2.0 * sx) as f32, ((y0 + y1) / 2.0 * sy) as f32);
     let image = |index: usize| Image {
-        pixels: &frames[index],
+        pixels: frames.get(index).map_or(&[][..], |frame| frame.as_slice()),
         width,
         height,
     };
@@ -84,7 +84,9 @@ pub fn track(
                     }
                 }
             }
-            centres[index as usize] = at;
+            if let Some(centre) = centres.get_mut(index as usize) {
+                *centre = at;
+            }
             index += direction;
         }
     }
@@ -92,7 +94,9 @@ pub fn track(
     // A short moving average takes out the tracker's own jitter.
     let smooth: Vec<(f32, f32)> = (0..centres.len())
         .map(|index| {
-            let window = &centres[index.saturating_sub(2)..(index + 3).min(centres.len())];
+            let window = centres
+                .get(index.saturating_sub(2)..(index + 3).min(centres.len()))
+                .unwrap_or_default();
             let n = window.len() as f32;
             (
                 window.iter().map(|c| c.0).sum::<f32>() / n,
@@ -173,7 +177,9 @@ impl Image<'_> {
     fn at(&self, x: i64, y: i64) -> f32 {
         let x = x.clamp(0, self.width as i64 - 1) as usize;
         let y = y.clamp(0, self.height as i64 - 1) as usize;
-        f32::from(self.pixels[y * self.width + x])
+        self.pixels
+            .get(y * self.width + x)
+            .map_or(0.0, |pixel| f32::from(*pixel))
     }
 
     /// A `tw`×`th` patch centred at `centre`.

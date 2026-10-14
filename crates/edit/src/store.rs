@@ -126,7 +126,7 @@ impl Store {
                     let name = std::fs::read(&path)
                         .ok()
                         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                        .and_then(|value| value["name"].as_str().map(str::to_owned))
+                        .and_then(|value| value.get("name")?.as_str().map(str::to_owned))
                         .unwrap_or_else(|| id.to_owned());
                     out.push(ProjectSummary {
                         id: id.to_owned(),

@@ -102,9 +102,15 @@ pub async fn place(app: &App, id: &str, media: Option<Vec<String>>) -> Result<Va
                 continue;
             };
             // Breathing room, without reaching into the words around it.
-            let first = &words[found.first];
-            let last = &words[found.last];
-            let before = found.first.checked_sub(1).map(|at| words[at].end);
+            let (Some(first), Some(last)) = (words.get(found.first), words.get(found.last)) else {
+                report.push(json!({ "cut_in": preview, "placed": false, "why": "its words weren't found in the recordings" }));
+                continue;
+            };
+            let before = found
+                .first
+                .checked_sub(1)
+                .and_then(|at| words.get(at))
+                .map(|word| word.end);
             let after = words.get(found.last + 1).map(|word| word.start);
             let from = (first.start - LEAD).max(before.map_or(0.0, |end| (end + first.start) / 2.0)).max(0.0);
             let to = (last.end + TAIL).min(after.map_or(f64::MAX, |start| (last.end + start) / 2.0));
@@ -274,8 +280,8 @@ fn same(a: &str, b: &str) -> bool {
     }
     // Edit distance of at most one.
     let (mut i, mut j, mut edits) = (0, 0, 0);
-    while i < a.len() && j < b.len() {
-        if a[i] == b[j] {
+    while let (Some(x), Some(y)) = (a.get(i), b.get(j)) {
+        if x == y {
             i += 1;
             j += 1;
             continue;
@@ -312,19 +318,18 @@ pub fn find(written: &[String], heard: &[String]) -> Option<Found> {
     }
     let width = cols + 1;
     let mut score = vec![0_i32; (rows + 1) * width];
+    // A cell outside the table is no alignment.
+    let cell = |score: &[i32], i: usize, j: usize| score.get(i * width + j).copied().unwrap_or(0);
     let mut best = (0, 0, 0);
-    for i in 1..=rows {
-        for j in 1..=cols {
-            let diagonal = score[(i - 1) * width + j - 1]
-                + if same(&written[i - 1], &heard[j - 1]) {
-                    2
-                } else {
-                    -1
-                };
-            let up = score[(i - 1) * width + j] - 1;
-            let left = score[i * width + j - 1] - 1;
+    for (i, said) in (1..).zip(written) {
+        for (j, read) in (1..).zip(heard) {
+            let diagonal = cell(&score, i - 1, j - 1) + if same(said, read) { 2 } else { -1 };
+            let up = cell(&score, i - 1, j) - 1;
+            let left = cell(&score, i, j - 1) - 1;
             let value = diagonal.max(up).max(left).max(0);
-            score[i * width + j] = value;
+            if let Some(slot) = score.get_mut(i * width + j) {
+                *slot = value;
+            }
             if value > best.0 {
                 best = (value, i, j);
             }
@@ -338,17 +343,20 @@ pub fn find(written: &[String], heard: &[String]) -> Option<Found> {
     let last = j - 1;
     let mut first = last;
     let mut matched = 0;
-    while i > 0 && j > 0 && score[i * width + j] > 0 {
-        let here = score[i * width + j];
-        let hit = same(&written[i - 1], &heard[j - 1]);
-        if here == score[(i - 1) * width + j - 1] + if hit { 2 } else { -1 } {
+    while i > 0 && j > 0 && cell(&score, i, j) > 0 {
+        let (Some(said), Some(read)) = (written.get(i - 1), heard.get(j - 1)) else {
+            break;
+        };
+        let here = cell(&score, i, j);
+        let hit = same(said, read);
+        if here == cell(&score, i - 1, j - 1) + if hit { 2 } else { -1 } {
             if hit {
                 matched += 1;
                 first = j - 1;
             }
             i -= 1;
             j -= 1;
-        } else if here == score[(i - 1) * width + j] - 1 {
+        } else if here == cell(&score, i - 1, j) - 1 {
             i -= 1;
         } else {
             j -= 1;

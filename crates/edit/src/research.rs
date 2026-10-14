@@ -146,8 +146,10 @@ fn dump(url: &str) -> Result<String, String> {
             if read == 0 {
                 break;
             }
-            page.extend_from_slice(&chunk[..read]);
-            let tail = &page[page.len().saturating_sub(64)..];
+            page.extend_from_slice(chunk.get(..read).unwrap_or_default());
+            let tail = page
+                .get(page.len().saturating_sub(64)..)
+                .unwrap_or_default();
             if tail.windows(7).any(|window| window == b"</html>") {
                 break;
             }
@@ -224,11 +226,11 @@ fn readable(page: &str) -> String {
         let (open, close) = (format!("<{tag}"), format!("</{tag}>"));
         let mut kept = String::with_capacity(text.len());
         let mut rest = text.as_str();
-        while let Some(start) = rest.find(&open) {
-            kept.push_str(&rest[..start]);
-            rest = rest[start..]
-                .find(&close)
-                .map_or("", |end| &rest[start + end + close.len()..]);
+        while let Some((before, from)) = rest.split_once(open.as_str()) {
+            kept.push_str(before);
+            rest = from
+                .split_once(close.as_str())
+                .map_or("", |(_, after)| after);
         }
         kept.push_str(rest);
         text = kept;
@@ -555,12 +557,13 @@ fn image_hits(page: &str) -> Vec<Hit> {
         .skip(1)
         .filter_map(|block| {
             let meta: Value = serde_json::from_str(&attribute(block, "m")?).ok()?;
-            let image = meta["murl"].as_str()?.to_owned();
+            let field = |name: &str| meta.get(name).and_then(Value::as_str);
+            let image = field("murl")?.to_owned();
             image.starts_with("http").then(|| {
                 (
                     image,
-                    meta["purl"].as_str().unwrap_or_default().to_owned(),
-                    meta["t"].as_str().unwrap_or_default().to_owned(),
+                    field("purl").unwrap_or_default().to_owned(),
+                    field("t").unwrap_or_default().to_owned(),
                 )
             })
         })
@@ -645,9 +648,9 @@ fn dimensions(path: &Path) -> Option<(u32, u32)> {
 /// An attribute's value in the tag that `block` starts inside, unescaped.
 fn attribute(block: &str, name: &str) -> Option<String> {
     let tag = block.split('>').next()?;
-    let start = tag.find(&format!(" {name}=\""))? + name.len() + 3;
-    let end = tag[start..].find('"')? + start;
-    Some(unescape(&tag[start..end]))
+    let (_, rest) = tag.split_once(&format!(" {name}=\""))?;
+    let (value, _) = rest.split_once('"')?;
+    Some(unescape(value))
 }
 
 /// Markup to plain text: tags dropped, entities read, spaces collapsed.
@@ -690,13 +693,13 @@ fn decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
-    while index < bytes.len() {
-        let escaped = (bytes[index] == b'%')
+    while let Some(&byte) = bytes.get(index) {
+        let escaped = (byte == b'%')
             .then(|| bytes.get(index + 1..index + 3))
             .flatten()
             .and_then(|hex| std::str::from_utf8(hex).ok())
             .and_then(|hex| u8::from_str_radix(hex, 16).ok());
-        match (escaped, bytes[index]) {
+        match (escaped, byte) {
             (Some(byte), _) => {
                 out.push(byte);
                 index += 3;

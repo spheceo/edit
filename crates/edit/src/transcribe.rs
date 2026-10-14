@@ -132,9 +132,10 @@ pub fn run(source: &Path, target: &Path) -> Result<(), String> {
     let (body, code) = text.rsplit_once('\n').unwrap_or((&text, "0"));
     let value: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     if code.trim() != "200" {
-        let message = value["error"]
-            .as_str()
-            .or_else(|| value["detail"]["message"].as_str())
+        let message = value
+            .get("error")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/detail/message").and_then(Value::as_str))
             .unwrap_or(body.trim());
         return Err(format!("transcription failed ({}): {message}", code.trim()));
     }

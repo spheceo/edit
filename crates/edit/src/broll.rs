@@ -373,7 +373,8 @@ fn geocode(place: &str) -> Result<(f64, f64, String), String> {
     );
     let found: Value = serde_json::from_str(&fetch(&url)?)
         .map_err(|error| format!("unexpected answer from the map search: {error}"))?;
-    match found["status"].as_str() {
+    let status = found.get("status").and_then(Value::as_str);
+    match status {
         Some("OK") => {}
         Some("ZERO_RESULTS") => {
             return Err(format!(
@@ -383,16 +384,17 @@ fn geocode(place: &str) -> Result<(f64, f64, String), String> {
         _ => {
             return Err(format!(
                 "the map search failed: {}",
-                found["error_message"]
-                    .as_str()
-                    .or(found["error"].as_str())
-                    .or(found["status"].as_str())
+                found
+                    .get("error_message")
+                    .and_then(Value::as_str)
+                    .or(found.get("error").and_then(Value::as_str))
+                    .or(status)
                     .unwrap_or("no answer")
             ))
         }
     }
-    let first = &found["results"][0];
-    let location = &first["geometry"]["location"];
+    let first = found.pointer("/results/0").unwrap_or(&Value::Null);
+    let location = first.pointer("/geometry/location").unwrap_or(&Value::Null);
     Ok((
         location["lat"].as_f64().ok_or("no latitude")?,
         location["lng"].as_f64().ok_or("no longitude")?,
@@ -428,8 +430,8 @@ fn outline_in(found: &Value) -> Option<Vec<[f64; 2]>> {
         .find_map(|place| {
             let polygon = &place["displayPolygon"];
             let ring = match polygon["type"].as_str()? {
-                "Polygon" => &polygon["coordinates"][0],
-                "MultiPolygon" => &polygon["coordinates"][0][0],
+                "Polygon" => polygon.pointer("/coordinates/0")?,
+                "MultiPolygon" => polygon.pointer("/coordinates/0/0")?,
                 _ => return None,
             };
             let ring: Vec<[f64; 2]> = ring
@@ -695,10 +697,10 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
         "width": width, "height": height,
         "relay": crate::transcribe::relay(),
     });
-    if frames > 0 {
-        config["frames"] = json!(frames);
-        config["orbit"] = json!(orbit);
-        config["push"] = json!(push);
+    if let (true, Some(fields)) = (frames > 0, config.as_object_mut()) {
+        fields.insert("frames".to_owned(), json!(frames));
+        fields.insert("orbit".to_owned(), json!(orbit));
+        fields.insert("push".to_owned(), json!(push));
     }
     let dir = app.store.uploads_dir(project_id).join("maps");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
@@ -750,8 +752,9 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
             "right": (right? - half_w).round(),
         }))
     };
-    let track: Vec<Value> = info["track"]
-        .as_array()
+    let track: Vec<Value> = info
+        .get("track")
+        .and_then(Value::as_array)
         .map(|track| {
             // Every half second, and the last frame.
             let step = (fps as usize / 2).max(1);
@@ -762,7 +765,7 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
                 .filter(|(frame, _)| frame % step == 0 || *frame == last)
                 .filter_map(|(frame, bounds)| {
                     let mut at = place_box(bounds)?;
-                    at["frame"] = json!(frame);
+                    at.as_object_mut()?.insert("frame".to_owned(), json!(frame));
                     Some(at)
                 })
                 .collect()
@@ -771,7 +774,7 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
     let building = track
         .first()
         .cloned()
-        .or_else(|| place_box(&info["building"]));
+        .or_else(|| info.get("building").and_then(place_box));
     let (_, added, errors) = crate::server::import_paths(
         app,
         project_id,

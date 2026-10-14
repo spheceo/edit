@@ -66,12 +66,12 @@ fn id_chars(text: &str) -> String {
 fn query<'a>(url: &'a str, key: &str) -> Option<&'a str> {
     let search = url.split_once('?')?.1.split('#').next()?;
     let needle = format!("{key}=");
-    let at = search
-        .match_indices(&needle)
-        .find(|(at, _)| *at == 0 || matches!(search.as_bytes()[at - 1], b'&' | b'?'))?
-        .0;
-    let value = &search[at + needle.len()..];
-    Some(&value[..value.find('&').unwrap_or(value.len())])
+    let (at, _) = search.match_indices(&needle).find(|(at, _)| {
+        at.checked_sub(1)
+            .and_then(|before| search.as_bytes().get(before))
+            .is_none_or(|byte| matches!(byte, b'&' | b'?'))
+    })?;
+    search.get(at + needle.len()..)?.split('&').next()
 }
 
 /// Fetches a Doc that's shared with anyone who has the link, as HTML (which
@@ -134,9 +134,8 @@ fn read_html(html: &str) -> (String, Vec<Para>, HashMap<String, String>) {
     let mut rest = html;
     while !rest.is_empty() {
         if let Some(open) = rest.strip_prefix('<') {
-            let end = open.find('>').unwrap_or(open.len());
-            let tag = &open[..end];
-            rest = open.get(end + 1..).unwrap_or("");
+            let (tag, after) = open.split_once('>').unwrap_or((open, ""));
+            rest = after;
             let closing = tag.starts_with('/');
             let name = tag
                 .trim_start_matches('/')
@@ -184,7 +183,8 @@ fn read_html(html: &str) -> (String, Vec<Para>, HashMap<String, String>) {
                         // A comment marker in the text.
                         (Some(href), Some(_)) if href.starts_with("#cmnt") => {
                             if let Some(para) = current.as_mut() {
-                                para.refs.push((para.text.len(), href[1..].to_owned()));
+                                let id = href.strip_prefix('#').unwrap_or(&href);
+                                para.refs.push((para.text.len(), id.to_owned()));
                             }
                             marker = true;
                         }
@@ -198,9 +198,12 @@ fn read_html(html: &str) -> (String, Vec<Para>, HashMap<String, String>) {
                 _ => {}
             }
         } else {
-            let end = rest.find('<').unwrap_or(rest.len());
-            let text = decode_entities(&rest[..end]);
-            rest = &rest[end..];
+            let (text, after) = match rest.find('<') {
+                Some(end) => rest.split_at(end),
+                None => (rest, ""),
+            };
+            let text = decode_entities(text);
+            rest = after;
             if hidden || marker {
                 continue;
             }
@@ -222,9 +225,9 @@ fn read_html(html: &str) -> (String, Vec<Para>, HashMap<String, String>) {
 }
 
 fn attribute(tag: &str, name: &str) -> Option<String> {
-    let at = tag.find(&format!(" {name}=\""))? + name.len() + 3;
-    let end = tag[at..].find('"')?;
-    Some(tag[at..at + end].to_owned())
+    let (_, rest) = tag.split_once(&format!(" {name}=\""))?;
+    let (value, _) = rest.split_once('"')?;
+    Some(value.to_owned())
 }
 
 /// Docs wraps links as google.com/url?q=<target>.
@@ -241,15 +244,19 @@ fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&text[i + 1..i + 3], 16) {
-                out.push(byte);
+    while let Some(&byte) = bytes.get(i) {
+        if byte == b'%' && i + 2 < bytes.len() {
+            // Not two hex digits (or not even whole characters): a plain `%`.
+            if let Some(decoded) = text
+                .get(i + 1..i + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                out.push(decoded);
                 i += 3;
                 continue;
             }
         }
-        out.push(bytes[i]);
+        out.push(byte);
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
@@ -261,15 +268,17 @@ fn decode_entities(text: &str) -> String {
     }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(at) = rest.find('&') {
-        out.push_str(&rest[..at]);
-        rest = &rest[at..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
+    while let Some((before, after)) = rest.split_once('&') {
+        out.push_str(before);
+        // An entity is short: its `;` comes within the next few bytes.
+        let Some((entity, tail)) = after
+            .split_once(';')
+            .filter(|(entity, _)| entity.len() < 11)
+        else {
             out.push('&');
-            rest = &rest[1..];
+            rest = after;
             continue;
         };
-        let entity = &rest[1..end];
         let decoded = match entity {
             "amp" => Some('&'),
             "lt" => Some('<'),
@@ -291,11 +300,11 @@ fn decode_entities(text: &str) -> String {
         match decoded {
             Some(c) => {
                 out.push(if c == '\u{a0}' { ' ' } else { c });
-                rest = &rest[end + 1..];
+                rest = tail;
             }
             None => {
                 out.push('&');
-                rest = &rest[1..];
+                rest = after;
             }
         }
     }
@@ -317,25 +326,25 @@ fn timestamp(text: &str) -> Option<(f64, usize)> {
     let mut parts = Vec::new();
     let mut used = 0;
     loop {
-        let digits = text[used..]
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .count();
+        let rest = text.get(used..)?;
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
         if digits == 0 || digits > 2 || (!parts.is_empty() && digits != 2) {
             return None;
         }
-        parts.push(text[used..used + digits].parse::<f64>().ok()?);
+        let (number, rest) = rest.split_at_checked(digits)?;
+        parts.push(number.parse::<f64>().ok()?);
         used += digits;
         if parts.len() < 3
-            && text[used..].starts_with(':')
-            && text[used + 1..].starts_with(|c: char| c.is_ascii_digit())
+            && rest
+                .strip_prefix(':')
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
         {
             used += 1;
         } else {
             break;
         }
     }
-    if parts.len() < 2 || parts[1..].iter().any(|part| *part >= 60.0) {
+    if parts.len() < 2 || parts.iter().skip(1).any(|part| *part >= 60.0) {
         return None;
     }
     Some((
@@ -348,34 +357,39 @@ fn find_ranges(text: &str) -> Vec<Range> {
     let mut ranges = Vec::new();
     let mut at = 0;
     while at < text.len() {
-        let Some(offset) = text[at..].find(|c: char| c.is_ascii_digit()) else {
+        let Some(offset) = text
+            .get(at..)
+            .and_then(|rest| rest.find(|c: char| c.is_ascii_digit()))
+        else {
             break;
         };
         let start = at + offset;
-        let after_digit = text[..start]
+        let after_digit = text
+            .get(..start)
+            .unwrap_or_default()
             .chars()
             .next_back()
             .is_some_and(|c| c.is_ascii_digit() || c == ':');
-        if let (false, Some((from, used))) = (after_digit, timestamp(&text[start..])) {
+        if let (false, Some((from, used))) = (after_digit, text.get(start..).and_then(timestamp)) {
             let mut cursor = start + used;
             let skip = |cursor: &mut usize| {
-                while let Some(c) = text[*cursor..]
-                    .chars()
-                    .next()
+                while let Some(c) = text
+                    .get(*cursor..)
+                    .and_then(|rest| rest.chars().next())
                     .filter(|c| c.is_whitespace() || *c == '\u{a0}')
                 {
                     *cursor += c.len_utf8();
                 }
             };
             skip(&mut cursor);
-            if let Some(dash) = text[cursor..]
-                .chars()
-                .next()
+            if let Some(dash) = text
+                .get(cursor..)
+                .and_then(|rest| rest.chars().next())
                 .filter(|c| matches!(c, '-' | '–' | '—' | '‑' | '‐' | '−'))
             {
                 cursor += dash.len_utf8();
                 skip(&mut cursor);
-                if let Some((to, used)) = timestamp(&text[cursor..]) {
+                if let Some((to, used)) = text.get(cursor..).and_then(timestamp) {
                     let end = cursor + used;
                     if to > from {
                         ranges.push(Range {
@@ -391,7 +405,9 @@ fn find_ranges(text: &str) -> Vec<Range> {
             }
         }
         at = start
-            + text[start..]
+            + text
+                .get(start..)
+                .unwrap_or_default()
                 .chars()
                 .take_while(char::is_ascii_digit)
                 .count()
@@ -451,7 +467,7 @@ pub fn parse(html: &str) -> Parsed {
         .collect();
     let only = {
         let ids: HashSet<&String> = files.iter().map(|(_, id)| id).collect();
-        (ids.len() == 1).then(|| files[0].clone())
+        files.first().filter(|_| ids.len() == 1).cloned()
     };
     let mut last = only.clone();
     let mut blocks: Vec<ScriptBlock> = Vec::new();
@@ -514,7 +530,8 @@ pub fn parse(html: &str) -> Parsed {
                 file,
                 start,
                 end: range.to.max(start + 0.1),
-                label: collapse(&para.text[range.start..range.end]).replace(['‑', '–', '—'], "-"),
+                label: collapse(para.text.get(range.start..range.end).unwrap_or_default())
+                    .replace(['‑', '–', '—'], "-"),
                 words: cue_words(&range_notes),
                 notes: range_notes,
                 media: None,
@@ -531,9 +548,9 @@ pub fn parse(html: &str) -> Parsed {
 /// (editors write where a range starts and ends this way).
 fn cue_words(notes: &[String]) -> Option<[String; 2]> {
     notes.iter().find_map(|note| {
-        let dots = note.find("..").or_else(|| note.find('…'))?;
-        let left = note[..dots].trim_end_matches('.');
-        let right = note[dots..].trim_start_matches(['.', '…']);
+        let (left, right) = note.split_once("..").or_else(|| note.split_once('…'))?;
+        let left = left.trim_end_matches('.');
+        let right = right.trim_start_matches(['.', '…']);
         let first = left.split_whitespace().next()?;
         let last = right.split_whitespace().last()?;
         Some([first.to_owned(), last.to_owned()])
@@ -602,17 +619,21 @@ fn edit_distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut row: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.chars().enumerate() {
-        let mut previous = row[0];
-        row[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let here = row[j + 1];
-            row[j + 1] = (previous + usize::from(ca != *cb))
-                .min(row[j] + 1)
+        // The row so far: the cell above-left, and the one just written to the left.
+        let (mut previous, mut left) = (i, i + 1);
+        for (cell, cb) in row.iter_mut().skip(1).zip(&b) {
+            let here = *cell;
+            *cell = (previous + usize::from(ca != *cb))
+                .min(left + 1)
                 .min(here + 1);
             previous = here;
+            left = *cell;
+        }
+        if let Some(first) = row.first_mut() {
+            *first = i + 1;
         }
     }
-    row[b.len()]
+    row.last().copied().unwrap_or(0)
 }
 
 /// The quietest moment between `from` and `to` (seconds) in a media file's
@@ -622,7 +643,7 @@ fn quietest(peaks: &[u8], from: f64, to: f64, near: f64) -> Option<f64> {
     let first = (from * rate).ceil().max(0.0) as usize;
     let last = ((to * rate).floor().max(0.0) as usize).min(peaks.len().checked_sub(1)?);
     (first..=last)
-        .map(|index| (peaks[index], index as f64 / rate))
+        .filter_map(|index| Some((*peaks.get(index)?, index as f64 / rate)))
         .min_by(|a, b| {
             a.0.cmp(&b.0)
                 .then((a.1 - near).abs().total_cmp(&(b.1 - near).abs()))
@@ -657,13 +678,14 @@ pub fn align(
     // A range written "…-02:03" ends somewhere in that second.
     let first = nearest(spoken(&cue[0]), start, |word| word.start);
     let last = nearest(spoken(&cue[1]), end + 0.5, |word| word.end);
-    let cut_in = first.map(|index| {
-        let word = &words[index];
+    let cut_in = first.and_then(|index| {
+        let word = words.get(index)?;
         let before = index
             .checked_sub(1)
-            .map(|previous| words[previous].end)
+            .and_then(|previous| words.get(previous))
+            .map(|previous| previous.end)
             .filter(|previous| *previous <= word.start);
-        match before.filter(|before| word.start - before < RUN_ON) {
+        let cut = match before.filter(|before| word.start - before < RUN_ON) {
             Some(before) => peaks
                 .and_then(|peaks| {
                     let from = (word.start - SETTLE).max(before);
@@ -676,16 +698,16 @@ pub fn align(
                 })
                 .unwrap_or(word.start),
             None => (word.start - WORD_PAD).max(before.unwrap_or(f64::MIN)),
-        }
-        .max(0.0)
+        };
+        Some(cut.max(0.0))
     });
-    let cut_out = last.map(|index| {
-        let word = &words[index];
+    let cut_out = last.and_then(|index| {
+        let word = words.get(index)?;
         let after = words
             .get(index + 1)
             .map(|next| next.start)
             .filter(|next| *next >= word.end);
-        match after.filter(|after| after - word.end < RUN_ON) {
+        Some(match after.filter(|after| after - word.end < RUN_ON) {
             Some(after) => peaks
                 .and_then(|peaks| {
                     let to = (word.end + SETTLE).min(after);
@@ -698,7 +720,7 @@ pub fn align(
                 })
                 .unwrap_or(word.end),
             None => (word.end + WORD_PAD).min(after.unwrap_or(f64::MAX)),
-        }
+        })
     });
     match (cut_in, cut_out) {
         // Out before in: one side matched the wrong word.
@@ -811,7 +833,8 @@ fn probe(url: &str, scratch: &Path) -> Result<Head, String> {
     // Only the last response counts (after redirects).
     let last = headers
         .rfind("\nHTTP/")
-        .map_or(headers.as_str(), |at| &headers[at + 1..]);
+        .and_then(|at| headers.get(at + 1..))
+        .unwrap_or(&headers);
     let status = last
         .split_whitespace()
         .nth(1)
@@ -883,15 +906,15 @@ fn safe_name(name: &str) -> String {
 
 /// The download link behind Drive's "can't scan for viruses" page, if this is that page.
 fn confirm_link(page: &str) -> Option<String> {
-    let form = &page[page.find("id=\"download-form\"")?..];
-    let action =
-        attribute(&form[..form.find('>')?], "action").map(|action| decode_entities(&action))?;
+    let form = page.get(page.find("id=\"download-form\"")?..)?;
+    let (tag, _) = form.split_once('>')?;
+    let action = attribute(tag, "action").map(|action| decode_entities(&action))?;
     // A Drive upload can itself contain HTML. Never let its form direct curl
     // at an arbitrary URL, local file or service on the editor's network.
     if action != "https://drive.usercontent.google.com/download" {
         return None;
     }
-    let form = &form[..form.find("</form>").unwrap_or(form.len())];
+    let form = form.split("</form>").next().unwrap_or(form);
     let fields: Vec<String> = form
         .split("<input")
         .skip(1)
@@ -1376,8 +1399,11 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
         let work = async move {
             let mut done: Vec<(String, Vec<Excerpt>)> = Vec::new();
             for (index, file) in files.iter().enumerate() {
-                app.scripts
-                    .set(&app, &id, |job| job.files[index].state = "downloading");
+                app.scripts.set(&app, &id, |job| {
+                    if let Some(entry) = job.files.get_mut(index) {
+                        entry.state = "downloading";
+                    }
+                });
                 let dir = app.store.drive_dir().join(file);
                 let result = {
                     let (app, id, file) = (app.clone(), id.clone(), file.clone());
@@ -1390,10 +1416,11 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                             }
                             *last = Instant::now();
                             app.scripts.set(&app, &id, |job| {
-                                let entry = &mut job.files[index];
-                                entry.bytes = bytes;
-                                entry.total = total;
-                                entry.name = Some(name.to_owned());
+                                if let Some(entry) = job.files.get_mut(index) {
+                                    entry.bytes = bytes;
+                                    entry.total = total;
+                                    entry.name = Some(name.to_owned());
+                                }
                             });
                         })
                     })
@@ -1403,8 +1430,11 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                 // Then only the parts the script uses become media.
                 let result = match result {
                     Ok(path) => {
-                        app.scripts
-                            .set(&app, &id, |job| job.files[index].state = "cutting");
+                        app.scripts.set(&app, &id, |job| {
+                            if let Some(entry) = job.files.get_mut(index) {
+                                entry.state = "cutting";
+                            }
+                        });
                         let ranges = app
                             .store
                             .get(&id)
@@ -1428,17 +1458,20 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                                 .map(|name| name.to_string_lossy().to_string()),
                         );
                         app.scripts.set(&app, &id, |job| {
-                            let entry = &mut job.files[index];
-                            entry.state = "done";
-                            entry.bytes = bytes;
-                            entry.total = Some(bytes);
-                            entry.name = name;
+                            if let Some(entry) = job.files.get_mut(index) {
+                                entry.state = "done";
+                                entry.bytes = bytes;
+                                entry.total = Some(bytes);
+                                entry.name = name;
+                            }
                         });
                         done.push((file.clone(), cut));
                     }
                     Err(error) => app.scripts.set(&app, &id, |job| {
-                        job.files[index].state = "failed";
-                        job.files[index].error = Some(error);
+                        if let Some(entry) = job.files.get_mut(index) {
+                            entry.state = "failed";
+                            entry.error = Some(error);
+                        }
                     }),
                 }
             }
@@ -1841,7 +1874,14 @@ fn lay_out(project: &mut Project) {
         project.add_track(TrackKind::Audio);
     }
     let video = tracks(project, TrackKind::Video);
-    let audio = tracks(project, TrackKind::Audio)[0].clone();
+    let audio = tracks(project, TrackKind::Audio);
+    // Both made just above.
+    let (Some(lower), Some(upper), Some(audio)) =
+        (video.first(), video.get(1), audio.first().cloned())
+    else {
+        project.script = Some(script);
+        return;
+    };
     let fps = project.fps();
     let (width, height) = (project.settings.width, project.settings.height);
     let exists = |project: &Project, clip: &Option<String>| {
@@ -1882,15 +1922,20 @@ fn lay_out(project: &mut Project) {
                     continue;
                 }
                 let next = colors.len();
-                let color = *colors
-                    .entry(file.clone())
-                    .or_insert(FILE_COLORS[next % FILE_COLORS.len()]);
+                let color = *colors.entry(file.clone()).or_insert_with(|| {
+                    FILE_COLORS
+                        .iter()
+                        .cycle()
+                        .nth(next)
+                        .copied()
+                        .unwrap_or(ClipColor::Blue)
+                });
                 let duration = (((to - from) * fps).round() as i64).max(1);
                 let link = media.has_audio.then(|| project.fresh_id("l"));
                 let id = project.fresh_id("c");
                 project.clips.push(Clip {
                     id: id.clone(),
-                    track: video[0].clone(),
+                    track: lower.clone(),
                     start: cursor,
                     duration,
                     color,
@@ -1941,7 +1986,7 @@ fn lay_out(project: &mut Project) {
                 let card = project.fresh_id("c");
                 project.clips.push(Clip {
                     id: card.clone(),
-                    track: video[0].clone(),
+                    track: lower.clone(),
                     start: cursor,
                     duration,
                     color: ClipColor::Purple,
@@ -1958,7 +2003,7 @@ fn lay_out(project: &mut Project) {
                 let words = project.fresh_id("c");
                 project.clips.push(Clip {
                     id: words,
-                    track: video[1].clone(),
+                    track: upper.clone(),
                     start: cursor,
                     duration,
                     color: ClipColor::Purple,

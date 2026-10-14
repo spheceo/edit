@@ -131,10 +131,12 @@ pub fn watch(app: App) {
         loop {
             match events.recv().await {
                 Ok(event)
-                    if event["type"] == "media" && event["status"]["transcript"] == "ready" =>
+                    if event.get("type").and_then(Value::as_str) == Some("media")
+                        && event.pointer("/status/transcript").and_then(Value::as_str)
+                            == Some("ready") =>
                 {
                     // One bad file mustn't stop the watching.
-                    if let Some(path) = event["path"].as_str() {
+                    if let Some(path) = event.get("path").and_then(Value::as_str) {
                         let _ = crate::guard::catch("naming speakers", || {
                             ensure(&app, Path::new(path))
                         });
@@ -501,11 +503,15 @@ pub fn colors(transcript: &Transcript) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for (voice, _) in voices {
         let palette = palette(role(voice), victim);
-        let color = palette
+        // Every palette has colours; past its last, voices share its first.
+        let Some(color) = palette
             .iter()
             .find(|color| !taken.contains(*color))
+            .or_else(|| palette.first())
             .copied()
-            .unwrap_or(palette[0]);
+        else {
+            continue;
+        };
         taken.insert(color);
         out.insert(voice.to_owned(), color.to_owned());
     }

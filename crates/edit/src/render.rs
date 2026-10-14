@@ -216,7 +216,9 @@ pub(crate) fn grab_frame(
     if output.stdout.len() < expected {
         return Err(format!("no frame at {time:.3}s in {}", media.name));
     }
-    Ok((w, h, output.stdout[..expected].to_vec()))
+    let mut pixels = output.stdout;
+    pixels.truncate(expected);
+    Ok((w, h, pixels))
 }
 
 /// Owns a GPU on its own thread; frame renders queue here.
@@ -397,14 +399,15 @@ pub fn downscale(image: &RgbaImage, max_side: u32) -> RgbaImage {
             for sy in sy0..sy1 {
                 for sx in sx0..sx1 {
                     let i = ((sy * image.width + sx) * 4) as usize;
-                    for (total, value) in sum.iter_mut().zip(&image.pixels[i..i + 4]) {
+                    let pixel = image.pixels.get(i..i + 4).into_iter().flatten();
+                    for (total, value) in sum.iter_mut().zip(pixel) {
                         *total += u64::from(*value);
                     }
                 }
             }
             let n = (sy1 - sy0) * (sx1 - sx0);
             let o = ((y * w + x) * 4) as usize;
-            for (out, total) in pixels[o..o + 4].iter_mut().zip(sum) {
+            for (out, total) in pixels.get_mut(o..o + 4).into_iter().flatten().zip(sum) {
                 *out = (total / u64::from(n.max(1))) as u8;
             }
         }
@@ -439,8 +442,13 @@ pub fn tile(images: &[RgbaImage], columns: u32) -> RgbaImage {
         for y in 0..image.height {
             let src = (y * image.width * 4) as usize;
             let dst = (((cy + y) * w + cx) * 4) as usize;
-            pixels[dst..dst + (image.width * 4) as usize]
-                .copy_from_slice(&image.pixels[src..src + (image.width * 4) as usize]);
+            let row = (image.width * 4) as usize;
+            if let (Some(to), Some(from)) = (
+                pixels.get_mut(dst..dst + row),
+                image.pixels.get(src..src + row),
+            ) {
+                to.copy_from_slice(from);
+            }
         }
     }
     RgbaImage {
@@ -705,9 +713,10 @@ fn export(
         Vec::new()
     };
     for (index, segment) in segments.iter().enumerate() {
-        let media = project
-            .media(&segment.media)
-            .expect("heard_segments checks");
+        // heard_segments only keeps sounds whose media is there.
+        let Some(media) = project.media(&segment.media) else {
+            continue;
+        };
         command
             .args(["-protocol_whitelist", "file,pipe", "-i"])
             .arg(&media.path);

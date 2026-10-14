@@ -154,8 +154,12 @@ async fn dispatch(app: &App, message: &Value, scope: Option<&str>) -> Option<Val
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     let mut properties = properties;
-    properties["project_id"] =
-        json!({ "type": "string", "description": "Defaults to the project open in the UI." });
+    if let Some(properties) = properties.as_object_mut() {
+        properties.insert(
+            "project_id".to_owned(),
+            json!({ "type": "string", "description": "Defaults to the project open in the UI." }),
+        );
+    }
     json!({
         "name": name,
         "description": description,
@@ -596,29 +600,34 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             Ok(text(format!("added text clip {clip_id}")))
         }
         "add_clip" => {
-            let mut value = args["clip"].clone();
-            if !value.is_object() {
+            let Some(mut fields) = args.get("clip").and_then(Value::as_object).cloned() else {
                 return Err("clip must be an object".to_owned());
-            }
+            };
             let (_, clip_id) = store.update(&id, ORIGIN, |project| {
                 let clip_id = project.fresh_id("c");
-                value["id"] = json!(clip_id);
-                let kind = if value["type"] == "audio" {
+                fields.insert("id".to_owned(), json!(clip_id));
+                let kind = if fields.get("type").and_then(Value::as_str) == Some("audio") {
                     TrackKind::Audio
                 } else {
                     TrackKind::Video
                 };
-                match value["track"].as_str() {
-                    Some("new") => value["track"] = json!(project.add_track(kind)),
-                    Some(_) => {}
+                let number = |key: &str, default: i64| {
+                    fields.get(key).and_then(Value::as_i64).unwrap_or(default)
+                };
+                let track = match fields.get("track").and_then(Value::as_str) {
+                    Some("new") => Some(project.add_track(kind)),
+                    Some(_) => None,
                     None => {
-                        let start = value["start"].as_i64().unwrap_or(0);
-                        let end = start + value["duration"].as_i64().unwrap_or(1);
-                        value["track"] = json!(free_track(project, kind, start, end));
+                        let start = number("start", 0);
+                        let end = start + number("duration", 1);
+                        Some(free_track(project, kind, start, end))
                     }
+                };
+                if let Some(track) = track {
+                    fields.insert("track".to_owned(), json!(track));
                 }
-                let clip: Clip =
-                    serde_json::from_value(value).map_err(|error| format!("clip: {error}"))?;
+                let clip: Clip = serde_json::from_value(Value::Object(fields))
+                    .map_err(|error| format!("clip: {error}"))?;
                 project.clips.push(clip);
                 Ok(clip_id)
             })?;
@@ -636,7 +645,9 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     .ok_or_else(|| format!("no clip {clip_id}"))?;
                 let mut value = serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
                 merge(&mut value, &patch);
-                value["id"] = json!(clip_id);
+                if let Some(fields) = value.as_object_mut() {
+                    fields.insert("id".to_owned(), json!(clip_id));
+                }
                 *clip = serde_json::from_value(value)
                     .map_err(|error| format!("patched clip is invalid: {error}"))?;
                 Ok(())
@@ -975,25 +986,34 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 for article in &articles {
                     // Each mention with the sentence or so around it.
                     // ASCII lowercasing keeps byte positions, so they index the text itself.
-                    let lower = article.text.to_ascii_lowercase();
+                    let text = article.text.as_str();
+                    let lower = text.to_ascii_lowercase();
                     let mut from = 0;
-                    while let Some(at) = lower[from..].find(&needle).map(|at| at + from) {
-                        let start = article.text[..at]
+                    while let Some(at) = lower
+                        .get(from..)
+                        .and_then(|rest| rest.find(&needle))
+                        .map(|at| at + from)
+                    {
+                        let (Some(before), Some(after)) = (text.get(..at), text.get(at..)) else {
+                            break;
+                        };
+                        let start = before
                             .char_indices()
                             .rev()
                             .nth(200)
                             .map_or(0, |(index, _)| index);
-                        let end = article.text[at..]
+                        let end = after
                             .char_indices()
                             .nth(needle.len() + 200)
-                            .map_or(article.text.len(), |(index, _)| at + index);
+                            .map_or(text.len(), |(index, _)| at + index);
                         found.push(format!(
                             "[{} · {}] …{}…",
                             article.outlet,
                             article.id,
-                            &article.text[start..end]
+                            text.get(start..end).unwrap_or_default()
                         ));
-                        from = end.min(lower.len());
+                        // Always forward, so a mention can't be found twice.
+                        from = end.max(at + needle.len().max(1)).min(lower.len());
                     }
                 }
                 return Ok(text(if found.is_empty() {
@@ -1374,8 +1394,10 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .as_array()
                 .map(|values| values.iter().filter_map(Value::as_f64).collect::<Vec<_>>())
             {
-                Some(values) if values.len() == 2 => [values[0], values[1]],
-                Some(_) => return Err("offset is [dx, dy]".into()),
+                Some(values) => match values[..] {
+                    [dx, dy] => [dx, dy],
+                    _ => return Err("offset is [dx, dy]".into()),
+                },
                 None => [0.0, 0.0],
             };
             let summary = crate::captions::follow_region(
@@ -1407,7 +1429,8 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .frames
                 .render(live.project.clone(), vec![frame], max)
                 .await?;
-            let png = encode_png(&images[0])?;
+            let rendered = images.first().ok_or("nothing was rendered")?;
+            let png = encode_png(rendered)?;
             Ok(image(
                 &png,
                 format!("frame {frame} ({:.2}s)", frame as f64 / live.project.fps()),
@@ -1568,7 +1591,9 @@ fn tidy_tracks(project: &mut Project) -> (usize, usize) {
                 .collect();
             // From the second track up, each onto the one below (never into the first).
             for pair in tracks.windows(2).skip(1) {
-                let ((below, below_locked), (here, here_locked)) = (&pair[0], &pair[1]);
+                let [(below, below_locked), (here, here_locked)] = pair else {
+                    continue;
+                };
                 if *below_locked || *here_locked {
                     continue;
                 }
@@ -1775,7 +1800,9 @@ fn merge(target: &mut Value, patch: &Value) {
     if !target.is_object() {
         *target = json!({});
     }
-    let object = target.as_object_mut().expect("object");
+    let Some(object) = target.as_object_mut() else {
+        return;
+    };
     for (key, value) in patch {
         if value.is_null() {
             object.remove(key);

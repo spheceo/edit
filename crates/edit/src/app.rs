@@ -74,7 +74,10 @@ pub fn adopt_shell_env() {
     else {
         return;
     };
-    let mut stdout = child.stdout.take().expect("piped stdout");
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        return;
+    };
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut env = Vec::new();
@@ -131,7 +134,9 @@ pub fn run_as_edit(home: &Path) {
         // Its own folder: "Edit" and "edit" are one name on a case-insensitive disk.
         let link = home.join("bin").join("Edit");
         let fresh = || -> std::io::Result<()> {
-            std::fs::create_dir_all(link.parent().expect("has a folder"))?;
+            if let Some(folder) = link.parent() {
+                std::fs::create_dir_all(folder)?;
+            }
             let _ = std::fs::remove_file(&link);
             std::fs::hard_link(&exe, &link).or_else(|_| std::fs::copy(&exe, &link).map(|_| ()))
         };

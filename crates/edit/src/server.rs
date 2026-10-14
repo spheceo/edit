@@ -127,6 +127,10 @@ pub fn router(app: App) -> Router {
         .route("/api/projects/{id}/agent/stop", post(agent_stop))
         .route("/api/projects/{id}/agent/reset", post(agent_reset))
         .route("/api/projects/{id}/captions", post(captions))
+        .route(
+            "/api/projects/{id}/repack-subtitles",
+            post(repack_subtitles),
+        )
         .route("/api/scripts/preview", post(script_preview))
         .route("/api/projects/{id}/script", post(script_attach))
         .route(
@@ -1061,6 +1065,7 @@ pub fn place_at_end(project: &mut Project, media_id: &str) {
                     source_in: 0.0,
                     speed: 1.0,
                     volume_db: 0.0,
+                    mutes: Vec::new(),
                 },
             });
         }
@@ -1325,6 +1330,9 @@ async fn media_file(
                 source
             }
         }
+        // Only once it exists: the client asks for it by name when it's ready, so
+        // one URL never serves two different files.
+        "light" => paths.light,
         "thumbs" => paths.thumbs,
         "peaks" => paths.peaks,
         "transcript" => {
@@ -1872,6 +1880,51 @@ async fn captions(
     let summary = crate::captions::caption_speakers(&app, &id, from, to)
         .await
         .map_err(bad)?;
+    Ok(Json(summary).into_response())
+}
+
+#[derive(Default, Deserialize)]
+struct RepackSubtitlesBody {
+    /// Timeline seconds; default the whole timeline.
+    start: Option<f64>,
+    end: Option<f64>,
+    #[serde(default)]
+    neglect: bool,
+    hold_ms: Option<f64>,
+}
+
+/// Repack's subtitles and mutes for a span (all of it by default), as the agent's repack_subtitles tool.
+async fn repack_subtitles(
+    State(app): State<App>,
+    UrlPath(id): UrlPath<String>,
+    body: Option<Json<RepackSubtitlesBody>>,
+) -> ApiResult {
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let live = app
+        .store
+        .get(&id)
+        .ok_or_else(|| not_found("no such project"))?;
+    let fps = live.project.fps();
+    let options = crate::subtitles::Options {
+        from: body
+            .start
+            .map_or(0, |seconds| (seconds * fps).round() as i64),
+        to: body.end.map_or(live.project.duration(), |seconds| {
+            (seconds * fps).round() as i64
+        }),
+        neglect: body.neglect,
+        hold_ms: body
+            .hold_ms
+            .filter(|hold| hold.is_finite() && (0.0..=3000.0).contains(hold))
+            .unwrap_or(crate::subtitles::DEFAULT_HOLD_MS),
+    };
+    let summary = crate::diag::time_async(
+        "subtitles",
+        "repack subtitles",
+        crate::subtitles::repack_subtitles(&app, &id, options),
+    )
+    .await
+    .map_err(bad)?;
     Ok(Json(summary).into_response())
 }
 

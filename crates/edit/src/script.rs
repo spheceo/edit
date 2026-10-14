@@ -1357,10 +1357,9 @@ pub fn unfinished(project: &Project) -> bool {
         return false;
     };
     !missing_files(project).is_empty()
+        // Only blocks never placed: one placed and since removed was removed on purpose.
         || script.blocks.iter().any(|block| match block {
-            ScriptBlock::Footage { clip, .. } | ScriptBlock::Narration { clip, .. } => clip
-                .as_ref()
-                .is_none_or(|clip| !project.clips.iter().any(|candidate| &candidate.id == clip)),
+            ScriptBlock::Footage { clip, .. } | ScriptBlock::Narration { clip, .. } => clip.is_none(),
         })
 }
 
@@ -1897,10 +1896,6 @@ fn lay_out(project: &mut Project) {
     };
     let fps = project.fps();
     let (width, height) = (project.settings.width, project.settings.height);
-    let exists = |project: &Project, clip: &Option<String>| {
-        clip.as_ref()
-            .is_some_and(|clip| project.clips.iter().any(|candidate| &candidate.id == clip))
-    };
     let mut colors: HashMap<String, ClipColor> = HashMap::new();
     let mut cursor = project.duration();
     let mut cut_ins = 0;
@@ -1916,7 +1911,9 @@ fn lay_out(project: &mut Project) {
                 clip,
                 ..
             } => {
-                if exists(project, clip) {
+                // Placed once already: gone means removed on purpose (a cut-in card
+                // replaced by B-roll), so it isn't put back. A re-cut clears these first.
+                if clip.is_some() {
                     continue;
                 }
                 let offset = media_start.unwrap_or(0.0);
@@ -1984,6 +1981,7 @@ fn lay_out(project: &mut Project) {
                             source_in: from,
                             speed: 1.0,
                             volume_db: 0.0,
+                            mutes: Vec::new(),
                         },
                     });
                 }
@@ -1992,7 +1990,9 @@ fn lay_out(project: &mut Project) {
             }
             ScriptBlock::Narration { text, clip, .. } => {
                 cut_ins += 1;
-                if exists(project, clip) {
+                // Placed once already: gone means removed on purpose (a cut-in card
+                // replaced by B-roll), so it isn't put back. A re-cut clears these first.
+                if clip.is_some() {
                     continue;
                 }
                 let duration = ((CUT_IN_SECONDS * fps).round() as i64).max(1);

@@ -376,7 +376,10 @@ fn to_project(
 }
 
 /// A media's transcript, transcribing it first if needed.
-async fn transcript_of(app: &App, media: &Media) -> Result<crate::transcribe::Transcript, String> {
+pub(crate) async fn transcript_of(
+    app: &App,
+    media: &Media,
+) -> Result<crate::transcribe::Transcript, String> {
     let path = PathBuf::from(&media.path);
     app.media.transcribe(path.clone(), media.has_audio);
     let started = std::time::Instant::now();
@@ -1329,7 +1332,7 @@ pub async fn follow_region(
 }
 
 /// "#00e5c7" → a colour.
-fn hex(text: &str) -> Option<Rgba> {
+pub(crate) fn hex(text: &str) -> Option<Rgba> {
     let value = u32::from_str_radix(text.strip_prefix('#')?, 16).ok()?;
     let channel = |shift: u32| ((value >> shift) & 0xff) as f32 / 255.0;
     Some(Rgba([channel(16), channel(8), channel(0), 1.0]))

@@ -6,6 +6,7 @@ import { paramAt, projectDuration, setParam } from "../lib/edit";
 import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
 import { viewerMenu } from "../lib/menus";
 import { playhead, preview } from "../lib/playback";
+import { usePreviewQuality, wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { useEditor } from "../lib/store";
@@ -50,7 +51,12 @@ export function Viewer() {
   };
   useEffect(() => { wake(); return () => clearTimeout(idleTimer.current); }, [fullscreen]);
 
-  const versionKey = JSON.stringify(Object.fromEntries(Object.entries(media).map(([id, status]) => [id, status.proxy === "ready" ? "preview" : "source"])));
+  const light = wantsLight(usePreviewQuality((state) => state.quality));
+  // The picture each media streams: the light preview once it's made (when
+  // wanted), else the preview, else the original.
+  const versionKey = JSON.stringify(
+    Object.fromEntries(Object.entries(media).map(([id, status]) => [id, light && status.light === "ready" ? "light" : status.proxy === "ready" ? "preview" : "source"])),
+  );
   const versions = useMemo(() => JSON.parse(versionKey) as Record<string, string>, [versionKey]);
 
   useEffect(() => {

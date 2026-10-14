@@ -144,6 +144,7 @@ pub async fn place(app: &App, id: &str, media: Option<Vec<String>>) -> Result<Va
                     source_in: from,
                     speed: 1.0,
                     volume_db: 0.0,
+                    mutes: Vec::new(),
                 },
             });
             voiceovers.insert(index, clip_id.clone());

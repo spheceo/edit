@@ -302,7 +302,18 @@ export interface AudioClip extends ClipBase {
   source_in: number;
   speed: number;
   volume_db: number;
+  /** Stretches of the source silenced (seconds of the media, like source_in), each ramped over MUTE_FADE_SECONDS outside it. */
+  mutes?: Mute[];
 }
+
+/** A muted stretch of an audio clip's source, in seconds of the media. */
+export interface Mute {
+  from: number;
+  to: number;
+}
+
+/** How long a mute fades out and back in, outside its stretch (seconds): a cosine ramp, as edit-core's. */
+export const MUTE_FADE_SECONDS = 0.012;
 
 export interface TextClip extends ClipBase {
   type: "text";
@@ -447,6 +458,8 @@ export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";
 export interface MediaStatus {
   proxy: Stage;
   proxy_progress: number;
+  /** The light (720p) preview, for watching from another machine. */
+  light?: Stage;
   thumbs: Stage;
   thumb_count: number;
   peaks: Stage;

@@ -186,11 +186,15 @@ impl Agents {
                             .await;
                     });
                 }
-                Ok(json!({ "models": cache.models, "fetched_ms": cache.fetched_ms }))
+                Ok(
+                    json!({ "models": with_configured_effort(cache.models), "fetched_ms": cache.fetched_ms }),
+                )
             }
             _ => {
                 let cache = self.fetch_models().await?;
-                Ok(json!({ "models": cache.models, "fetched_ms": cache.fetched_ms }))
+                Ok(
+                    json!({ "models": with_configured_effort(cache.models), "fetched_ms": cache.fetched_ms }),
+                )
             }
         }
     }
@@ -1043,4 +1047,37 @@ impl Drop for Codex {
     fn drop(&mut self) {
         let _ = self._child.lock().kill();
     }
+}
+
+/// The reasoning effort the user's Codex config sets (`model_reasoning_effort`
+/// in ~/.codex/config.toml, before any [section]): Codex uses it whenever a
+/// turn names none, so it, not the model list's own default, is the default.
+fn configured_effort() -> Option<String> {
+    let home = std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".codex"))
+        })?;
+    let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
+    text.lines()
+        .map(str::trim)
+        .take_while(|line| !line.starts_with('['))
+        .find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == "model_reasoning_effort")
+                .then(|| value.trim().trim_matches('"').to_owned())
+        })
+        .filter(|effort| !effort.is_empty())
+}
+
+/// The models with the default each will really use.
+fn with_configured_effort(mut models: Vec<Model>) -> Vec<Model> {
+    if let Some(effort) = configured_effort() {
+        for model in &mut models {
+            if model.efforts.contains(&effort) {
+                model.default_effort = effort.clone();
+            }
+        }
+    }
+    models
 }

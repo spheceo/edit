@@ -157,9 +157,9 @@ impl Engine {
                     ..
                 } => {
                     let hidden = scene.layers.iter().skip(index + 1).any(covers);
-                    (!hidden).then(|| {
-                        serde_json::json!({ "clip": clip, "media": media, "time": source_time })
-                    })
+                    (!hidden).then(
+                        || serde_json::json!({ "clip": clip, "media": media, "time": source_time }),
+                    )
                 }
                 _ => None,
             })
@@ -313,11 +313,13 @@ fn covers_frame(project: &Project, scene: &Scene, layer: &Layer) -> bool {
     }
     let (width, height) = (scene.width as f32, scene.height as f32);
     let fit = (width / media.width as f32).min(height / media.height as f32) * transform.scale;
-    let (half_w, half_h) = (media.width as f32 * fit / 2.0, media.height as f32 * fit / 2.0);
+    let (half_w, half_h) = (
+        media.width as f32 * fit / 2.0,
+        media.height as f32 * fit / 2.0,
+    );
     // A pixel's slack: a fitted 16:9 shot is exactly the frame.
     transform.x - half_w <= -width / 2.0 + 0.5
         && transform.x + half_w >= width / 2.0 - 0.5
         && transform.y - half_h <= -height / 2.0 + 0.5
         && transform.y + half_h >= height / 2.0 - 0.5
 }
-

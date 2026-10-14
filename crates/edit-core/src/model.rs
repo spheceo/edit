@@ -236,6 +236,28 @@ impl Clip {
     }
 }
 
+/// A muted stretch of an audio clip's source, in seconds of the media.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Mute {
+    pub from: f64,
+    pub to: f64,
+}
+
+/// How long a mute takes to fade out and back in, outside its stretch
+/// (seconds): a cosine ramp, as Repack's renderer does.
+pub const MUTE_FADE_SECONDS: f64 = 0.012;
+
+/// The gain a clip's mutes leave at `time` (seconds of the source): 1 away
+/// from every mute, 0 inside one, a cosine ramp within MUTE_FADE_SECONDS of one.
+pub fn mute_gain(mutes: &[Mute], time: f64) -> f64 {
+    mutes.iter().fold(1.0, |gain: f64, mute| {
+        let distance = (mute.from - time).max(time - mute.to).max(0.0);
+        let ramp =
+            (1.0 - (std::f64::consts::PI * (distance / MUTE_FADE_SECONDS).min(1.0)).cos()) / 2.0;
+        gain.min(ramp)
+    })
+}
+
 /// How much of a picture is cut off each side, as shares of its width and height.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Crop {
@@ -293,6 +315,10 @@ pub enum ClipContent {
         speed: f64,
         #[serde(default)]
         volume_db: f32,
+        /// Stretches of the source silenced (a swear word): seconds of the
+        /// media, like source_in, each ramped over MUTE_FADE_SECONDS outside it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        mutes: Vec<Mute>,
     },
     Text {
         text: String,
@@ -1510,6 +1536,16 @@ impl Project {
                     return Err(format!("clip {} gradient from and to must differ", clip.id));
                 }
             }
+            if let ClipContent::Audio { mutes, .. } = &clip.content {
+                if mutes.iter().any(|mute| {
+                    !(mute.from.is_finite() && mute.to.is_finite() && mute.from < mute.to)
+                }) {
+                    return Err(format!(
+                        "clip {} mutes must be finite with from before to",
+                        clip.id
+                    ));
+                }
+            }
             if let ClipContent::Video {
                 speed, source_in, ..
             }
@@ -1617,7 +1653,14 @@ fn content_finite(content: &ClipContent) -> bool {
                 && opacity.is_finite()
                 && finite(&[crop.left, crop.right, crop.top, crop.bottom])
         }
-        ClipContent::Audio { volume_db, .. } => volume_db.is_finite(),
+        ClipContent::Audio {
+            volume_db, mutes, ..
+        } => {
+            volume_db.is_finite()
+                && mutes
+                    .iter()
+                    .all(|mute| mute.from.is_finite() && mute.to.is_finite())
+        }
         ClipContent::Solid {
             fill,
             opacity,
@@ -1765,6 +1808,26 @@ mod validation_tests {
         assert_eq!(p.fresh_id("c"), "c9007199254740991");
         assert_eq!(p.fresh_id("c"), "c2");
         assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn mutes_ramp_and_must_run_forwards() {
+        let mutes = [Mute { from: 2.0, to: 2.5 }];
+        assert_eq!(mute_gain(&mutes, 2.2), 0.0);
+        assert_eq!(mute_gain(&mutes, 1.9), 1.0);
+        assert!((mute_gain(&mutes, 2.506) - 0.5).abs() < 1e-9);
+        let json = r#"{"type":"audio","media":"m","mutes":[{"from":1.0,"to":1.5}]}"#;
+        let content: ClipContent = serde_json::from_str(json).unwrap();
+        assert!(matches!(&content, ClipContent::Audio { mutes, .. } if mutes.len() == 1));
+        let silent = serde_json::to_string(&ClipContent::Audio {
+            media: "m".into(),
+            source_in: 0.0,
+            speed: 1.0,
+            volume_db: 0.0,
+            mutes: Vec::new(),
+        })
+        .unwrap();
+        assert!(!silent.contains("mutes"));
     }
 
     #[test]

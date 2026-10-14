@@ -8,6 +8,7 @@ import { chooseEffort, chooseModel, currentEffort, currentModel, EFFORT_LABELS, 
 import { fetchRetrying, useMachine } from "../lib/api";
 import { closeDialog, openDialog, SHORTCUTS, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
+import { setPreviewQuality, usePreviewQuality } from "../lib/previewQuality";
 import { OpenAIMark } from "./AgentPanel";
 import { toggleMenu } from "./ContextMenu";
 import { cx, IconButton, Kbd, Modal, Select } from "./ui";
@@ -137,6 +138,28 @@ function ReportDialog() {
   );
 }
 
+/** Full or light preview picture (light: 720p, a quarter of the data, for watching over the internet). */
+function PreviewQualityRow() {
+  const quality = usePreviewQuality((state) => state.quality);
+  return (
+    <div className="rounded-xl bg-black ring-1 ring-line">
+      <Line label="Quality" last>
+        <div className="w-48">
+          <Select
+            value={quality}
+            options={[
+              { value: "auto", label: "Auto (light when away)" },
+              { value: "full", label: "Full quality" },
+              { value: "light", label: "Light (720p, less data)" },
+            ]}
+            onChange={setPreviewQuality}
+          />
+        </div>
+      </Line>
+    </div>
+  );
+}
+
 function DialogHeader({ title }: { title: string }) {
   return (
     <div className="flex h-12 items-center px-5">
@@ -240,6 +263,10 @@ function SettingsBody() {
           <RotateCw size={12} className={checking ? "animate-spin" : undefined} />
           {checking ? "Checking…" : "Check again"}
         </button>
+      </Group>
+      <Group title="Preview">
+        <PreviewQualityRow />
+        <p className="mt-2 text-[12px] leading-relaxed text-muted">Light streams a 720p copy (a quarter of the data) so playback keeps up over the internet. Export always uses the originals.</p>
       </Group>
       <Group title="Transcription">
         <div className="rounded-xl bg-black ring-1 ring-line">

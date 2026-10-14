@@ -84,7 +84,7 @@ export function TopBar({ onExport }: { onExport: () => void }) {
   );
 }
 
-/** A subtitled video's export on the team's Drive: its upload, then its link. */
+/** The edit's export on the team's Drive: its upload, then its link. */
 function DriveButton() {
   const projectId = useEditor((state) => state.project?.id ?? "");
   const drive = useDriveLink(projectId, useEditor((state) => state.project?.drive));
@@ -92,7 +92,7 @@ function DriveButton() {
   const toast = useEditor((state) => state.toast);
   if (driveState?.state === "uploading") {
     return (
-      <span className="flex h-8 items-center gap-1.5 px-2 text-[12px] text-muted tabular" title="Uploading the export to the Subtitles folder on Drive">
+      <span className="flex h-8 items-center gap-1.5 px-2 text-[12px] text-muted tabular" title="Uploading the export to Drive">
         <CloudUpload size={15} />
         {Math.round((driveState.progress ?? 0) * 100)}%
       </span>

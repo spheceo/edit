@@ -24,8 +24,10 @@ use crate::export::{ExportOptions, Format, Plan};
 use crate::library::{curl, quote, Library};
 use crate::store::Store;
 
-/// "Subtitles" (My Drive / [03] Media / Repack / Subtitles).
-const DEFAULT_FOLDER: &str = "12q4jbYhXI53BYZtTwOxzFEOJV2d1wJTk";
+/// "Subtitles" (My Drive / [03] Media / Repack / Subtitles): subtitled videos.
+const SUBTITLES_FOLDER: &str = "12q4jbYhXI53BYZtTwOxzFEOJV2d1wJTk";
+/// "Render": every other edit.
+const RENDER_FOLDER: &str = "15Fp5Zq_RKwYRohpE5t_uEho8T2Q1RwwL";
 const API: &str = "https://www.googleapis.com/drive/v3";
 const UPLOAD: &str = "https://www.googleapis.com/upload/drive/v3/files";
 /// A link checked this recently isn't checked again.
@@ -38,11 +40,17 @@ static NEXT_UPLOAD: LazyLock<Mutex<u64>> = LazyLock::new(Default::default);
 /// When each file was last found on Drive.
 static CHECKED: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
 
-fn folder() -> String {
-    std::env::var("EDIT_SUBTITLES_FOLDER")
+/// Where a project's exports go: subtitled videos to Subtitles, the rest to Render.
+fn folder(subtitled: bool) -> String {
+    let (variable, default) = if subtitled {
+        ("EDIT_SUBTITLES_FOLDER", SUBTITLES_FOLDER)
+    } else {
+        ("EDIT_RENDER_FOLDER", RENDER_FOLDER)
+    };
+    std::env::var(variable)
         .ok()
         .filter(|folder| !folder.is_empty())
-        .unwrap_or_else(|| DEFAULT_FOLDER.to_owned())
+        .unwrap_or_else(|| default.to_owned())
 }
 
 /// Where a Drive file opens.
@@ -61,13 +69,12 @@ pub fn upload_name(project: &str, extension: &str) -> String {
     format!("{name}.{extension}")
 }
 
-/// Whether an export is uploaded: a subtitled video, as a video file (MP4 or
-/// MOV), all of it.
+/// Whether an export is uploaded: a video file (MP4 or MOV) of all of it.
 pub fn wanted(project: &Project, options: &ExportOptions, plan: &Plan) -> bool {
     matches!(options.format, Format::H264 | Format::Hevc | Format::Prores)
         && plan.start == 0
         && plan.end >= project.duration()
-        && crate::subtitles::is_subtitled(project)
+        && project.duration() > 0
 }
 
 /// Whether any upload is running (an update waits for it).
@@ -95,6 +102,7 @@ pub fn start(store: Arc<Store>, library: Arc<Library>, project: &Project, path: 
     let name = upload_name(&project.name, &extension);
     // A re-export replaces the file it made before, so its link stays the same.
     let replacing = project.drive.as_ref().map(|file| file.file_id.clone());
+    let into = folder(crate::subtitles::is_subtitled(project));
     let number = {
         let mut next = NEXT_UPLOAD.lock();
         *next += 1;
@@ -113,7 +121,7 @@ pub fn start(store: Arc<Store>, library: Arc<Library>, project: &Project, path: 
         let subject = format!("{} ({})", path.display(), id);
         let result = crate::diag::time_on("drive", "drive upload", &subject, || {
             crate::guard::catch("the Drive upload", || {
-                upload(&library, &path, &name, replacing.as_deref(), |progress| {
+                upload(&library, &path, &name, &into, replacing.as_deref(), |progress| {
                     emit("uploading", json!({ "progress": progress }))
                 })
             })
@@ -151,6 +159,7 @@ fn upload(
     library: &Library,
     path: &Path,
     name: &str,
+    into: &str,
     replacing: Option<&str>,
     progress: impl FnMut(f32),
 ) -> Result<DriveFile, String> {
@@ -161,7 +170,7 @@ fn upload(
     let session = |replace: Option<&str>| -> Result<(u16, String), String> {
         let metadata = match replace {
             Some(_) => json!({ "name": name }),
-            None => json!({ "name": name, "parents": [folder()] }),
+            None => json!({ "name": name, "parents": [into] }),
         }
         .to_string();
         let config = [
@@ -498,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn uploads_whole_subtitled_videos_only() {
+    fn uploads_whole_videos_only() {
         use edit_core::Settings;
         let plan = |start, end| Plan {
             start,
@@ -529,8 +538,8 @@ mod tests {
         );
         project.clips.push(footage);
         let whole = plan(0, project.duration());
-        // Not subtitled yet: never.
-        assert!(!wanted(&project, &ExportOptions::default(), &whole));
+        // Any whole edit, subtitled (to Subtitles) or not (to Render).
+        assert!(wanted(&project, &ExportOptions::default(), &whole));
         project.clips.push(line);
         assert!(wanted(&project, &ExportOptions::default(), &whole));
         // Part of it, or not a video file: no.
@@ -578,7 +587,7 @@ mod tests {
         assert!(status.success());
         let library = Library::default();
         let mut seen = Vec::new();
-        let file = upload(&library, &path, "edit-upload-test.mp4", None, |share| {
+        let file = upload(&library, &path, "edit-upload-test.mp4", &folder(true), None, |share| {
             seen.push(share)
         })
         .unwrap();

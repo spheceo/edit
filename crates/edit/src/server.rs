@@ -1577,8 +1577,8 @@ async fn drive_link(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Api
     Ok(Json(json!({ "drive": drive })).into_response())
 }
 
-/// Uploads a finished export of a subtitled video to Drive again (after a
-/// failed upload); progress comes as `drive` events.
+/// Uploads a finished export to Drive again (after a failed upload); progress
+/// comes as `drive` events.
 async fn drive_upload(
     State(app): State<App>,
     UrlPath(id): UrlPath<String>,
@@ -1591,9 +1591,6 @@ async fn drive_upload(
     let path = PathBuf::from(&body.path);
     if !app.exports.exported(&path) {
         return Err(not_found("not an export from this session"));
-    }
-    if !crate::subtitles::is_subtitled(&live.project) {
-        return Err(bad("only subtitled videos go to Drive"));
     }
     crate::drive::start(
         Arc::clone(&app.store),

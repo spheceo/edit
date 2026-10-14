@@ -1,4 +1,4 @@
-// A subtitled video's export on the team's Drive (crates/edit/src/drive.rs):
+// An edit's export on the team's Drive (subtitled videos in Subtitles, the rest in Render) (crates/edit/src/drive.rs):
 // the link a project keeps, checked against Drive when it's shown.
 
 import { useEffect, useState } from "react";
@@ -16,10 +16,13 @@ export function isSubtitled(project: Project) {
   return project.clips.some(subtitle) && project.clips.every((clip) => subtitle(clip) || footage(clip));
 }
 
-/** Whether an export goes to Drive too: all of a subtitled video, as MP4 or MOV (as drive::wanted). */
-export function uploadsToDrive(project: Project, format: Format, range: [number, number], duration: number) {
-  return (format === "h264" || format === "hevc" || format === "prores") && range[0] === 0 && range[1] >= duration && isSubtitled(project);
+/** Whether an export goes to Drive too: all of the edit, as MP4 or MOV (as drive::wanted). */
+export function uploadsToDrive(_project: Project, format: Format, range: [number, number], duration: number) {
+  return (format === "h264" || format === "hevc" || format === "prores") && range[0] === 0 && range[1] >= duration && duration > 0;
 }
+
+/** The Drive folder a project's exports go to (as drive::folder). */
+export const driveFolder = (project: Project) => (isSubtitled(project) ? "Subtitles" : "Render");
 
 /** Files asked about this session: the server checks Drive at most every few minutes anyway. */
 const asked = new Set<string>();

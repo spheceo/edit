@@ -940,6 +940,52 @@ impl Part {
 /// Watches the project's footage (the sound repack_subtitles subtitles):
 /// corrects who says each line in the transcripts and sets the segments.
 pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Result<Value, String> {
+    // One watch of a project at a time: a second (the agent asking while the
+    // one a full edit started in the background is still out) waits for it,
+    // then answers from its cache instead of paying for every window twice.
+    type Locks = parking_lot::Mutex<BTreeMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>;
+    static WATCHING: std::sync::OnceLock<Locks> = std::sync::OnceLock::new();
+    let lock = WATCHING
+        .get_or_init(Default::default)
+        .lock()
+        .entry(project_id.to_owned())
+        .or_default()
+        .clone();
+    let _watching = lock.lock().await;
+    watch_now(app, project_id, options).await
+}
+
+/// Starts watching `project_id`'s footage in the background (a full edit
+/// does at its start), so its subtitles step finds the answers cached.
+pub fn watch_in_background(app: &App, project_id: &str) {
+    if api_key().is_err() {
+        return;
+    }
+    let (app, project_id) = (app.clone(), project_id.to_owned());
+    tokio::spawn(async move {
+        let watched = crate::diag::time_async(
+            "watch",
+            "watch footage (background)",
+            watch_footage(
+                &app,
+                &project_id,
+                Options {
+                    force: false,
+                    segments: None,
+                },
+            ),
+        )
+        .await;
+        if let Err(error) = watched {
+            crate::diag::warn(
+                "watch",
+                format!("background watch of {project_id}: {error}"),
+            );
+        }
+    });
+}
+
+async fn watch_now(app: &App, project_id: &str, options: Options) -> Result<Value, String> {
     let project = app.store.get(project_id).ok_or("no such project")?.project;
     let fps = project.fps();
     let duration = project.duration();
@@ -949,7 +995,28 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
         return Err("there is no footage with sound to watch".into());
     }
     let set_segments = options.segments.unwrap_or_else(|| sets_segments(&project));
+    // Every file's transcript at once: one after another, an edit of ten
+    // files waited on the transcriber ten times over.
+    let wanted: BTreeSet<String> = sound
+        .iter()
+        .filter_map(|clip| clip.media_id().map(str::to_owned))
+        .collect();
+    let fetched: Vec<Result<(String, crate::transcribe::Transcript), String>> =
+        futures_util::stream::iter(wanted.into_iter().filter_map(|id| {
+            let media = project.media(&id)?.clone();
+            Some(async move {
+                let transcript = crate::captions::transcript_of(app, &media).await?;
+                Ok((media.id.clone(), transcript))
+            })
+        }))
+        .buffer_unordered(4)
+        .collect()
+        .await;
     let mut transcripts: BTreeMap<String, crate::transcribe::Transcript> = BTreeMap::new();
+    for fetched in fetched {
+        let (id, transcript) = fetched?;
+        transcripts.insert(id, transcript);
+    }
     let mut parts: Vec<Part> = Vec::new();
     // An edit's clips, by file, to watch once per stretch they use.
     let mut used: BTreeMap<String, Vec<Use>> = BTreeMap::new();
@@ -966,10 +1033,6 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
         let Some(media) = project.media(media) else {
             continue;
         };
-        if !transcripts.contains_key(&media.id) {
-            let transcript = crate::captions::transcript_of(app, media).await?;
-            transcripts.insert(media.id.clone(), transcript);
-        }
         let Some(transcript) = transcripts.get(&media.id) else {
             continue;
         };
@@ -1118,6 +1181,9 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
     let mut said: BTreeMap<(String, String), (Vec<String>, Vec<String>)> = BTreeMap::new();
     let mut seen: Vec<Segment> = Vec::new();
     let mut people: Vec<Value> = Vec::new();
+    // Lines the model only guessed at: the few worth a look, so nobody
+    // re-checks every speaker by reading transcripts or rendering frames.
+    let mut doubtful: Vec<Value> = Vec::new();
     for ((p, w), answer) in &answers {
         let (Some(part), Some(window)) = (
             parts.get(*p),
@@ -1152,6 +1218,20 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
                 "look": person.look,
                 "where": person.place,
             }));
+        }
+        for line in answer.lines.iter().filter(|line| line.sure == "low") {
+            let Some(watched) = usize::try_from(line.n).ok().and_then(|n| lines.get(n)) else {
+                continue;
+            };
+            if doubtful.len() < 24 && !answer.background.contains(&line.n) {
+                doubtful.push(json!({
+                    "time": (on_timeline(watched.start) * 100.0).round() / 100.0,
+                    "text": watched.text,
+                    "kept": watched.label,
+                    "guess": voices.get(&line.who),
+                    "or": line.or.as_ref().and_then(|or| voices.get(or)),
+                }));
+            }
         }
         for (n, voice) in reassigned(answer, &voices, &labels) {
             let Some(watched) = lines.get(n) else {
@@ -1289,6 +1369,7 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
         "cost": (cost * 10_000.0).round() / 10_000.0,
         "lines_changed": changed,
         "examples": examples,
+        "doubtful": doubtful,
         "people": people,
         "segments_set": set_segments,
         "segments": segments.iter().map(|segment| json!({

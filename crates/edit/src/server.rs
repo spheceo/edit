@@ -808,6 +808,9 @@ async fn agent_run(
         .run_full_edit(&id, body.notes, body.model, body.effort)
         .await
         .map_err(bad)?;
+    // The watcher takes minutes of a model's time; started now, it's done
+    // by the subtitles step.
+    crate::watch::watch_in_background(&app, &id);
     Ok(Json(json!({ "ok": true })).into_response())
 }
 

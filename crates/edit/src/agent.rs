@@ -591,10 +591,11 @@ impl Agents {
              Edit only through the `edit` tools; you have no shell or files. The project is \"{}\" ({}x{} at {} fps). \
              Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. \
              When a tool is still running (watch_footage, map_view, export), wait for it in long blocks (yield_time_ms 30000 or more), never second by second. \
-             Keep replies short: say what you changed and where (timecodes).\n\n{}",
+             Keep replies short: say what you changed and where (timecodes).\n\n{}\n\nThe edit tools (in exec: tools.mcp__edit__<name>({{…}}); their full declarations are in ALL_TOOLS, but this list is usually enough):\n{}",
             live.project.name, live.project.settings.width, live.project.settings.height, live.project.settings.fps,
             // The model and house style, as every MCP client gets them.
-            crate::mcp::INSTRUCTIONS
+            crate::mcp::INSTRUCTIONS,
+            crate::mcp::tool_reference()
         );
         let thread = match (thread, known) {
             (Some(thread), true) => thread,
@@ -603,13 +604,23 @@ impl Agents {
                 match codex
                     .call(
                         "thread/resume",
-                        json!({ "threadId": thread, "config": config, "developerInstructions": instructions }),
+                        json!({
+                            "threadId": thread,
+                            "cwd": workspace.to_string_lossy(),
+                            "approvalPolicy": "never",
+                            "sandbox": "read-only",
+                            "config": config,
+                            "developerInstructions": instructions,
+                        }),
                         Duration::from_secs(30),
                     )
                     .await
                 {
                     Ok(_) => thread,
-                    Err(_) => self.start_thread(&codex, &config, &instructions, &workspace).await?,
+                    Err(_) => {
+                        self.start_thread(&codex, &config, &instructions, &workspace)
+                            .await?
+                    }
                 }
             }
             (None, _) => {

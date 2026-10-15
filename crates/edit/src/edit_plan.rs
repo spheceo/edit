@@ -96,9 +96,17 @@ fn operation_on(
             } else {
                 TrackKind::Video
             };
-            let start = fields.get("start").and_then(Value::as_i64).unwrap_or(0);
-            let end =
-                start.saturating_add(fields.get("duration").and_then(Value::as_i64).unwrap_or(1));
+            // No silent defaults: a clip at frame 0 for one frame is never meant.
+            let start = fields
+                .get("start")
+                .and_then(Value::as_i64)
+                .ok_or("clip.start is required (frames)")?;
+            let end = start.saturating_add(
+                fields
+                    .get("duration")
+                    .and_then(Value::as_i64)
+                    .ok_or("clip.duration is required (frames)")?,
+            );
             let track = match fields.get("track").and_then(Value::as_str) {
                 Some("new") => Some(project.add_track(kind)),
                 Some(_) => None,
@@ -115,11 +123,15 @@ fn operation_on(
         "update" => {
             let ids = selected(project, &args["select"])?;
             let patch = args["patch"].as_object().ok_or("patch must be an object")?;
+            // Moving or trimming one half of a linked pair moves the other
+            // half with it (unless both are selected), as in the timeline.
+            let mut moved: Vec<(String, i64, i64, i64)> = Vec::new();
             for clip in project
                 .clips
                 .iter_mut()
                 .filter(|clip| ids.contains(&clip.id))
             {
+                let (start, duration) = (clip.start, clip.duration);
                 let mut value = serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
                 crate::mcp::merge(&mut value, &Value::Object(patch.clone()));
                 value
@@ -127,11 +139,46 @@ fn operation_on(
                     .ok_or("patched clip must be an object")?
                     .insert("id".to_owned(), json!(clip.id));
                 *clip = serde_json::from_value(value).map_err(|error| format!("clip: {error}"))?;
+                if let Some(link) = &clip.link {
+                    if clip.start != start || clip.duration != duration {
+                        moved.push((link.clone(), clip.start - start, duration, clip.duration));
+                    }
+                }
             }
-            Ok(json!({"clips": ids}))
+            let mut partners = Vec::new();
+            if !args["unlinked"].as_bool().unwrap_or(false) {
+                for (link, shift, before, after) in moved {
+                    for clip in project.clips.iter_mut().filter(|clip| {
+                        clip.link.as_deref() == Some(link.as_str()) && !ids.contains(&clip.id)
+                    }) {
+                        clip.start += shift;
+                        if clip.duration == before {
+                            clip.duration = after;
+                        }
+                        partners.push(clip.id.clone());
+                    }
+                }
+            }
+            Ok(json!({"clips": ids, "linked_moved": partners}))
         }
         "delete" => {
-            let ids = selected(project, &args["select"])?;
+            let mut ids = selected(project, &args["select"])?;
+            // A linked pair goes together unless asked otherwise.
+            if !args["unlinked"].as_bool().unwrap_or(false) {
+                let links: BTreeSet<String> = project
+                    .clips
+                    .iter()
+                    .filter(|clip| ids.contains(&clip.id))
+                    .filter_map(|clip| clip.link.clone())
+                    .collect();
+                ids.extend(
+                    project
+                        .clips
+                        .iter()
+                        .filter(|clip| clip.link.as_ref().is_some_and(|link| links.contains(link)))
+                        .map(|clip| clip.id.clone()),
+                );
+            }
             project.clips.retain(|clip| !ids.contains(&clip.id));
             Ok(json!({"clips": ids}))
         }
@@ -141,6 +188,10 @@ fn operation_on(
             let mut keys: Vec<Keyframe> = serde_json::from_value(args["keyframes"].clone())
                 .map_err(|error| format!("keyframes: {error}"))?;
             keys.sort_by(|a, b| a.frame.total_cmp(&b.frame));
+            // Two keys on one frame: the later one given wins.
+            keys.reverse();
+            keys.dedup_by(|a, b| a.frame == b.frame);
+            keys.reverse();
             for clip in project
                 .clips
                 .iter_mut()
@@ -331,6 +382,56 @@ pub fn audit(project: &Project) -> Value {
             }
         }
     }
+    // Slivers: a picture or text clip too short to read is left over from a trim.
+    for clip in &project.clips {
+        if clip.duration < 3
+            && !matches!(
+                clip.content,
+                ClipContent::Audio { .. } | ClipContent::Adjustment { .. }
+            )
+        {
+            issues.push(json!({"kind":"sliver", "clip":clip.id, "start":clip.start, "frames":clip.duration}));
+        }
+    }
+    // A narration card with nothing over it is a black screen with words.
+    let level = |track: &str| project.tracks.iter().position(|own| own.id == track);
+    if let Some(script) = &project.script {
+        for (number, card) in script
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                edit_core::ScriptBlock::Narration { clip, .. } => Some(clip.as_deref()),
+                _ => None,
+            })
+            .enumerate()
+            .filter_map(|(number, card)| Some((number + 1, project.clip(card?)?)))
+        {
+            let base = level(&card.track);
+            let mut cover: Vec<(i64, i64)> = project
+                .clips
+                .iter()
+                .filter(|clip| {
+                    matches!(clip.content, ClipContent::Video { .. })
+                        && level(&clip.track) > base
+                        && project
+                            .track(&clip.track)
+                            .is_some_and(|track| !track.hidden)
+                })
+                .map(|clip| (clip.start.max(card.start), clip.end().min(card.end())))
+                .filter(|(start, end)| end > start)
+                .collect();
+            cover.sort_unstable();
+            let (mut at, mut bare) = (card.start, 0);
+            for (start, end) in cover {
+                bare += (start - at).max(0);
+                at = at.max(end);
+            }
+            bare += (card.end() - at).max(0);
+            if bare >= 6 {
+                issues.push(json!({"kind":"bare_card", "cut_in":number, "card":card.id, "uncovered_frames":bare}));
+            }
+        }
+    }
     issues.sort_by_key(Value::to_string);
     json!({"issues":issues, "frames":project.duration(), "clips":project.clips.len()})
 }
@@ -364,6 +465,33 @@ mod tests {
         assert_eq!(result.results.len(), 3);
         assert_eq!(p.clips[1].start, 30);
         assert!(audit(&p)["issues"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn linked_halves_move_and_go_together_and_add_needs_times() {
+        let mut p = project();
+        apply(&mut p, &[
+            json!({"op":"add", "as":"card", "clip":{"type":"solid", "track":"v1", "start":0, "duration":30, "fill":[0,0,0,1], "link":"l1"}}),
+            json!({"op":"add", "as":"words", "clip":{"type":"solid", "track":"new", "start":0, "duration":30, "fill":[1,1,1,1], "link":"l1"}}),
+        ]).unwrap();
+        let card = p.clips[0].id.clone();
+        apply(
+            &mut p,
+            &[json!({"op":"update", "select":{"ids":[card]}, "patch":{"start":10, "duration":20}})],
+        )
+        .unwrap();
+        assert!(p
+            .clips
+            .iter()
+            .all(|clip| clip.start == 10 && clip.duration == 20));
+        let card = p.clips[0].id.clone();
+        apply(&mut p, &[json!({"op":"delete", "select":{"ids":[card]}})]).unwrap();
+        assert!(p.clips.is_empty());
+        let missing = apply(
+            &mut p,
+            &[json!({"op":"add", "clip":{"type":"solid", "fill":[0,0,0,1]}})],
+        );
+        assert!(missing.err().unwrap().contains("clip.start is required"));
     }
 
     #[test]

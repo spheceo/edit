@@ -602,7 +602,9 @@ async fn ask_with(
     // Who says a line is read off the picture and the voices, not reasoned
     // out at length: low thinking answers a window in a fraction of the time.
     if let Some(effort) = effort {
-        request["reasoning"] = json!({ "effort": effort });
+        if let Some(fields) = request.as_object_mut() {
+            fields.insert("reasoning".to_owned(), json!({ "effort": effort }));
+        }
     }
     tokio::fs::write(
         scratch,

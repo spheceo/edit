@@ -203,8 +203,8 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 pub fn tool_reference() -> String {
     let mut out = String::new();
     for tool in tools() {
-        let name = tool["name"].as_str().unwrap_or_default();
-        let schema = &tool["inputSchema"];
+        let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
+        let schema = tool.get("inputSchema").unwrap_or(&Value::Null);
         let required: Vec<&str> = schema["required"]
             .as_array()
             .map(|names| names.iter().filter_map(Value::as_str).collect())
@@ -246,12 +246,20 @@ pub fn tool_reference() -> String {
                 .next()
                 .is_some_and(|name| name.ends_with('?'))
         });
-        let description = tool["description"].as_str().unwrap_or_default();
+        let description = tool
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let first = description
             .match_indices(". ")
             .map(|(at, _)| at)
-            .find(|&at| !description[..at].ends_with("e.g") && !description[..at].ends_with("i.e"))
-            .map_or(description, |end| &description[..=end]);
+            .find(|&at| {
+                description
+                    .get(..at)
+                    .is_some_and(|before| !before.ends_with("e.g") && !before.ends_with("i.e"))
+            })
+            .and_then(|end| description.get(..=end))
+            .unwrap_or(description);
         out.push_str(&format!("- {name}({}) — {first}\n", args.join(", ")));
     }
     out
@@ -2398,6 +2406,11 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
             }
         }
     }
+    if ids.is_some() {
+        // A revision's lookup: just those clips, and where things stand.
+        return json!({"rev": live.rev, "duration_frames": p.duration(), "clips": clips,
+            "audit": crate::edit_plan::audit(p)});
+    }
     // Keep cut-in numbers stable when a span hides some.
     let cut_ins: Vec<Value> = cut_ins
         .into_iter()
@@ -2436,7 +2449,8 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
                 media.kind,
                 media.duration,
                 if media.has_audio { " sound" } else { "" },
-                media.name
+                // Long camera-export names end in hashes nobody reads.
+                media.name.chars().take(60).collect::<String>()
             )
         })
         .collect();
@@ -2458,7 +2472,20 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
                 .collect::<Vec<_>>()
                 .join("\n"),
         };
-        context["transcript"] = json!(heard);
+        // Half the budget at most, so the clips still fit beside it.
+        let room = BUDGET / 2;
+        let transcript = if heard.len() > room {
+            let cut: String = heard.chars().take(room).collect();
+            let cut = cut.rsplit_once('\n').map_or(cut.as_str(), |(kept, _)| kept);
+            json!(format!(
+                "{cut}\n[cut here: narrow with start/end for the rest]"
+            ))
+        } else {
+            json!(heard)
+        };
+        if let Some(fields) = context.as_object_mut() {
+            fields.insert("transcript".to_owned(), transcript);
+        }
     }
     // Clips last, cut to what fits.
     let used = context.to_string().len();
@@ -2474,12 +2501,19 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
         kept.push(clip);
     }
     if kept.len() < total {
-        context["clips_cut"] = json!(format!(
-            "{} of {total} clips shown; narrow with section, start/end or clip_ids",
-            kept.len()
-        ));
+        if let Some(fields) = context.as_object_mut() {
+            fields.insert(
+                "clips_cut".to_owned(),
+                json!(format!(
+                    "{} of {total} clips shown; narrow with section, start/end or clip_ids",
+                    kept.len()
+                )),
+            );
+        }
     }
-    context["clips"] = json!(kept);
+    if let Some(fields) = context.as_object_mut() {
+        fields.insert("clips".to_owned(), json!(kept));
+    }
     context
 }
 
@@ -2499,7 +2533,7 @@ fn line_seconds(line: &str) -> Option<f64> {
 /// shows or plays, and which params are keyframed (not the keys).
 fn clip_row(p: &Project, clip: &Clip) -> String {
     let value = serde_json::to_value(clip).unwrap_or_default();
-    let kind = value["type"].as_str().unwrap_or("?");
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or("?");
     let mut row = format!(
         "{} {} {kind} [{},{})",
         clip.id,
@@ -2591,7 +2625,7 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
     let mut content = Vec::new();
     let mut failures = 0;
     let run_one = |index: usize, added: &[Option<String>]| {
-        let call_spec = &calls[index];
+        let call_spec = calls.get(index).unwrap_or(&Value::Null);
         let name = call_spec["tool"].as_str().unwrap_or_default().to_owned();
         let mut call_args = call_spec.get("args").cloned().unwrap_or_else(|| json!({}));
         let ready = if SLOW.contains(&name.as_str()) {
@@ -2614,14 +2648,17 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
         }
     };
     let independent = |index: usize| {
-        let spec = &calls[index];
+        let spec = calls.get(index).unwrap_or(&Value::Null);
         SIDE_BY_SIDE.contains(&spec["tool"].as_str().unwrap_or_default())
             && !has_refs(spec.get("args").unwrap_or(&Value::Null))
     };
     let mut ready: std::collections::VecDeque<(usize, Result<Value, String>)> = Default::default();
     let mut index = 0;
     while index < calls.len() {
-        let name = calls[index]["tool"].as_str().unwrap_or_default();
+        let name = calls
+            .get(index)
+            .and_then(|call| call["tool"].as_str())
+            .unwrap_or_default();
         let result = if let Some((_, result)) = ready.pop_front() {
             result
         } else if independent(index) {
@@ -2673,7 +2710,10 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
                         let label = format!(
                             "[{}] {}: ",
                             at + 1,
-                            calls[at]["tool"].as_str().unwrap_or_default()
+                            calls
+                                .get(at)
+                                .and_then(|call| call["tool"].as_str())
+                                .unwrap_or_default()
                         );
                         let said = match result {
                             Ok(Value::Array(items)) => items

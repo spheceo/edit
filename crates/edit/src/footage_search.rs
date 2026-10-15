@@ -61,7 +61,9 @@ pub fn search(words: &[String], phrase: &str) -> Vec<(usize, usize, f64)> {
     let matches =
         |own: &String, w: &String| own == w || (w.len() > 4 && own.starts_with(w.as_str()));
     for start in 0..=words.len() - span {
-        let window = &words[start..start + span];
+        let Some(window) = words.get(start..start + span) else {
+            continue;
+        };
         let held = key
             .iter()
             .filter(|w| window.iter().any(|own| matches(own, w)))
@@ -137,10 +139,16 @@ pub fn find(
             let mut hits: Vec<Hit> = Vec::new();
             for (media, _, transcript, words) in &sources {
                 for (from, to, score) in search(words, phrase) {
+                    let (Some(first), Some(last)) = (
+                        transcript.words.get(from),
+                        transcript.words.get(to.saturating_sub(1)),
+                    ) else {
+                        continue;
+                    };
                     hits.push(Hit {
                         media: media.clone(),
-                        start: transcript.words[from].start,
-                        end: transcript.words[to - 1].end,
+                        start: first.start,
+                        end: last.end,
                         score,
                         index: from,
                     });
@@ -155,17 +163,24 @@ pub fn find(
                         sources.iter().find(|source| source.0 == hit.media)?;
                     let from = hit.index.saturating_sub(context);
                     let to = (hit.index + context + 6).min(transcript.words.len());
-                    let said: Vec<&str> = transcript.words[from..to]
+                    let said: Vec<&str> = transcript
+                        .words
+                        .get(from..to)?
                         .iter()
                         .map(|word| word.text.trim())
                         .collect();
-                    let voice = transcript.words[hit.index].speaker.as_ref().map(|voice| {
-                        transcript
-                            .speakers
-                            .get(voice)
-                            .cloned()
-                            .unwrap_or_else(|| voice.clone())
-                    });
+                    let voice = transcript
+                        .words
+                        .get(hit.index)?
+                        .speaker
+                        .as_ref()
+                        .map(|voice| {
+                            transcript
+                                .speakers
+                                .get(voice)
+                                .cloned()
+                                .unwrap_or_else(|| voice.clone())
+                        });
                     Some(json!({
                         "media": hit.media,
                         "name": name,

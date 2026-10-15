@@ -669,7 +669,27 @@ pub fn shown(
         });
     }
     out.retain(|cue| cue.end_ms > cue.start_ms && !hidden(&cue.speaker));
+    if !together {
+        hold_readable(&mut out, until_ms);
+    }
     out
+}
+
+/// The least time a line stays up: under this it flashes past unread (a
+/// finished subtitled video had 28 lines, "No.", "Yeah.", up for a single
+/// frame, squeezed in before a quick answer).
+pub const MIN_SHOWN_MS: f64 = 400.0;
+
+/// Holds every line at least MIN_SHOWN_MS (not past `until_ms`), starting the
+/// next one that much later: its own hold after its last word absorbs it.
+fn hold_readable(cues: &mut [Line], until_ms: f64) {
+    let mut shown_until = f64::NEG_INFINITY;
+    for cue in cues.iter_mut() {
+        cue.start_ms = cue.start_ms.max(shown_until);
+        let least = (cue.start_ms + MIN_SHOWN_MS).min(until_ms);
+        cue.end_ms = cue.end_ms.max(least);
+        shown_until = cue.end_ms;
+    }
 }
 
 /// Whether a role's lines are hidden: the narrator, radio traffic and
@@ -1506,6 +1526,22 @@ mod tests {
             .iter()
             .map(|line| (line.start_ms, line.end_ms, line.speaker.as_str()))
             .collect()
+    }
+
+    #[test]
+    fn a_line_squeezed_by_a_quick_answer_still_stays_up_long_enough_to_read() {
+        let none = |_: &str| false;
+        // "No." said 40 ms before the next line starts.
+        let out = shown(
+            &[line(0.0, 30.0, "a"), line(40.0, 1500.0, "b")],
+            1000.0,
+            0.0,
+            9000.0,
+            false,
+            none,
+            none,
+        );
+        assert_eq!(times(&out), [(0.0, 400.0, "a"), (400.0, 2500.0, "b")]);
     }
 
     #[test]

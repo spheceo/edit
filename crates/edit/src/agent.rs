@@ -1142,8 +1142,10 @@ impl Agents {
                 Ok(chat.generation)
             })?
         };
-        let effort = crate::fulledit::STEPS[0].effort.to_owned();
-        self.start_step(project, prompt, model, Some(effort), generation)
+        let effort = crate::fulledit::STEPS
+            .first()
+            .map(|step| step.effort.to_owned());
+        self.start_step(project, prompt, model, effort, generation)
             .await
     }
 

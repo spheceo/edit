@@ -217,10 +217,96 @@ fn operation_on(
             let (moved, removed) = crate::mcp::tidy_tracks(project);
             Ok(json!({"moved": moved, "removed_tracks": removed}))
         }
+        "transition" => transition(project, args),
         other => Err(format!(
-            "unknown op {other}; use add, update, delete, keyframes, cover_cut_in, tidy_tracks"
+            "unknown op {other}; use add, update, delete, keyframes, cover_cut_in, transition, tidy_tracks"
         )),
     }
+}
+
+/// A house transition at a cut, built the way the house style describes it,
+/// so a plan says `{"op":"transition","kind":"dip","at":1234}` instead of a
+/// clip and its keyframes for every cut (fewer tokens for the model to
+/// write, and no room to get the shape wrong). On a new track above
+/// everything there; tidy_tracks packs them down afterwards.
+/// - drop: the vertical slam, an adjustment 6 frames straddling the cut.
+/// - flash: white, 6 frames centred on the cut, fading out (with a shutter).
+/// - dip: to black and straight back, `frames` long (12) centred on the cut.
+/// - open: the reverse dip that opens the video, black fading out over ~0.5 s.
+fn transition(project: &mut Project, args: &Value) -> Result<Value, String> {
+    let kind = args["kind"]
+        .as_str()
+        .ok_or("transition needs kind: drop, flash, dip or open")?;
+    let at = args["at"].as_i64();
+    let cut = || at.ok_or_else(|| format!("a {kind} needs at (the cut's frame)"));
+    let key =
+        |frame: i64, value: f64, ease: &str| json!({"frame": frame, "value": value, "ease": ease});
+    let (name, start, duration, content, opacity) = match kind {
+        "drop" => (
+            "Drop",
+            cut()? - 3,
+            6,
+            json!({"type": "adjustment", "shake": {"preset": "vertical"}}),
+            None,
+        ),
+        "flash" => (
+            "Flash",
+            cut()? - 3,
+            6,
+            json!({"type": "solid", "fill": [1.0, 1.0, 1.0, 1.0]}),
+            Some(vec![key(0, 1.0, "out"), key(5, 0.0, "linear")]),
+        ),
+        "dip" => {
+            let frames = args["frames"].as_i64().unwrap_or(12).clamp(4, 60);
+            (
+                "Dip",
+                cut()? - frames / 2,
+                frames,
+                json!({"type": "solid", "fill": [0.0, 0.0, 0.0, 1.0]}),
+                Some(vec![
+                    key(0, 0.0, "in_out"),
+                    key(frames / 2, 1.0, "in_out"),
+                    key(frames - 1, 0.0, "linear"),
+                ]),
+            )
+        }
+        "open" => {
+            let frames = ((project.fps() * 0.5).round() as i64).max(2);
+            (
+                "Opening dip",
+                0,
+                frames,
+                json!({"type": "solid", "fill": [0.0, 0.0, 0.0, 1.0]}),
+                Some(vec![key(0, 1.0, "linear"), key(frames - 1, 0.0, "linear")]),
+            )
+        }
+        other => {
+            return Err(format!(
+                "unknown transition {other}; use drop, flash, dip or open"
+            ))
+        }
+    };
+    // Never before the start of the video: what's cut off the front goes.
+    let (start, duration) = (start.max(0), duration - (-start).max(0));
+    let id = project.fresh_id("c");
+    let track = project.add_track(TrackKind::Video);
+    let mut fields = content.as_object().cloned().ok_or("transition content")?;
+    for (field, value) in [
+        ("id", json!(id)),
+        ("name", json!(name)),
+        ("track", json!(track)),
+        ("start", json!(start)),
+        ("duration", json!(duration)),
+    ] {
+        fields.insert(field.to_owned(), value);
+    }
+    if let Some(keys) = opacity {
+        fields.insert("keyframes".to_owned(), json!({"opacity": keys}));
+    }
+    let clip: Clip = serde_json::from_value(Value::Object(fields))
+        .map_err(|error| format!("{kind}: {error}"))?;
+    project.clips.push(clip);
+    Ok(json!(id))
 }
 
 /// Selects many clips without having to enumerate hundreds of subtitle IDs.
@@ -492,6 +578,34 @@ mod tests {
             &[json!({"op":"add", "clip":{"type":"solid", "fill":[0,0,0,1]}})],
         );
         assert!(missing.err().unwrap().contains("clip.start is required"));
+    }
+
+    #[test]
+    fn transitions_are_built_the_house_way() {
+        let mut p = project();
+        apply(&mut p, &[
+            json!({"op":"add", "clip":{"type":"solid", "track":"v1", "start":0, "duration":300, "fill":[0,0,0,1]}}),
+            json!({"op":"transition", "kind":"open"}),
+            json!({"op":"transition", "kind":"dip", "at":100}),
+            json!({"op":"transition", "kind":"drop", "at":200}),
+            json!({"op":"transition", "kind":"flash", "at":2}),
+        ]).unwrap();
+        let named = |name: &str| {
+            p.clips
+                .iter()
+                .find(|clip| clip.name.as_deref() == Some(name))
+                .unwrap()
+        };
+        assert_eq!(
+            (named("Opening dip").start, named("Opening dip").duration),
+            (0, 15)
+        );
+        assert_eq!((named("Dip").start, named("Dip").duration), (94, 12));
+        assert_eq!(named("Dip").keyframes["opacity"].len(), 3);
+        assert_eq!((named("Drop").start, named("Drop").duration), (197, 6));
+        // Cut off at the start of the video.
+        assert_eq!((named("Flash").start, named("Flash").duration), (0, 5));
+        assert!(apply(&mut p, &[json!({"op":"transition", "kind":"dip"})]).is_err());
     }
 
     #[test]

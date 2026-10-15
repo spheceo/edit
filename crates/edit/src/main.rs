@@ -15,6 +15,7 @@ mod library;
 mod mac_media;
 mod mcp;
 mod media;
+mod mix;
 mod render;
 mod research;
 mod script;

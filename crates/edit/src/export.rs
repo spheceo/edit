@@ -284,7 +284,7 @@ fn bits_per_pixel(quality: Quality) -> f64 {
     }
 }
 
-fn audio_bitrate(format: Format, quality: Quality) -> u32 {
+pub fn audio_bitrate(format: Format, quality: Quality) -> u32 {
     match (format, quality) {
         (Format::Mp3, Quality::High) => 320_000,
         (Format::Mp3, Quality::Balanced) => 224_000,
@@ -322,8 +322,33 @@ pub fn video_bitrate(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<u
     .round() as u64)
 }
 
-/// The codec arguments for the output (after the inputs and maps).
+/// The codec arguments for the whole output (after the inputs and maps):
+/// picture, sound and, for MP4, the index at the front.
 pub fn codec_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<String>, String> {
+    let mut args = video_args(options, plan, fps)?;
+    if plan.audio {
+        args.extend(audio_args(options));
+    }
+    if matches!(options.format, Format::H264 | Format::Hevc) {
+        args.extend(["-movflags".to_owned(), "+faststart".to_owned()]);
+    }
+    Ok(args)
+}
+
+/// The sound's codec arguments for the format.
+pub fn audio_args(options: &ExportOptions) -> Vec<String> {
+    let rate = audio_bitrate(options.format, options.quality).to_string();
+    let args: &[&str] = match options.format {
+        Format::H264 | Format::Hevc => &["-c:a", "aac", "-b:a", &rate],
+        Format::Prores | Format::Wav => &["-c:a", "pcm_s16le"],
+        Format::Mp3 => &["-c:a", "libmp3lame", "-b:a", &rate],
+        Format::Gif | Format::Png => &[],
+    };
+    args.iter().map(|arg| (*arg).to_owned()).collect()
+}
+
+/// The picture's codec arguments for the format (none for sound-only formats).
+pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = Vec::new();
     let mut push = |items: &[&str]| args.extend(items.iter().map(|item| (*item).to_owned()));
     let format = options.format;
@@ -416,10 +441,6 @@ pub fn codec_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
                 "-color_trc",
                 "bt709",
             ]);
-            if plan.audio {
-                push(&["-c:a", "aac", "-b:a", &audio_rate.to_string()]);
-            }
-            push(&["-movflags", "+faststart"]);
         }
         Format::Prores => {
             push(&["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0"]);
@@ -431,14 +452,10 @@ pub fn codec_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
                 "-color_trc",
                 "bt709",
             ]);
-            if plan.audio {
-                push(&["-c:a", "pcm_s16le"]);
-            }
         }
         Format::Gif => push(&["-loop", "0"]),
         Format::Png => push(&["-frames:v", "1", "-update", "1"]),
-        Format::Wav => push(&["-c:a", "pcm_s16le"]),
-        Format::Mp3 => push(&["-c:a", "libmp3lame", "-b:a", &audio_rate.to_string()]),
+        Format::Wav | Format::Mp3 => {}
     }
     if format.has_video() && format != Format::Png {
         push(&["-t", &format!("{seconds:.6}")]);

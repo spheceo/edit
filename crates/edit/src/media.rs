@@ -447,7 +447,7 @@ impl Processor {
                         "media",
                         "media: light preview",
                         &source.to_string_lossy(),
-                        || make_light(&paths, &probe),
+                        || make_light(&source, &paths, &probe),
                     ) {
                         Ok(()) => worker.set(&source, |status| status.light = Stage::Ready),
                         Err(error) => worker.set(&source, |status| {
@@ -550,12 +550,26 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
+/// The light preview of `source` in the media cache, if it's been made.
+pub fn light_preview(cache: &Path, source: &Path) -> Option<PathBuf> {
+    let path = cache.join(media_key(source)).join("preview-light.mp4");
+    path.is_file().then_some(path)
+}
+
 /// A 720p copy of the preview at ~1.5 Mbit/s (a quarter of the data), same
 /// half-second GOPs and no reordering: what a preview over the internet streams.
-fn make_light(paths: &CachePaths, probe: &Probe) -> Result<(), String> {
+/// Made from the source when the preview picture is missing (a finished
+/// preview whose picture was removed, or one made before pictures were kept),
+/// on the source's clock either way.
+fn make_light(source: &Path, paths: &CachePaths, probe: &Probe) -> Result<(), String> {
     let partial = paths.light.with_extension("partial.mp4");
+    let input = if paths.proxy.is_file() {
+        paths.proxy.as_path()
+    } else {
+        source
+    };
     #[cfg(target_os = "macos")]
-    if native_proxy(&paths.proxy, &partial, probe, 1280, 720, 1_500_000, |_| {}) {
+    if native_proxy(input, &partial, probe, 1280, 720, 1_500_000, |_| {}) {
         return std::fs::rename(&partial, &paths.light).map_err(|error| error.to_string());
     }
     let gop = (probe.fps / 2.0).round().max(1.0).to_string();
@@ -571,12 +585,13 @@ fn make_light(paths: &CachePaths, probe: &Probe) -> Result<(), String> {
             "1",
             "-i",
         ])
-        .arg(&paths.proxy)
+        .arg(input)
         .args([
             "-map",
             "0:v:0",
             "-vf",
-            "scale=w=-2:h='min(720,ih)'",
+            // The source (unlike the preview) may be any size, matrix or pixel format.
+            "scale=w=-2:h='min(720,ih)':out_color_matrix=bt709:out_range=tv,format=yuv420p",
             "-colorspace",
             "bt709",
             "-color_primaries",
@@ -806,21 +821,29 @@ fn native_proxy(
             30.0
         };
         let mut reader = crate::mac_media::Reader::open(source, width, height)?;
+        // Every frame a keyframe or decodable as it arrives (no reordering);
+        // the writer replaces a stale partial file from an interrupted run.
         let mut writer = crate::mac_media::Writer::open(
             output,
             width,
             height,
             fps,
-            false,
-            bitrate,
-            (fps / 2.0).round().max(1.0) as i32,
+            crate::mac_media::WriterOptions {
+                hevc: false,
+                bitrate,
+                key_interval: (fps / 2.0).round().max(1.0) as i32,
+                finished: false,
+                faststart: true,
+            },
         )?;
         let frames = (probe.duration * fps).ceil().max(1.0) as i64;
-        let mut rgba = vec![0; width as usize * height as usize * 4];
+        // BGRA in and out: no conversion. A repeated picture isn't copied again.
+        let mut bgra = vec![0; width as usize * height as usize * 4];
+        let order = crate::mac_media::Order::Bgra;
         let mut reported = Instant::now();
         for frame in 0..frames {
-            reader.frame(frame as f64 / fps, &mut rgba)?;
-            writer.frame(frame, &rgba)?;
+            reader.frame(frame as f64 / fps, &mut bgra, order, frame > 0)?;
+            writer.frame(frame, &bgra, width as usize * 4, order)?;
             if reported.elapsed() >= Duration::from_millis(250) {
                 progress((frame as f64 / frames as f64) as f32);
                 reported = Instant::now();

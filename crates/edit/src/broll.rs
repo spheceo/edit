@@ -115,35 +115,17 @@ pub fn still_video(image: &Path, dir: &Path) -> Result<PathBuf, String> {
     Ok(out)
 }
 
-/// Evenly spaced frames of a media file between `start` and `end` (seconds of the file).
+/// Evenly spaced frames of a media file between `start` and `end` (seconds of
+/// the file), at most 480 px, decoded side by side (from the light preview in
+/// `cache` when it's made).
 pub fn media_frames(
     media: &Media,
+    cache: Option<&Path>,
     start: f64,
     end: f64,
     count: usize,
 ) -> Result<(Vec<RgbaImage>, Vec<f64>), String> {
-    let end = end.min(media.duration).max(start);
-    let times: Vec<f64> = (0..count)
-        .map(|index| {
-            if count == 1 {
-                start
-            } else {
-                start + (end - start) * index as f64 / (count - 1) as f64
-            }
-        })
-        .collect();
-    let mut images = Vec::new();
-    let mut reader = crate::render::VideoReader::new(media, 480, 480);
-    for time in &times {
-        let (width, height) = (reader.width, reader.height);
-        let pixels = reader.frame_at(*time)?.to_vec();
-        images.push(RgbaImage {
-            width,
-            height,
-            pixels,
-        });
-    }
-    Ok((images, times))
+    crate::render::media_frames(media, cache, start, end, count, 480)
 }
 
 /// A media file's words, transcribing it first if needed.

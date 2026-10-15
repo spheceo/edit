@@ -1170,7 +1170,6 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             if !(0.0..=media.duration).contains(&time) {
                 return Err(format!("time must be 0 to {:.2} s", media.duration));
             }
-            let source = std::path::PathBuf::from(&media.path);
             let label: String = args["name"]
                 .as_str()
                 .unwrap_or("still")
@@ -1187,22 +1186,10 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             let dir = store.uploads_dir(&id);
             std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
             let out = dir.join(format!("{} {:.2}s.png", label.trim(), time));
-            let output = std::process::Command::new(crate::tools::ffmpeg())
-                .args(["-hide_banner", "-loglevel", "error", "-y", "-ss"])
-                .arg(format!("{time:.3}"))
-                .arg("-i")
-                .arg(&source)
-                .args(["-frames:v", "1"])
-                .arg(&out)
-                .stdin(std::process::Stdio::null())
-                .output()
-                .map_err(|error| format!("ffmpeg: {error}"))?;
-            if !output.status.success() || !out.is_file() {
-                return Err(format!(
-                    "couldn't take the frame: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            }
+            let (media, path) = (media.clone(), out.clone());
+            tokio::task::spawn_blocking(move || crate::render::save_still(&media, time, &path))
+                .await
+                .map_err(|error| error.to_string())??;
             let (_, added, errors) = crate::server::import_paths(
                 app,
                 &id,
@@ -1714,21 +1701,23 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             let end = args["end"].as_f64().unwrap_or(media.duration);
             let count = args["count"].as_u64().unwrap_or(12).clamp(1, 24) as usize;
             let columns = args["columns"].as_u64().unwrap_or(4).clamp(1, 8) as u32;
-            let (images, times) = tokio::task::spawn_blocking(move || {
-                crate::broll::media_frames(&media, start, end, count)
+            let cache = store.cache_dir();
+            let media_id = media_id.to_owned();
+            tokio::task::spawn_blocking(move || {
+                let (images, times) =
+                    crate::broll::media_frames(&media, Some(&cache), start, end, count)?;
+                let times: Vec<String> = times.iter().map(|time| format!("{time:.2}s")).collect();
+                crate::render::image_content(
+                    &tile(&images, columns),
+                    format!(
+                        "{media_id}: {} frames, left-to-right then down, at {}",
+                        times.len(),
+                        times.join(", ")
+                    ),
+                )
             })
             .await
-            .map_err(|error| error.to_string())??;
-            let png = encode_png(&tile(&images, columns))?;
-            let times: Vec<String> = times.iter().map(|time| format!("{time:.2}s")).collect();
-            Ok(image(
-                &png,
-                format!(
-                    "{media_id}: {} frames, left-to-right then down, at {}",
-                    times.len(),
-                    times.join(", ")
-                ),
-            ))
+            .map_err(|error| error.to_string())?
         }
         "find_in_footage" => {
             let live = store.get(&id).ok_or("project vanished")?;
@@ -2121,14 +2110,15 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             let max = args["max_size"].as_u64().unwrap_or(960) as u32;
             let images = app
                 .frames
-                .render(live.project.clone(), vec![frame], max)
+                .render_for_agent(live.project.clone(), vec![frame], max)
                 .await?;
-            let rendered = images.first().ok_or("nothing was rendered")?;
-            let png = encode_png(rendered)?;
-            Ok(image(
-                &png,
-                format!("frame {frame} ({:.2}s)", frame as f64 / live.project.fps()),
-            ))
+            let caption = format!("frame {frame} ({:.2}s)", frame as f64 / live.project.fps());
+            tokio::task::spawn_blocking(move || {
+                let rendered = images.first().ok_or("nothing was rendered")?;
+                crate::render::image_content(rendered, caption)
+            })
+            .await
+            .map_err(|error| error.to_string())?
         }
         "contact_sheet" => {
             let live = store.get(&id).ok_or("project vanished")?;
@@ -2149,20 +2139,27 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .collect();
             let images = app
                 .frames
-                .render(live.project.clone(), frames.clone(), 480)
+                .render_for_agent(
+                    live.project.clone(),
+                    frames.clone(),
+                    crate::render::SHEET_CELL,
+                )
                 .await?;
-            let png = encode_png(&tile(&images, columns))?;
             let times: Vec<String> = frames
                 .iter()
                 .map(|frame| format!("{:.2}s", *frame as f64 / fps))
                 .collect();
-            Ok(image(
-                &png,
-                format!(
-                    "{count} frames, left-to-right then down: {}",
-                    times.join(", ")
-                ),
-            ))
+            tokio::task::spawn_blocking(move || {
+                crate::render::image_content(
+                    &tile(&images, columns),
+                    format!(
+                        "{count} frames, left-to-right then down: {}",
+                        times.join(", ")
+                    ),
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())?
         }
         "export" => {
             let options: crate::export::ExportOptions = args
@@ -2226,12 +2223,16 @@ async fn with_review(
             if frames.iter().any(|frame| *frame >= project.duration()) {
                 return Err("a review frame is past the timeline's end".to_owned());
             }
-            let images = app.frames.render(project, frames.clone(), 480).await?;
-            let png = encode_png(&tile(&images, 4))?;
-            Ok(image(
-                &png,
-                format!("Review frames, left to right then down: {frames:?}"),
-            ))
+            let images = app
+                .frames
+                .render_for_agent(project, frames.clone(), crate::render::SHEET_CELL)
+                .await?;
+            let caption = format!("Review frames, left to right then down: {frames:?}");
+            tokio::task::spawn_blocking(move || {
+                crate::render::image_content(&tile(&images, 4), caption)
+            })
+            .await
+            .map_err(|error| error.to_string())?
         }
         .await;
         match reviewed {

@@ -1,20 +1,29 @@
-//! Native rendering: single frames (for agents) and full exports. Both run
-//! the same `edit-render` compositor the browser preview runs as WASM.
+//! Native rendering: single frames (for agents and the UI) and full exports.
+//! Both run the same `edit-render` compositor the browser preview runs as WASM.
+//!
+//! An export is a pipeline: a planner evaluates frames a little ahead and hands
+//! each clip's run of frames to one of a few decoder threads (so the next
+//! clip's file is opened and sought while this one plays), the compositor
+//! uploads, renders and queues each frame's readback without waiting for it,
+//! and an encoder thread reads frames back and hands them to the encoder. The
+//! sound is mixed first (`crate::mix`; seconds, and slower beside the video's
+//! decoders), and the two are put together at the end without re-encoding.
 
-use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::io::{Read, Write};
+use parking_lot::{Condvar, Mutex};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use edit_core::{audio_segments, evaluate, AudioSegment, Layer, Media, Project};
+use base64::Engine;
+use edit_core::{audio_segments, evaluate, AudioSegment, Layer, Media, Project, Scene};
 use edit_render::{text::BUNDLED_FONTS, wgpu, Renderer};
-use serde_json::json;
+use serde_json::{json, Value};
 
-use crate::export::{ExportOptions, Plan};
+use crate::export::{ExportOptions, Format, Plan};
 use crate::store::Store;
 
 pub fn new_renderer(width: u32, height: u32) -> Result<Renderer, String> {
@@ -46,13 +55,56 @@ fn decode_size(media: &Media, width: u32, height: u32) -> (u32, u32) {
     (even(mw * fit), even(mh * fit))
 }
 
-/// Sequential RGBA reader for one source that restarts on jumps.
-pub(crate) struct VideoReader {
+/// Pixel order of decoded and rendered frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Order {
+    Rgba,
+    /// The video decoder's and encoder's own order: no conversion on the CPU
+    /// (the renderer samples a BGRA texture the same as an RGBA one).
+    Bgra,
+}
+
+/// What a reader decodes: a file at a size, in an order.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DecodeKey {
     path: PathBuf,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
+    width: u32,
+    height: u32,
+    order: Order,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Source {
+    key: DecodeKey,
     fps: f64,
     still: bool,
+}
+
+impl Source {
+    fn new(media: &Media, path: PathBuf, (width, height): (u32, u32), order: Order) -> Self {
+        Self {
+            key: DecodeKey {
+                path,
+                width,
+                height,
+                order,
+            },
+            fps: if media.fps > 0.0 { media.fps } else { 30.0 },
+            still: media.kind == edit_core::MediaKind::Image,
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        self.key.width as usize * self.key.height as usize * 4
+    }
+}
+
+/// Sequential reader for one source that restarts on jumps: AVFoundation on
+/// the Mac, FFmpeg for what it can't read (and elsewhere), ImageIO for stills.
+pub(crate) struct VideoReader {
+    source: Source,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     child: Option<(Child, ChildStdout)>,
     #[cfg(target_os = "macos")]
     native: Option<crate::mac_media::Reader>,
@@ -64,17 +116,19 @@ pub(crate) struct VideoReader {
     has_frame: bool,
     eof: bool,
     spare: Vec<u8>,
+    /// Source seconds last asked for: which pooled reader continues best.
+    position: Option<f64>,
+    /// A still has been copied out since it was decoded.
+    copied: bool,
 }
 
 impl VideoReader {
-    pub(crate) fn new(media: &Media, width: u32, height: u32) -> Self {
-        let (width, height) = decode_size(media, width, height);
+    fn open(source: Source) -> Self {
+        let (width, height) = (source.key.width, source.key.height);
         Self {
-            path: PathBuf::from(&media.path),
+            source,
             width,
             height,
-            fps: if media.fps > 0.0 { media.fps } else { 30.0 },
-            still: media.kind == edit_core::MediaKind::Image,
             child: None,
             #[cfg(target_os = "macos")]
             native: None,
@@ -82,16 +136,18 @@ impl VideoReader {
             native_failed: std::env::var_os("EDIT_FFMPEG_VIDEO").is_some(),
             start: 0.0,
             next_index: 0,
-            frame: vec![0; width as usize * height as usize * 4],
+            frame: Vec::new(),
             has_frame: false,
             eof: false,
             spare: Vec::new(),
+            position: None,
+            copied: false,
         }
     }
 
     fn restart(&mut self, time: f64) -> Result<(), String> {
         self.stop();
-        self.spare.resize(self.frame.len(), 0);
+        self.spare.resize(self.source.bytes(), 0);
         let time = time.max(0.0);
         let mut child = Command::new(crate::tools::ffmpeg())
             .args([
@@ -108,20 +164,23 @@ impl VideoReader {
                 "file,pipe",
                 "-i",
             ])
-            .arg(&self.path)
+            .arg(&self.source.key.path)
             .args([
                 "-an",
                 "-vf",
                 &format!(
                     "fps={:.6},scale={}:{}:flags=bicubic",
-                    self.fps, self.width, self.height
+                    self.source.fps, self.width, self.height
                 ),
                 "-threads",
                 "1",
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
-                "rgba",
+                match self.source.key.order {
+                    Order::Rgba => "rgba",
+                    Order::Bgra => "bgra",
+                },
                 "pipe:1",
             ])
             .stdin(Stdio::null())
@@ -138,57 +197,131 @@ impl VideoReader {
         Ok(())
     }
 
-    /// Frame covering `time` (seconds into the source).
-    pub(crate) fn frame_at(&mut self, time: f64) -> Result<&[u8], String> {
-        let time = if self.still { 0.0 } else { time };
-        if self.still && self.has_frame {
-            return Ok(&self.frame);
+    fn decode_still(&mut self) -> Result<(), String> {
+        self.frame.resize(self.source.bytes(), 0);
+        #[cfg(target_os = "macos")]
+        crate::mac_media::image(
+            &self.source.key.path,
+            self.width,
+            self.height,
+            &mut self.frame,
+        )?;
+        #[cfg(not(target_os = "macos"))]
+        {
+            // FFmpeg decodes stills elsewhere: its first (only) frame.
+            self.restart(0.0)?;
+            self.read_ffmpeg(0.0)?;
+            self.stop();
         }
         #[cfg(target_os = "macos")]
-        if self.still {
-            crate::mac_media::image(&self.path, self.width, self.height, &mut self.frame)?;
-            self.has_frame = true;
+        if self.source.key.order == Order::Bgra {
+            for pixel in self.frame.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+        }
+        self.has_frame = true;
+        self.copied = false;
+        Ok(())
+    }
+
+    /// Frame covering `time` (seconds into the source), into the reader's own buffer.
+    pub(crate) fn frame_at(&mut self, time: f64) -> Result<&[u8], String> {
+        self.position = Some(time);
+        if self.source.still {
+            if !self.has_frame {
+                self.decode_still()?;
+            }
             return Ok(&self.frame);
         }
         #[cfg(target_os = "macos")]
         if !self.native_failed {
-            let decoded = (|| {
-                if self.native.is_none() {
-                    self.native = Some(crate::mac_media::Reader::open(
-                        &self.path,
-                        self.width,
-                        self.height,
-                    )?);
-                }
-                self.native.as_mut().ok_or("native reader missing")?.frame(
-                    (time * self.fps + 0.5 + 1e-7).floor() / self.fps,
-                    &mut self.frame,
-                )
-            })();
-            match decoded {
-                Ok(()) => return Ok(&self.frame),
-                Err(error) => {
-                    crate::diag::warn(
-                        "render",
-                        format!(
-                            "native decode of {}: {error}; using FFmpeg",
-                            self.path.display()
-                        ),
-                    );
-                    self.native = None;
-                    self.native_failed = true;
-                }
+            let mut frame = std::mem::take(&mut self.frame);
+            frame.resize(self.source.bytes(), 0);
+            let decoded = self.native_frame(time, &mut frame, false);
+            self.frame = frame;
+            if decoded.is_ok() {
+                return Ok(&self.frame);
             }
         }
-        let ahead = time - (self.start + self.next_index as f64 / self.fps);
+        self.read_ffmpeg(time)?;
+        Ok(&self.frame)
+    }
+
+    /// The frame covering `time` into `out` (sized for this reader). With
+    /// `if_changed`, Ok(false) leaves `out` alone when the picture is the one
+    /// last copied out (a slowed clip shows each frame several times).
+    fn frame_into(&mut self, time: f64, out: &mut [u8], if_changed: bool) -> Result<bool, String> {
+        self.position = Some(time);
+        if self.source.still {
+            if !self.has_frame {
+                self.decode_still()?;
+            }
+            if if_changed && self.copied {
+                return Ok(false);
+            }
+            out.copy_from_slice(self.frame.get(..out.len()).ok_or("still size changed")?);
+            self.copied = true;
+            return Ok(true);
+        }
+        #[cfg(target_os = "macos")]
+        if !self.native_failed {
+            if let Ok(changed) = self.native_frame(time, out, if_changed) {
+                return Ok(changed);
+            }
+        }
+        self.read_ffmpeg(time)?;
+        out.copy_from_slice(self.frame.get(..out.len()).ok_or("decoded size changed")?);
+        Ok(true)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn native_frame(
+        &mut self,
+        time: f64,
+        out: &mut [u8],
+        if_changed: bool,
+    ) -> Result<bool, String> {
+        let decoded = (|| {
+            if self.native.is_none() {
+                self.native = Some(crate::mac_media::Reader::open(
+                    &self.source.key.path,
+                    self.width,
+                    self.height,
+                )?);
+            }
+            self.native.as_mut().ok_or("native reader missing")?.frame(
+                time,
+                out,
+                self.source.key.order,
+                if_changed,
+            )
+        })();
+        if let Err(error) = &decoded {
+            crate::diag::warn(
+                "render",
+                format!(
+                    "native decode of {}: {error}; using FFmpeg",
+                    self.source.key.path.display()
+                ),
+            );
+            self.native = None;
+            self.native_failed = true;
+        }
+        decoded
+    }
+
+    fn read_ffmpeg(&mut self, time: f64) -> Result<(), String> {
+        let fps = self.source.fps;
+        let ahead = time - (self.start + self.next_index as f64 / fps);
         if self.child.is_none()
             || time < self.start - 1e-6
             || (!self.eof && ahead > 2.0)
-            || (self.next_index > 0 && ahead < -1.5 / self.fps)
+            || (self.next_index > 0 && ahead < -1.5 / fps)
         {
             self.restart(time)?;
         }
-        let target = ((time - self.start) * self.fps + 1e-6).floor() as i64;
+        self.frame.resize(self.source.bytes(), 0);
+        let target = ((time - self.start) * fps + 1e-6).floor() as i64;
         while !self.eof && self.next_index <= target {
             let Some((child, stdout)) = self.child.as_mut() else {
                 break;
@@ -203,18 +336,24 @@ impl VideoReader {
                     if error.kind() == std::io::ErrorKind::UnexpectedEof && self.has_frame =>
                 {
                     if !child.wait().map_err(|error| error.to_string())?.success() {
-                        return Err(format!("decoder failed for {}", self.path.display()));
+                        return Err(format!(
+                            "decoder failed for {}",
+                            self.source.key.path.display()
+                        ));
                     }
                     // End of source: hold the last frame.
                     self.eof = true;
                     break;
                 }
                 Err(error) => {
-                    return Err(format!("could not decode {}: {error}", self.path.display()))
+                    return Err(format!(
+                        "could not decode {}: {error}",
+                        self.source.key.path.display()
+                    ))
                 }
             }
         }
-        Ok(&self.frame)
+        Ok(())
     }
 
     fn stop(&mut self) {
@@ -231,9 +370,189 @@ impl Drop for VideoReader {
     }
 }
 
-/// Owns a GPU on its own thread; frame renders queue here.
+/// Open readers kept between frames, by file and size rather than by clip, so
+/// cutting back to a file (jump cuts, a sheet's frames) continues a reader
+/// instead of opening and seeking a new one.
+struct ReaderPool {
+    readers: Vec<(VideoReader, u64)>,
+    clock: u64,
+    total: usize,
+    per_key: usize,
+}
+
+impl ReaderPool {
+    fn new(total: usize, per_key: usize) -> Self {
+        Self {
+            readers: Vec::new(),
+            clock: 0,
+            total,
+            per_key,
+        }
+    }
+
+    /// The pooled reader for `source` that gets to `time` soonest (one just
+    /// behind it decodes forward; anything else seeks), or a new one.
+    fn take(&mut self, source: &Source, time: f64) -> VideoReader {
+        let cost = |reader: &VideoReader, used: u64| match reader.position {
+            Some(position) if position <= time + 1e-6 && time - position <= 2.0 => time - position,
+            _ => 1e6 - used as f64 * 1e-3,
+        };
+        let best = self
+            .readers
+            .iter()
+            .enumerate()
+            .filter(|(_, (reader, _))| reader.source.key == source.key)
+            .min_by(|(_, (a, at)), (_, (b, bt))| cost(a, *at).total_cmp(&cost(b, *bt)))
+            .map(|(index, _)| index);
+        match best {
+            Some(index) => self.readers.swap_remove(index).0,
+            None => VideoReader::open(source.clone()),
+        }
+    }
+
+    fn put(&mut self, reader: VideoReader) {
+        self.clock += 1;
+        let key = reader.source.key.clone();
+        self.readers.push((reader, self.clock));
+        let oldest = |readers: &Vec<(VideoReader, u64)>, key: Option<&DecodeKey>| {
+            readers
+                .iter()
+                .enumerate()
+                .filter(|(_, (reader, _))| key.is_none_or(|key| reader.source.key == *key))
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(index, _)| index)
+        };
+        while self
+            .readers
+            .iter()
+            .filter(|(reader, _)| reader.source.key == key)
+            .count()
+            > self.per_key
+        {
+            let Some(index) = oldest(&self.readers, Some(&key)) else {
+                break;
+            };
+            self.readers.swap_remove(index);
+        }
+        while self.readers.len() > self.total {
+            let Some(index) = oldest(&self.readers, None) else {
+                break;
+            };
+            self.readers.swap_remove(index);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.readers.clear();
+    }
+}
+
+/// Frames for `requests` (each a source and a time), decoded on up to
+/// `threads` threads, each going through its share in file and time order.
+/// Readers come from and go back to `pool`.
+fn decode_all(
+    pool: &mut ReaderPool,
+    requests: &[(Source, f64)],
+    threads: usize,
+) -> Result<Vec<Vec<u8>>, String> {
+    let mut order: Vec<usize> = (0..requests.len()).collect();
+    order.sort_by(|a, b| {
+        let (Some((sa, ta)), Some((sb, tb))) = (requests.get(*a), requests.get(*b)) else {
+            return std::cmp::Ordering::Equal;
+        };
+        (&sa.key.path, sa.key.width, sa.key.height)
+            .cmp(&(&sb.key.path, sb.key.width, sb.key.height))
+            .then(ta.total_cmp(tb))
+    });
+    let threads = threads.clamp(1, requests.len().max(1));
+    let share = order.len().div_ceil(threads).max(1);
+    let shares: Vec<Vec<usize>> = order.chunks(share).map(<[usize]>::to_vec).collect();
+    let mut work = Vec::new();
+    for share in shares {
+        let Some((source, time)) = share.first().and_then(|index| requests.get(*index)) else {
+            continue;
+        };
+        let reader = pool.take(source, *time);
+        work.push((share, reader));
+    }
+    let run = |(share, mut reader): (Vec<usize>, VideoReader)| {
+        let mut done = Vec::new();
+        let mut spent = Vec::new();
+        for index in share {
+            let Some((source, time)) = requests.get(index) else {
+                continue;
+            };
+            if reader.source.key != source.key {
+                spent.push(std::mem::replace(
+                    &mut reader,
+                    VideoReader::open(source.clone()),
+                ));
+            }
+            let mut out = vec![0_u8; source.bytes()];
+            let decoded = reader.frame_into(*time, &mut out, false);
+            done.push((index, decoded.map(|_| out)));
+        }
+        spent.push(reader);
+        (done, spent)
+    };
+    let results: Vec<_> = if work.len() <= 1 {
+        work.into_iter().map(run).collect()
+    } else {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = work
+                .into_iter()
+                .map(|item| scope.spawn(move || run(item)))
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().ok())
+                .collect()
+        })
+    };
+    let mut frames: Vec<Option<Vec<u8>>> = vec![None; requests.len()];
+    let mut failure = None;
+    for (done, spent) in results {
+        for reader in spent {
+            pool.put(reader);
+        }
+        for (index, decoded) in done {
+            match decoded {
+                Ok(pixels) => {
+                    if let Some(slot) = frames.get_mut(index) {
+                        *slot = Some(pixels);
+                    }
+                }
+                Err(error) => failure = Some(error),
+            }
+        }
+    }
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    frames
+        .into_iter()
+        .map(|frame| frame.ok_or_else(|| "a frame wasn't decoded".to_owned()))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Single frames
+
+/// Owns a GPU on its own thread; frame renders queue here, the agent's ahead
+/// of the UI's (covers and thumbnails can wait; an agent's turn can't).
 pub struct FrameRenderer {
-    jobs: Mutex<mpsc::SyncSender<FrameJob>>,
+    queue: Arc<JobQueue>,
+}
+
+struct JobQueue {
+    jobs: Mutex<Queues>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct Queues {
+    agent: VecDeque<FrameJob>,
+    ui: VecDeque<FrameJob>,
 }
 
 struct FrameJob {
@@ -250,19 +569,42 @@ pub struct RgbaImage {
     pub pixels: Vec<u8>,
 }
 
+/// Readers left open this long with nothing to render are closed.
+const IDLE: Duration = Duration::from_secs(20);
+
 impl FrameRenderer {
-    /// `cache` is the media cache, where waveforms' sound levels are.
+    /// `cache` is the media cache: waveforms' sound levels and light previews.
     pub fn start(cache: PathBuf) -> Arc<Self> {
-        let (sender, receiver) = mpsc::sync_channel::<FrameJob>(8);
+        let queue = Arc::new(JobQueue {
+            jobs: Mutex::new(Queues::default()),
+            ready: Condvar::new(),
+        });
+        let jobs = Arc::clone(&queue);
         std::thread::spawn(move || {
             let mut renderer: Option<Renderer> = None;
             let mut last_project = String::new();
-            let mut readers = HashMap::new();
-            for job in receiver {
+            let mut pool = ReaderPool::new(6, 2);
+            loop {
+                let job = {
+                    let mut queues = jobs.jobs.lock();
+                    loop {
+                        if let Some(job) =
+                            queues.agent.pop_front().or_else(|| queues.ui.pop_front())
+                        {
+                            break job;
+                        }
+                        if jobs.ready.wait_for(&mut queues, IDLE).timed_out()
+                            && queues.agent.is_empty()
+                            && queues.ui.is_empty()
+                        {
+                            pool.clear();
+                        }
+                    }
+                };
                 if job.reply.is_closed() {
                     continue;
                 }
-                let rendering = std::time::Instant::now();
+                let rendering = Instant::now();
                 let caught = crate::guard::catch("rendering a frame", || {
                     let settings = job.project.settings;
                     let renderer = match &mut renderer {
@@ -272,26 +614,21 @@ impl FrameRenderer {
                     // Media ids are per project: another project's may be other files.
                     if job.project.id != last_project {
                         renderer.clear_peaks();
-                        readers.clear();
                         last_project = job.project.id.clone();
                     }
-                    let mut images = Vec::new();
-                    for frame in &job.frames {
-                        images.push(render_one(
-                            renderer,
-                            &mut readers,
-                            &job.project,
-                            *frame,
-                            job.max_side,
-                            &cache,
-                        )?);
-                    }
-                    Ok(images)
+                    render_job(
+                        renderer,
+                        &mut pool,
+                        &job.project,
+                        &job.frames,
+                        job.max_side,
+                        &cache,
+                    )
                 });
                 // A crash may leave the GPU state half-way: start afresh next time.
                 if caught.is_err() {
                     renderer = None;
-                    readers.clear();
+                    pool.clear();
                 }
                 let result = caught.and_then(|result| result);
                 let name = if job.frames.len() > 1 {
@@ -308,37 +645,65 @@ impl FrameRenderer {
                 let _ = job.reply.send(result);
             }
         });
-        Arc::new(Self {
-            jobs: Mutex::new(sender),
-        })
+        Arc::new(Self { queue })
     }
 
+    /// Renders for the UI (covers, the export dialog, saving a frame).
     pub async fn render(
         &self,
         project: Project,
         frames: Vec<i64>,
         max_side: u32,
     ) -> Result<Vec<RgbaImage>, String> {
+        self.submit(project, frames, max_side, false).await
+    }
+
+    /// Renders for an agent's tool call, ahead of any UI renders waiting.
+    pub async fn render_for_agent(
+        &self,
+        project: Project,
+        frames: Vec<i64>,
+        max_side: u32,
+    ) -> Result<Vec<RgbaImage>, String> {
+        self.submit(project, frames, max_side, true).await
+    }
+
+    async fn submit(
+        &self,
+        project: Project,
+        frames: Vec<i64>,
+        max_side: u32,
+        agent: bool,
+    ) -> Result<Vec<RgbaImage>, String> {
         let (reply, response) = tokio::sync::oneshot::channel();
-        self.jobs
-            .lock()
-            .try_send(FrameJob {
+        {
+            let mut queues = self.queue.jobs.lock();
+            // Callers that gave up leave nothing to wait behind.
+            queues.agent.retain(|job| !job.reply.is_closed());
+            queues.ui.retain(|job| !job.reply.is_closed());
+            let (queue, limit) = if agent {
+                (&mut queues.agent, 16)
+            } else {
+                (&mut queues.ui, 8)
+            };
+            if queue.len() >= limit {
+                return Err("renderer busy; try again shortly".to_owned());
+            }
+            queue.push_back(FrameJob {
                 project,
                 frames,
                 max_side,
                 reply,
-            })
-            .map_err(|error| match error {
-                mpsc::TrySendError::Full(_) => "renderer busy; try again shortly".to_owned(),
-                mpsc::TrySendError::Disconnected(_) => "renderer stopped".to_owned(),
-            })?;
+            });
+        }
+        self.queue.ready.notify_one();
         response.await.map_err(|_| "renderer stopped".to_owned())?
     }
 }
 
 /// Gives the renderer the sound levels this frame's waveforms read: each
 /// media's peaks from the media cache (missing ones are tried again next frame).
-fn feed_peaks(renderer: &mut Renderer, project: &Project, scene: &edit_core::Scene, cache: &Path) {
+fn feed_peaks(renderer: &mut Renderer, project: &Project, scene: &Scene, cache: &Path) {
     for layer in &scene.layers {
         let Layer::Waveform { sources, .. } = layer else {
             continue;
@@ -360,62 +725,212 @@ fn feed_peaks(renderer: &mut Renderer, project: &Project, scene: &edit_core::Sce
     }
 }
 
-fn render_one(
+/// Where to decode `media` from for a picture whose longest side is
+/// `max_side` (0 = full size): the light 720p preview when that's enough and
+/// made (short keyframe intervals, a fraction of the decoding), else the file.
+fn picture_source(media: &Media, size: (u32, u32), max_side: u32, cache: Option<&Path>) -> Source {
+    let original = PathBuf::from(&media.path);
+    let path = match cache {
+        Some(cache)
+            if max_side > 0 && max_side <= 720 && media.kind == edit_core::MediaKind::Video =>
+        {
+            crate::media::light_preview(cache, &original).unwrap_or(original)
+        }
+        _ => original,
+    };
+    Source::new(media, path, size, Order::Bgra)
+}
+
+/// Renders `frames` of `project`: every picture they need decoded first (in
+/// parallel, at the size they'll be shown), then composited one by one.
+fn render_job(
     renderer: &mut Renderer,
-    readers: &mut HashMap<String, VideoReader>,
+    pool: &mut ReaderPool,
     project: &Project,
-    frame: i64,
+    frames: &[i64],
     max_side: u32,
     cache: &Path,
-) -> Result<RgbaImage, String> {
+) -> Result<Vec<RgbaImage>, String> {
     let settings = project.settings;
-    let scene = evaluate(project, frame);
-    feed_peaks(renderer, project, &scene, cache);
-    for layer in &scene.layers {
-        if let Layer::Video {
-            clip,
-            media,
-            source_time,
-            ..
-        } = layer
-        {
-            let source = project
-                .media(media)
-                .ok_or_else(|| format!("unknown media {media}"))?;
-            let reader = readers
-                .entry(clip.clone())
-                .or_insert_with(|| VideoReader::new(source, settings.width, settings.height));
-            if reader.path != Path::new(&source.path)
-                || (reader.width, reader.height)
-                    != decode_size(source, settings.width, settings.height)
+    let (width, height) = (settings.width, settings.height);
+    let longest = width.max(height).max(1);
+    let scale = if max_side > 0 && max_side < longest {
+        f64::from(max_side) / f64::from(longest)
+    } else {
+        1.0
+    };
+    let shown = (
+        ((f64::from(width) * scale).round() as u32).max(2),
+        ((f64::from(height) * scale).round() as u32).max(2),
+    );
+    let scenes: Vec<Scene> = frames
+        .iter()
+        .map(|frame| evaluate(project, *frame))
+        .collect();
+    let mut requests = Vec::new();
+    let mut layers = Vec::new();
+    for (index, scene) in scenes.iter().enumerate() {
+        for layer in &scene.layers {
+            if let Layer::Video {
+                clip,
+                media,
+                source_time,
+                ..
+            } = layer
             {
-                *reader = VideoReader::new(source, settings.width, settings.height);
+                let media = project
+                    .media(media)
+                    .ok_or_else(|| format!("unknown media {media}"))?;
+                let size = decode_size(media, shown.0, shown.1);
+                requests.push((
+                    picture_source(media, size, max_side, Some(cache)),
+                    *source_time,
+                ));
+                layers.push((index, clip.as_str()));
             }
-            let (w, h) = (reader.width, reader.height);
-            renderer.upload_video_rgba(clip, w, h, reader.frame_at(*source_time)?);
         }
     }
-    readers.retain(|clip, _| {
-        scene
-            .layers
-            .iter()
-            .any(|layer| matches!(layer, Layer::Video {clip: active, ..} if active == clip))
-    });
-    renderer.render(&scene);
-    let pixels = renderer.read_output()?;
-    let image = RgbaImage {
-        width: settings.width,
-        height: settings.height,
+    let threads = if requests.len() > 2 { 4 } else { 1 };
+    let decoding = Instant::now();
+    let decoded = decode_all(pool, &requests, threads)?;
+    let decoding = decoding.elapsed();
+    let compositing = Instant::now();
+    let mut pictures: Vec<Vec<(&str, &Source, Vec<u8>)>> =
+        scenes.iter().map(|_| Vec::new()).collect();
+    for (((index, clip), (source, _)), pixels) in layers.into_iter().zip(&requests).zip(decoded) {
+        if let Some(list) = pictures.get_mut(index) {
+            list.push((clip, source, pixels));
+        }
+    }
+    let mut images = Vec::new();
+    for (scene, pictures) in scenes.iter().zip(pictures) {
+        feed_peaks(renderer, project, scene, cache);
+        for (clip, source, pixels) in &pictures {
+            renderer.upload_video(clip, source.key.width, source.key.height, pixels, true);
+        }
+        renderer.render(scene);
+        let image = RgbaImage {
+            width,
+            height,
+            pixels: renderer.read_output()?,
+        };
+        images.push(if max_side > 0 {
+            downscale(&image, max_side)
+        } else {
+            image
+        });
+    }
+    if frames.len() > 1 {
+        crate::diag::info(
+            "render",
+            format!(
+                "{} frames: {} pictures decoded in {}, composited in {}",
+                frames.len(),
+                requests.len(),
+                crate::diag::human(decoding),
+                crate::diag::human(compositing.elapsed())
+            ),
+        );
+    }
+    Ok(images)
+}
+
+/// Evenly spaced frames of a media file between `start` and `end` (seconds of
+/// the file), at most `max_side` px, decoded side by side (from the light
+/// preview when it's made).
+pub fn media_frames(
+    media: &Media,
+    cache: Option<&Path>,
+    start: f64,
+    end: f64,
+    count: usize,
+    max_side: u32,
+) -> Result<(Vec<RgbaImage>, Vec<f64>), String> {
+    let end = end.min(media.duration).max(start);
+    let times: Vec<f64> = (0..count)
+        .map(|index| {
+            if count == 1 {
+                start
+            } else {
+                start + (end - start) * index as f64 / (count - 1) as f64
+            }
+        })
+        .collect();
+    let size = decode_size(media, max_side, max_side);
+    let mut source = picture_source(media, size, max_side, cache);
+    source.key.order = Order::Rgba;
+    let requests: Vec<(Source, f64)> = times.iter().map(|time| (source.clone(), *time)).collect();
+    let mut pool = ReaderPool::new(4, 4);
+    let frames = decode_all(&mut pool, &requests, 4)?;
+    let images = frames
+        .into_iter()
+        .map(|pixels| RgbaImage {
+            width: size.0,
+            height: size.1,
+            pixels,
+        })
+        .collect();
+    Ok((images, times))
+}
+
+/// One frame of a media file at full size (RGBA), for saving as a still.
+pub fn media_still(media: &Media, time: f64) -> Result<RgbaImage, String> {
+    let size = decode_size(media, media.width.max(2), media.height.max(2));
+    let source = Source::new(media, PathBuf::from(&media.path), size, Order::Rgba);
+    let mut reader = VideoReader::open(source);
+    let pixels = reader.frame_at(time)?.to_vec();
+    Ok(RgbaImage {
+        width: size.0,
+        height: size.1,
         pixels,
-    };
-    Ok(if max_side > 0 {
-        downscale(&image, max_side)
-    } else {
-        image
     })
 }
 
-/// Box-filter downscale so the longest side is at most `max_side`.
+/// Saves the frame of `media` at `time` (seconds) as a PNG at `out`: decoded
+/// natively and written by ImageIO on the Mac, grabbed by FFmpeg otherwise.
+/// Blocking: call it off the async runtime.
+pub fn save_still(media: &Media, time: f64, out: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let native = media_still(media, time).and_then(|still| {
+            let png = crate::mac_media::encode_image(
+                &still.pixels,
+                still.width,
+                still.height,
+                still.width as usize * 4,
+                None,
+            )?;
+            std::fs::write(out, png).map_err(|error| error.to_string())
+        });
+        match native {
+            Ok(()) => return Ok(()),
+            Err(error) => crate::diag::warn(
+                "render",
+                format!("native still of {}: {error}; using FFmpeg", media.path),
+            ),
+        }
+    }
+    let output = Command::new(crate::tools::ffmpeg())
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-ss"])
+        .arg(format!("{time:.3}"))
+        .arg("-i")
+        .arg(&media.path)
+        .args(["-frames:v", "1"])
+        .arg(out)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    if !output.status.success() || !out.is_file() {
+        return Err(format!(
+            "couldn't take the frame: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Scales down so the longest side is at most `max_side` (Accelerate's
+/// resampler on the Mac, a box filter elsewhere).
 pub fn downscale(image: &RgbaImage, max_side: u32) -> RgbaImage {
     let longest = image.width.max(image.height);
     if longest <= max_side {
@@ -431,6 +946,21 @@ pub fn downscale(image: &RgbaImage, max_side: u32) -> RgbaImage {
         ((image.height as f32 * scale).round() as u32).max(1),
     );
     let mut pixels = vec![0_u8; (w * h * 4) as usize];
+    #[cfg(target_os = "macos")]
+    if crate::mac_media::scale(
+        &image.pixels,
+        (image.width, image.height, image.width as usize * 4),
+        &mut pixels,
+        (w, h),
+    )
+    .is_ok()
+    {
+        return RgbaImage {
+            width: w,
+            height: h,
+            pixels,
+        };
+    }
     for y in 0..h {
         let sy0 = (y as f32 / scale) as u32;
         let sy1 = (((y + 1) as f32 / scale) as u32).clamp(sy0 + 1, image.height);
@@ -506,6 +1036,8 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {
         let mut encoder = png::Encoder::new(&mut out, image.width, image.height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
+        // Frames are big and short-lived: fast compression is the better trade.
+        encoder.set_compression(png::Compression::Fast);
         let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
         writer
             .write_image_data(&image.pixels)
@@ -513,6 +1045,33 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {
     }
     Ok(out)
 }
+
+/// A picture for a model: JPEG (quality 80) where ImageIO is, else PNG; with its MIME type.
+pub fn encode_for_agent(image: &RgbaImage) -> Result<(Vec<u8>, &'static str), String> {
+    #[cfg(target_os = "macos")]
+    if let Ok(jpeg) = crate::mac_media::encode_image(
+        &image.pixels,
+        image.width,
+        image.height,
+        image.width as usize * 4,
+        Some(0.8),
+    ) {
+        return Ok((jpeg, "image/jpeg"));
+    }
+    Ok((encode_png(image)?, "image/png"))
+}
+
+/// MCP content for a picture and its caption (a tool result's `content`).
+pub fn image_content(image: &RgbaImage, caption: String) -> Result<Value, String> {
+    let (bytes, mime) = encode_for_agent(image)?;
+    Ok(json!([
+        { "type": "image", "data": base64::engine::general_purpose::STANDARD.encode(bytes), "mimeType": mime },
+        { "type": "text", "text": caption }
+    ]))
+}
+
+/// Contact-sheet cells' longest side: four across makes a ~1.5k px sheet, plenty for a model.
+pub const SHEET_CELL: u32 = 360;
 
 // ---------------------------------------------------------------------------
 // Export
@@ -534,6 +1093,13 @@ impl Drop for ExportFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
+}
+
+/// A file beside `output` named for what it holds; removed when dropped.
+fn beside(output: &Path, suffix: &str) -> ExportFile {
+    let mut name = output.as_os_str().to_owned();
+    name.push(suffix);
+    ExportFile(PathBuf::from(name))
 }
 
 impl Exports {
@@ -636,8 +1202,8 @@ impl Exports {
             emit("running", 0.0, json!({}));
             let started = Instant::now();
             let result = crate::guard::catch("the export", || {
-                // FFmpeg writes beside the destination; only a complete export
-                // replaces it. Failure/cancellation cannot destroy an older file.
+                // Everything is written beside the destination; only a complete
+                // export replaces it. Failure/cancellation cannot destroy an older file.
                 let mut name = output.as_os_str().to_owned();
                 name.push(format!(
                     ".{}-{}.partial.{}",
@@ -740,79 +1306,6 @@ fn heard_segments(project: &Project, start: i64, end: i64) -> Vec<AudioSegment> 
         .collect()
 }
 
-/// One sound's filter chain, from input `input` to the label `[a{index}]`:
-/// its part of the source, mutes, tempo, volume, fades, and delay to its place.
-#[cfg(test)]
-fn segment_chain(input: usize, index: usize, segment: &AudioSegment) -> String {
-    segment_chain_with_fades(input, index, segment, 0.0, segment.duration)
-}
-
-fn segment_chain_with_fades(
-    input: usize,
-    index: usize,
-    segment: &AudioSegment,
-    elapsed: f64,
-    original_duration: f64,
-) -> String {
-    let mut chain = format!(
-        "[{input}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS",
-        segment.source_in,
-        segment.duration * segment.speed
-    );
-    // Mutes are in source seconds: here t = 0 is source_in, before any tempo change.
-    if let Some(mute) = mute_filter(segment) {
-        chain.push_str(&mute);
-    }
-    let mut tempo = segment.speed;
-    while (tempo - 1.0).abs() > 1e-6 {
-        let step = tempo.clamp(0.5, 2.0);
-        chain.push_str(&format!(",atempo={step:.6}"));
-        tempo /= step;
-    }
-    if elapsed > 0.0 {
-        chain.push_str(&format!(",asetpts=PTS+{elapsed:.9}/TB"));
-    }
-    chain.push_str(&format!(",volume={:.3}dB", segment.volume_db));
-    if segment.fade_in > 0.0 {
-        chain.push_str(&format!(",afade=t=in:st=0:d={:.4}", segment.fade_in));
-    }
-    if segment.fade_out > 0.0 {
-        chain.push_str(&format!(
-            ",afade=t=out:st={:.4}:d={:.4}",
-            (original_duration - segment.fade_out).max(0.0),
-            segment.fade_out
-        ));
-    }
-    if elapsed > 0.0 {
-        chain.push_str(",asetpts=PTS-STARTPTS");
-    }
-    let delay = (segment.start * 1000.0).round() as i64;
-    chain.push_str(&format!(",adelay={delay}|{delay}[a{index}]"));
-    chain
-}
-
-/// `,aeval=…` silencing a segment's mutes sample by sample, each ramped over
-/// MUTE_FADE_SECONDS with a cosine (as `edit_core::mute_gain`); None without
-/// any in the part it plays.
-fn mute_filter(segment: &AudioSegment) -> Option<String> {
-    let fade = edit_core::MUTE_FADE_SECONDS;
-    let length = segment.duration * segment.speed;
-    let gains: Vec<String> = segment
-        .mutes
-        .iter()
-        .map(|mute| (mute.from - segment.source_in, mute.to - segment.source_in))
-        .filter(|&(from, to)| to > -fade && from < length + fade)
-        .map(|(from, to)| {
-            format!("if(between(t,{:.6},{:.6}),(1-cos(PI*min(max(max(({from:.6})-t,t-({to:.6})),0)/{fade:.6},1)))/2,1)", from-fade, to+fade)
-        })
-        .collect();
-    let gain = gains
-        .into_iter()
-        .reduce(|all, next| format!("min({all},{next})"))?;
-    // c=same keeps the stereo layout, which encoders (AAC) need named.
-    Some(format!(",aeval=exprs='val(0)*{gain}|val(1)*{gain}':c=same"))
-}
-
 #[allow(clippy::too_many_arguments)]
 fn export(
     project: &Project,
@@ -827,38 +1320,186 @@ fn export(
     if !pending.is_empty() {
         crate::diag::info("export", format!("exporting current timeline snapshot; {} optional optical-flow renders still pending", pending.len()));
     }
+    let fps = project.fps();
+    let seconds = plan.seconds(fps);
+    let video = options.format.has_video();
+    let chapters = crate::export::chapters_file(options, plan, fps)
+        .map(|text| -> Result<ExportFile, String> {
+            let file = beside(output, ".chapters.txt");
+            std::fs::write(&file.0, text).map_err(|error| error.to_string())?;
+            Ok(file)
+        })
+        .transpose()?;
+    let parts = if plan.audio {
+        crate::mix::parts(
+            &heard_segments(project, plan.start, plan.end),
+            |media| project.media(media).map(|media| PathBuf::from(&media.path)),
+            plan.start as f64 / fps,
+            seconds,
+        )
+    } else {
+        Vec::new()
+    };
+    let sound = !parts.is_empty();
+    // What's put together at the end, if anything: the sound and chapters
+    // join the picture without re-encoding it.
+    let joined = video && (sound || chapters.is_some());
+    let sound_file = (video && sound).then(|| {
+        beside(
+            output,
+            if options.format == Format::Prores {
+                ".sound.wav"
+            } else {
+                ".sound.m4a"
+            },
+        )
+    });
+    let picture_file =
+        joined.then(|| beside(output, &format!(".picture.{}", options.format.extension())));
+    // The sound first, then the picture. Mixing beside the picture's decoders
+    // made both slower (AVFoundation's readers contend): a 2-minute edit's
+    // 126 sounds mix in ~1.3 s alone but took ~45 s alongside its video.
+    // The sound's share of the progress is its share of the time, roughly.
+    let share = if video { 0.05 } else { 1.0 };
+    if sound {
+        let scratch = beside(output, ".mix.f32");
+        let destination = sound_file.as_ref().map_or(output, |file| file.0.as_path());
+        let codec = crate::export::audio_args(options);
+        let encoding = crate::mix::Encoding {
+            codec: &codec,
+            // MP4's AAC goes into an .m4a that the join copies.
+            aac: (video && matches!(options.format, Format::H264 | Format::Hevc))
+                .then(|| crate::export::audio_bitrate(options.format, options.quality)),
+        };
+        crate::diag::time_on("export", "export: sound", &project.id, || {
+            crate::mix::render(
+                &parts,
+                (seconds * crate::mix::RATE as f64).round() as usize,
+                options.loudness,
+                &encoding,
+                destination,
+                &scratch.0,
+                cancel,
+                |done| progress(done * share),
+            )
+        })?;
+    }
+    let before = if sound { share } else { 0.0 };
+    if video {
+        let destination = picture_file
+            .as_ref()
+            .map_or(output, |file| file.0.as_path());
+        render_picture(
+            project,
+            options,
+            plan,
+            destination,
+            !joined,
+            cache,
+            cancel,
+            &mut |done| progress(before + done * (1.0 - before)),
+        )?;
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err("cancelled".to_owned());
+    }
+    if let Some(picture_file) = &picture_file {
+        crate::diag::time_on("export", "export: join", &project.id, || {
+            join(
+                options,
+                &picture_file.0,
+                sound_file.as_ref().map(|file| file.0.as_path()),
+                chapters.as_ref().map(|file| file.0.as_path()),
+                output,
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Puts the picture, sound and chapters into `output` without re-encoding.
+fn join(
+    options: &ExportOptions,
+    picture: &Path,
+    sound: Option<&Path>,
+    chapters: Option<&Path>,
+    output: &Path,
+) -> Result<(), String> {
+    let mut command = Command::new(crate::tools::ffmpeg());
+    command
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(picture);
+    let mut inputs = 1;
+    if let Some(sound) = sound {
+        command.arg("-i").arg(sound);
+        inputs += 1;
+    }
+    if let Some(chapters) = chapters {
+        command.args(["-f", "ffmetadata", "-i"]).arg(chapters);
+    }
+    command.args(["-map", "0:v:0"]);
+    if sound.is_some() {
+        command.args(["-map", "1:a:0"]);
+    }
+    if chapters.is_some() {
+        command.args(["-map_chapters", &inputs.to_string()]);
+    }
+    command.args(["-c", "copy"]);
+    if options.format == Format::Hevc {
+        command.args(["-tag:v", "hvc1"]);
+    }
+    if matches!(options.format, Format::H264 | Format::Hevc) {
+        command.args(["-movflags", "+faststart"]);
+    }
+    let result = command
+        .arg(output)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        return Err(stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("joining the picture and sound failed")
+            .trim()
+            .to_owned());
+    }
+    Ok(())
+}
+
+/// Renders the picture to `output`: AVFoundation's hardware encoder for the
+/// standard Mac shapes, FFmpeg otherwise. `alone` means nothing is joined to
+/// it afterwards (so it gets its index at the front itself).
+#[allow(clippy::too_many_arguments)]
+fn render_picture(
+    project: &Project,
+    options: &ExportOptions,
+    plan: &Plan,
+    output: &Path,
+    alone: bool,
+    cache: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if let Some(writer) = native_writer(project, options, plan, output, alone)? {
+        return crate::diag::time_on("export", "export: native video", &project.id, || {
+            render_frames(project, plan, Sink::Native(writer), cache, cancel, progress)
+        });
+    }
     let settings = project.settings;
     let (width, height) = (settings.width, settings.height);
-    let fps = settings.fps;
-    let seconds = plan.seconds(project.fps());
-    let offset = plan.start as f64 / project.fps();
-    let video = options.format.has_video();
-
-    #[cfg(target_os = "macos")]
-    let native_video = native_video(project, options, plan, output, cache, cancel, &mut progress)?;
-    #[cfg(not(target_os = "macos"))]
-    let native_video: Option<ExportFile> = None;
-    if native_video.is_some() && !plan.audio && options.chapters.is_empty() {
-        if let Some(file) = native_video {
-            std::fs::rename(&file.0, output).map_err(|error| error.to_string())?;
-        }
-        return Ok(());
-    }
     let mut command = Command::new(crate::tools::ffmpeg());
-    command.args([
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-filter_complex_threads",
-        "2",
-    ]);
-    let mut inputs = 0;
-    if let Some(file) = &native_video {
-        command.arg("-i").arg(&file.0);
-        inputs += 1;
-    } else if video {
-        command.args([
+    command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-filter_complex_threads",
+            "2",
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -866,133 +1507,28 @@ fn export(
             "-s",
             &format!("{width}x{height}"),
             "-framerate",
-            &fps.to_string(),
+            &settings.fps.to_string(),
             "-i",
             "pipe:0",
-        ]);
-        inputs += 1;
-    }
-    let mut graph = Vec::new();
-    if video && native_video.is_none() {
-        graph.push(crate::export::video_graph(
-            options,
-            (width, height),
-            (plan.width, plan.height),
-        ));
-    }
-    let segments = if plan.audio {
-        heard_segments(project, plan.start, plan.end)
-    } else {
-        Vec::new()
-    };
-    for (index, original) in segments.iter().enumerate() {
-        let from = original.start.max(offset);
-        let to = (original.start + original.duration).min(offset + seconds);
-        let elapsed = from - original.start;
-        let mut segment = original.clone();
-        segment.source_in += elapsed * segment.speed;
-        segment.start = (from - offset).max(0.0);
-        segment.duration = to - from;
-        // heard_segments only keeps sounds whose media is there.
-        let Some(media) = project.media(&segment.media) else {
-            continue;
-        };
-        command
-            .args([
-                "-threads",
-                "1",
-                "-ss",
-                &format!("{:.6}", segment.source_in),
-                "-t",
-                &format!("{:.6}", segment.duration * segment.speed),
-                "-protocol_whitelist",
-                "file,pipe",
-                "-i",
-            ])
-            .arg(&media.path);
-        let input = inputs;
-        inputs += 1;
-        let mut sought = segment.clone();
-        sought.source_in = 0.0;
-        for mute in &mut sought.mutes {
-            mute.from -= segment.source_in;
-            mute.to -= segment.source_in;
-        }
-        graph.push(segment_chain_with_fades(
-            input,
-            index,
-            &sought,
-            elapsed,
-            original.duration,
-        ));
-    }
-    if !segments.is_empty() {
-        let mixed: String = (0..segments.len())
-            .map(|index| format!("[a{index}]"))
-            .collect();
-        // Mixed on the edit's clock, then cut to the span.
-        let mut mix = format!(
-            "{mixed}amix=inputs={}:normalize=0:dropout_transition=0,apad,atrim=start=0:duration={seconds:.6},asetpts=PTS-STARTPTS",
-            segments.len()
-        );
-        if let Some(lufs) = options.loudness {
-            mix.push_str(&format!(
-                ",loudnorm=I={lufs:.1}:TP=-1.5:LRA=11,aresample=48000"
-            ));
-        }
-        mix.push_str("[aout]");
-        graph.push(mix);
-    }
-    // Chapters come in as one more input, an FFMETADATA file beside the output.
-    let chapters = crate::export::chapters_file(options, plan, project.fps())
-        .map(|text| -> Result<ExportFile, String> {
-            let mut name = output.as_os_str().to_owned();
-            name.push(".chapters.txt");
-            let path = PathBuf::from(name);
-            std::fs::write(&path, text).map_err(|error| error.to_string())?;
-            Ok(ExportFile(path))
-        })
-        .transpose()?;
-    if let Some(file) = &chapters {
-        command.args(["-f", "ffmetadata", "-i"]).arg(&file.0);
-    }
-    if !graph.is_empty() {
-        command.args(["-filter_complex", &graph.join(";")]);
-    }
-    if video {
-        command.args([
+            "-filter_complex",
+            &crate::export::video_graph(options, (width, height), (plan.width, plan.height)),
             "-map",
-            if native_video.is_some() {
-                "0:v:0"
-            } else {
-                "[vout]"
-            },
-        ]);
-    }
-    if !segments.is_empty() {
-        command.args(["-map", "[aout]"]);
-    }
-    if chapters.is_some() {
-        command.args(["-map_chapters", &inputs.to_string()]);
-    }
-    command.args(crate::export::codec_args(options, plan, project.fps())?);
-    if native_video.is_some() {
-        command.args(["-c:v", "copy"]);
+            "[vout]",
+        ])
+        .args(crate::export::video_args(options, plan, project.fps())?);
+    if alone && matches!(options.format, Format::H264 | Format::Hevc) {
+        command.args(["-movflags", "+faststart"]);
     }
     command
         .args(["-threads", "2"])
         .arg(output)
-        .stdin(if video && native_video.is_none() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     let mut encoder = command
         .spawn()
         .map_err(|error| format!("ffmpeg: {error}"))?;
-    let stdin = encoder.stdin.take();
+    let stdin = encoder.stdin.take().ok_or("ffmpeg stdin")?;
     let stderr = encoder.stderr.take();
     let stderr_thread = std::thread::spawn(move || {
         let mut text = String::new();
@@ -1001,38 +1537,19 @@ fn export(
         }
         text
     });
-
-    let result = match stdin {
-        Some(mut stdin) => render_frames(
-            project,
-            plan,
-            |_, pixels| {
-                stdin
-                    .write_all(pixels)
-                    .map_err(|_| "the encoder stopped early".to_owned())
-            },
-            cache,
-            cancel,
-            &mut progress,
-        ),
-        // Sound only: FFmpeg does all the work; wait for it, staying cancellable.
-        None => loop {
-            if cancel.load(Ordering::Acquire) {
-                break Err("cancelled".to_owned());
-            }
-            match encoder.try_wait() {
-                Ok(Some(_)) => break Ok(()),
-                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-                Err(error) => break Err(error.to_string()),
-            }
-        },
+    let sink = Sink::Pipe {
+        stdin: BufWriter::with_capacity(1 << 20, stdin),
+        width,
+        height,
     };
+    let result = crate::diag::time_on("export", "export: video", &project.id, || {
+        render_frames(project, plan, sink, cache, cancel, progress)
+    });
     if result.is_err() {
         let _ = encoder.kill();
     }
     let status = encoder.wait().map_err(|error| error.to_string())?;
     let stderr = stderr_thread.join().unwrap_or_default();
-    drop(chapters);
     result?;
     if !status.success() {
         let last = stderr
@@ -1045,25 +1562,21 @@ fn export(
     Ok(())
 }
 
-/// The standard Mac video path uses AVFoundation for decoding and encoding;
-/// the compositor remains shared with the browser. Nonstandard shapes/rates and
+/// The standard Mac video path encodes with AVFoundation; the compositor
+/// remains shared with the browser. Nonstandard shapes/rates and
 /// software-quality exports keep the compatibility encoder.
 #[cfg(target_os = "macos")]
-#[allow(clippy::too_many_arguments)]
-fn native_video(
+fn native_writer(
     project: &Project,
     options: &ExportOptions,
     plan: &Plan,
     output: &Path,
-    cache: &Path,
-    cancel: &AtomicBool,
-    progress: &mut impl FnMut(f32),
-) -> Result<Option<ExportFile>, String> {
-    use crate::export::{Format, Shape};
+    alone: bool,
+) -> Result<Option<crate::mac_media::Writer>, String> {
     if !options.hardware
         || std::env::var_os("EDIT_FFMPEG_VIDEO").is_some()
         || !matches!(options.format, Format::H264 | Format::Hevc)
-        || options.shape != Shape::Original
+        || options.shape != crate::export::Shape::Original
         || (plan.width, plan.height) != (project.settings.width, project.settings.height)
         || options
             .fps
@@ -1071,312 +1584,724 @@ fn native_video(
     {
         return Ok(None);
     }
-    let mut name = output.as_os_str().to_owned();
-    name.push(".native.mp4");
-    let temporary = ExportFile(PathBuf::from(name));
     let rate = crate::export::video_bitrate(options, plan, project.fps())?;
-    let mut writer = match crate::mac_media::Writer::open(
-        &temporary.0,
+    match crate::mac_media::Writer::open(
+        output,
         plan.width,
         plan.height,
         project.fps(),
-        options.format == Format::Hevc,
-        rate,
-        (project.settings.fps * 2) as i32,
+        crate::mac_media::WriterOptions {
+            hevc: options.format == Format::Hevc,
+            bitrate: rate,
+            key_interval: (project.settings.fps * 2) as i32,
+            finished: true,
+            faststart: alone,
+        },
     ) {
-        Ok(writer) => writer,
+        Ok(writer) => Ok(Some(writer)),
         Err(error) => {
             crate::diag::warn(
                 "export",
                 format!("native encoder unavailable: {error}; using FFmpeg"),
             );
-            return Ok(None);
+            Ok(None)
         }
-    };
-    crate::diag::time_on("export", "export: native video", &project.id, || {
-        render_frames(
-            project,
-            plan,
-            |frame, pixels| writer.frame(frame, pixels),
-            cache,
-            cancel,
-            progress,
-        )?;
-        if cancel.load(Ordering::Acquire) {
-            return Err("cancelled".to_owned());
-        }
-        writer.finish(plan.end - plan.start)
-    })?;
-    Ok(Some(temporary))
+    }
 }
 
-/// Renders frames `[plan.start, plan.end)` into the encoder's stdin (closed when done).
-fn render_frames(
+/// Where rendered frames go (on the encoder thread).
+enum Sink {
+    #[cfg(target_os = "macos")]
+    Native(crate::mac_media::Writer),
+    Pipe {
+        stdin: BufWriter<ChildStdin>,
+        width: u32,
+        height: u32,
+    },
+}
+
+impl Sink {
+    /// One RGBA frame whose rows are `stride` bytes apart.
+    fn write(&mut self, index: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
+        match self {
+            #[cfg(target_os = "macos")]
+            Sink::Native(writer) => writer.frame(index, pixels, stride, Order::Rgba),
+            Sink::Pipe {
+                stdin,
+                width,
+                height,
+            } => {
+                let row = *width as usize * 4;
+                for line in pixels.chunks(stride).take(*height as usize) {
+                    stdin
+                        .write_all(line.get(..row).ok_or("GPU readback came back short")?)
+                        .map_err(|_| "the encoder stopped early".to_owned())?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn finish(self, frames: i64) -> Result<(), String> {
+        match self {
+            #[cfg(target_os = "macos")]
+            Sink::Native(mut writer) => writer.finish(frames),
+            Sink::Pipe { mut stdin, .. } => stdin
+                .flush()
+                .map_err(|_| "the encoder stopped early".to_owned()),
+        }
+    }
+}
+
+/// Decoder threads per export: one plays the current clip while the others
+/// open and seek the next ones.
+const DECODERS: usize = 3;
+/// Frames the planner (and so the decoders) may run ahead of the compositor.
+const LOOKAHEAD: usize = 48;
+/// Readback buffers in flight between the compositor and the encoder.
+const READBACKS: usize = 3;
+/// How far ahead (source seconds) a reader decodes forward rather than seeks
+/// (the native reader's own limit).
+const FORWARD: f64 = 2.0;
+
+/// How the compositor gets a video layer's picture.
+enum Decode {
+    /// From decoder thread n (which was sent the job).
+    Worker(usize),
+    /// On the compositor's own thread (more clips overlap than there are decoders).
+    Inline(Source, f64),
+    Missing(String),
+}
+
+/// A frame the planner evaluated, and where its pictures come from.
+struct Planned {
+    frame: i64,
+    scene: Scene,
+    decodes: Vec<(String, Decode)>,
+}
+
+struct DecodeJob {
+    frame: i64,
+    clip: String,
+    source: Source,
+    time: f64,
+    /// The first frame of the clip's run (always copied, never "unchanged").
+    first: bool,
+}
+
+struct Decoded {
+    frame: i64,
+    clip: String,
+    width: u32,
+    height: u32,
+    order: Order,
+    /// None: the same picture as this clip's last.
+    pixels: Option<Vec<u8>>,
+}
+
+/// One decoder thread: decodes its jobs in order, each clip's run from one
+/// reader (kept in a small pool by file), recycling pixel buffers.
+fn decoder(
+    jobs: mpsc::Receiver<DecodeJob>,
+    out: mpsc::SyncSender<Result<Decoded, String>>,
+    recycle: mpsc::Receiver<Vec<u8>>,
+) {
+    let mut pool = ReaderPool::new(2, 2);
+    let mut current: Option<(String, VideoReader)> = None;
+    let mut spare: Vec<Vec<u8>> = Vec::new();
+    for job in jobs {
+        if job.first || current.as_ref().is_none_or(|(clip, _)| *clip != job.clip) {
+            if let Some((_, reader)) = current.take() {
+                pool.put(reader);
+            }
+            current = Some((job.clip.clone(), pool.take(&job.source, job.time)));
+        }
+        let Some((_, reader)) = current.as_mut() else {
+            break;
+        };
+        let mut buffer = spare
+            .pop()
+            .or_else(|| recycle.try_recv().ok())
+            .unwrap_or_default();
+        buffer.resize(job.source.bytes(), 0);
+        let result = reader
+            .frame_into(job.time, &mut buffer, !job.first)
+            .map(|changed| {
+                let pixels = if changed {
+                    Some(buffer)
+                } else {
+                    spare.push(buffer);
+                    None
+                };
+                Decoded {
+                    frame: job.frame,
+                    clip: job.clip,
+                    width: job.source.key.width,
+                    height: job.source.key.height,
+                    order: job.source.key.order,
+                    pixels,
+                }
+            });
+        let failed = result.is_err();
+        if out.send(result).is_err() || failed {
+            break;
+        }
+    }
+}
+
+/// The planner: evaluates each frame, gives each clip's run to a free decoder
+/// (the one idle longest, so it can get ahead), and passes the frame on.
+fn planner(
     project: &Project,
     plan: &Plan,
-    mut write_frame: impl FnMut(i64, &[u8]) -> Result<(), String>,
-    cache: &Path,
+    jobs: Vec<mpsc::Sender<DecodeJob>>,
+    planned: mpsc::SyncSender<Planned>,
     cancel: &AtomicBool,
-    progress: &mut impl FnMut(f32),
-) -> Result<(), String> {
+) {
     let (width, height) = (project.settings.width, project.settings.height);
-    let mut renderer = new_renderer(width, height)?;
-    let mut readers: HashMap<String, VideoReader> = HashMap::new();
-    let mut last_report = Instant::now();
-    let total = (plan.end - plan.start).max(1);
+    let mut sources: HashMap<String, Source> = HashMap::new();
+    let mut assigned: HashMap<String, Option<usize>> = HashMap::new();
+    // Each decoder's current clip, and the frame its last run ended on.
+    let mut decoders: Vec<(Option<String>, i64)> = vec![(None, i64::MIN); jobs.len()];
+    // Where each decoder's reader was left: file and source seconds.
+    let mut left: Vec<Option<(PathBuf, f64)>> = vec![None; jobs.len()];
     for frame in plan.start..plan.end {
         if cancel.load(Ordering::Acquire) {
-            return Err("cancelled".to_owned());
+            break;
         }
         let scene = evaluate(project, frame);
-        feed_peaks(&mut renderer, project, &scene, cache);
+        let mut decodes = Vec::new();
+        let mut present = HashSet::new();
         for layer in &scene.layers {
-            if let Layer::Video {
+            let Layer::Video {
                 clip,
                 media,
                 source_time,
                 ..
             } = layer
+            else {
+                continue;
+            };
+            present.insert(clip.clone());
+            let source = match sources.get(media) {
+                Some(source) => source.clone(),
+                None => match project.media(media) {
+                    Some(found) => {
+                        let source = Source::new(
+                            found,
+                            PathBuf::from(&found.path),
+                            decode_size(found, width, height),
+                            Order::Bgra,
+                        );
+                        sources.insert(media.clone(), source.clone());
+                        source
+                    }
+                    None => {
+                        decodes.push((
+                            clip.clone(),
+                            Decode::Missing(format!("unknown media {media}")),
+                        ));
+                        continue;
+                    }
+                },
+            };
+            let (worker, first) = match assigned.get(clip) {
+                Some(worker) => (*worker, false),
+                None => {
+                    // A jump cut forward in the file a free decoder just read
+                    // continues there (decoding the gap costs less than a
+                    // seek); otherwise the decoder idle longest gets ahead.
+                    let continues = |index: usize| {
+                        left.get(index)
+                            .and_then(Option::as_ref)
+                            .is_some_and(|(path, at)| {
+                                *path == source.key.path
+                                    && *source_time >= *at
+                                    && *source_time - *at <= FORWARD
+                            })
+                    };
+                    let free = decoders
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (busy, _))| busy.is_none())
+                        .min_by_key(|(index, (_, ended))| (!continues(*index), *ended))
+                        .map(|(index, _)| index);
+                    if let Some((busy, _)) = free.and_then(|index| decoders.get_mut(index)) {
+                        *busy = Some(clip.clone());
+                    }
+                    assigned.insert(clip.clone(), free);
+                    (free, true)
+                }
+            };
+            let sent = worker
+                .and_then(|index| jobs.get(index))
+                .is_some_and(|jobs| {
+                    jobs.send(DecodeJob {
+                        frame,
+                        clip: clip.clone(),
+                        source: source.clone(),
+                        time: *source_time,
+                        first,
+                    })
+                    .is_ok()
+                });
+            if let Some(at) = worker
+                .filter(|_| sent)
+                .and_then(|index| left.get_mut(index))
             {
-                let source = project
-                    .media(media)
-                    .ok_or_else(|| format!("unknown media {media}"))?;
-                let reader = readers
-                    .entry(clip.clone())
-                    .or_insert_with(|| VideoReader::new(source, width, height));
-                let (w, h) = (reader.width, reader.height);
-                let pixels = reader.frame_at(*source_time)?;
-                renderer.upload_video_rgba(clip, w, h, pixels);
+                *at = Some((source.key.path.clone(), *source_time));
+            }
+            decodes.push((
+                clip.clone(),
+                match worker {
+                    Some(index) if sent => Decode::Worker(index),
+                    _ => Decode::Inline(source, *source_time),
+                },
+            ));
+        }
+        // A clip that's gone has finished its run: its decoder is free.
+        for (busy, ended) in &mut decoders {
+            if busy.as_ref().is_some_and(|clip| !present.contains(clip)) {
+                *busy = None;
+                *ended = frame;
             }
         }
-        // A reader owns an FFmpeg process and pipe. Keep only the clips
-        // visible now, so a long export doesn't accumulate one per cut.
-        readers.retain(|clip, _| {
-            scene
-                .layers
-                .iter()
-                .any(|layer| matches!(layer, Layer::Video { clip: active, .. } if active == clip))
-        });
-        renderer.render(&scene);
-        let pixels = renderer.read_output()?;
-        write_frame(frame - plan.start, &pixels)?;
-        if last_report.elapsed() > Duration::from_millis(200) {
-            last_report = Instant::now();
-            progress((frame - plan.start) as f32 / total as f32);
+        assigned.retain(|clip, _| present.contains(clip));
+        if planned
+            .send(Planned {
+                frame,
+                scene,
+                decodes,
+            })
+            .is_err()
+        {
+            break;
         }
     }
-    Ok(())
+}
+
+/// A frame read back for the encoder: the buffer it's in and when it's ready.
+struct Readback {
+    index: i64,
+    slot: usize,
+    submission: wgpu::SubmissionIndex,
+    mapped: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+}
+
+/// Renders frames `[plan.start, plan.end)` into `sink`, finishing it.
+fn render_frames(
+    project: &Project,
+    plan: &Plan,
+    mut sink: Sink,
+    cache: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let (width, height) = (project.settings.width, project.settings.height);
+    let mut renderer = new_renderer(width, height)?;
+    let device = renderer.device().clone();
+    let row = renderer.output_row_bytes() as usize;
+    let buffers: Vec<wgpu::Buffer> = (0..READBACKS).map(|_| renderer.output_buffer()).collect();
+    let total = (plan.end - plan.start).max(1);
+    std::thread::scope(|scope| {
+        let (planned_tx, planned) = mpsc::sync_channel::<Planned>(LOOKAHEAD);
+        let mut job_senders = Vec::new();
+        let mut outputs = Vec::new();
+        let mut recyclers = Vec::new();
+        for _ in 0..DECODERS {
+            let (job_tx, job_rx) = mpsc::channel::<DecodeJob>();
+            let (out_tx, out_rx) = mpsc::sync_channel(2);
+            let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<u8>>();
+            scope.spawn(move || decoder(job_rx, out_tx, recycle_rx));
+            job_senders.push(job_tx);
+            outputs.push(out_rx);
+            recyclers.push(recycle_tx);
+        }
+        scope.spawn(move || planner(project, plan, job_senders, planned_tx, cancel));
+        let (free_tx, free) = mpsc::sync_channel::<usize>(READBACKS);
+        for slot in 0..READBACKS {
+            let _ = free_tx.send(slot);
+        }
+        let (readback_tx, readbacks) = mpsc::sync_channel::<Readback>(READBACKS);
+        let buffers = &buffers;
+        let encoder = scope.spawn(move || -> Result<(), String> {
+            let mut written = 0;
+            for readback in readbacks {
+                let buffer = buffers.get(readback.slot).ok_or("no readback buffer")?;
+                loop {
+                    match readback.mapped.try_recv() {
+                        Ok(result) => {
+                            result.map_err(|error| format!("GPU readback failed: {error}"))?;
+                            break;
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {
+                            let _ = device.poll(wgpu::PollType::Wait {
+                                submission_index: Some(readback.submission.clone()),
+                                timeout: Some(Duration::from_secs(1)),
+                            });
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            return Err("GPU readback was dropped".to_owned())
+                        }
+                    }
+                }
+                let view = buffer
+                    .slice(..)
+                    .get_mapped_range()
+                    .map_err(|error| format!("GPU readback failed: {error}"))?;
+                let wrote = sink.write(readback.index, &view, row);
+                drop(view);
+                buffer.unmap();
+                wrote?;
+                written += 1;
+                if free_tx.send(readback.slot).is_err() {
+                    break;
+                }
+            }
+            sink.finish(written)
+        });
+        let composited = (|| -> Result<(), String> {
+            let mut inline_pool = ReaderPool::new(4, 2);
+            let mut inline: HashMap<String, VideoReader> = HashMap::new();
+            let mut scratch = Vec::new();
+            let mut last_report = Instant::now();
+            // Where the compositor waited: on the planner, the decoders, the encoder.
+            let (mut on_plan, mut on_decode, mut on_encode) =
+                (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+            let started = Instant::now();
+            let mut planned = planned.into_iter();
+            loop {
+                let waiting = Instant::now();
+                let Some(planned) = planned.next() else {
+                    break;
+                };
+                on_plan += waiting.elapsed();
+                if cancel.load(Ordering::Acquire) {
+                    return Err("cancelled".to_owned());
+                }
+                feed_peaks(&mut renderer, project, &planned.scene, cache);
+                for (clip, decode) in &planned.decodes {
+                    match decode {
+                        Decode::Worker(index) => {
+                            let waiting = Instant::now();
+                            let decoded = outputs
+                                .get(*index)
+                                .ok_or("no such decoder")?
+                                .recv()
+                                .map_err(|_| "a decoder stopped".to_owned())??;
+                            on_decode += waiting.elapsed();
+                            if decoded.frame != planned.frame || decoded.clip != *clip {
+                                return Err("decoding fell out of step".to_owned());
+                            }
+                            if let Some(pixels) = decoded.pixels {
+                                renderer.upload_video(
+                                    clip,
+                                    decoded.width,
+                                    decoded.height,
+                                    &pixels,
+                                    decoded.order == Order::Bgra,
+                                );
+                                if let Some(recycle) = recyclers.get(*index) {
+                                    let _ = recycle.send(pixels);
+                                }
+                            }
+                        }
+                        Decode::Inline(source, time) => {
+                            let reader = inline
+                                .entry(clip.clone())
+                                .or_insert_with(|| inline_pool.take(source, *time));
+                            scratch.resize(source.bytes(), 0);
+                            reader.frame_into(*time, &mut scratch, false)?;
+                            renderer.upload_video(
+                                clip,
+                                source.key.width,
+                                source.key.height,
+                                &scratch,
+                                source.key.order == Order::Bgra,
+                            );
+                        }
+                        Decode::Missing(error) => return Err(error.clone()),
+                    }
+                }
+                let gone: Vec<String> = inline
+                    .keys()
+                    .filter(|clip| !planned.decodes.iter().any(|(active, _)| active == *clip))
+                    .cloned()
+                    .collect();
+                for clip in gone {
+                    if let Some(reader) = inline.remove(&clip) {
+                        inline_pool.put(reader);
+                    }
+                }
+                renderer.render(&planned.scene);
+                let waiting = Instant::now();
+                let slot = free.recv().map_err(|_| "the encoder stopped".to_owned())?;
+                on_encode += waiting.elapsed();
+                let buffer = buffers.get(slot).ok_or("no readback buffer")?;
+                let submission = renderer.copy_output_to(buffer);
+                let (mapped_tx, mapped) = mpsc::channel();
+                buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        let _ = mapped_tx.send(result);
+                    });
+                readback_tx
+                    .send(Readback {
+                        index: planned.frame - plan.start,
+                        slot,
+                        submission,
+                        mapped,
+                    })
+                    .map_err(|_| "the encoder stopped".to_owned())?;
+                if last_report.elapsed() > Duration::from_millis(200) {
+                    last_report = Instant::now();
+                    progress((planned.frame - plan.start) as f32 / total as f32);
+                }
+            }
+            if cancel.load(Ordering::Acquire) {
+                return Err("cancelled".to_owned());
+            }
+            crate::diag::info(
+                "export",
+                format!(
+                    "{} frames composited in {}; waited {} on planning, {} on decoding, {} on encoding",
+                    plan.end - plan.start,
+                    crate::diag::human(started.elapsed()),
+                    crate::diag::human(on_plan),
+                    crate::diag::human(on_decode),
+                    crate::diag::human(on_encode),
+                ),
+            );
+            Ok(())
+        })();
+        drop(readback_tx);
+        drop(outputs);
+        let encoded = encoder
+            .join()
+            .unwrap_or_else(|_| Err("the encoder crashed".to_owned()));
+        // The encoder's own error explains a compositor that found it gone.
+        match (composited, encoded) {
+            (Err(error), _) if error == "cancelled" => Err(error),
+            (_, Err(error)) => Err(error),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edit_core::Mute;
 
-    /// RMS of interleaved stereo f32 samples between two times (seconds).
-    fn rms(samples: &[f32], from: f64, to: f64) -> f64 {
-        let (a, b) = ((from * 48000.0) as usize * 2, (to * 48000.0) as usize * 2);
-        let part = &samples[a..b];
-        (part.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / part.len() as f64).sqrt()
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "edit-render-{name}-{}-{}",
+            std::process::id(),
+            crate::store::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
-    /// The export's own chain, run through FFmpeg on a tone: silence inside a
-    /// mute, a cosine ramp outside it, the rest untouched.
-    #[test]
-    fn mutes_silence_the_source_with_ramps() {
-        let dir = std::env::temp_dir().join(format!("edit-mute-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let tone = dir.join("tone.wav");
+    /// A 2 s 320×180 source of one flat colour, its sound a 0.8 click at `click` s.
+    fn source(dir: &Path, name: &str, color: &str, click: f64) -> PathBuf {
+        let path = dir.join(name);
         let made = Command::new(crate::tools::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg(format!("color=c={color}:size=320x180:rate=30:duration=2"))
+            .args(["-f", "lavfi", "-i"])
+            .arg(format!(
+                "aevalsrc='if(between(t\\,{click}\\,{click}+0.002)\\,0.8\\,0)':s=48000:d=2:c=stereo"
+            ))
             .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
+                "-c:v", "libx264", "-g", "15", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             ])
-            .arg("sine=frequency=440:sample_rate=48000:duration=4")
-            .arg(&tone)
+            .arg(&path)
             .status()
             .unwrap();
         assert!(made.success());
-        // The clip plays the source from 1 s; the mute is 2.0–2.5 s of the source.
-        let segment = AudioSegment {
-            clip: "a".into(),
-            media: "m".into(),
-            start: 0.0,
-            duration: 2.5,
-            source_in: 1.0,
-            speed: 1.0,
-            volume_db: 0.0,
-            fade_in: 0.0,
-            fade_out: 0.0,
-            mutes: vec![
-                Mute { from: 2.0, to: 2.5 },
-                Mute {
-                    from: 30.0,
-                    to: 31.0,
-                },
-            ],
-        };
-        let chain = segment_chain(0, 0, &segment);
-        assert_eq!(
-            chain.matches("cos(").count(),
-            2,
-            "only the mute it plays: {chain}"
-        );
+        path
+    }
+
+    fn decode_video(path: &Path) -> Vec<u8> {
         let output = Command::new(crate::tools::ffmpeg())
-            .args(["-hide_banner", "-loglevel", "error", "-i"])
-            .arg(&tone)
+            .args(["-v", "error", "-i"])
+            .arg(path)
             .args([
-                "-filter_complex",
-                &chain,
-                "-map",
-                "[a0]",
+                "-vf",
+                "scale=32:18",
                 "-f",
-                "f32le",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
                 "-",
             ])
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let samples: Vec<f32> = output
-            .stdout
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect();
-        // Seeking at the input must keep the same mute positions and samples.
-        let mut sought = segment.clone();
-        sought.source_in = 0.0;
-        for mute in &mut sought.mutes {
-            mute.from -= segment.source_in;
-            mute.to -= segment.source_in;
-        }
+        assert!(output.status.success());
+        output.stdout
+    }
+
+    fn decode_sound(path: &Path) -> Vec<f32> {
         let output = Command::new(crate::tools::ffmpeg())
-            .args(["-v", "error", "-ss", "1", "-t", "2.5", "-i"])
-            .arg(&tone)
+            .args(["-v", "error", "-i"])
+            .arg(path)
             .args([
-                "-filter_complex",
-                &segment_chain(0, 0, &sought),
-                "-map",
-                "[a0]",
-                "-f",
-                "f32le",
-                "-",
+                "-map", "0:a:0", "-f", "f32le", "-ac", "2", "-ar", "48000", "-",
             ])
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let optimized: Vec<f32> = output
+        assert!(output.status.success());
+        output
             .stdout
             .as_chunks::<4>()
             .0
             .iter()
             .map(|bytes| f32::from_le_bytes(*bytes))
-            .collect();
-        assert_eq!(optimized, samples);
-        // As the export encodes it.
-        let encoded = Command::new(crate::tools::ffmpeg())
-            .args(["-hide_banner", "-loglevel", "error", "-i"])
-            .arg(&tone)
-            .args([
-                "-filter_complex",
-                &chain,
-                "-map",
-                "[a0]",
-                "-c:a",
-                "aac",
-                "-f",
-                "null",
-                "-",
-            ])
-            .output()
-            .unwrap();
-        assert!(
-            encoded.status.success(),
-            "{}",
-            String::from_utf8_lossy(&encoded.stderr)
-        );
-        let full = rms(&samples, 0.1, 0.9);
-        assert!(full > 0.05, "tone heard: {full}");
-        // Clip time 1.0–1.5 s is source 2.0–2.5 s.
-        assert!(rms(&samples, 1.0, 1.5) < 1e-4, "silent inside");
-        assert!(
-            (rms(&samples, 1.52, 2.4) - full).abs() < 0.01 * full,
-            "untouched after the fade"
-        );
-        assert!(
-            (rms(&samples, 0.1, 0.98) - full).abs() < 0.01 * full,
-            "untouched before"
-        );
-        // Halfway through the 12 ms fade the gain is about one half.
-        let ramp = rms(&samples, 1.5045, 1.5075) / full;
-        assert!((0.3..0.7).contains(&ramp), "ramping: {ramp}");
-        std::fs::remove_dir_all(&dir).ok();
+            .collect()
     }
 
-    #[test]
-    fn a_partial_export_preserves_a_fade_already_in_progress() {
-        let segment = AudioSegment {
-            clip: "a".into(),
-            media: "m".into(),
-            start: 0.0,
-            duration: 0.5,
-            source_in: 0.0,
-            speed: 1.0,
-            volume_db: 0.0,
-            fade_in: 2.0,
-            fade_out: 1.0,
-            mutes: vec![],
-        };
-        let chain = segment_chain_with_fades(0, 0, &segment, 1.0, 4.0);
-        let output = Command::new(crate::tools::ffmpeg())
+    fn duration(path: &Path, stream: &str) -> f64 {
+        let output = Command::new(crate::tools::ffprobe())
             .args([
                 "-v",
                 "error",
-                "-f",
-                "lavfi",
-                "-i",
-                "aevalsrc=0.5|0.5:d=0.5:s=48000:c=stereo",
-                "-filter_complex",
-                &chain,
-                "-map",
-                "[a0]",
-                "-f",
-                "f32le",
-                "-",
+                "-select_streams",
+                stream,
+                "-show_entries",
+                "stream=duration",
+                "-of",
+                "csv=p=0",
             ])
+            .arg(path)
             .output()
             .unwrap();
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    /// Many short cuts between two files, each clip's sound with it: every
+    /// frame shows the right file, the sound stays in sync with the picture,
+    /// and both last exactly the span.
+    #[test]
+    fn exports_cuts_in_sync_with_their_sound() {
+        let dir = temp_dir("export");
+        let red = source(&dir, "red.mp4", "red", 0.5);
+        let blue = source(&dir, "blue.mp4", "blue", 1.0);
+        let mut clips = Vec::new();
+        // Twelve 5-frame cuts alternating red/blue, red from 0.4 s, blue from 0.9 s.
+        for index in 0..12 {
+            let (media, source_in) = if index % 2 == 0 {
+                ("r", 0.4)
+            } else {
+                ("b", 0.9)
+            };
+            let start = index * 5;
+            clips.push(
+                json!({"id": format!("v{index}"), "track": "v", "type": "video", "media": media,
+                "source_in": source_in, "start": start, "duration": 5}),
+            );
+            clips.push(
+                json!({"id": format!("a{index}"), "track": "a", "type": "audio", "media": media,
+                "source_in": source_in, "start": start, "duration": 5}),
+            );
+        }
+        let project: Project = serde_json::from_value(json!({
+            "version": 1, "id": "p", "name": "t",
+            "settings": {"width": 320, "height": 180, "fps": 30},
+            "media": [
+                {"id": "r", "name": "red", "path": red, "kind": "video", "duration": 2.0, "width": 320, "height": 180, "fps": 30, "has_audio": true},
+                {"id": "b", "name": "blue", "path": blue, "kind": "video", "duration": 2.0, "width": 320, "height": 180, "fps": 30, "has_audio": true}
+            ],
+            "tracks": [{"id": "v", "kind": "video"}, {"id": "a", "kind": "audio"}],
+            "clips": clips,
+        }))
+        .unwrap();
+        let options = ExportOptions::default();
+        let plan = crate::export::plan(&options, &project, true).unwrap();
+        let output = dir.join("out.mp4");
+        export(
+            &project,
+            &options,
+            &plan,
+            &output,
+            &dir,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
         assert!(
-            output.status.success(),
+            (duration(&output, "v:0") - 2.0).abs() < 0.04,
             "{}",
-            String::from_utf8_lossy(&output.stderr)
+            duration(&output, "v:0")
         );
-        let samples: Vec<f32> = output
-            .stdout
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|bytes| f32::from_le_bytes(*bytes))
-            .collect();
         assert!(
-            (samples[0] - 0.25).abs() < 0.001,
-            "mid-fade starts at original gain: {}",
-            samples[0]
+            (duration(&output, "a:0") - 2.0).abs() < 0.03,
+            "{}",
+            duration(&output, "a:0")
         );
-        assert!((samples[samples.len() - 2] - 0.375).abs() < 0.001);
+        let frames = decode_video(&output);
+        let pixel = 32 * 18 * 3;
+        assert_eq!(frames.len(), pixel * 60);
+        for frame in 0..60 {
+            let middle = &frames[frame * pixel + (9 * 32 + 16) * 3..][..3];
+            let red = (frame / 5) % 2 == 0;
+            assert!(
+                if red {
+                    middle[0] > 180 && middle[2] < 80
+                } else {
+                    middle[2] > 180 && middle[0] < 80
+                },
+                "frame {frame}: {middle:?}"
+            );
+        }
+        // Each cut plays 0.4–0.567 s of red (click at 0.5) or 0.9–1.067 of blue
+        // (click at 1.0): the click sounds 0.1 s into every cut.
+        let sound = decode_sound(&output);
+        for index in 0..12 {
+            let start = index * 5 * 48000 / 30;
+            let window = &sound[start * 2..(start + 8000) * 2];
+            let loudest = (0..8000)
+                .max_by(|a, b| window[a * 2].abs().total_cmp(&window[b * 2].abs()))
+                .unwrap();
+            assert!(
+                (loudest as i64 - 4800).abs() < 96,
+                "cut {index}: click at {loudest} samples, expected 4800"
+            );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn readers_are_pooled_by_file_and_continue_forward() {
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "m", "path": "/nowhere.mp4", "kind": "video",
+            "duration": 10.0, "width": 1920, "height": 1080, "fps": 30
+        }))
+        .unwrap();
+        let source = Source::new(&media, "/nowhere.mp4".into(), (640, 360), Order::Bgra);
+        let mut pool = ReaderPool::new(3, 2);
+        let mut behind = VideoReader::open(source.clone());
+        behind.position = Some(4.0);
+        let mut far = VideoReader::open(source.clone());
+        far.position = Some(9.0);
+        pool.put(far);
+        pool.put(behind);
+        assert_eq!(
+            pool.take(&source, 4.5).position,
+            Some(4.0),
+            "the one just behind"
+        );
+        // A third for the same file pushes out its oldest; other files count to the total.
+        pool.put(VideoReader::open(source.clone()));
+        pool.put(VideoReader::open(source.clone()));
+        assert_eq!(pool.readers.len(), 2);
+        let mut other = source.clone();
+        other.key.path = "/other.mp4".into();
+        pool.put(VideoReader::open(other.clone()));
+        pool.put(VideoReader::open(other));
+        assert_eq!(pool.readers.len(), 3);
     }
 }

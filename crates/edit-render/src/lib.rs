@@ -125,6 +125,7 @@ struct Target {
     view: wgpu::TextureView,
     width: u32,
     height: u32,
+    format: wgpu::TextureFormat,
 }
 
 impl Target {
@@ -158,6 +159,7 @@ impl Target {
             view,
             width: width.max(1),
             height: height.max(1),
+            format,
         }
     }
 }
@@ -528,20 +530,34 @@ impl Renderer {
     /// The texture a media's current frame should be uploaded into, sized
     /// `width`×`height`. Usable as a `copy_external_image_to_texture` target.
     pub fn video_texture(&mut self, media: &str, width: u32, height: u32) -> &wgpu::Texture {
+        self.video_texture_in(media, width, height, SOURCE_FORMAT)
+    }
+
+    /// As `video_texture`, in `format` (RGBA8 or BGRA8: sampled the same way).
+    fn video_texture_in(
+        &mut self,
+        media: &str,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> &wgpu::Texture {
         let make = || {
             Target::new(
                 &self.device,
                 "edit video",
                 width,
                 height,
-                SOURCE_FORMAT,
+                format,
                 wgpu::TextureUsages::COPY_DST,
             )
         };
         let target = match self.videos.entry(media.to_owned()) {
             Entry::Occupied(entry) => {
                 let target = entry.into_mut();
-                if target.width != width.max(1) || target.height != height.max(1) {
+                if target.width != width.max(1)
+                    || target.height != height.max(1)
+                    || target.format != format
+                {
                     *target = make();
                 }
                 target
@@ -563,7 +579,27 @@ impl Renderer {
 
     /// Native path: upload a decoded RGBA8 frame.
     pub fn upload_video_rgba(&mut self, media: &str, width: u32, height: u32, rgba: &[u8]) {
-        let texture = self.video_texture(media, width, height).clone();
+        self.upload_video(media, width, height, rgba, false);
+    }
+
+    /// Native path: upload a decoded frame, BGRA8 (`bgra`: the order video
+    /// decoders produce, so no conversion on the CPU) or RGBA8. The shaders
+    /// sample both alike, so compositing is identical.
+    pub fn upload_video(
+        &mut self,
+        media: &str,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        bgra: bool,
+    ) {
+        let format = if bgra {
+            wgpu::TextureFormat::Bgra8Unorm
+        } else {
+            SOURCE_FORMAT
+        };
+        let texture = self.video_texture_in(media, width, height, format).clone();
+        let rgba = pixels;
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -1234,23 +1270,31 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
     }
 
-    /// Native path: copy the last rendered frame out as tightly packed RGBA8.
+    /// Bytes between rows of the output as `copy_output_to` lays it out
+    /// (RGBA8 rows padded to wgpu's copy alignment).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn read_output(&mut self) -> Result<Vec<u8>, String> {
+    pub fn output_row_bytes(&self) -> u32 {
+        (self.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+    }
+
+    /// A buffer `copy_output_to` can fill (map it to read the picture).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn output_buffer(&self) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("edit readback"),
+            size: u64::from(self.output_row_bytes()) * u64::from(self.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Queues a copy of the last rendered frame into `buffer` (from
+    /// `output_buffer`, unmapped) without waiting for it: exports keep a few
+    /// frames in flight and read each once its submission is done.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn copy_output_to(&self, buffer: &wgpu::Buffer) -> wgpu::SubmissionIndex {
         let (width, height) = (self.width, self.height);
-        let padded = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let buffer = self
-            .readback
-            .get_or_insert_with(|| {
-                self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("edit readback"),
-                    size: u64::from(padded) * u64::from(height),
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                })
-            })
-            .clone();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1264,10 +1308,10 @@ impl Renderer {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
+                buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(padded),
+                    bytes_per_row: Some(self.output_row_bytes()),
                     rows_per_image: Some(height),
                 },
             },
@@ -1277,7 +1321,23 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-        self.queue.submit([encoder.finish()]);
+        self.queue.submit([encoder.finish()])
+    }
+
+    /// Native path: copy the last rendered frame out as tightly packed RGBA8.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_output(&mut self) -> Result<Vec<u8>, String> {
+        let (width, height) = (self.width, self.height);
+        let padded = self.output_row_bytes();
+        let buffer = match &self.readback {
+            Some(buffer) => buffer.clone(),
+            None => {
+                let buffer = self.output_buffer();
+                self.readback = Some(buffer.clone());
+                buffer
+            }
+        };
+        self.copy_output_to(&buffer);
         let slice = buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {

@@ -1495,14 +1495,13 @@ async fn frame_png(
         .render(live.project, vec![frame], query.max.unwrap_or(0))
         .await
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
-    let image = images.first().ok_or_else(|| {
-        ApiError(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "the frame didn't render".to_owned(),
-        )
-    })?;
-    let png =
-        encode_png(image).map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let png = tokio::task::spawn_blocking(move || {
+        encode_png(images.first().ok_or("the frame didn't render")?)
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|png| png)
+    .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
     Ok(([(header::CONTENT_TYPE, "image/png")], png).into_response())
 }
 

@@ -534,8 +534,10 @@ fn collect_inner(
         .iter()
         .flat_map(|item| [item.id.clone(), item.image.clone()])
         .collect();
-    let (mut added, mut had, mut failed) = (0, 0, 0);
-    for query in queries {
+    // Queries three at a time: each is a browser search and its downloads,
+    // and one after another they made a research step wait minutes.
+    let one = |query: &String| -> Result<(usize, usize, usize), String> {
+        let mut had = 0;
         let mut hits: Vec<Hit> = Vec::new();
         let mut first = 1;
         while hits.len() < per_query {
@@ -570,9 +572,30 @@ fn collect_inner(
             })
             .collect();
         let (new, already, broken) = store_hits(home, project, query, hits)?;
-        added += new;
-        had += already;
-        failed += broken;
+        Ok((new, had + already, broken))
+    };
+    let (mut added, mut had, mut failed) = (0, 0, 0);
+    for group in queries.chunks(3) {
+        let results: Vec<Result<(usize, usize, usize), String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = group
+                .iter()
+                .map(|query| scope.spawn(|| one(query)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err("a search crashed".into()))
+                })
+                .collect()
+        });
+        for result in results {
+            let (new, already, broken) = result?;
+            added += new;
+            had += already;
+            failed += broken;
+        }
     }
     Ok((added, had, failed))
 }

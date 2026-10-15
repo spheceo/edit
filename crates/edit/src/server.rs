@@ -1020,11 +1020,31 @@ pub async fn import_paths(
     // transcriber starts now instead of when the watcher first asks for it.
     // (A script's import transcribes its own footage; voice-overs have theirs.)
     let transcribe = live.project.script.is_none() && !matches!(origin, "voice" | "script");
+    let mut transcribing = Vec::new();
     for (path, probe) in probed {
         if transcribe && probe.kind == MediaKind::Video && probe.has_audio {
             app.media.transcribe(path.clone(), true);
+            transcribing.push(path.clone());
         }
         app.media.ensure(path, probe);
+    }
+    if !transcribing.is_empty() {
+        // Then the watcher, in the background, once the words are in: asking
+        // for the subtitles later finds its answers cached.
+        let (app, id) = (app.clone(), id.to_owned());
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            while started.elapsed() < std::time::Duration::from_secs(3600) {
+                let pending = transcribing
+                    .iter()
+                    .any(|path| app.media.status(path).transcript == media::Stage::Working);
+                if !pending {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+            crate::watch::watch_in_background(&app, &id);
+        });
     }
     Ok((live.rev, added, errors))
 }

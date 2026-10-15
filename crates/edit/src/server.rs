@@ -1299,11 +1299,34 @@ async fn media_status(State(app): State<App>, UrlPath(id): UrlPath<String>) -> A
         .media
         .iter()
         .map(|media| {
-            let status = app.media.status(Path::new(&media.path));
-            (media.id.clone(), json!(status))
+            let source = Path::new(&media.path);
+            let mut status = json!(app.media.status(source));
+            // Which version of each preview file is there: the client puts it in
+            // the file's URL, so the browser can keep what it read for good.
+            let paths = app.media.paths(source);
+            if let Some(fields) = status.as_object_mut() {
+                fields.insert(
+                    "stamps".to_owned(),
+                    json!({ "preview": file_stamp(&paths.proxy_done), "light": file_stamp(&paths.light) }),
+                );
+            }
+            (media.id.clone(), status)
         })
         .collect();
     Ok(Json(json!({ "media": statuses })).into_response())
+}
+
+/// A file's version: its length and modification time (a remade preview is a
+/// new stamp).
+fn file_stamp(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some(format!("{:x}-{modified:x}", meta.len()))
 }
 
 async fn media_file(
@@ -1321,6 +1344,23 @@ async fn media_file(
         .ok_or_else(|| not_found("no such media"))?;
     let source = PathBuf::from(&media.path);
     let paths = app.media.paths(&source);
+    // `v=<preview|light>~<stamp>`: the URL names one version of the file, so
+    // when it's that version the browser may keep it (no round trip to check).
+    let named = request
+        .uri()
+        .query()
+        .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("v=")))
+        .map(|version| version.replace("%7E", "~").replace("%7e", "~"));
+    let lasting = named
+        .as_deref()
+        .and_then(|version| version.split_once('~'))
+        .is_some_and(|(which, stamp)| match (which, kind.as_str()) {
+            ("light", "light") => file_stamp(&paths.light).as_deref() == Some(stamp),
+            ("preview", "proxy" | "audio") => {
+                file_stamp(&paths.proxy_done).as_deref() == Some(stamp)
+            }
+            _ => false,
+        });
     let file = match kind.as_str() {
         // Until the proxy exists, stream the original (fine for H.264/HEVC MP4/MOV).
         "proxy" | "audio" => {
@@ -1361,9 +1401,16 @@ async fn media_file(
             HeaderValue::from_static("application/octet-stream"),
         );
     }
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    // Never the original standing in while the preview is missing.
+    let lasting = lasting && file != Path::new(&media.path) && response.status().is_success();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if lasting {
+            "private, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        }),
+    );
     Ok(response)
 }
 

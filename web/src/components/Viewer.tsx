@@ -53,9 +53,15 @@ export function Viewer() {
 
   const light = wantsLight(usePreviewQuality((state) => state.quality));
   // The picture each media streams: the light preview once it's made (when
-  // wanted), else the preview, else the original.
+  // wanted), else the preview, else the original. Each with its files' stamps
+  // ("light~<light>~<preview>"), so a version's URL is only ever that version.
   const versionKey = JSON.stringify(
-    Object.fromEntries(Object.entries(media).map(([id, status]) => [id, light && status.light === "ready" ? "light" : status.proxy === "ready" ? "preview" : "source"])),
+    Object.fromEntries(Object.entries(media).map(([id, status]) => {
+      const preview = status.stamps?.preview ?? "";
+      const version = light && status.light === "ready" ? `light~${status.stamps?.light ?? ""}~${preview}`
+        : status.proxy === "ready" ? `preview~${preview}` : "source";
+      return [id, version];
+    })),
   );
   const versions = useMemo(() => JSON.parse(versionKey) as Record<string, string>, [versionKey]);
 

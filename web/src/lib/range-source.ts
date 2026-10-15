@@ -4,12 +4,17 @@
  * round trip at a time. Over Wi-Fi that made each scrub wait on bytes that were
  * thrown away. Here every request names its end and covers an aligned block, so
  * one or two requests fetch a whole GOP and keep-alive connections are reused.
+ *
+ * Blocks are small (a scrub over a remote link wants one keyframe, ~30–70 KB, not
+ * a quarter megabyte) and cached for the whole worker by URL, with each file's
+ * size: a file opened again (scrubbing back across a cut) costs no round trip.
  */
-export const BLOCK = 256 * 1024;
-const MAX_BLOCKS = 64;
-const LOOKAHEAD = 3;
-/** Blocks fetched past a sequential read, so playback never waits on a round trip. */
-const READAHEAD = 2;
+export const BLOCK = 64 * 1024;
+/** Decoded media blocks kept per worker, across every file. */
+const CACHE_BYTES = 192 * 1024 * 1024;
+const LOOKAHEAD = 6;
+/** Blocks fetched past a sequential read while playing, so playback never waits on a round trip. */
+const READAHEAD = 8;
 const RETRIES = 8;
 /** A read that hasn't finished by then is abandoned and tried again: a hung
  * connection must not leave the preview waiting on a frame for good. */
@@ -25,16 +30,38 @@ export interface NetworkStats {
   ms: number;
   slowestMs: number;
   failures: number;
+  /** Blocks served from the worker's cache instead of the network. */
+  cached: number;
 }
 
-export const network: NetworkStats = { requests: 0, bytes: 0, ms: 0, slowestMs: 0, failures: 0 };
+export const network: NetworkStats = { requests: 0, bytes: 0, ms: 0, slowestMs: 0, failures: 0, cached: 0 };
 const wait = (attempt: number) => new Promise((resolve) => setTimeout(resolve, Math.min(2000, 250 * 2 ** attempt)));
 
+/** Every file's size, learnt from its first read. */
+const sizes = new Map<string, number>();
+/** Recently used blocks of every file (`url#index`), oldest first. */
+const blocks = new Map<string, Promise<Uint8Array>>();
+
+/** Whether reads are for playback (sequential: read ahead) or a scrub (only what's asked). */
+let streaming = false;
+export function setStreaming(on: boolean) { streaming = on; }
+
+/** Drops a file's blocks (its URL serves something else now). */
+export function forgetBlocks(url: string) {
+  sizes.delete(url);
+  const prefix = `${url}#`;
+  for (const key of [...blocks.keys()]) if (key.startsWith(prefix)) blocks.delete(key);
+}
+
+function remember(key: string, loading: Promise<Uint8Array>) {
+  blocks.delete(key);
+  blocks.set(key, loading);
+  while (blocks.size * BLOCK > CACHE_BYTES) blocks.delete(blocks.keys().next().value!);
+}
+
 export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch(input, init)) {
-  let size = Infinity;
-  /** Recently used blocks, oldest first. */
-  const blocks = new Map<number, Promise<Uint8Array>>();
   let previous = -2;
+  const size = () => sizes.get(url) ?? Infinity;
 
   async function fetchRange(start: number, end: number) {
     for (let attempt = 0; ; attempt++) {
@@ -46,6 +73,8 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
         // 503 is the dev server answering while `edit serve` restarts.
         if (response.status === 503 && attempt < RETRIES) throw new Error("restarting");
         if (response.status !== 200 && response.status !== 206) throw new Error(`HTTP ${response.status} reading ${url} (bytes ${start}-${end - 1})`);
+        const total = Number(response.headers.get("content-range")?.split("/")[1] ?? (response.status === 200 ? response.headers.get("content-length") : NaN));
+        if (Number.isFinite(total)) sizes.set(url, total);
         const body = new Uint8Array(await response.arrayBuffer());
         clearTimeout(timer);
         const took = performance.now() - started;
@@ -65,44 +94,33 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
 
   function block(index: number) {
     const loading = load(index);
-    if (index === previous + 1) for (let i = 1; i <= READAHEAD && (index + i) * BLOCK < size; i++) load(index + i);
+    if (streaming && index === previous + 1) for (let i = 1; i <= READAHEAD && (index + i) * BLOCK < size(); i++) load(index + i);
     previous = index;
-    // The block being read stays the most recently used.
-    blocks.delete(index);
-    blocks.set(index, loading);
     return loading;
   }
 
   function load(index: number) {
-    let loading = blocks.get(index);
-    if (loading) blocks.delete(index);
+    const key = `${url}#${index}`;
+    let loading = blocks.get(key);
+    if (loading) network.cached++;
     else {
-      loading = fetchRange(index * BLOCK, Math.min(size, (index + 1) * BLOCK));
+      loading = fetchRange(index * BLOCK, Math.min(size(), (index + 1) * BLOCK));
       // A failed block is fetched again next time rather than cached.
-      loading.catch(() => { if (blocks.get(index) === loading) blocks.delete(index); });
+      const failed = loading;
+      failed.catch(() => { if (blocks.get(key) === failed) blocks.delete(key); });
     }
-    blocks.set(index, loading);
-    while (blocks.size > MAX_BLOCKS) blocks.delete(blocks.keys().next().value!);
+    remember(key, loading);
     return loading;
   }
 
   return {
+    /** The size from an earlier read of this file, else from reading its first block (needed next anyway). */
     async getSize() {
-      for (let attempt = 0; ; attempt++) {
-        const response = await fetcher(url, { headers: { Range: "bytes=0-0" } }).catch((error: unknown) => {
-          if (attempt >= RETRIES) throw error;
-          return null;
-        });
-        if (response && response.status !== 503) {
-          void response.body?.cancel().catch(() => {});
-          const header = response.headers.get("content-range")?.split("/")[1] ?? response.headers.get("content-length");
-          const total = header === null ? NaN : Number(header);
-          if (!response.ok || !Number.isFinite(total)) throw new Error(`HTTP ${response.status}`);
-          return size = total;
-        }
-        if (attempt >= RETRIES) throw new Error("HTTP 503");
-        await wait(attempt);
-      }
+      if (sizes.has(url)) return sizes.get(url)!;
+      await load(0);
+      const known = sizes.get(url);
+      if (known === undefined) throw new Error(`no size for ${url}`);
+      return known;
     },
     /**
      * Blocks load a few ahead of the one being handed over, so an abandoned read

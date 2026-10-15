@@ -501,6 +501,8 @@ export interface MediaStatus {
   transcript: Stage;
   transcript_error?: string;
   error?: string;
+  /** Each preview file's version, for URLs the browser can cache for good. */
+  stamps?: { preview?: string | null; light?: string | null };
 }
 
 /** A spoken word; times are seconds into the source. */

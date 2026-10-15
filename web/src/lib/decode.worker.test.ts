@@ -3,7 +3,7 @@ import type { DecodeRequest, DecodeResponse } from "./decoder.protocol";
 
 const decoding = vi.hoisted(() => ({
   gate: null as Promise<void> | null,
-  closed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(), audioRanges: vi.fn(), videoOpened: vi.fn(), scrubbed: vi.fn(),
+  closed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(), audioRanges: vi.fn(), videoOpened: vi.fn(), scrubbed: vi.fn(), keyed: vi.fn(), sampled: vi.fn(),
 }));
 vi.mock("mediabunny", () => ({
   ALL_FORMATS: [],
@@ -13,7 +13,16 @@ vi.mock("mediabunny", () => ({
     async getPrimaryVideoTrack() { return { canDecode: async () => true, getFirstTimestamp: async () => 0 }; }
     async getPrimaryAudioTrack() { return { canDecode: async () => true }; }
   },
+  EncodedPacketSink: class {
+    // Keyframes every half second.
+    async getKeyPacket(time: number) { decoding.keyed(time); return { timestamp: Math.floor(time * 2 + 1e-9) / 2 }; }
+  },
   VideoSampleSink: class {
+    async getSample(time: number) {
+      decoding.sampled(time);
+      const timestamp = Math.floor(time * 30 + 1e-9) / 30;
+      return { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => ({ timestamp: timestamp * 1e6 }) };
+    }
     // A 30 fps source decoded forward from the frame shown at `start`.
     async *samplesAtTimestamps(times: number[]) {
       decoding.scrubbed(times);
@@ -106,6 +115,15 @@ describe("decoder worker scheduling and PCM boundaries", () => {
     expect(decoding.videoOpened).toHaveBeenCalledOnce();
     expect(decoding.scrubbed).toHaveBeenCalledTimes(2);
     expect(messages.filter((m) => m.type === "video").map((m) => m.time)).toEqual([1, 1.2, 1.3, 1.5]);
+  });
+
+  it("answers a rough scrub with the keyframe at or before the time", async () => {
+    send({ type: "video", id: 1, key: "file", url: "/file", lane: "v:clip", times: [1.8], playing: false, rough: true });
+    await vi.waitFor(() => expect(messages.some((m) => m.type === "done" && m.id === 1)).toBe(true));
+    expect(decoding.sampled.mock.calls).toEqual([[1.5]]);
+    expect(decoding.scrubbed).not.toHaveBeenCalled();
+    const picture = messages.find((m) => m.type === "video");
+    expect(picture?.type === "video" && [picture.time, picture.rough]).toEqual([1.5, true]);
   });
 
   it("releases a lane's decoder when the preview stops showing it", async () => {

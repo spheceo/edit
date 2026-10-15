@@ -10,8 +10,8 @@ vi.mock("../engine/pkg/edit_wasm", () => ({ default: vi.fn(), createEngine: vi.f
 vi.mock("./api", () => ({ fetchRetrying: vi.fn(async () => new Response(new Uint8Array())), mediaUrl: (p: string, m: string) => `/${p}/${m}` }));
 
 const decoding = vi.hoisted(() => ({
-  frames: new Map<string, object>(), sound: new Map<number, object>(),
-  requestVideo: vi.fn(), requestAudio: vi.fn(), requestImage: vi.fn(), forget: vi.fn(), dispose: vi.fn(),
+  frames: new Map<string, object>(), sound: new Map<number, object>(), near: undefined as object | undefined,
+  requestVideo: vi.fn(), requestRough: vi.fn(), requestAudio: vi.fn(), requestImage: vi.fn(), forget: vi.fn(), dispose: vi.fn(),
 }));
 vi.mock("./decoder", async (original) => {
   const actual = await original<typeof import("./decoder")>();
@@ -20,10 +20,11 @@ vi.mock("./decoder", async (original) => {
     picture(key: string, time: number) { return decoding.frames.get(`${key}:${time.toFixed(6)}`); }
     pcm(_key: string, chunk: number) { return decoding.sound.get(chunk); }
     requestVideo = decoding.requestVideo;
+    requestRough = decoding.requestRough;
     requestAudio = decoding.requestAudio;
     requestImage = decoding.requestImage;
     forget = decoding.forget;
-    nearbyPicture() { return undefined; }
+    nearbyPicture() { return decoding.near; }
     retain() {}
     dispose() { decoding.dispose(); decoding.frames.clear(); }
   } };
@@ -66,7 +67,7 @@ describe("preview seeks and lifetime", () => {
   const draw = () => { const callbacks = [...frames.values()]; frames.clear(); for (const callback of callbacks) callback(performance.now()); };
 
   beforeEach(async () => {
-    vi.resetModules(); vi.clearAllMocks(); decoding.frames.clear(); decoding.sound.clear(); frames = new Map(); storage = new Map(); clock = new AudioClock();
+    vi.resetModules(); vi.clearAllMocks(); decoding.near = undefined; decoding.frames.clear(); decoding.sound.clear(); frames = new Map(); storage = new Map(); clock = new AudioClock();
     const doc = Object.assign(new EventTarget(), { visibilityState: "visible" });
     vi.stubGlobal("document", doc); vi.stubGlobal("window", new EventTarget());
     vi.stubGlobal("navigator", { gpu: {} }); vi.stubGlobal("location", { hostname: "localhost", protocol: "http:" });
@@ -118,6 +119,24 @@ describe("preview seeks and lifetime", () => {
     expect(engine.render).toHaveBeenCalledTimes(renders);
     await complete(30);
     expect(engine.render).toHaveBeenLastCalledWith(30);
+  });
+
+  it("mid-drag asks for keyframes and shows the nearest one at the wanted frame, then the exact frame once it rests", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      preview.setProject(fixture(), {}); draw();
+      preview.seek(10); draw();
+      // A single seek (a click) asks for its exact frame straight away.
+      expect(decoding.requestRough).not.toHaveBeenCalled();
+      preview.seek(20); draw();
+      expect(decoding.requestRough).toHaveBeenCalled();
+      const exact = decoding.requestVideo.mock.calls.length;
+      decoding.near = { keyframe: true };
+      preview.invalidate(); draw();
+      expect(engine.render).toHaveBeenLastCalledWith(20);
+      vi.advanceTimersByTime(300); draw();
+      expect(decoding.requestVideo.mock.calls.length).toBeGreaterThan(exact);
+    } finally { vi.useRealTimers(); }
   });
 
   it("does not upload or composite the same cached picture twice", async () => {

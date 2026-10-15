@@ -50,6 +50,10 @@ const AUDIO_AHEAD = 0.8;
 const START_LEAD = 0.05;
 /** After the playhead rests this long, its sound is decoded so Play starts at once. */
 const SETTLE_MS = 300;
+/** Seeks closer together than this are one drag. */
+const DRAG_GAP_MS = 150;
+/** Source seconds a decoded picture may be from the wanted one and still stand in mid-drag. */
+const STAND_IN_REACH = 3;
 
 class Preview {
   engine: Engine | null = null;
@@ -79,6 +83,8 @@ class Preview {
   private pendingScenes = new Map<number, { serial: number; sources: PictureSource[] }>();
   private seekSerial = 0;
   private settled = true;
+  private dragging = false;
+  private lastSeekAt = -Infinity;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
   private renderedScrub = -1;
   private direction = 1;
@@ -291,11 +297,14 @@ class Preview {
     this.media = new Map(project.media.map((media) => [media.id, media]));
     // Picture and sound are separate preview files, so decoding sound never downloads video.
     // The light preview is picture only: sound keeps coming from the preview's.
+    // Versions are "source", "preview~<stamp>" or "light~<light stamp>~<preview stamp>"
+    // (the light file is picture only: sound still comes from the preview's).
     const url = (media: Media, kind: "proxy" | "audio") => {
-      const version = proxyVersions[media.id] ?? "source";
-      const light = version === "light";
+      const [which, ...stamps] = (proxyVersions[media.id] ?? "source").split("~");
+      const light = which === "light";
       const file = kind === "proxy" && light ? "light" : kind;
-      return `${mediaUrl(project.id, media.id, file)}?v=${encodeURIComponent(light && kind === "audio" ? "preview" : version)}`;
+      const named = !light ? [which, ...stamps] : kind === "audio" ? ["preview", stamps[1]] : ["light", stamps[0]];
+      return `${mediaUrl(project.id, media.id, file)}?v=${named.filter((part) => part !== undefined && part !== "").join("~")}`;
     };
     const nextSources = new Map(project.media.map((media) => [media.id, url(media, "proxy")]));
     const nextSounds = new Map(project.media.map((media) => [media.id, url(media, "audio")]));
@@ -349,6 +358,10 @@ class Preview {
 
   seek(frame: number) {
     if (!Number.isFinite(frame)) return;
+    // Seeks in quick succession are a drag (or a held key): rough pictures until it rests.
+    const now = performance.now();
+    this.dragging = now - this.lastSeekAt < DRAG_GAP_MS;
+    this.lastSeekAt = now;
     this.direction = frame < playhead.frame ? -1 : 1;
     this.seekSerial++;
     playhead.frame = Math.max(0, Math.round(frame));
@@ -479,6 +492,28 @@ class Preview {
 
   private picturesReady(sources: PictureSource[]) { return sources.every((source) => Boolean(this.picture(source))); }
 
+  /**
+   * Pictures near enough to stand in mid-drag (the keyframes a rough scrub
+   * decodes), from within each clip, so the frame's graphics land on time
+   * while its footage catches up. Null when any source has none.
+   */
+  private standIns(sources: PictureSource[]) {
+    const pictures: VideoFrame[] = [];
+    for (const source of sources) {
+      let picture = this.picture(source);
+      const media = this.media.get(source.media);
+      const clip = this.clipsById.get(source.clip);
+      if (!picture && media && clip?.type === "video") {
+        const time = videoTime(source.time, media.fps, media.duration);
+        picture = this.decoder.nearbyPicture(this.sources.get(source.media)!, time, STAND_IN_REACH * Math.max(1, clip.speed),
+          Math.max(0, clip.source_in - 0.5 / (media.fps || 30)), clip.source_in + clip.duration / this.project!.settings.fps * clip.speed);
+      }
+      if (!picture) return null;
+      pictures.push(picture);
+    }
+    return pictures;
+  }
+
   private requestPicture(source: PictureSource, lanes: Set<string>) {
     const media = this.media.get(source.media);
     const url = this.sources.get(source.media);
@@ -488,6 +523,7 @@ class Preview {
     const clip = this.clipsById.get(source.clip);
     const speed = clip?.type === "video" ? clip.speed : 1;
     if (media.kind === "image") this.decoder.requestImage(url, url);
+    else if (!playhead.playing && this.dragging && !this.settled) this.decoder.requestRough(url, url, lane, source.time, media.fps || 30, media.duration);
     else this.decoder.requestVideo(url, url, lane, source.time, media.fps || 30, media.duration,
       playhead.playing ? 1 : this.direction, playhead.playing, speed / this.project!.settings.fps);
   }
@@ -635,10 +671,12 @@ class Preview {
     let frame = wanted;
     let selected = sources;
     const ready = this.picturesReady(sources);
+    let standIns: VideoFrame[] | null = null;
     if (!playhead.playing) {
       this.pendingScenes.set(wanted, { serial: this.seekSerial, sources });
       while (this.pendingScenes.size > 32) this.pendingScenes.delete(this.pendingScenes.keys().next().value!);
-      if (!ready) {
+      if (!ready) standIns = this.standIns(sources);
+      if (!ready && !standIns) {
         // Display the newest completed request as a complete scene, never a new
         // title over old footage. The final cursor position stays queued for exact landing.
         const completed = [...this.pendingScenes].reverse().find(([, scene]) => scene.serial > this.renderedScrub && this.picturesReady(scene.sources));
@@ -648,8 +686,8 @@ class Preview {
         this.renderedScrub = completed[1].serial;
       }
     }
-    const pictures: VideoFrame[] = [];
-    for (const source of selected) {
+    const pictures: VideoFrame[] = standIns ?? [];
+    if (!standIns) for (const source of selected) {
       let picture = this.picture(source);
       if (!picture && playhead.playing) {
         const media = this.media.get(source.media);

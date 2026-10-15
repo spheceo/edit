@@ -1,6 +1,6 @@
-import { ALL_FORMATS, AudioSampleSink, Input, StreamSource, VideoSampleSink, type VideoSample } from "mediabunny";
+import { ALL_FORMATS, AudioSampleSink, EncodedPacketSink, Input, StreamSource, VideoSampleSink, type VideoSample } from "mediabunny";
 import { stretchAudio } from "./audio-stretch";
-import { network, rangeReader } from "./range-source";
+import { forgetBlocks, network, rangeReader, setStreaming } from "./range-source";
 import { AUDIO_CHUNK_SECONDS, type DecodeJob, type DecodeRequest, type DecodeResponse, type PcmChunk } from "./decoder.protocol";
 
 // No DOM or audio context in this worker. Only demux, decode and transferable resources.
@@ -10,7 +10,7 @@ const scope = self as unknown as {
 };
 interface File {
   input: Input;
-  video?: Promise<{ sink: VideoSampleSink; first: number }>;
+  video?: Promise<{ sink: VideoSampleSink; packets: EncodedPacketSink; first: number }>;
   audio?: Promise<AudioSampleSink>;
   users: number;
 }
@@ -32,13 +32,16 @@ interface Lane { latest: DecodeJob | null; running: DecodeJob | null; cancelled:
 /** Decoding forward this far is cheaper than reopening at the preceding keyframe. */
 const CONTINUE_SECONDS = 1;
 const EPSILON = 1e-6;
+/** Open files kept. Cheap to keep (their bytes live in the shared block cache);
+ * reopening one costs parsing its index again. */
+const OPEN_FILES = 16;
 const files = new Map<string, File>();
 const lanes = new Map<string, Lane>();
 let running = 0;
 
 function trimFiles() {
   for (const [key, file] of files) {
-    if (files.size <= 4) break;
+    if (files.size <= OPEN_FILES) break;
     if (file.users) continue;
     file.input.dispose();
     files.delete(key);
@@ -69,7 +72,7 @@ async function videoSink(file: File) {
   return file.video ??= (async () => {
     const track = await file.input.getPrimaryVideoTrack();
     if (!track || !await track.canDecode()) throw new Error("This video codec cannot be decoded by this browser. Wait for its H.264 proxy.");
-    return { sink: new VideoSampleSink(track, { optimizeForLatency: true }), first: await track.getFirstTimestamp() };
+    return { sink: new VideoSampleSink(track, { optimizeForLatency: true }), packets: new EncodedPacketSink(track), first: await track.getFirstTimestamp() };
   })();
 }
 
@@ -104,7 +107,7 @@ async function pictureAt(cursor: Cursor, time: number) {
 }
 
 async function decodeVideo(job: Extract<DecodeJob, { type: "video" }>, file: File, lane: Lane) {
-  const { sink, first } = await videoSink(file);
+  const { sink, packets, first } = await videoSink(file);
   for (const [i, requested] of job.times.entries()) {
     // Finish the first requested picture even if the cursor moved while decoding it:
     // the preview can display that complete scene instead of starving during a drag.
@@ -128,6 +131,20 @@ async function decodeVideo(job: Extract<DecodeJob, { type: "video" }>, file: Fil
       if (lane.cancelled) break;
       if (!sample) throw new Error("No video frame at the requested source time");
       frame = sample.toVideoFrame();
+    } else if (job.rough) {
+      // Mid-drag, the keyframe at or before the time stands in: one packet to
+      // fetch and decode instead of a run of them. The exact frame follows once
+      // the playhead rests.
+      const key = await packets.getKeyPacket(time, { metadataOnly: true });
+      const at = Math.max(first, key?.timestamp ?? time);
+      const sample = await sink.getSample(at);
+      if (!sample) throw new Error("No video frame at the requested source time");
+      try {
+        if (lane.cancelled) break;
+        frame = sample.toVideoFrame();
+        scope.postMessage({ type: "video", id: job.id, key: job.key, time: sample.timestamp, frame, rough: true }, [frame]);
+      } finally { sample.close(); }
+      continue;
     } else {
       // An open decoder reads dozens of packets ahead. A scrub decodes from the
       // keyframe to exactly its picture, so a drag doesn't download what it skips.
@@ -194,6 +211,8 @@ async function decodeAudio(job: Extract<DecodeJob, { type: "audio" }>, file: Fil
 async function run(job: DecodeJob, lane: Lane) {
   running++;
   lane.running = job;
+  // Playback reads on sequentially (worth reading ahead); a scrub only reads what it asks for.
+  setStreaming(job.type === "audio" || job.playing);
   lane.latest = null;
   let file: File | undefined;
   try {
@@ -239,6 +258,7 @@ scope.onmessage = ({ data }) => {
     }
     files.get(data.key)?.input.dispose();
     files.delete(data.key);
+    forgetBlocks(data.key);
   } else if (data.type === "retain") {
     const keep = new Set(data.lanes);
     for (const [name, lane] of lanes) if (!keep.has(name)) release(name, lane);

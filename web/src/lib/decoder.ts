@@ -12,7 +12,10 @@ export function videoTime(time: number, fps: number, duration: number) {
   return Math.max(0, Math.min((Math.floor(time * rate + 0.5 + 1e-7) + 0.01) / rate, Math.max(0, duration - 1e-6)));
 }
 
-interface Flight { id: number; key: string; values: Set<string> }
+interface Flight { id: number; key: string; values: Set<string>; /** A rough request's time. */ rough?: number }
+
+/** Source seconds within which a decoded picture is close enough mid-drag (a preview's keyframe interval). */
+const ROUGH_REACH = 0.55;
 
 /** Two workers keep video and audio independent. The UI only owns bounded decoded caches. */
 export class Decoder {
@@ -113,6 +116,23 @@ export class Decoder {
     })().catch((error) => { if (generation === this.generation && this.files.has(key)) this.failed(String(error)); })
       .finally(() => { if (this.images.get(key) === loading) this.images.delete(key); });
     this.images.set(key, loading);
+  }
+
+  /**
+   * Mid-drag, a keyframe stands in for the exact frame: it's a fraction of the
+   * bytes over a remote link. Nothing is asked when a picture from the same
+   * keyframe interval (a preview's is half a second) is already decoded.
+   */
+  requestRough(key: string, url: string, lane: string, time: number, fps: number, duration: number) {
+    const at = videoTime(time, fps, duration);
+    if (this.pictures.has(frameKey(key, at)) || this.nearbyPicture(key, at, ROUGH_REACH, at - ROUGH_REACH, at + 1 / fps)) return;
+    const active = this.flights.get(lane);
+    if (active?.key === key && active.rough !== undefined && Math.abs(active.rough - at) <= ROUGH_REACH) return;
+    const id = ++this.serial;
+    this.files.add(key);
+    this.flights.set(lane, { id, key, values: new Set(), rough: at });
+    this.stats.videoRequests++;
+    this.worker("video")?.postMessage({ type: "video", id, key, url, lane, times: [at], playing: false, rough: true } satisfies DecodeRequest);
   }
 
   requestVideo(key: string, url: string, lane: string, time: number, fps: number, duration: number, direction = 1, playing = false, step = 1 / fps) {

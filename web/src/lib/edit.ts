@@ -3,6 +3,7 @@
 
 import { current, isDraft } from "immer";
 
+import { isSubtitled } from "./drive";
 import { HOUSE_BOX, HOUSE_GLOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind } from "./types";
 
 export const freshId = (project: Project, prefix: string) => {
@@ -258,6 +259,7 @@ function cutInStyle(width: number, height: number, text: string): TextStyle {
 
 /** Adds a generated element at `frame`: on `onTrack` (overwriting), else a free track above the footage. */
 export function addElement(project: Project, element: Element, frame: number, onTrack?: string): string {
+  const subtitleProject = element === "subtitle" && isSubtitled(project);
   const fps = project.settings.fps;
   const duration = Math.max(1, Math.round(ELEMENT_SECONDS[element] * fps));
   const start = Math.max(0, Math.round(frame));
@@ -319,16 +321,18 @@ export function addElement(project: Project, element: Element, frame: number, on
       break;
     case "subtitle": {
       // The subtitle look after the intro (crates/edit/src/captions.rs subtitle_style), authored at 1080p:
-      // white words in a black box, no glow, the speaker's name above in their colour.
+      // Edits use a first-name label without glow; subtitle projects use glow without a label.
+      const subtitled = subtitleProject;
       const { width, height } = project.settings;
       const k = height / 1080;
       const scaled = <T extends object>(value: T, keys: (keyof T)[]) =>
         Object.fromEntries(Object.entries(value).map(([key, v]) => [key, keys.includes(key as keyof T) ? (v as number) * k : v])) as T;
-      const background = { ...scaled(HOUSE_BOX, ["pad_x", "pad_y"]), color: [0, 0, 0, 1] as [number, number, number, number], opacity: 1 };
+      const background = { ...scaled(HOUSE_BOX, ["pad_x", "pad_y"]), color: [0, 0, 0, 1] as [number, number, number, number], opacity: subtitled ? 0.75 : 1 };
       clip = {
         ...base,
         color: "cyan",
         type: "text",
+        name: "Subtitle · Speaker",
         text: "Subtitle",
         style: {
           font: "Montserrat",
@@ -337,10 +341,11 @@ export function addElement(project: Project, element: Element, frame: number, on
           color: [1, 1, 1, 1],
           tracking: 0,
           line_height: 1.15,
-          glow: { ...HOUSE_GLOW, enabled: false, radius: HOUSE_GLOW.radius * k },
+          glow: { ...HOUSE_GLOW, enabled: subtitled, radius: HOUSE_GLOW.radius * k },
           max_width: width * 0.8 - background.pad_x * 2,
           background,
-          label: { text: "Speaker:", color: [1, 0.86, 0.2, 1], size: Math.round(26 * k) },
+          label: subtitled ? undefined : { text: "Speaker:", color: [1, 0.86, 0.2, 1], size: Math.round(26 * k) },
+          shadow: subtitled ? { color: [0, 0, 0, 1], opacity: 0.65, distance: 3 * k, angle: 112, size: 6 * k, blur: 8 * k } : undefined,
         },
         transform: { ...transform, y: height * 0.4 },
         animation: { preset: "none", duration: 0, stagger: 0 },

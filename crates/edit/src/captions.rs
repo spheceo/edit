@@ -543,6 +543,29 @@ pub fn subtitle_style(width: u32, height: u32) -> TextStyle {
     }
 }
 
+/// A known speaker's first name; retain a short role when no name is known.
+fn subtitle_name(name: &str) -> &str {
+    let name = name
+        .split(" (")
+        .next()
+        .unwrap_or(name)
+        .trim()
+        .trim_end_matches(':');
+    let mut words = name.split_whitespace();
+    let first = words.next().unwrap_or("Speaker");
+    if matches!(
+        first,
+        "Officer" | "Deputy" | "Detective" | "Sergeant" | "Sgt." | "Det."
+    ) {
+        match words.next() {
+            Some(next) if !next.chars().all(|ch| ch.is_ascii_digit()) => next,
+            _ => name,
+        }
+    } else {
+        first
+    }
+}
+
 /// The speaker label's size at 1080p.
 const LABEL_SIZE: f32 = 26.0;
 
@@ -813,7 +836,7 @@ pub async fn subtitles(
             let color = line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE);
             let mut line_style = TextStyle {
                 label: Some(TextLabel {
-                    text: format!("{who}:"),
+                    text: format!("{}:", subtitle_name(&who)),
                     color,
                     size: (LABEL_SIZE * height as f32 / 1080.0).round(),
                 }),
@@ -1826,6 +1849,20 @@ mod tests {
                 word_times: Vec::new(),
             },
         }
+    }
+
+    #[test]
+    fn edit_subtitles_use_first_names_without_glow() {
+        let style = subtitle_style(1920, 1080);
+        assert!(!style.glow.enabled);
+        assert_eq!(subtitle_name("Jane Doe (Mother)"), "Jane");
+        assert_eq!(subtitle_name("Hayven:"), "Hayven");
+        assert_eq!(subtitle_name("Officer Diaz"), "Diaz");
+        assert_eq!(subtitle_name("Deputy 2"), "Deputy 2");
+        assert_eq!(subtitle_name(""), "Speaker");
+        let subtitled = crate::subtitles::house_style(1920, 1080, Rgba::WHITE);
+        assert!(subtitled.glow.enabled);
+        assert!(subtitled.label.is_none());
     }
 
     #[test]

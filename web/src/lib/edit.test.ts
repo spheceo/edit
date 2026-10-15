@@ -2,6 +2,7 @@ import { produce } from "immer";
 import { describe, expect, it } from "vitest";
 
 import {
+  addElement,
   clipEnd,
   duplicateClips,
   folderOf,
@@ -198,4 +199,21 @@ describe("media bin", () => {
     expect(folderOf(file("e", "audio", "/Users/me/.edit/library/music/0a1b2c3d4e5f/Drone.wav"))).toBe("audio");
     expect(folderOf(file("d", "image", "/x/logo.png"))).toBe("images");
   });
+});
+
+
+it("adds subtitles with glow and no name only in subtitle projects", () => {
+  const edit = project([video("c1", 0, 300)]);
+  const normalId = addElement(edit, "subtitle", 0);
+  const normal = edit.clips.find((clip) => clip.id === normalId)!;
+  if (normal.type !== "text") throw new Error("Expected subtitle text");
+  expect(normal.style.glow.enabled).toBe(false);
+  expect(normal.style.label?.text).toBe("Speaker:");
+
+  const subs = project([video("c1", 0, 300), { ...normal, id: "c2", start: 0 }]);
+  const subId = addElement(subs, "subtitle", 0);
+  const subtitle = subs.clips.find((clip) => clip.id === subId)!;
+  if (subtitle.type !== "text") throw new Error("Expected subtitle text");
+  expect(subtitle.style.glow.enabled).toBe(true);
+  expect(subtitle.style.label).toBeUndefined();
 });

@@ -63,7 +63,8 @@ export function OpenAIMark({ size = 16 }: { size?: number }) {
 
 export function AgentPanel() {
   const projectId = useEditor((state) => state.project?.id);
-  const { status, entries, running, loaded } = useAgent();
+  const { status, entries, running, loaded, run } = useAgent();
+  const busy = running || run?.state === "running";
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const turns = buildTurns(entries, running);
@@ -92,7 +93,7 @@ export function AgentPanel() {
         <OpenAIMark size={15} />
         <span className="font-medium">Codex</span>
         {status?.ready !== false && (
-          <IconButton label="New chat" className="ml-auto" disabled={running || !entries.length} onClick={newChat}>
+          <IconButton label="New chat" className="ml-auto" disabled={busy || !entries.length} onClick={newChat}>
             <SquarePen size={14} />
           </IconButton>
         )}
@@ -493,7 +494,7 @@ function RunProgress() {
 
 function Composer({ disabled }: { disabled: boolean }) {
   const [text, setText] = useState("");
-  const running = useAgent((state) => state.running);
+  const running = useAgent((state) => state.running || state.run?.state === "running");
   const models = useAgent((state) => state.models);
   const model = useAgent((state) => currentModel(state));
   const effort = useAgent((state) => currentEffort(state));

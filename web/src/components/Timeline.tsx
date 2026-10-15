@@ -2,6 +2,7 @@ import { Eye, EyeOff, Lock, LockOpen, Magnet, MousePointer2, Plus, Scissors, Spl
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { mediaUrl } from "../lib/api";
+import { DecodedCache } from "../lib/decoded-cache";
 import { CLIP_HEX } from "../lib/colors";
 import {
   addElement,
@@ -67,21 +68,40 @@ function layoutRows(project: Project): { rows: Row[]; height: number } {
 
 // --- asset caches (sprites and waveforms), shared across renders -----------
 
-const sprites = new Map<string, HTMLImageElement | "loading" | "missing">();
-const peaks = new Map<string, Uint8Array | "loading" | "missing">();
+const sprites = new DecodedCache<HTMLImageElement | "missing">(64 * 1024 * 1024, (image) => {
+  if (image === "missing") return;
+  image.onload = null; image.onerror = null; image.src = "";
+});
+const peaks = new DecodedCache<Uint8Array | "missing">(8 * 1024 * 1024, () => {});
+const spriteLoads = new Map<string, HTMLImageElement>();
+const peakLoads = new Map<string, AbortController>();
+
+function clearAssets() {
+  for (const image of spriteLoads.values()) { image.onload = null; image.onerror = null; image.src = ""; }
+  spriteLoads.clear();
+  for (const loading of peakLoads.values()) loading.abort();
+  peakLoads.clear();
+  sprites.clear(); peaks.clear();
+}
 
 function sprite(project: Project, media: string, ready: boolean, onLoad: () => void) {
   const key = `${project.id}/${media}`;
   const cached = sprites.get(key);
   if (cached instanceof HTMLImageElement) return cached;
-  if (cached === "loading" || !ready) return null;
-  sprites.set(key, "loading");
+  if (cached === "missing" || spriteLoads.has(key) || !ready) return null;
   const image = new Image();
+  spriteLoads.set(key, image);
   image.onload = () => {
-    sprites.set(key, image);
+    if (spriteLoads.get(key) !== image) return;
+    spriteLoads.delete(key);
+    sprites.set(key, image, image.naturalWidth * image.naturalHeight * 4);
     onLoad();
   };
-  image.onerror = () => sprites.set(key, "missing");
+  image.onerror = () => {
+    if (spriteLoads.get(key) !== image) return;
+    spriteLoads.delete(key);
+    sprites.set(key, "missing", 1);
+  };
   image.src = mediaUrl(project.id, media, "thumbs");
   return null;
 }
@@ -90,15 +110,22 @@ function waveform(project: Project, media: string, ready: boolean, onLoad: () =>
   const key = `${project.id}/${media}`;
   const cached = peaks.get(key);
   if (cached instanceof Uint8Array) return cached;
-  if (cached === "loading" || !ready) return null;
-  peaks.set(key, "loading");
-  fetch(mediaUrl(project.id, media, "peaks"))
+  if (cached === "missing" || peakLoads.has(key) || !ready) return null;
+  const loading = new AbortController();
+  peakLoads.set(key, loading);
+  fetch(mediaUrl(project.id, media, "peaks"), { signal: loading.signal })
     .then((response) => (response.ok ? response.arrayBuffer() : Promise.reject()))
     .then((buffer) => {
-      peaks.set(key, new Uint8Array(buffer));
+      if (peakLoads.get(key) !== loading) return;
+      peakLoads.delete(key);
+      peaks.set(key, new Uint8Array(buffer), buffer.byteLength);
       onLoad();
     })
-    .catch(() => peaks.set(key, "missing"));
+    .catch(() => {
+      if (peakLoads.get(key) !== loading) return;
+      peakLoads.delete(key);
+      peaks.set(key, "missing", 1);
+    });
   return null;
 }
 
@@ -139,6 +166,9 @@ export function Timeline() {
       draw();
     });
   };
+
+  // Do not keep decoded strips (or late fetch completions) from another project.
+  useLayoutEffect(() => () => clearAssets(), [project.id]);
 
   // Size the canvas to its box.
   useEffect(() => {
@@ -959,7 +989,7 @@ function drawClip(
   if (clip.type === "video") {
     const media = mediaOf(project, clip.media);
     const status = statuses[clip.media];
-    const image = media && sprite(project, clip.media, status?.thumbs === "ready", onAsset);
+    const image = media && w >= 8 && sprite(project, clip.media, status?.thumbs === "ready", onAsset);
     if (media && image) {
       const count = Math.max(1, status?.thumb_count || 1);
       const cellW = image.naturalWidth / count;

@@ -47,12 +47,17 @@ fn decode_size(media: &Media, width: u32, height: u32) -> (u32, u32) {
 }
 
 /// Sequential RGBA reader for one source that restarts on jumps.
-struct VideoReader {
+pub(crate) struct VideoReader {
     path: PathBuf,
-    width: u32,
-    height: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     fps: f64,
+    still: bool,
     child: Option<(Child, ChildStdout)>,
+    #[cfg(target_os = "macos")]
+    native: Option<crate::mac_media::Reader>,
+    #[cfg(target_os = "macos")]
+    native_failed: bool,
     start: f64,
     next_index: i64,
     frame: Vec<u8>,
@@ -62,31 +67,41 @@ struct VideoReader {
 }
 
 impl VideoReader {
-    fn new(media: &Media, width: u32, height: u32) -> Self {
+    pub(crate) fn new(media: &Media, width: u32, height: u32) -> Self {
         let (width, height) = decode_size(media, width, height);
         Self {
             path: PathBuf::from(&media.path),
             width,
             height,
             fps: if media.fps > 0.0 { media.fps } else { 30.0 },
+            still: media.kind == edit_core::MediaKind::Image,
             child: None,
+            #[cfg(target_os = "macos")]
+            native: None,
+            #[cfg(target_os = "macos")]
+            native_failed: std::env::var_os("EDIT_FFMPEG_VIDEO").is_some(),
             start: 0.0,
             next_index: 0,
             frame: vec![0; width as usize * height as usize * 4],
             has_frame: false,
             eof: false,
-            spare: vec![0; width as usize * height as usize * 4],
+            spare: Vec::new(),
         }
     }
 
     fn restart(&mut self, time: f64) -> Result<(), String> {
         self.stop();
+        self.spare.resize(self.frame.len(), 0);
         let time = time.max(0.0);
         let mut child = Command::new(crate::tools::ffmpeg())
             .args([
                 "-hide_banner",
                 "-loglevel",
                 "error",
+                "-threads",
+                "2",
+                "-filter_threads",
+                "1",
                 "-ss",
                 &format!("{time:.6}"),
                 "-protocol_whitelist",
@@ -101,6 +116,8 @@ impl VideoReader {
                     "fps={:.6},scale={}:{}:flags=bicubic",
                     self.fps, self.width, self.height
                 ),
+                "-threads",
+                "1",
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
@@ -122,7 +139,47 @@ impl VideoReader {
     }
 
     /// Frame covering `time` (seconds into the source).
-    fn frame_at(&mut self, time: f64) -> Result<&[u8], String> {
+    pub(crate) fn frame_at(&mut self, time: f64) -> Result<&[u8], String> {
+        let time = if self.still { 0.0 } else { time };
+        if self.still && self.has_frame {
+            return Ok(&self.frame);
+        }
+        #[cfg(target_os = "macos")]
+        if self.still {
+            crate::mac_media::image(&self.path, self.width, self.height, &mut self.frame)?;
+            self.has_frame = true;
+            return Ok(&self.frame);
+        }
+        #[cfg(target_os = "macos")]
+        if !self.native_failed {
+            let decoded = (|| {
+                if self.native.is_none() {
+                    self.native = Some(crate::mac_media::Reader::open(
+                        &self.path,
+                        self.width,
+                        self.height,
+                    )?);
+                }
+                self.native.as_mut().ok_or("native reader missing")?.frame(
+                    (time * self.fps + 0.5 + 1e-7).floor() / self.fps,
+                    &mut self.frame,
+                )
+            })();
+            match decoded {
+                Ok(()) => return Ok(&self.frame),
+                Err(error) => {
+                    crate::diag::warn(
+                        "render",
+                        format!(
+                            "native decode of {}: {error}; using FFmpeg",
+                            self.path.display()
+                        ),
+                    );
+                    self.native = None;
+                    self.native_failed = true;
+                }
+            }
+        }
         let ahead = time - (self.start + self.next_index as f64 / self.fps);
         if self.child.is_none()
             || time < self.start - 1e-6
@@ -174,53 +231,6 @@ impl Drop for VideoReader {
     }
 }
 
-/// Decodes the single source frame nearest `time` (as the export's fps filter
-/// and the browser preview pick it) without keeping a process around.
-pub(crate) fn grab_frame(
-    media: &Media,
-    time: f64,
-    width: u32,
-    height: u32,
-) -> Result<(u32, u32, Vec<u8>), String> {
-    let (w, h) = decode_size(media, width, height);
-    // An accurate seek returns the first frame at or after its time: half a frame early is the nearest.
-    let time = time - 0.5 / if media.fps > 0.0 { media.fps } else { 30.0 };
-    let output = Command::new(crate::tools::ffmpeg())
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-ss",
-            &format!("{:.6}", time.max(0.0)),
-            "-protocol_whitelist",
-            "file,pipe",
-            "-i",
-        ])
-        .arg(&media.path)
-        .args([
-            "-an",
-            "-frames:v",
-            "1",
-            "-vf",
-            &format!("scale={w}:{h}:flags=bicubic"),
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgba",
-            "pipe:1",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("ffmpeg: {error}"))?;
-    let expected = w as usize * h as usize * 4;
-    if output.stdout.len() < expected {
-        return Err(format!("no frame at {time:.3}s in {}", media.name));
-    }
-    let mut pixels = output.stdout;
-    pixels.truncate(expected);
-    Ok((w, h, pixels))
-}
-
 /// Owns a GPU on its own thread; frame renders queue here.
 pub struct FrameRenderer {
     jobs: Mutex<mpsc::SyncSender<FrameJob>>,
@@ -247,6 +257,7 @@ impl FrameRenderer {
         std::thread::spawn(move || {
             let mut renderer: Option<Renderer> = None;
             let mut last_project = String::new();
+            let mut readers = HashMap::new();
             for job in receiver {
                 if job.reply.is_closed() {
                     continue;
@@ -261,12 +272,14 @@ impl FrameRenderer {
                     // Media ids are per project: another project's may be other files.
                     if job.project.id != last_project {
                         renderer.clear_peaks();
+                        readers.clear();
                         last_project = job.project.id.clone();
                     }
                     let mut images = Vec::new();
                     for frame in &job.frames {
                         images.push(render_one(
                             renderer,
+                            &mut readers,
                             &job.project,
                             *frame,
                             job.max_side,
@@ -278,6 +291,7 @@ impl FrameRenderer {
                 // A crash may leave the GPU state half-way: start afresh next time.
                 if caught.is_err() {
                     renderer = None;
+                    readers.clear();
                 }
                 let result = caught.and_then(|result| result);
                 let name = if job.frames.len() > 1 {
@@ -348,6 +362,7 @@ fn feed_peaks(renderer: &mut Renderer, project: &Project, scene: &edit_core::Sce
 
 fn render_one(
     renderer: &mut Renderer,
+    readers: &mut HashMap<String, VideoReader>,
     project: &Project,
     frame: i64,
     max_side: u32,
@@ -367,10 +382,25 @@ fn render_one(
             let source = project
                 .media(media)
                 .ok_or_else(|| format!("unknown media {media}"))?;
-            let (w, h, pixels) = grab_frame(source, *source_time, settings.width, settings.height)?;
-            renderer.upload_video_rgba(clip, w, h, &pixels);
+            let reader = readers
+                .entry(clip.clone())
+                .or_insert_with(|| VideoReader::new(source, settings.width, settings.height));
+            if reader.path != Path::new(&source.path)
+                || (reader.width, reader.height)
+                    != decode_size(source, settings.width, settings.height)
+            {
+                *reader = VideoReader::new(source, settings.width, settings.height);
+            }
+            let (w, h) = (reader.width, reader.height);
+            renderer.upload_video_rgba(clip, w, h, reader.frame_at(*source_time)?);
         }
     }
+    readers.retain(|clip, _| {
+        scene
+            .layers
+            .iter()
+            .any(|layer| matches!(layer, Layer::Video {clip: active, ..} if active == clip))
+    });
     renderer.render(&scene);
     let pixels = renderer.read_output()?;
     let image = RgbaImage {
@@ -570,8 +600,8 @@ impl Exports {
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut jobs = self.jobs.lock();
-            if jobs.contains_key(&project.id) {
-                return Err("an export is already running for this project".to_owned());
+            if !jobs.is_empty() {
+                return Err("an export is already running; wait for it or cancel it before starting another".to_owned());
             }
             if jobs.values().any(|job| job.output == output) {
                 return Err("another export is writing to that file".to_owned());
@@ -712,7 +742,18 @@ fn heard_segments(project: &Project, start: i64, end: i64) -> Vec<AudioSegment> 
 
 /// One sound's filter chain, from input `input` to the label `[a{index}]`:
 /// its part of the source, mutes, tempo, volume, fades, and delay to its place.
+#[cfg(test)]
 fn segment_chain(input: usize, index: usize, segment: &AudioSegment) -> String {
+    segment_chain_with_fades(input, index, segment, 0.0, segment.duration)
+}
+
+fn segment_chain_with_fades(
+    input: usize,
+    index: usize,
+    segment: &AudioSegment,
+    elapsed: f64,
+    original_duration: f64,
+) -> String {
     let mut chain = format!(
         "[{input}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={:.6}:duration={:.6},asetpts=PTS-STARTPTS",
         segment.source_in,
@@ -728,6 +769,9 @@ fn segment_chain(input: usize, index: usize, segment: &AudioSegment) -> String {
         chain.push_str(&format!(",atempo={step:.6}"));
         tempo /= step;
     }
+    if elapsed > 0.0 {
+        chain.push_str(&format!(",asetpts=PTS+{elapsed:.9}/TB"));
+    }
     chain.push_str(&format!(",volume={:.3}dB", segment.volume_db));
     if segment.fade_in > 0.0 {
         chain.push_str(&format!(",afade=t=in:st=0:d={:.4}", segment.fade_in));
@@ -735,9 +779,12 @@ fn segment_chain(input: usize, index: usize, segment: &AudioSegment) -> String {
     if segment.fade_out > 0.0 {
         chain.push_str(&format!(
             ",afade=t=out:st={:.4}:d={:.4}",
-            (segment.duration - segment.fade_out).max(0.0),
+            (original_duration - segment.fade_out).max(0.0),
             segment.fade_out
         ));
+    }
+    if elapsed > 0.0 {
+        chain.push_str(",asetpts=PTS-STARTPTS");
     }
     let delay = (segment.start * 1000.0).round() as i64;
     chain.push_str(&format!(",adelay={delay}|{delay}[a{index}]"));
@@ -756,7 +803,7 @@ fn mute_filter(segment: &AudioSegment) -> Option<String> {
         .map(|mute| (mute.from - segment.source_in, mute.to - segment.source_in))
         .filter(|&(from, to)| to > -fade && from < length + fade)
         .map(|(from, to)| {
-            format!("(1-cos(PI*min(max(max(({from:.6})-t,t-({to:.6})),0)/{fade:.6},1)))/2")
+            format!("if(between(t,{:.6},{:.6}),(1-cos(PI*min(max(max(({from:.6})-t,t-({to:.6})),0)/{fade:.6},1)))/2,1)", from-fade, to+fade)
         })
         .collect();
     let gain = gains
@@ -776,6 +823,10 @@ fn export(
     cancel: &AtomicBool,
     mut progress: impl FnMut(f32),
 ) -> Result<(), String> {
+    let pending = crate::broll::smoothing_pending(&project.id);
+    if !pending.is_empty() {
+        crate::diag::info("export", format!("exporting current timeline snapshot; {} optional optical-flow renders still pending", pending.len()));
+    }
     let settings = project.settings;
     let (width, height) = (settings.width, settings.height);
     let fps = settings.fps;
@@ -783,10 +834,30 @@ fn export(
     let offset = plan.start as f64 / project.fps();
     let video = options.format.has_video();
 
+    #[cfg(target_os = "macos")]
+    let native_video = native_video(project, options, plan, output, cache, cancel, &mut progress)?;
+    #[cfg(not(target_os = "macos"))]
+    let native_video: Option<ExportFile> = None;
+    if native_video.is_some() && !plan.audio && options.chapters.is_empty() {
+        if let Some(file) = native_video {
+            std::fs::rename(&file.0, output).map_err(|error| error.to_string())?;
+        }
+        return Ok(());
+    }
     let mut command = Command::new(crate::tools::ffmpeg());
-    command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+    command.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-filter_complex_threads",
+        "2",
+    ]);
     let mut inputs = 0;
-    if video {
+    if let Some(file) = &native_video {
+        command.arg("-i").arg(&file.0);
+        inputs += 1;
+    } else if video {
         command.args([
             "-f",
             "rawvideo",
@@ -802,7 +873,7 @@ fn export(
         inputs += 1;
     }
     let mut graph = Vec::new();
-    if video {
+    if video && native_video.is_none() {
         graph.push(crate::export::video_graph(
             options,
             (width, height),
@@ -814,17 +885,46 @@ fn export(
     } else {
         Vec::new()
     };
-    for (index, segment) in segments.iter().enumerate() {
+    for (index, original) in segments.iter().enumerate() {
+        let from = original.start.max(offset);
+        let to = (original.start + original.duration).min(offset + seconds);
+        let elapsed = from - original.start;
+        let mut segment = original.clone();
+        segment.source_in += elapsed * segment.speed;
+        segment.start = (from - offset).max(0.0);
+        segment.duration = to - from;
         // heard_segments only keeps sounds whose media is there.
         let Some(media) = project.media(&segment.media) else {
             continue;
         };
         command
-            .args(["-protocol_whitelist", "file,pipe", "-i"])
+            .args([
+                "-threads",
+                "1",
+                "-ss",
+                &format!("{:.6}", segment.source_in),
+                "-t",
+                &format!("{:.6}", segment.duration * segment.speed),
+                "-protocol_whitelist",
+                "file,pipe",
+                "-i",
+            ])
             .arg(&media.path);
         let input = inputs;
         inputs += 1;
-        graph.push(segment_chain(input, index, segment));
+        let mut sought = segment.clone();
+        sought.source_in = 0.0;
+        for mute in &mut sought.mutes {
+            mute.from -= segment.source_in;
+            mute.to -= segment.source_in;
+        }
+        graph.push(segment_chain_with_fades(
+            input,
+            index,
+            &sought,
+            elapsed,
+            original.duration,
+        ));
     }
     if !segments.is_empty() {
         let mixed: String = (0..segments.len())
@@ -832,7 +932,7 @@ fn export(
             .collect();
         // Mixed on the edit's clock, then cut to the span.
         let mut mix = format!(
-            "{mixed}amix=inputs={}:normalize=0:dropout_transition=0,apad,atrim=start={offset:.6}:duration={seconds:.6},asetpts=PTS-STARTPTS",
+            "{mixed}amix=inputs={}:normalize=0:dropout_transition=0,apad,atrim=start=0:duration={seconds:.6},asetpts=PTS-STARTPTS",
             segments.len()
         );
         if let Some(lufs) = options.loudness {
@@ -856,9 +956,18 @@ fn export(
     if let Some(file) = &chapters {
         command.args(["-f", "ffmetadata", "-i"]).arg(&file.0);
     }
-    command.args(["-filter_complex", &graph.join(";")]);
+    if !graph.is_empty() {
+        command.args(["-filter_complex", &graph.join(";")]);
+    }
     if video {
-        command.args(["-map", "[vout]"]);
+        command.args([
+            "-map",
+            if native_video.is_some() {
+                "0:v:0"
+            } else {
+                "[vout]"
+            },
+        ]);
     }
     if !segments.is_empty() {
         command.args(["-map", "[aout]"]);
@@ -866,10 +975,18 @@ fn export(
     if chapters.is_some() {
         command.args(["-map_chapters", &inputs.to_string()]);
     }
+    command.args(crate::export::codec_args(options, plan, project.fps())?);
+    if native_video.is_some() {
+        command.args(["-c:v", "copy"]);
+    }
     command
-        .args(crate::export::codec_args(options, plan, project.fps())?)
+        .args(["-threads", "2"])
         .arg(output)
-        .stdin(if video { Stdio::piped() } else { Stdio::null() })
+        .stdin(if video && native_video.is_none() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     let mut encoder = command
@@ -886,7 +1003,18 @@ fn export(
     });
 
     let result = match stdin {
-        Some(stdin) => render_frames(project, plan, stdin, cache, cancel, &mut progress),
+        Some(mut stdin) => render_frames(
+            project,
+            plan,
+            |_, pixels| {
+                stdin
+                    .write_all(pixels)
+                    .map_err(|_| "the encoder stopped early".to_owned())
+            },
+            cache,
+            cancel,
+            &mut progress,
+        ),
         // Sound only: FFmpeg does all the work; wait for it, staying cancellable.
         None => loop {
             if cancel.load(Ordering::Acquire) {
@@ -917,11 +1045,76 @@ fn export(
     Ok(())
 }
 
+/// The standard Mac video path uses AVFoundation for decoding and encoding;
+/// the compositor remains shared with the browser. Nonstandard shapes/rates and
+/// software-quality exports keep the compatibility encoder.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn native_video(
+    project: &Project,
+    options: &ExportOptions,
+    plan: &Plan,
+    output: &Path,
+    cache: &Path,
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(f32),
+) -> Result<Option<ExportFile>, String> {
+    use crate::export::{Format, Shape};
+    if !options.hardware
+        || std::env::var_os("EDIT_FFMPEG_VIDEO").is_some()
+        || !matches!(options.format, Format::H264 | Format::Hevc)
+        || options.shape != Shape::Original
+        || (plan.width, plan.height) != (project.settings.width, project.settings.height)
+        || options
+            .fps
+            .is_some_and(|fps| fps > 0 && fps != project.settings.fps)
+    {
+        return Ok(None);
+    }
+    let mut name = output.as_os_str().to_owned();
+    name.push(".native.mp4");
+    let temporary = ExportFile(PathBuf::from(name));
+    let rate = crate::export::video_bitrate(options, plan, project.fps())?;
+    let mut writer = match crate::mac_media::Writer::open(
+        &temporary.0,
+        plan.width,
+        plan.height,
+        project.fps(),
+        options.format == Format::Hevc,
+        rate,
+        (project.settings.fps * 2) as i32,
+    ) {
+        Ok(writer) => writer,
+        Err(error) => {
+            crate::diag::warn(
+                "export",
+                format!("native encoder unavailable: {error}; using FFmpeg"),
+            );
+            return Ok(None);
+        }
+    };
+    crate::diag::time_on("export", "export: native video", &project.id, || {
+        render_frames(
+            project,
+            plan,
+            |frame, pixels| writer.frame(frame, pixels),
+            cache,
+            cancel,
+            progress,
+        )?;
+        if cancel.load(Ordering::Acquire) {
+            return Err("cancelled".to_owned());
+        }
+        writer.finish(plan.end - plan.start)
+    })?;
+    Ok(Some(temporary))
+}
+
 /// Renders frames `[plan.start, plan.end)` into the encoder's stdin (closed when done).
 fn render_frames(
     project: &Project,
     plan: &Plan,
-    mut stdin: std::process::ChildStdin,
+    mut write_frame: impl FnMut(i64, &[u8]) -> Result<(), String>,
     cache: &Path,
     cancel: &AtomicBool,
     progress: &mut impl FnMut(f32),
@@ -966,9 +1159,7 @@ fn render_frames(
         });
         renderer.render(&scene);
         let pixels = renderer.read_output()?;
-        stdin
-            .write_all(&pixels)
-            .map_err(|_| "the encoder stopped early".to_owned())?;
+        write_frame(frame - plan.start, &pixels)?;
         if last_report.elapsed() > Duration::from_millis(200) {
             last_report = Instant::now();
             progress((frame - plan.start) as f32 / total as f32);
@@ -1062,6 +1253,40 @@ mod tests {
             .iter()
             .map(|b| f32::from_le_bytes(*b))
             .collect();
+        // Seeking at the input must keep the same mute positions and samples.
+        let mut sought = segment.clone();
+        sought.source_in = 0.0;
+        for mute in &mut sought.mutes {
+            mute.from -= segment.source_in;
+            mute.to -= segment.source_in;
+        }
+        let output = Command::new(crate::tools::ffmpeg())
+            .args(["-v", "error", "-ss", "1", "-t", "2.5", "-i"])
+            .arg(&tone)
+            .args([
+                "-filter_complex",
+                &segment_chain(0, 0, &sought),
+                "-map",
+                "[a0]",
+                "-f",
+                "f32le",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let optimized: Vec<f32> = output
+            .stdout
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect();
+        assert_eq!(optimized, samples);
         // As the export encodes it.
         let encoded = Command::new(crate::tools::ffmpeg())
             .args(["-hide_banner", "-loglevel", "error", "-i"])
@@ -1100,5 +1325,58 @@ mod tests {
         let ramp = rms(&samples, 1.5045, 1.5075) / full;
         assert!((0.3..0.7).contains(&ramp), "ramping: {ramp}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_partial_export_preserves_a_fade_already_in_progress() {
+        let segment = AudioSegment {
+            clip: "a".into(),
+            media: "m".into(),
+            start: 0.0,
+            duration: 0.5,
+            source_in: 0.0,
+            speed: 1.0,
+            volume_db: 0.0,
+            fade_in: 2.0,
+            fade_out: 1.0,
+            mutes: vec![],
+        };
+        let chain = segment_chain_with_fades(0, 0, &segment, 1.0, 4.0);
+        let output = Command::new(crate::tools::ffmpeg())
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=0.5|0.5:d=0.5:s=48000:c=stereo",
+                "-filter_complex",
+                &chain,
+                "-map",
+                "[a0]",
+                "-f",
+                "f32le",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let samples: Vec<f32> = output
+            .stdout
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect();
+        assert!(
+            (samples[0] - 0.25).abs() < 0.001,
+            "mid-fade starts at original gain: {}",
+            samples[0]
+        );
+        assert!((samples[samples.len() - 2] - 0.375).abs() < 0.001);
     }
 }

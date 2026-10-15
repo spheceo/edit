@@ -933,6 +933,8 @@ pub async fn import_paths(
         let path = PathBuf::from(&path);
         let path = match path.canonicalize() {
             Ok(path) if path.is_file() && media::is_media_path(&path) => path,
+            #[cfg(target_os = "macos")]
+            Ok(path) if path.is_file() && crate::broll::is_image_path(&path) => path,
             // A still becomes 30 s of footage (it then plays, scales and exports like any clip).
             Ok(path) if path.is_file() && crate::broll::is_image_path(&path) => {
                 let name = path
@@ -1048,7 +1050,7 @@ pub fn place_at_end(project: &mut Project, media_id: &str) {
         .find(|track| track.kind == TrackKind::Audio)
         .map(|track| track.id.clone());
     let link = (media.kind == MediaKind::Video && media.has_audio).then(|| project.fresh_id("l"));
-    if media.kind == MediaKind::Video {
+    if media.kind != MediaKind::Audio {
         if let Some(track) = video_track {
             let id = project.fresh_id("c");
             project.clips.push(Clip {
@@ -1552,19 +1554,18 @@ async fn start_export(
     UrlPath(id): UrlPath<String>,
     body: Option<Json<ExportBody>>,
 ) -> ApiResult {
-    // Shots still being smoothed would export unsmoothed.
-    if !crate::broll::wait_for_smoothing(&id, std::time::Duration::from_secs(20 * 60)).await {
-        return Err(bad(
-            "B-roll is still being smoothed; try the export again in a few minutes".to_owned(),
-        ));
+    let (path, options) = body.map_or((None, Default::default()), |Json(body)| {
+        (body.path, body.options)
+    });
+    if options.wait_for_smoothing
+        && !crate::broll::wait_for_smoothing(&id, std::time::Duration::from_secs(120)).await
+    {
+        return Err(bad("optional optical flow is still running; export the current timeline with wait_for_smoothing false or wait for it to finish"));
     }
     let live = app
         .store
         .get(&id)
         .ok_or_else(|| not_found("no such project"))?;
-    let (path, options) = body.map_or((None, Default::default()), |Json(body)| {
-        (body.path, body.options)
-    });
     let path = path
         .filter(|path| !path.trim().is_empty())
         .map(|path| expand_home(&path))

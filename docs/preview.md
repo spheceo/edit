@@ -9,6 +9,11 @@ The server makes two preview files per source (`crates/edit/src/media.rs`):
 B-frames (a few Mbit/s, where the old all-intra proxies ran at 15–85), and
 `preview.m4a`, AAC. Picture and sound are fetched separately, so decoding sound
 never downloads video. Until `preview.done` exists both URLs serve the original.
+On macOS, AVFoundation/VideoToolbox produces the preview video and light copy
+with a bounded pixel-buffer pool. Audio remains a separate FFmpeg job. Imports
+and optional optical flow share one background slot, rather than independent
+limits that add up. Photos use ImageIO and remain images: no synthetic video,
+video proxy or optical-flow job is needed for a still.
 
 `decoder.ts` creates separate module workers for video and audio, using
 `decode.worker.ts` and Mediabunny for demuxing and WebCodecs decoding. Bytes come
@@ -58,6 +63,16 @@ audio nodes. Use these alongside
 browser tracing when checking cold seeks, repeated forward/reverse scrubs and cuts.
 Unsupported codecs surface an error; completion of the H.264/AAC proxy changes the
 source URL and clears the error. There is no hidden HTML video playback path.
+
+Native frame reviews and exports use persistent AVAssetReader cursors on macOS,
+with Accelerate scaling/rotation and nearest-source-frame selection. Standard
+H.264/HEVC hardware exports encode through AVAssetWriter, then copy that video
+when mixing audio/chapters. The compositor remains shared with the browser.
+Custom output shapes, resizes/rates, software quality modes and other formats use
+the FFmpeg encoder; unsupported native decoders fall back per source and log why.
+`EDIT_FFMPEG_VIDEO=1` selects the compatibility video backend for comparison.
+Native handles drain temporary objects per frame, readers are discarded when
+their clips leave the scene, and the encoder pool allows at most six buffers.
 
 To measure over a realistic link, run the editor through a bandwidth- and
 latency-limited proxy (Chrome's `--proxy-server`; DevTools throttling does not reach

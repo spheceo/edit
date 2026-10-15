@@ -392,8 +392,22 @@ fn cache_key(media_key: &str, window: &Window, lines: &[WatchLine]) -> String {
 
 /// A small MP4 of the window with its sound: 360p at 3 fps, mono AAC 48k.
 async fn cut(source: &Path, window: &Window, out: &Path) -> Result<(), String> {
+    let _slot = crate::media::background_slots()
+        .acquire()
+        .await
+        .map_err(|error| error.to_string())?;
     let output = tokio::process::Command::new(crate::tools::ffmpeg())
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-ss"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-threads",
+            "2",
+            "-filter_threads",
+            "1",
+            "-ss",
+        ])
         .arg(format!("{:.3}", window.start.max(0.0)))
         .arg("-t")
         .arg(format!("{:.3}", window.end - window.start))
@@ -405,7 +419,9 @@ async fn cut(source: &Path, window: &Window, out: &Path) -> Result<(), String> {
             "-map",
             "0:a:0?",
             "-vf",
-            "scale=-2:360,fps=3",
+            "fps=3,scale=-2:360",
+            "-threads",
+            "2",
             "-c:v",
             "libx264",
             "-preset",
@@ -427,6 +443,7 @@ async fn cut(source: &Path, window: &Window, out: &Path) -> Result<(), String> {
         ])
         .arg(out)
         .stdin(Stdio::null())
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|error| format!("ffmpeg: {error}"))?;
@@ -614,6 +631,7 @@ pub async fn watch_window(
             return Ok((answer, 0.0, true));
         }
     }
+    api_key()?;
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let clip = dir.join(format!("{key}.mp4"));
     let what = format!(
@@ -911,7 +929,6 @@ impl Part {
 /// Watches the project's footage (the sound repack_subtitles subtitles):
 /// corrects who says each line in the transcripts and sets the segments.
 pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Result<Value, String> {
-    api_key()?;
     let project = app.store.get(project_id).ok_or("no such project")?.project;
     let fps = project.fps();
     let duration = project.duration();
@@ -990,6 +1007,36 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
                 windows: windows(&spans, from, to),
                 lines,
             });
+        }
+    }
+    // Corrections can change line grouping, invalidating the original window
+    // keys on the very next run. Remember the *completed* transcript state too.
+    // This also allows an unchanged, already-watched project to work offline.
+    let receipt = app
+        .store
+        .cache_dir()
+        .join("watch-projects")
+        .join(format!("{project_id}.json"));
+    if !options.force {
+        let key = completed_key(&project, &transcripts, set_segments);
+        if let Some(mut report) = std::fs::read(&receipt)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .filter(|value| value.get("key").and_then(Value::as_str) == Some(key.as_str()))
+            .and_then(|value| value.get("report").cloned())
+        {
+            if let Some(fields) = report.as_object_mut() {
+                let windows = fields.get("windows").cloned().unwrap_or(json!(0));
+                fields.insert("cached".to_owned(), windows);
+                fields.insert(
+                    "rev".to_owned(),
+                    json!(app.store.get(project_id).ok_or("no such project")?.rev),
+                );
+                fields.insert("cost".to_owned(), json!(0));
+                fields.insert("lines_changed".to_owned(), json!(0));
+                fields.insert("examples".to_owned(), json!([]));
+            }
+            return Ok(report);
         }
     }
     // Every window of every part, a few at a time.
@@ -1223,7 +1270,7 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
             format!("{project_id}: {} windows failed", failed.len()),
         );
     }
-    Ok(json!({
+    let report = json!({
         "rev": rev,
         "windows": answers.len() + failed.len(),
         "cached": cached,
@@ -1239,7 +1286,73 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
             "kind": segment.kind,
             "note": segment.note,
         })).collect::<Vec<_>>(),
-    }))
+    });
+    if failed.is_empty() {
+        if let Some(current) = app
+            .store
+            .get(project_id)
+            .filter(|live| watched_uses(&live.project) == watched_uses(&project))
+        {
+            // Use the corrected words from disk, not the pre-watch snapshots.
+            for (id, transcript) in &mut transcripts {
+                if let Some(media) = current.project.media(id) {
+                    if let Ok(bytes) =
+                        std::fs::read(app.media.paths(Path::new(&media.path)).transcript)
+                    {
+                        if let Ok(updated) = serde_json::from_slice(&bytes) {
+                            *transcript = updated;
+                        }
+                    }
+                }
+            }
+            let key = completed_key(&current.project, &transcripts, set_segments);
+            let saved = json!({"key":key,"report":report});
+            if let Some(parent) = receipt.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let result = serde_json::to_vec(&saved)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    crate::store::write_atomic(&receipt, &bytes).map_err(|error| error.to_string())
+                });
+            if let Err(error) = result {
+                crate::diag::warn(
+                    "watch",
+                    format!("saving completed watch for {project_id}: {error}"),
+                );
+            }
+        }
+    }
+    Ok(report)
+}
+
+fn watched_uses(project: &edit_core::Project) -> Value {
+    let mut uses: Vec<_> = crate::subtitles::footage_sound(project, 0, project.duration()).iter().map(|clip| {
+        let value = serde_json::to_value(clip).unwrap_or_default();
+        let source = clip.media_id().and_then(|id| project.media(id)).map(|media| crate::media::media_key(Path::new(&media.path)));
+        json!({"source":source,"start":clip.start,"duration":clip.duration,"source_in":value.get("source_in"),"speed":value.get("speed")})
+    }).collect();
+    uses.sort_by_key(Value::to_string);
+    json!({"fps":project.settings.fps,"uses":uses})
+}
+
+fn completed_key(
+    project: &edit_core::Project,
+    transcripts: &BTreeMap<String, crate::transcribe::Transcript>,
+    set_segments: bool,
+) -> String {
+    let words: BTreeMap<_, _> = transcripts
+        .iter()
+        .map(|(id, transcript)| (id, &transcript.words))
+        .collect();
+    let data = json!({"model":MODEL,"system":WATCH_SYSTEM,"uses":watched_uses(project),"words":words,
+        "set_segments":set_segments,"segments":if set_segments {Some(&project.segments)} else {None}});
+    let mut hash = Sha256::new();
+    hash.update(data.to_string().as_bytes());
+    hash.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// The value given most often (the first of a tie).
@@ -1289,6 +1402,56 @@ pub fn lines_of(words: &[crate::transcribe::Word], from: f64, to: f64) -> Vec<Wa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_watch_key_ignores_cosmetic_edits_but_not_speech_or_timing() {
+        let mut p = edit_core::Project::new("p".into(), "case".into(), Default::default());
+        p.media.push(edit_core::Media {
+            id: "m".into(),
+            name: "source".into(),
+            path: "/unused".into(),
+            kind: edit_core::MediaKind::Video,
+            duration: 10.0,
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            has_audio: true,
+            markers: vec![],
+        });
+        let track = p
+            .tracks
+            .iter()
+            .find(|track| track.kind == edit_core::TrackKind::Audio)
+            .unwrap()
+            .id
+            .clone();
+        p.clips.push(serde_json::from_value(json!({"id":"audio","track":track,"start":0,"duration":300,"type":"audio","media":"m"})).unwrap());
+        let t = crate::transcribe::Transcript {
+            model: "test".into(),
+            language: None,
+            words: vec![crate::transcribe::Word {
+                text: "hello".into(),
+                start: 1.0,
+                end: 1.5,
+                speaker: Some("speaker_0".into()),
+            }],
+            speakers: Default::default(),
+            roles: Default::default(),
+            colors: Default::default(),
+        };
+        let mut transcripts = BTreeMap::from([("m".into(), t)]);
+        let original = completed_key(&p, &transcripts, false);
+        p.clips[0].name = Some("renamed".into());
+        assert_eq!(completed_key(&p, &transcripts, false), original);
+        // A correction's output gets its own receipt, so regrouped lines do not
+        // force another paid watch. Changing it later invalidates that receipt.
+        transcripts.get_mut("m").unwrap().words[0].speaker = Some("corrected_voice".into());
+        let corrected = completed_key(&p, &transcripts, false);
+        assert_ne!(corrected, original);
+        assert_eq!(completed_key(&p, &transcripts, false), corrected);
+        p.clips[0].duration -= 30;
+        assert_ne!(completed_key(&p, &transcripts, false), corrected);
+    }
 
     fn seg(start: i64, end: i64, kind: SegmentKind) -> Segment {
         Segment {

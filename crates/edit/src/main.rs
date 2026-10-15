@@ -5,10 +5,14 @@ mod captions;
 mod cutin;
 mod diag;
 mod drive;
+mod edit_plan;
+mod edit_review;
 mod export;
 mod fulledit;
 mod guard;
 mod library;
+#[cfg(target_os = "macos")]
+mod mac_media;
 mod mcp;
 mod media;
 mod render;

@@ -5,6 +5,7 @@ import { applyAgentEvent, openAgent } from "./agent";
 import { api, ApiError, useConnection } from "./api";
 import { addContext, note } from "./diagnostics";
 import { validateProject } from "./edit";
+import { shareProject } from "./project-sharing";
 import { forgetSetting, readSetting, writeSetting } from "./storage";
 import type { MediaStatus, Project, ScriptJob } from "./types";
 
@@ -201,7 +202,8 @@ export const useEditor = create<EditorState>((set, get) => ({
     // The live event for our own change can land first: it bumps rev but leaves the project
     // to this response. Another client's event may instead have brought the change already.
     if (rev === get().rev && JSON.stringify(project) === JSON.stringify(next)) return;
-    set({ project: next, rev, past: [...past.slice(-HISTORY_LIMIT), project], future: [], dirty: false });
+    next = shareProject(project, next);
+    set({ project: next, rev, past: next === project ? past : [...past.slice(-HISTORY_LIMIT), project], future: [], dirty: false });
   },
 
   select: (ids, mode = "replace") => {
@@ -287,7 +289,7 @@ async function saveProject(state: EditorState) {
     if (error instanceof ApiError && error.status === 409) {
       const body = error.body as { rev: number; project: Project };
       const current = useEditor.getState();
-      useEditor.setState({ project: body.project, rev: body.rev, dirty: false, gestureBase: null, past: [...current.past.slice(-HISTORY_LIMIT), current.project ?? project], future: [] });
+      useEditor.setState({ project: shareProject(current.project ?? project, body.project), rev: body.rev, dirty: false, gestureBase: null, past: [...current.past.slice(-HISTORY_LIMIT), current.project ?? project], future: [] });
       useEditor.getState().toast("The project changed elsewhere; showing the latest version.", "info");
     } else if (error instanceof ApiError && error.status === 400) {
       // The server refused the change: show what it has, never a version that can't be saved.
@@ -351,7 +353,7 @@ function catchUp() {
     .project(project.id)
     .then(({ rev, project: fresh }) => {
       const now = useEditor.getState();
-      if (now.project?.id === fresh.id && !now.dirty && rev > now.rev) useEditor.setState({ rev, project: fresh });
+      if (now.project?.id === fresh.id && !now.dirty && rev > now.rev) useEditor.setState({ rev, project: shareProject(now.project, fresh) });
     })
     .catch(() => {});
   void api
@@ -383,12 +385,13 @@ export function connectEvents() {
       }
       if (event.rev <= state.rev) return;
       clearTimeout(saveTimer);
+      const next = shareProject(project, event.project);
       useEditor.setState({
-        project: event.project,
+        project: next,
         rev: event.rev,
         dirty: false,
         gestureBase: null,
-        past: [...state.past.slice(-HISTORY_LIMIT), project],
+        past: next === project ? state.past : [...state.past.slice(-HISTORY_LIMIT), project],
         future: [],
         selection: state.selection.filter((id) => event.project.clips.some((clip: { id: string }) => clip.id === id)),
       });

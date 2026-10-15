@@ -17,15 +17,15 @@ pub const STEPS: &[(&str, &str)] = &[
     ),
     (
         "Cut-ins",
-        "THE CUT-INS: cover every cut-in after the intro with B-roll, following the house style: THE DATE CUT-IN opens on map_view with the date and place label; B-ROLL IN CUT-INS from the source footage timed to the narration's words, shots changing on its phrases (one cover_cut_in per cut-in); EMPHASIS IN THE NARRATION runs where the footage really shows what the words name; INTRODUCING A PERSON callouts and vignettes where the narration introduces someone; QUOTE CALLOUTS on the lines that carry the story; TRANSITIONS varied (a glitch at most once or twice in the whole video) and every transition heard. Leave the outro's cut-ins for the outro step. Work through them in order, sending each cut-in's extras in one batch, and check each with a contact_sheet. Then list what each cut-in got.",
+        "THE CUT-INS: cover every cut-in after the intro with B-roll, following the house style: THE DATE CUT-IN opens on map_view with the date and place label; B-ROLL IN CUT-INS from the source footage timed to the narration's words, shots changing on its phrases (cover_cut_in operations in apply_edit_plan); EMPHASIS IN THE NARRATION runs where the footage really shows what the words name; INTRODUCING A PERSON callouts and vignettes where the narration introduces someone; QUOTE CALLOUTS on the lines that carry the story; TRANSITIONS varied (a glitch at most once or twice in the whole video) and every transition heard. Leave the outro's cut-ins for the outro step. Read get_edit_context with include_transcript once for this stage (it includes all cut-in narration word timings). Pick shots for all cut-ins, then apply them and their extras together in one apply_edit_plan. Use native frame sampling; do not start optical-flow smoothing. Request one review_frames contact sheet spanning the new layouts; fix only concrete defects in one follow-up plan. Then list what each cut-in got.",
     ),
     (
         "Subtitles",
-        "SUBTITLES (house style AFTER THE INTRO, SPEAKERS, HOUSE WORDS ON SCREEN): run watch_footage, then add_subtitles for everything after the intro (neglect: true for a child abuse or neglect case); give each person one short label and one colour with update_clips; check stretches where someone speaks with no subtitle and lines that read oddly; check a few frames across the video (bodycam stretches, phone calls).",
+        "SUBTITLES (house style AFTER THE INTRO, SPEAKERS, HOUSE WORDS ON SCREEN): run watch_footage, then add_subtitles for everything after the intro (neglect: true for a child abuse or neglect case); give each person one short label and one colour with update_clips; run review_edit for cached transcript coverage and fix only the uncovered stretches it reports (missing transcripts are reported separately), plus lines that read oddly; check a few frames across the video (bodycam stretches, phone calls).",
     ),
     (
         "Outro",
-        "THE OUTRO (house style THE OUTRO): build the charges screens over the outro's cut-ins from what the research found: per person arrested, in order, their picture on the left (the mugshot with use_found, else a clear still_frame of them from late in the footage), the black gradient, and their exact charges in red glowing left-aligned text, held while the voice-over talks about them; people charged together share one screen. Remove the outro's cards and words as the screens replace them, and end the video on the outro's last word. Check every screen with render_frame and say which charges you used and where they came from.",
+        "THE OUTRO (house style THE OUTRO): build the charges screens over the outro's cut-ins from what the research found: per person arrested, in order, their picture on the left (the mugshot with use_found, else a clear still_frame of them from late in the footage), the black gradient, and their exact charges in red glowing left-aligned text, held while the voice-over talks about them; people charged together share one screen. Remove the outro's cards and words as the screens replace them, and end the video on the outro's last word. Check the screens together in one contact sheet and say which charges you used and where they came from.",
     ),
     (
         "Music and sound",
@@ -33,7 +33,7 @@ pub const STEPS: &[(&str, &str)] = &[
     ),
     (
         "Final pass",
-        "FINAL PASS: go through the whole video section by section with contact_sheet: gaps or slivers, clips floating with nothing under them (tidy_tracks), redactions covered, captions or subtitles on the wrong person, transitions that repeat, sound levels (measure_audio). Fix what you find, then run mute_house_words over the whole timeline last. Finish with a short summary of the finished edit: its length, the sections, and everything you weren't sure about that the user should look at.",
+        "FINAL PASS: start with review_edit for a structural audit and one contact sheet across the edited sections. Reuse earlier visual reviews for unchanged sections. Look for: gaps or slivers, clips floating with nothing under them (tidy_tracks), redactions covered, captions or subtitles on the wrong person, transitions that repeat, sound levels (measure_audio). Fix what you find, then run mute_house_words over the whole timeline last. Finish with a short summary of the finished edit: its length, the sections, and everything you weren't sure about that the user should look at.",
     ),
 ];
 
@@ -48,7 +48,7 @@ pub fn prompt(index: usize, notes: &str) -> Option<String> {
         .collect();
     let notes = notes.trim();
     Some(format!(
-        "(Edit, running the full edit) Step {} of {}: {name}. The whole plan: {}. You're working through it on your own: Edit sends the next step when you finish this one. So do this step completely and stop there (don't start the next one), don't ask the user anything (decide yourself and keep a note of what you weren't sure about for the final summary), and work fast (batch, cover_cut_in, update_clips).{}\n\n{ask}",
+        "(Edit, running the full edit) Step {} of {}: {name}. The whole plan: {}. You're working through it on your own: Edit sends the next step when you finish this one. So do this step completely and stop there (don't start the next one), don't ask the user anything (decide yourself and keep a note of what you weren't sure about for the final summary), and work fast: read get_edit_context once, plan the entire stage, apply its known timeline operations in one apply_edit_plan with base_rev and optional review_frames, then make at most one focused correction pass for concrete failures. Use cached narration word timings and source loudness; do not repeat full project reads, transcript reads or visual reviews of unchanged work. Batch any independent source lookups. Optical-flow smoothing is opt-in, never part of a normal edit. The target is ten minutes for the whole edit; report external blockers and uncertain creative choices instead of repeatedly retrying unavailable sources.{}\n\n{ask}",
         index + 1,
         STEPS.len(),
         plan.join(", "),

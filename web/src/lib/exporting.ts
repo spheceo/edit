@@ -69,7 +69,7 @@ export const DEFAULTS: Omit<ExportOptions, "range" | "chapters"> = {
   fps: null,
   quality: "high",
   target_mb: null,
-  hardware: false,
+  hardware: true,
   audio: true,
   loudness: -14,
 };

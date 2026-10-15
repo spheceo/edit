@@ -133,8 +133,10 @@ pub fn media_frames(
         })
         .collect();
     let mut images = Vec::new();
+    let mut reader = crate::render::VideoReader::new(media, 480, 480);
     for time in &times {
-        let (width, height, pixels) = crate::render::grab_frame(media, *time, 480, 480)?;
+        let (width, height) = (reader.width, reader.height);
+        let pixels = reader.frame_at(*time)?.to_vec();
         images.push(RgbaImage {
             width,
             height,
@@ -288,6 +290,9 @@ pub async fn smooth_slow_motion(
         |stem| stem.to_string_lossy().into_owned(),
     );
     let key = fingerprint(&[
+        "bounded-optical-flow-v2",
+        &crate::media::media_key(Path::new(&source.path)),
+        &format!("{}x{}", project.settings.width, project.settings.height),
         &source.path,
         &format!("{source_in:.4}"),
         &format!("{length:.4}"),
@@ -301,6 +306,10 @@ pub async fn smooth_slow_motion(
             .acquire()
             .await
             .map_err(|error| error.to_string())?;
+        let _work = crate::media::background_slots()
+            .acquire()
+            .await
+            .map_err(|error| error.to_string())?;
         let partial = dir.join(format!("{stem}-{key}.partial.mp4"));
         let (input, start) = (PathBuf::from(&source.path), *source_in);
         let speed = *speed;
@@ -308,38 +317,38 @@ pub async fn smooth_slow_motion(
         if out.is_file() {
             return swap_in_smooth(app, project_id, &clip, &out, fps).await;
         }
-        let result = tokio::task::spawn_blocking(move || {
-            Command::new(crate::tools::ffmpeg())
-                .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", &format!("{start:.4}"), "-t", &format!("{length:.4}"), "-i"])
-                .arg(&input)
-                .args([
-                    "-an",
-                    "-vf",
-                    &format!(
-                        "setpts=PTS/{speed:.6},minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,format=yuv420p"
-                    ),
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    "15",
-                    // x264's own frame threads cost ~350 MB at 1080p; the
-                    // interpolation is the slow part anyway.
-                    "-threads",
-                    "2",
-                    "-movflags",
-                    "+faststart",
-                ])
-                .arg(&partial)
-                .stdin(Stdio::null())
-                .output()
-                .map(|output| (output, partial))
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| format!("ffmpeg: {error}"))?;
-        let (output, partial) = result;
+        // A queued request may already be obsolete. Do not spend minutes on it.
+        let current = app.store.get(project_id).ok_or("project vanished")?.project;
+        let current = current
+            .clip(clip_id)
+            .ok_or("clip was removed before smoothing")?;
+        if source_of(&current.content) != source_of(&clip.content)
+            || current.duration > clip.duration
+        {
+            return Err(format!(
+                "{clip_id} changed before smoothing started; skipped"
+            ));
+        }
+        let (width, height) = (project.settings.width, project.settings.height);
+        let mut command = tokio::process::Command::new(crate::tools::ffmpeg());
+        command.args(["-hide_banner", "-loglevel", "error", "-y", "-threads", "2", "-filter_threads", "1",
+            "-ss", &format!("{start:.4}"), "-t", &format!("{length:.4}"), "-i"])
+            .arg(&input)
+            .args(["-an", "-vf", &format!(
+                "scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setpts=PTS/{speed:.6},minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,format=yuv420p"),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "15", "-threads", "2", "-movflags", "+faststart"])
+            .arg(&partial).stdin(Stdio::null()).kill_on_drop(true);
+        let output = match tokio::time::timeout(Duration::from_secs(120), command.output()).await {
+            Ok(Ok(output)) => output,
+            result => {
+                let _ = std::fs::remove_file(&partial);
+                return Err(match result {
+                    Ok(Err(error)) => format!("ffmpeg: {error}"),
+                    _ => "optical flow exceeded 120 seconds; kept the original slowed clip"
+                        .to_owned(),
+                });
+            }
+        };
         if !output.status.success() {
             let _ = std::fs::remove_file(&partial);
             return Err(format!(
@@ -362,25 +371,54 @@ async fn swap_in_smooth(
     out: &Path,
     fps: f64,
 ) -> Result<Value, String> {
-    let (_, added, errors) = crate::server::import_paths(
-        app,
-        project_id,
-        vec![out.to_string_lossy().into_owned()],
-        false,
-        "agent",
-    )
-    .await?;
-    let smooth = added.first().cloned().ok_or_else(|| errors.join("; "))?;
-    let clip_id = rendered.id.as_str();
+    let current = app.store.get(project_id).ok_or("project vanished")?.project;
+    let clip = current.clip(&rendered.id).ok_or("the clip went away")?;
+    if source_of(&clip.content) != source_of(&rendered.content) || clip.duration > rendered.duration
+    {
+        return Err(format!(
+            "{} changed while smoothing; kept the current clip",
+            rendered.id
+        ));
+    }
+    let path = out.to_owned();
+    let probe = tokio::task::spawn_blocking(move || crate::media::probe(&path))
+        .await
+        .map_err(|error| error.to_string())??;
+    let path = out.to_string_lossy().into_owned();
     let (_, done) = app.store.update(project_id, "agent", |project| {
-        let clip = project.clip_mut(clip_id).ok_or("the clip went away")?;
+        let clip = project.clip(&rendered.id).ok_or("the clip went away")?;
         if source_of(&clip.content) != source_of(&rendered.content)
             || clip.duration > rendered.duration
         {
             return Err(format!(
-                "{clip_id} changed while it was being smoothed; run smooth_slow_motion on it again"
+                "{} changed while smoothing; kept the current clip",
+                rendered.id
             ));
         }
+        let smooth = match project.media.iter().find(|media| media.path == path) {
+            Some(media) => media.id.clone(),
+            None => {
+                let id = project.fresh_id("m");
+                project.media.push(Media {
+                    id: id.clone(),
+                    name: out
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    path: path.clone(),
+                    kind: probe.kind,
+                    duration: probe.duration,
+                    width: probe.width,
+                    height: probe.height,
+                    fps: probe.fps,
+                    has_audio: probe.has_audio,
+                    markers: Vec::new(),
+                });
+                id
+            }
+        };
+        let clip = project.clip_mut(&rendered.id).ok_or("the clip went away")?;
         if let ClipContent::Video {
             media,
             source_in,
@@ -392,8 +430,9 @@ async fn swap_in_smooth(
             *source_in = 0.0;
             *speed = 1.0;
         }
-        Ok(json!({ "clip": clip_id, "media": smooth, "seconds": clip.duration as f64 / fps }))
+        Ok(json!({"clip":rendered.id, "media":smooth, "seconds":clip.duration as f64 / fps}))
     })?;
+    app.media.ensure(out.to_owned(), probe);
     Ok(done)
 }
 
@@ -411,29 +450,11 @@ fn source_of(content: &ClipContent) -> Option<(&str, f64, f64)> {
     }
 }
 
-/// How many smoothing renders run at once. Motion interpolation keeps about
-/// one core busy each, so several side by side finish a cut-in's shots in
-/// the time of one or two; but a 1080p render holds about a gigabyte, so
-/// memory caps them too (one per 4 GB): on an 8 GB Mac four at once swapped
-/// the whole machine and each took half an hour.
+/// Optical flow is optional and uses one shared background slot. Serializing
+/// it also prevents duplicate requests from writing the same cached file.
 fn smoothing_slots() -> &'static tokio::sync::Semaphore {
     static SLOTS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
-    SLOTS.get_or_init(|| {
-        let cores = std::thread::available_parallelism().map_or(4, |cores| cores.get());
-        let memory_gb = Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .ok()
-            .and_then(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .parse::<u64>()
-                    .ok()
-            })
-            .map_or(8, |bytes| bytes >> 30);
-        let slots = (cores / 2).min(memory_gb as usize / 4).clamp(1, 6);
-        tokio::sync::Semaphore::new(slots)
-    })
+    SLOTS.get_or_init(|| tokio::sync::Semaphore::new(1))
 }
 
 /// Clips being smoothed in the background, by project.

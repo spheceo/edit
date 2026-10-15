@@ -111,6 +111,8 @@ pub struct ExportOptions {
     pub target_mb: Option<f64>,
     /// Encode on the Mac's media engine (VideoToolbox): much faster, a little bigger.
     pub hardware: bool,
+    /// Explicitly wait for optional optical flow; normally export the current snapshot immediately.
+    pub wait_for_smoothing: bool,
     pub audio: bool,
     /// Bring the sound to this integrated loudness (LUFS), e.g. -14 for YouTube.
     pub loudness: Option<f64>,
@@ -128,7 +130,8 @@ impl Default for ExportOptions {
             fps: None,
             quality: Quality::default(),
             target_mb: None,
-            hardware: false,
+            hardware: cfg!(target_os = "macos"),
+            wait_for_smoothing: false,
             audio: true,
             loudness: None,
             chapters: Vec::new(),
@@ -290,6 +293,33 @@ fn audio_bitrate(format: Format, quality: Quality) -> u32 {
         (_, Quality::Balanced) => 192_000,
         (_, Quality::Small) => 128_000,
     }
+}
+
+/// Shared target for the native writer and FFmpeg's hardware encoder.
+#[cfg(target_os = "macos")]
+pub fn video_bitrate(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<u64, String> {
+    if let Some(mb) = options.target_mb {
+        let rate = mb * 8_000_000.0 * 0.94 / plan.seconds(fps)
+            - if plan.audio {
+                f64::from(audio_bitrate(options.format, options.quality))
+            } else {
+                0.0
+            };
+        if !rate.is_finite() || rate < 150_000.0 {
+            return Err("target size is too small".to_owned());
+        }
+        return Ok(rate.round() as u64);
+    }
+    Ok((f64::from(plan.width)
+        * f64::from(plan.height)
+        * fps
+        * bits_per_pixel(options.quality)
+        * if options.format == Format::Hevc {
+            0.6
+        } else {
+            1.0
+        })
+    .round() as u64)
 }
 
 /// The codec arguments for the output (after the inputs and maps).

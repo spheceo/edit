@@ -1,6 +1,6 @@
 //! Covering a cut-in with B-roll in one go, the house way: the shots the
 //! agent picked, butted end to end across the cut-in, each slowed, pushed in
-//! and smoothed (in the background), the B-roll look over them, the vertical
+//! using native frame sampling, the B-roll look over them, the vertical
 //! drop into the cut, and the placeholder card and words gone with the
 //! voice-over moved onto A1. The agent picks the shots; this does the rest,
 //! so a cut-in is one tool call instead of dozens.
@@ -149,6 +149,20 @@ fn clip_from(fields: Value) -> Result<Clip, String> {
 }
 
 pub async fn cover_cut_in(app: &App, project_id: &str, args: &Value) -> Result<Value, String> {
+    let (_, (report, smooth)) = app
+        .store
+        .update(project_id, ORIGIN, |project| cover(project, args))?;
+    let started = crate::broll::smooth_in_background(app, project_id, &smooth);
+    let mut report = report;
+    if let Some(fields) = report.as_object_mut() {
+        fields.insert("smoothing_started".to_owned(), json!(started));
+    }
+    Ok(report)
+}
+
+/// Pure plan operation: the caller validates and commits the whole section once.
+/// Expensive optical flow is an explicit shot option, never automatic work.
+pub fn cover(project: &mut Project, args: &Value) -> Result<(Value, Vec<String>), String> {
     let args: Args =
         serde_json::from_value(args.clone()).map_err(|error| format!("arguments: {error}"))?;
     if args.shots.is_empty() {
@@ -157,100 +171,118 @@ pub async fn cover_cut_in(app: &App, project_id: &str, args: &Value) -> Result<V
     let drop = match args.into.as_deref() {
         None | Some("drop") => true,
         Some("none") => false,
-        Some(other) => return Err(format!("into is \"drop\" or \"none\", not {other}")),
+        Some(other) => return Err(format!("into is drop or none, not {other}")),
     };
-    let (_, (report, smooth)) = app.store.update(project_id, ORIGIN, |project| {
-        let fps = project.fps();
-        let cut = find_cut_in(project, &args.cut_in)?;
-        let prefix = format!("Cut-in {} · ", cut.number);
+    let fps = project.fps();
+    let cut = find_cut_in(project, &args.cut_in)?;
+    let prefix = format!("Cut-in {} · ", cut.number);
 
-        // Where each shot starts and ends, butted across the whole cut-in.
-        let frame = |seconds: f64| (seconds * fps).round() as i64;
-        let mut starts = Vec::new();
-        for (index, shot) in args.shots.iter().enumerate() {
-            let start = match shot.at {
-                Some(at) => frame(at),
-                None if index == 0 => cut.start,
-                None => return Err(format!("shot {} needs at (timeline seconds where it starts)", index + 1)),
-            };
-            // A first shot within a few frames of the cut-in's start starts it.
-            let start = if index == 0 && (start - cut.start).abs() <= 6 { cut.start } else { start };
-            starts.push(start);
-        }
-        if starts.first() != Some(&cut.start) {
+    // Where each shot starts and ends, butted across the whole cut-in.
+    let frame = |seconds: f64| (seconds * fps).round() as i64;
+    let mut starts = Vec::new();
+    for (index, shot) in args.shots.iter().enumerate() {
+        let start = match shot.at {
+            Some(at) => frame(at),
+            None if index == 0 => cut.start,
+            None => {
+                return Err(format!(
+                    "shot {} needs at (timeline seconds where it starts)",
+                    index + 1
+                ))
+            }
+        };
+        // A first shot within a few frames of the cut-in's start starts it.
+        let start = if index == 0 && (start - cut.start).abs() <= 6 {
+            cut.start
+        } else {
+            start
+        };
+        starts.push(start);
+    }
+    if starts.first() != Some(&cut.start) {
+        return Err(format!(
+            "the first shot must start the cut-in, at {:.2} s",
+            cut.start as f64 / fps
+        ));
+    }
+    let mut spans = Vec::new();
+    for (index, start) in starts.iter().enumerate() {
+        let end = starts.get(index + 1).copied().unwrap_or(cut.end);
+        if end <= *start || end > cut.end {
             return Err(format!(
-                "the first shot must start the cut-in, at {:.2} s",
-                cut.start as f64 / fps
+                "shot {} has no room: shots start in order inside the cut-in ({:.2}–{:.2} s)",
+                index + 1,
+                cut.start as f64 / fps,
+                cut.end as f64 / fps
             ));
         }
-        let mut spans = Vec::new();
-        for (index, start) in starts.iter().enumerate() {
-            let end = starts.get(index + 1).copied().unwrap_or(cut.end);
-            if end <= *start || end > cut.end {
-                return Err(format!(
-                    "shot {} has no room: shots start in order inside the cut-in ({:.2}–{:.2} s)",
-                    index + 1,
-                    cut.start as f64 / fps,
-                    cut.end as f64 / fps
-                ));
-            }
-            spans.push((*start, end));
-        }
+        spans.push((*start, end));
+    }
 
-        // A re-run replaces what it placed before.
-        let span = (cut.start - 6, cut.end + 6);
-        project.clips.retain(|clip| {
-            let ours = clip.name.as_deref().is_some_and(|name| {
-                name.starts_with(&format!("{prefix}B-roll")) || name == format!("{prefix}vertical drop")
-            });
-            !(ours && clip.start < span.1 && span.0 < clip.end())
+    // A re-run replaces what it placed before.
+    let span = (cut.start - 6, cut.end + 6);
+    project.clips.retain(|clip| {
+        let ours = clip.name.as_deref().is_some_and(|name| {
+            name.starts_with(&format!("{prefix}B-roll")) || name == format!("{prefix}vertical drop")
         });
+        !(ours && clip.start < span.1 && span.0 < clip.end())
+    });
 
-        // The placeholder card and its words go; the narration keeps its voice-over.
-        let mut removed = Vec::new();
-        if let Some(card_id) = &cut.card {
-            let card = project.clip(card_id).cloned();
-            if let Some(card) = card {
-                project.clips.retain(|clip| {
-                    let words = clip.id != card.id
-                        && matches!(clip.content, ClipContent::Text { .. })
-                        && (card.link.is_some() && clip.link == card.link
-                            || clip.start == card.start && clip.duration == card.duration);
-                    let gone = clip.id == card.id || words;
-                    if gone {
-                        removed.push(clip.id.clone());
-                    }
-                    !gone
-                });
-            }
-            if let Some(script) = &mut project.script {
-                for block in &mut script.blocks {
-                    if let ScriptBlock::Narration { clip, .. } = block {
-                        if clip.as_deref() == Some(card_id.as_str()) {
-                            *clip = None;
-                        }
+    // The placeholder card and its words go; the narration keeps its voice-over.
+    let mut removed = Vec::new();
+    if let Some(card_id) = &cut.card {
+        let card = project.clip(card_id).cloned();
+        if let Some(card) = card {
+            project.clips.retain(|clip| {
+                let words = clip.id != card.id
+                    && matches!(clip.content, ClipContent::Text { .. })
+                    && (card.link.is_some() && clip.link == card.link
+                        || clip.start == card.start && clip.duration == card.duration);
+                let gone = clip.id == card.id || words;
+                if gone {
+                    removed.push(clip.id.clone());
+                }
+                !gone
+            });
+        }
+        if let Some(script) = &mut project.script {
+            for block in &mut script.blocks {
+                if let ScriptBlock::Narration { clip, .. } = block {
+                    if clip.as_deref() == Some(card_id.as_str()) {
+                        *clip = None;
                     }
                 }
             }
         }
+    }
 
-        // The shots, on the lowest free track above the footage.
-        let shots_track = free_above(project, None, cut.start, cut.end);
-        let mut placed = Vec::new();
-        let mut smooth = Vec::new();
-        for (index, (shot, (start, end))) in args.shots.iter().zip(&spans).enumerate() {
-            let media = project
-                .media(&shot.media)
-                .ok_or_else(|| format!("shot {}: no media {}", index + 1, shot.media))?;
-            let still = media.kind == MediaKind::Image;
-            if media.kind == MediaKind::Audio {
-                return Err(format!("shot {}: {} is audio", index + 1, shot.media));
-            }
-            let speed = if still { 1.0 } else { shot.speed.unwrap_or(0.5).clamp(0.05, 20.0) };
-            let duration = end - start;
-            let needs = duration as f64 / fps * speed;
-            if !still && shot.source_in + needs > media.duration + 0.05 {
-                return Err(format!(
+    // The shots, on the lowest free track above the footage.
+    let shots_track = free_above(project, None, cut.start, cut.end);
+    let mut placed = Vec::new();
+    let mut smooth = Vec::new();
+    for (index, (shot, (start, end))) in args.shots.iter().zip(&spans).enumerate() {
+        let media = project
+            .media(&shot.media)
+            .ok_or_else(|| format!("shot {}: no media {}", index + 1, shot.media))?;
+        let still = media.kind == MediaKind::Image;
+        if media.kind == MediaKind::Audio {
+            return Err(format!("shot {}: {} is audio", index + 1, shot.media));
+        }
+        let speed = if still {
+            1.0
+        } else {
+            shot.speed.unwrap_or(0.5).clamp(0.05, 20.0)
+        };
+        let duration = end - start;
+        let needs = duration as f64 / fps * speed;
+        if !shot.source_in.is_finite() || shot.source_in < 0.0 {
+            return Err(format!(
+                "shot {}: source_in must be finite and nonnegative",
+                index + 1
+            ));
+        }
+        if !still && shot.source_in + needs > media.duration + 0.05 {
+            return Err(format!(
                     "shot {}: {} runs out at {:.2} s; from {:.2} s at {speed}× this shot needs {:.2} s of it",
                     index + 1,
                     shot.media,
@@ -258,55 +290,58 @@ pub async fn cover_cut_in(app: &App, project_id: &str, args: &Value) -> Result<V
                     shot.source_in,
                     needs
                 ));
-            }
-            let scale = shot.scale.unwrap_or(1.0);
-            let [from, to] = shot.push.unwrap_or([1.0, 1.08]);
-            let label = shot.name.clone().unwrap_or_else(|| format!("shot {}", index + 1));
-            let id = project.fresh_id("c");
-            let clip = clip_from(json!({
-                "id": id, "track": shots_track, "start": start, "duration": duration,
-                "color": "cyan", "name": format!("{prefix}B-roll: {label}"),
-                "type": "video", "media": shot.media, "source_in": shot.source_in.max(0.0), "speed": speed,
-                "transform": { "x": shot.x.unwrap_or(0.0), "y": shot.y.unwrap_or(0.0), "scale": scale, "rotation": 0.0 },
-                "opacity": 1.0,
-                "keyframes": { "scale": [
-                    { "frame": 0.0, "value": scale * from, "ease": "linear" },
-                    { "frame": (duration - 1).max(1) as f64, "value": scale * to, "ease": "linear" }
-                ] },
-            }))?;
-            project.clips.push(clip);
-            if !still && speed < 0.999 && shot.smooth.unwrap_or(true) {
-                smooth.push(id.clone());
-            }
-            placed.push(json!({
-                "clip": id, "name": label,
-                "start": *start as f64 / fps, "end": *end as f64 / fps,
-                "source": [shot.source_in, shot.source_in + needs],
-            }));
         }
+        let scale = shot.scale.unwrap_or(1.0);
+        let [from, to] = shot.push.unwrap_or([1.0, 1.08]);
+        let label = shot
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("shot {}", index + 1));
+        let id = project.fresh_id("c");
+        let clip = clip_from(json!({
+            "id": id, "track": shots_track, "start": start, "duration": duration,
+            "color": "cyan", "name": format!("{prefix}B-roll: {label}"),
+            "type": "video", "media": shot.media, "source_in": shot.source_in.max(0.0), "speed": speed,
+            "transform": { "x": shot.x.unwrap_or(0.0), "y": shot.y.unwrap_or(0.0), "scale": scale, "rotation": 0.0 },
+            "opacity": 1.0,
+            "keyframes": { "scale": [
+                { "frame": 0.0, "value": scale * from, "ease": "linear" },
+                { "frame": (duration - 1).max(1) as f64, "value": scale * to, "ease": "linear" }
+            ] },
+        }))?;
+        project.clips.push(clip);
+        if !still && speed < 0.999 && shot.smooth.unwrap_or(false) {
+            smooth.push(id.clone());
+        }
+        placed.push(json!({
+            "clip": id, "name": label,
+            "start": *start as f64 / fps, "end": *end as f64 / fps,
+            "source": [shot.source_in, shot.source_in + needs],
+        }));
+    }
 
-        // The B-roll look over the whole stretch, above the shots.
-        let look = if args.look {
-            let track = free_above(project, Some(&shots_track), cut.start, cut.end);
-            let id = project.fresh_id("c");
-            project.clips.push(clip_from(json!({
+    // The B-roll look over the whole stretch, above the shots.
+    let look = if args.look {
+        let track = free_above(project, Some(&shots_track), cut.start, cut.end);
+        let id = project.fresh_id("c");
+        project.clips.push(clip_from(json!({
                 "id": id, "track": track, "start": cut.start, "duration": cut.end - cut.start,
                 "color": "blue", "name": format!("{prefix}B-roll look"),
                 "type": "adjustment",
                 "grade": { "exposure": 0.0, "contrast": 0.0, "saturation": -0.6, "temperature": 0.0, "vignette": 0.3 },
                 "opacity": 1.0,
             }))?);
-            Some(id)
-        } else {
-            None
-        };
+        Some(id)
+    } else {
+        None
+    };
 
-        // The vertical drop into the cut-in, straddling the cut above everything.
-        let drop = if drop && cut.start >= 3 {
-            let (start, end) = (cut.start - 3, cut.start + 3);
-            let track = free_on_top(project, start, end);
-            let id = project.fresh_id("c");
-            project.clips.push(clip_from(json!({
+    // The vertical drop into the cut-in, straddling the cut above everything.
+    let drop = if drop && cut.start >= 3 {
+        let (start, end) = (cut.start - 3, cut.start + 3);
+        let track = free_on_top(project, start, end);
+        let id = project.fresh_id("c");
+        project.clips.push(clip_from(json!({
                 "id": id, "track": track, "start": start, "duration": end - start,
                 "color": "blue", "name": format!("{prefix}vertical drop"),
                 "type": "adjustment",
@@ -314,52 +349,45 @@ pub async fn cover_cut_in(app: &App, project_id: &str, args: &Value) -> Result<V
                 "shake": { "preset": "vertical" },
                 "opacity": 1.0,
             }))?);
-            Some(id)
-        } else {
-            None
-        };
+        Some(id)
+    } else {
+        None
+    };
 
-        // The voice-over onto A1 (the footage's sound track, free under B-roll), purple.
-        let mut voiceover = Value::Null;
-        if let Some(vo) = cut.voiceover.as_deref() {
-            let a1 = project
-                .tracks
-                .iter()
-                .find(|track| track.kind == TrackKind::Audio)
-                .map(|track| track.id.clone());
-            let (start, end) = project.clip(vo).map_or((0, 0), |clip| (clip.start, clip.end()));
-            let free = a1.as_deref().is_some_and(|a1| {
-                !project.clips.iter().any(|clip| {
-                    clip.id != vo && clip.track == a1 && clip.start < end && start < clip.end()
-                })
-            });
-            if let (Some(a1), Some(clip)) = (a1.filter(|_| free), project.clip_mut(vo)) {
-                clip.track = a1;
-                clip.color = ClipColor::Purple;
-                voiceover = json!({ "clip": vo, "moved_to_a1": true });
-            } else {
-                voiceover = json!({ "clip": vo, "moved_to_a1": false, "why": "A1 isn't free under it" });
-            }
-        }
-
-        let report = json!({
-            "cut_in": cut.number,
-            "span": [cut.start as f64 / fps, cut.end as f64 / fps],
-            "shots": placed,
-            "look": look,
-            "vertical_drop": drop,
-            "removed_card_and_words": removed,
-            "voiceover": voiceover,
+    // The voice-over onto A1 (the footage's sound track, free under B-roll), purple.
+    let mut voiceover = Value::Null;
+    if let Some(vo) = cut.voiceover.as_deref() {
+        let a1 = project
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Audio)
+            .map(|track| track.id.clone());
+        let (start, end) = project
+            .clip(vo)
+            .map_or((0, 0), |clip| (clip.start, clip.end()));
+        let free = a1.as_deref().is_some_and(|a1| {
+            !project.clips.iter().any(|clip| {
+                clip.id != vo && clip.track == a1 && clip.start < end && start < clip.end()
+            })
         });
-        Ok((report, smooth))
-    })?;
-    let started = crate::broll::smooth_in_background(app, project_id, &smooth);
-    let mut report = report;
-    if let Some(fields) = report.as_object_mut() {
-        fields.insert("smoothing".to_owned(), json!(format!(
-        "{} shot(s) smoothing in the background; each swaps in when done (export waits for them). Changing a shot's speed, in point or media before then cancels its swap: run smooth_slow_motion on it after.",
-        started.len()
-    )));
+        if let (Some(a1), Some(clip)) = (a1.filter(|_| free), project.clip_mut(vo)) {
+            clip.track = a1;
+            clip.color = ClipColor::Purple;
+            voiceover = json!({ "clip": vo, "moved_to_a1": true });
+        } else {
+            voiceover =
+                json!({ "clip": vo, "moved_to_a1": false, "why": "A1 isn't free under it" });
+        }
     }
-    Ok(report)
+
+    let report = json!({
+        "cut_in": cut.number,
+        "span": [cut.start as f64 / fps, cut.end as f64 / fps],
+        "shots": placed,
+        "look": look,
+        "vertical_drop": drop,
+        "removed_card_and_words": removed,
+        "voiceover": voiceover,
+    });
+    Ok((report, smooth))
 }

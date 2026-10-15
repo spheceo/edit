@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use edit_core::MediaKind;
@@ -19,6 +19,13 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::store::Store;
+
+/// Shared across proxies, thumbnails and optional optical flow. Independent
+/// per-feature limits used to add up to more RAM than an 8 GB Mac has.
+pub fn background_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    SLOTS.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
 
 pub const PROXY_MAX_WIDTH: u32 = 1920;
 pub const PROXY_MAX_HEIGHT: u32 = 1080;
@@ -51,6 +58,18 @@ pub fn is_media_path(path: &Path) -> bool {
 }
 
 pub fn probe(path: &Path) -> Result<Probe, String> {
+    #[cfg(target_os = "macos")]
+    if crate::broll::is_image_path(path) {
+        let (width, height) = crate::mac_media::image_size(path)?;
+        return Ok(Probe {
+            kind: MediaKind::Image,
+            duration: 30.0,
+            width,
+            height,
+            fps: 0.0,
+            has_audio: false,
+        });
+    }
     let output = Command::new(crate::tools::ffprobe())
         .args([
             "-v",
@@ -202,7 +221,6 @@ pub struct MediaStatus {
 pub struct Processor {
     store: Arc<Store>,
     status: Mutex<HashMap<String, MediaStatus>>,
-    encodes: Arc<tokio::sync::Semaphore>,
     processing: Mutex<HashSet<String>>,
 }
 
@@ -226,7 +244,6 @@ impl Processor {
         Arc::new(Self {
             store,
             status: Mutex::new(HashMap::new()),
-            encodes: Arc::new(tokio::sync::Semaphore::new(2)),
             processing: Mutex::new(HashSet::new()),
         })
     }
@@ -313,6 +330,13 @@ impl Processor {
 
     /// Starts whatever work is missing for `source`. Safe to call repeatedly.
     pub fn ensure(self: &Arc<Self>, source: PathBuf, probe: Probe) {
+        if probe.kind == MediaKind::Image {
+            self.set(&source, |status| {
+                status.proxy = Stage::Skipped;
+                status.light = Stage::Skipped;
+                status.peaks = Stage::Skipped;
+            });
+        }
         let key = media_key(&source);
         if !self.processing.lock().insert(key.clone()) {
             return;
@@ -325,7 +349,15 @@ impl Processor {
         tokio::spawn(async move {
             // Limit all FFmpeg work, including waveforms and thumbnails, rather
             // than starting two unbounded extra decoders for every import.
-            let Ok(_permit) = this.encodes.clone().acquire_owned().await else {
+            // Small ImageIO thumbnails need not sit behind minutes of video
+            // proxy work. They have their own single, bounded decoder slot.
+            static IMAGES: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+            let slots = if probe.kind == MediaKind::Image {
+                IMAGES.get_or_init(|| tokio::sync::Semaphore::new(1))
+            } else {
+                background_slots()
+            };
+            let Ok(_permit) = slots.acquire().await else {
                 return;
             };
             let worker = Arc::clone(&this);
@@ -333,13 +365,21 @@ impl Processor {
             let outcome = tokio::task::spawn_blocking(move || {
                 let status = worker.status(&source);
                 let paths = worker.paths(&source);
-                if probe.kind == MediaKind::Video && status.thumbs != Stage::Ready {
+                if matches!(probe.kind, MediaKind::Video | MediaKind::Image)
+                    && status.thumbs != Stage::Ready
+                {
                     worker.set(&source, |status| status.thumbs = Stage::Working);
                     match crate::diag::time_on(
                         "media",
                         "media: thumbnails",
                         &source.to_string_lossy(),
-                        || make_thumbs(&source, &probe, &paths),
+                        || {
+                            if probe.kind == MediaKind::Image {
+                                make_image_thumbs(&source, &paths)
+                            } else {
+                                make_thumbs(&source, &probe, &paths)
+                            }
+                        },
                     ) {
                         Ok(count) => worker.set(&source, |status| {
                             status.thumbs = Stage::Ready;
@@ -350,7 +390,7 @@ impl Processor {
                             status.error = Some(error);
                         }),
                     }
-                } else if probe.kind != MediaKind::Video {
+                } else if !matches!(probe.kind, MediaKind::Video | MediaKind::Image) {
                     worker.set(&source, |status| status.thumbs = Stage::Skipped);
                 }
                 if probe.has_audio && status.peaks != Stage::Ready {
@@ -429,7 +469,12 @@ impl Processor {
                     format!("processing {} crashed: {message}", job_source.display()),
                 );
                 this.set(&job_source, |status| {
-                    for stage in [&mut status.thumbs, &mut status.peaks, &mut status.proxy] {
+                    for stage in [
+                        &mut status.thumbs,
+                        &mut status.peaks,
+                        &mut status.proxy,
+                        &mut status.light,
+                    ] {
                         if *stage == Stage::Working {
                             *stage = Stage::Failed;
                         }
@@ -509,9 +554,23 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
 /// half-second GOPs and no reordering: what a preview over the internet streams.
 fn make_light(paths: &CachePaths, probe: &Probe) -> Result<(), String> {
     let partial = paths.light.with_extension("partial.mp4");
+    #[cfg(target_os = "macos")]
+    if native_proxy(&paths.proxy, &partial, probe, 1280, 720, 1_500_000, |_| {}) {
+        return std::fs::rename(&partial, &paths.light).map_err(|error| error.to_string());
+    }
     let gop = (probe.fps / 2.0).round().max(1.0).to_string();
     let output = Command::new(crate::tools::ffmpeg())
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-threads",
+            "2",
+            "-filter_threads",
+            "1",
+            "-i",
+        ])
         .arg(&paths.proxy)
         .args([
             "-map",
@@ -526,6 +585,8 @@ fn make_light(paths: &CachePaths, probe: &Probe) -> Result<(), String> {
             "bt709",
             "-color_range",
             "tv",
+            "-threads",
+            "2",
             "-c:v",
             "libx264",
             "-preset",
@@ -568,11 +629,32 @@ fn make_proxy(
     let video = probe.kind == MediaKind::Video;
     let video_tmp = paths.proxy.with_extension("partial.mp4");
     let audio_tmp = paths.audio.with_extension("partial.m4a");
+    #[cfg(target_os = "macos")]
+    let native = video
+        && native_proxy(
+            source,
+            &video_tmp,
+            probe,
+            PROXY_MAX_WIDTH,
+            PROXY_MAX_HEIGHT,
+            8_000_000,
+            &mut progress,
+        );
+    #[cfg(not(target_os = "macos"))]
+    let native = false;
+    if native && !probe.has_audio {
+        std::fs::rename(&video_tmp, &paths.proxy).map_err(|error| error.to_string())?;
+        return std::fs::write(&paths.proxy_done, b"").map_err(|error| error.to_string());
+    }
     let mut command = Command::new(crate::tools::ffmpeg());
     command
         .args([
             "-hide_banner",
             "-nostats",
+            "-threads",
+            "2",
+            "-filter_threads",
+            "1",
             "-y",
             "-progress",
             "pipe:1",
@@ -581,7 +663,7 @@ fn make_proxy(
             "-i",
         ])
         .arg(source);
-    if video {
+    if video && !native {
         // Half-second GOPs: seeking decodes at most ~15 frames, and playback
         // streams at a few Mbit/s instead of the ~70 an all-intra 1080p file needs.
         let gop = (probe.fps / 2.0).round().max(1.0).to_string();
@@ -602,6 +684,8 @@ fn make_proxy(
                 "bt709",
                 "-color_range",
                 "tv",
+                "-threads",
+                "2",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -695,6 +779,98 @@ fn make_proxy(
     Ok(())
 }
 
+/// AVFoundation/VideoToolbox transcodes the picture without a raw-video pipe
+/// or x264 frame queues. Audio is produced separately by the compatibility path.
+#[cfg(target_os = "macos")]
+fn native_proxy(
+    source: &Path,
+    output: &Path,
+    probe: &Probe,
+    max_w: u32,
+    max_h: u32,
+    bitrate: u64,
+    mut progress: impl FnMut(f32),
+) -> bool {
+    if std::env::var_os("EDIT_FFMPEG_VIDEO").is_some() {
+        return false;
+    }
+    let result = (|| {
+        let fit = (f64::from(max_w) / f64::from(probe.width.max(2)))
+            .min(f64::from(max_h) / f64::from(probe.height.max(2)))
+            .min(1.0);
+        let even = |size: u32| ((f64::from(size) * fit).round() as u32 / 2 * 2).max(2);
+        let (width, height) = (even(probe.width), even(probe.height));
+        let fps = if probe.fps.is_finite() && probe.fps > 0.0 {
+            probe.fps
+        } else {
+            30.0
+        };
+        let mut reader = crate::mac_media::Reader::open(source, width, height)?;
+        let mut writer = crate::mac_media::Writer::open(
+            output,
+            width,
+            height,
+            fps,
+            false,
+            bitrate,
+            (fps / 2.0).round().max(1.0) as i32,
+        )?;
+        let frames = (probe.duration * fps).ceil().max(1.0) as i64;
+        let mut rgba = vec![0; width as usize * height as usize * 4];
+        let mut reported = Instant::now();
+        for frame in 0..frames {
+            reader.frame(frame as f64 / fps, &mut rgba)?;
+            writer.frame(frame, &rgba)?;
+            if reported.elapsed() >= Duration::from_millis(250) {
+                progress((frame as f64 / frames as f64) as f32);
+                reported = Instant::now();
+            }
+        }
+        writer.finish(frames)
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(output);
+        crate::diag::warn(
+            "media",
+            format!(
+                "native preview of {}: {error}; using FFmpeg",
+                source.display()
+            ),
+        );
+        false
+    } else {
+        true
+    }
+}
+
+fn make_image_thumbs(source: &Path, paths: &CachePaths) -> Result<u32, String> {
+    let partial = paths.thumbs.with_extension("partial.jpg");
+    #[cfg(target_os = "macos")]
+    let result = crate::mac_media::image_thumbnail(source, &partial);
+    #[cfg(not(target_os = "macos"))]
+    let result = run(Command::new(crate::tools::ffmpeg())
+        .args(["-v", "error", "-y", "-threads", "1", "-i"])
+        .arg(source)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=320:320:force_original_aspect_ratio=decrease",
+            "-threads",
+            "1",
+        ])
+        .arg(&partial))
+    .map(|_| ());
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&partial);
+        return Err(error);
+    }
+    std::fs::rename(&partial, &paths.thumbs).map_err(|error| error.to_string())?;
+    crate::store::write_atomic(&paths.thumbs_meta, br#"{"count":1,"interval":30}"#)
+        .map_err(|error| error.to_string())?;
+    Ok(1)
+}
+
 fn make_thumbs(source: &Path, probe: &Probe, paths: &CachePaths) -> Result<u32, String> {
     let wanted = ((probe.duration / 2.0).ceil() as u32).clamp(1, 120);
     let interval = (probe.duration / f64::from(wanted)).max(0.05);
@@ -730,7 +906,17 @@ fn make_thumbs(source: &Path, probe: &Probe, paths: &CachePaths) -> Result<u32, 
     }
     let tmp = paths.thumbs.with_extension("partial.jpg");
     let result = run(Command::new(crate::tools::ffmpeg())
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-threads",
+            "2",
+            "-filter_threads",
+            "1",
+            "-i",
+        ])
         .arg(frames_dir.join("%04d.jpg"))
         .args([
             "-vf",

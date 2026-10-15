@@ -24,7 +24,8 @@ relay/               Cloudflare Worker holding API keys (transcription)
 - **Exact effects.** The preview runs `edit-render` as WASM on WebGPU; export and agent frame grabs run the same crate natively. Text is rasterized on the CPU by shared code, so a frame renders to identical pixels in both.
 - **Clean scrubbing.** Imports get a light H.264 preview proxy (≤1080p, a keyframe every half second, no B-frames, tagged BT.709) plus a separate AAC sound file, so the preview streams comfortably over Wi-Fi. Scrubbing coalesces requests and displays decoded pictures; playback keeps one decoder running and cues upcoming cuts. The playhead is remembered per project in this browser. Export always reads the originals.
 - **Built-in agent.** The Codex panel drives `codex app-server` with the user's own `codex login`. Edit injects its MCP server per chat (`/mcp?project=<id>`, tools pre-approved) and turns off the user's other MCP servers, apps and plugins; the sandbox is read-only, so the agent can only change the edit. Models are cached in `~/.edit/agent/models.json` (refreshed daily), chats in `~/.edit/agent/chats/`.
-- **Agents.** `POST /mcp` exposes `get_project`, `add_text`, `add_clip`, `update_clip`, `set_keyframes`, `render_frame`, `contact_sheet`, `export` and more. See `crates/edit/src/mcp.rs` for the model description agents receive.
+- **Agents.** Begin with `get_edit_context`, apply a whole stage with `apply_edit_plan`, then use `review_edit` for structural checks, cached subtitle coverage and a contact sheet. A plan validates and saves once, is one undo step, and rejects stale revisions without partial changes. Existing per-clip tools and `batch` remain available. See `crates/edit/src/mcp.rs` for the model description agents receive.
+- **Native Mac video.** Standard hardware H.264/HEVC exports and preview video transcoding use AVFoundation, VideoToolbox and bounded pixel-buffer pools. Photos use ImageIO and remain images. The compositor is still shared with the browser; FFmpeg handles audio, compatibility formats and custom output settings. Slowed clips use source-frame sampling by default; expensive optical-flow interpolation is opt-in, serialized and limited to 120 seconds per render. Export normally takes the current timeline snapshot immediately.
 
 ## Transcription
 
@@ -64,6 +65,30 @@ just check   # fmt, clippy, tests, typecheck
 ```
 
 Data lives in `~/.edit` (`EDIT_HOME` overrides): `projects/*.json` and `cache/` (proxies, thumbnails, waveforms). Exports default to `~/Movies/Edit/`.
+
+## Performance checks
+
+Build baseline and candidate binaries in separate checkouts, then compare them
+without changing real projects or calling paid APIs:
+
+```sh
+python3 scripts/benchmark.py --baseline /path/to/baseline/edit --candidate target/debug/edit
+# Optional: use a read-only copy of a real project instead of the generated fixture.
+python3 scripts/benchmark.py --baseline /path/to/baseline/edit --candidate target/debug/edit --project /path/to/project.json
+bun scripts/benchmark-history.ts /path/to/project.json baseline
+bun scripts/benchmark-history.ts /path/to/project.json shared
+```
+
+The first script starts isolated servers, measures a 15-second export, process-tree
+RSS, contact sheets, revisions (including the legacy batch route), context size and
+repeated audio measurements. It writes logs, files and JSON results under
+`target/performance/`. Run it with other CPU-heavy work stopped. The history check
+measures retained JavaScriptCore heap for 200 revisions; unchanged clip objects now
+share storage across undo entries. Whole-browser/GPU memory and shared macOS codec
+services are outside those measurements. These component benchmarks do not prove
+a cold, research-to-finished-video agent run meets a ten-minute target.
+The measured run and verification details are in
+[`docs/performance-results.json`](docs/performance-results.json).
 
 ## Sound library
 

@@ -19,7 +19,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -392,6 +392,34 @@ pub fn loudness(path: &Path, from: f64, seconds: f64) -> Result<f64, String> {
 
 /// The loudness as `loudness` measures it, and the sample peak (dBFS).
 pub fn levels(path: &Path, from: f64, seconds: f64) -> Result<(f64, f64), String> {
+    // Key the measurement by file identity and the exact FFmpeg seek arguments.
+    // Clip gain is applied by the caller, so changing a mix reuses source analysis.
+    type Key = (String, String, String);
+    static CACHE: OnceLock<Mutex<HashMap<Key, (f64, f64)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = (
+        crate::media::media_key(path),
+        format!("{:.3}", from.max(0.0)),
+        format!("{:.3}", seconds.max(0.05)),
+    );
+    if let Some(levels) = cache.lock().get(&key).copied() {
+        return Ok(levels);
+    }
+    let levels = crate::diag::time_on(
+        "audio",
+        "audio: source loudness",
+        &path.to_string_lossy(),
+        || measure_levels(path, from, seconds),
+    )?;
+    let mut cache = cache.lock();
+    if cache.len() >= 2048 {
+        cache.clear();
+    }
+    cache.insert(key, levels);
+    Ok(levels)
+}
+
+fn measure_levels(path: &Path, from: f64, seconds: f64) -> Result<(f64, f64), String> {
     let output = Command::new(crate::tools::ffmpeg())
         .args([
             "-hide_banner",
@@ -419,6 +447,13 @@ pub fn levels(path: &Path, from: f64, seconds: f64) -> Result<(f64, f64), String
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("ffmpeg: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "couldn't measure {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
     let log = String::from_utf8_lossy(&output.stderr);
     let value = |line: &str, key: &str| {
         line.split(key)

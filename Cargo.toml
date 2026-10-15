@@ -36,6 +36,16 @@ opt-level = 2
 [profile.dev]
 opt-level = 1
 
+# Frame evaluation and the compositor run for every frame of an export and
+# every agent render; they're small, so optimising them costs little build
+# time. The big `edit` crate stays at 1 so `just dev` rebuilds quickly (its
+# heavy per-frame work is in AVFoundation, Accelerate and the GPU).
+[profile.dev.package.edit-core]
+opt-level = 3
+
+[profile.dev.package.edit-render]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 strip = true

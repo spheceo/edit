@@ -64,6 +64,37 @@ pub struct Chat {
     /// Turns restarted in a row after the model was at capacity.
     #[serde(skip)]
     pub retries: u32,
+    /// The user pressed stop: nothing restarts on its own until they send again.
+    #[serde(skip)]
+    pub halted: bool,
+    /// The full edit going on (or the last one), step by step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<Run>,
+}
+
+/// A full edit: the steps of `fulledit::STEPS`, each a turn of its own.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Run {
+    /// "running", "done", "stopped" or "failed".
+    pub state: String,
+    #[serde(default)]
+    pub notes: String,
+    /// The step being worked on (0-based).
+    pub current: usize,
+    pub steps: Vec<RunStep>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct RunStep {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_ms: Option<u64>,
+    #[serde(default)]
+    pub tool_calls: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -318,7 +349,7 @@ impl Agents {
 
     pub fn chat(&self, project: &str) -> Value {
         self.with_chat(project, |chat| {
-            json!({ "entries": chat.entries, "running": chat.running, "model": chat.model, "effort": chat.effort })
+            json!({ "entries": chat.entries, "running": chat.running, "model": chat.model, "effort": chat.effort, "run": chat.run })
         })
     }
 
@@ -455,6 +486,7 @@ impl Agents {
         let (model, effort) = self.with_chat(project, |chat| {
             chat.thread = Some(thread.clone());
             chat.running = true;
+            chat.halted = false;
             chat.started = Some(std::time::Instant::now());
             (chat.model.clone(), chat.effort.clone())
         });
@@ -628,6 +660,14 @@ impl Agents {
     }
 
     pub async fn stop(self: &Arc<Self>, project: &str) -> Result<(), String> {
+        // Stopping also ends a full edit, even between its steps.
+        let running = self.with_chat(project, |chat| {
+            chat.halted = true;
+            chat.run.as_ref().is_some_and(|run| run.state == "running")
+        });
+        if running {
+            self.end_run(project, "stopped", None);
+        }
         let (thread, turn) =
             self.with_chat(project, |chat| (chat.thread.clone(), chat.turn.clone()));
         let (Some(thread), Some(turn)) = (thread, turn) else {
@@ -828,7 +868,11 @@ impl Agents {
                     Some("interrupted") => Some("Stopped.".to_owned()),
                     _ => None,
                 };
-                if let Some(failure) = error.as_deref().filter(|failure| busy_model(failure)) {
+                let halted = self.with_chat(&project, |chat| chat.halted);
+                if let Some(failure) = error
+                    .as_deref()
+                    .filter(|failure| busy_model(failure) && !halted)
+                {
                     let tries = self.with_chat(&project, |chat| {
                         chat.retries += 1;
                         chat.retries
@@ -845,8 +889,8 @@ impl Agents {
                         let (this, failure) = (Arc::clone(self), failure.to_owned());
                         runtime.spawn(async move {
                             tokio::time::sleep(Duration::from_secs(wait)).await;
-                            // The user may have sent something else meanwhile.
-                            if this.with_chat(&project, |chat| chat.running) {
+                            // The user may have sent something else, or stopped, meanwhile.
+                            if this.with_chat(&project, |chat| chat.running || chat.halted) {
                                 return;
                             }
                             let text = format!(
@@ -859,11 +903,210 @@ impl Agents {
                         return;
                     }
                 }
-                self.finish(&project, error);
+                self.finish(&project, error.clone());
+                self.next_step(&project, error, runtime);
             }
             _ => {}
         }
     }
+
+    // --- full edit -----------------------------------------------------------
+
+    /// Starts a full edit: every step of `fulledit::STEPS`, sent one after
+    /// another as each turn finishes.
+    pub async fn run_full_edit(
+        self: &Arc<Self>,
+        project: &str,
+        notes: String,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<(), String> {
+        if self.with_chat(project, |chat| chat.running) {
+            return Err("the agent is still working; stop it or wait".to_owned());
+        }
+        let prompt = crate::fulledit::prompt(0, &notes).ok_or("no steps")?;
+        self.with_chat(project, |chat| {
+            chat.run = Some(Run {
+                state: "running".to_owned(),
+                notes,
+                current: 0,
+                steps: crate::fulledit::STEPS
+                    .iter()
+                    .map(|(name, _)| RunStep {
+                        name: (*name).to_owned(),
+                        ..RunStep::default()
+                    })
+                    .collect(),
+            });
+        });
+        self.start_step(project, prompt, model, effort).await
+    }
+
+    async fn start_step(
+        self: &Arc<Self>,
+        project: &str,
+        prompt: String,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<(), String> {
+        self.with_chat(project, |chat| {
+            if let Some(run) = chat.run.as_mut() {
+                let current = run.current;
+                if let Some(step) = run.steps.get_mut(current) {
+                    step.started_ms.get_or_insert_with(now_ms);
+                }
+            }
+        });
+        self.emit_run(project);
+        let sent = self.send(project, prompt, model, effort).await;
+        if let Err(error) = &sent {
+            self.end_run(project, "failed", Some(error.clone()));
+        }
+        sent
+    }
+
+    /// After a turn of a full edit: the step is done, so the next one goes
+    /// out; a failed or stopped turn ends the run there.
+    fn next_step(
+        self: &Arc<Self>,
+        project: &str,
+        error: Option<String>,
+        runtime: &tokio::runtime::Handle,
+    ) {
+        let Some(run) = self.with_chat(project, |chat| chat.run.clone()) else {
+            return;
+        };
+        if run.state != "running" {
+            return;
+        }
+        match error {
+            Some(error) if error == "Stopped." => self.end_run(project, "stopped", None),
+            Some(error) => self.end_run(project, "failed", Some(error)),
+            None => {
+                let next = run.current + 1;
+                self.close_step(project);
+                let Some(prompt) = crate::fulledit::prompt(next, &run.notes) else {
+                    self.end_run(project, "done", None);
+                    return;
+                };
+                self.with_chat(project, |chat| {
+                    if let Some(run) = chat.run.as_mut() {
+                        run.current = next;
+                    }
+                });
+                let (this, project) = (Arc::clone(self), project.to_owned());
+                runtime.spawn(async move {
+                    // The model and thinking level the chat already uses.
+                    let _ = this.start_step(&project, prompt, None, None).await;
+                });
+            }
+        }
+    }
+
+    /// Stamps the current step's end and counts the tool calls it made.
+    fn close_step(&self, project: &str) {
+        let now = now_ms();
+        self.with_chat(project, |chat| {
+            let Some(run) = chat.run.as_mut() else {
+                return;
+            };
+            let current = run.current;
+            let Some(step) = run.steps.get_mut(current) else {
+                return;
+            };
+            let from = step.started_ms.unwrap_or(now);
+            step.ended_ms.get_or_insert(now);
+            step.tool_calls = chat
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == "tool" && entry.at >= from)
+                .count();
+        });
+    }
+
+    /// Ends a full edit and writes its report into the chat.
+    fn end_run(&self, project: &str, state: &str, error: Option<String>) {
+        self.close_step(project);
+        let report = self.with_chat(project, |chat| {
+            let run = chat.run.as_mut()?;
+            run.state = state.to_owned();
+            let current = run.current;
+            if let Some(step) = run.steps.get_mut(current) {
+                step.error = error.clone();
+            }
+            Some(run_report(run))
+        });
+        if let Some(report) = report {
+            self.upsert(
+                project,
+                Entry {
+                    id: format!("run-{}", now_ms()),
+                    kind: "assistant".to_owned(),
+                    text: report,
+                    ..Entry::default()
+                },
+            );
+        }
+        crate::diag::info("agent", format!("full edit of {project}: {state}"));
+        self.save(project);
+        self.emit_run(project);
+    }
+
+    fn emit_run(&self, project: &str) {
+        let run = self.with_chat(project, |chat| chat.run.clone());
+        self.emit(project, json!({ "event": "run", "run": run }));
+    }
+}
+
+/// A finished (or ended) full edit as a table: each step, how long it took
+/// and how many tool calls it made.
+fn run_report(run: &Run) -> String {
+    let minutes = |ms: u64| {
+        let seconds = ms / 1000;
+        if seconds >= 3600 {
+            format!("{} h {:02} min", seconds / 3600, seconds % 3600 / 60)
+        } else {
+            format!("{} min {:02} s", seconds / 60, seconds % 60)
+        }
+    };
+    let heading = match run.state.as_str() {
+        "done" => "**Full edit done.**",
+        "stopped" => "**Full edit stopped.**",
+        _ => "**Full edit stopped by an error.**",
+    };
+    let mut out = format!("{heading}\n\n| Step | Took | Tool calls |\n|---|---|---|\n");
+    let mut total = 0;
+    let mut calls = 0;
+    for (index, step) in run.steps.iter().enumerate() {
+        let took = match (step.started_ms, step.ended_ms) {
+            (Some(start), Some(end)) => {
+                total += end.saturating_sub(start);
+                calls += step.tool_calls;
+                minutes(end.saturating_sub(start))
+            }
+            _ => "—".to_owned(),
+        };
+        let failed = step
+            .error
+            .as_deref()
+            .map(|error| format!(" (stopped: {error})"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "| {}. {}{failed} | {took} | {} |\n",
+            index + 1,
+            step.name,
+            if step.ended_ms.is_some() {
+                step.tool_calls.to_string()
+            } else {
+                "—".to_owned()
+            }
+        ));
+    }
+    out.push_str(&format!(
+        "| **Total** | **{}** | **{calls}** |",
+        minutes(total)
+    ));
+    out
 }
 
 /// A one-line view of tool arguments for the chat ("text: Your title · start: 2").

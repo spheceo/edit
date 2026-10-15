@@ -6,6 +6,7 @@ mod cutin;
 mod diag;
 mod drive;
 mod export;
+mod fulledit;
 mod guard;
 mod library;
 mod mcp;

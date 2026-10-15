@@ -324,6 +324,10 @@ pub async fn smooth_slow_motion(
                     "medium",
                     "-crf",
                     "15",
+                    // x264's own frame threads cost ~350 MB at 1080p; the
+                    // interpolation is the slow part anyway.
+                    "-threads",
+                    "2",
                     "-movflags",
                     "+faststart",
                 ])
@@ -409,12 +413,26 @@ fn source_of(content: &ClipContent) -> Option<(&str, f64, f64)> {
 
 /// How many smoothing renders run at once. Motion interpolation keeps about
 /// one core busy each, so several side by side finish a cut-in's shots in
-/// the time of one or two.
+/// the time of one or two; but a 1080p render holds about a gigabyte, so
+/// memory caps them too (one per 4 GB): on an 8 GB Mac four at once swapped
+/// the whole machine and each took half an hour.
 fn smoothing_slots() -> &'static tokio::sync::Semaphore {
     static SLOTS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
     SLOTS.get_or_init(|| {
         let cores = std::thread::available_parallelism().map_or(4, |cores| cores.get());
-        tokio::sync::Semaphore::new((cores / 2).clamp(2, 6))
+        let memory_gb = Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()
+            .and_then(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
+            .map_or(8, |bytes| bytes >> 30);
+        let slots = (cores / 2).min(memory_gb as usize / 4).clamp(1, 6);
+        tokio::sync::Semaphore::new(slots)
     })
 }
 

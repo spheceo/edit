@@ -106,6 +106,76 @@ pub fn update(
     Ok(item)
 }
 
+/// An article page: kept for a few minutes (read_page then add_article on
+/// the same story fetched it twice), fetched plainly first (most news pages
+/// are rendered on the server, and a plain fetch takes a second where a
+/// fresh headless Chrome takes ten or twenty), the browser only when the plain
+/// page is a shell, a block or too thin to be the story.
+fn article_page(url: &str) -> Result<String, String> {
+    type Pages = Mutex<Vec<(String, std::time::Instant, String)>>;
+    static PAGES: std::sync::OnceLock<Pages> = std::sync::OnceLock::new();
+    let pages = PAGES.get_or_init(Default::default);
+    let fresh = Duration::from_secs(600);
+    if let Some((_, _, page)) = pages
+        .lock()
+        .iter()
+        .find(|(own, at, _)| own == url && at.elapsed() < fresh)
+    {
+        return Ok(page.clone());
+    }
+    let page = match plain(url) {
+        Some(page) => page,
+        None => dump(url)?,
+    };
+    let mut kept = pages.lock();
+    kept.retain(|(own, at, _)| own != url && at.elapsed() < fresh);
+    if kept.len() >= 24 {
+        kept.remove(0);
+    }
+    kept.push((url.to_owned(), std::time::Instant::now(), page.clone()));
+    Ok(page)
+}
+
+/// The page as the server sends it, when that's already the story: a 200
+/// with a couple of thousand characters of readable text and no sign of a
+/// bot check.
+fn plain(url: &str) -> Option<String> {
+    let output = Command::new("curl")
+        .args([
+            "-sSL",
+            "--compressed",
+            "--proto",
+            "=https,http",
+            "--max-time",
+            "15",
+        ])
+        .args(["-A", USER_AGENT, "-H", "Accept-Language: en-US,en;q=0.9"])
+        .args(["-w", "\n%{http_code}", url])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let out = String::from_utf8_lossy(&output.stdout);
+    let (page, code) = out.rsplit_once('\n')?;
+    if code.trim() != "200" {
+        return None;
+    }
+    // Judged on the readable text: a <noscript> "enable JavaScript" note on
+    // a server-rendered story isn't a block.
+    let text = readable(page);
+    let lower = text.to_ascii_lowercase();
+    let blocked = [
+        "captcha",
+        "verify you are human",
+        "human verification",
+        "access denied",
+        "please enable javascript",
+    ]
+    .iter()
+    .any(|sign| lower.contains(sign));
+    (!blocked && text.len() >= 2000).then(|| page.to_owned())
+}
+
 /// A page as the browser renders it (scripts run), from a fresh profile
 /// that's deleted afterwards.
 fn dump(url: &str) -> Result<String, String> {
@@ -215,7 +285,7 @@ pub fn read_page(url: &str, limit: usize) -> Result<String, String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("give a web address (http or https)".into());
     }
-    Ok(readable(&dump(url)?).chars().take(limit).collect())
+    Ok(readable(&article_page(url)?).chars().take(limit).collect())
 }
 
 /// A page's readable text: scripts, styles and tags dropped.
@@ -275,7 +345,7 @@ pub fn add_article(
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("give a web address (http or https)".into());
     }
-    let page = dump(url)?;
+    let page = article_page(url)?;
     let metas = metas(&page);
     let meta = |names: &[&str]| {
         names.iter().find_map(|name| {

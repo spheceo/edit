@@ -33,11 +33,15 @@ const MODEL: &str = "google/gemini-3.8-flash";
 const TARGET: f64 = 240.0;
 const SHORTEST: f64 = 150.0;
 const LONGEST: f64 = 330.0;
-/// Windows watched at once.
-const AT_ONCE: usize = 4;
-/// Tries per window, and how long each may take.
+/// Windows watched at once: they're network-bound, so all of a usual video's.
+const AT_ONCE: usize = 12;
+/// Windows cut at once. Their own lane, not the media jobs' single slot: a
+/// watch waiting behind an import's proxy is minutes on the critical path.
+const CUTS_AT_ONCE: usize = 2;
+/// Tries per window, and how long each may take. With low thinking a window
+/// answers in well under a minute; a slow one is usually stuck, so try again.
 const TRIES: usize = 3;
-const TIMEOUT: Duration = Duration::from_secs(240);
+const TIMEOUT: Duration = Duration::from_secs(150);
 /// A window's clip is sent inline; bigger than this and it isn't sent.
 const MAX_CLIP_BYTES: u64 = 15 * 1024 * 1024;
 
@@ -390,24 +394,28 @@ fn cache_key(media_key: &str, window: &Window, lines: &[WatchLine]) -> String {
         .collect()
 }
 
-/// A small MP4 of the window with its sound: 360p at 3 fps, mono AAC 48k.
+/// A small MP4 of the window with its sound: 360p at 1 fps (Gemini samples
+/// video at one frame a second, so more is only bytes to send), mono AAC 48k.
+/// The source is decoded in hardware where there is some.
 async fn cut(source: &Path, window: &Window, out: &Path) -> Result<(), String> {
-    let _slot = crate::media::background_slots()
-        .acquire()
-        .await
-        .map_err(|error| error.to_string())?;
-    let output = tokio::process::Command::new(crate::tools::ffmpeg())
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-threads",
-            "2",
-            "-filter_threads",
-            "1",
-            "-ss",
-        ])
+    static CUTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(CUTS_AT_ONCE);
+    let _slot = CUTS.acquire().await.map_err(|error| error.to_string())?;
+    let mut command = tokio::process::Command::new(crate::tools::ffmpeg());
+    command.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-threads",
+        "2",
+        "-filter_threads",
+        "1",
+    ]);
+    if cfg!(target_os = "macos") {
+        command.args(["-hwaccel", "videotoolbox"]);
+    }
+    let output = command
+        .arg("-ss")
         .arg(format!("{:.3}", window.start.max(0.0)))
         .arg("-t")
         .arg(format!("{:.3}", window.end - window.start))
@@ -419,7 +427,7 @@ async fn cut(source: &Path, window: &Window, out: &Path) -> Result<(), String> {
             "-map",
             "0:a:0?",
             "-vf",
-            "fps=3,scale=-2:360",
+            "fps=1,scale=-2:360",
             "-threads",
             "2",
             "-c:v",
@@ -567,7 +575,10 @@ async fn ask(
                 { "type": "file", "file": { "filename": "window.mp4", "file_data": format!("data:video/mp4;base64,{data}") } }
             ] }
         ],
-        "response_format": { "type": "json_schema", "json_schema": { "name": "watched", "strict": true, "schema": schema() } }
+        "response_format": { "type": "json_schema", "json_schema": { "name": "watched", "strict": true, "schema": schema() } },
+        // Who says a line is read off the picture and the voices, not reasoned
+        // out at length: low thinking answers a window in a fraction of the time.
+        "reasoning": { "effort": "low" }
     });
     tokio::fs::write(
         scratch,

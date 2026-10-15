@@ -200,7 +200,8 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 fn tools() -> Vec<Value> {
     vec![
         tool("list_projects", "List projects on this machine.", json!({}), &[]),
-        tool("get_edit_context", "Start here: compact planning context, revision, sections, source media, script and each cut-in's cached narration word timings, speaker groups, and mechanical issues. Omits hundreds of repetitive subtitles. Read once per stage; use clip_ids or start/end for full details of a revision. include_transcript returns cached timeline speech; does no transcription or rendering.", json!({
+        tool("get_edit_context", "Start here, once per stage: the revision (base_rev), sections, tracks, media, each cut-in's narration with its word timings (word@seconds) and the footage blocks with their notes, speaker line counts, mechanical issues, and the clips as one line each (id, track, type, [start,end) frames, media@source seconds, text, keyframed params). Subtitles are only counted. section (intro, story = between intro and outro, outro) or start/end (seconds) narrow everything to that span; clip_ids returns those clips in full (keyframes too). include_transcript adds the timeline's cached speech for the span. Never needs get_project.", json!({
+            "section": {"type":"string", "enum":["intro","story","outro"]},
             "clip_ids": {"type":"array", "items":{"type":"string"}},
             "start":{"type":"number"}, "end":{"type":"number"},
             "include_transcript":{"type":"boolean"}
@@ -2181,76 +2182,287 @@ fn subtitle_coverage(app: &App, project: &Project) -> Value {
 }
 
 fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
+    // Sized for a model's context: Codex cuts a tool's output at ~10k tokens,
+    // and every token here is read again on each later request of the turn.
+    const BUDGET: usize = 36_000;
     let p = &live.project;
     let fps = p.fps();
+    let sections = edit_core::sections(p);
     let ids = args["clip_ids"].as_array();
-    let from = args["start"].as_f64().map(|t| (t * fps).round() as i64);
-    let to = args["end"].as_f64().map(|t| (t * fps).round() as i64);
-    let detailed = ids.is_some() || from.is_some() || to.is_some();
+    let span = match args["section"].as_str() {
+        Some("intro") => sections.intro,
+        Some("outro") => sections.outro,
+        Some("story") => Some((
+            sections.intro.map_or(0, |(_, end)| end),
+            sections.outro.map_or(p.duration(), |(start, _)| start),
+        )),
+        _ => None,
+    };
+    let from = args["start"]
+        .as_f64()
+        .map(|t| (t * fps).round() as i64)
+        .or(span.map(|(start, _)| start));
+    let to = args["end"]
+        .as_f64()
+        .map(|t| (t * fps).round() as i64)
+        .or(span.map(|(_, end)| end));
+    let inside = |start: i64, end: i64| {
+        !from.is_some_and(|from| end <= from) && !to.is_some_and(|to| start >= to)
+    };
     let mut speakers: std::collections::BTreeMap<String, usize> = Default::default();
     let mut clips = Vec::new();
+    let mut subtitles = 0;
     for clip in &p.clips {
-        if ids.is_some_and(|ids| !ids.iter().any(|id| id.as_str() == Some(&clip.id)))
-            || from.is_some_and(|from| clip.end() <= from)
-            || to.is_some_and(|to| clip.start >= to)
-        {
-            continue;
-        }
-        let subtitle = p.track(&clip.track).is_some_and(|track| track.subtitles);
         if let ClipContent::Text { style, .. } = &clip.content {
             if let Some(label) = &style.label {
                 *speakers.entry(label.text.clone()).or_default() += 1;
             }
         }
-        if detailed {
+        if ids.is_some_and(|ids| !ids.iter().any(|id| id.as_str() == Some(&clip.id)))
+            || !inside(clip.start, clip.end())
+        {
+            continue;
+        }
+        if ids.is_some() {
+            // Asked for by id: the whole clip, keyframes too.
             clips.push(json!(clip));
-        } else if !subtitle {
-            let value = serde_json::to_value(clip).unwrap_or_default();
-            clips.push(json!({"id":clip.id, "track":clip.track, "type":value.get("type"), "name":clip.name,
-                "start":clip.start, "end":clip.end(), "media":clip.media_id(), "source_in":value.get("source_in"), "speed":value.get("speed"), "text":value.get("text")}));
+        } else if p.track(&clip.track).is_some_and(|track| track.subtitles) {
+            subtitles += 1;
+        } else {
+            clips.push(json!(clip_row(p, clip)));
         }
     }
     let mut cut_ins = Vec::new();
+    let mut footage = Vec::new();
     if let Some(script) = &p.script {
-        for block in &script.blocks {
-            if let ScriptBlock::Narration {
-                text,
-                notes,
-                clip,
-                voiceover,
-            } = block
-            {
-                let placed = clip
-                    .as_deref()
-                    .and_then(|id| p.clip(id))
-                    .or_else(|| voiceover.as_deref().and_then(|id| p.clip(id)));
-                let words = voiceover.as_deref().and_then(|id| p.clip(id)).and_then(|clip| {
-                    let ClipContent::Audio {media, source_in, speed, ..} = &clip.content else { return None; };
-                    let media = p.media(media)?;
-                    let transcript: crate::transcribe::Transcript = serde_json::from_slice(&std::fs::read(app.media.paths(std::path::Path::new(&media.path)).transcript).ok()?).ok()?;
-                    Some(transcript.words.iter().filter(|word| word.end > *source_in && word.start < source_in + clip.duration as f64 / fps * speed)
-                        .map(|word| json!({"text":word.text, "start":clip.start as f64 / fps + (word.start-source_in)/speed, "end":clip.start as f64 / fps + (word.end-source_in)/speed})).collect::<Vec<_>>())
-                });
-                cut_ins.push(json!({"cut_in":cut_ins.len()+1, "text":text, "notes":notes, "card":clip, "voiceover":voiceover,
-                    "start":placed.map(|clip| clip.start), "end":placed.map(|clip| clip.end()), "words_seconds":words}));
+        for (index, block) in script.blocks.iter().enumerate() {
+            match block {
+                ScriptBlock::Narration {
+                    text,
+                    notes,
+                    clip,
+                    voiceover,
+                } => {
+                    let number = cut_ins.len() + 1;
+                    let placed = clip
+                        .as_deref()
+                        .and_then(|id| p.clip(id))
+                        .or_else(|| voiceover.as_deref().and_then(|id| p.clip(id)));
+                    if placed.is_some_and(|placed| !inside(placed.start, placed.end())) {
+                        cut_ins.push(Value::Null);
+                        continue;
+                    }
+                    let words = voiceover
+                        .as_deref()
+                        .and_then(|id| p.clip(id))
+                        .and_then(|clip| {
+                            let ClipContent::Audio {
+                                media,
+                                source_in,
+                                speed,
+                                ..
+                            } = &clip.content
+                            else {
+                                return None;
+                            };
+                            let media = p.media(media)?;
+                            let transcript: crate::transcribe::Transcript = serde_json::from_slice(
+                                &std::fs::read(
+                                    app.media
+                                        .paths(std::path::Path::new(&media.path))
+                                        .transcript,
+                                )
+                                .ok()?,
+                            )
+                            .ok()?;
+                            let to = source_in + clip.duration as f64 / fps * speed;
+                            Some(
+                                transcript
+                                    .words
+                                    .iter()
+                                    .filter(|word| word.end > *source_in && word.start < to)
+                                    .map(|word| {
+                                        format!(
+                                            "{}@{:.2}",
+                                            word.text.trim(),
+                                            clip.start as f64 / fps
+                                                + (word.start - source_in) / speed
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                            )
+                        });
+                    cut_ins.push(json!({"cut_in": number, "text": text, "notes": notes, "card": clip, "voiceover": voiceover,
+                        "start": placed.map(|clip| clip.start), "end": placed.map(|clip| clip.end()),
+                        "words": words}));
+                }
+                ScriptBlock::Footage {
+                    label, notes, clip, ..
+                } => {
+                    let placed = clip.as_deref().and_then(|id| p.clip(id));
+                    if placed.is_some_and(|placed| inside(placed.start, placed.end())) {
+                        footage.push(json!({"block": index, "label": label, "notes": notes, "clip": clip,
+                            "start": placed.map(|clip| clip.start), "end": placed.map(|clip| clip.end())}));
+                    }
+                }
             }
         }
     }
-    let tracks: Vec<_> = p
+    // Keep cut-in numbers stable when a span hides some.
+    let cut_ins: Vec<Value> = cut_ins
+        .into_iter()
+        .filter(|cut_in| !cut_in.is_null())
+        .collect();
+    let tracks: Vec<String> = p
         .tracks
         .iter()
-        .map(|track| json!({"track":track, "label":p.track_label(&track.id)}))
+        .map(|track| {
+            let mut row = format!(
+                "{} {}",
+                track.id,
+                p.track_label(&track.id).unwrap_or_default()
+            );
+            for (on, word) in [
+                (track.subtitles, "subtitles"),
+                (track.hidden, "hidden"),
+                (track.muted, "muted"),
+                (track.locked, "locked"),
+            ] {
+                if on {
+                    row.push(' ');
+                    row.push_str(word);
+                }
+            }
+            row
+        })
         .collect();
-    let media: Vec<_> = p.media.iter().map(|media| json!({"id":media.id, "name":media.name, "kind":media.kind, "duration":media.duration, "fps":media.fps, "width":media.width, "height":media.height, "has_audio":media.has_audio})).collect();
-    let mut context = json!({"rev":live.rev, "id":p.id, "settings":p.settings, "duration_frames":p.duration(), "tracks":tracks,
-        "sections":edit_core::sections(p), "media":media, "clips":clips, "speaker_line_counts":speakers, "script":p.script,
-        "cut_ins":cut_ins, "audit":crate::edit_plan::audit(p), "smoothing":crate::broll::smoothing_pending(&p.id)});
+    let media: Vec<String> = p
+        .media
+        .iter()
+        .map(|media| {
+            format!(
+                "{} {:?} {:.1}s{} \"{}\"",
+                media.id,
+                media.kind,
+                media.duration,
+                if media.has_audio { " sound" } else { "" },
+                media.name
+            )
+        })
+        .collect();
+    let mut context = json!({"rev":live.rev, "id":p.id, "settings":p.settings, "duration_frames":p.duration(),
+        "times": "clip rows are `id track type [start,end) frames …`; cut-in words are word@timeline-seconds",
+        "tracks":tracks, "sections":sections, "media":media, "speaker_line_counts":speakers,
+        "subtitles_in_span": subtitles, "footage_blocks":footage, "cut_ins":cut_ins,
+        "audit":crate::edit_plan::audit(p), "smoothing":crate::broll::smoothing_pending(&p.id)});
     if args["include_transcript"].as_bool().unwrap_or(false) {
-        if let Some(fields) = context.as_object_mut() {
-            fields.insert("transcript".to_owned(), json!(timeline_transcript(app, p)));
-        }
+        let heard = timeline_transcript(app, p);
+        let heard = match (from, to) {
+            (None, None) => heard,
+            _ => heard
+                .lines()
+                .filter(|line| {
+                    line_seconds(line)
+                        .is_none_or(|at| inside((at * fps) as i64, (at * fps) as i64 + 1))
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        };
+        context["transcript"] = json!(heard);
     }
+    // Clips last, cut to what fits.
+    let used = context.to_string().len();
+    let mut room = BUDGET.saturating_sub(used);
+    let total = clips.len();
+    let mut kept = Vec::new();
+    for clip in clips {
+        let size = clip.to_string().len() + 1;
+        if size > room && ids.is_none() {
+            break;
+        }
+        room = room.saturating_sub(size);
+        kept.push(clip);
+    }
+    if kept.len() < total {
+        context["clips_cut"] = json!(format!(
+            "{} of {total} clips shown; narrow with section, start/end or clip_ids",
+            kept.len()
+        ));
+    }
+    context["clips"] = json!(kept);
     context
+}
+
+/// The start of a transcript line ("[12.3] …" / "12.30 …"), in seconds.
+fn line_seconds(line: &str) -> Option<f64> {
+    line.trim_start_matches(['[', ' '])
+        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == ':'))
+        .next()
+        .and_then(|at| {
+            at.split(':').try_fold(0.0, |total, part| {
+                part.parse::<f64>().ok().map(|n| total * 60.0 + n)
+            })
+        })
+}
+
+/// One clip as a line a model reads quickly: id, track, type, frames, what it
+/// shows or plays, and which params are keyframed (not the keys).
+fn clip_row(p: &Project, clip: &Clip) -> String {
+    let value = serde_json::to_value(clip).unwrap_or_default();
+    let kind = value["type"].as_str().unwrap_or("?");
+    let mut row = format!(
+        "{} {} {kind} [{},{})",
+        clip.id,
+        p.track_label(&clip.track)
+            .unwrap_or_else(|| clip.track.clone()),
+        clip.start,
+        clip.end()
+    );
+    if let Some(name) = &clip.name {
+        row.push_str(&format!(" \"{name}\""));
+    }
+    match &clip.content {
+        ClipContent::Video {
+            media,
+            source_in,
+            speed,
+            ..
+        } => {
+            row.push_str(&format!(" {media}@{source_in:.2}s"));
+            if (*speed - 1.0).abs() > 1e-6 {
+                row.push_str(&format!(" x{speed:.2}"));
+            }
+        }
+        ClipContent::Audio {
+            media,
+            source_in,
+            speed,
+            volume_db,
+            ..
+        } => {
+            row.push_str(&format!(" {media}@{source_in:.2}s {volume_db:+.1}dB"));
+            if (*speed - 1.0).abs() > 1e-6 {
+                row.push_str(&format!(" x{speed:.2}"));
+            }
+        }
+        ClipContent::Text { text, style, .. } => {
+            let short: String = text.chars().take(70).collect();
+            row.push_str(&format!(" {:?}", short.replace('\n', " / ")));
+            if let Some(label) = &style.label {
+                row.push_str(&format!(" label {:?}", label.text));
+            }
+        }
+        _ => {}
+    }
+    if let Some(link) = &clip.link {
+        row.push_str(&format!(" link {link}"));
+    }
+    if !clip.keyframes.is_empty() {
+        let params: Vec<&str> = clip.keyframes.keys().map(String::as_str).collect();
+        row.push_str(&format!(" kf {}", params.join(",")));
+    }
+    row
 }
 
 /// Runs tool calls one after another for `batch`: "$N" arguments become the
@@ -2268,31 +2480,82 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
         "transcribe",
         "export",
     ];
+    /// Tools that only look (or each touch just their own clip) and take a
+    /// while: a run of these with no "$N" references goes side by side.
+    const SIDE_BY_SIDE: &[&str] = &[
+        "render_frame",
+        "contact_sheet",
+        "look_at_media",
+        "measure_audio",
+        "media_transcript",
+        "read_transcript",
+        "still_frame",
+        "track_region",
+        "case_articles",
+        "read_page",
+        "list_library",
+    ];
     let calls = args["calls"].as_array().ok_or("calls must be a list")?;
     let keep_going = args["keep_going"].as_bool().unwrap_or(false);
     let mut added: Vec<Option<String>> = Vec::new();
     let mut content = Vec::new();
     let mut failures = 0;
-    for (index, call_spec) in calls.iter().enumerate() {
-        let name = call_spec["tool"].as_str().unwrap_or_default();
+    let run_one = |index: usize, added: &[Option<String>]| {
+        let call_spec = &calls[index];
+        let name = call_spec["tool"].as_str().unwrap_or_default().to_owned();
         let mut call_args = call_spec.get("args").cloned().unwrap_or_else(|| json!({}));
-        let result = if SLOW.contains(&name) {
+        let ready = if SLOW.contains(&name.as_str()) {
             Err(format!("{name} can't run in a batch; call it on its own"))
         } else {
-            resolve_refs(&mut call_args, &added)
+            resolve_refs(&mut call_args, added)
         };
-        let result = match result {
-            Ok(()) => {
-                Box::pin(crate::diag::time_async(
-                    "agent",
-                    &format!("tool {name}"),
-                    call(app, name, &call_args, scope),
-                ))
-                .await
+        async move {
+            match ready {
+                Ok(()) => {
+                    Box::pin(crate::diag::time_async(
+                        "agent",
+                        &format!("tool {name}"),
+                        call(app, &name, &call_args, scope),
+                    ))
+                    .await
+                }
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
+        }
+    };
+    let independent = |index: usize| {
+        let spec = &calls[index];
+        SIDE_BY_SIDE.contains(&spec["tool"].as_str().unwrap_or_default())
+            && !has_refs(spec.get("args").unwrap_or(&Value::Null))
+    };
+    let mut ready: std::collections::VecDeque<(usize, Result<Value, String>)> = Default::default();
+    let mut index = 0;
+    while index < calls.len() {
+        let name = calls[index]["tool"].as_str().unwrap_or_default();
+        let result = if let Some((_, result)) = ready.pop_front() {
+            result
+        } else if independent(index) {
+            // This call and the independent ones right after it, three at a time.
+            let mut end = index;
+            while end < calls.len() && independent(end) {
+                end += 1;
+            }
+            use futures_util::StreamExt as _;
+            let results: Vec<Result<Value, String>> =
+                futures_util::stream::iter((index..end).map(|at| run_one(at, &added)))
+                    .buffered(3)
+                    .collect()
+                    .await;
+            ready.extend((index..end).zip(results));
+            ready
+                .pop_front()
+                .map(|(_, result)| result)
+                .unwrap_or_else(|| Err("lost".into()))
+        } else {
+            run_one(index, &added).await
         };
         let label = format!("[{}] {name}: ", index + 1);
+        index += 1;
         match result {
             Ok(Value::Array(items)) => {
                 added.push(items.iter().find_map(added_clip));
@@ -2315,8 +2578,27 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
                 failures += 1;
                 content.push(json!({ "type": "text", "text": format!("{label}FAILED: {error}") }));
                 if !keep_going {
-                    if index + 1 < calls.len() {
-                        content.push(json!({ "type": "text", "text": format!("stopped; calls {} to {} didn't run", index + 2, calls.len()) }));
+                    // Calls that already ran beside this one still report.
+                    while let Some((at, result)) = ready.pop_front() {
+                        let label = format!(
+                            "[{}] {}: ",
+                            at + 1,
+                            calls[at]["tool"].as_str().unwrap_or_default()
+                        );
+                        let said = match result {
+                            Ok(Value::Array(items)) => items
+                                .iter()
+                                .filter_map(|item| item["text"].as_str())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            Ok(other) => other.to_string(),
+                            Err(error) => format!("FAILED: {error}"),
+                        };
+                        content.push(json!({ "type": "text", "text": format!("{label}{said}") }));
+                        index = at + 1;
+                    }
+                    if index < calls.len() {
+                        content.push(json!({ "type": "text", "text": format!("stopped; calls {} to {} didn't run", index + 1, calls.len()) }));
                     }
                     break;
                 }
@@ -2340,6 +2622,18 @@ fn added_clip(item: &Value) -> Option<String> {
         .strip_prefix("added clip ")
         .or_else(|| said.strip_prefix("added text clip "))?;
     rest.split_whitespace().next().map(str::to_owned)
+}
+
+/// Whether `value` holds a "$N" reference to an earlier call's clip.
+fn has_refs(value: &Value) -> bool {
+    match value {
+        Value::String(said) => said
+            .strip_prefix('$')
+            .is_some_and(|n| n.parse::<usize>().is_ok()),
+        Value::Array(items) => items.iter().any(has_refs),
+        Value::Object(fields) => fields.values().any(has_refs),
+        _ => false,
+    }
 }
 
 /// Replaces "$N" strings with the clip call N added.

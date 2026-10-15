@@ -85,6 +85,9 @@ pub struct Run {
     /// The step being worked on (0-based).
     pub current: usize,
     pub steps: Vec<RunStep>,
+    /// The model every step runs on (each step sets its own effort).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -586,8 +589,8 @@ impl Agents {
         let instructions = format!(
             "You are the agent built into Edit, a video editor. The user is watching the editor while you work: every change you make through the `edit` tools appears live on their timeline and can be undone with ⌘Z. \
              Edit only through the `edit` tools; you have no shell or files. The project is \"{}\" ({}x{} at {} fps). \
-             Call get_project before editing and read_transcript when speech matters. After visual changes, look at your work with render_frame or contact_sheet. \
-             Work in as few steps as you can: put edits you already know into one batch call (see WORK FAST). \
+             Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. \
+             When a tool is still running (watch_footage, map_view, export), wait for it in long blocks (yield_time_ms 30000 or more), never second by second. \
              Keep replies short: say what you changed and where (timecodes).\n\n{}",
             live.project.name, live.project.settings.width, live.project.settings.height, live.project.settings.fps,
             // The model and house style, as every MCP client gets them.
@@ -1084,7 +1087,8 @@ impl Agents {
         project: &str,
         notes: String,
         model: Option<String>,
-        effort: Option<String>,
+        // Each step has its own effort (fulledit::STEPS); the composer's is for chat.
+        _effort: Option<String>,
     ) -> Result<(), String> {
         let prompt = crate::fulledit::prompt(0, &notes).ok_or("no steps")?;
         let generation = {
@@ -1104,22 +1108,31 @@ impl Agents {
                 chat.generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
                 chat.halted = false;
                 chat.retries = 0;
+                // A full edit starts its own conversation. Carrying on the
+                // chat's thread brought every earlier turn along (200k+ tokens
+                // before the first step), and a model's answer takes several
+                // times as long with that much to read. What earlier work
+                // found is in the project: saved articles, found images,
+                // transcripts and the timeline.
+                chat.thread = None;
                 chat.run = Some(Run {
                     state: "running".to_owned(),
                     notes,
                     current: 0,
                     steps: crate::fulledit::STEPS
                         .iter()
-                        .map(|(name, _)| RunStep {
-                            name: (*name).to_owned(),
+                        .map(|step| RunStep {
+                            name: step.name.to_owned(),
                             ..RunStep::default()
                         })
                         .collect(),
+                    model: model.clone(),
                 });
                 Ok(chat.generation)
             })?
         };
-        self.start_step(project, prompt, model, effort, generation)
+        let effort = crate::fulledit::STEPS[0].effort.to_owned();
+        self.start_step(project, prompt, model, Some(effort), generation)
             .await
     }
 
@@ -1162,9 +1175,12 @@ impl Agents {
             if prompt.is_some() {
                 run.current += 1;
             }
-            Some((chat.generation, prompt))
+            let effort = crate::fulledit::STEPS
+                .get(run.current)
+                .map(|step| step.effort.to_owned());
+            Some((chat.generation, prompt, run.model.clone(), effort))
         });
-        let Some((generation, prompt)) = next else {
+        let Some((generation, prompt, model, effort)) = next else {
             return;
         };
         match (error, prompt) {
@@ -1177,7 +1193,7 @@ impl Agents {
                 let (this, project) = (Arc::clone(self), project.to_owned());
                 runtime.spawn(async move {
                     let _ = this
-                        .start_step(&project, prompt, None, None, generation)
+                        .start_step(&project, prompt, model, effort, generation)
                         .await;
                 });
             }
@@ -1662,12 +1678,19 @@ mod tests {
         }
 
         async fn request(&mut self, method: &str) -> Value {
-            let request = tokio::time::timeout(Duration::from_secs(2), self.requests.recv())
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(request["method"], method);
-            request
+            loop {
+                let request = tokio::time::timeout(Duration::from_secs(2), self.requests.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                // A full edit starts its own thread: hand it the test's.
+                if request["method"] == "thread/start" && method != "thread/start" {
+                    self.reply(&request, Ok(json!({ "thread": { "id": "test-thread" } })));
+                    continue;
+                }
+                assert_eq!(request["method"], method);
+                return request;
+            }
         }
 
         fn reply(&self, request: &Value, result: Result<Value, String>) {
@@ -1707,11 +1730,17 @@ mod tests {
             let request = fixture.request("turn/start").await;
             assert_eq!(request["params"]["threadId"], "test-thread");
             assert_eq!(request["params"]["model"], "test-model");
-            assert_eq!(request["params"]["effort"], "medium");
-            assert!(request["params"]["input"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("test notes"));
+            assert_eq!(
+                request["params"]["effort"],
+                crate::fulledit::STEPS[index].effort
+            );
+            assert_eq!(
+                request["params"]["input"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("test notes"),
+                index == 0
+            );
             fixture.reply(&request, Ok(json!({ "turn": { "id": "test-turn" } })));
             // No await: the reader can deliver completion before the sender
             // has handled the reply and released its startup lock.

@@ -166,7 +166,7 @@ fn upload(
     name: &str,
     into: &str,
     replacing: Option<&str>,
-    progress: impl FnMut(f32),
+    mut progress: impl FnMut(f32),
 ) -> Result<DriveFile, String> {
     let size = std::fs::metadata(path)
         .map_err(|error| format!("can't read {}: {error}", path.display()))?
@@ -207,18 +207,43 @@ fn upload(
         )?;
         Ok((code, String::from_utf8_lossy(&answer).into_owned()))
     };
-    let (mut code, mut answer) = session(replacing)?;
     let mut replaced = replacing.is_some();
-    if replaced && code == 404 {
-        // Deleted on Drive since: a new file, and a new link.
-        (code, answer) = session(None)?;
-        replaced = false;
-    }
-    if code != 200 {
-        return Err(drive_error(code, body_of(&answer)));
-    }
-    let session = location(&answer).ok_or("Google Drive didn't start the upload")?;
-    let (code, body) = put(&session, path, mime, progress)?;
+    // A dropped connection or a busy Drive mid-upload starts a new session
+    // and sends the file again (a few times), rather than failing the export
+    // and leaving the user to upload by hand.
+    let mut tries = 0;
+    let (code, body) = loop {
+        tries += 1;
+        let (mut code, mut answer) = session(replacing.filter(|_| replaced))?;
+        if replaced && code == 404 {
+            // Deleted on Drive since: a new file, and a new link.
+            (code, answer) = session(None)?;
+            replaced = false;
+        }
+        if code != 200 {
+            return Err(drive_error(code, body_of(&answer)));
+        }
+        let session = location(&answer).ok_or("Google Drive didn't start the upload")?;
+        let sent = put(&session, path, mime, &mut progress);
+        let retry = match &sent {
+            Err(_) => true,
+            Ok((code, _)) => *code == 429 || *code >= 500 || *code == 0,
+        };
+        if !retry || tries >= 3 {
+            break sent?;
+        }
+        crate::diag::warn(
+            "drive",
+            format!(
+                "uploading {name}, try {tries}: {}; trying again",
+                match &sent {
+                    Err(error) => error.clone(),
+                    Ok((code, body)) => drive_error(*code, body),
+                }
+            ),
+        );
+        std::thread::sleep(std::time::Duration::from_secs(2 * tries));
+    };
     if !(200..300).contains(&code) {
         return Err(drive_error(code, &body));
     }

@@ -206,6 +206,22 @@ export interface Glitch {
   rgb?: number;
 }
 
+/** Blurs the picture below in a region (a minor's face, a name on screen) before the grade. */
+export interface Blur {
+  /** Gaussian spread in project px, as CSS blur() (0 = off; ~35 at 1080p hides a face). */
+  radius: number;
+  /** The region's centre (project px from the frame centre, y down); absent = centred. */
+  x?: number;
+  y?: number;
+  /** The region's size in project px; absent or 0 = the whole frame. */
+  width?: number;
+  height?: number;
+  /** Px over which the blur fades out beyond the region's edge. */
+  feather?: number;
+  /** Ellipse (a face, default) or slightly rounded rectangle (a word, a plate). */
+  shape?: "ellipse" | "rect";
+}
+
 export type ShakePreset = "none" | "handheld" | "vertical" | "horizontal" | "impact" | "earthquake";
 export type ShakeDirection = "both" | "vertical" | "horizontal";
 export type ShakeEnvelope = "steady" | "build" | "hit" | "swell";
@@ -331,6 +347,7 @@ export interface AdjustmentClip extends ClipBase {
   grade: Grade;
   shake?: Shake;
   glitch?: Glitch;
+  blur?: Blur;
   opacity: number;
 }
 
@@ -510,7 +527,7 @@ export const ANIMATABLE: Record<ClipType, string[]> = {
   video: ["opacity", "x", "y", "scale", "rotation", "shake"],
   audio: ["volume_db"],
   text: ["opacity", "x", "y", "scale", "rotation", "shake", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"],
-  adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "glitch"],
+  adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "glitch", "blur", "blur.x", "blur.y", "blur.width", "blur.height"],
   solid: ["opacity"],
   waveform: ["opacity", "x", "y", "scale", "rotation", "gain", "glow.radius", "glow.strength"],
 };

@@ -1491,8 +1491,25 @@ pub async fn follow_region(
         let (x, y) = match what {
             "vignette" => ("vignette_x", "vignette_y"),
             "leader" => ("leader.x", "leader.y"),
+            "blur" => ("blur.x", "blur.y"),
             _ => ("x", "y"),
         };
+        if what == "blur" {
+            // The blur covers the box (feathered beyond it), strong enough to hide a face.
+            let ClipContent::Adjustment { blur, .. } = &mut clip.content else {
+                return Err(format!("{follow} isn't an adjustment, so it has no blur"));
+            };
+            blur.width = (region[2] - region[0]).abs() as f32;
+            blur.height = (region[3] - region[1]).abs() as f32;
+            if blur.radius <= 0.0 {
+                blur.radius = (35.0 * height / 1080.0) as f32;
+            }
+            if blur.feather <= 0.0 {
+                blur.feather = (20.0 * height / 1080.0) as f32;
+            }
+            clip.keyframes.remove("blur.width");
+            clip.keyframes.remove("blur.height");
+        }
         clip.keyframes.insert(x.into(), xs);
         clip.keyframes.insert(y.into(), ys);
         Ok(())

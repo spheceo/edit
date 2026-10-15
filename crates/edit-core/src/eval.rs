@@ -37,6 +37,8 @@ pub enum Layer {
         /// How the picture beneath moves this frame.
         shake: ShakeOffset,
         glitch: GlitchFrame,
+        /// Blurs the picture beneath (in a region) before the grade; project px.
+        blur: Blur,
         opacity: f32,
     },
     Solid {
@@ -225,6 +227,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 grade,
                 shake,
                 glitch,
+                blur,
                 opacity,
             } => {
                 let settings = shake.resolved();
@@ -253,6 +256,15 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         rgb: glitch.rgb,
                         seed: ((seed_of(&clip.id) ^ (frame as u32).wrapping_mul(0x9E37_79B9)) % 997)
                             as f32,
+                    },
+                    blur: Blur {
+                        radius: anim("blur", blur.radius).max(0.0),
+                        x: anim("blur.x", blur.x),
+                        y: anim("blur.y", blur.y),
+                        width: anim("blur.width", blur.width).max(0.0),
+                        height: anim("blur.height", blur.height).max(0.0),
+                        feather: blur.feather.max(0.0),
+                        shape: blur.shape,
                     },
                     shake: shake_offset(
                         &clip.id,
@@ -781,6 +793,73 @@ mod tests {
             },
         });
         project
+    }
+
+    #[test]
+    fn blur_strength_and_region_follow_keyframes() {
+        let mut project = project();
+        let key = |frame: f32, value: f32| Keyframe {
+            frame,
+            value,
+            ease: Ease::Linear,
+            handle_in: None,
+            handle_out: None,
+        };
+        let Some(clip) = project.clips.get_mut(1) else {
+            panic!("no clip");
+        };
+        clip.content = ClipContent::Adjustment {
+            grade: Grade::default(),
+            shake: Shake::default(),
+            glitch: Glitch::default(),
+            blur: Blur {
+                radius: 30.0,
+                width: 200.0,
+                height: 260.0,
+                feather: 12.0,
+                ..Blur::default()
+            },
+            opacity: 1.0,
+        };
+        clip.keyframes = [
+            ("blur".to_owned(), vec![key(0.0, 0.0), key(10.0, 40.0)]),
+            (
+                "blur.x".to_owned(),
+                vec![key(0.0, -100.0), key(20.0, 100.0)],
+            ),
+            ("blur.y".to_owned(), vec![key(0.0, 50.0), key(20.0, -50.0)]),
+            (
+                "blur.width".to_owned(),
+                vec![key(0.0, 200.0), key(20.0, 300.0)],
+            ),
+        ]
+        .into();
+        assert!(project.validate().is_ok());
+        let scene = evaluate(&project, 40);
+        let blur = scene
+            .layers
+            .iter()
+            .find_map(|layer| match layer {
+                Layer::Adjustment { blur, .. } => Some(*blur),
+                _ => None,
+            })
+            .unwrap();
+        assert!((blur.radius - 40.0).abs() < 1e-4, "{blur:?}");
+        assert!(blur.x.abs() < 1e-4 && blur.y.abs() < 1e-4, "{blur:?}");
+        assert!((blur.width - 250.0).abs() < 1e-4, "{blur:?}");
+        // Not keyed: as set.
+        assert_eq!((blur.height, blur.feather), (260.0, 12.0));
+        // Before the first key it holds the first value; keys can't make it negative.
+        let Some(clip) = project.clips.get_mut(1) else {
+            panic!("no clip");
+        };
+        clip.keyframes
+            .insert("blur".to_owned(), vec![key(0.0, -5.0), key(10.0, 40.0)]);
+        let scene = evaluate(&project, 30);
+        assert!(scene.layers.iter().any(|layer| matches!(
+            layer,
+            Layer::Adjustment { blur, .. } if blur.radius == 0.0 && (blur.x + 100.0).abs() < 1e-4
+        )));
     }
 
     #[test]

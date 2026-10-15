@@ -88,6 +88,30 @@ struct BlurUniforms {
     _pad: [f32; 2],
 }
 
+/// An adjustment's blur, second pass (see `region_blur.wgsl`).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct RegionBlurUniforms {
+    dir: [f32; 2],
+    texel: [f32; 2],
+    sigma: f32,
+    taps: f32,
+    /// 0 ellipse, 1 rounded rectangle, 2 the whole frame.
+    shape: f32,
+    feather: f32,
+    /// Target px from the top-left.
+    center: [f32; 2],
+    half: [f32; 2],
+    size: [f32; 2],
+    amount: f32,
+    _pad: f32,
+}
+
+/// Taps each side of a blur pass: about one every 1.5 px over 3 sigma, at most 48.
+fn blur_taps(sigma: f32) -> f32 {
+    (3.0 * sigma / 1.5).ceil().clamp(1.0, 48.0)
+}
+
 const MODE_STRAIGHT: u32 = 0;
 const MODE_SOLID: u32 = 1;
 const MODE_GLOW: u32 = 2;
@@ -165,6 +189,8 @@ pub struct Renderer {
     width: u32,
     height: u32,
     accum: [Target; 2],
+    /// The picture beneath a blurring adjustment, blurred across (made on first use).
+    blur_scratch: Option<Target>,
     output: Target,
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<wgpu::Buffer>,
@@ -172,6 +198,10 @@ pub struct Renderer {
     over_pipeline: wgpu::RenderPipeline,
     adjust_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
+    /// The blur's first pass into `blur_scratch`, then its second over the picture.
+    blur_accum_pipeline: wgpu::RenderPipeline,
+    region_layout: wgpu::BindGroupLayout,
+    region_blur_pipeline: wgpu::RenderPipeline,
     present_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     present_shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -232,6 +262,54 @@ impl Renderer {
             bind_group_layouts: &[Some(&layer_layout)],
             immediate_size: 0,
         });
+        // The layer layout plus a second texture: the sharp picture a blur is laid over.
+        let region_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("edit region blur"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let region_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("edit region blur"),
+                bind_group_layouts: &[Some(&region_layout)],
+                immediate_size: 0,
+            });
         let shader = |label: &str, source: String| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
@@ -246,6 +324,10 @@ impl Renderer {
         let blur_shader = shader(
             "edit blur",
             fullscreen_source(include_str!("shaders/blur.wgsl")),
+        );
+        let region_blur_shader = shader(
+            "edit region blur",
+            fullscreen_source(include_str!("shaders/region_blur.wgsl")),
         );
         let present_shader = shader(
             "edit present",
@@ -287,6 +369,22 @@ impl Renderer {
             SOURCE_FORMAT,
             None,
             "edit blur",
+        );
+        let blur_accum_pipeline = make_pipeline(
+            &device,
+            &pipeline_layout,
+            &blur_shader,
+            ACCUM_FORMAT,
+            None,
+            "edit blur accum",
+        );
+        let region_blur_pipeline = make_pipeline(
+            &device,
+            &region_pipeline_layout,
+            &region_blur_shader,
+            ACCUM_FORMAT,
+            None,
+            "edit region blur",
         );
 
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -343,6 +441,7 @@ impl Renderer {
             width: width.max(1),
             height: height.max(1),
             accum,
+            blur_scratch: None,
             output,
             #[cfg(not(target_arch = "wasm32"))]
             readback: None,
@@ -350,6 +449,9 @@ impl Renderer {
             over_pipeline,
             adjust_pipeline,
             blur_pipeline,
+            blur_accum_pipeline,
+            region_layout,
+            region_blur_pipeline,
             present_pipelines: HashMap::new(),
             present_shader,
             pipeline_layout,
@@ -407,6 +509,7 @@ impl Renderer {
                 wgpu::TextureUsages::empty(),
             ),
         ];
+        self.blur_scratch = None;
         self.output = Target::new(
             &self.device,
             "edit output",
@@ -1005,8 +1108,14 @@ impl Renderer {
                     grade,
                     shake,
                     glitch,
+                    blur,
                     opacity,
                 } => {
+                    // The blur first, so the grade and shake treat it as the picture.
+                    if !blur.is_off() && *opacity > 0.0 {
+                        self.blur_region(&mut encoder, &mut slots, current, blur, *opacity);
+                        current = 1 - current;
+                    }
                     let still = *shake == edit_core::ShakeOffset::default() && glitch.amount == 0.0;
                     if still && (*opacity <= 0.0 || *grade == Grade::default()) {
                         continue;
@@ -1636,6 +1745,113 @@ impl Renderer {
             offset,
             4,
             None,
+        );
+    }
+
+    /// Blurs `accum(current)` into `accum(1 - current)` inside `blur`'s region:
+    /// a Gaussian across into the scratch, then down, laid over the sharp picture.
+    fn blur_region(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        slots: &mut SlotWriter,
+        current: usize,
+        blur: &edit_core::Blur,
+        opacity: f32,
+    ) {
+        let (width, height) = (self.width as f32, self.height as f32);
+        let texel = [1.0 / width, 1.0 / height];
+        let sigma = blur.radius.max(0.5);
+        let taps = blur_taps(sigma);
+        if self
+            .blur_scratch
+            .as_ref()
+            .is_none_or(|scratch| (scratch.width, scratch.height) != (self.width, self.height))
+        {
+            self.blur_scratch = Some(Target::new(
+                &self.device,
+                "edit blur scratch",
+                self.width,
+                self.height,
+                ACCUM_FORMAT,
+                wgpu::TextureUsages::empty(),
+            ));
+        }
+        let Some(scratch) = &self.blur_scratch else {
+            return;
+        };
+        let across = BlurUniforms {
+            dir: [1.0, 0.0],
+            texel,
+            sigma,
+            taps,
+            _pad: [0.0; 2],
+        };
+        let offset = slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&across));
+        let group = self.bind(&self.accum(current).view);
+        draw(
+            encoder,
+            &self.blur_accum_pipeline,
+            &scratch.view,
+            &group,
+            offset,
+            3,
+            Some(wgpu::Color::TRANSPARENT),
+        );
+        let down = RegionBlurUniforms {
+            dir: [0.0, 1.0],
+            texel,
+            sigma,
+            taps,
+            shape: if blur.is_whole_frame() {
+                2.0
+            } else {
+                match blur.shape {
+                    edit_core::BlurShape::Ellipse => 0.0,
+                    edit_core::BlurShape::Rect => 1.0,
+                }
+            },
+            feather: blur.feather.max(0.0),
+            center: [width / 2.0 + blur.x, height / 2.0 + blur.y],
+            half: [blur.width / 2.0, blur.height / 2.0],
+            size: [width, height],
+            amount: opacity.clamp(0.0, 1.0),
+            _pad: 0.0,
+        };
+        let offset = slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&down));
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.region_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.uniforms,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(UNIFORM_SLOT),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&scratch.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.accum(current).view),
+                },
+            ],
+        });
+        draw(
+            encoder,
+            &self.region_blur_pipeline,
+            &self.accum(1 - current).view,
+            &group,
+            offset,
+            3,
+            Some(wgpu::Color::TRANSPARENT),
         );
     }
 

@@ -393,7 +393,7 @@ pub enum ClipContent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         word_times: Vec<f32>,
     },
-    /// Applies a grade, camera shake and a glitch to everything composited beneath it.
+    /// Applies a blur, a grade, camera shake and a glitch to everything composited beneath it.
     Adjustment {
         #[serde(default)]
         grade: Grade,
@@ -401,6 +401,8 @@ pub enum ClipContent {
         shake: Shake,
         #[serde(default, skip_serializing_if = "Glitch::is_off")]
         glitch: Glitch,
+        #[serde(default, skip_serializing_if = "Blur::is_off")]
+        blur: Blur,
         #[serde(default = "one_f32")]
         opacity: f32,
     },
@@ -1202,6 +1204,60 @@ impl Glitch {
     }
 }
 
+/// A blur of the picture beneath an adjustment layer, over a region (a
+/// minor's face, a name on screen) or the whole frame: blurred before the
+/// grade, so the grade and shake apply to it as to the rest.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct Blur {
+    /// How strong: the Gaussian's spread in project px, as CSS `blur()`
+    /// (0 = off; ~35 at 1080p leaves a face unrecognisable).
+    #[serde(default)]
+    pub radius: f32,
+    /// The region's centre: project px from the frame centre, y down (as transforms).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub x: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub y: f32,
+    /// The region's size in project px; 0 (either) = the whole frame.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub width: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub height: f32,
+    /// Project px over which the blur fades out beyond the region's edge
+    /// (the region itself is always fully blurred).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub feather: f32,
+    #[serde(default, skip_serializing_if = "BlurShape::is_ellipse")]
+    pub shape: BlurShape,
+}
+
+impl Blur {
+    pub fn is_off(&self) -> bool {
+        self.radius <= 0.0
+    }
+
+    /// Whether it covers the whole frame (no region given).
+    pub fn is_whole_frame(&self) -> bool {
+        self.width <= 0.0 || self.height <= 0.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BlurShape {
+    /// Fits a face.
+    #[default]
+    Ellipse,
+    /// A rectangle with slightly rounded corners: a word, a plate, a screen.
+    Rect,
+}
+
+impl BlurShape {
+    fn is_ellipse(&self) -> bool {
+        *self == Self::Ellipse
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Ease {
@@ -1271,6 +1327,11 @@ pub fn animatable_params(content: &ClipContent) -> &'static [&'static str] {
             "vignette_y",
             "vignette_size",
             "glitch",
+            "blur",
+            "blur.x",
+            "blur.y",
+            "blur.width",
+            "blur.height",
         ],
         ClipContent::Solid { .. } => &["opacity"],
         ClipContent::Waveform { .. } => &[
@@ -1627,6 +1688,17 @@ impl Project {
                     ));
                 }
             }
+            if let ClipContent::Adjustment { blur, .. } = &clip.content {
+                if [blur.radius, blur.width, blur.height, blur.feather]
+                    .iter()
+                    .any(|value| *value < 0.0)
+                {
+                    return Err(format!(
+                        "clip {} blur radius, width, height and feather can't be negative",
+                        clip.id
+                    ));
+                }
+            }
             if let ClipContent::Solid {
                 gradient: Some(gradient),
                 ..
@@ -1794,10 +1866,17 @@ fn content_finite(content: &ClipContent) -> bool {
             grade,
             shake,
             glitch,
+            blur,
             opacity,
         } => {
             let shake = shake.resolved();
             finite(&[
+                blur.radius,
+                blur.x,
+                blur.y,
+                blur.width,
+                blur.height,
+                blur.feather,
                 grade.exposure,
                 grade.contrast,
                 grade.saturation,
@@ -1908,6 +1987,64 @@ mod validation_tests {
         assert_eq!(p.fresh_id("c"), "c9007199254740991");
         assert_eq!(p.fresh_id("c"), "c2");
         assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn blur_defaults_off_round_and_whole_frame_and_rejects_negatives() {
+        let json = r#"{"type":"adjustment","grade":{"exposure":0,"contrast":0,"saturation":0,"temperature":0,"vignette":0}}"#;
+        let content: ClipContent = serde_json::from_str(json).unwrap();
+        let ClipContent::Adjustment { blur, .. } = content else {
+            panic!("not an adjustment");
+        };
+        assert!(blur.is_off() && blur.is_whole_frame());
+        assert_eq!(blur.shape, BlurShape::Ellipse);
+        // Off, it isn't written; on, only what's set is.
+        let written = serde_json::to_string(&content).unwrap();
+        assert!(!written.contains("blur"), "{written}");
+        let json = r#"{"type":"adjustment","grade":{"exposure":0,"contrast":0,"saturation":0,"temperature":0,"vignette":0},"blur":{"radius":35,"x":-120,"width":180,"height":220,"shape":"rect"}}"#;
+        let content: ClipContent = serde_json::from_str(json).unwrap();
+        let ClipContent::Adjustment { blur, .. } = content else {
+            panic!("not an adjustment");
+        };
+        assert_eq!(
+            blur,
+            Blur {
+                radius: 35.0,
+                x: -120.0,
+                y: 0.0,
+                width: 180.0,
+                height: 220.0,
+                feather: 0.0,
+                shape: BlurShape::Rect,
+            }
+        );
+        assert!(!blur.is_off() && !blur.is_whole_frame());
+        let written = serde_json::to_string(&content).unwrap();
+        assert!(
+            written.contains(
+                r#""blur":{"radius":35.0,"x":-120.0,"width":180.0,"height":220.0,"shape":"rect"}"#
+            ),
+            "{written}"
+        );
+
+        let mut p = project();
+        p.clips[0].content = content;
+        p.clips[0].keyframes.insert(
+            "blur.x".into(),
+            vec![Keyframe {
+                frame: 0.0,
+                value: 10.0,
+                ease: Ease::Linear,
+                handle_in: None,
+                handle_out: None,
+            }],
+        );
+        assert!(p.validate().is_ok());
+        let ClipContent::Adjustment { blur, .. } = &mut p.clips[0].content else {
+            panic!("not an adjustment");
+        };
+        blur.radius = -1.0;
+        assert!(p.validate().is_err());
     }
 
     #[test]

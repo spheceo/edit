@@ -12,7 +12,6 @@ import {
   FolderOpen,
   LayoutGrid,
   ListChecks,
-  ListVideo,
   Music,
   RotateCw,
   ScrollText,
@@ -40,7 +39,6 @@ import {
   EFFORT_LABELS,
   newChat,
   openAgent,
-  runFullEdit,
   sendToAgent,
   stopAgent,
   useAgent,
@@ -63,8 +61,8 @@ export function OpenAIMark({ size = 16 }: { size?: number }) {
 
 export function AgentPanel() {
   const projectId = useEditor((state) => state.project?.id);
-  const { status, entries, running, loaded, run } = useAgent();
-  const busy = running || run?.state === "running";
+  const { status, entries, running, loaded } = useAgent();
+  const busy = running;
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const turns = buildTurns(entries, running);
@@ -120,7 +118,6 @@ export function AgentPanel() {
         )}
       </div>
 
-      {!(status && !status.ready) && <RunProgress />}
       {!(status && !status.ready) && <Composer disabled={!status?.ready} />}
     </section>
   );
@@ -450,51 +447,9 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
-/** Where a full edit is: each step, the one being worked on, and for how long. */
-function RunProgress() {
-  const run = useAgent((state) => state.run);
-  const [now, setNow] = useState(Date.now());
-  const active = run?.state === "running";
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [active]);
-  if (!active) return null;
-  const step = run.steps[run.current];
-  const started = run.steps[0]?.started_ms;
-  const clock = (ms: number) => {
-    const seconds = Math.max(0, Math.floor(ms / 1000));
-    return seconds >= 3600
-      ? `${Math.floor(seconds / 3600)}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
-      : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-  };
-  return (
-    <div className="mx-2.5 mt-1 rounded-xl border border-line bg-raised px-3 py-2">
-      <div className="flex items-center gap-2 text-[12px]">
-        <ListVideo size={13} className="text-muted" />
-        <span className="font-medium text-fg">Full edit</span>
-        <span className="text-muted">
-          Step {run.current + 1} of {run.steps.length}: {step?.name}
-        </span>
-        <span className="ml-auto tabular text-faint">{started ? clock(now - started) : ""}</span>
-      </div>
-      <div className="mt-2 flex gap-1" aria-hidden>
-        {run.steps.map((item, index) => (
-          <span
-            key={item.name}
-            title={item.name}
-            className={cx("h-1 flex-1 rounded-full", index < run.current ? "bg-fg/70" : index === run.current ? "animate-pulse bg-fg/40" : "bg-line")}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function Composer({ disabled }: { disabled: boolean }) {
   const [text, setText] = useState("");
-  const running = useAgent((state) => state.running || state.run?.state === "running");
+  const running = useAgent((state) => state.running);
   const models = useAgent((state) => state.models);
   const model = useAgent((state) => currentModel(state));
   const effort = useAgent((state) => currentEffort(state));
@@ -505,14 +460,6 @@ function Composer({ disabled }: { disabled: boolean }) {
     if (!message || running || disabled) return;
     setText("");
     void sendToAgent(message);
-  };
-
-  // The whole edit on its own; what's typed goes along as notes for every step.
-  const fullEdit = () => {
-    if (running || disabled) return;
-    const notes = text.trim();
-    setText("");
-    void runFullEdit(notes);
   };
 
   const pick = (event: React.MouseEvent<HTMLButtonElement>, items: MenuItem[], width: number) => {
@@ -539,7 +486,7 @@ function Composer({ disabled }: { disabled: boolean }) {
           value={text}
           disabled={disabled}
           rows={2}
-          placeholder={running ? "Codex is working…" : "Ask Codex to add a title, tighten the intro…"}
+          placeholder={running ? "Codex is working…" : "Start the editing workflow, or ask for a change…"}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             event.stopPropagation();
@@ -596,18 +543,6 @@ function Composer({ disabled }: { disabled: boolean }) {
             <EffortMeter level={(model?.efforts ?? []).indexOf(effort)} of={(model?.efforts ?? []).length} />
             {EFFORT_LABELS[effort] ?? effort}
           </Pill>
-          {!running && (
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={fullEdit}
-              title="Run the full edit: research, intro, cut-ins, subtitles, outro, music and sound, a final pass, one after another on its own. Anything typed here goes along as notes."
-              className="ml-auto flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11px] font-medium text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-25"
-            >
-              <ListVideo size={13} />
-              Full edit
-            </button>
-          )}
           {running ? (
             <button
               type="button"
@@ -624,7 +559,7 @@ function Composer({ disabled }: { disabled: boolean }) {
               aria-label="Send"
               title="Send (Enter)"
               disabled={!text.trim() || disabled}
-              className="flex size-7 items-center justify-center rounded-lg bg-white text-black transition-[transform,opacity] active:scale-90 disabled:opacity-25"
+              className="ml-auto flex size-7 items-center justify-center rounded-lg bg-white text-black transition-[transform,opacity] active:scale-90 disabled:opacity-25"
             >
               <ArrowUp size={14} strokeWidth={2.4} />
             </button>

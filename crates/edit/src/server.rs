@@ -129,7 +129,6 @@ pub fn router(app: App) -> Router {
         .route("/api/agent/models", get(agent_models))
         .route("/api/projects/{id}/agent", get(agent_chat).post(agent_send))
         .route("/api/projects/{id}/agent/stop", post(agent_stop))
-        .route("/api/projects/{id}/agent/run", post(agent_run))
         .route("/api/projects/{id}/agent/reset", post(agent_reset))
         .route("/api/projects/{id}/captions", post(captions))
         .route(
@@ -783,34 +782,6 @@ async fn agent_send(
         .send(&id, text, body.model, body.effort)
         .await
         .map_err(bad)?;
-    Ok(Json(json!({ "ok": true })).into_response())
-}
-
-#[derive(Deserialize, Default)]
-struct FullEdit {
-    #[serde(default)]
-    notes: String,
-    model: Option<String>,
-    effort: Option<String>,
-}
-
-/// Runs the whole edit: the agent works through every step on its own.
-async fn agent_run(
-    State(app): State<App>,
-    UrlPath(id): UrlPath<String>,
-    body: Option<Json<FullEdit>>,
-) -> ApiResult {
-    app.store
-        .get(&id)
-        .ok_or_else(|| not_found("no such project"))?;
-    let Json(body) = body.unwrap_or_default();
-    app.agents
-        .run_full_edit(&id, body.notes, body.model, body.effort)
-        .await
-        .map_err(bad)?;
-    // The watcher takes minutes of a model's time; started now, it's done
-    // by the subtitles step.
-    crate::watch::watch_in_background(&app, &id);
     Ok(Json(json!({ "ok": true })).into_response())
 }
 

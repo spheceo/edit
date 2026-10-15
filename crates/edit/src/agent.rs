@@ -67,65 +67,9 @@ pub struct Chat {
     /// The user pressed stop: nothing restarts on its own until they send again.
     #[serde(skip)]
     pub halted: bool,
-    /// Identifies this work so queued steps and retries cannot revive an old run.
+    /// Identifies this work so retries cannot revive an old turn.
     #[serde(skip)]
     pub generation: u64,
-    /// The full edit going on (or the last one), step by step.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<Run>,
-}
-
-/// A full edit: the steps of `fulledit::STEPS`, each a turn of its own.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Run {
-    /// "running", "done", "stopped" or "failed".
-    pub state: String,
-    #[serde(default)]
-    pub notes: String,
-    /// The step being worked on (0-based).
-    pub current: usize,
-    pub steps: Vec<RunStep>,
-    /// The model every step runs on (each step sets its own effort).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct RunStep {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ended_ms: Option<u64>,
-    #[serde(default)]
-    pub tool_calls: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl Chat {
-    fn close_step(&mut self) {
-        let Some(step) = self
-            .run
-            .as_mut()
-            .and_then(|run| run.steps.get_mut(run.current))
-        else {
-            return;
-        };
-        let Some(from) = step.started_ms else {
-            return;
-        };
-        if step.ended_ms.is_some() {
-            return;
-        }
-        let end = now_ms();
-        step.ended_ms = Some(end);
-        step.tool_calls = self
-            .entries
-            .iter()
-            .filter(|entry| entry.kind == "tool" && entry.at >= from && entry.at <= end)
-            .count();
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -353,7 +297,7 @@ impl Agents {
         let Ok(bytes) = std::fs::read(&path) else {
             return Chat::default();
         };
-        let mut chat: Chat = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+        let chat: Chat = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
             // Never overwrite a chat we can't read: set it aside and start fresh.
             crate::diag::warn("agent", format!("agent chat {}: {error}", path.display()));
             let _ = std::fs::rename(
@@ -362,44 +306,6 @@ impl Agents {
             );
             Chat::default()
         });
-        if chat.run.as_ref().is_some_and(|run| run.state == "running") {
-            chat.close_step();
-            chat.halted = true;
-            for entry in chat
-                .entries
-                .iter_mut()
-                .filter(|entry| entry.status.as_deref() == Some("running"))
-            {
-                entry.status = Some("stopped".to_owned());
-            }
-            if let Some(run) = chat.run.as_mut() {
-                run.state = "failed".to_owned();
-                if let Some(step) = run.steps.get_mut(run.current) {
-                    step.error = Some("Edit restarted before the full edit finished.".to_owned());
-                }
-                let now = now_ms();
-                chat.entries.push(Entry {
-                    id: format!("run-{now}"),
-                    kind: "assistant".to_owned(),
-                    text: run_report(run),
-                    at: now,
-                    updated: now,
-                    ..Entry::default()
-                });
-            }
-            crate::diag::warn(
-                "agent",
-                format!("full edit of {project} interrupted by restart"),
-            );
-            if let Err(error) =
-                crate::store::write_atomic(&path, &serde_json::to_vec(&chat).unwrap_or_default())
-            {
-                crate::diag::warn(
-                    "agent",
-                    format!("saving interrupted full edit of {project}: {error}"),
-                );
-            }
-        }
         chat
     }
 
@@ -421,7 +327,7 @@ impl Agents {
 
     pub fn chat(&self, project: &str) -> Value {
         self.with_chat(project, |chat| {
-            json!({ "entries": chat.entries, "running": chat.running, "model": chat.model, "effort": chat.effort, "run": chat.run })
+            json!({ "entries": chat.entries, "running": chat.running, "model": chat.model, "effort": chat.effort })
         })
     }
 
@@ -512,8 +418,6 @@ impl Agents {
                 if chat.generation != generation || chat.halted {
                     return Ok(None);
                 }
-            } else if chat.run.as_ref().is_some_and(|run| run.state == "running") {
-                return Err("the full edit is still working; stop it or wait".to_owned());
             }
             if chat.running {
                 return Err("the agent is still working; stop it or wait".to_owned());
@@ -525,17 +429,11 @@ impl Agents {
             }
             chat.running = true;
             chat.started = Some(std::time::Instant::now());
-            if let Some(run) = chat.run.as_mut().filter(|run| run.state == "running") {
-                if let Some(step) = run.steps.get_mut(run.current) {
-                    step.started_ms.get_or_insert_with(now_ms);
-                }
-            }
             Ok(Some(chat.generation))
         })?;
         let Some(generation) = generation else {
             return Ok(());
         };
-        self.emit_run(project);
         self.emit(project, json!({ "event": "status", "running": true }));
         let result = self
             .prepare_turn(project, text, model, effort, generation)
@@ -578,6 +476,10 @@ impl Agents {
         let workspace = self.dir.join("workspace");
         let _ = std::fs::create_dir_all(&workspace);
         let config = json!({
+            // A model answers several times slower with 300k tokens to read
+            // than with 100k (a whole edit's chat reached 340k): compact well
+            // before that, so a long conversation stays quick.
+            "model_auto_compact_token_limit": 150_000,
             "mcp_servers": { "edit": {
                 "url": format!("http://127.0.0.1:{}/mcp?project={project}", self.port),
                 "default_tools_approval_mode": "approve",
@@ -591,6 +493,7 @@ impl Agents {
              Edit only through the `edit` tools; you have no shell or files. The project is \"{}\" ({}x{} at {} fps). \
              Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. \
              When a tool is still running (watch_footage, map_view, export), wait for it in long blocks (yield_time_ms 30000 or more), never second by second. \
+             When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. For other requests, load the skill for the part you're working on (see SKILLS). \
              Keep replies short: say what you changed and where (timecodes).\n\n{}\n\nThe edit tools (in exec: tools.mcp__edit__<name>({{…}}); their full declarations are in ALL_TOOLS, but this list is usually enough):\n{}",
             live.project.name, live.project.settings.width, live.project.settings.height, live.project.settings.fps,
             // The model and house style, as every MCP client gets them.
@@ -837,12 +740,7 @@ impl Agents {
     }
 
     pub async fn stop(self: &Arc<Self>, project: &str) -> Result<(), String> {
-        // Stopping also ends a full edit, even between its steps.
-        let generation = self.with_chat(project, |chat| {
-            chat.halted = true;
-            chat.generation
-        });
-        self.end_run(project, "stopped", None, generation);
+        self.with_chat(project, |chat| chat.halted = true);
         let (thread, turn) =
             self.with_chat(project, |chat| (chat.thread.clone(), chat.turn.clone()));
         let (Some(thread), Some(turn)) = (thread, turn) else {
@@ -909,20 +807,17 @@ impl Agents {
         let params = message.get("params").unwrap_or(&Value::Null);
         // The process is gone: no turn of it will ever complete, so end them now.
         if method == EXITED {
-            let running: Vec<(String, u64)> = self
+            let running: Vec<String> = self
                 .chats
                 .lock()
                 .iter()
-                .filter(|(_, chat)| {
-                    chat.running || chat.run.as_ref().is_some_and(|run| run.state == "running")
-                })
-                .map(|(project, chat)| (project.clone(), chat.generation))
+                .filter(|(_, chat)| chat.running)
+                .map(|(project, _)| project.clone())
                 .collect();
-            for (project, generation) in running {
+            for project in running {
                 self.with_chat(&project, |chat| chat.halted = true);
                 let error = "Codex stopped unexpectedly; send your message again.".to_owned();
-                self.finish(&project, Some(error.clone()));
-                self.end_run(&project, "failed", Some(error), generation);
+                self.finish(&project, Some(error));
             }
             return;
         }
@@ -1072,241 +967,20 @@ impl Agents {
                                 return;
                             }
                             let text = format!(
-                                "(Edit, automatically) Your last turn was cut off by an error (\"{failure}\") before you finished. Carry on from where you stopped: check get_project for what's already done, then finish the task."
+                                "(Edit, automatically) Your last turn was cut off by an error (\"{failure}\") before you finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task."
                             );
                             if let Err(error) = this.send_turn(&project, text, None, None, Some(generation)).await {
                                 crate::diag::warn("agent", format!("retrying the turn in {project}: {error}"));
-                                this.end_run(&project, "failed", Some(error), generation);
                             }
                         });
                         return;
                     }
                 }
-                self.finish(&project, error.clone());
-                self.next_step(&project, error, runtime);
+                self.finish(&project, error);
             }
             _ => {}
         }
     }
-
-    // --- full edit -----------------------------------------------------------
-
-    /// Starts a full edit: every step of `fulledit::STEPS`, sent one after
-    /// another as each turn finishes.
-    pub async fn run_full_edit(
-        self: &Arc<Self>,
-        project: &str,
-        notes: String,
-        model: Option<String>,
-        // Each step has its own effort (fulledit::STEPS); the composer's is for chat.
-        _effort: Option<String>,
-    ) -> Result<(), String> {
-        let prompt = crate::fulledit::prompt(0, &notes).ok_or("no steps")?;
-        let generation = {
-            let sending = self
-                .sending
-                .lock()
-                .entry(project.to_owned())
-                .or_default()
-                .clone();
-            let _sending = sending
-                .try_lock()
-                .map_err(|_| "the agent is already starting a turn".to_owned())?;
-            self.with_chat(project, |chat| {
-                if chat.running || chat.run.as_ref().is_some_and(|run| run.state == "running") {
-                    return Err("the agent is still working; stop it or wait".to_owned());
-                }
-                chat.generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-                chat.halted = false;
-                chat.retries = 0;
-                // A full edit starts its own conversation. Carrying on the
-                // chat's thread brought every earlier turn along (200k+ tokens
-                // before the first step), and a model's answer takes several
-                // times as long with that much to read. What earlier work
-                // found is in the project: saved articles, found images,
-                // transcripts and the timeline.
-                chat.thread = None;
-                chat.run = Some(Run {
-                    state: "running".to_owned(),
-                    notes,
-                    current: 0,
-                    steps: crate::fulledit::STEPS
-                        .iter()
-                        .map(|step| RunStep {
-                            name: step.name.to_owned(),
-                            ..RunStep::default()
-                        })
-                        .collect(),
-                    model: model.clone(),
-                });
-                Ok(chat.generation)
-            })?
-        };
-        let effort = crate::fulledit::STEPS
-            .first()
-            .map(|step| step.effort.to_owned());
-        self.start_step(project, prompt, model, effort, generation)
-            .await
-    }
-
-    async fn start_step(
-        self: &Arc<Self>,
-        project: &str,
-        prompt: String,
-        model: Option<String>,
-        effort: Option<String>,
-        generation: u64,
-    ) -> Result<(), String> {
-        let sent = self
-            .send_turn(project, prompt, model, effort, Some(generation))
-            .await;
-        if let Err(error) = &sent {
-            self.end_run(project, "failed", Some(error.clone()), generation);
-        }
-        sent
-    }
-
-    /// After a turn of a full edit: the step is done, so the next one goes
-    /// out; a failed or stopped turn ends the run there.
-    fn next_step(
-        self: &Arc<Self>,
-        project: &str,
-        error: Option<String>,
-        runtime: &tokio::runtime::Handle,
-    ) {
-        let next = self.with_chat(project, |chat| {
-            if chat.halted || !chat.run.as_ref().is_some_and(|run| run.state == "running") {
-                return None;
-            }
-            chat.close_step();
-            let run = chat.run.as_mut()?;
-            let prompt = if error.is_none() {
-                crate::fulledit::prompt(run.current + 1, &run.notes)
-            } else {
-                None
-            };
-            if prompt.is_some() {
-                run.current += 1;
-            }
-            let effort = crate::fulledit::STEPS
-                .get(run.current)
-                .map(|step| step.effort.to_owned());
-            Some((chat.generation, prompt, run.model.clone(), effort))
-        });
-        let Some((generation, prompt, model, effort)) = next else {
-            return;
-        };
-        match (error, prompt) {
-            (Some(error), _) if error == "Stopped." => {
-                self.end_run(project, "stopped", None, generation)
-            }
-            (Some(error), _) => self.end_run(project, "failed", Some(error), generation),
-            (None, None) => self.end_run(project, "done", None, generation),
-            (None, Some(prompt)) => {
-                let (this, project) = (Arc::clone(self), project.to_owned());
-                runtime.spawn(async move {
-                    let _ = this
-                        .start_step(&project, prompt, model, effort, generation)
-                        .await;
-                });
-            }
-        }
-    }
-
-    /// Ends a full edit once and writes its report into the chat. A stale
-    /// startup or retry must never end a newer run.
-    fn end_run(&self, project: &str, state: &str, error: Option<String>, generation: u64) {
-        let report = self.with_chat(project, |chat| {
-            if chat.generation != generation
-                || !chat.run.as_ref().is_some_and(|run| run.state == "running")
-            {
-                return None;
-            }
-            chat.close_step();
-            chat.halted = true;
-            let run = chat.run.as_mut()?;
-            run.state = state.to_owned();
-            if let Some(step) = run.steps.get_mut(run.current) {
-                step.error = error.clone();
-            }
-            Some(run_report(run))
-        });
-        let Some(report) = report else {
-            return;
-        };
-        self.upsert(
-            project,
-            Entry {
-                id: format!("run-{}", now_ms()),
-                kind: "assistant".to_owned(),
-                text: report,
-                ..Entry::default()
-            },
-        );
-        if let Some(error) = error {
-            crate::diag::warn("agent", format!("full edit of {project}: {state}: {error}"));
-        } else {
-            crate::diag::info("agent", format!("full edit of {project}: {state}"));
-        }
-        self.save(project);
-        self.emit_run(project);
-    }
-
-    fn emit_run(&self, project: &str) {
-        let run = self.with_chat(project, |chat| chat.run.clone());
-        self.emit(project, json!({ "event": "run", "run": run }));
-    }
-}
-
-/// A finished (or ended) full edit as a table: each step, how long it took
-/// and how many tool calls it made.
-fn run_report(run: &Run) -> String {
-    let minutes = |ms: u64| {
-        let seconds = ms / 1000;
-        if seconds >= 3600 {
-            format!("{} h {:02} min", seconds / 3600, seconds % 3600 / 60)
-        } else {
-            format!("{} min {:02} s", seconds / 60, seconds % 60)
-        }
-    };
-    let heading = match run.state.as_str() {
-        "done" => "**Full edit done.**",
-        "stopped" => "**Full edit stopped.**",
-        _ => "**Full edit stopped by an error.**",
-    };
-    let mut out = format!("{heading}\n\n| Step | Took | Tool calls |\n|---|---|---|\n");
-    let mut total = 0;
-    let mut calls = 0;
-    for (index, step) in run.steps.iter().enumerate() {
-        let took = match (step.started_ms, step.ended_ms) {
-            (Some(start), Some(end)) => {
-                total += end.saturating_sub(start);
-                calls += step.tool_calls;
-                minutes(end.saturating_sub(start))
-            }
-            _ => "—".to_owned(),
-        };
-        let failed = step
-            .error
-            .as_deref()
-            .map(|error| format!(" (stopped: {error})"))
-            .unwrap_or_default();
-        out.push_str(&format!(
-            "| {}. {}{failed} | {took} | {} |\n",
-            index + 1,
-            step.name,
-            if step.ended_ms.is_some() {
-                step.tool_calls.to_string()
-            } else {
-                "—".to_owned()
-            }
-        ));
-    }
-    out.push_str(&format!(
-        "| **Total** | **{}** | **{calls}** |",
-        minutes(total)
-    ));
-    out
 }
 
 /// A one-line view of tool arguments for the chat ("text: Your title · start: 2").
@@ -1632,7 +1306,7 @@ mod tests {
             ));
             let store = Arc::new(Store::open(home.clone()).unwrap());
             let project = store
-                .create("Full edit test", edit_core::Settings::default())
+                .create("Agent test", edit_core::Settings::default())
                 .unwrap()
                 .project
                 .id;
@@ -1680,9 +1354,9 @@ mod tests {
             let (agents, project) = (Arc::clone(&self.agents), self.project.clone());
             tokio::spawn(async move {
                 agents
-                    .run_full_edit(
+                    .send(
                         &project,
-                        "test notes".to_owned(),
+                        "Start the editing workflow. test notes".to_owned(),
                         Some("test-model".to_owned()),
                         Some("medium".to_owned()),
                     )
@@ -1696,7 +1370,7 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap();
-                // A full edit starts its own thread: hand it the test's.
+                // A new conversation starts its own thread: hand it the test's.
                 if request["method"] == "thread/start" && method != "thread/start" {
                     self.reply(&request, Ok(json!({ "thread": { "id": "test-thread" } })));
                     continue;
@@ -1719,11 +1393,6 @@ mod tests {
         fn complete(&self) {
             self.agents.on_message(json!({ "method": "turn/completed", "params": { "threadId": "test-thread", "turn": { "id": "test-turn", "status": "completed" } } }), &tokio::runtime::Handle::current());
         }
-
-        fn run(&self) -> Run {
-            self.agents
-                .with_chat(&self.project, |chat| chat.run.clone().unwrap())
-        }
     }
 
     impl Drop for Fixture {
@@ -1736,73 +1405,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seven_steps_finish_even_when_completion_beats_the_start_reply() {
-        let mut fixture = Fixture::new().await;
-        let started = fixture.start();
-        for index in 0..crate::fulledit::STEPS.len() {
-            let request = fixture.request("turn/start").await;
-            assert_eq!(request["params"]["threadId"], "test-thread");
-            assert_eq!(request["params"]["model"], "test-model");
-            assert_eq!(
-                request["params"]["effort"],
-                crate::fulledit::STEPS[index].effort
-            );
-            assert_eq!(
-                request["params"]["input"][0]["text"]
-                    .as_str()
-                    .unwrap()
-                    .contains("test notes"),
-                index == 0
-            );
-            fixture.reply(&request, Ok(json!({ "turn": { "id": "test-turn" } })));
-            // No await: the reader can deliver completion before the sender
-            // has handled the reply and released its startup lock.
-            fixture.complete();
-            assert_eq!(fixture.run().current, (index + 1).min(6));
-        }
-        started.await.unwrap().unwrap();
-        assert_eq!(fixture.run().state, "done");
-        assert!(fixture
-            .run()
-            .steps
-            .iter()
-            .all(|step| step.started_ms.is_some() && step.ended_ms.is_some()));
-        let reports = fixture.agents.with_chat(&fixture.project, |chat| {
-            chat.entries
-                .iter()
-                .filter(|entry| entry.text.starts_with("**Full edit done."))
-                .count()
-        });
-        assert_eq!(reports, 1);
-    }
-
-    #[tokio::test]
-    async fn stop_cancels_a_step_queued_between_turns() {
+    async fn a_turn_goes_out_with_its_model_and_ends_when_codex_says_so() {
         let mut fixture = Fixture::new().await;
         let started = fixture.start();
         let request = fixture.request("turn/start").await;
+        assert_eq!(request["params"]["threadId"], "test-thread");
+        assert_eq!(request["params"]["model"], "test-model");
+        assert_eq!(request["params"]["effort"], "medium");
+        // No await between: completion can arrive before the start reply is handled.
         fixture.reply(&request, Ok(json!({ "turn": { "id": "test-turn" } })));
-        started.await.unwrap().unwrap();
-        let sending = fixture
-            .agents
-            .sending
-            .lock()
-            .get(&fixture.project)
-            .unwrap()
-            .clone();
-        let guard = sending.lock().await;
         fixture.complete();
-        fixture.agents.stop(&fixture.project).await.unwrap();
-        drop(guard);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), fixture.requests.recv())
-                .await
-                .is_err()
-        );
-        let run = fixture.run();
-        assert_eq!(run.state, "stopped");
-        assert!(run.steps[1].started_ms.is_none());
-        assert!(run.steps[1].ended_ms.is_none());
+        started.await.unwrap().unwrap();
+        assert!(!fixture
+            .agents
+            .with_chat(&fixture.project, |chat| chat.running));
     }
 
     #[tokio::test]
@@ -1816,17 +1432,9 @@ mod tests {
         assert_eq!(interrupt["params"]["turnId"], "late-turn");
         fixture.reply(&interrupt, Ok(json!({})));
         assert_eq!(started.await.unwrap().unwrap_err(), "Stopped.");
-        assert_eq!(fixture.run().state, "stopped");
         assert!(!fixture
             .agents
             .with_chat(&fixture.project, |chat| chat.running));
-        let reports = fixture.agents.with_chat(&fixture.project, |chat| {
-            chat.entries
-                .iter()
-                .filter(|entry| entry.text.starts_with("**Full edit stopped."))
-                .count()
-        });
-        assert_eq!(reports, 1);
     }
 
     #[tokio::test]
@@ -1843,70 +1451,21 @@ mod tests {
         drop(guard);
         assert_eq!(started.await.unwrap().unwrap_err(), "Stopped.");
         assert!(fixture.requests.try_recv().is_err());
-        assert_eq!(fixture.run().state, "stopped");
     }
 
     #[tokio::test]
-    async fn stale_step_cannot_start_or_fail_a_new_run() {
+    async fn process_exit_ends_the_running_turn() {
         let mut fixture = Fixture::new().await;
         let started = fixture.start();
         let request = fixture.request("turn/start").await;
         fixture.reply(&request, Ok(json!({ "turn": { "id": "test-turn" } })));
         started.await.unwrap().unwrap();
-        let generation = fixture.agents.with_chat(&fixture.project, |chat| {
-            chat.running = false;
-            chat.turn = None;
-            chat.generation
-        });
-        fixture.agents.stop(&fixture.project).await.unwrap();
-        let newer = fixture.start();
-        let request = fixture.request("turn/start").await;
-        fixture.reply(&request, Ok(json!({ "turn": { "id": "test-turn" } })));
-        newer.await.unwrap().unwrap();
-        fixture
-            .agents
-            .start_step(&fixture.project, "stale".to_owned(), None, None, generation)
-            .await
-            .unwrap();
-        fixture.agents.end_run(
-            &fixture.project,
-            "failed",
-            Some("old error".to_owned()),
-            generation,
-        );
-        assert_eq!(fixture.run().state, "running");
-        assert_eq!(fixture.run().current, 0);
-        assert!(fixture.requests.try_recv().is_err());
-    }
-
-    #[tokio::test]
-    async fn process_exit_and_reload_end_the_run() {
-        let mut fixture = Fixture::new().await;
-        let started = fixture.start();
-        let request = fixture.request("turn/start").await;
-        fixture.reply(&request, Ok(json!({ "turn": { "id": "test-turn" } })));
-        started.await.unwrap().unwrap();
-        let reloaded = fixture.agents.load(&fixture.project);
-        assert_eq!(reloaded.run.unwrap().state, "failed");
-        assert!(reloaded
-            .entries
-            .last()
-            .unwrap()
-            .text
-            .contains("Edit restarted"));
-        // A retry wait has no active turn, but is still a running full edit.
-        fixture
-            .agents
-            .with_chat(&fixture.project, |chat| chat.running = false);
         fixture.agents.on_message(
             json!({ "method": EXITED }),
             &tokio::runtime::Handle::current(),
         );
-        assert_eq!(fixture.run().state, "failed");
-        assert!(fixture.run().steps[0]
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("unexpectedly"));
+        assert!(!fixture
+            .agents
+            .with_chat(&fixture.project, |chat| chat.running));
     }
 }

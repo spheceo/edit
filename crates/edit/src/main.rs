@@ -9,7 +9,6 @@ mod edit_plan;
 mod edit_review;
 mod export;
 mod footage_search;
-mod fulledit;
 mod guard;
 mod library;
 #[cfg(target_os = "macos")]
@@ -21,6 +20,7 @@ mod research;
 mod script;
 mod server;
 mod sfx;
+mod skills;
 mod speakers;
 mod store;
 mod subtitles;

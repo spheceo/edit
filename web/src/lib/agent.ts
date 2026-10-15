@@ -17,14 +17,6 @@ export interface AgentEntry {
   updated?: number;
 }
 
-/** A full edit: the agent working through every step on its own (crates/edit/src/fulledit.rs). */
-export interface AgentRun {
-  state: "running" | "done" | "stopped" | "failed";
-  notes: string;
-  current: number;
-  steps: { name: string; started_ms?: number; ended_ms?: number; tool_calls: number; error?: string }[];
-}
-
 export interface AgentModel {
   id: string;
   name: string;
@@ -55,7 +47,6 @@ interface AgentState {
   activityAt: number;
   model: string | null;
   effort: string | null;
-  run: AgentRun | null;
 }
 
 const cachedModels = (): AgentModel[] => {
@@ -76,7 +67,6 @@ export const useAgent = create<AgentState>(() => ({
   activityAt: 0,
   model: readSetting("edit.agent.model"),
   effort: readSetting("edit.agent.effort"),
-  run: null,
 }));
 
 /** Chats already seen this session, so reopening the panel or a project is instant. */
@@ -125,12 +115,12 @@ export async function openAgent(project: string) {
   const state = useAgent.getState();
   if (state.project !== project) {
     const cached = chats.get(project);
-    useAgent.setState({ project, loaded: Boolean(cached), entries: cached?.entries ?? [], running: cached?.running ?? false, run: null });
+    useAgent.setState({ project, loaded: Boolean(cached), entries: cached?.entries ?? [], running: cached?.running ?? false });
   }
   const [status, chat] = await Promise.all([
     fetchRetrying("/api/agent").then((response) => json<AgentStatus>(response)),
     fetchRetrying(`/api/projects/${project}/agent`).then((response) =>
-      json<{ entries: AgentEntry[]; running: boolean; model: string | null; effort: string | null; run?: AgentRun | null }>(response),
+      json<{ entries: AgentEntry[]; running: boolean; model: string | null; effort: string | null }>(response),
     ),
   ]).catch(() => [null, null] as const);
   if (useAgent.getState().project !== project) return;
@@ -145,7 +135,6 @@ export async function openAgent(project: string) {
     loaded: true,
     entries: [...chat.entries, ...pending],
     running: chat.running || pending.length > 0,
-    run: chat.run ?? null,
     ...(chat.model ? { model: chat.model } : {}),
     ...(chat.effort ? { effort: chat.effort } : {}),
   });
@@ -176,26 +165,6 @@ export async function sendToAgent(text: string) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, model: model?.id, effort: currentEffort(state) }),
-    }).then(json);
-  } catch (error) {
-    useAgent.setState((current) => ({
-      running: false,
-      entries: [...current.entries, { id: `local-${Date.now()}`, kind: "error", text: (error as Error).message }],
-    }));
-  }
-}
-
-/** Runs the whole edit: Edit sends each step when the last is done. `notes` go along with every step. */
-export async function runFullEdit(notes: string) {
-  const state = useAgent.getState();
-  if (!state.project) return;
-  const model = currentModel(state);
-  useAgent.setState({ running: true, activityAt: Date.now() });
-  try {
-    await fetchRetrying(`/api/projects/${state.project}/agent/run`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ notes, model: model?.id, effort: currentEffort(state) }),
     }).then(json);
   } catch (error) {
     useAgent.setState((current) => ({
@@ -250,10 +219,7 @@ export function applyAgentEvent(event: { project: string; event: string; [key: s
       useAgent.setState({ running: Boolean(event.running), activityAt: now });
       break;
     case "reset":
-      useAgent.setState({ entries: [], running: false, run: null });
-      break;
-    case "run":
-      useAgent.setState({ run: (event.run as AgentRun | null) ?? null });
+      useAgent.setState({ entries: [], running: false });
       break;
   }
   const after = useAgent.getState();

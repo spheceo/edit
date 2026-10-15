@@ -970,7 +970,7 @@ impl Part {
 /// corrects who says each line in the transcripts and sets the segments.
 pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Result<Value, String> {
     // One watch of a project at a time: a second (the agent asking while the
-    // one a full edit started in the background is still out) waits for it,
+    // one the editing workflow started in the background is still out) waits for it,
     // then answers from its cache instead of paying for every window twice.
     type Locks = parking_lot::Mutex<BTreeMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>;
     static WATCHING: std::sync::OnceLock<Locks> = std::sync::OnceLock::new();
@@ -984,8 +984,8 @@ pub async fn watch_footage(app: &App, project_id: &str, options: Options) -> Res
     watch_now(app, project_id, options).await
 }
 
-/// Starts watching `project_id`'s footage in the background (a full edit
-/// does at its start), so its subtitles step finds the answers cached.
+/// Starts watching `project_id`'s footage in the background (the editing
+/// workflow does at its start), so its subtitles stage finds the answers cached.
 pub fn watch_in_background(app: &App, project_id: &str) {
     if api_key().is_err() {
         return;

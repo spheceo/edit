@@ -21,7 +21,7 @@ use crate::server::App;
 
 /// The editors' word lists. Muted and starred out: "word = s**t" sets how
 /// one is starred, otherwise its first letter stays ("f***").
-pub const HOUSE_TERMS: [&str; 37] = [
+pub const HOUSE_TERMS: [&str; 38] = [
     "fuck = f***",
     "fucking = f******",
     "bitch = b****",
@@ -48,6 +48,7 @@ pub const HOUSE_TERMS: [&str; 37] = [
     "suicide",
     "suicidal",
     "rape",
+    "rapist",
     "overdose",
     "abuse",
     "crack",
@@ -71,19 +72,85 @@ pub const HOUSE_MUTE_ONLY: [&str; 7] = [
     "marijuana",
 ];
 /// Muted and starred out too, only in a heavy neglect case.
-pub const NEGLECT_TERMS: [&str; 11] = [
+pub const NEGLECT_TERMS: [&str; 12] = [
     "endangerment",
     "kick",
     "hit",
     "punch",
+    "beat",
     "kill",
     "blood",
-    "lashed",
+    "lash",
     "whoop",
     "butt",
     "slap",
     "strangle",
 ];
+/// The listed words that are verbs: their other forms count as them too
+/// ("punched", "hitting", "abusive", "fucker"; see `is_form_of`). Every
+/// listed word also counts in the plural ("hits", "bitches").
+const VERBS: [&str; 19] = [
+    "abuse",
+    "beat",
+    "choke",
+    "drug",
+    "fuck",
+    "hit",
+    "kick",
+    "kill",
+    "lash",
+    "masturbate",
+    "neglect",
+    "overdose",
+    "punch",
+    "rape",
+    "shoot",
+    "slap",
+    "stab",
+    "strangle",
+    "whoop",
+];
+
+/// Whether `token` is `term` or a form of it: its plural, and for a verb its
+/// past, participles and doers ("punch" → punched, punching, punchin',
+/// puncher; "hit" → hitting; "choke" → choked, choking; "beat" → beaten;
+/// "abuse" → abusive).
+pub fn is_form_of(token: &str, term: &str) -> bool {
+    if token == term {
+        return true;
+    }
+    let Some(rest) = token.strip_prefix(term) else {
+        return is_verb_form(token, term);
+    };
+    matches!(rest, "s" | "es") || is_verb_form(token, term)
+}
+
+fn is_verb_form(token: &str, term: &str) -> bool {
+    if !VERBS.contains(&term) {
+        return false;
+    }
+    let chars: Vec<char> = term.chars().collect();
+    let vowel = |c: Option<&char>| c.is_some_and(|c| "aeiou".contains(*c));
+    // hit → hitt-ing, slap → slapp-ed: a short vowel between two consonants.
+    let doubled = match chars.as_slice() {
+        [.., a, b, c] => {
+            !vowel(Some(a)) && vowel(Some(b)) && !vowel(Some(c)) && !"wxy".contains(*c)
+        }
+        _ => false,
+    };
+    let base = term.strip_suffix('e').unwrap_or(term);
+    let stems = [
+        Some(base.to_owned()),
+        doubled
+            .then(|| chars.last().map(|last| format!("{term}{last}")))
+            .flatten(),
+    ];
+    stems.iter().flatten().any(|stem| {
+        token
+            .strip_prefix(stem.as_str())
+            .is_some_and(|rest| matches!(rest, "ed" | "ing" | "in" | "er" | "ers" | "en" | "ive"))
+    })
+}
 
 /// A muted word is silenced from a little before it starts (ms).
 const MUTE_LEAD_MS: f64 = 30.0;
@@ -293,66 +360,81 @@ pub fn suggestions(
     let mut out = Vec::new();
     let mut i = 0;
     while i < stream.len() {
-        for term in &listed {
-            let Some(found) = stream.get(i..i + term.parts.len()) else {
-                continue;
-            };
-            let fits = found.iter().enumerate().all(|(j, (token, index))| {
-                if Some(token) != term.parts.get(j) {
-                    return false;
+        // Words as listed first; then another form of one ("punched").
+        'found: for loose in [false, true] {
+            for term in &listed {
+                if loose && term.parts.len() != 1 {
+                    continue;
                 }
-                let Some(previous) = j.checked_sub(1).and_then(|k| found.get(k)) else {
-                    return true;
+                let Some(found) = stream.get(i..i + term.parts.len()) else {
+                    continue;
                 };
-                let (Some(word), Some(before)) = (words.get(*index), words.get(previous.1)) else {
-                    return false;
-                };
-                word.speaker == before.speaker && word.start_ms - before.end_ms <= 750.0
-            });
-            if !fits {
-                continue;
-            }
-            let (Some((_, first_index)), Some((_, last_index))) = (found.first(), found.last())
-            else {
-                continue;
-            };
-            let Some(first) = words.get(*first_index) else {
-                continue;
-            };
-            let mut said_from = first.start_ms;
-            if collapsed(first) {
-                said_from = (first.start_ms - COLLAPSED_REACH_MS).max(0.0);
-                for before in words.get(..*first_index).unwrap_or_default().iter().rev() {
-                    if before.end_ms <= said_from {
-                        break;
+                let fits = found.iter().enumerate().all(|(j, (token, index))| {
+                    let Some(part) = term.parts.get(j) else {
+                        return false;
+                    };
+                    if !(token == part || (loose && is_form_of(token, part))) {
+                        return false;
                     }
-                    if before.speaker == first.speaker && !collapsed(before) {
-                        said_from = before.end_ms;
-                        break;
-                    }
-                }
-            }
-            let said_until = found
-                .iter()
-                .filter_map(|(_, index)| words.get(*index))
-                .map(|word| word.end_ms)
-                .fold(f64::MIN, f64::max);
-            let start_ms = from_ms.max(said_from - MUTE_LEAD_MS).round();
-            let end_ms = to_ms.min(said_until + MUTE_PADDING_MS).round();
-            let last_end = words.get(*last_index).map_or(f64::MIN, |word| word.end_ms);
-            if start_ms < end_ms && first.start_ms < to_ms && last_end > from_ms {
-                out.push(Suggestion {
-                    term: term.term.clone(),
-                    starred: term.starred,
-                    display: term.display.clone(),
-                    word: *first_index,
-                    at_ms: first.start_ms.round(),
-                    start_ms,
-                    end_ms,
+                    let Some(previous) = j.checked_sub(1).and_then(|k| found.get(k)) else {
+                        return true;
+                    };
+                    let (Some(word), Some(before)) = (words.get(*index), words.get(previous.1))
+                    else {
+                        return false;
+                    };
+                    word.speaker == before.speaker && word.start_ms - before.end_ms <= 750.0
                 });
+                if !fits {
+                    continue;
+                }
+                let (Some((_, first_index)), Some((_, last_index))) = (found.first(), found.last())
+                else {
+                    continue;
+                };
+                let Some(first) = words.get(*first_index) else {
+                    continue;
+                };
+                let mut said_from = first.start_ms;
+                if collapsed(first) {
+                    said_from = (first.start_ms - COLLAPSED_REACH_MS).max(0.0);
+                    for before in words.get(..*first_index).unwrap_or_default().iter().rev() {
+                        if before.end_ms <= said_from {
+                            break;
+                        }
+                        if before.speaker == first.speaker && !collapsed(before) {
+                            said_from = before.end_ms;
+                            break;
+                        }
+                    }
+                }
+                let said_until = found
+                    .iter()
+                    .filter_map(|(_, index)| words.get(*index))
+                    .map(|word| word.end_ms)
+                    .fold(f64::MIN, f64::max);
+                let start_ms = from_ms.max(said_from - MUTE_LEAD_MS).round();
+                let end_ms = to_ms.min(said_until + MUTE_PADDING_MS).round();
+                let last_end = words.get(*last_index).map_or(f64::MIN, |word| word.end_ms);
+                if start_ms < end_ms && first.start_ms < to_ms && last_end > from_ms {
+                    // Another form is starred as written: "punched" → "p******".
+                    let (said, display) = match found.first() {
+                        Some((token, _)) if loose && *token != term.key => (token.clone(), None),
+                        _ => (term.term.clone(), term.display.clone()),
+                    };
+                    out.push(Suggestion {
+                        term: said,
+                        starred: term.starred,
+                        display,
+                        word: *first_index,
+                        at_ms: first.start_ms.round(),
+                        start_ms,
+                        end_ms,
+                    });
+                }
+                i += term.parts.len() - 1;
+                break 'found;
             }
-            i += term.parts.len() - 1;
-            break;
         }
         i += 1;
     }
@@ -933,133 +1015,137 @@ pub async fn repack_subtitles(
     );
     let (width, height) = (project.settings.width, project.settings.height);
     let frame = |ms: f64| (ms / 1000.0 * fps).round() as i64;
-    let (live, (placed, skipped, outside)) = app.store.update(project_id, "agent", |project| {
-        // Stacked lines (overlap) go on tracks of their own under the
-        // subtitles' track, made as needed; a re-run removes them by name.
-        let mut tracks: Vec<String> = Vec::new();
-        let stacked: Vec<String> = project
-            .tracks
-            .iter()
-            .filter(|track| track.kind == TrackKind::Video && !track.subtitles)
-            .filter(|track| {
-                let mine = project.clips.iter().filter(|clip| clip.track == track.id);
-                let mut mine = mine.peekable();
-                mine.peek().is_some()
-                    && mine.all(|clip| {
-                        clip.name
-                            .as_deref()
-                            .is_some_and(|name| name.starts_with(NAME))
-                    })
-            })
-            .map(|track| track.id.clone())
-            .rev()
-            .collect();
-        project.clips.retain(|clip| {
-            !(clip
-                .name
-                .as_deref()
-                .is_some_and(|name| name.starts_with(NAME))
-                && clip.start < to
-                && clip.end() > from)
-        });
-        write_mutes(project, &mutes);
-        tracks.push(project.subtitles_track());
-        tracks.extend(stacked);
-        let base_y = height as f32 * 0.4;
-        let k = height as f32 / 1080.0;
-        // Lines up now: when each ends (frames), its centre and box height.
-        let mut open: Vec<(i64, f32, f32)> = Vec::new();
-        let (mut placed, mut skipped) = (0, 0);
-        // Only inside footage segments: a line across a segment's edge shows
-        // only inside it (narration and already-subtitled stretches get none).
-        let pieces: Vec<(&Line, i64, i64)> = shown
-            .iter()
-            .flat_map(|line| {
-                let (start, end) = (frame(line.start_ms).max(from), frame(line.end_ms).min(to));
-                project
-                    .subtitled_spans(start, end)
-                    .into_iter()
-                    .map(move |(start, end)| (line, start, end))
-            })
-            .collect();
-        let mut outside = shown.len();
-        let mut counted = std::collections::HashSet::new();
-        for &(line, _, _) in &pieces {
-            if counted.insert(std::ptr::from_ref(line)) {
-                outside -= 1;
-            }
-        }
-        for (line, start, end) in pieces {
-            if end <= start {
-                skipped += 1;
-                continue;
-            }
-            let free = |project: &Project, track: &str| {
-                !project
-                    .clips
-                    .iter()
-                    .any(|clip| clip.track == track && clip.start < end && start < clip.end())
-            };
-            let track = match tracks.iter().find(|track| free(project, track)) {
-                Some(track) => track.clone(),
-                None if overlap => {
-                    let id = project.add_track(TrackKind::Video);
-                    tracks.push(id.clone());
-                    id
+    let (live, (placed, skipped, outside, texts)) =
+        app.store.update(project_id, "agent", |project| {
+            // Stacked lines (overlap) go on tracks of their own under the
+            // subtitles' track, made as needed; a re-run removes them by name.
+            let mut tracks: Vec<String> = Vec::new();
+            let stacked: Vec<String> = project
+                .tracks
+                .iter()
+                .filter(|track| track.kind == TrackKind::Video && !track.subtitles)
+                .filter(|track| {
+                    let mine = project.clips.iter().filter(|clip| clip.track == track.id);
+                    let mut mine = mine.peekable();
+                    mine.peek().is_some()
+                        && mine.all(|clip| {
+                            clip.name
+                                .as_deref()
+                                .is_some_and(|name| name.starts_with(NAME))
+                        })
+                })
+                .map(|track| track.id.clone())
+                .rev()
+                .collect();
+            project.clips.retain(|clip| {
+                !(clip
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with(NAME))
+                    && clip.start < to
+                    && clip.end() > from)
+            });
+            write_mutes(project, &mutes);
+            tracks.push(project.subtitles_track());
+            tracks.extend(stacked);
+            let base_y = height as f32 * 0.4;
+            let k = height as f32 / 1080.0;
+            // Lines up now: when each ends (frames), its centre and box height.
+            let mut open: Vec<(i64, f32, f32)> = Vec::new();
+            let (mut placed, mut skipped) = (0, 0);
+            // Only inside footage segments: a line across a segment's edge shows
+            // only inside it (narration and already-subtitled stretches get none).
+            let pieces: Vec<(&Line, i64, i64)> = shown
+                .iter()
+                .flat_map(|line| {
+                    let (start, end) = (frame(line.start_ms).max(from), frame(line.end_ms).min(to));
+                    project
+                        .subtitled_spans(start, end)
+                        .into_iter()
+                        .map(move |(start, end)| (line, start, end))
+                })
+                .collect();
+            let mut outside = shown.len();
+            let mut counted = std::collections::HashSet::new();
+            for &(line, _, _) in &pieces {
+                if counted.insert(std::ptr::from_ref(line)) {
+                    outside -= 1;
                 }
-                None => {
+            }
+            for (line, start, end) in pieces {
+                if end <= start {
                     skipped += 1;
                     continue;
                 }
-            };
-            // Stacked: a line whose box would cover one already up goes above it.
-            open.retain(|(until, _, _)| *until > start);
-            let box_height = box_height(&line.text, width, k);
-            let mut y = base_y;
-            for _ in 0..=open.len() {
-                let Some(&(_, over_y, over_height)) =
-                    open.iter().find(|(_, other, other_height)| {
-                        (y - other).abs() < (box_height + other_height) / 2.0 + STACK_GAP * k / 2.0
-                    })
-                else {
-                    break;
+                let free = |project: &Project, track: &str| {
+                    !project
+                        .clips
+                        .iter()
+                        .any(|clip| clip.track == track && clip.start < end && start < clip.end())
                 };
-                y = over_y - over_height / 2.0 - STACK_GAP * k - box_height / 2.0;
-            }
-            open.push((end, y, box_height));
-            let voice = voices.get(&line.speaker);
-            let color = voice
-                .and_then(|voice| crate::captions::hex(&voice.color))
-                .unwrap_or(Rgba::WHITE);
-            let who = voice.map_or("Speaker", |voice| voice.name.as_str());
-            let id = project.fresh_id("c");
-            project.clips.push(Clip {
-                id,
-                track: track.clone(),
-                start,
-                duration: end - start,
-                color: ClipColor::Cyan,
-                name: Some(format!("{NAME} · {who}")),
-                link: None,
-                fade_in: 0,
-                fade_out: 0,
-                keyframes: Default::default(),
-                content: ClipContent::Text {
-                    text: line.text.clone(),
-                    style: house_style(width, height, color),
-                    transform: Transform {
-                        y,
-                        ..Transform::default()
+                let track = match tracks.iter().find(|track| free(project, track)) {
+                    Some(track) => track.clone(),
+                    None if overlap => {
+                        let id = project.add_track(TrackKind::Video);
+                        tracks.push(id.clone());
+                        id
+                    }
+                    None => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                // Stacked: a line whose box would cover one already up goes above it.
+                open.retain(|(until, _, _)| *until > start);
+                let box_height = box_height(&line.text, width, k);
+                let mut y = base_y;
+                for _ in 0..=open.len() {
+                    let Some(&(_, over_y, over_height)) =
+                        open.iter().find(|(_, other, other_height)| {
+                            (y - other).abs()
+                                < (box_height + other_height) / 2.0 + STACK_GAP * k / 2.0
+                        })
+                    else {
+                        break;
+                    };
+                    y = over_y - over_height / 2.0 - STACK_GAP * k - box_height / 2.0;
+                }
+                open.push((end, y, box_height));
+                let voice = voices.get(&line.speaker);
+                let color = voice
+                    .and_then(|voice| crate::captions::hex(&voice.color))
+                    .unwrap_or(Rgba::WHITE);
+                let who = voice.map_or("Speaker", |voice| voice.name.as_str());
+                let id = project.fresh_id("c");
+                project.clips.push(Clip {
+                    id,
+                    track: track.clone(),
+                    start,
+                    duration: end - start,
+                    color: ClipColor::Cyan,
+                    name: Some(format!("{NAME} · {who}")),
+                    link: None,
+                    fade_in: 0,
+                    fade_out: 0,
+                    keyframes: Default::default(),
+                    content: ClipContent::Text {
+                        text: line.text.clone(),
+                        style: house_style(width, height, color),
+                        transform: Transform {
+                            y,
+                            ..Transform::default()
+                        },
+                        animation: TextAnimation::default(),
+                        opacity: 1.0,
+                        word_times: Vec::new(),
                     },
-                    animation: TextAnimation::default(),
-                    opacity: 1.0,
-                    word_times: Vec::new(),
-                },
-            });
-            placed += 1;
-        }
-        Ok((placed, skipped, outside))
-    })?;
+                });
+                placed += 1;
+            }
+            // Every other text on screen too (captions, callouts, charges), all of the video.
+            let texts = star_on_screen(project, 0, i64::MAX, neglect);
+            Ok((placed, skipped, outside, texts))
+        })?;
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for line in &shown {
         *counts.entry(line.speaker.as_str()).or_default() += 1;
@@ -1082,6 +1168,7 @@ pub async fn repack_subtitles(
         "subtitles": placed,
         "skipped": skipped,
         "outside_segments": outside,
+        "texts_starred": texts,
         "speakers": speakers,
         "mutes": muted,
     }))
@@ -1262,13 +1349,15 @@ pub async fn mute_house_words(
     let project = app.store.get(project_id).ok_or("no such project")?.project;
     let fps = project.fps();
     let house = house_words(app, &project, from, to, neglect).await?;
-    let (live, starred) = app.store.update(project_id, "agent", |project| {
+    let (live, (starred, on_screen)) = app.store.update(project_id, "agent", |project| {
         write_mutes(project, &house.mutes);
-        Ok(star_subtitles(project, &house.found, from, to, fps))
+        let starred = star_subtitles(project, &house.found, from, to, fps);
+        Ok((starred, star_on_screen(project, from, to, neglect)))
     })?;
     Ok(json!({
         "rev": live.rev,
         "subtitles_starred": starred,
+        "texts_starred": on_screen,
         "mutes": house.listed,
     }))
 }
@@ -1289,6 +1378,44 @@ fn star_subtitles(project: &mut Project, found: &[Found], from: i64, to: i64, fp
         let mine = said_during(found, clip.start, clip.end(), fps);
         if let ClipContent::Text { text, .. } = &mut clip.content {
             let starred = star(text, &mine);
+            if starred != *text {
+                *text = starred;
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
+/// `text` with the starred house words in it (and the neglect list's when
+/// `neglect`) starred out, whatever is said: for any text on screen. Words
+/// keep their places and lengths, so word timings still fit.
+pub fn star_text(text: &str, neglect: bool) -> String {
+    let words: Vec<TimedWord> = text
+        .split_whitespace()
+        .enumerate()
+        .map(|(index, word)| TimedWord {
+            text: word.to_owned(),
+            start_ms: index as f64 * 100.0,
+            end_ms: index as f64 * 100.0 + 50.0,
+            speaker: None,
+        })
+        .collect();
+    let found = suggestions(&words, neglect, f64::MIN, f64::MAX);
+    star(text, &found.iter().collect::<Vec<_>>())
+}
+
+/// Stars out the house words in every text clip on screen between `from`
+/// and `to` (timeline frames): subtitles, speaker captions, callouts,
+/// quotes, charges, labels. How many changed.
+pub(crate) fn star_on_screen(project: &mut Project, from: i64, to: i64, neglect: bool) -> usize {
+    let mut changed = 0;
+    for clip in &mut project.clips {
+        if clip.start >= to || clip.end() <= from {
+            continue;
+        }
+        if let ClipContent::Text { text, .. } = &mut clip.content {
+            let starred = star_text(text, neglect);
             if starred != *text {
                 *text = starred;
                 changed += 1;
@@ -1567,6 +1694,121 @@ mod tests {
         let two = box_height(&"word ".repeat(20), 1920, 1.0);
         assert!((one - (48.0 * 1.15 + 16.0)).abs() < 0.01);
         assert!(two > one * 1.5);
+    }
+
+    #[test]
+    fn listed_words_count_in_their_other_forms() {
+        for (token, term) in [
+            ("hits", "hit"),
+            ("hitting", "hit"),
+            ("punched", "punch"),
+            ("punching", "punch"),
+            ("punches", "punch"),
+            ("kicked", "kick"),
+            ("kickin", "kick"),
+            ("slapped", "slap"),
+            ("beaten", "beat"),
+            ("beating", "beat"),
+            ("choked", "choke"),
+            ("choking", "choke"),
+            ("abused", "abuse"),
+            ("abusive", "abuse"),
+            ("abuser", "abuse"),
+            ("stabbed", "stab"),
+            ("strangled", "strangle"),
+            ("whooping", "whoop"),
+            ("fucker", "fuck"),
+            ("bitches", "bitch"),
+            ("drugs", "drug"),
+        ] {
+            assert!(is_form_of(token, term), "{token} is a form of {term}");
+        }
+        for (token, term) in [
+            ("hitch", "hit"),
+            ("butter", "butt"),
+            ("cracked", "crack"),
+            ("assault", "ass"),
+            ("cocky", "cock"),
+            ("shots", "shoot"),
+        ] {
+            assert!(!is_form_of(token, term), "{token} is not a form of {term}");
+        }
+    }
+
+    #[test]
+    fn other_forms_are_muted_and_starred_as_said() {
+        // "punched" at 9:29 of a neglect case wasn't muted.
+        let words = [
+            word("He", 0.0, 200.0, "a"),
+            word("punched", 250.0, 600.0, "a"),
+            word("her", 650.0, 800.0, "a"),
+            word("and", 850.0, 900.0, "a"),
+            word("kept", 950.0, 1100.0, "a"),
+            word("hitting", 1150.0, 1500.0, "a"),
+            word("fucking", 1550.0, 1900.0, "a"),
+            word("shooting", 1950.0, 2300.0, "a"),
+        ];
+        let found = suggestions(&words, true, 0.0, 10_000.0);
+        let terms: Vec<(&str, bool)> = found.iter().map(|s| (s.term.as_str(), s.starred)).collect();
+        assert_eq!(
+            terms,
+            [
+                ("punched", true),
+                ("hitting", true),
+                ("fucking", true),
+                ("shooting", false)
+            ]
+        );
+        assert_eq!((found[0].start_ms, found[0].end_ms), (220.0, 625.0));
+        let mine: Vec<&Suggestion> = found.iter().collect();
+        assert_eq!(
+            star("He punched her and kept hitting, fucking", &mine),
+            "He p****** her and kept h******, f******"
+        );
+        // Outside a neglect case only the house words count.
+        let found = suggestions(&words, false, 0.0, 10_000.0);
+        assert!(found.iter().all(|s| s.term != "punched"));
+    }
+
+    #[test]
+    fn every_text_on_screen_gets_house_words_starred() {
+        assert_eq!(
+            star_text("Charges:\nChild Abuse\nAggravated child abuse", false),
+            "Charges:\nChild A****\nAggravated child a****"
+        );
+        assert_eq!(star_text("\"He choked me\"", false), "\"He c***** me\"");
+        assert_eq!(
+            star_text("Shit, he punched him", false),
+            "S**t, he punched him"
+        );
+        assert_eq!(
+            star_text("Shit, he punched him", true),
+            "S**t, he p****** him"
+        );
+        // Mute-only words stay readable; words are never removed.
+        assert_eq!(
+            star_text("Shots fired, he's dead", false),
+            "Shots fired, he's dead"
+        );
+        let mut project = project_with(json!([
+            { "id": "caption", "track": "v2", "start": 0, "duration": 30,
+              "name": "Caption · Officer", "type": "text", "text": "Stop fucking moving",
+              "word_times": [0.0, 5.0, 10.0] },
+            { "id": "callout", "track": "v2", "start": 60, "duration": 30,
+              "name": "Callout", "type": "text", "text": "Suspected of child abuse" },
+            { "id": "later", "track": "v2", "start": 900, "duration": 30,
+              "name": "Title", "type": "text", "text": "fuck" }
+        ]));
+        assert_eq!(star_on_screen(&mut project, 0, 300, false), 2);
+        let text_of = |id: &str| match &project.clip(id).unwrap().content {
+            ClipContent::Text { text, .. } => text.clone(),
+            _ => String::new(),
+        };
+        assert_eq!(text_of("caption"), "Stop f****** moving");
+        assert_eq!(text_of("callout"), "Suspected of child a****");
+        assert_eq!(text_of("later"), "fuck");
+        // Starred already: nothing changes on a second run.
+        assert_eq!(star_on_screen(&mut project, 0, 300, false), 0);
     }
 
     #[test]

@@ -6,7 +6,9 @@
 mod eval;
 mod model;
 mod sections;
+mod timeline;
 
 pub use eval::*;
 pub use model::*;
 pub use sections::*;
+pub use timeline::*;

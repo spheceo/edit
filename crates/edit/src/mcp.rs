@@ -73,10 +73,12 @@ House editing style (videos cut from a script of police footage):
 - THE DATE CUT-IN (the "On <date>…" cut-in that opens the story) opens on where it happened: map_view of the place the narration names (the department, the station or the street; add the city and state), as a moving shot with the defaults and seconds = how long it's on screen, unless the user asks for another angle (each new view is a paid map session). Full frame at scale 1 from source_in 0, no scale keyframes: the camera slowly circles right and closes in. While the narration says the date, darken the background heavily with an adjustment beneath the text and show the date large and centered, in white (Geist 600, ~120 at 1080p, soft glow radius 40, strength 0.85, one line like "July 13th, 2024", rising into place letter by letter (animation {preset "rise", duration 14, stagger 1.5}, in frames), with shadow {color [0,0,0,1], opacity 1, distance 6, angle 112, size 10, blur 20}). Fade the date out after the spoken year, then lift the extra darkening and reveal the red building marker and floating place label together. Set map_view highlight_after to the reveal time in source seconds and highlight_fade to ~0.4 s; start the label at that time with a matching fade. The label sits just above the building (x = building.x, box bottom ~30 px above building.top, kept inside the frame), white (Geist 600, ~44 at 1080p, glow off), in an opaque black box (pad_x 20, pad_y 12) with a red border (2 px, border_color [1,0.1,0.1,1]) and shadow (opacity 0.85, distance 8, size 2, blur 18). Pin it using building_track x and y, same offsets and linear easing; when the label starts later, subtract its source start frame from tracking frames and interpolate its initial position. No state or city text. Then the cut-in's other B-roll, out of the map through a dip to black or a crossfade, never a hard cut (TRANSITIONS).
 - CALLS WITHOUT PICTURE in the story (a 911 call, a voicemail): cover them with B-roll that moves slowly (a push-in), the glowing waveform and its dark vignette on top (see PHONE CALLS), and subtitles as everywhere after the intro.
 - VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. They play at the footage's loudness, so narration and what's said on screen sound equally loud: place_voiceovers sets that; for voice-overs already placed, run set_loudness on them (no loudness = match the footage). Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Once B-roll covers a cut-in from its first frame to its last, the card and its words were only placeholders: delete the black card and the words, and move its voice-over onto A1, the footage's own sound track (free there, since B-roll is picture only), coloured purple, which no other audio uses, so the narration sits in line with the rest of the sound and still stands out. Until then, leave the card and words in place.
+- TIGHT VOICE-OVERS: a pause over ~0.7 s inside a thought makes a cut-in drag; tighten_voiceover shortens such pauses to ~0.35 s and the B-roll follows. Not every pause: run it with dry_run on the stretch first, then only where it drags, never across a scene change or a deliberate beat (a pause before a reveal, after a hard line); give start/end to keep it to that stretch. A stretch that still drags after that can be sped up with speed_voiceover at 1.04–1.08 (its B-roll and graphics squeeze with it); never so it sounds rushed, never past ~1.1, and never over footage people speak in. Both ripple the rest of the timeline (remove_time is the same cut done by hand), so do them before laying sound effects and transitions on later cuts, or check those after.
 - MUSIC AND SOUND EFFECTS come from the team's library (list_library, then add_from_library), when the user asks for them. They set the video's vibe, so choose it deliberately before placing anything: read the script and footage, decide the case's tone and tell the user which you chose and why. A murder or really dark case (death, abuse, a disturbing scene) gets the dark beds: drones, low tones, tension. A lighter or upbeat case (an entitled driver, an absurd arrest, someone getting their comeuppance) gets music with energy and play and lighter sound design, never horror drones, eerie beds or heartbeats. Move the music with the story (tension into a build-up, revelation at the reveal), never at random. Each bed must fit the scene it plays under, not just the case: read its notes against what's on screen there (officers arriving on a fatal crash is grim and tense, not a chase or heist), and change beds only at scene changes, starting the new one where the music starts (its beginning or the part a note names), never mid-phrase. If nothing in the library fits the tone, say so rather than forcing a track that doesn't. Pick by the library's notes and usage guide (a shutter on crime scene images, a hit on a reveal, mugshot or chapter title, a riser building into a reveal or hard cut). Play only the part a note names ("first ~20 seconds", via seconds) and fade music out over ~1.5 s when it's cut short. The last bed fades out by the end of the outro's voice-over, where the video ends (THE OUTRO); never past it. LEVELS: set them with add_from_library's loudness (LUFS), never a guessed volume_db, measured against the speech: run measure_audio over the span first. Music sits about 12 LU under the speech it plays beneath (voice-over or footage; about 16 under where the note says "low volume") and never competes with it; with nothing said over it, it can rise to about 6 under the speech around it. A sound marks something that happens on screen and matches how it happens: a click for something that pops on, never for a fade (the place label fades in: no click). Accents must be clearly heard: a hit or stinger on a drop or reveal about as loud as the speech around it, risers, whooshes and shutters about 3–4 below that, small clicks about 8 below. Afterwards run measure_audio again: every sound you added is heard, and none drowns out a word.
 - PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
   - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: first run watch_footage (it corrects who says each line and marks background talk; on an edit it leaves the segments alone), then add_subtitles (it defaults to everything after the intro), with neglect: true when the case involves child abuse or neglect. The narrator, radio and background talk get no subtitles; the house words are muted in the footage's sound and starred out on screen (read the mutes it returns back to the user). They sit bottom middle on the subtitles track, always, even over a large blur or redaction box (overlapping it is fine): never move them up or to the side to dodge one; any moved off bottom middle that way go back (update_clip transform {x 0, y 0.4*height}; set_keyframes [] on any x/y they were given) before add_subtitles runs again, since it keeps hand-moved positions. No animation, no tracking: white words without glow in a pure black box (opaque, unlike the intro captions' see-through 0.45 box), the speaker's name above in their colour ("Officer:"). Timing matters most: each line is on screen while it's said, no earlier or later. Where a line repeats ("I'm hungry" … "I'm hungry again"), check each one against the transcript's word times (read_transcript) and with render_frame at each moment, so each appears when it's said and one never stands in for both; the same for the intro's captions. The intro keeps its own speaker captions (caption_speakers), glow and all. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own and their mutes, keeping where and how big subtitles moved by hand were. Subtitles finished by hand that only need the house words muted and starred: mute_house_words (it moves nothing).
+- HOUSE WORDS ON SCREEN: every text on screen gets the house words starred ("f***", "a****"; never removed or reworded), not only subtitles: the intro's speaker captions, callouts, quotes, the outro's charges, dates and labels; and the footage's sound under them is muted, the intro's too. When an edit's text is in, run mute_house_words over the whole timeline (no start/end; neglect: true in a child abuse or neglect case) and read its mutes back to the user. Words count in their other forms (punched, hitting, abused, choking).
 - SUBTITLE VIDEOS (Repack style): when the user asks for a subtitled video or a "sub video" (subtitles for the whole video and nothing else), first run watch_footage (it corrects who says each line and marks the segments: only footage gets subtitles, not an intro that already has them burned in, nor narration), then run repack_subtitles over the whole timeline (no start/end), with neglect: true when the case involves child abuse or neglect, and overlap: true for interrogation footage (people talk over each other there; each line gets its own stacked box). It puts every line said in the footage on the subtitles track in Repack's house style (Montserrat 48 in the speaker's colour with a glow, 75% black box, soft shadow, bottom middle, held a second after the last word, one at a time; the narrator, radio and background talk hidden), mutes the house words in the footage's sound and stars them out on screen. Then check a few frames with render_frame (a line with a starred word among them), read the mutes it returns back to the user (each word and its time, starred or mute-only) so they can review them, and add no other edits unless asked. A re-run replaces its own subtitles and mutes (and add_subtitles' in that span). Exporting a subtitled video (all of it, as MP4 or MOV) also uploads the file to the team's "Subtitles" folder on Google Drive, viewable by anyone with the link; when the upload is done the link is on the project as drive.url (get_project), so give that link when asked for it (it's gone if the file was deleted from Drive: export again). In the normal edit workflow keep using add_subtitles as described above.
 - Be precise, and fill in the small gaps yourself: skip throwaway moments (a lone "like" or "um", a blip that adds nothing to the story) rather than captioning them; when something starts or ends within ~0.2 s of a cut or of the next caption, snap it to that edge so there are no slivers or hairline gaps.
 - Keep the layers tidy: a clip shouldn't float on a track with nothing under it. After adding or removing layers, run tidy_tracks; it moves clips down into empty space below them (keeping what's above what) and drops empty tracks.
@@ -444,6 +446,37 @@ fn tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            "remove_time",
+            "Takes a stretch of time out of the whole timeline (a ripple delete across every track): clips wholly inside it are deleted; footage, B-roll and sound crossing it are cut so what's before and after it stays and joins up (the later piece plays on from where it would have); text, solids and adjustments crossing it are shortened; everything after moves left by its length. Keyframes stay with the picture they describe, fades at the cut are dropped, the in/out points, segments and script links follow. Returns what it cut, deleted and moved.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline." },
+                "end": { "type": "number", "description": "Seconds on the timeline." }
+            }),
+            &["start", "end"],
+        ),
+        tool(
+            "tighten_voiceover",
+            "Shortens the long pauses inside voice-overs: each silence between two words longer than max_pause (from the recording's word times) is cut down to keep, by taking the rest out of the timeline (remove_time at that spot), so the B-roll over it and everything after follow. Never touches the silence before a voice-over clip's first word or after its last, never cuts into a word, and leaves a pause where the footage's own sound is heard over it. Run it with dry_run first on a stretch that drags. Returns each pause (timeline seconds, the words either side, its length, how much went) and the total removed.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
+                "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
+                "max_pause": { "type": "number", "description": "Seconds: shorter pauses are left alone. Default 0.7." },
+                "keep": { "type": "number", "description": "Seconds of each long pause kept. Default 0.35." },
+                "dry_run": { "type": "boolean", "description": "Only list the pauses it would shorten. Default false." }
+            }),
+            &[],
+        ),
+        tool(
+            "speed_voiceover",
+            "Plays the voice-over in a span faster (pitch kept, as audio speed always is), and everything laid over it with it: the B-roll plays faster to fit, graphics and keyframes in the span squeeze to the new length, so all still lines up with the words; the timeline after it moves up by the time saved. The span is trimmed to the voice-over clips in it; refused where the footage's own sound plays (it would speed up what people say). Returns the span sped and the seconds saved.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline." },
+                "end": { "type": "number", "description": "Seconds on the timeline." },
+                "speed": { "type": "number", "description": "1.01 to 1.25; 1.04 to 1.08 is usual." }
+            }),
+            &["start", "end", "speed"],
+        ),
+        tool(
             "tidy_tracks",
             "Moves every clip down onto the track below wherever that track is empty for the clip's whole span (never into V1/A1, the footage tracks), so layers don't float above gaps and clips that overlap keep their order, then removes tracks left empty. Run it after adding or removing layers.",
             json!({}),
@@ -488,21 +521,21 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "add_subtitles",
-            "Plain subtitles for everything said (Repack's style): bottom middle, no animation, no tracking, each line in its speaker's colour. Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"); some are muted but stay readable. Replaces subtitles and mutes it made before in that span; a new subtitle over one moved, resized or keyframed by hand keeps that position and size (subtitles stay bottom middle even over a blur: move one only when the user asks). Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, and every mute (term, timeline time, starred).",
+            "Plain subtitles for everything said (Repack's style): bottom middle, no animation, no tracking, each line in its speaker's colour. Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words (in their other forms too: punched, hitting) are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and in every other text on the timeline; some are muted but stay readable. Replaces subtitles and mutes it made before in that span; a new subtitle over one moved, resized or keyframed by hand keeps that position and size (subtitles stay bottom middle even over a blur: move one only when the user asks). Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, and every mute (term, timeline time, starred).",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default: the end of the intro)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
-                "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, slap, blood, etc. Default false." }
+                "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false." }
             }),
             &[],
         ),
         tool(
             "mute_house_words",
-            "Mutes the house words in the footage's sound and stars them out in the subtitles already there, moving and re-timing nothing: for subtitles finished by hand. Replaces the mutes made before in that span. Returns how many subtitles changed and every mute (term, timeline time, starred).",
+            "Mutes the house words in the footage's sound (the intro's too) and stars them out in every text on screen: subtitles, speaker captions, callouts, quotes, charges, labels; moving and re-timing nothing. Words count in their other forms (punched, hitting, abusive). Run it over the whole timeline (no start/end) once the captions and text are in. Replaces the mutes made before in that span. Returns how many subtitles and other texts changed and every mute (term, timeline time, starred).",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
-                "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, slap, blood, etc. Default false." }
+                "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false." }
             }),
             &[],
         ),
@@ -521,11 +554,11 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "repack_subtitles",
-            "A subtitled video the Repack way: every line said in the footage (its own sound, transcribed if needed), split by Repack's rules, held a second after its last word (one at a time), in the house style in each speaker's colour (no two alike), on the subtitles track; the narrator, radio and background talk are hidden. The house words are muted in the footage's sound (sample-accurate, 12 ms cosine ramps; written as `mutes` on its audio clips) and starred out on screen (\"f***\"); some are muted but stay readable. Replaces subtitles and mutes made before in the span (add_subtitles' too). Returns the subtitles placed, the speakers (name, role, colour, lines) and every mute (term, timeline time, starred).",
+            "A subtitled video the Repack way: every line said in the footage (its own sound, transcribed if needed), split by Repack's rules, held a second after its last word (one at a time), in the house style in each speaker's colour (no two alike), on the subtitles track; the narrator, radio and background talk are hidden. The house words are muted in the footage's sound (sample-accurate, 12 ms cosine ramps; written as `mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and every other text on the timeline; words count in their other forms (punched, hitting); some are muted but stay readable. Replaces subtitles and mutes made before in the span (add_subtitles' too). Returns the subtitles placed, the speakers (name, role, colour, lines) and every mute (term, timeline time, starred).",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
-                "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, slap, blood, etc. Default false." },
+                "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false." },
                 "hold_ms": { "type": "number", "description": "How long a subtitle stays after its last word unless the next starts first (default 1000)." },
                 "overlap": { "type": "boolean", "description": "Interrogation footage: people talking over each other are shown together, each line its own box stacked above the one already up (each person's lines still one at a time). Default false." }
             }),
@@ -1462,6 +1495,85 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             Ok(text(
                 serde_json::to_string_pretty(&report).unwrap_or_default(),
             ))
+        }
+        "remove_time" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let frame = |key: &str| {
+                args[key]
+                    .as_f64()
+                    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+                    .map(|seconds| (seconds * fps).round() as i64)
+                    .ok_or(format!("{key} is required (seconds)"))
+            };
+            let (start, end) = (frame("start")?, frame("end")?);
+            if end <= start {
+                return Err("end must come after start".into());
+            }
+            let (_, done) = store.update(&id, ORIGIN, |project| {
+                Ok(edit_core::remove_time(project, start, end))
+            })?;
+            Ok(text(format!(
+                "removed {:.2}s at {:.2}s: {} clip(s) cut, {} deleted, {} moved",
+                done.frames as f64 / fps,
+                start as f64 / fps,
+                done.cut,
+                done.deleted,
+                done.moved
+            )))
+        }
+        "tighten_voiceover" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let from = args["start"]
+                .as_f64()
+                .map_or(0, |seconds| (seconds * fps).round() as i64);
+            let to = args["end"]
+                .as_f64()
+                .map_or(live.project.duration(), |seconds| {
+                    (seconds * fps).round() as i64
+                });
+            let max_pause = args["max_pause"]
+                .as_f64()
+                .filter(|pause| pause.is_finite() && *pause >= 0.2)
+                .unwrap_or(0.7);
+            let keep = args["keep"]
+                .as_f64()
+                .filter(|keep| keep.is_finite() && *keep >= 0.1)
+                .unwrap_or(0.35)
+                .min(max_pause);
+            let dry_run = args["dry_run"].as_bool().unwrap_or(false);
+            let done = crate::diag::time_async(
+                "voiceover",
+                "tighten voice-over",
+                crate::voiceover::tighten(app, &id, (from, to), max_pause, keep, dry_run),
+            )
+            .await?;
+            Ok(text(
+                serde_json::to_string_pretty(&done).unwrap_or_default(),
+            ))
+        }
+        "speed_voiceover" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let frame = |key: &str| {
+                args[key]
+                    .as_f64()
+                    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+                    .map(|seconds| (seconds * fps).round() as i64)
+                    .ok_or(format!("{key} is required (seconds)"))
+            };
+            let (from, to) = (frame("start")?, frame("end")?);
+            let speed = args["speed"].as_f64().ok_or("speed is required")?;
+            let (_, (start, end, saved)) = store.update(&id, ORIGIN, |project| {
+                crate::voiceover::speed_up(project, from, to, speed)
+            })?;
+            Ok(text(format!(
+                "sped {:.2}–{:.2}s up {speed}x: saved {:.2}s",
+                start as f64 / fps,
+                end as f64 / fps,
+                saved as f64 / fps
+            )))
         }
         "tidy_tracks" => {
             let (_, (moved, removed)) =

@@ -709,7 +709,7 @@ pub async fn subtitles(
         y: height as f32 * 0.4,
         ..Transform::default()
     };
-    let (live, (placed, kept)) = app.store.update(project_id, "agent", |project| {
+    let (live, (placed, kept, texts)) = app.store.update(project_id, "agent", |project| {
         let old: HashSet<String> = project
             .clips
             .iter()
@@ -858,7 +858,9 @@ pub async fn subtitles(
             });
             placed += 1;
         }
-        Ok((placed, kept))
+        // Every other text on screen too (captions, callouts, charges), all of the video.
+        let texts = crate::subtitles::star_on_screen(project, 0, i64::MAX, neglect);
+        Ok((placed, kept, texts))
     })?;
     Ok(json!({
         "rev": live.rev,
@@ -866,6 +868,7 @@ pub async fn subtitles(
         "hidden": hidden,
         "placed": placed,
         "kept_hand_adjustments": kept,
+        "texts_starred": texts,
         "mutes": house.listed,
     }))
 }

@@ -362,7 +362,9 @@ async fn name(app: &App, source: &Path, target: &Path) -> Result<(), String> {
         .agents
         .ask(
             MODEL,
-            "high",
+            // Naming voices from the conversation is quick work, and the
+            // watcher checks every line against the footage afterwards.
+            "medium",
             INSTRUCTIONS,
             input,
             Some(schema),

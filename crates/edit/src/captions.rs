@@ -946,6 +946,7 @@ pub async fn caption_speakers(
     let clip_of = |id: &str| footage.iter().find(|clip| clip.id == id).copied();
     let mut images = Vec::new();
     let mut listing = Vec::new();
+    let mut grabs = Vec::new();
     for (n, line) in lines.iter().enumerate() {
         let Some(clip) = clip_of(&line.clip) else {
             continue;
@@ -964,10 +965,7 @@ pub async fn caption_speakers(
         };
         let at = (line.start() + line.end()) / 2.0;
         let path = dir.join(format!("line-{n}.jpg"));
-        let (source, at_clone, out) = (PathBuf::from(&media.path), at, path.clone());
-        tokio::task::spawn_blocking(move || still(&source, at_clone, &out))
-            .await
-            .map_err(|error| error.to_string())??;
+        grabs.push((PathBuf::from(&media.path), at, path.clone()));
         images.push(json!({ "type": "localImage", "path": path.to_string_lossy() }));
         let timeline = clip.start as f64 + (line.start() - source_in) / speed * fps;
         listing.push(format!(
@@ -977,6 +975,21 @@ pub async fn caption_speakers(
             line.text(),
             (clip.start as f64 + (at - source_in) / speed * fps) / fps
         ));
+    }
+    // The stills side by side (one FFmpeg seek each): one after another, an
+    // intro of thirty lines waited on thirty of them.
+    {
+        use futures_util::StreamExt as _;
+        let grabbed: Vec<Result<(), String>> =
+            futures_util::stream::iter(grabs.into_iter().map(|(source, at, out)| async move {
+                tokio::task::spawn_blocking(move || still(&source, at, &out))
+                    .await
+                    .map_err(|error| error.to_string())?
+            }))
+            .buffered(4)
+            .collect()
+            .await;
+        grabbed.into_iter().collect::<Result<Vec<()>, String>>()?;
     }
     let mut voices: Vec<String> = lines.iter().map(voice_label).collect();
     voices.sort();
@@ -992,7 +1005,9 @@ pub async fn caption_speakers(
         .agents
         .ask(
             WATCH_MODEL,
-            "high",
+            // Who's who in a still is seen, not reasoned out: medium answers
+            // in a fraction of high's time.
+            "medium",
             INSTRUCTIONS,
             input,
             Some(schema()),
@@ -1015,6 +1030,7 @@ pub async fn caption_speakers(
         track: Vec<crate::track::Sample>,
     }
     let mut plans = Vec::new();
+    let mut tracks = Vec::new();
     for said in &watched.lines {
         let Some(line) = lines.get(said.n) else {
             continue;
@@ -1044,24 +1060,18 @@ pub async fn caption_speakers(
                     .any(|name| !name.is_empty() && seen.who.trim().eq_ignore_ascii_case(name))
             })
             .and_then(|seen| box_pixels(&seen.face, media_size));
-        let track = match face {
-            Some(region) => {
-                let (path, at, from, to) = (
-                    PathBuf::from(&media.path),
-                    (line.start() + line.end()) / 2.0,
-                    line.start(),
-                    line.end() + HOLD,
-                );
-                tokio::task::spawn_blocking(move || {
-                    crate::track::track(&path, (media.width, media.height), from, to, at, region)
-                })
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .unwrap_or_default()
-            }
-            None => Vec::new(),
-        };
+        if let Some(region) = face {
+            tracks.push((
+                plans.len(),
+                PathBuf::from(&media.path),
+                (media.width, media.height),
+                line.start(),
+                line.end() + HOLD,
+                (line.start() + line.end()) / 2.0,
+                region,
+            ));
+        }
+        let track = Vec::new();
         plans.push(Plan {
             line: said.n,
             // Who says it is the transcript's: its voices were named from the conversation.
@@ -1081,6 +1091,32 @@ pub async fn caption_speakers(
                 .collect(),
             track,
         });
+    }
+
+    // Every speaker's face tracked side by side, a few at a time.
+    {
+        use futures_util::StreamExt as _;
+        let tracked: Vec<(usize, Vec<crate::track::Sample>)> =
+            futures_util::stream::iter(tracks.into_iter().map(
+                |(plan, path, size, from, to, at, region)| async move {
+                    let samples = tokio::task::spawn_blocking(move || {
+                        crate::track::track(&path, size, from, to, at, region)
+                    })
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_default();
+                    (plan, samples)
+                },
+            ))
+            .buffer_unordered(3)
+            .collect()
+            .await;
+        for (plan, samples) in tracked {
+            if let Some(plan) = plans.get_mut(plan) {
+                plan.track = samples;
+            }
+        }
     }
 
     let colors = [

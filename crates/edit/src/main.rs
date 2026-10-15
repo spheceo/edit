@@ -8,6 +8,7 @@ mod drive;
 mod edit_plan;
 mod edit_review;
 mod export;
+mod footage_search;
 mod fulledit;
 mod guard;
 mod library;

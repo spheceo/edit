@@ -63,7 +63,7 @@ House editing style (videos cut from a script of police footage):
   - Between the outro's screens a short crossfade (10 frames); into the outro from the story, the usual transition rules apply. A soft low hit as each set of charges appears, ~6 LU under the voice-over.
   - The video ends when the outro's voice-over ends: the last frame of the edit is the end of its last word (plus at most a couple of frames; media_transcript with words: true gives it). Nothing runs on after it: trim every clip (pictures, gradient, charges, adjustments, music, sound effects, any footage) to end there, the music fading out by then (fade_out ~1.5 s ending on it). The plan's audit gives the new duration (frames).
 - CUT-INS (the black narration cards) may carry stylised text and graphics.
-- B-ROLL IN CUT-INS: use source footage for B-roll, not AI-generated images. A cut-in's voice-over is covered by B-roll that shows what it says, never generic footage. Read the narration, then find the moments that back it up in the source footage (media_transcript to find who says what where; look_at_media to see it): someone confused when the words say they had no idea, the wreck or a shocked witness when they say a devastating crash. Time each shot to the words it shows (media_transcript with words: true on the voice-over gives exact times; a voice-over clip's timeline time = clip start + word time - its source_in): a shot showing \"the teenagers and the missing driver\" starts just before those words and lasts until they're said. Short cut-ins (under ~10 s) get two shots, longer ones more, each a few seconds, butted end to end and filling the cut-in from its first frame to its last, on a video track above the card. Each shot is picture only, slowed (speed about 0.5) using native frame sampling (no pre-render), with a slow push-in (scale keyframes from 1 to about 1.08 across the shot, ease linear). The vertical drop into the cut-in still applies. Do all of that with cover_cut_in operations in one apply_edit_plan for the whole stage (it places the shots, push-ins, B-roll look and drop, clears the card and moves the voice-over to A1): you choose the shots and their times; include each cut-in's particular extras (a person's vignette and label, a quote, a different transition and its sounds) in that same plan. Pick varied shots (different moments, angles, people, evidence): shots only seconds or a few minutes apart in the source, cut together, look repetitive, worst with a flash or shutter between them. Pick another shot, let one shot run longer, or, when the cuts really are one moment, treat them as one shot (PUSH-INS). Across the video too: when the footage has run out of fresh shots for a stretch and the same few moments would come back again and again, use something else there: a picture of the person (a found photo or a still_frame) with short text beside it (THE QUOTE CALLOUT's layout: their words, or a few of the narration's), found images of what's named, or a held shot under a CLAIM LIST.
+- B-ROLL IN CUT-INS: use source footage for B-roll, not AI-generated images. A cut-in's voice-over is covered by B-roll that shows what it says, never generic footage. Read the narration, then find the moments that back it up in the source footage (find_in_footage with a phrase per idea, for every cut-in at once; look_at_media to see a moment only when its picture is in doubt): someone confused when the words say they had no idea, the wreck or a shocked witness when they say a devastating crash. Time each shot to the words it shows (get_edit_context's cut-in words give each word's timeline time): a shot showing \"the teenagers and the missing driver\" starts just before those words and lasts until they're said. Short cut-ins (under ~10 s) get two shots, longer ones more, each a few seconds, butted end to end and filling the cut-in from its first frame to its last, on a video track above the card. Each shot is picture only, slowed (speed about 0.5) using native frame sampling (no pre-render), with a slow push-in (scale keyframes from 1 to about 1.08 across the shot, ease linear). The vertical drop into the cut-in still applies. Do all of that with cover_cut_in operations in one apply_edit_plan for the whole stage (it places the shots, push-ins, B-roll look and drop, clears the card and moves the voice-over to A1): you choose the shots and their times; include each cut-in's particular extras (a person's vignette and label, a quote, a different transition and its sounds) in that same plan. Pick varied shots (different moments, angles, people, evidence): shots only seconds or a few minutes apart in the source, cut together, look repetitive, worst with a flash or shutter between them. Pick another shot, let one shot run longer, or, when the cuts really are one moment, treat them as one shot (PUSH-INS). Across the video too: when the footage has run out of fresh shots for a stretch and the same few moments would come back again and again, use something else there: a picture of the person (a found photo or a still_frame) with short text beside it (THE QUOTE CALLOUT's layout: their words, or a few of the narration's), found images of what's named, or a held shot under a CLAIM LIST.
 - B-ROLL NEVER GETS AHEAD OF THE STORY: never show something before the video has shown it happen. A person being arrested, cuffed, put in a car, hurt, or a find being made appears as B-roll only after that moment has played in the footage; before it, B-roll of that person comes from moments already seen or neutral ones (talking with officers, at the door, waiting). Check each shot's source time against where its moment plays on the timeline (the transcript you already read).
 - PUSH-INS (the slow zoom across a B-roll shot and anything pinned to it; the moving map is linear by itself) are ease linear: a constant-speed zoom, a straight line on the graph, never in_out (no slow start, rush and slow stop). B-roll made of several cuts of the SAME moment (same scene and time, cut a little apart) is one shot: never restart the zoom on each cut; one continuous push-in runs across the whole run, each clip's scale keyframes starting where the previous clip's ended and climbing at the same rate (as if one parent above them were zooming: e.g. 1→1.04, then 1.04→1.08), and no flash, shutter, whoosh or drop between them.
 - TRANSITIONS: vary them and pick each for its moment; the same transition on cut after cut reads as a gimmick. Every cut out of a cut-in back into footage and every cut between two graphics (the map, a person's label, a picture, a quote) is clean, never abrupt: when unsure, a short dip to black. Give each graphic its beat: a label, the map or a quote holds at least ~1.5 s before the next move, so moves around one never pile up too fast. A DIP TO BLACK is short and light: ~12 frames, black only for a frame or two at its peak (ease in_out up and straight back down, never a plateau), so it never reads as a blank screen; and no black card or solid is ever left on screen by itself (the review frames across each dip and each cleared cut-in). The GLITCH is the rarest: at most once or twice in a video (a digital or tech moment, a jarring reveal), never on two transitions in a row and never as the default into or out of B-roll. Into and out of B-roll choose from: the vertical drop (a slam into a hard beat), a white flash or a camera shutter with its flash (CAMERA SHUTTERS; a new angle, a photo, a reveal: the team likes these), a dip to black (a change of time or a heavy beat), and a smooth crossfade for calm moves (between two B-roll shots, out of the date cut-in): the incoming clip on the track above starts 10–15 frames before the cut with fade_in over that span while the outgoing shot runs on beneath it to the cut's end. Out of the map (the address graphic) into what follows, above all another graphic such as a person's label: never a hard cut; a dip to black (a black solid ~12 frames straddling the cut, start = cut - 6, on a track above everything there, opacity keyframes 0 → 1 on the cut → 0, ease in_out; the place label fades out into it) or, for a calm move, the crossfade. Cuts between clips of the same moment get no transition at all (PUSH-INS). A glitch, when used: an adjustment {grade all 0, glitch {amount 90} (default 6 tall bands)} 8 frames straddling the cut (start = cut - 4), on a track above everything there, with the library's glitch sound lined up on the cut, trimmed to the glitch (add_from_library seconds ~0.3), quiet: about 10 LU under the speech around it.
@@ -398,6 +398,16 @@ fn tools() -> Vec<Value> {
                 "columns": { "type": "integer", "description": "Default 4." }
             }),
             &["media_id", "start", "end"],
+        ),
+        tool(
+            "find_in_footage",
+            "Where things are said in all of the project's footage at once, from the transcripts already made: for each phrase, the best places (media id, source seconds at/end, speaker, the words around it), exact runs first. Use it to find B-roll for every cut-in in one call: a phrase per idea in the narration (\"baby in a bucket\", \"arrested her mother\", \"the trunk\"), then look_at_media only where a moment's picture is in doubt. Transcribes nothing; untranscribed_media lists videos without a transcript.",
+            json!({
+                "phrases": { "type": "array", "items": { "type": "string" }, "description": "Up to 60 phrases." },
+                "limit": { "type": "integer", "description": "Places per phrase (default 4)." },
+                "context": { "type": "integer", "description": "Words of context before each place (default 8)." }
+            }),
+            &["phrases"],
         ),
         tool(
             "media_transcript",
@@ -1721,6 +1731,25 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 ),
             ))
         }
+        "find_in_footage" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let phrases: Vec<String> = serde_json::from_value(args["phrases"].clone())
+                .map_err(|error| format!("phrases: {error}"))?;
+            if phrases.is_empty() || phrases.len() > 60 {
+                return Err("give 1 to 60 phrases".to_owned());
+            }
+            let limit = args["limit"].as_u64().unwrap_or(4).clamp(1, 12) as usize;
+            let context = args["context"].as_u64().unwrap_or(8).min(40) as usize;
+            let app = app.clone();
+            let found = tokio::task::spawn_blocking(move || {
+                crate::footage_search::find(&app, &live.project, &phrases, limit, context)
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+            Ok(text(
+                serde_json::to_string(&found).map_err(|error| error.to_string())?,
+            ))
+        }
         "media_transcript" => {
             let live = store.get(&id).ok_or("project vanished")?;
             let media_id = args["media_id"].as_str().ok_or("media_id is required")?;
@@ -2548,6 +2577,7 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
         "look_at_media",
         "measure_audio",
         "media_transcript",
+        "find_in_footage",
         "read_transcript",
         "still_frame",
         "track_region",

@@ -51,6 +51,11 @@ const PARAM_INFO: Record<string, { label: string; color: string; format: (value:
   vignette_y: { label: "Vignette Y", color: "#86efac", format: (v) => `${Math.round(v)} px` },
   vignette_size: { label: "Vignette size", color: "#c4b5fd", format: (v) => v.toFixed(2) },
   glitch: { label: "Glitch", color: "#2dd4bf", format: (v) => `${Math.round(v)} px` },
+  blur: { label: "Blur", color: "#93c5fd", format: (v) => `${Math.round(v)} px` },
+  "blur.x": { label: "Blur X", color: "#f87171", format: (v) => `${Math.round(v)} px` },
+  "blur.y": { label: "Blur Y", color: "#86efac", format: (v) => `${Math.round(v)} px` },
+  "blur.width": { label: "Blur width", color: "#fcd34d", format: (v) => `${Math.round(v)} px` },
+  "blur.height": { label: "Blur height", color: "#fdba74", format: (v) => `${Math.round(v)} px` },
   "leader.x": { label: "Line start X", color: "#f87171", format: (v) => `${Math.round(v)} px` },
   "leader.y": { label: "Line start Y", color: "#86efac", format: (v) => `${Math.round(v)} px` },
 };

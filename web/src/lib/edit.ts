@@ -507,6 +507,14 @@ const params: Record<string, [Getter, Setter]> = {
     (c) => (c.type === "adjustment" ? (c.glitch?.amount ?? 0) : 0),
     (c, v) => c.type === "adjustment" && (c.glitch = { ...c.glitch, amount: v }),
   ],
+  blur: [
+    (c) => (c.type === "adjustment" ? (c.blur?.radius ?? 0) : 0),
+    (c, v) => c.type === "adjustment" && (c.blur = { ...c.blur, radius: v }),
+  ],
+  "blur.x": [(c) => (c.type === "adjustment" ? (c.blur?.x ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.blur = { radius: 0, ...c.blur, x: v })],
+  "blur.y": [(c) => (c.type === "adjustment" ? (c.blur?.y ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.blur = { radius: 0, ...c.blur, y: v })],
+  "blur.width": [(c) => (c.type === "adjustment" ? (c.blur?.width ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.blur = { radius: 0, ...c.blur, width: v })],
+  "blur.height": [(c) => (c.type === "adjustment" ? (c.blur?.height ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.blur = { radius: 0, ...c.blur, height: v })],
   "leader.x": [(c) => (c.type === "text" ? (c.style.leader?.x ?? 0) : 0), (c, v) => c.type === "text" && c.style.leader && (c.style.leader.x = v)],
   "leader.y": [(c) => (c.type === "text" ? (c.style.leader?.y ?? 0) : 0), (c, v) => c.type === "text" && c.style.leader && (c.style.leader.y = v)],
 };
@@ -516,7 +524,7 @@ function animatableParams(clip: Clip): string[] {
   switch (clip.type) {
     case "video": return ["x", "y", "scale", "rotation", "shake", "opacity"];
     case "text": return ["x", "y", "scale", "rotation", "shake", "opacity", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"];
-    case "adjustment": return ["shake", "glitch", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "opacity"];
+    case "adjustment": return ["shake", "glitch", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "blur", "blur.x", "blur.y", "blur.width", "blur.height", "opacity"];
     case "solid": return ["opacity"];
     case "waveform": return ["x", "y", "scale", "rotation", "opacity", "gain", "glow.radius", "glow.strength"];
     case "audio": return ["volume_db"];

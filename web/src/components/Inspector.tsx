@@ -688,6 +688,30 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             })}
           </Section>
         )}
+        {clip.type === "adjustment" && (
+          <Section title="Blur">
+            {param("Strength", "blur", { step: 0.5, min: 0, max: 200, precision: 1, suffix: "px" })}
+            {(clip.blur?.radius ?? 0) > 0 && (
+              <>
+                {param("Center X", "blur.x")}
+                {param("Center Y", "blur.y")}
+                {param("Width", "blur.width", { min: 0, suffix: "px" })}
+                {param("Height", "blur.height", { min: 0, suffix: "px" })}
+                {field("Feather", clip.blur?.feather ?? 0, (live, value) => live.type === "adjustment" && (live.blur = { radius: 0, ...live.blur, feather: value }), { min: 0, suffix: "px" })}
+                <Row label="Shape">
+                  <Select<"ellipse" | "rect">
+                    value={clip.blur?.shape ?? "ellipse"}
+                    options={[
+                      { value: "ellipse", label: "Ellipse" },
+                      { value: "rect", label: "Rectangle" },
+                    ]}
+                    onChange={(shape) => once((live) => live.type === "adjustment" && (live.blur = { radius: 0, ...live.blur, shape }))}
+                  />
+                </Row>
+              </>
+            )}
+          </Section>
+        )}
         {clip.type === "waveform" && (
           <>
             <Section title="Waveform">

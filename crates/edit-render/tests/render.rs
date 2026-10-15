@@ -126,6 +126,7 @@ fn renders_gradient_glowing_title_and_grade() {
                 },
                 shake: Default::default(),
                 glitch: Default::default(),
+                blur: Default::default(),
                 opacity: 1.0,
             },
             Layer::Text {
@@ -331,4 +332,153 @@ fn crops_a_picture_and_fades_a_gradient() {
     assert!(grey(50) > 250, "{}", grey(50));
     assert!(grey(75) > 20 && grey(75) < 235, "{}", grey(75));
     assert!(grey(95) < 5, "{}", grey(95));
+}
+
+#[test]
+fn blurs_only_inside_the_region() {
+    let (w, h) = (1920_u32, 1080_u32);
+    let Some(mut renderer) = renderer(w, h) else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    // Busy detail everywhere: an 8 px checker over a colour gradient.
+    let mut frame = vec![0_u8; (w * h * 4) as usize];
+    for (i, px) in frame.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let (x, y) = (i as u32 % w, i as u32 / w);
+        let on = ((x / 8) + (y / 8)) % 2 == 0;
+        let lift = if on { 150 } else { 0 };
+        *px = [
+            (40 + lift + x * 60 / w) as u8,
+            (30 + lift + y * 60 / h) as u8,
+            (70 + lift) as u8,
+            255,
+        ];
+    }
+    renderer.upload_video_rgba("m1", w, h, &frame);
+    let footage = Layer::Video {
+        clip: "c1".into(),
+        media: "m1".into(),
+        source_time: 0.0,
+        transform: Transform::default(),
+        opacity: 1.0,
+        crop: Default::default(),
+    };
+    let word = Layer::Text {
+        clip: "t1".into(),
+        text: "JANE DOE".into(),
+        style: TextStyle {
+            size: 120.0,
+            weight: 900,
+            glow: Glow {
+                enabled: false,
+                ..Glow::default()
+            },
+            ..TextStyle::default()
+        },
+        transform: Transform {
+            x: 450.0,
+            y: 250.0,
+            ..Transform::default()
+        },
+        animation: TextAnimation::default(),
+        local_frame: 0.0,
+        opacity: 1.0,
+        shown_glyphs: None,
+    };
+    let adjustment = |blur: Blur| Layer::Adjustment {
+        grade: Grade::default(),
+        shake: Default::default(),
+        glitch: Default::default(),
+        blur,
+        opacity: 1.0,
+    };
+    // A face-sized ellipse left of centre and a rounded box over the word.
+    let face = Blur {
+        radius: 35.0,
+        x: -400.0,
+        y: -100.0,
+        width: 360.0,
+        height: 440.0,
+        feather: 24.0,
+        shape: BlurShape::Ellipse,
+    };
+    let name = Blur {
+        radius: 30.0,
+        x: 450.0,
+        y: 250.0,
+        width: 640.0,
+        height: 160.0,
+        feather: 12.0,
+        shape: BlurShape::Rect,
+    };
+    let sharp = Scene {
+        width: w,
+        height: h,
+        layers: vec![footage.clone(), word.clone()],
+    };
+    renderer.render(&sharp);
+    let before = renderer.read_output().unwrap();
+    let blurred = Scene {
+        width: w,
+        height: h,
+        layers: vec![footage, word, adjustment(face), adjustment(name)],
+    };
+    renderer.render(&blurred);
+    let after = renderer.read_output().unwrap();
+    save("blur.png", w, h, &after);
+
+    // Variance of the brightness over a 32 px square centred on (cx, cy).
+    let variance = |pixels: &[u8], cx: u32, cy: u32| {
+        let mut values = Vec::new();
+        for y in cy - 16..cy + 16 {
+            for x in cx - 16..cx + 16 {
+                let i = ((y * w + x) * 4) as usize;
+                values.push((pixels[i] as f64 + pixels[i + 1] as f64 + pixels[i + 2] as f64) / 3.0);
+            }
+        }
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
+    };
+    // Inside the face's region (its centre and near its edge): smoothed away.
+    let (fx, fy) = (960 - 400, 540 - 100);
+    for (cx, cy) in [(fx, fy), (fx + 120, fy), (fx, fy - 160)] {
+        let (sharp, soft) = (variance(&before, cx, cy), variance(&after, cx, cy));
+        assert!(
+            sharp > 1000.0,
+            "the checker is busy at ({cx}, {cy}): {sharp}"
+        );
+        assert!(
+            soft < sharp / 50.0,
+            "blurred at ({cx}, {cy}): {soft} vs {sharp}"
+        );
+    }
+    // The word under the rounded box: unreadable.
+    let (sharp, soft) = (
+        variance(&before, 960 + 450, 540 + 250),
+        variance(&after, 960 + 450, 540 + 250),
+    );
+    assert!(
+        soft < sharp / 10.0,
+        "the word is blurred: {soft} vs {sharp}"
+    );
+    // Away from both regions (past the feather) every pixel is untouched.
+    let touched = |x: u32, y: u32| {
+        let (dx, dy) = (x as f32 - fx as f32, y as f32 - fy as f32);
+        let in_face = (dx / (180.0 + 30.0)).powi(2) + (dy / (220.0 + 30.0)).powi(2) <= 1.0;
+        let in_name =
+            (x as f32 - 1410.0).abs() <= 320.0 + 16.0 && (y as f32 - 790.0).abs() <= 80.0 + 16.0;
+        in_face || in_name
+    };
+    let mut checked = 0;
+    for y in (0..h).step_by(3) {
+        for x in (0..w).step_by(3) {
+            if touched(x, y) {
+                continue;
+            }
+            let i = ((y * w + x) * 4) as usize;
+            assert_eq!(after[i..i + 4], before[i..i + 4], "({x}, {y}) changed");
+            checked += 1;
+        }
+    }
+    assert!(checked > 150_000);
 }

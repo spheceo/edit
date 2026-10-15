@@ -1015,7 +1015,15 @@ pub async fn import_paths(
         }
         Ok(added)
     })?;
+    // Footage brought into a project with no script is a subtitled video in
+    // the making: its transcript is the first thing it needs, so the
+    // transcriber starts now instead of when the watcher first asks for it.
+    // (A script's import transcribes its own footage; voice-overs have theirs.)
+    let transcribe = live.project.script.is_none() && !matches!(origin, "voice" | "script");
     for (path, probe) in probed {
+        if transcribe && probe.kind == MediaKind::Video && probe.has_audio {
+            app.media.transcribe(path.clone(), true);
+        }
         app.media.ensure(path, probe);
     }
     Ok((live.rev, added, errors))

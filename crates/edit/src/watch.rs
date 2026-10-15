@@ -37,7 +37,7 @@ const LONGEST: f64 = 330.0;
 const AT_ONCE: usize = 12;
 /// Windows cut at once. Their own lane, not the media jobs' single slot: a
 /// watch waiting behind an import's proxy is minutes on the critical path.
-const CUTS_AT_ONCE: usize = 2;
+const CUTS_AT_ONCE: usize = 3;
 /// Tries per window, and how long each may take. With low thinking a window
 /// answers in well under a minute; a slow one is usually stuck, so try again.
 const TRIES: usize = 3;
@@ -395,11 +395,31 @@ fn cache_key(media_key: &str, window: &Window, lines: &[WatchLine]) -> String {
 }
 
 /// A small MP4 of the window with its sound: 360p at 1 fps (Gemini samples
-/// video at one frame a second, so more is only bytes to send), mono AAC 48k.
-/// The source is decoded in hardware where there is some.
-async fn cut(source: &Path, window: &Window, out: &Path) -> Result<(), String> {
+/// video at one frame a second, so more is only bytes to send).
+///
+/// From the media's light preview when it has one: 720p with a keyframe
+/// every half second, so decoding only its keyframes still gives every
+/// second's frame, and its AAC sound is copied as it is. That is several
+/// times cheaper than decoding the 1080p original, which is what every
+/// window waited on once the model answered faster than it was cut.
+async fn cut(source: &Path, cache: &Path, window: &Window, out: &Path) -> Result<(), String> {
+    let light = cache.join("preview-light.mp4");
+    let sound = cache.join("preview.m4a");
+    let preview = (light.is_file() && sound.is_file()).then_some((light, sound));
+    cut_at(source, preview, window, out, 1).await
+}
+
+async fn cut_at(
+    source: &Path,
+    preview: Option<(PathBuf, PathBuf)>,
+    window: &Window,
+    out: &Path,
+    fps: u32,
+) -> Result<(), String> {
     static CUTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(CUTS_AT_ONCE);
     let _slot = CUTS.acquire().await.map_err(|error| error.to_string())?;
+    let start = format!("{:.3}", window.start.max(0.0));
+    let length = format!("{:.3}", window.end - window.start);
     let mut command = tokio::process::Command::new(crate::tools::ffmpeg());
     command.args([
         "-hide_banner",
@@ -411,44 +431,36 @@ async fn cut(source: &Path, window: &Window, out: &Path) -> Result<(), String> {
         "-filter_threads",
         "1",
     ]);
-    if cfg!(target_os = "macos") {
-        command.args(["-hwaccel", "videotoolbox"]);
-    }
+    let audio = match &preview {
+        Some((light, sound)) => {
+            command
+                .args(["-skip_frame", "nokey", "-ss", &start, "-t", &length, "-i"])
+                .arg(light)
+                .args(["-ss", &start, "-t", &length, "-i"])
+                .arg(sound)
+                .args(["-map", "0:v:0", "-map", "1:a:0"]);
+            vec!["-c:a", "copy"]
+        }
+        None => {
+            if cfg!(target_os = "macos") {
+                command.args(["-hwaccel", "videotoolbox"]);
+            }
+            command
+                .args(["-ss", &start, "-t", &length, "-i"])
+                .arg(source)
+                .args(["-map", "0:v:0", "-map", "0:a:0?"]);
+            vec!["-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "48000"]
+        }
+    };
     let output = command
-        .arg("-ss")
-        .arg(format!("{:.3}", window.start.max(0.0)))
-        .arg("-t")
-        .arg(format!("{:.3}", window.end - window.start))
-        .arg("-i")
-        .arg(source)
+        .arg("-vf")
+        .arg(format!("fps={fps},scale=-2:360"))
         .args([
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a:0?",
-            "-vf",
-            "fps=1,scale=-2:360",
-            "-threads",
-            "2",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "30",
-            "-pix_fmt",
+            "-threads", "2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt",
             "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "48k",
-            "-ac",
-            "1",
-            "-ar",
-            "48000",
-            "-movflags",
-            "+faststart",
         ])
+        .args(audio)
+        .args(["-movflags", "+faststart"])
         .arg(out)
         .stdin(Stdio::null())
         .kill_on_drop(true)
@@ -561,12 +573,22 @@ async fn ask(
     lines: usize,
     scratch: &Path,
 ) -> Result<(Answer, f64), String> {
+    ask_with(clip, text, lines, scratch, Some("low")).await
+}
+
+async fn ask_with(
+    clip: &Path,
+    text: String,
+    lines: usize,
+    scratch: &Path,
+    effort: Option<&str>,
+) -> Result<(Answer, f64), String> {
     use base64::Engine as _;
     let bytes = tokio::fs::read(clip)
         .await
         .map_err(|error| error.to_string())?;
     let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let request = json!({
+    let mut request = json!({
         "model": MODEL,
         "messages": [
             { "role": "system", "content": WATCH_SYSTEM },
@@ -575,11 +597,13 @@ async fn ask(
                 { "type": "file", "file": { "filename": "window.mp4", "file_data": format!("data:video/mp4;base64,{data}") } }
             ] }
         ],
-        "response_format": { "type": "json_schema", "json_schema": { "name": "watched", "strict": true, "schema": schema() } },
-        // Who says a line is read off the picture and the voices, not reasoned
-        // out at length: low thinking answers a window in a fraction of the time.
-        "reasoning": { "effort": "low" }
+        "response_format": { "type": "json_schema", "json_schema": { "name": "watched", "strict": true, "schema": schema() } }
     });
+    // Who says a line is read off the picture and the voices, not reasoned
+    // out at length: low thinking answers a window in a fraction of the time.
+    if let Some(effort) = effort {
+        request["reasoning"] = json!({ "effort": effort });
+    }
     tokio::fs::write(
         scratch,
         serde_json::to_vec(&request).map_err(|error| error.to_string())?,
@@ -651,7 +675,10 @@ pub async fn watch_window(
         clock(window.start),
         clock(window.end)
     );
-    let made = cut(source, window, &clip).await;
+    let made = match dir.parent() {
+        Some(cache) => cut(source, cache, window, &clip).await,
+        None => cut_at(source, None, window, &clip, 1).await,
+    };
     if let Err(error) = made {
         let _ = std::fs::remove_file(&clip);
         return Err(format!("{what}: {error}"));
@@ -1830,5 +1857,100 @@ mod tests {
             .unwrap(),
         );
         assert!(!sets_segments(&project));
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    /// Watches one real window both ways (the old 3 fps with default thinking,
+    /// the new 1 fps with low thinking) and compares time and answers. Paid:
+    /// EDIT_WATCH_BENCH="<source path>,<start s>,<end s>" with AI_GATEWAY_API_KEY.
+    #[tokio::test]
+    #[ignore]
+    async fn old_and_new_settings_on_one_window() {
+        let Ok(spec) = std::env::var("EDIT_WATCH_BENCH") else {
+            return;
+        };
+        let parts: Vec<&str> = spec.split(',').collect();
+        let source = PathBuf::from(parts[0]);
+        let (start, end): (f64, f64) = (parts[1].parse().unwrap(), parts[2].parse().unwrap());
+        let home = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join(".edit");
+        let transcript: crate::transcribe::Transcript = serde_json::from_slice(
+            &std::fs::read(
+                home.join("cache")
+                    .join(crate::media::media_key(&source))
+                    .join("transcript.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let lines = lines_of(&transcript.words, start, end);
+        let window = Window {
+            lines: 0..lines.len(),
+            start,
+            end,
+        };
+        let text = prompt("benchmark", &window, &lines, &transcript.speakers);
+        let dir = std::env::temp_dir().join(format!("watch-bench-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut answers = Vec::new();
+        for (name, fps, effort) in [("old", 3, None), ("new", 1, Some("low"))] {
+            let clip = dir.join(format!("{name}.mp4"));
+            let began = std::time::Instant::now();
+            let cache = home.join("cache").join(crate::media::media_key(&source));
+            let preview = (name == "new")
+                .then(|| (cache.join("preview-light.mp4"), cache.join("preview.m4a")))
+                .filter(|(light, sound)| light.is_file() && sound.is_file());
+            cut_at(&source, preview, &window, &clip, fps).await.unwrap();
+            let cut = began.elapsed().as_secs_f64();
+            let size = std::fs::metadata(&clip).unwrap().len();
+            let began = std::time::Instant::now();
+            let (answer, cost) = ask_with(
+                &clip,
+                text.clone(),
+                lines.len(),
+                &dir.join("request.json"),
+                effort,
+            )
+            .await
+            .unwrap();
+            println!(
+                "{name}: cut {cut:.1}s ({} KB), asked {:.1}s, ${cost:.4}, {} people, {} lines, {} low",
+                size / 1024,
+                began.elapsed().as_secs_f64(),
+                answer.people.len(),
+                answer.lines.len(),
+                answer.lines.iter().filter(|line| line.sure == "low").count()
+            );
+            answers.push(answer);
+        }
+        // Agreement: lines both gave to the same person (letters can differ,
+        // so compare who-said-it groupings pairwise).
+        let (a, b) = (&answers[0], &answers[1]);
+        let who = |answer: &Answer| -> BTreeMap<i64, String> {
+            answer
+                .lines
+                .iter()
+                .map(|line| (line.n, line.who.clone()))
+                .collect()
+        };
+        let (wa, wb) = (who(a), who(b));
+        let shared: Vec<i64> = wa.keys().filter(|n| wb.contains_key(n)).copied().collect();
+        let (mut same, mut pairs) = (0, 0);
+        for (i, x) in shared.iter().enumerate() {
+            for y in &shared[i + 1..] {
+                pairs += 1;
+                if (wa[x] == wa[y]) == (wb[x] == wb[y]) {
+                    same += 1;
+                }
+            }
+        }
+        println!(
+            "pairwise speaker agreement: {:.1}% of {pairs} line pairs",
+            100.0 * same as f64 / pairs.max(1) as f64
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

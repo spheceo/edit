@@ -38,6 +38,7 @@ Model (JSON):
 Validation: collection IDs are nonempty and unique; next_id is a nonnegative safe integer; timeline start/duration/fades are nonnegative safe integer frames (duration positive), source_in is finite and nonnegative, all numeric parameters are finite, keyframes are in strictly increasing frame order, and script file is a Drive ID with no path separators and a positive source range. Project dimensions are 1..8192.
 Linked clips (same link id) are picture+sound of one source; keep them aligned when moving.
 Look at your work with render_frame / contact_sheet before telling the user it is done.
+WORK FAST: the user waits on every step you take, and each tool call is a step. When you know the next several edits (sounds and flashes across a section, keyframes on several clips, deletes, relabels), send them together in one batch call. Cover a cut-in's B-roll with cover_cut_in, change many clips at once with update_clips (by ids, by speaker label or by track), and smooth several slowed clips with one smooth_slow_motion {clip_ids}. Check a section's look with one contact_sheet rather than render_frame after every small change; use render_frame where a detail needs a close look.
 
 House editing style (videos cut from a script of police footage):
 - get_project's "sections" are found automatically from where the script's blocks sit (never set by hand): intro, intro_splits, outro, and parts back to back (intro / b-roll / story / outro, frames). Every cut-in is a B-roll spot.
@@ -63,7 +64,7 @@ House editing style (videos cut from a script of police footage):
   - Between the outro's screens a short crossfade (10 frames); into the outro from the story, the usual transition rules apply. A soft low hit as each set of charges appears, ~6 LU under the voice-over.
   - The video ends when the outro's voice-over ends: the last frame of the edit is the end of its last word (plus at most a couple of frames; media_transcript with words: true gives it). Nothing runs on after it: trim every clip (pictures, gradient, charges, adjustments, music, sound effects, any footage) to end there, the music fading out by then (fade_out ~1.5 s ending on it). Check get_project's duration afterwards.
 - CUT-INS (the black narration cards) may carry stylised text and graphics.
-- B-ROLL IN CUT-INS: use source footage for B-roll, not AI-generated images. A cut-in's voice-over is covered by B-roll that shows what it says, never generic footage. Read the narration, then find the moments that back it up in the source footage (media_transcript to find who says what where; look_at_media to see it): someone confused when the words say they had no idea, the wreck or a shocked witness when they say a devastating crash. Time each shot to the words it shows (media_transcript with words: true on the voice-over gives exact times; a voice-over clip's timeline time = clip start + word time - its source_in): a shot showing \"the teenagers and the missing driver\" starts just before those words and lasts until they're said. Short cut-ins (under ~10 s) get two shots, longer ones more, each a few seconds, butted end to end and filling the cut-in from its first frame to its last, on a video track above the card. Each shot is picture only, slowed (speed about 0.5) and then made smooth with smooth_slow_motion, with a slow push-in (scale keyframes from 1 to about 1.08 across the shot, ease linear). The vertical drop into the cut-in still applies. Pick varied shots (different moments, angles, people, evidence): shots only seconds or a few minutes apart in the source, cut together, look repetitive, worst with a flash or shutter between them. Pick another shot, let one shot run longer, or, when the cuts really are one moment, treat them as one shot (PUSH-INS). Across the video too: when the footage has run out of fresh shots for a stretch and the same few moments would come back again and again, use something else there: a picture of the person (a found photo or a still_frame) with short text beside it (THE QUOTE CALLOUT's layout: their words, or a few of the narration's), found images of what's named, or a held shot under a CLAIM LIST.
+- B-ROLL IN CUT-INS: use source footage for B-roll, not AI-generated images. A cut-in's voice-over is covered by B-roll that shows what it says, never generic footage. Read the narration, then find the moments that back it up in the source footage (media_transcript to find who says what where; look_at_media to see it): someone confused when the words say they had no idea, the wreck or a shocked witness when they say a devastating crash. Time each shot to the words it shows (media_transcript with words: true on the voice-over gives exact times; a voice-over clip's timeline time = clip start + word time - its source_in): a shot showing \"the teenagers and the missing driver\" starts just before those words and lasts until they're said. Short cut-ins (under ~10 s) get two shots, longer ones more, each a few seconds, butted end to end and filling the cut-in from its first frame to its last, on a video track above the card. Each shot is picture only, slowed (speed about 0.5) and then made smooth with smooth_slow_motion, with a slow push-in (scale keyframes from 1 to about 1.08 across the shot, ease linear). The vertical drop into the cut-in still applies. Do all of that with one cover_cut_in per cut-in (it places the shots, push-ins, B-roll look and drop, smooths in the background, clears the card and moves the voice-over to A1): you choose the shots and their times; then add what's particular to that cut-in (a person's vignette and label, a quote, a different transition and its sounds) in one batch. Pick varied shots (different moments, angles, people, evidence): shots only seconds or a few minutes apart in the source, cut together, look repetitive, worst with a flash or shutter between them. Pick another shot, let one shot run longer, or, when the cuts really are one moment, treat them as one shot (PUSH-INS). Across the video too: when the footage has run out of fresh shots for a stretch and the same few moments would come back again and again, use something else there: a picture of the person (a found photo or a still_frame) with short text beside it (THE QUOTE CALLOUT's layout: their words, or a few of the narration's), found images of what's named, or a held shot under a CLAIM LIST.
 - B-ROLL NEVER GETS AHEAD OF THE STORY: never show something before the video has shown it happen. A person being arrested, cuffed, put in a car, hurt, or a find being made appears as B-roll only after that moment has played in the footage; before it, B-roll of that person comes from moments already seen or neutral ones (talking with officers, at the door, waiting). Check each shot's source time against where its moment plays on the timeline (read_transcript, media_transcript).
 - PUSH-INS (the slow zoom across a B-roll shot and anything pinned to it; the moving map is linear by itself) are ease linear: a constant-speed zoom, a straight line on the graph, never in_out (no slow start, rush and slow stop). B-roll made of several cuts of the SAME moment (same scene and time, cut a little apart) is one shot: never restart the zoom on each cut; one continuous push-in runs across the whole run, each clip's scale keyframes starting where the previous clip's ended and climbing at the same rate (as if one parent above them were zooming: e.g. 1→1.04, then 1.04→1.08), and no flash, shutter, whoosh or drop between them.
 - TRANSITIONS: vary them and pick each for its moment; the same transition on cut after cut reads as a gimmick. Every cut out of a cut-in back into footage and every cut between two graphics (the map, a person's label, a picture, a quote) is clean, never abrupt: when unsure, a short dip to black. Give each graphic its beat: a label, the map or a quote holds at least ~1.5 s before the next move, so moves around one never pile up too fast. A DIP TO BLACK is short and light: ~12 frames, black only for a frame or two at its peak (ease in_out up and straight back down, never a plateau), so it never reads as a blank screen; and no black card or solid is ever left on screen by itself (render_frame across each dip and each cleared cut-in). The GLITCH is the rarest: at most once or twice in a video (a digital or tech moment, a jarring reveal), never on two transitions in a row and never as the default into or out of B-roll. Into and out of B-roll choose from: the vertical drop (a slam into a hard beat), a white flash or a camera shutter with its flash (CAMERA SHUTTERS; a new angle, a photo, a reveal: the team likes these), a dip to black (a change of time or a heavy beat), and a smooth crossfade for calm moves (between two B-roll shots, out of the date cut-in): the incoming clip on the track above starts 10–15 frames before the cut with fade_in over that span while the outgoing shot runs on beneath it to the cut's end. Out of the map (the address graphic) into what follows, above all another graphic such as a person's label: never a hard cut; a dip to black (a black solid ~12 frames straddling the cut, start = cut - 6, on a track above everything there, opacity keyframes 0 → 1 on the cut → 0, ease in_out; the place label fades out into it) or, for a calm move, the crossfade. Cuts between clips of the same moment get no transition at all (PUSH-INS). A glitch, when used: an adjustment {grade all 0, glitch {amount 90} (default 6 tall bands)} 8 frames straddling the cut (start = cut - 4), on a track above everything there, with the library's glitch sound lined up on the cut, trimmed to the glitch (add_from_library seconds ~0.3), quiet: about 10 LU under the speech around it.
@@ -75,14 +76,14 @@ House editing style (videos cut from a script of police footage):
 - B-ROLL LOOK: B-roll reads apart from the footage: an adjustment over each B-roll stretch (the cut-in's span, beneath its text and callouts) {grade {saturation -0.6, vignette 0.3}}; a shot that gets a person's vignette (INTRODUCING A PERSON) carries that instead, desaturated the same way.
 - THE DATE CUT-IN (the "On <date>…" cut-in that opens the story) opens on where it happened: map_view of the place the narration names (the department, the station or the street; add the city and state), as a moving shot with the defaults and seconds = how long it's on screen, unless the user asks for another angle (each new view is a paid map session). Full frame at scale 1 from source_in 0, no scale keyframes: the camera slowly circles right and closes in. While the narration says the date, darken the background heavily with an adjustment beneath the text and show the date large and centered, in white (Geist 600, ~120 at 1080p, soft glow radius 40, strength 0.85, one line like "July 13th, 2024", rising into place letter by letter (animation {preset "rise", duration 14, stagger 1.5}, in frames), with shadow {color [0,0,0,1], opacity 1, distance 6, angle 112, size 10, blur 20}). Fade the date out after the spoken year, then lift the extra darkening and reveal the red building marker and floating place label together. Set map_view highlight_after to the reveal time in source seconds and highlight_fade to ~0.4 s; start the label at that time with a matching fade. The label sits just above the building (x = building.x, box bottom ~30 px above building.top, kept inside the frame), white (Geist 600, ~44 at 1080p, glow off), in an opaque black box (pad_x 20, pad_y 12) with a red border (2 px, border_color [1,0.1,0.1,1]) and shadow (opacity 0.85, distance 8, size 2, blur 18). Pin it using building_track x and y, same offsets and linear easing; when the label starts later, subtract its source start frame from tracking frames and interpolate its initial position. No state or city text. Then the cut-in's other B-roll, out of the map through a dip to black or a crossfade, never a hard cut (TRANSITIONS).
 - CALLS WITHOUT PICTURE in the story (a 911 call, a voicemail): cover them with B-roll that moves slowly (a push-in), the glowing waveform and its dark vignette on top (see PHONE CALLS), and subtitles as everywhere after the intro.
-- VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. They play at the footage's loudness, so narration and what's said on screen sound equally loud: place_voiceovers sets that; for voice-overs already placed, run set_loudness on them (no loudness = match the footage). Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Once B-roll covers a cut-in from its first frame to its last, the card and its words were only placeholders: delete the black card and the words, and move its voice-over onto A1, the footage's own sound track (free there, since B-roll is picture only), coloured purple, which no other audio uses, so the narration sits in line with the rest of the sound and still stands out. Until then, leave the card and words in place.
+- VOICE-OVERS: audio files in the project that read the cut-ins (narration recordings) go on with place_voiceovers, never by hand. They play at the footage's loudness, so narration and what's said on screen sound equally loud: place_voiceovers sets that; for voice-overs already placed, run set_loudness on them (no loudness = match the footage). Each cut-in then plays its voice-over and is a B-roll spot (cover it with B-roll, or the card until there is some). A narration block's voiceover is its clip once placed. Once B-roll covers a cut-in from its first frame to its last (cover_cut_in does all of this), the card and its words were only placeholders: delete the black card and the words, and move its voice-over onto A1, the footage's own sound track (free there, since B-roll is picture only), coloured purple, which no other audio uses, so the narration sits in line with the rest of the sound and still stands out. Until then, leave the card and words in place.
 - TIGHT VOICE-OVERS (only where a cut-in drags: the user says so, or its voice-over leaves dead air with nothing happening on screen; never as a pass over every cut-in): a pause over ~0.7 s inside a thought makes a cut-in drag; tighten_voiceover shortens such pauses to ~0.35 s and the B-roll follows. Not every pause: run it with dry_run on the stretch first, then only where it drags, never across a scene change or a deliberate beat (a pause before a reveal, after a hard line); give start/end to keep it to that stretch. A stretch that still feels slow after that (or one the user calls slow) can be sped up with speed_voiceover at 1.04–1.08 (its B-roll and graphics squeeze with it): slightly faster, never so it sounds rushed or rehearsed, never past ~1.1, and never over footage people speak in. Both ripple the rest of the timeline (remove_time is the same cut done by hand), so do them before laying sound effects and transitions on later cuts, or check those after.
 - MUSIC AND SOUND EFFECTS come from the team's library (list_library, then add_from_library), when the user asks for them. They set the video's vibe, so choose it deliberately before placing anything: read the script and footage, decide the case's tone and tell the user which you chose and why. A murder or really dark case (death, abuse, a disturbing scene) gets the dark beds: drones, low tones, tension; but match the kind of dark: thriller music (pulses, stabs, a hunt) is for a killing or a chase, while a neglect or family abuse case (a child left alone, a filthy home) wants heavy, sombre, sad beds, never murder-thriller tension. Keep one tone across the video. A lighter or upbeat case (an entitled driver, an absurd arrest, someone getting their comeuppance) gets music with energy and play and lighter sound design, never horror drones, eerie beds or heartbeats. Move the music with the story (tension into a build-up, revelation at the reveal), never at random. Each bed must fit the scene it plays under, not just the case: read its notes against what's on screen there (officers arriving on a fatal crash is grim and tense, not a chase or heist), and change beds only at scene changes, starting the new one where the music starts (its beginning or the part a note names), never mid-phrase. If nothing in the library fits the tone, say so rather than forcing a track that doesn't. Change a bed (only) where its tone doesn't fit the case or the scene, or where a cut-in feels flat under it: a long cut-in that turns the story (a new person, a new revelation) can take a new bed of the same tone on its first frame, rather than one track running on under cut-in after cut-in. Pick by the library's notes and usage guide (a shutter on crime scene images, a hit on a reveal, mugshot or chapter title, a riser building into a reveal or hard cut). Play only the part a note names ("first ~20 seconds", via seconds) and fade music out over ~1.5 s when it's cut short. The last bed fades out by the end of the outro's voice-over, where the video ends (THE OUTRO); never past it. LEVELS: set them with add_from_library's loudness (LUFS), never a guessed volume_db, measured against the speech: run measure_audio over the span first. Music sits about 12 LU under the speech it plays beneath (voice-over or footage; about 16 under where the note says "low volume") and never competes with it; with nothing said over it, it can rise to about 6 under the speech around it. A sound marks something that happens on screen and matches how it happens: a click for something that pops on, never for a fade (the place label fades in: no click). Accents must be clearly heard: a hit or stinger on a drop or reveal about as loud as the speech around it, whooshes and shutters about 3–4 below that, small clicks about 8 below. RISERS sit well under the voice, about 8 LU under the speech they play beneath (a swell felt under the words, never on top of them). Afterwards run measure_audio again: every sound you added is heard, and none drowns out a word.
 - PHONE CALLS and other sound without a picture (911 calls, voicemails, recordings): a glowing waveform. Lay a dark vignette first: an adjustment layer {type "adjustment", name "Dark vignette", grade {exposure -1.9, contrast 0, saturation 0, temperature 0, vignette 0.9}} over the footage for the span (the footage still shows, darker at the edges), then a waveform on the track above it (both spanning the call, linked), centred, in its defaults (rich red tangled line, house glow). Scale its width, height and glow radius by the project height / 1080.
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
   - It does get plain subtitles throughout (Repack's subtitles), as part of editing the whole video: first run watch_footage (it corrects who says each line and marks background talk; on an edit it leaves the segments alone), then add_subtitles (it defaults to everything after the intro), with neglect: true when the case involves child abuse or neglect. The narrator, radio and background talk get no subtitles; the house words are muted in the footage's sound and starred out on screen (read the mutes it returns back to the user). They sit bottom middle on the subtitles track, always, even over a large blur or redaction box (overlapping it is fine): never move them up or to the side to dodge one; any moved off bottom middle that way go back (update_clip transform {x 0, y 0.4*height}; set_keyframes [] on any x/y they were given) before add_subtitles runs again, since it keeps hand-moved positions. No animation, no tracking: white words without glow in a pure black box (opaque, unlike the intro captions' see-through 0.45 box), the speaker's name above in their colour ("Officer:"). Timing matters most: each line is on screen while it's said, no earlier or later. Where a line repeats ("I'm hungry" … "I'm hungry again"), check each one against the transcript's word times (read_transcript) and with render_frame at each moment, so each appears when it's said and one never stands in for both; the same for the intro's captions. Short lines and lines that read oddly are where the transcriber slips (a word that makes no sense there, a phrase missing a word: "hit me in the" without "head", a line opening on a word that ends the one before): check them against the word times and what's said around them, fix the text or move the word to its line when the context makes it clear, and list the ones you couldn't settle for the user. EVERY LINE SAID IN THE FOOTAGE after the intro gets a subtitle: once they're in, compare read_transcript with the subtitles track and look for stretches where someone speaks with none on screen (a file not transcribed, a voice wrongly marked background, a range added later); fix the cause and run add_subtitles over that stretch. The intro keeps its own speaker captions (caption_speakers), glow and all. If footage after the intro changes (a range realigned, a clip moved), run add_subtitles again; it replaces its own and their mutes, keeping where and how big subtitles moved by hand were. Subtitles finished by hand that only need the house words muted and starred: mute_house_words (it moves nothing).
 - HOUSE WORDS ON SCREEN: every text on screen gets the house words starred ("f***", "a****"; never removed or reworded), not only subtitles: the intro's speaker captions, callouts, quotes, the outro's charges, dates and labels; and the footage's sound under them is muted, the intro's too. When an edit's text is in, run mute_house_words over the whole timeline (no start/end; neglect: true in a child abuse or neglect case, or "hit" and "punched" stay readable and heard) and read its mutes back to the user; run it again last, after any text added later (quotes, callouts, labels) or any add_subtitles re-run. Words count in their other forms (punched, hitting, abused, choking). A house word written in the picture itself (a document, a phone screen) gets a rect blur (MINORS' FACES).
-- SPEAKERS: one name and one colour per person for the whole video (two people never share a colour). Subtitles take their labels and colours from each file's transcript, so one person can come out under different names or colours in different files, or drift between roles (Officer, then Sergeant, then Medic). After the last add_subtitles (or repack_subtitles) run, list the labels in use (get_project: style.label on the subtitles track), work out who is who across files, and give each person one short label and one colour everywhere: update_clip {style: {label: {text, color}}} on each of their subtitles (a re-run resets them: do it again after one); quotes and lists of their words use the same colour. Short labels: first names for family and civilians ("Pearl:", "Latricia:", "Benjamin:", never "Latricia Smith (Mother)"); officers by rank or role and surname ("Sgt. Raven:", "Officer Diaz:"), or "Officer:" when unnamed; a minor victim by first name or "Victim:", never "Teenager:" or "15-year-old victim:" (age and role belong only on the callout that introduces them). Once someone is named they keep the name: never back to "Suspect:" or "Man:". Who speaks: the bodycam's wearer (the POV; the Axon or department tag in a corner says whose camera it is) is police, never a medic or a witness, and theirs is the nearest, loudest voice; a voice that isn't the wearer's is someone else in the scene. When a label looks doubtful (a role that doesn't fit, a name that changes a line later, "Officer" right after a named officer in the same conversation), check by watching, never by guessing: watch_footage first, then render_frame / look_at_media at the line (whose mouth moves, who's in the shot, who's on the phone) and the transcript around it; the same voice in the same scene is the same person, so give them the same label.
+- SPEAKERS: one name and one colour per person for the whole video (two people never share a colour). Subtitles take their labels and colours from each file's transcript, so one person can come out under different names or colours in different files, or drift between roles (Officer, then Sergeant, then Medic). After the last add_subtitles (or repack_subtitles) run, list the labels in use (get_project: style.label on the subtitles track), work out who is who across files, and give each person one short label and one colour everywhere: one update_clips {label: "<the label as it is>", patch: {style: {label: {text, color}}}} per label in use, which changes every subtitle and caption carrying it at once (never update_clip one subtitle at a time; a re-run resets them: do it again after one); quotes and lists of their words use the same colour. Short labels: first names for family and civilians ("Pearl:", "Latricia:", "Benjamin:", never "Latricia Smith (Mother)"); officers by rank or role and surname ("Sgt. Raven:", "Officer Diaz:"), or "Officer:" when unnamed; a minor victim by first name or "Victim:", never "Teenager:" or "15-year-old victim:" (age and role belong only on the callout that introduces them). Once someone is named they keep the name: never back to "Suspect:" or "Man:". Who speaks: the bodycam's wearer (the POV; the Axon or department tag in a corner says whose camera it is) is police, never a medic or a witness, and theirs is the nearest, loudest voice; a voice that isn't the wearer's is someone else in the scene. When a label looks doubtful (a role that doesn't fit, a name that changes a line later, "Officer" right after a named officer in the same conversation), check by watching, never by guessing: watch_footage first, then render_frame / look_at_media at the line (whose mouth moves, who's in the shot, who's on the phone) and the transcript around it; the same voice in the same scene is the same person, so give them the same label.
 - SUBTITLE VIDEOS (Repack style): when the user asks for a subtitled video or a "sub video" (subtitles for the whole video and nothing else), first run watch_footage (it corrects who says each line and marks the segments: only footage gets subtitles, not an intro that already has them burned in, nor narration), then run repack_subtitles over the whole timeline (no start/end), with neglect: true when the case involves child abuse or neglect, and overlap: true for interrogation footage (people talk over each other there; each line gets its own stacked box). It puts every line said in the footage on the subtitles track in Repack's house style (Montserrat 48 in the speaker's colour with a glow, 75% black box, soft shadow, bottom middle, held a second after the last word, one at a time; the narrator, radio and background talk hidden), mutes the house words in the footage's sound and stars them out on screen. Then check a few frames with render_frame (a line with a starred word among them), read the mutes it returns back to the user (each word and its time, starred or mute-only) so they can review them, and add no other edits unless asked. A re-run replaces its own subtitles and mutes (and add_subtitles' in that span). Exporting a subtitled video (all of it, as MP4 or MOV) also uploads the file to the team's "Subtitles" folder on Google Drive, viewable by anyone with the link; when the upload is done the link is on the project as drive.url (get_project), so give that link when asked for it (it's gone if the file was deleted from Drive: export again). In the normal edit workflow keep using add_subtitles as described above.
 - Be precise, and fill in the small gaps yourself: skip throwaway moments (a lone "like" or "um", a blip that adds nothing to the story) rather than captioning them; when something starts or ends within ~0.2 s of a cut or of the next caption, snap it to that edge so there are no slivers or hairline gaps.
 - Keep the layers tidy: a clip shouldn't float on a track with nothing under it. After adding or removing layers, run tidy_tracks; it moves clips down into empty space below them (keeping what's above what) and drops empty tracks.
@@ -227,6 +228,31 @@ fn tools() -> Vec<Value> {
             &["clip_id", "patch"],
         ),
         tool(
+            "update_clips",
+            "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, or by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\"), optionally only on one track and within start/end (timeline seconds). E.g. one person's name and colour on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\", color: [1,1,0,1]}}}}.",
+            json!({
+                "clip_ids": { "type": "array", "items": { "type": "string" } },
+                "label": { "type": "string", "description": "Text clips whose style.label.text is exactly this." },
+                "track": { "type": "string", "description": "Only clips on this track id." },
+                "start": { "type": "number", "description": "Only clips that start at or after this (timeline seconds)." },
+                "end": { "type": "number", "description": "Only clips that start before this (timeline seconds)." },
+                "patch": { "type": "object" }
+            }),
+            &["patch"],
+        ),
+        tool(
+            "batch",
+            "Run several tool calls in one go, in order, and get every result back: use it whenever you already know the next few edits (placing sounds, transitions and flashes across a section, setting keyframes on several clips, deleting and relabelling), instead of one call at a time; it's far faster. Any argument that is exactly \"$N\" (a string) becomes the id of the clip that call N (1-based) added, so a batch can add a clip and then animate or track it. Stops at the first error unless keep_going (what ran before it stays). Not for tools that take minutes (caption_speakers, add_subtitles, watch_footage, map_view, place_voiceovers): call those on their own.",
+            json!({
+                "calls": { "type": "array", "items": { "type": "object", "properties": {
+                    "tool": { "type": "string" },
+                    "args": { "type": "object" }
+                }, "required": ["tool"] } },
+                "keep_going": { "type": "boolean", "description": "Run the rest after a call fails. Default false." }
+            }),
+            &["calls"],
+        ),
+        tool(
             "set_in_out",
             "Set the in and out points (seconds on the timeline; the out point's frame is the last one in). Null clears one; omit to leave it. Export without a range renders just that span, and playback stops at the out point.",
             json!({
@@ -306,9 +332,34 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "smooth_slow_motion",
-            "Make a slowed video clip (speed below 1) play smoothly: the stretch of its media is rendered at that speed with new frames made between the real ones (motion interpolation, like After Effects' pixel-motion frame blending), and the clip then plays that at 1×. Timing is unchanged. Set the clip's speed and trim first; run again after changing them. Takes a while (it renders).",
-            json!({ "clip_id": { "type": "string" } }),
-            &["clip_id"],
+            "Make slowed video clips (speed below 1) play smoothly: the stretch of each one's media is rendered at that speed with new frames made between the real ones (motion interpolation, like After Effects' pixel-motion frame blending), and the clip then plays that at 1×. Timing is unchanged. Set the clip's speed and trim first; run again after changing them. Several clips render side by side; with wait false it returns at once and each swaps in when done (get_project's smoothing lists those still going; export waits for them).",
+            json!({
+                "clip_id": { "type": "string" },
+                "clip_ids": { "type": "array", "items": { "type": "string" }, "description": "Several at once (rendered side by side)." },
+                "wait": { "type": "boolean", "description": "Wait for the renders (default true). False: smooth in the background and carry on." }
+            }),
+            &[],
+        ),
+        tool(
+            "cover_cut_in",
+            "Cover a cut-in with B-roll in one call, the house way (B-ROLL IN CUT-INS, PUSH-INS, B-ROLL LOOK, VOICE-OVERS): your shots butted end to end from the cut-in's first frame to its last (each picture only, slowed to speed 0.5, a linear push-in 1 → 1.08, smoothed in the background), the B-roll look adjustment over the stretch, the vertical drop into the cut-in (into \"none\" when you'll put another transition there), the black card and its words deleted and the voice-over moved onto A1 in purple. You pick the shots (media_transcript, look_at_media) and time them to the narration's phrases (media_transcript words on the voice-over); this does the rest. Running it again on the same cut-in replaces what it placed. Afterwards add what's particular to the cut-in (a person's vignette and label, a quote, other transitions and their sounds) with batch. Returns each shot's clip id and span.",
+            json!({
+                "cut_in": { "type": ["integer", "string"], "description": "The cut-in's number among the script's narration blocks (1-based: \"Cut-in N\"), or its card's or voice-over's clip id." },
+                "shots": { "type": "array", "items": { "type": "object", "properties": {
+                    "media": { "type": "string", "description": "Media id (video or image)." },
+                    "source_in": { "type": "number", "description": "Seconds into the media where the shot starts." },
+                    "at": { "type": "number", "description": "Timeline seconds where it starts (the first defaults to the cut-in's start; each later one is required). Each shot runs until the next starts; the last to the cut-in's end." },
+                    "name": { "type": "string", "description": "What it shows (\"the locked closet\"); names the clip." },
+                    "speed": { "type": "number", "description": "Default 0.5." },
+                    "push": { "type": "array", "items": { "type": "number" }, "description": "[from, to] scale across the shot, default [1, 1.08]; continue a run of the same moment with e.g. [1.04, 1.08]." },
+                    "x": { "type": "number" }, "y": { "type": "number" },
+                    "scale": { "type": "number", "description": "Base scale the push multiplies (default 1)." },
+                    "smooth": { "type": "boolean", "description": "Default true." }
+                }, "required": ["media", "source_in"] } },
+                "look": { "type": "boolean", "description": "The B-roll look adjustment (default true)." },
+                "into": { "type": "string", "enum": ["drop", "none"], "description": "The transition into the cut-in: the vertical drop (default), or none." }
+            }),
+            &["cut_in", "shots"],
         ),
         tool(
             "map_view",
@@ -657,6 +708,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     "duration_seconds": project.duration() as f64 / project.fps(),
                     "track_labels": labels,
                     "sections": edit_core::sections(project),
+                    "smoothing": crate::broll::smoothing_pending(&id),
                     "project": project,
                 }))
                 .unwrap_or_default(),
@@ -779,6 +831,74 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 "updated {clip_id}: {}",
                 serde_json::to_string(&clip).unwrap_or_default()
             )))
+        }
+        "update_clips" => {
+            let patch = args["patch"].clone();
+            if !patch.is_object() {
+                return Err("patch must be an object".to_owned());
+            }
+            let ids: Option<Vec<String>> = args
+                .get("clip_ids")
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
+                })
+                .transpose()?;
+            let label = args["label"].as_str().map(str::to_owned);
+            let track = args["track"].as_str().map(str::to_owned);
+            if ids.is_none() && label.is_none() && track.is_none() {
+                return Err("pick the clips: clip_ids, label or track".to_owned());
+            }
+            let (_, changed) = store.update(&id, ORIGIN, |project| {
+                let fps = project.fps();
+                let from = args["start"]
+                    .as_f64()
+                    .map(|seconds| (seconds * fps).round() as i64);
+                let to = args["end"]
+                    .as_f64()
+                    .map(|seconds| (seconds * fps).round() as i64);
+                if let Some(ids) = &ids {
+                    if let Some(missing) = ids.iter().find(|clip| project.clip(clip).is_none()) {
+                        return Err(format!("no clip {missing}"));
+                    }
+                }
+                let mut changed = Vec::new();
+                for clip in &mut project.clips {
+                    let picked = ids.as_ref().is_none_or(|ids| ids.contains(&clip.id))
+                        && track.as_ref().is_none_or(|track| &clip.track == track)
+                        && from.is_none_or(|from| clip.start >= from)
+                        && to.is_none_or(|to| clip.start < to)
+                        && label.as_ref().is_none_or(|label| {
+                            matches!(&clip.content, ClipContent::Text { style, .. }
+                                if style.label.as_ref().is_some_and(|own| &own.text == label))
+                        });
+                    if !picked {
+                        continue;
+                    }
+                    let clip_id = clip.id.clone();
+                    let mut value =
+                        serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
+                    merge(&mut value, &patch);
+                    if let Some(fields) = value.as_object_mut() {
+                        fields.insert("id".to_owned(), json!(clip_id));
+                    }
+                    *clip = serde_json::from_value(value)
+                        .map_err(|error| format!("patched {clip_id} is invalid: {error}"))?;
+                    changed.push(clip_id);
+                }
+                Ok(changed)
+            })?;
+            Ok(text(match changed.len() {
+                0 => "no clips matched; nothing changed".to_owned(),
+                count => format!("updated {count} clip(s): {}", changed.join(", ")),
+            }))
+        }
+        "batch" => run_batch(app, args, scope).await,
+        "cover_cut_in" => {
+            let report = crate::cutin::cover_cut_in(app, &id, args).await?;
+            Ok(text(
+                serde_json::to_string_pretty(&report).unwrap_or_default(),
+            ))
         }
         "set_in_out" => {
             let fps = store.get(&id).ok_or("project vanished")?.project.fps();
@@ -1478,9 +1598,47 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             ))
         }
         "smooth_slow_motion" => {
-            let clip = args["clip_id"].as_str().ok_or("clip_id is required")?;
-            let done = crate::broll::smooth_slow_motion(app, &id, clip).await?;
-            Ok(text(done.to_string()))
+            let mut clips: Vec<String> = args
+                .get("clip_ids")
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    serde_json::from_value(value.clone()).map_err(|error| error.to_string())
+                })
+                .transpose()?
+                .unwrap_or_default();
+            clips.extend(args["clip_id"].as_str().map(str::to_owned));
+            if clips.is_empty() {
+                return Err("give clip_id or clip_ids".to_owned());
+            }
+            if !args["wait"].as_bool().unwrap_or(true) {
+                let started = crate::broll::smooth_in_background(app, &id, &clips);
+                return Ok(text(format!(
+                    "smoothing {} clip(s) in the background ({}); each swaps in when done",
+                    started.len(),
+                    started.join(", ")
+                )));
+            }
+            let renders = clips
+                .iter()
+                .map(|clip| crate::broll::smooth_slow_motion(app, &id, clip));
+            let results = futures_util::future::join_all(renders).await;
+            let mut out = Vec::new();
+            let mut failed = Vec::new();
+            for (clip, result) in clips.iter().zip(results) {
+                match result {
+                    Ok(done) => out.push(done.to_string()),
+                    Err(error) => failed.push(format!("{clip}: {error}")),
+                }
+            }
+            if out.is_empty() {
+                return Err(failed.join("\n"));
+            }
+            out.extend(
+                failed
+                    .into_iter()
+                    .map(|failure| format!("failed {failure}")),
+            );
+            Ok(text(out.join("\n")))
         }
         "map_view" => {
             let done = crate::broll::map_view(app, &id, args).await?;
@@ -1841,6 +1999,14 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             ))
         }
         "export" => {
+            // Shots still being smoothed would export unsmoothed.
+            if !crate::broll::wait_for_smoothing(&id, std::time::Duration::from_secs(20 * 60)).await
+            {
+                return Err(
+                    "B-roll is still being smoothed after 20 minutes; try the export again later"
+                        .to_owned(),
+                );
+            }
             let live = store.get(&id).ok_or("project vanished")?;
             let path = args["path"]
                 .as_str()
@@ -1864,6 +2030,120 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             Ok(text(said))
         }
         _ => Err(format!("unknown tool {name}")),
+    }
+}
+
+/// Runs tool calls one after another for `batch`: "$N" arguments become the
+/// id of the clip call N added.
+async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value, String> {
+    const SLOW: &[&str] = &[
+        "batch",
+        "caption_speakers",
+        "add_subtitles",
+        "repack_subtitles",
+        "watch_footage",
+        "map_view",
+        "place_voiceovers",
+        "collect_images",
+        "transcribe",
+        "export",
+    ];
+    let calls = args["calls"].as_array().ok_or("calls must be a list")?;
+    let keep_going = args["keep_going"].as_bool().unwrap_or(false);
+    let mut added: Vec<Option<String>> = Vec::new();
+    let mut content = Vec::new();
+    let mut failures = 0;
+    for (index, call_spec) in calls.iter().enumerate() {
+        let name = call_spec["tool"].as_str().unwrap_or_default();
+        let mut call_args = call_spec.get("args").cloned().unwrap_or_else(|| json!({}));
+        let result = if SLOW.contains(&name) {
+            Err(format!("{name} can't run in a batch; call it on its own"))
+        } else {
+            resolve_refs(&mut call_args, &added)
+        };
+        let result = match result {
+            Ok(()) => {
+                Box::pin(crate::diag::time_async(
+                    "agent",
+                    &format!("tool {name}"),
+                    call(app, name, &call_args, scope),
+                ))
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        let label = format!("[{}] {name}: ", index + 1);
+        match result {
+            Ok(Value::Array(items)) => {
+                added.push(items.iter().find_map(added_clip));
+                for mut item in items {
+                    if let Some(fields) = item.as_object_mut() {
+                        if let Some(said) = fields.get("text").and_then(Value::as_str) {
+                            let said = format!("{label}{said}");
+                            fields.insert("text".to_owned(), json!(said));
+                        }
+                    }
+                    content.push(item);
+                }
+            }
+            Ok(other) => {
+                added.push(None);
+                content.push(json!({ "type": "text", "text": format!("{label}{other}") }));
+            }
+            Err(error) => {
+                added.push(None);
+                failures += 1;
+                content.push(json!({ "type": "text", "text": format!("{label}FAILED: {error}") }));
+                if !keep_going {
+                    if index + 1 < calls.len() {
+                        content.push(json!({ "type": "text", "text": format!("stopped; calls {} to {} didn't run", index + 2, calls.len()) }));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    if failures > 0 && failures == calls.len() {
+        let said: Vec<&str> = content
+            .iter()
+            .filter_map(|item| item["text"].as_str())
+            .collect();
+        return Err(said.join("\n"));
+    }
+    Ok(Value::Array(content))
+}
+
+/// The clip an add_clip / add_text result names ("added clip c12").
+fn added_clip(item: &Value) -> Option<String> {
+    let said = item["text"].as_str()?;
+    let rest = said
+        .strip_prefix("added clip ")
+        .or_else(|| said.strip_prefix("added text clip "))?;
+    rest.split_whitespace().next().map(str::to_owned)
+}
+
+/// Replaces "$N" strings with the clip call N added.
+fn resolve_refs(value: &mut Value, added: &[Option<String>]) -> Result<(), String> {
+    match value {
+        Value::String(said) => {
+            if let Some(number) = said.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()) {
+                let clip = number
+                    .checked_sub(1)
+                    .and_then(|index| added.get(index))
+                    .ok_or_else(|| format!("${number}: there's no earlier call {number}"))?
+                    .clone()
+                    .ok_or_else(|| format!("${number}: call {number} added no clip"))?;
+                *said = clip;
+            }
+            Ok(())
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .try_for_each(|item| resolve_refs(item, added)),
+        Value::Object(fields) => fields
+            .values_mut()
+            .try_for_each(|item| resolve_refs(item, added)),
+        _ => Ok(()),
     }
 }
 
@@ -2237,7 +2517,9 @@ fn close_gaps(project: &mut Project, gone: &[Clip]) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_gaps, merge, tidy_tracks, Clip, Project, TrackKind};
+    use super::{
+        added_clip, close_gaps, merge, resolve_refs, tidy_tracks, Clip, Project, TrackKind,
+    };
     use serde_json::json;
 
     #[test]
@@ -2307,5 +2589,26 @@ mod tests {
             value,
             json!({ "style": { "size": 10, "glow": { "enabled": true } }, "b": [1] })
         );
+    }
+
+    #[test]
+    fn batch_refs_become_the_clips_earlier_calls_added() {
+        let added = vec![
+            added_clip(&json!({ "type": "text", "text": "added clip c12" })),
+            added_clip(&json!({ "type": "text", "text": "set opacity keyframes on c12" })),
+            added_clip(&json!({ "type": "text", "text": "added text clip c13" })),
+        ];
+        assert_eq!(
+            added,
+            vec![Some("c12".to_owned()), None, Some("c13".to_owned())]
+        );
+        let mut args = json!({ "clip_id": "$1", "follow": ["$3", "$x", "c9"], "n": 2 });
+        resolve_refs(&mut args, &added).unwrap();
+        assert_eq!(
+            args,
+            json!({ "clip_id": "c12", "follow": ["c13", "$x", "c9"], "n": 2 })
+        );
+        assert!(resolve_refs(&mut json!("$2"), &added).is_err());
+        assert!(resolve_refs(&mut json!("$4"), &added).is_err());
     }
 }

@@ -1479,6 +1479,12 @@ async fn start_export(
     UrlPath(id): UrlPath<String>,
     body: Option<Json<ExportBody>>,
 ) -> ApiResult {
+    // Shots still being smoothed would export unsmoothed.
+    if !crate::broll::wait_for_smoothing(&id, std::time::Duration::from_secs(20 * 60)).await {
+        return Err(bad(
+            "B-roll is still being smoothed; try the export again in a few minutes".to_owned(),
+        ));
+    }
     let live = app
         .store
         .get(&id)

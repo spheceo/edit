@@ -2,6 +2,7 @@ mod agent;
 mod app;
 mod broll;
 mod captions;
+mod cutin;
 mod diag;
 mod drive;
 mod export;

@@ -61,6 +61,9 @@ pub struct Chat {
     /// When the running turn started, to time it.
     #[serde(skip)]
     pub started: Option<std::time::Instant>,
+    /// Turns restarted in a row after the model was at capacity.
+    #[serde(skip)]
+    pub retries: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -157,7 +160,8 @@ impl Agents {
             return Ok(Arc::clone(codex));
         }
         let this = Arc::clone(self);
-        let codex = Codex::spawn(move |message| this.on_message(message))?;
+        let runtime = tokio::runtime::Handle::current();
+        let codex = Codex::spawn(move |message| this.on_message(message, &runtime))?;
         codex
             .call(
                 "initialize",
@@ -418,6 +422,7 @@ impl Agents {
             "You are the agent built into Edit, a video editor. The user is watching the editor while you work: every change you make through the `edit` tools appears live on their timeline and can be undone with ⌘Z. \
              Edit only through the `edit` tools; you have no shell or files. The project is \"{}\" ({}x{} at {} fps). \
              Call get_project before editing and read_transcript when speech matters. After visual changes, look at your work with render_frame or contact_sheet. \
+             Work in as few steps as you can: put edits you already know into one batch call (see WORK FAST). \
              Keep replies short: say what you changed and where (timecodes).\n\n{}",
             live.project.name, live.project.settings.width, live.project.settings.height, live.project.settings.fps,
             // The model and house style, as every MCP client gets them.
@@ -640,7 +645,12 @@ impl Agents {
     }
 
     fn finish(&self, project: &str, error: Option<String>) {
-        let started = self.with_chat(project, |chat| chat.started.take());
+        let started = self.with_chat(project, |chat| {
+            if error.is_none() {
+                chat.retries = 0;
+            }
+            chat.started.take()
+        });
         if let Some(started) = started {
             crate::diag::record("agent", "agent turn", started.elapsed(), error.as_deref());
         }
@@ -676,7 +686,7 @@ impl Agents {
     }
 
     /// Codex notifications, mapped onto the chat of the project their thread belongs to.
-    fn on_message(&self, message: Value) {
+    fn on_message(self: &Arc<Self>, message: Value, runtime: &tokio::runtime::Handle) {
         let method = message
             .get("method")
             .and_then(Value::as_str)
@@ -818,6 +828,37 @@ impl Agents {
                     Some("interrupted") => Some("Stopped.".to_owned()),
                     _ => None,
                 };
+                if let Some(failure) = error.as_deref().filter(|failure| busy_model(failure)) {
+                    let tries = self.with_chat(&project, |chat| {
+                        chat.retries += 1;
+                        chat.retries
+                    });
+                    if tries <= MAX_RETRIES {
+                        // Wait a little longer each time, then pick the work back up.
+                        let wait = 20 * u64::from(tries);
+                        self.finish(
+                            &project,
+                            Some(format!(
+                                "{failure} Trying again in {wait} s ({tries} of {MAX_RETRIES})."
+                            )),
+                        );
+                        let (this, failure) = (Arc::clone(self), failure.to_owned());
+                        runtime.spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(wait)).await;
+                            // The user may have sent something else meanwhile.
+                            if this.with_chat(&project, |chat| chat.running) {
+                                return;
+                            }
+                            let text = format!(
+                                "(Edit, automatically) Your last turn was cut off by an error (\"{failure}\") before you finished. Carry on from where you stopped: check get_project for what's already done, then finish the task."
+                            );
+                            if let Err(error) = this.send(&project, text, None, None).await {
+                                crate::diag::warn("agent", format!("retrying the turn in {project}: {error}"));
+                            }
+                        });
+                        return;
+                    }
+                }
                 self.finish(&project, error);
             }
             _ => {}
@@ -916,6 +957,25 @@ fn find_codex() -> Option<PathBuf> {
 // The app-server process.
 
 type Reply = tokio::sync::oneshot::Sender<Result<Value, String>>;
+
+/// How many times in a row a turn cut off by a busy model is restarted.
+const MAX_RETRIES: u32 = 3;
+
+/// A turn that failed because the model was busy (worth trying again), not
+/// because of anything in the request.
+fn busy_model(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "at capacity",
+        "overloaded",
+        "temporarily unavailable",
+        "try again later",
+        "server_error",
+        "503",
+    ]
+    .iter()
+    .any(|sign| error.contains(sign))
+}
 
 /// Sent to `on_message` (by Edit, not Codex) when Codex's output ends.
 const EXITED: &str = "edit/codexExited";
@@ -1070,13 +1130,22 @@ fn configured_effort() -> Option<String> {
         .filter(|effort| !effort.is_empty())
 }
 
-/// The models with the default each will really use.
+/// Edit's own default thinking level: its edits are mostly the house style
+/// applied again and again, which medium does as well as high in far less
+/// time. The user can still pick another in the agent panel.
+const DEFAULT_EFFORT: &str = "medium";
+
+/// The models with the default each will really use: Edit's, else the one the
+/// user's Codex config sets.
 fn with_configured_effort(mut models: Vec<Model>) -> Vec<Model> {
-    if let Some(effort) = configured_effort() {
-        for model in &mut models {
-            if model.efforts.contains(&effort) {
-                model.default_effort = effort.clone();
-            }
+    let configured = configured_effort();
+    for model in &mut models {
+        let effort = [Some(DEFAULT_EFFORT), configured.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|effort| model.efforts.iter().any(|own| own == effort));
+        if let Some(effort) = effort {
+            model.default_effort = effort.to_owned();
         }
     }
     models

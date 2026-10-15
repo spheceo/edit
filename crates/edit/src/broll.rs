@@ -6,7 +6,7 @@
 
 use parking_lot::Mutex;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -296,9 +296,18 @@ pub async fn smooth_slow_motion(
     ]);
     let out = dir.join(format!("{stem}-{speed:.2}x-{key}.mp4"));
     if !out.is_file() {
+        // A few renders at a time (see `smoothing_slots`); the rest wait their turn.
+        let _slot = smoothing_slots()
+            .acquire()
+            .await
+            .map_err(|error| error.to_string())?;
         let partial = dir.join(format!("{stem}-{key}.partial.mp4"));
         let (input, start) = (PathBuf::from(&source.path), *source_in);
         let speed = *speed;
+        // Never two renders into one file: a second ask waits for the first.
+        if out.is_file() {
+            return swap_in_smooth(app, project_id, &clip, &out, fps).await;
+        }
         let result = tokio::task::spawn_blocking(move || {
             Command::new(crate::tools::ffmpeg())
                 .args(["-hide_banner", "-loglevel", "error", "-y", "-ss", &format!("{start:.4}"), "-t", &format!("{length:.4}"), "-i"])
@@ -336,6 +345,19 @@ pub async fn smooth_slow_motion(
         }
         std::fs::rename(&partial, &out).map_err(|error| error.to_string())?;
     }
+    swap_in_smooth(app, project_id, &clip, &out, fps).await
+}
+
+/// Puts a smoothed render in place of the slowed stretch it was made from,
+/// unless the clip has changed since (re-trimmed, re-timed, other media): the
+/// render no longer matches it then, and it must be smoothed again.
+async fn swap_in_smooth(
+    app: &App,
+    project_id: &str,
+    rendered: &edit_core::Clip,
+    out: &Path,
+    fps: f64,
+) -> Result<Value, String> {
     let (_, added, errors) = crate::server::import_paths(
         app,
         project_id,
@@ -345,8 +367,16 @@ pub async fn smooth_slow_motion(
     )
     .await?;
     let smooth = added.first().cloned().ok_or_else(|| errors.join("; "))?;
+    let clip_id = rendered.id.as_str();
     let (_, done) = app.store.update(project_id, "agent", |project| {
         let clip = project.clip_mut(clip_id).ok_or("the clip went away")?;
+        if source_of(&clip.content) != source_of(&rendered.content)
+            || clip.duration > rendered.duration
+        {
+            return Err(format!(
+                "{clip_id} changed while it was being smoothed; run smooth_slow_motion on it again"
+            ));
+        }
         if let ClipContent::Video {
             media,
             source_in,
@@ -361,6 +391,102 @@ pub async fn smooth_slow_motion(
         Ok(json!({ "clip": clip_id, "media": smooth, "seconds": clip.duration as f64 / fps }))
     })?;
     Ok(done)
+}
+
+/// What a smoothing render was made from: media, in point and speed. (A
+/// clip's position, scale or keyframes can change meanwhile.)
+fn source_of(content: &ClipContent) -> Option<(&str, f64, f64)> {
+    match content {
+        ClipContent::Video {
+            media,
+            source_in,
+            speed,
+            ..
+        } => Some((media.as_str(), *source_in, *speed)),
+        _ => None,
+    }
+}
+
+/// How many smoothing renders run at once. Motion interpolation keeps about
+/// one core busy each, so several side by side finish a cut-in's shots in
+/// the time of one or two.
+fn smoothing_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    SLOTS.get_or_init(|| {
+        let cores = std::thread::available_parallelism().map_or(4, |cores| cores.get());
+        tokio::sync::Semaphore::new((cores / 2).clamp(2, 6))
+    })
+}
+
+/// Clips being smoothed in the background, by project.
+fn smoothing() -> &'static Mutex<HashMap<String, HashSet<String>>> {
+    static PENDING: OnceLock<Mutex<HashMap<String, HashSet<String>>>> = OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
+/// The clips of a project still being smoothed in the background.
+pub fn smoothing_pending(project_id: &str) -> Vec<String> {
+    let mut pending: Vec<String> = smoothing()
+        .lock()
+        .get(project_id)
+        .map(|clips| clips.iter().cloned().collect())
+        .unwrap_or_default();
+    pending.sort();
+    pending
+}
+
+/// Smooths slowed clips without waiting: each swaps in when its render is
+/// done (a few render at once). A clip already being smoothed is left to it.
+/// Returns the clips started.
+pub fn smooth_in_background(app: &App, project_id: &str, clip_ids: &[String]) -> Vec<String> {
+    let mut started = Vec::new();
+    for clip_id in clip_ids {
+        let fresh = smoothing()
+            .lock()
+            .entry(project_id.to_owned())
+            .or_default()
+            .insert(clip_id.clone());
+        if !fresh {
+            continue;
+        }
+        started.push(clip_id.clone());
+        let (app, project_id, clip_id) = (app.clone(), project_id.to_owned(), clip_id.clone());
+        tokio::spawn(async move {
+            let done = crate::diag::time_async(
+                "agent",
+                "smooth slow motion (background)",
+                smooth_slow_motion(&app, &project_id, &clip_id),
+            )
+            .await;
+            if let Err(error) = done {
+                crate::diag::warn(
+                    "agent",
+                    format!("smoothing {clip_id} in {project_id}: {error}"),
+                );
+            }
+            let mut pending = smoothing().lock();
+            if let Some(clips) = pending.get_mut(&project_id) {
+                clips.remove(&clip_id);
+                if clips.is_empty() {
+                    pending.remove(&project_id);
+                }
+            }
+        });
+    }
+    started
+}
+
+/// Waits (up to `limit`) until a project's background smoothing is done, so
+/// an export renders the smooth shots. Returns false if it timed out.
+pub async fn wait_for_smoothing(project_id: &str, limit: Duration) -> bool {
+    let started = Instant::now();
+    while !smoothing_pending(project_id).is_empty() {
+        if started.elapsed() > limit {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    true
 }
 
 /// Where a place is, from Google's geocoding through the relay (only Google's

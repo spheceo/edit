@@ -1699,22 +1699,24 @@ struct Decoded {
     pixels: Option<Vec<u8>>,
 }
 
-/// One decoder thread: decodes its jobs in order, each clip's run from one
-/// reader (kept in a small pool by file), recycling pixel buffers.
+/// One decoder thread: decodes its jobs in order, recycling pixel buffers.
+/// It keeps one reader open (each holds a hardware decoder and its buffers):
+/// a clip in the same file carries on with it (the planner sends jump cuts to
+/// the decoder already in that file), any other opens a new one.
 fn decoder(
     jobs: mpsc::Receiver<DecodeJob>,
     out: mpsc::SyncSender<Result<Decoded, String>>,
     recycle: mpsc::Receiver<Vec<u8>>,
 ) {
-    let mut pool = ReaderPool::new(2, 2);
     let mut current: Option<(String, VideoReader)> = None;
     let mut spare: Vec<Vec<u8>> = Vec::new();
     for job in jobs {
         if job.first || current.as_ref().is_none_or(|(clip, _)| *clip != job.clip) {
-            if let Some((_, reader)) = current.take() {
-                pool.put(reader);
-            }
-            current = Some((job.clip.clone(), pool.take(&job.source, job.time)));
+            let reader = match current.take() {
+                Some((_, reader)) if reader.source.key == job.source.key => reader,
+                _ => VideoReader::open(job.source.clone()),
+            };
+            current = Some((job.clip.clone(), reader));
         }
         let Some((_, reader)) = current.as_mut() else {
             break;

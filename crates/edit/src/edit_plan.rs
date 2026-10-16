@@ -479,6 +479,25 @@ pub fn audit(project: &Project) -> Value {
             issues.push(json!({"kind":"sliver", "clip":clip.id, "start":clip.start, "frames":clip.duration}));
         }
     }
+    // A review note left in on-screen text would be burned into the video.
+    for clip in &project.clips {
+        if let ClipContent::Text { text, .. } = &clip.content {
+            let lower = text.to_lowercase();
+            if [
+                "[unclear",
+                "[inaudible",
+                "[crosstalk",
+                "[?]",
+                "???",
+                "[unintelligible",
+            ]
+            .iter()
+            .any(|note| lower.contains(note))
+            {
+                issues.push(json!({"kind":"placeholder_text", "clip":clip.id, "start":clip.start, "text":text}));
+            }
+        }
+    }
     // A narration card with nothing over it is a black screen with words.
     let level = |track: &str| project.tracks.iter().position(|own| own.id == track);
     if let Some(script) = &project.script {
@@ -578,6 +597,19 @@ mod tests {
             &[json!({"op":"add", "clip":{"type":"solid", "fill":[0,0,0,1]}})],
         );
         assert!(missing.err().unwrap().contains("clip.start is required"));
+    }
+
+    #[test]
+    fn review_notes_on_screen_are_flagged() {
+        let mut p = project();
+        apply(&mut p, &[
+            json!({"op":"add", "clip":{"type":"solid", "track":"v1", "start":0, "duration":60, "fill":[0,0,0,1]}}),
+            json!({"op":"add", "clip":{"type":"text", "track":"new", "start":0, "duration":30, "text":"Go to the [unclear]"}}),
+            json!({"op":"add", "clip":{"type":"text", "track":"new", "start":30, "duration":30, "text":"Go to the store"}}),
+        ]).unwrap();
+        let issues = audit(&p)["issues"].as_array().unwrap().clone();
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0]["kind"], "placeholder_text");
     }
 
     #[test]

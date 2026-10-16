@@ -1358,9 +1358,24 @@ pub fn unfinished(project: &Project) -> bool {
     };
     !missing_files(project).is_empty()
         // Only blocks never placed: one placed and since removed was removed on purpose.
-        || script.blocks.iter().any(|block| match block {
-            ScriptBlock::Footage { clip, .. } | ScriptBlock::Narration { clip, .. } => clip.is_none(),
-        })
+        || script.blocks.iter().any(|block| !placed(project, block))
+}
+
+/// Whether a block was ever put on the timeline (since removed counts: on
+/// purpose). A cut-in whose card id was cleared (cover_cut_in once did) but
+/// whose voice-over is on the timeline was placed.
+fn placed(project: &Project, block: &ScriptBlock) -> bool {
+    match block {
+        ScriptBlock::Footage { clip, .. } => clip.is_some(),
+        ScriptBlock::Narration {
+            clip, voiceover, ..
+        } => {
+            clip.is_some()
+                || voiceover
+                    .as_deref()
+                    .is_some_and(|id| project.clip(id).is_some())
+        }
+    }
 }
 
 /// Downloads the script's footage and lays the edit out. Safe to call again:
@@ -1899,6 +1914,22 @@ fn lay_out(project: &mut Project) {
     let mut colors: HashMap<String, ClipColor> = HashMap::new();
     let mut cursor = project.duration();
     let mut cut_ins = 0;
+    // Cut-ins (numbered from 1) whose voice-over is on the timeline: placed.
+    let voiceovers: std::collections::HashSet<usize> = script
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            ScriptBlock::Narration { voiceover, .. } => Some(voiceover),
+            ScriptBlock::Footage { .. } => None,
+        })
+        .enumerate()
+        .filter(|(_, voiceover)| {
+            voiceover
+                .as_deref()
+                .is_some_and(|id| project.clip(id).is_some())
+        })
+        .map(|(index, _)| index + 1)
+        .collect();
     for block in &mut script.blocks {
         match block {
             ScriptBlock::Footage {
@@ -1992,7 +2023,7 @@ fn lay_out(project: &mut Project) {
                 cut_ins += 1;
                 // Placed once already: gone means removed on purpose (a cut-in card
                 // replaced by B-roll), so it isn't put back. A re-cut clears these first.
-                if clip.is_some() {
+                if clip.is_some() || voiceovers.contains(&cut_ins) {
                     continue;
                 }
                 let duration = ((CUT_IN_SECONDS * fps).round() as i64).max(1);
@@ -2330,6 +2361,31 @@ mod tests {
         let count = project.clips.len();
         lay_out(&mut project);
         assert_eq!(project.clips.len(), count);
+        // A covered cut-in whose card id was cleared (as cover_cut_in once
+        // did) but whose voice-over is on the timeline isn't laid out again.
+        let sound = project
+            .clips
+            .iter()
+            .find(|clip| matches!(clip.content, ClipContent::Audio { .. }))
+            .map(|clip| clip.id.clone());
+        if let Some(script) = &mut project.script {
+            for block in &mut script.blocks {
+                if let ScriptBlock::Narration {
+                    clip, voiceover, ..
+                } = block
+                {
+                    *clip = None;
+                    voiceover.clone_from(&sound);
+                }
+            }
+        }
+        lay_out(&mut project);
+        assert_eq!(project.clips.len(), count);
+        assert!(project.script.as_ref().is_some_and(|script| script
+            .blocks
+            .iter()
+            .filter(|block| matches!(block, ScriptBlock::Narration { .. }))
+            .all(|block| placed(&project, block))));
     }
 
     /// Downloads a real (715 MB) Drive file: `cargo test -p edit drive_download -- --ignored`.

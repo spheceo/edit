@@ -245,15 +245,9 @@ pub fn cover(project: &mut Project, args: &Value) -> Result<(Value, Vec<String>)
                 !gone
             });
         }
-        if let Some(script) = &mut project.script {
-            for block in &mut script.blocks {
-                if let ScriptBlock::Narration { clip, .. } = block {
-                    if clip.as_deref() == Some(card_id.as_str()) {
-                        *clip = None;
-                    }
-                }
-            }
-        }
+        // The script keeps the card's id: a placed block whose clip is gone
+        // was removed on purpose. Cleared, it read as never placed, and the
+        // next script resume laid every covered card out again at the end.
     }
 
     // The shots, on the lowest free track above the footage.

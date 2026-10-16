@@ -328,14 +328,35 @@ fn transition(project: &mut Project, args: &Value) -> Result<Value, String> {
     Ok(json!(id))
 }
 
+/// The evidence board's glide between photos (frames) unless told otherwise.
+const BOARD_PAN: i64 = 30;
+/// How far along a glide each end's Bezier handle reaches: 0.42 is CSS
+/// ease-in-out, a soft start and landing (peak speed ~1.7x the average,
+/// where the old in_out preset's was ~2.9x).
+const GLIDE_INFLUENCE: f64 = 0.42;
+
+/// A camera keyframe on an evidence board (board pixels): `glide` when the
+/// camera leaves for the next photo here; `speed` the drift's (px a frame).
+struct CameraKey {
+    frame: i64,
+    x: f64,
+    y: f64,
+    glide: bool,
+    speed: (f64, f64),
+}
+
 /// An evidence board: photos laid out on paper like prints on a desk, each in
 /// a dark frame with a soft shadow and a red handwritten note under it, the
-/// camera holding on one (drifting slowly), then gliding to the next (eased,
-/// ~0.7 s), zig-zagging down the board; each note writes itself on, a letter
-/// every 2 frames, just after its photo arrives. Built in one go from
+/// camera holding on one (drifting slowly), then gliding to the next (~1 s),
+/// zig-zagging down the board; each note writes itself on, a letter every 2
+/// frames, just after its photo arrives. The camera never stops dead or
+/// jerks: each glide leaves and lands at the drift's own speed and eases in
+/// and out softly (CSS ease-in-out, Bezier handles), so the move is one
+/// continuous motion. Built in one go from
 /// `{"op":"evidence_board","start":F,"items":[{"media":"m1","label":"arson?","frames":75}]}`
 /// (frames = how long the camera stays on that photo; `pan` the glide's frames,
-/// for the board or per photo: a quick run through things named in a breath).
+/// for the board or per photo: a quick run through things named in a breath;
+/// `illustrative: true` adds a small "Illustrative images" in the corner).
 fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> {
     let start = args["start"]
         .as_i64()
@@ -345,7 +366,7 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
         .as_array()
         .filter(|items| !items.is_empty() && items.len() <= 8)
         .ok_or("evidence_board needs items: 1 to 8 photos [{media, label, frames}]")?;
-    let pan = args["pan"].as_i64().unwrap_or(22).clamp(8, 60);
+    let pan = args["pan"].as_i64().unwrap_or(BOARD_PAN).clamp(8, 60);
     let (width, height) = (
         f64::from(project.settings.width),
         f64::from(project.settings.height),
@@ -369,9 +390,9 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
         .map(|item| item["pan"].as_i64().map_or(pan, |own| own.clamp(6, 60)))
         .collect();
     // The camera: a slow drift along the way it's going while it holds, then
-    // an eased glide to the next photo. (frame, x, y, ease to the next)
+    // a glide to the next photo that leaves and lands at the drift's speed.
     let drift = 0.35 * k;
-    let mut camera: Vec<(i64, f64, f64, &str)> = Vec::new();
+    let mut camera: Vec<CameraKey> = Vec::new();
     let mut at = 0;
     let mut arrivals = Vec::new();
     for (index, (&(x, y), &hold)) in spots.iter().zip(&holds).enumerate() {
@@ -388,14 +409,22 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
                 (dx / length, dy / length)
             });
         let reach = drift * hold as f64 / 2.0;
+        let speed = (toward.0 * drift, toward.1 * drift);
         arrivals.push(at);
-        camera.push((at, x - toward.0 * reach, y - toward.1 * reach, "linear"));
-        camera.push((
-            at + hold,
-            x + toward.0 * reach,
-            y + toward.1 * reach,
-            "in_out",
-        ));
+        camera.push(CameraKey {
+            frame: at,
+            x: x - toward.0 * reach,
+            y: y - toward.1 * reach,
+            glide: false,
+            speed,
+        });
+        camera.push(CameraKey {
+            frame: at + hold,
+            x: x + toward.0 * reach,
+            y: y + toward.1 * reach,
+            glide: true,
+            speed,
+        });
         at += hold + pans.get(index).copied().unwrap_or(pan);
     }
     let total = at - pans.last().copied().unwrap_or(pan);
@@ -404,24 +433,41 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
         camera
             .windows(2)
             .find_map(|pair| match pair {
-                [(from, fx, fy, _), (to, tx, ty, _)] if *from <= frame && frame <= *to => {
-                    let share = (frame - from) as f64 / (to - from).max(1) as f64;
-                    Some((fx + (tx - fx) * share, fy + (ty - fy) * share))
+                [from, to] if from.frame <= frame && frame <= to.frame => {
+                    let share = (frame - from.frame) as f64 / (to.frame - from.frame).max(1) as f64;
+                    Some((
+                        from.x + (to.x - from.x) * share,
+                        from.y + (to.y - from.y) * share,
+                    ))
                 }
                 _ => None,
             })
             .unwrap_or((0.0, 0.0))
     };
-    // An element at board position (bx, by), on screen from `from` (board frames).
+    // An element at board position (bx, by), on screen from `from` (board
+    // frames): it moves against the camera, so its handles' speeds are the
+    // camera's turned round. A glide's ends get handles (leaving at the
+    // drift's speed, landing at the next drift's), the holds stay linear.
     let keys = |bx: f64, by: f64, from: i64| -> Value {
         let mut xs = Vec::new();
         let mut ys = Vec::new();
         let (cx, cy) = camera_at(from);
         xs.push(json!({"frame": 0, "value": bx - cx, "ease": "linear"}));
         ys.push(json!({"frame": 0, "value": by - cy, "ease": "linear"}));
-        for &(frame, cx, cy, ease) in camera.iter().filter(|key| key.0 > from) {
-            xs.push(json!({"frame": frame - from, "value": bx - cx, "ease": ease}));
-            ys.push(json!({"frame": frame - from, "value": by - cy, "ease": ease}));
+        let mut landing = false;
+        for key in camera.iter().filter(|key| key.frame > from) {
+            for (keys, value, speed) in [
+                (&mut xs, bx - key.x, -key.speed.0),
+                (&mut ys, by - key.y, -key.speed.1),
+            ] {
+                let handle = json!({"speed": speed, "influence": GLIDE_INFLUENCE});
+                keys.push(
+                    json!({"frame": key.frame - from, "value": value, "ease": "linear",
+                    "handle_out": key.glide.then(|| handle.clone()),
+                    "handle_in": landing.then_some(handle)}),
+                );
+            }
+            landing = key.glide;
         }
         json!({"x": xs, "y": ys})
     };
@@ -510,6 +556,19 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
         json!({"type": "adjustment", "name": "Evidence board · vignette", "track": shade,
         "start": start, "duration": total, "grade": {"vignette": 0.38}}),
     )?;
+    // Photos that aren't the case's own say so, small, in the corner, still.
+    if args["illustrative"].as_bool().unwrap_or(false) {
+        let track = project.add_track(TrackKind::Video);
+        add(
+            project,
+            json!({"type": "text", "name": "Evidence board · illustrative", "track": track,
+            "start": start, "duration": total, "text": "Illustrative images",
+            "style": {"size": 30.0 * k, "weight": 500, "color": [1.0, 1.0, 1.0, 1.0],
+                "glow": {"enabled": false},
+                "background": {"opacity": 0.45, "pad_x": 12.0 * k, "pad_y": 6.0 * k}},
+            "transform": {"x": 0.5 * width - 190.0 * k, "y": 0.5 * height - 50.0 * k}}),
+        )?;
+    }
     Ok(json!({"clips": made, "end": start + total}))
 }
 
@@ -1009,16 +1068,18 @@ mod tests {
         }
         let result = apply(
             &mut p,
-            &[json!({"op":"evidence_board", "start":0, "items":[
-                {"media":"m1", "label":"accident?", "frames":60},
-                {"media":"m2", "label":"arson?", "frames":60},
-                {"media":"m3", "frames":60},
-            ]})],
+            &[
+                json!({"op":"evidence_board", "start":0, "illustrative":true, "items":[
+                    {"media":"m1", "label":"accident?", "frames":60},
+                    {"media":"m2", "label":"arson?", "frames":60},
+                    {"media":"m3", "frames":60},
+                ]}),
+            ],
         )
         .unwrap();
-        // Paper, three photos, two notes, the vignette.
-        assert_eq!(p.clips.len(), 7);
-        assert_eq!(result.results[0]["end"], 60 * 3 + 22 * 2);
+        // Paper, three photos, two notes, the vignette, "Illustrative images".
+        assert_eq!(p.clips.len(), 8);
+        assert_eq!(result.results[0]["end"], 60 * 3 + 30 * 2);
         let photo = p
             .clips
             .iter()
@@ -1026,14 +1087,39 @@ mod tests {
             .unwrap();
         // On screen in the middle once the camera has arrived there (drifting a little).
         let x = &photo.keyframes["x"];
-        let arrived = x.iter().find(|key| key.frame as i64 == 60 + 22).unwrap();
+        let arrived = x.iter().find(|key| key.frame as i64 == 60 + 30).unwrap();
         assert!(arrived.value.abs() < 40.0, "{arrived:?}");
+        // Softly: the glide leaves and lands at the drift's speed (no jolt
+        // where a hold meets a glide) and never whips past ~1.8x its average.
+        let leaves = x.iter().find(|key| key.frame as i64 == 60).unwrap();
+        assert!(leaves
+            .handle_out
+            .is_some_and(|handle| (handle.influence - 0.42).abs() < 1e-6));
+        assert!(arrived.handle_in.is_some());
+        for keys in [&photo.keyframes["x"], &photo.keyframes["y"]] {
+            let at = |frame: f32| edit_core::sample(keys, frame).unwrap();
+            let speed = |frame: f32| at(frame + 0.05) - at(frame - 0.05);
+            for joint in [60.0, 90.0] {
+                let (before, after) = (speed(joint - 0.1), speed(joint + 0.1));
+                assert!(
+                    (before - after).abs() < 0.1,
+                    "jolt at {joint}: {before} then {after}"
+                );
+            }
+            let average = (at(90.0) - at(60.0)).abs() / 30.0;
+            let peak = (0..300)
+                .map(|step| {
+                    (at(60.0 + step as f32 * 0.1 + 0.1) - at(60.0 + step as f32 * 0.1)).abs() * 10.0
+                })
+                .fold(0.0, f32::max);
+            assert!(peak < 1.8 * average, "peak {peak} vs average {average}");
+        }
         let note = p
             .clips
             .iter()
             .find(|clip| clip.name.as_deref() == Some("Evidence board · note 2"))
             .unwrap();
-        assert_eq!(note.start, 60 + 22 + 8);
+        assert_eq!(note.start, 60 + 30 + 8);
         assert!(
             audit(&p)["issues"].as_array().unwrap().is_empty(),
             "{:?}",

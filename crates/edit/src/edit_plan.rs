@@ -334,7 +334,8 @@ fn transition(project: &mut Project, args: &Value) -> Result<Value, String> {
 /// ~0.7 s), zig-zagging down the board; each note writes itself on, a letter
 /// every 2 frames, just after its photo arrives. Built in one go from
 /// `{"op":"evidence_board","start":F,"items":[{"media":"m1","label":"arson?","frames":75}]}`
-/// (frames = how long the camera stays on that photo; `pan` the glide's frames).
+/// (frames = how long the camera stays on that photo; `pan` the glide's frames,
+/// for the board or per photo: a quick run through things named in a breath).
 fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> {
     let start = args["start"]
         .as_i64()
@@ -360,7 +361,12 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
         .collect();
     let holds: Vec<i64> = items
         .iter()
-        .map(|item| item["frames"].as_i64().unwrap_or(75).clamp(20, 600))
+        .map(|item| item["frames"].as_i64().unwrap_or(75).clamp(4, 600))
+        .collect();
+    // Each photo's glide on to the next: its own `pan`, else the board's.
+    let pans: Vec<i64> = items
+        .iter()
+        .map(|item| item["pan"].as_i64().map_or(pan, |own| own.clamp(6, 60)))
         .collect();
     // The camera: a slow drift along the way it's going while it holds, then
     // an eased glide to the next photo. (frame, x, y, ease to the next)
@@ -390,9 +396,9 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
             y + toward.1 * reach,
             "in_out",
         ));
-        at += hold + pan;
+        at += hold + pans.get(index).copied().unwrap_or(pan);
     }
-    let total = at - pan;
+    let total = at - pans.last().copied().unwrap_or(pan);
     // Where the camera is at `frame` (only asked inside a hold, which is linear).
     let camera_at = |frame: i64| -> (f64, f64) {
         camera
@@ -472,7 +478,13 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
             .as_str()
             .filter(|label| !label.trim().is_empty())
         {
-            let from = arrival + 8;
+            // Written just after the photo arrives (at once on a short stop).
+            let from = arrival
+                + if holds.get(index).is_some_and(|hold| *hold < 24) {
+                    2
+                } else {
+                    8
+                };
             let (lx, ly) = (
                 x + if index % 2 == 0 { 0.02 } else { -0.02 } * width,
                 y + shown / 2.0 + 0.06 * height,

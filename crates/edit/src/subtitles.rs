@@ -634,9 +634,9 @@ pub fn shown(
                     .copied()
                     .unwrap_or(0.0),
             );
-            if end_ms < start_ms {
-                end_ms = start_ms;
-            }
+            // Readable however quick the reply after it: a line held into
+            // another speaker's stacks over it (overlap mode's way).
+            end_ms = end_ms.max((start_ms + MIN_SHOWN_MS).min(until_ms));
             speaker_until.insert(&cue.speaker, end_ms);
             out.push(Line {
                 start_ms,
@@ -922,6 +922,91 @@ struct Voice {
     color: String,
 }
 
+/// The narrator only speaks in narration: a "narrator" line inside a footage
+/// segment is someone in the room whose voice diarisation lumped in with the
+/// narrator's (an interrogator's 475 words were hidden that way). Such lines
+/// go to the shown voice sharing a name with it ("JT Palmer (Narrator)" →
+/// "Palmer (Undersheriff)"), else to the same voice shown, as "Other".
+fn narrators_in_footage(
+    project: &Project,
+    voices: &mut BTreeMap<String, Voice>,
+    lines: &mut [Line],
+) {
+    let fps = project.fps();
+    let footage: Vec<(f64, f64)> = project
+        .segments
+        .iter()
+        .filter(|segment| segment.kind == edit_core::SegmentKind::Footage)
+        .map(|segment| {
+            (
+                segment.start as f64 / fps * 1000.0,
+                segment.end as f64 / fps * 1000.0,
+            )
+        })
+        .collect();
+    if footage.is_empty() {
+        return;
+    }
+    let generic = [
+        "the",
+        "officer",
+        "detective",
+        "deputy",
+        "sergeant",
+        "narrator",
+        "police",
+        "speaker",
+        "unknown",
+    ];
+    let names = |name: &str| -> Vec<String> {
+        person(name)
+            .0
+            .into_iter()
+            .filter(|word| word.len() > 1 && !generic.contains(&word.as_str()))
+            .collect()
+    };
+    for line in lines.iter_mut() {
+        let Some(voice) = voices.get(&line.speaker) else {
+            continue;
+        };
+        if voice.role != "narrator"
+            || !footage
+                .iter()
+                .any(|(start, end)| *start <= line.start_ms && line.start_ms < *end)
+        {
+            continue;
+        }
+        let words = names(&voice.name);
+        let media = line
+            .speaker
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let match_key = voices
+            .iter()
+            .filter(|(key, other)| {
+                key.starts_with(&format!("{media}/")) && !hidden_role(&other.role)
+            })
+            .find(|(_, other)| names(&other.name).iter().any(|word| words.contains(word)))
+            .map(|(key, _)| key.clone());
+        let key = match match_key {
+            Some(key) => key,
+            None => {
+                let key = format!("{}#footage", line.speaker);
+                let shown = Voice {
+                    name: "Other".into(),
+                    role: "other".into(),
+                    color: voice.color.clone(),
+                };
+                voices.entry(key.clone()).or_insert(shown);
+                key
+            }
+        };
+        line.speaker = key;
+    }
+}
+
 /// A speaker's name as compared: its words (lower case) and the role in its
 /// brackets, "Romania Hunter (Mother)" → (["romania", "hunter"], "mother").
 fn person(name: &str) -> (Vec<String>, String) {
@@ -1096,6 +1181,7 @@ pub async fn repack_subtitles(
             }));
         }
     }
+    narrators_in_footage(&project, &mut voices, &mut lines);
     same_person_same_colour(&mut voices, &mut lines);
     uncram(&mut lines);
     let role = |key: &str| voices.get(key).map_or("other", |voice| voice.role.as_str());
@@ -1522,6 +1608,60 @@ pub(crate) fn star_on_screen(project: &mut Project, from: i64, to: i64, neglect:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn overlapping_lines_stay_up_long_enough_to_read() {
+        let line = |start_ms: f64, end_ms: f64, speaker: &str| super::Line {
+            start_ms,
+            end_ms,
+            text: "Okay.".into(),
+            speaker: speaker.into(),
+        };
+        let lines = [
+            line(0.0, 100.0, "a"),
+            line(120.0, 1_000.0, "b"),
+            line(1_300.0, 1_400.0, "a"),
+        ];
+        let shown = super::shown(&lines, 1_000.0, 0.0, 10_000.0, true, |_| false, |_| false);
+        assert!(
+            shown
+                .iter()
+                .all(|cue| cue.end_ms - cue.start_ms >= super::MIN_SHOWN_MS - 1e-6),
+            "{shown:?}"
+        );
+    }
+
+    #[test]
+    fn a_narrator_in_the_footage_is_someone_in_the_room() {
+        use super::{narrators_in_footage, Line, Voice};
+        let mut project =
+            edit_core::Project::new("p".into(), "t".into(), edit_core::Settings::default());
+        project.segments = serde_json::from_value(serde_json::json!([
+            {"start": 0, "end": 300, "kind": "narration"},
+            {"start": 300, "end": 900, "kind": "footage"},
+        ]))
+        .unwrap();
+        let voice = |name: &str, role: &str| Voice {
+            name: name.into(),
+            role: role.into(),
+            color: "#ffffff".into(),
+        };
+        let mut voices = std::collections::BTreeMap::from([
+            ("m/0".to_owned(), voice("JT Palmer (Narrator)", "narrator")),
+            ("m/2".to_owned(), voice("Palmer (Undersheriff)", "leader")),
+        ]);
+        let line = |start_ms: f64| Line {
+            start_ms,
+            end_ms: start_ms + 500.0,
+            text: "so".into(),
+            speaker: "m/0".into(),
+        };
+        // One in the narration (stays the narrator's), one in the footage.
+        let mut lines = vec![line(2_000.0), line(20_000.0)];
+        narrators_in_footage(&project, &mut voices, &mut lines);
+        assert_eq!(lines[0].speaker, "m/0");
+        assert_eq!(lines[1].speaker, "m/2");
+    }
+
     #[test]
     fn one_person_gets_one_colour() {
         use super::{same_person, same_person_same_colour, Line, Voice};

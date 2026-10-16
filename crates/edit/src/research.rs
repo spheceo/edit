@@ -123,7 +123,7 @@ fn article_page(url: &str) -> Result<String, String> {
     {
         return Ok(page.clone());
     }
-    let page = match plain(url) {
+    let page = match plain(url)? {
         Some(page) => page,
         None => dump(url)?,
     };
@@ -139,7 +139,7 @@ fn article_page(url: &str) -> Result<String, String> {
 /// The page as the server sends it, when that's already the story: a 200
 /// with a couple of thousand characters of readable text and no sign of a
 /// bot check.
-fn plain(url: &str) -> Option<String> {
+fn plain(url: &str) -> Result<Option<String>, String> {
     let output = Command::new("curl")
         .args([
             "-sSL",
@@ -153,27 +153,88 @@ fn plain(url: &str) -> Option<String> {
         .args(["-w", "\n%{http_code}", url])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output()
-        .ok()?;
+        .output();
+    let Ok(output) = output else {
+        return Ok(None);
+    };
     let out = String::from_utf8_lossy(&output.stdout);
-    let (page, code) = out.rsplit_once('\n')?;
+    let Some((page, code)) = out.rsplit_once('\n') else {
+        return Ok(None);
+    };
     if code.trim() != "200" {
-        return None;
+        // A Cloudflare challenge: headless Chrome doesn't get past it either
+        // (it waited the full timeout on one), so say so at once.
+        if ["403", "503"].contains(&code.trim())
+            && (page.contains("cf_chl") || page.contains("challenge-platform"))
+        {
+            return Err("the site blocks readers with a bot check; use another source".to_owned());
+        }
+        return Ok(None);
     }
     // Judged on the readable text: a <noscript> "enable JavaScript" note on
     // a server-rendered story isn't a block.
     let text = readable(page);
     let lower = text.to_ascii_lowercase();
-    let blocked = [
+    let blocked = bot_check(&lower) || lower.contains("please enable javascript");
+    if blocked {
+        return Ok(None);
+    }
+    if text.len() >= 2000 {
+        return Ok(Some(page.to_owned()));
+    }
+    // Pages rendered by script often carry the whole story as JSON-LD
+    // (`articleBody`, for search engines): read that rather than start a
+    // browser (a second instead of ten to forty).
+    Ok(article_body(page)
+        .filter(|body| body.len() >= 800)
+        .map(|body| format!("{page}\n<div>{body}</div>")))
+}
+
+/// Whether a page's readable text (lower case) is a bot check, not the story.
+fn bot_check(lower: &str) -> bool {
+    [
         "captcha",
         "verify you are human",
         "human verification",
         "access denied",
-        "please enable javascript",
+        "just a moment...",
+        "enable javascript and cookies to continue",
     ]
     .iter()
-    .any(|sign| lower.contains(sign));
-    (!blocked && text.len() >= 2000).then(|| page.to_owned())
+    .any(|sign| lower.contains(sign))
+}
+
+/// The `articleBody` of the page's JSON-LD (schema.org NewsArticle), if any.
+fn article_body(page: &str) -> Option<String> {
+    fn bodies(value: &serde_json::Value, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, value) in map {
+                    match value {
+                        serde_json::Value::String(text) if key == "articleBody" => {
+                            out.push(text.clone());
+                        }
+                        _ => bodies(value, out),
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| bodies(item, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for block in page.split("application/ld+json").skip(1) {
+        let Some((_, json)) = block.split_once('>') else {
+            continue;
+        };
+        let json = json.split("</script>").next().unwrap_or_default();
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(json.trim()) {
+            bodies(&value, &mut out);
+        }
+    }
+    out.dedup();
+    let body = out.join("\n\n");
+    (!body.trim().is_empty()).then_some(body)
 }
 
 /// A page as the browser renders it (scripts run), from a fresh profile
@@ -226,12 +287,19 @@ fn dump(url: &str) -> Result<String, String> {
         }
         let _ = sender.send(page);
     });
-    let page = receiver.recv_timeout(Duration::from_secs(45));
+    let page = receiver.recv_timeout(Duration::from_secs(30));
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);
     let page = page.map_err(|_| "the page took too long to load".to_owned())?;
-    Ok(String::from_utf8_lossy(&page).into_owned())
+    let page = String::from_utf8_lossy(&page).into_owned();
+    // A bot check (Cloudflare's "Just a moment...") isn't the story: say so
+    // rather than hand it over as the page.
+    let text = readable(&page);
+    if text.len() < 2000 && bot_check(&text.to_ascii_lowercase()) {
+        return Err("the site blocked the reader with a bot check; use another source".to_owned());
+    }
+    Ok(page)
 }
 
 /// Web results for `query` (DuckDuckGo).
@@ -812,6 +880,16 @@ fn decode(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn script_rendered_pages_read_their_json_ld() {
+        let story = "A little more than a week after the arrests, police said. ".repeat(20);
+        let page = format!(
+            r#"<html><head><script type="application/ld+json">{{"@graph":[{{"@type":"NewsArticle","headline":"H","articleBody":"{story}"}}]}}</script></head><body><div id="app"></div></body></html>"#
+        );
+        assert_eq!(super::article_body(&page).as_deref(), Some(story.as_str()));
+        assert!(super::article_body("<html><body>nothing</body></html>").is_none());
+    }
+
     use super::*;
 
     #[test]

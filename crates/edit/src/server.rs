@@ -997,6 +997,10 @@ pub async fn import_paths(
             app.media.transcribe(path.clone(), true);
             transcribing.push(path.clone());
         }
+        if probe.has_audio {
+            // Its loudness analysis, so the first measure_audio / set_loudness is instant.
+            crate::loudness::warm(path.clone());
+        }
         app.media.ensure(path, probe);
     }
     if !transcribing.is_empty() {

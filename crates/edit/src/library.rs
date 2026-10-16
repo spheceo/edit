@@ -390,92 +390,24 @@ pub fn loudness(path: &Path, from: f64, seconds: f64) -> Result<f64, String> {
     levels(path, from, seconds).map(|(lufs, _)| lufs)
 }
 
-/// The loudness as `loudness` measures it, and the sample peak (dBFS).
+/// The loudness as `loudness` measures it, and the sample peak (dBFS). Read
+/// off the file's loudness analysis (`crate::loudness`, made once per file),
+/// so a measurement costs microseconds once the file has been analysed.
 pub fn levels(path: &Path, from: f64, seconds: f64) -> Result<(f64, f64), String> {
-    // Key the measurement by file identity and the exact FFmpeg seek arguments.
-    // Clip gain is applied by the caller, so changing a mix reuses source analysis.
-    type Key = (String, String, String);
-    static CACHE: OnceLock<Mutex<HashMap<Key, (f64, f64)>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    let key = (
-        crate::media::media_key(path),
-        format!("{:.3}", from.max(0.0)),
-        format!("{:.3}", seconds.max(0.05)),
-    );
-    if let Some(levels) = cache.lock().get(&key).copied() {
-        return Ok(levels);
-    }
-    let levels = crate::diag::time_on(
-        "audio",
-        "audio: source loudness",
-        &path.to_string_lossy(),
-        || measure_levels(path, from, seconds),
-    )?;
-    let mut cache = cache.lock();
-    if cache.len() >= 2048 {
-        cache.clear();
-    }
-    cache.insert(key, levels);
-    Ok(levels)
+    let blocks = crate::loudness::blocks(path)?;
+    span_levels(&blocks, from, seconds)
 }
 
-fn measure_levels(path: &Path, from: f64, seconds: f64) -> Result<(f64, f64), String> {
-    let output = Command::new(crate::tools::ffmpeg())
-        .args([
-            "-hide_banner",
-            "-nostats",
-            "-protocol_whitelist",
-            "file,pipe",
-        ])
-        .args([
-            "-ss",
-            &format!("{:.3}", from.max(0.0)),
-            "-t",
-            &format!("{:.3}", seconds.max(0.05)),
-        ])
-        .arg("-i")
-        .arg(path)
-        .args([
-            "-map",
-            "0:a:0",
-            "-af",
-            "apad=pad_dur=0.5,ebur128=peak=sample",
-            "-f",
-            "null",
-            "-",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("ffmpeg: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "couldn't measure {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let log = String::from_utf8_lossy(&output.stderr);
-    let value = |line: &str, key: &str| {
-        line.split(key)
-            .nth(1)
-            .and_then(|rest| rest.split_whitespace().next())
-            .and_then(|number| number.parse::<f64>().ok())
-    };
-    let loudest = log
-        .lines()
-        .filter(|line| line.contains(" M:"))
-        .filter_map(|line| value(line, " M:"))
-        .fold(f64::NEG_INFINITY, f64::max);
-    let summary = |key: &str| {
-        log.lines()
-            .rev()
-            .find(|line| line.trim_start().starts_with(key))
-            .and_then(|line| value(line, key))
-    };
-    let peak = summary("Peak:").unwrap_or(0.0);
-    match summary("I:") {
-        Some(integrated) if seconds > 3.0 && integrated > -70.0 => Ok((integrated, peak)),
-        _ if loudest > -70.0 => Ok((loudest, peak)),
+fn span_levels(
+    blocks: &crate::loudness::Blocks,
+    from: f64,
+    seconds: f64,
+) -> Result<(f64, f64), String> {
+    let seconds = seconds.max(0.05);
+    let span = blocks.span(from.max(0.0), seconds);
+    match span.integrated {
+        integrated if seconds > 3.0 && integrated > -70.0 => Ok((integrated, span.peak)),
+        _ if span.loudest > -70.0 => Ok((span.loudest, span.peak)),
         _ => Err("that stretch of the sound is silent".into()),
     }
 }
@@ -504,10 +436,15 @@ pub fn gain_to(
 
 /// How loud the footage's own sound is across the timeline, in LUFS: its
 /// clips (sound from video, not effects or voice-overs) averaged by energy
-/// over their length, each as heard.
+/// over their length, each as heard. An edit with no footage sound (all
+/// narration) answers with its voice-overs instead: they're its speech. The
+/// files are analysed side by side the first time; after that it's
+/// arithmetic, and the answer for the same clips is remembered.
 pub fn footage_loudness(project: &edit_core::Project) -> Result<f64, String> {
     let fps = project.fps();
-    let (mut energy, mut seconds) = (0.0, 0.0);
+    // (file, from, seconds of source, seconds on the timeline, gain)
+    let mut spans = Vec::new();
+    let mut voiceovers = Vec::new();
     for clip in &project.clips {
         let edit_core::ClipContent::Audio {
             media,
@@ -523,62 +460,65 @@ pub fn footage_loudness(project: &edit_core::Project) -> Result<f64, String> {
             continue;
         };
         let length = clip.duration as f64 / fps;
-        if media.kind != edit_core::MediaKind::Video || media.is_sound_effect() || length < 1.0 {
+        if media.is_sound_effect() || length < 1.0 {
             continue;
         }
-        if let Ok((lufs, _)) = levels(Path::new(&media.path), *source_in, length * speed) {
-            energy += length * 10f64.powf((lufs + f64::from(*volume_db)) / 10.0);
+        let span = (
+            PathBuf::from(&media.path),
+            *source_in,
+            length * speed,
+            length,
+            f64::from(*volume_db),
+        );
+        if media.kind == edit_core::MediaKind::Video {
+            spans.push(span);
+        } else if crate::voiceover::is_voiceover(project, clip) {
+            voiceovers.push(span);
+        }
+    }
+    if spans.is_empty() {
+        spans = voiceovers;
+    }
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for (path, from, seconds, length, gain) in &spans {
+            crate::media::media_key(path).hash(&mut hasher);
+            [*from, *seconds, *length, *gain]
+                .map(f64::to_bits)
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    };
+    static ANSWERS: OnceLock<Mutex<HashMap<u64, f64>>> = OnceLock::new();
+    let answers = ANSWERS.get_or_init(Default::default);
+    if let Some(lufs) = answers.lock().get(&key) {
+        return Ok(*lufs);
+    }
+    let paths: Vec<PathBuf> = spans.iter().map(|span| span.0.clone()).collect();
+    crate::loudness::prepare(&paths);
+    let (mut energy, mut seconds) = (0.0, 0.0);
+    for (path, from, source_seconds, length, gain) in &spans {
+        if let Ok((lufs, _)) = levels(path, *from, *source_seconds) {
+            energy += length * 10f64.powf((lufs + gain) / 10.0);
             seconds += length;
         }
     }
     if seconds == 0.0 {
-        return Err("no footage sound on the timeline to match".into());
+        return Err("no footage sound or voice-over on the timeline to match".into());
     }
-    Ok(10.0 * (energy / seconds).log10())
+    let lufs = 10.0 * (energy / seconds).log10();
+    let mut answers = answers.lock();
+    if answers.len() >= 256 {
+        answers.clear();
+    }
+    answers.insert(key, lufs);
+    Ok(lufs)
 }
 
 /// Seconds into the sound of its loudest 10 ms.
 fn loudest(path: &Path) -> Result<f64, String> {
-    const RATE: usize = 8000;
-    let output = Command::new(crate::tools::ffmpeg())
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-protocol_whitelist",
-            "file,pipe",
-            "-i",
-        ])
-        .arg(path)
-        .args([
-            "-map",
-            "0:a:0",
-            "-ac",
-            "1",
-            "-ar",
-            &RATE.to_string(),
-            "-f",
-            "f32le",
-            "pipe:1",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("ffmpeg: {error}"))?;
-    let samples: Vec<f32> = output
-        .stdout
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|bytes| f32::from_le_bytes(*bytes))
-        .collect();
-    let window = RATE / 100;
-    let loudest = samples
-        .chunks(window)
-        .map(|chunk| chunk.iter().map(|sample| sample * sample).sum::<f32>())
-        .enumerate()
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map_or(0, |(index, _)| index);
-    Ok((loudest * window) as f64 / RATE as f64 + 0.005)
+    Ok(crate::loudness::blocks(path)?.loudest_moment())
 }
 
 /// The index's note for each file, by Drive id and by file name. An entry:

@@ -11,6 +11,7 @@ mod export;
 mod footage_search;
 mod guard;
 mod library;
+mod loudness;
 #[cfg(target_os = "macos")]
 mod mac_media;
 mod mcp;
@@ -184,6 +185,7 @@ async fn start(home: PathBuf, host: Option<String>, port: u16) -> Vec<tokio::tas
         store::Store::open(home.clone())
             .unwrap_or_else(|error| fail(&format!("{}: {error}", home.display()))),
     );
+    tools::use_cache_dir(store.cache_dir());
     let mut allowed = vec![
         "localhost".to_owned(),
         "127.0.0.1".to_owned(),

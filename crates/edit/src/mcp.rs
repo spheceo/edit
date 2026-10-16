@@ -478,6 +478,7 @@ fn tools() -> Vec<Value> {
                 "id": { "type": "string", "description": "The sound's id from list_library." },
                 "times": { "type": "array", "items": { "type": "number" }, "description": "Seconds on the timeline." },
                 "loudness": { "type": "number", "description": "How loud it's heard, in LUFS (see the house style's levels): the tool measures the part that plays (a short sound by its loudest moment) and sets the volume to match. Prefer this to volume_db: library files differ in loudness by 20 dB or more." },
+                "under_speech": { "type": "number", "description": "LU under the edit's speech (the footage and voice-overs): music 12, low-volume notes 16, music with nothing said over it 6, risers 8, hits 0, whooshes and shutters 3, clicks 8. Use instead of loudness; nothing to measure first." },
                 "volume_db": { "type": "number", "description": "A raw gain instead of loudness. Default 0." },
                 "seconds": { "type": "number", "description": "Play at most this long: music from its start (a track's \"first ~20 seconds\"); a sound effect, the stretch around its hit (a long glitch or whoosh file cut to its transition's length, e.g. 0.3 s for an 8-frame glitch)." },
                 "lead": { "type": "number", "description": "With seconds, on a sound effect: how much of it plays before the hit (default half of seconds; a riser wants most of it before)." },
@@ -1294,7 +1295,25 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             let seconds = args["seconds"].as_f64().filter(|seconds| *seconds > 0.0);
             let mut volume_db = args["volume_db"].as_f64().unwrap_or(0.0);
             let mut level = String::new();
-            if let Some(target) = args["loudness"].as_f64() {
+            let target = match (args["loudness"].as_f64(), args["under_speech"].as_f64()) {
+                (Some(target), _) => Some(target),
+                (None, Some(under)) => {
+                    // The speech the voice-overs are matched to: the footage's own sound.
+                    let project = store.get(&id).ok_or("project vanished")?.project;
+                    let speech = tokio::task::spawn_blocking(move || {
+                        crate::library::footage_loudness(&project)
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .map_err(|error| {
+                        format!("under_speech needs the edit's speech to measure ({error}); give loudness in LUFS instead")
+                    })?;
+                    level = format!("; the speech is {speech:.1} LUFS");
+                    Some(speech - under)
+                }
+                (None, None) => None,
+            };
+            if let Some(target) = target {
                 let media = store
                     .get(&id)
                     .and_then(|live| live.project.media(&media_id).cloned())
@@ -1319,7 +1338,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .map_err(|error| error.to_string())??;
                 // Never boost a near-silent stretch into noise.
                 volume_db = (target - measured).clamp(-40.0, 12.0);
-                level = format!(
+                level += &format!(
                     "; it measures {measured:.1} LUFS, so volume {volume_db:+.1} dB puts it at {:.1} LUFS",
                     measured + volume_db
                 );
@@ -1663,6 +1682,10 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .filter_map(|track| Some((track.id.clone(), project.track_label(&track.id)?)))
                 .collect();
             let lines = tokio::task::spawn_blocking(move || {
+                // Each file is analysed once (a few side by side); every span is then arithmetic.
+                let paths: Vec<std::path::PathBuf> =
+                    spans.iter().map(|span| std::path::PathBuf::from(&span.5)).collect();
+                crate::loudness::prepare(&paths);
                 spans
                     .into_iter()
                     .map(|(clip, name, track, from, to, path, source, seconds, gain)| {

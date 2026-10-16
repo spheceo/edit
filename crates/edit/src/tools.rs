@@ -41,3 +41,16 @@ fn find(tool: &str, variable: &str) -> OsString {
     }
     tool.into()
 }
+
+/// Edit's media cache (`Store::cache_dir`), set once the server starts.
+static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn use_cache_dir(dir: PathBuf) {
+    let _ = CACHE_DIR.set(dir);
+}
+
+/// A media file's cache folder (where `media::Processor::paths` keeps its
+/// previews and waveform), for work that has no `App` at hand.
+pub fn media_cache(source: &std::path::Path) -> Option<PathBuf> {
+    Some(CACHE_DIR.get()?.join(crate::media::media_key(source)))
+}

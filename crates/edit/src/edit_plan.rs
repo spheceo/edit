@@ -486,9 +486,16 @@ pub fn audit(project: &Project) -> Value {
             }
         }
     }
-    // Slivers: a picture or text clip too short to read is left over from a trim.
+    // Slivers: a picture or text clip too short to read is left over from a
+    // trim; footage under a quarter of a second reads as a stutter (the team
+    // caught a 5-frame fragment; emphasis runs are 12 frames or more).
     for clip in &project.clips {
-        if clip.duration < 3
+        let shortest = if matches!(clip.content, ClipContent::Video { .. }) {
+            8
+        } else {
+            3
+        };
+        if clip.duration < shortest
             && !matches!(
                 clip.content,
                 ClipContent::Audio { .. } | ClipContent::Adjustment { .. }
@@ -559,6 +566,56 @@ pub fn audit(project: &Project) -> Value {
             }) {
                 issues.push(json!({"kind":"silent_transition", "clip":clip.id, "at":middle}));
             }
+        }
+    }
+    // A subtitle runs past the cut it's said before: into a cut-in's
+    // voice-over, or over the cut into another moment of footage.
+    let voiceovers: Vec<(i64, i64)> = project
+        .clips
+        .iter()
+        .filter(|clip| clip.name.as_deref() == Some("Voice-over"))
+        .map(|clip| (clip.start, clip.end()))
+        .collect();
+    let footage: Vec<(&Clip, &str, f64, f64)> = project
+        .clips
+        .iter()
+        .filter(|clip| Some(clip.track.as_str()) == base)
+        .filter_map(|clip| match &clip.content {
+            ClipContent::Video {
+                media,
+                source_in,
+                speed,
+                ..
+            } => Some((clip, media.as_str(), *source_in, *speed)),
+            _ => None,
+        })
+        .collect();
+    for clip in &project.clips {
+        if !clip
+            .name
+            .as_deref()
+            .is_some_and(|name| name.starts_with("Subtitle"))
+        {
+            continue;
+        }
+        let into_voiceover = voiceovers
+            .iter()
+            .any(|(start, end)| clip.start < *end && *start < clip.end());
+        let over_cut = footage
+            .iter()
+            .find(|(under, ..)| under.start <= clip.start && clip.start < under.end())
+            .filter(|(under, ..)| clip.end() > under.end())
+            .is_some_and(|(under, media, source_in, speed)| {
+                // Carrying on in the same moment (a split, not a cut) is fine.
+                let next_in = source_in + under.duration as f64 / project.fps() * speed;
+                !footage.iter().any(|(next, next_media, next_source, _)| {
+                    next.start == under.end()
+                        && next_media == media
+                        && (next_source - next_in).abs() * project.fps() < 2.0
+                })
+            });
+        if into_voiceover || over_cut {
+            issues.push(json!({"kind":"subtitle_past_cut", "clip":clip.id, "start":clip.start, "into": if into_voiceover {"cut-in"} else {"next shot"}}));
         }
     }
     // A review note left in on-screen text would be burned into the video.
@@ -734,6 +791,28 @@ mod tests {
             .collect();
         assert_eq!(silent.len(), 1, "{issues:?}");
         assert_eq!(silent[0]["at"], 200);
+    }
+
+    #[test]
+    fn a_subtitle_past_its_cut_is_flagged() {
+        let mut p = project();
+        p.media.push(serde_json::from_value(json!({"id":"m1","name":"f","path":"/f.mp4","kind":"video","duration":600.0,"width":1920,"height":1080,"has_audio":false})).unwrap());
+        apply(&mut p, &[
+            // A cut: 0–100 from 10 s, then 100–200 from 50 s.
+            json!({"op":"add", "clip":{"type":"video", "track":"v1", "media":"m1", "source_in":10.0, "start":0, "duration":100}}),
+            json!({"op":"add", "clip":{"type":"video", "track":"v1", "media":"m1", "source_in":50.0, "start":100, "duration":100}}),
+            // A split: 200–300 carries straight on from 300 (50 s + 100 frames).
+            json!({"op":"add", "clip":{"type":"video", "track":"v1", "media":"m1", "source_in":53.333333, "start":200, "duration":100}}),
+            json!({"op":"add", "clip":{"type":"text", "track":"new", "name":"Subtitle · A", "start":80, "duration":30, "text":"over the cut"}}),
+            json!({"op":"add", "clip":{"type":"text", "track":"new", "name":"Subtitle · A", "start":180, "duration":30, "text":"over the split"}}),
+        ]).unwrap();
+        let issues = audit(&p)["issues"].as_array().unwrap().clone();
+        let past: Vec<_> = issues
+            .iter()
+            .filter(|issue| issue["kind"] == "subtitle_past_cut")
+            .collect();
+        assert_eq!(past.len(), 1, "{issues:?}");
+        assert_eq!(past[0]["start"], 80);
     }
 
     #[test]

@@ -1158,6 +1158,10 @@ pub async fn repack_subtitles(
                     name,
                 }
             });
+            // A cue of only a transcriber's mark ("...") says nothing: no subtitle.
+            if !cue.text.chars().any(char::is_alphanumeric) {
+                continue;
+            }
             lines.push(Line {
                 start_ms: on_timeline(cue.start_ms),
                 end_ms: on_timeline(cue.end_ms),

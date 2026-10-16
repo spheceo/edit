@@ -122,7 +122,25 @@ fn operation_on(
         }
         "update" => {
             let ids = selected(project, &args["select"])?;
-            let patch = args["patch"].as_object().ok_or("patch must be an object")?;
+            let mut patch = args["patch"]
+                .as_object()
+                .ok_or("patch must be an object")?
+                .clone();
+            // {track: "new"} moves the clips onto a new track of their kind, as add does.
+            if patch.get("track").and_then(Value::as_str) == Some("new") {
+                let audio = project
+                    .clips
+                    .iter()
+                    .find(|clip| ids.contains(&clip.id))
+                    .is_some_and(|clip| matches!(clip.content, ClipContent::Audio { .. }));
+                let track = project.add_track(if audio {
+                    TrackKind::Audio
+                } else {
+                    TrackKind::Video
+                });
+                patch.insert("track".to_owned(), json!(track));
+            }
+            let patch = &patch;
             // Moving or trimming one half of a linked pair moves the other
             // half with it (unless both are selected), as in the timeline.
             let mut moved: Vec<(String, i64, i64, i64)> = Vec::new();
@@ -597,6 +615,17 @@ mod tests {
             &[json!({"op":"add", "clip":{"type":"solid", "fill":[0,0,0,1]}})],
         );
         assert!(missing.err().unwrap().contains("clip.start is required"));
+    }
+
+    #[test]
+    fn update_can_move_clips_to_a_new_track() {
+        let mut p = project();
+        apply(&mut p, &[
+            json!({"op":"add", "as":"a", "clip":{"type":"solid", "track":"v1", "start":0, "duration":30, "fill":[0,0,0,1]}}),
+            json!({"op":"update", "select":{"ids":[{"$ref":"a"}]}, "patch":{"track":"new"}}),
+        ]).unwrap();
+        assert_ne!(p.clips[0].track, "v1");
+        assert!(p.track(&p.clips[0].track).is_some());
     }
 
     #[test]

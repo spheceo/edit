@@ -13,7 +13,8 @@ const info = { start: Date.now() };
 // Exactly the picture's size (the window is a little larger).
 document.getElementById("map").style.cssText += `;width:${C.width}px;height:${C.height}px`;
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-async function until(test, ms) { const end = Date.now() + ms; while (!test() && Date.now() < end) await sleep(200); }
+// Checks often: a moving shot asks this for every frame.
+async function until(test, ms) { const end = Date.now() + ms; while (!test() && Date.now() < end) await sleep(25); return test(); }
 // Grade the imagery before the building marker is drawn, so it stays bright
 // and sharp. This is baked into every still and moving-shot frame.
 function createMapLook(width, height) {
@@ -164,19 +165,64 @@ async function mark(ctx, ground, opacity) {
   }
   // A moving shot: the camera circles the place (orbit degrees, positive to
   // its right) and closes in (push, a fraction of the range) at a constant
-  // speed, aimed at it throughout. Each frame waits for its tiles, then goes
-  // to the server, which makes the footage.
-  info.track = [];
-  for (let i = 0; i < C.frames; i++) {
+  // speed, aimed at it throughout. Frames go to the server, which makes the
+  // footage; those it already has (C.have, from an attempt cut short) aren't
+  // made again.
+  const have = new Set(C.have || []);
+  const pose = (i) => {
     const t = C.frames > 1 ? i / (C.frames - 1) : 0;
     aim(C.heading - C.orbit * t, C.range * (1 - C.push * t));
-    viewer.render();
-    await sleep(20);
-    await until(() => tileset.tilesLoaded, 15000);
+  };
+  // The camera moves every frame and never rests: ask for every tile a view
+  // needs at once rather than holding back while it moves, and more at a time
+  // (they all come through the one relay).
+  tileset.foveatedScreenSpaceError = false;
+  tileset.cullRequestsWhileMoving = false;
+  Cesium.RequestScheduler.maximumRequestsPerServer = 48;
+  const capture = async (i) => {
     await draw(i);
-    info.track.push(info.building);
-    const sent = await fetch(`${location.href}/frame/${i}`, { method: "POST", headers: { "content-type": "image/jpeg" }, body: await picture("image/jpeg", 0.95) });
+    const sent = await fetch(`${location.href}/frame/${i}`, { method: "POST", headers: { "content-type": "image/jpeg" }, body: await picture("image/jpeg", 0.9) });
     if (!sent.ok) throw new Error(`frame ${i}: ${sent.status}`);
+  };
+  // 1) The first frame, with all its tiles in (it stands in for the shot
+  //    until the rest is made).
+  pose(0);
+  viewer.render();
+  await until(() => tileset.tilesLoaded, 20000);
+  if (!have.has(0)) await capture(0);
+  // 2) Where the building is in every frame: the camera's path is fixed, so
+  //    this needs no tiles beyond the place's own. Sent at once, so the editor
+  //    can carry on while the frames are made.
+  const scratch = document.createElement("canvas").getContext("2d");
+  info.track = [];
+  for (let i = 0; i < C.frames; i++) {
+    pose(i);
+    viewer.render();
+    if (C.highlight) await mark(scratch, ground, 1);
+    info.track.push(C.highlight ? info.building : null);
+  }
+  info.ready = (Date.now() - info.start) / 1000;
+  await fetch(location.href, { method: "POST", headers: { "content-type": "application/json", "x-map-phase": "ready" }, body: JSON.stringify(info) });
+  // 3) Fly the path once, resting briefly every so often, so the tiles the
+  //    frames need are mostly in before any is captured.
+  const step = Math.max(1, Math.round(C.fps / 3));
+  for (let i = step; i < C.frames; i += step) {
+    if (have.has(i)) continue;
+    pose(i);
+    viewer.render();
+    await until(() => tileset.tilesLoaded, 3000);
+  }
+  info.warmed = (Date.now() - info.start) / 1000;
+  // 4) The frames: each waits a moment for any tile still coming (the first
+  //    half second longer, so the shot never opens on missing tiles).
+  info.incomplete = 0;
+  for (let i = 1; i < C.frames; i++) {
+    if (have.has(i)) continue;
+    pose(i);
+    viewer.render();
+    await sleep(0);
+    if (!(await until(() => tileset.tilesLoaded, i < C.fps / 2 ? 5000 : 1000))) info.incomplete++;
+    await capture(i);
   }
   info.seconds = (Date.now() - info.start) / 1000;
   await fetch(location.href, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(info) });

@@ -436,7 +436,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "map_view",
-            "A tilted 3D view of a place from Google's photorealistic 3D map (real buildings and trees, darker exposure and a vignette, the building at the place marked in glowing red), imported as footage: by default a moving shot, the camera slowly circling the building and closing in while aimed at it (rendered frame by frame; takes a minute or two), or a still. Give the place as an address or name (\"Kent Police Department, Kent, Washington\"; Google finds it and the building's outline) or lat/lon. Each new view is a paid map session (a few a day): get it right the first time, and asking for the same view again reuses the footage. Returns the media id, the address it found, whether the building was outlined and where it sits in the frame (`building`: x, top, bottom, left, right in timeline transform coordinates; for a moving shot also `building_track`, where it is every half second), to place text by it.",
+            "A tilted 3D view of a place from Google's photorealistic 3D map (real buildings and trees, darker exposure and a vignette, the building at the place marked in glowing red), imported as footage: by default a moving shot, the camera slowly circling the building and closing in while aimed at it (it answers once the first frame and the building track are in, usually well under a minute, and renders the rest in the background: place it right away; the media is the first frame until the footage swaps in, and exports wait for it), or a still. Give the place as an address or name (\"Kent Police Department, Kent, Washington\"; Google finds it and the building's outline) or lat/lon. Each new view is a paid map session (a few a day): get it right the first time, and asking for the same view again reuses the footage. Returns the media id, the address it found, whether the building was outlined and where it sits in the frame (`building`: x, top, bottom, left, right in timeline transform coordinates; for a moving shot also `building_track`, where it is every half second), to place text by it.",
             json!({
                 "place": { "type": "string" },
                 "lat": { "type": "number" }, "lon": { "type": "number" },
@@ -2197,6 +2197,8 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             {
                 return Err("optional optical flow is still running; export the current timeline with wait_for_smoothing false or wait for it to finish".to_owned());
             }
+            // A map shot still rendering would export as its first frame.
+            crate::broll::wait_for_maps(app, &id, crate::broll::MAP_EXPORT_WAIT).await?;
             let live = store.get(&id).ok_or("project vanished")?;
             let path = args["path"]
                 .as_str()

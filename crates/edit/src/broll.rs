@@ -446,6 +446,8 @@ fn smoothing() -> &'static Mutex<HashMap<String, HashSet<String>>> {
 }
 
 /// The clips of a project still being smoothed in the background.
+/// Map shots still rendering (and any whose render failed) come after them,
+/// by media: "m7 (map view rendering)".
 pub fn smoothing_pending(project_id: &str) -> Vec<String> {
     let mut pending: Vec<String> = smoothing()
         .lock()
@@ -453,6 +455,23 @@ pub fn smoothing_pending(project_id: &str) -> Vec<String> {
         .map(|clips| clips.iter().cloned().collect())
         .unwrap_or_default();
     pending.sort();
+    let mut maps: Vec<String> = maps_pending()
+        .lock()
+        .get(project_id)
+        .map(|maps| {
+            maps.values()
+                .map(|map| match &map.error {
+                    None => format!("{} (map view rendering)", map.media),
+                    Some(error) => format!(
+                        "{} (map view failed: {error}; map_view again with the same arguments carries on from its frames)",
+                        map.media
+                    ),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    maps.sort();
+    pending.extend(maps);
     pending
 }
 
@@ -501,7 +520,14 @@ pub fn smooth_in_background(app: &App, project_id: &str, clip_ids: &[String]) ->
 /// an export renders the smooth shots. Returns false if it timed out.
 pub async fn wait_for_smoothing(project_id: &str, limit: Duration) -> bool {
     let started = Instant::now();
-    while !smoothing_pending(project_id).is_empty() {
+    let busy = || {
+        smoothing()
+            .lock()
+            .get(project_id)
+            .is_some_and(|clips| !clips.is_empty())
+            || maps_rendering(project_id)
+    };
+    while busy() {
         if started.elapsed() > limit {
             return false;
         }
@@ -649,6 +675,9 @@ type MapShot = Result<(Vec<u8>, Value), String>;
 struct MapJob {
     page: String,
     done: Option<oneshot::Sender<MapShot>>,
+    /// A moving shot's first frame is in and where the building is in every
+    /// frame is known: what the page measured so far.
+    ready: Option<oneshot::Sender<Value>>,
     frames: PathBuf,
 }
 
@@ -670,10 +699,31 @@ pub async fn map_frame(UrlPath((token, index)): UrlPath<(String, u32)>, body: By
     let Some(dir) = map_jobs().lock().get(&token).map(|job| job.frames.clone()) else {
         return StatusCode::NOT_FOUND;
     };
-    match std::fs::write(dir.join(format!("frame-{index:05}.jpg")), body) {
+    // Whole frames only: an attempt cut short is resumed from what's there.
+    let (partial, frame) = (
+        dir.join(format!("frame-{index:05}.partial")),
+        dir.join(frame_name(index as usize)),
+    );
+    match std::fs::write(&partial, body).and_then(|()| std::fs::rename(&partial, &frame)) {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
+}
+
+fn frame_name(index: usize) -> String {
+    format!("frame-{index:05}.jpg")
+}
+
+/// The frames of a moving shot already in `dir` (whole JPEGs), from an
+/// attempt that was cut short.
+fn frames_had(dir: &Path, count: usize) -> Vec<usize> {
+    (0..count)
+        .filter(|index| {
+            std::fs::read(dir.join(frame_name(*index))).is_ok_and(|bytes| {
+                bytes.starts_with(&[0xFF, 0xD8]) && bytes.ends_with(&[0xFF, 0xD9])
+            })
+        })
+        .collect()
 }
 
 /// `POST /api/maps/{token}`: the picture (image/png) with what the page measured
@@ -684,6 +734,22 @@ pub async fn map_shot(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
+    if headers
+        .get("x-map-phase")
+        .is_some_and(|phase| phase.as_bytes() == b"ready")
+    {
+        let ready = map_jobs()
+            .lock()
+            .get_mut(&token)
+            .and_then(|job| job.ready.take());
+        return match ready {
+            Some(ready) => {
+                let _ = ready.send(serde_json::from_slice(&body).unwrap_or_default());
+                StatusCode::NO_CONTENT
+            }
+            None => StatusCode::NOT_FOUND,
+        };
+    }
     let waiting = map_jobs()
         .lock()
         .get_mut(&token)
@@ -714,7 +780,13 @@ pub async fn map_shot(
 
 /// Opens the map page in headless Chrome and waits for its picture (or, for a
 /// moving shot, its frames in `frames`).
-async fn render_map(config: &Value, width: u32, height: u32, frames: &Path) -> MapShot {
+async fn render_map(
+    config: &Value,
+    width: u32,
+    height: u32,
+    frames: &Path,
+    ready: Option<oneshot::Sender<Value>>,
+) -> MapShot {
     let browser = chrome().ok_or("map views need Google Chrome (or Chromium) installed")?;
     let address = LISTENING.get().ok_or("the server isn't listening yet")?;
     let host = if address.ip().is_unspecified() {
@@ -736,6 +808,7 @@ async fn render_map(config: &Value, width: u32, height: u32, frames: &Path) -> M
         MapJob {
             page,
             done: Some(sender),
+            ready,
             frames: frames.to_owned(),
         },
     );
@@ -779,11 +852,123 @@ async fn render_map(config: &Value, width: u32, height: u32, frames: &Path) -> M
     answer
 }
 
+/// How long map_view waits for a moving shot's first frame and building
+/// track before answering that it's still loading.
+const MAP_READY_WAIT: Duration = Duration::from_secs(180);
+/// How long an export waits for map shots still rendering.
+pub const MAP_EXPORT_WAIT: Duration = Duration::from_secs(600);
+
+/// A moving map shot being made in the background, by its key.
+struct MapRender {
+    /// What the page measured once the first frame was in (or why it failed first).
+    ready: tokio::sync::watch::Sender<Option<Result<Value, String>>>,
+    /// Projects whose stand-in becomes the footage when it's done.
+    projects: Mutex<HashSet<String>>,
+    /// Why it failed, once it has (read and written with `maps_pending`
+    /// locked, so a stand-in registered as it fails still hears of it).
+    failed: Mutex<Option<String>>,
+}
+
+fn map_renders() -> &'static Mutex<HashMap<String, std::sync::Arc<MapRender>>> {
+    static RENDERS: OnceLock<Mutex<HashMap<String, std::sync::Arc<MapRender>>>> = OnceLock::new();
+    RENDERS.get_or_init(Default::default)
+}
+
+/// A map shot's stand-in in a project: its media, and why its render failed
+/// (None while it's still being made).
+struct MapPending {
+    media: String,
+    error: Option<String>,
+}
+
+/// Map stand-ins by project, by the stand-in's path.
+fn maps_pending() -> &'static Mutex<HashMap<String, HashMap<String, MapPending>>> {
+    static PENDING: OnceLock<Mutex<HashMap<String, HashMap<String, MapPending>>>> = OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
+/// Whether any of a project's map shots is still being made.
+fn maps_rendering(project_id: &str) -> bool {
+    maps_pending()
+        .lock()
+        .get(project_id)
+        .is_some_and(|maps| maps.values().any(|map| map.error.is_none()))
+}
+
+/// Whether a media file is a moving map shot's first frame standing in for it.
+fn is_map_stand_in(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("map-") && name.ends_with("-first.jpg"))
+}
+
+/// Waits (up to `limit`) for a project's map shots still being made, so an
+/// export has the footage rather than its stand-in. An error says why it
+/// can't: one still rendering after `limit`, or a stand-in on the timeline
+/// whose render failed or was cut short (Edit closed): never exported as a
+/// still by mistake.
+pub async fn wait_for_maps(app: &App, project_id: &str, limit: Duration) -> Result<(), String> {
+    let started = Instant::now();
+    while maps_rendering(project_id) {
+        if started.elapsed() > limit {
+            return Err(
+                "a map view is still rendering; export again in a minute (get_project's smoothing lists it until it's done)"
+                    .to_owned(),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let project = app.store.get(project_id).ok_or("no such project")?.project;
+    let used: HashSet<&str> = project
+        .clips
+        .iter()
+        .filter_map(|clip| clip.media_id())
+        .collect();
+    let pending = maps_pending().lock();
+    let stuck: Vec<String> = project
+        .media
+        .iter()
+        .filter(|media| used.contains(media.id.as_str()) && is_map_stand_in(&media.path))
+        .map(|media| {
+            let error = pending
+                .get(project_id)
+                .and_then(|maps| maps.values().find(|map| map.media == media.id))
+                .and_then(|map| map.error.clone());
+            match error {
+                Some(error) => format!("{} (its render failed: {error})", media.id),
+                None => format!("{} (its render was cut short)", media.id),
+            }
+        })
+        .collect();
+    if stuck.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the map view {} is still only its first frame; call map_view again with the same arguments (it carries on from the frames it has), then export",
+            stuck.join(", ")
+        ))
+    }
+}
+
+/// One map render (a headless Chrome with the 3D map) at a time: each takes
+/// a gigabyte or so.
+fn map_slot() -> &'static tokio::sync::Semaphore {
+    static SLOT: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    SLOT.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
 /// A tilted 3D view of `place` (or `lat`/`lon`) from Google's photorealistic
 /// map, the building there in red, as footage in the project: by default a
 /// moving shot (the camera circling the building and closing in), or a still.
 /// Returns the media and where the building is. The same view again reuses the
 /// footage (each new one is a billed map session).
+///
+/// A moving shot answers as soon as its first frame is in and the building's
+/// place in every frame is known: its media is that first frame, standing in
+/// while the rest renders in the background, and becomes the footage when
+/// it's done (exports wait for it). A render cut short keeps its frames, and
+/// the same call again carries on from them.
 pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value, String> {
     let project: Project = app.store.get(project_id).ok_or("no such project")?.project;
     let place = args["place"].as_str().map(str::to_owned);
@@ -860,31 +1045,40 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
     ));
     // What the page measured is kept beside the footage, for reuse.
     let measured = out.with_extension("json");
-    let info: Value = if out.is_file() {
-        std::fs::read(&measured)
+    let (info, media, rendering) = if out.is_file() {
+        let info = std::fs::read(&measured)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
-    } else {
+            .unwrap_or_default();
+        if frames > 0 {
+            // A stand-in still in the project (its swap never happened)
+            // becomes the footage, so clips placed on it play the shot.
+            let first = dir.join(format!("map-{key}-first.jpg"));
+            if first.is_file() {
+                swap_in_map(app, project_id, &first, &out).await;
+            }
+        }
+        (info, import_one(app, project_id, &out).await?, false)
+    } else if frames == 0 {
         let shots = dir.join(format!("map-{key}.frames"));
         std::fs::create_dir_all(&shots).map_err(|error| error.to_string())?;
-        let made = async {
-            let (picture, info) = render_map(&config, width, height, &shots).await?;
-            if frames > 0 {
-                let (shots, out) = (shots.clone(), out.clone());
-                tokio::task::spawn_blocking(move || frames_video(&shots, fps, &out))
-                    .await
-                    .map_err(|error| error.to_string())??;
-            } else {
-                std::fs::write(&out, picture).map_err(|error| error.to_string())?;
-            }
-            Ok::<_, String>(info)
-        }
-        .await;
+        let made = render_map(&config, width, height, &shots, None).await;
         let _ = std::fs::remove_dir_all(&shots);
-        let info = made?;
+        let (picture, info) = made?;
+        std::fs::write(&out, picture).map_err(|error| error.to_string())?;
         let _ = std::fs::write(&measured, info.to_string());
-        info
+        (info, import_one(app, project_id, &out).await?, false)
+    } else {
+        let render = MapShotJob {
+            key: key.clone(),
+            config,
+            width,
+            height,
+            fps,
+            frames: frames as usize,
+            dir: dir.clone(),
+        };
+        moving_map(app, project_id, render).await?
     };
     // The building's box in timeline coordinates (pixels from the frame's centre, y down).
     let place_box = |bounds: &Value| {
@@ -922,20 +1116,14 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
         .first()
         .cloned()
         .or_else(|| info.get("building").and_then(place_box));
-    let (_, added, errors) = crate::server::import_paths(
-        app,
-        project_id,
-        vec![out.to_string_lossy().into_owned()],
-        false,
-        "agent",
-    )
-    .await?;
-    let media = added.first().cloned().ok_or_else(|| errors.join("; "))?;
-    let note = if frames > 0 {
-        "A moving shot (frames/fps seconds): the camera circles the building and closes in at a constant speed by itself, so place it as a video clip at scale 1 from source_in 0 with no scale keyframes. `building` is where the marked building sits on the first frame and `building_track` where it is every half second (frame = frames into the footage), in timeline transform coordinates: keyframe a label's x and y at those frames (ease linear) to keep it pinned. The marker can reveal after a date title using `highlight_after` and `highlight_fade` in source seconds; tracking remains available throughout."
+    let mut note = if frames > 0 {
+        "A moving shot (frames/fps seconds): the camera circles the building and closes in at a constant speed by itself, so place it as a video clip at scale 1 from source_in 0 with no scale keyframes. `building` is where the marked building sits on the first frame and `building_track` where it is every half second (frame = frames into the footage), in timeline transform coordinates: keyframe a label's x and y at those frames (ease linear) to keep it pinned. The marker can reveal after a date title using `highlight_after` and `highlight_fade` in source seconds; tracking remains available throughout.".to_owned()
     } else {
-        "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. `building` is where the marked building sits in the frame (timeline transform coordinates at scale 1; a push-in to s moves a point p to p*s)."
+        "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. `building` is where the marked building sits in the frame (timeline transform coordinates at scale 1; a push-in to s moves a point p to p*s).".to_owned()
     };
+    if rendering {
+        note.push_str(" It's still rendering in the background: place it now (the media is its first frame until the footage is done, then the same media id is the moving shot by itself; get_edit_context lists it under smoothing until then, and exports wait for it).");
+    }
     Ok(json!({
         "media": media,
         "place": found,
@@ -946,8 +1134,293 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
         "building_outlined": ring.is_some(),
         "building": building,
         "building_track": track,
+        "rendering": rendering,
         "note": note,
     }))
+}
+
+/// Adds one file to the project's media (or finds it there).
+async fn import_one(app: &App, project_id: &str, path: &Path) -> Result<String, String> {
+    let (_, added, errors) = crate::server::import_paths(
+        app,
+        project_id,
+        vec![path.to_string_lossy().into_owned()],
+        false,
+        "agent",
+    )
+    .await?;
+    added.first().cloned().ok_or_else(|| errors.join("; "))
+}
+
+/// A moving map shot to make.
+#[derive(Clone)]
+struct MapShotJob {
+    key: String,
+    config: Value,
+    width: u32,
+    height: u32,
+    fps: u32,
+    frames: usize,
+    dir: PathBuf,
+}
+
+impl MapShotJob {
+    fn out(&self) -> PathBuf {
+        self.dir.join(format!("map-{}.mp4", self.key))
+    }
+
+    /// Its first frame, which stands in for it until it's done.
+    fn first(&self) -> PathBuf {
+        self.dir.join(format!("map-{}-first.jpg", self.key))
+    }
+
+    fn shots(&self) -> PathBuf {
+        self.dir.join(format!("map-{}.frames", self.key))
+    }
+}
+
+/// Starts (or joins) the moving shot's render and waits for its first frame
+/// and building track: the first frame goes in as the shot's media for now.
+/// Returns what the page measured, the media, and whether it's still rendering.
+async fn moving_map(
+    app: &App,
+    project_id: &str,
+    job: MapShotJob,
+) -> Result<(Value, String, bool), String> {
+    let render = {
+        let mut renders = map_renders().lock();
+        match renders.get(&job.key) {
+            Some(render) => std::sync::Arc::clone(render),
+            None => {
+                let render = std::sync::Arc::new(MapRender {
+                    ready: tokio::sync::watch::channel(None).0,
+                    projects: Mutex::new(HashSet::new()),
+                    failed: Mutex::new(None),
+                });
+                renders.insert(job.key.clone(), std::sync::Arc::clone(&render));
+                let (app, job, running) =
+                    (app.clone(), job.clone(), std::sync::Arc::clone(&render));
+                tokio::spawn(async move {
+                    let key = job.key.clone();
+                    let _ = crate::diag::time_async(
+                        "agent",
+                        "map_view render (background)",
+                        render_moving(&app, &job, &running),
+                    )
+                    .await;
+                    map_renders().lock().remove(&key);
+                });
+                render
+            }
+        }
+    };
+    render.projects.lock().insert(project_id.to_owned());
+    let mut ready = render.ready.subscribe();
+    let info = match tokio::time::timeout(MAP_READY_WAIT, ready.wait_for(Option::is_some)).await {
+        Ok(Ok(ready)) => ready.clone().unwrap_or_else(|| Err("the map render stopped".into()))?,
+        Ok(Err(_)) => return Err("the map render stopped".into()),
+        Err(_) => {
+            return Err("the map is still loading its first frame; call map_view again with the same arguments in a minute (the render carries on)".into())
+        }
+    };
+    let (out, first) = (job.out(), job.first());
+    let media = import_one(app, project_id, &first).await?;
+    {
+        // Under the same lock as the render's failure, so one that failed
+        // meanwhile is never left looking as if it were still rendering.
+        let mut pending = maps_pending().lock();
+        let error = render.failed.lock().clone();
+        pending.entry(project_id.to_owned()).or_default().insert(
+            first.to_string_lossy().into_owned(),
+            MapPending {
+                media: media.clone(),
+                error,
+            },
+        );
+    }
+    // It may have finished meanwhile (its own swap found no stand-in yet).
+    if out.is_file() {
+        swap_in_map(app, project_id, &first, &out).await;
+    }
+    Ok((info, media, !out.is_file()))
+}
+
+/// Makes a moving shot: the page's frames (resuming from those already
+/// there), then the footage; the projects waiting on it get it in place of
+/// its first frame. A failure keeps the frames for the next attempt.
+async fn render_moving(app: &App, job: &MapShotJob, render: &MapRender) -> Result<(), String> {
+    let result = async {
+        let _slot = map_slot()
+            .acquire()
+            .await
+            .map_err(|error| error.to_string())?;
+        let shots = job.shots();
+        std::fs::create_dir_all(&shots).map_err(|error| error.to_string())?;
+        let have = frames_had(&shots, job.frames);
+        let mut config = job.config.clone();
+        if let Some(fields) = config.as_object_mut() {
+            fields.insert("have".to_owned(), json!(have));
+        }
+        let (sender, ready) = oneshot::channel();
+        let page = render_map(&config, job.width, job.height, &shots, Some(sender));
+        tokio::pin!(page);
+        let (early, done) = tokio::select! {
+            measured = ready => match measured {
+                Ok(measured) => (Some(measured), None),
+                Err(_) => (None, None),
+            },
+            done = &mut page => (None, Some(done)),
+        };
+        let first = job.first();
+        let stand_in = |measured: &Value| -> Result<(), String> {
+            if !first.is_file() {
+                std::fs::copy(shots.join(frame_name(0)), &first)
+                    .map_err(|error| format!("the map's first frame: {error}"))?;
+            }
+            render.ready.send_replace(Some(Ok(measured.clone())));
+            Ok(())
+        };
+        if let Some(measured) = &early {
+            stand_in(measured)?;
+        }
+        let (_, mut info) = match done {
+            Some(done) => done?,
+            None => page.await?,
+        };
+        // The track was measured up front; the final answer may not repeat it.
+        if let (Some(early), Some(fields)) = (&early, info.as_object_mut()) {
+            if !fields.contains_key("track") {
+                if let Some(track) = early.get("track") {
+                    fields.insert("track".to_owned(), track.clone());
+                }
+            }
+        }
+        if early.is_none() {
+            stand_in(&info)?;
+        }
+        let (frames_dir, fps, out) = (shots.clone(), job.fps, job.out());
+        tokio::task::spawn_blocking(move || frames_video(&frames_dir, fps, &out))
+            .await
+            .map_err(|error| error.to_string())??;
+        let _ = std::fs::write(job.out().with_extension("json"), info.to_string());
+        let _ = std::fs::remove_dir_all(&shots);
+        Ok::<_, String>(())
+    }
+    .await;
+    let projects: Vec<String> = render.projects.lock().iter().cloned().collect();
+    let first = job.first();
+    match &result {
+        Ok(()) => {
+            for project in projects {
+                swap_in_map(app, &project, &first, &job.out()).await;
+            }
+        }
+        Err(error) => {
+            if render.ready.borrow().is_none() {
+                render.ready.send_replace(Some(Err(error.clone())));
+            }
+            let first = first.to_string_lossy().into_owned();
+            let mut pending = maps_pending().lock();
+            *render.failed.lock() = Some(error.clone());
+            for project in projects {
+                if let Some(map) = pending
+                    .get_mut(&project)
+                    .and_then(|maps| maps.get_mut(&first))
+                {
+                    map.error = Some(error.clone());
+                }
+            }
+        }
+    }
+    result
+}
+
+/// The finished footage in place of its first frame: the stand-in media
+/// becomes the moving shot (same id), so every clip using it plays it.
+async fn swap_in_map(app: &App, project_id: &str, first: &Path, out: &Path) {
+    let first_path = first.to_string_lossy().into_owned();
+    let swapped = swap_media(app, project_id, first, out).await;
+    let mut pending = maps_pending().lock();
+    match swapped {
+        Ok(()) => {
+            if let Some(maps) = pending.get_mut(project_id) {
+                maps.remove(&first_path);
+                if maps.is_empty() {
+                    pending.remove(project_id);
+                }
+            }
+        }
+        Err(error) => {
+            crate::diag::warn(
+                "agent",
+                format!("map footage {} into {project_id}: {error}", out.display()),
+            );
+            // Exports refuse the stand-in and say so, rather than wait on it.
+            if let Some(map) = pending
+                .get_mut(project_id)
+                .and_then(|maps| maps.get_mut(&first_path))
+            {
+                map.error = Some(error);
+            }
+        }
+    }
+}
+
+async fn swap_media(app: &App, project_id: &str, first: &Path, out: &Path) -> Result<(), String> {
+    let path = out.to_owned();
+    let probe = tokio::task::spawn_blocking(move || crate::media::probe(&path))
+        .await
+        .map_err(|error| error.to_string())??;
+    // As import_paths keeps them.
+    let canonical = |path: &Path| {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_owned())
+            .to_string_lossy()
+            .into_owned()
+    };
+    let (stand_in, out_path) = (canonical(first), canonical(out));
+    let has_stand_in = app.store.get(project_id).is_some_and(|live| {
+        live.project
+            .media
+            .iter()
+            .any(|media| media.path == stand_in)
+    });
+    if !has_stand_in {
+        return Ok(());
+    }
+    let (_, replaced) = app.store.update(project_id, "agent", |project| {
+        Ok(replace_media_path(project, &stand_in, &out_path, &probe))
+    })?;
+    if replaced {
+        app.media.ensure(PathBuf::from(&out_path), probe);
+    }
+    Ok(())
+}
+
+/// Points the media at `from` to the file at `to` instead (as `probe` read
+/// it). Returns whether there was any.
+fn replace_media_path(
+    project: &mut Project,
+    from: &str,
+    to: &str,
+    probe: &crate::media::Probe,
+) -> bool {
+    let name = Path::new(to)
+        .file_name()
+        .map_or_else(|| to.to_owned(), |name| name.to_string_lossy().into_owned());
+    let mut replaced = false;
+    for media in project.media.iter_mut().filter(|media| media.path == from) {
+        media.path = to.to_owned();
+        media.name = name.clone();
+        media.kind = probe.kind;
+        media.duration = probe.duration;
+        media.width = probe.width;
+        media.height = probe.height;
+        media.fps = probe.fps;
+        media.has_audio = probe.has_audio;
+        replaced = true;
+    }
+    replaced
 }
 
 /// A moving map shot's frames (`frame-00000.jpg`…) as footage at `fps`.
@@ -1014,5 +1487,164 @@ mod tests {
     fn images_are_recognised() {
         assert!(is_image_path(Path::new("/x/Still.PNG")));
         assert!(!is_image_path(Path::new("/x/clip.mp4")));
+    }
+
+    #[test]
+    fn whole_frames_are_resumed_from() {
+        let dir = std::env::temp_dir().join(format!("edit-map-frames-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(frame_name(0)), [0xFF, 0xD8, 1, 2, 0xFF, 0xD9]).unwrap();
+        // Cut off mid-write (no end marker), and a gap.
+        std::fs::write(dir.join(frame_name(1)), [0xFF, 0xD8, 1, 2]).unwrap();
+        std::fs::write(dir.join(frame_name(3)), [0xFF, 0xD8, 0xFF, 0xD9]).unwrap();
+        assert_eq!(frames_had(&dir, 5), vec![0, 3]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn make(args: &[&str], out: &Path) {
+        let made = Command::new(crate::tools::ffmpeg())
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(args)
+            .arg(out)
+            .status()
+            .unwrap();
+        assert!(made.success());
+    }
+
+    /// A moving map shot's stand-in (its first frame) becomes the footage
+    /// when the render is done: same media id, so clips placed on it play
+    /// the shot; until then it's listed as pending and exports wait.
+    #[tokio::test]
+    async fn map_footage_swaps_in_for_its_first_frame() {
+        let home = std::env::temp_dir().join(format!("edit-map-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let store = std::sync::Arc::new(crate::store::Store::open(home.clone()).unwrap());
+        let app = App {
+            updater: crate::update::Updater::new(home.clone()),
+            voices: std::sync::Arc::new(crate::voice::Voices::new(&home)),
+            agents: crate::agent::Agents::new(std::sync::Arc::clone(&store), home.clone(), 0),
+            scripts: std::sync::Arc::new(crate::script::Jobs::default()),
+            library: std::sync::Arc::new(crate::library::Library::default()),
+            media: crate::media::Processor::new(std::sync::Arc::clone(&store)),
+            frames: crate::render::FrameRenderer::start(store.cache_dir()),
+            exports: std::sync::Arc::new(crate::render::Exports::default()),
+            allowed_hosts: std::sync::Arc::new(Vec::new()),
+            machine: "test".into(),
+            store: std::sync::Arc::clone(&store),
+        };
+        let project = store
+            .create("map", edit_core::Settings::default())
+            .unwrap()
+            .project
+            .id;
+        let maps = home.join("maps");
+        std::fs::create_dir_all(&maps).unwrap();
+        let (first, out) = (maps.join("map-k-first.jpg"), maps.join("map-k.mp4"));
+        make(
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=320x180",
+                "-frames:v",
+                "1",
+            ],
+            &first,
+        );
+        make(
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=320x180:r=30:d=2",
+                "-pix_fmt",
+                "yuv420p",
+            ],
+            &out,
+        );
+        let media = import_one(&app, &project, &first).await.unwrap();
+        store
+            .update(&project, "test", |project| {
+                crate::server::place_at_end(project, &media);
+                Ok(())
+            })
+            .unwrap();
+        maps_pending()
+            .lock()
+            .entry(project.clone())
+            .or_default()
+            .insert(
+                first.to_string_lossy().into_owned(),
+                MapPending {
+                    media: media.clone(),
+                    error: None,
+                },
+            );
+        assert_eq!(
+            smoothing_pending(&project),
+            vec![format!("{media} (map view rendering)")]
+        );
+        assert!(wait_for_maps(&app, &project, Duration::from_millis(600))
+            .await
+            .unwrap_err()
+            .contains("still rendering"));
+        assert!(!wait_for_smoothing(&project, Duration::from_millis(600)).await);
+
+        // A render that failed: the export refuses the stand-in and says why.
+        if let Some(map) = maps_pending()
+            .lock()
+            .get_mut(&project)
+            .and_then(|maps| maps.get_mut(first.to_string_lossy().as_ref()))
+        {
+            map.error = Some("tiles refused".into());
+        }
+        let refused = wait_for_maps(&app, &project, Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(refused.contains("tiles refused"), "{refused}");
+        // Cut short (Edit closed mid-render: nothing pending any more).
+        let stand_in = maps_pending().lock().remove(&project);
+        let refused = wait_for_maps(&app, &project, Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(refused.contains("cut short"), "{refused}");
+        if let Some(mut maps) = stand_in {
+            for map in maps.values_mut() {
+                map.error = None;
+            }
+            maps_pending().lock().insert(project.clone(), maps);
+        }
+
+        swap_in_map(&app, &project, &first, &out).await;
+
+        let live = store.get(&project).unwrap().project;
+        let swapped = live.media(&media).unwrap();
+        assert_eq!(Path::new(&swapped.path), out.canonicalize().unwrap());
+        assert_eq!(swapped.kind, edit_core::MediaKind::Video);
+        assert!((swapped.duration - 2.0).abs() < 0.1, "{}", swapped.duration);
+        assert!(live
+            .clips
+            .iter()
+            .any(|clip| clip.media_id() == Some(media.as_str())));
+        assert!(smoothing_pending(&project).is_empty());
+        assert!(wait_for_maps(&app, &project, Duration::ZERO).await.is_ok());
+
+        // A render that failed is listed (with what to do) but holds nothing up.
+        maps_pending()
+            .lock()
+            .entry(project.clone())
+            .or_default()
+            .insert(
+                "elsewhere.jpg".into(),
+                MapPending {
+                    media: "m9".into(),
+                    error: Some("tiles refused".into()),
+                },
+            );
+        assert!(smoothing_pending(&project)[0].starts_with("m9 (map view failed: tiles refused"));
+        assert!(wait_for_maps(&app, &project, Duration::ZERO).await.is_ok());
+        assert!(wait_for_smoothing(&project, Duration::ZERO).await);
+        maps_pending().lock().remove(&project);
+        let _ = std::fs::remove_dir_all(home);
     }
 }

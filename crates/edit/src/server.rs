@@ -1567,6 +1567,11 @@ async fn start_export(
     {
         return Err(bad("optional optical flow is still running; export the current timeline with wait_for_smoothing false or wait for it to finish"));
     }
+    // A map shot still rendering would export as its first frame. The
+    // button answers soon (the agent's export waits longer).
+    crate::broll::wait_for_maps(&app, &id, std::time::Duration::from_secs(5))
+        .await
+        .map_err(bad)?;
     let live = app
         .store
         .get(&id)

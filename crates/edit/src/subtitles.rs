@@ -922,6 +922,80 @@ struct Voice {
     color: String,
 }
 
+/// A speaker's name as compared: its words (lower case) and the role in its
+/// brackets, "Romania Hunter (Mother)" → (["romania", "hunter"], "mother").
+fn person(name: &str) -> (Vec<String>, String) {
+    let (name, role) = match name.split_once('(') {
+        Some((name, role)) => (name, role.trim_end_matches(')').trim().to_lowercase()),
+        None => (name, String::new()),
+    };
+    (tokens(name), role)
+}
+
+/// Whether two speaker names are one person: the same name, or (with the
+/// same role in brackets) one name the start of the other ("Romania
+/// (Mother)" and "Romania Hunter (Mother)"). Bare labels ("Deputy 2",
+/// "Deputy 3") only match exactly.
+fn same_person(a: &str, b: &str) -> bool {
+    let ((a_words, a_role), (b_words, b_role)) = (person(a), person(b));
+    if a_words.is_empty() || b_words.is_empty() {
+        return false;
+    }
+    if a_words == b_words && a_role == b_role {
+        return true;
+    }
+    let shorter = a_words.len().min(b_words.len());
+    !a_role.is_empty() && a_role == b_role && a_words.get(..shorter) == b_words.get(..shorter)
+}
+
+/// One person, one colour: the watcher can name several of the
+/// transcript's voices as the same person, each with its own colour (a boy
+/// in three colours). Merges them into the voice with the most lines (its
+/// colour), under the fullest name.
+fn same_person_same_colour(voices: &mut BTreeMap<String, Voice>, lines: &mut [Line]) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in lines.iter() {
+        *counts.entry(line.speaker.clone()).or_default() += 1;
+    }
+    let mut keys: Vec<String> = voices.keys().cloned().collect();
+    keys.sort_by_key(|key| std::cmp::Reverse(counts.get(key).copied().unwrap_or(0)));
+    let mut into: HashMap<String, String> = HashMap::new();
+    for (index, key) in keys.iter().enumerate() {
+        if into.contains_key(key) {
+            continue;
+        }
+        let Some(name) = voices.get(key).map(|voice| voice.name.clone()) else {
+            continue;
+        };
+        for other in keys.iter().skip(index + 1) {
+            if into.contains_key(other) {
+                continue;
+            }
+            if voices
+                .get(other)
+                .is_some_and(|voice| same_person(&name, &voice.name))
+            {
+                into.insert(other.clone(), key.clone());
+            }
+        }
+    }
+    for (merged, kept) in &into {
+        let Some(gone) = voices.remove(merged) else {
+            continue;
+        };
+        if let Some(voice) = voices.get_mut(kept) {
+            if gone.name.len() > voice.name.len() {
+                voice.name = gone.name;
+            }
+        }
+    }
+    for line in lines.iter_mut() {
+        if let Some(kept) = into.get(&line.speaker) {
+            line.speaker = kept.clone();
+        }
+    }
+}
+
 /// Subtitles and mutes the Repack way for everything said in the footage
 /// between `from` and `to`: replaces subtitles made before in that span (by
 /// this or add_subtitles) and the mutes on the footage's sound there.
@@ -1022,6 +1096,7 @@ pub async fn repack_subtitles(
             }));
         }
     }
+    same_person_same_colour(&mut voices, &mut lines);
     uncram(&mut lines);
     let role = |key: &str| voices.get(key).map_or("other", |voice| voice.role.as_str());
     let shown = shown(
@@ -1447,6 +1522,53 @@ pub(crate) fn star_on_screen(project: &mut Project, from: i64, to: i64, neglect:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn one_person_gets_one_colour() {
+        use super::{same_person, same_person_same_colour, Line, Voice};
+        assert!(same_person("Haven (Boy)", "haven (boy)"));
+        assert!(same_person("Romania (Mother)", "Romania Hunter (Mother)"));
+        assert!(!same_person("Deputy 2", "Deputy 3"));
+        assert!(!same_person("Deputy", "Deputy 2"));
+        assert!(!same_person("Romania (Mother)", "Romania (Neighbor)"));
+        let voice = |name: &str, color: &str| Voice {
+            name: name.into(),
+            role: "other".into(),
+            color: color.into(),
+        };
+        let mut voices = std::collections::BTreeMap::from([
+            ("m/a".to_owned(), voice("Haven (Boy)", "#111111")),
+            ("m/b".to_owned(), voice("Haven (Boy)", "#222222")),
+            ("m/c".to_owned(), voice("Romania (Mother)", "#333333")),
+            (
+                "m/d".to_owned(),
+                voice("Romania Hunter (Mother)", "#444444"),
+            ),
+            ("m/e".to_owned(), voice("Deputy 2", "#555555")),
+        ]);
+        let line = |speaker: &str| Line {
+            start_ms: 0.0,
+            end_ms: 1.0,
+            text: String::new(),
+            speaker: speaker.into(),
+        };
+        let mut lines: Vec<Line> = ["m/a", "m/b", "m/b", "m/c", "m/c", "m/d", "m/e"]
+            .into_iter()
+            .map(line)
+            .collect();
+        same_person_same_colour(&mut voices, &mut lines);
+        assert_eq!(voices.len(), 3);
+        // Haven keeps the colour of the voice with more lines (b).
+        assert_eq!(
+            voices.get("m/b").map(|voice| voice.color.as_str()),
+            Some("#222222")
+        );
+        assert_eq!(
+            voices.get("m/c").map(|voice| voice.name.as_str()),
+            Some("Romania Hunter (Mother)")
+        );
+        assert!(lines.iter().all(|line| voices.contains_key(&line.speaker)));
+    }
+
     use super::*;
 
     fn word(text: &str, start_ms: f64, end_ms: f64, speaker: &str) -> TimedWord {

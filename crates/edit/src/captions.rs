@@ -162,11 +162,32 @@ struct Seen {
     face: Vec<f64>,
 }
 
+/// Whether the model's name for someone in a still is this line's speaker:
+/// the label as given ("Pearl (Pearl)", "speaker_2"), or either half of it,
+/// the name before its brackets or the role inside ("Pearl"; "Rodriguez" or
+/// "Officer Rodriguez" for "Rodriguez (Officer Rodriguez)"). The model
+/// often drops the brackets, and an exact match then found nobody, leaving
+/// every caption at the bottom.
+fn same_speaker(seen: &str, label: &str) -> bool {
+    let parts = |text: &str| -> Vec<String> {
+        let text = text.trim();
+        let mut parts = vec![text.to_lowercase()];
+        if let Some((name, role)) = text.split_once('(') {
+            parts.push(name.trim().to_lowercase());
+            parts.push(role.trim_end_matches(')').trim().to_lowercase());
+        }
+        parts.retain(|part| !part.is_empty());
+        parts
+    };
+    let (seen, label) = (parts(seen), parts(label));
+    seen.iter().any(|part| label.contains(part))
+}
+
 const INSTRUCTIONS: &str = "You look at police footage (bodycam, interviews, interrogations) to place captions: for each numbered line of the transcript you're told who says it, and you find that person in a still taken while it's said.
 
 Who's who comes from the transcript (each voice was identified from the conversation): trust it. Your job is only to find the named speaker in each line's still. Use what you see to pick them out: who matches their description (a mother, a teenage son, an officer), where others look (people look at whoever is talking), posture, and whose mouth or hands move. The officer wearing the camera, and anyone on a radio, is never in the picture.
 
-Faces may be hidden behind a black redaction box for privacy: that box is that person's face.
+Faces may be hidden for privacy, behind a black redaction box or a blur: that box or blurred patch is that person's face.
 
 For every line give: people, everyone whose face (or redaction box) is in that line's still, each with who they are (exactly one of the names in \"Who's who\", or \"other\" for anyone who doesn't speak) and their face box; above, true when there's clear space above the speaker's head for a short caption, false when their head (or box) is near the top of the frame or text there would sit on an overlay; and overlays, every burned-in overlay in the still (a bodycam timestamp or model line, a logo or watermark). Name people consistently from line to line. All boxes are [ymin, xmin, ymax, xmax] from 0 to 1000. Captions are kept off every face and overlay.
 
@@ -1054,11 +1075,7 @@ pub async fn caption_speakers(
         let face = said
             .people
             .iter()
-            .find(|seen| {
-                names
-                    .iter()
-                    .any(|name| !name.is_empty() && seen.who.trim().eq_ignore_ascii_case(name))
-            })
+            .find(|seen| names.iter().any(|name| same_speaker(&seen.who, name)))
             .and_then(|seen| box_pixels(&seen.face, media_size));
         if let Some(region) = face {
             tracks.push((
@@ -1608,6 +1625,21 @@ fn free_track(project: &mut Project, start: i64, end: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn speakers_match_without_their_brackets() {
+        use super::same_speaker;
+        assert!(same_speaker("Pearl", "Pearl (Pearl)"));
+        assert!(same_speaker(
+            "Officer Rodriguez",
+            "Rodriguez (Officer Rodriguez)"
+        ));
+        assert!(same_speaker("rodriguez", "Rodriguez (Officer Rodriguez)"));
+        assert!(same_speaker("speaker_2", "speaker_2"));
+        assert!(!same_speaker("Latricia", "Pearl (Pearl)"));
+        assert!(!same_speaker("other", "Pearl (Pearl)"));
+        assert!(!same_speaker("", "Pearl (Pearl)"));
+    }
+
     use super::*;
 
     fn word(text: &str, start: f64, end: f64, speaker: &str) -> Word {

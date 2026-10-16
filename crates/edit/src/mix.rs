@@ -23,8 +23,6 @@ use edit_core::{mute_gain, AudioSegment, Mute, MUTE_FADE_SECONDS};
 pub const RATE: usize = 48_000;
 /// Frames mixed at a time (4 s: 1.5 MB of stereo float).
 const WINDOW: usize = RATE * 4;
-/// Highest true peak a normalised mix may reach (dBTP).
-pub const TRUE_PEAK_CEILING: f64 = -1.0;
 
 /// One heard clip cut to the export's span.
 #[derive(Clone, Debug)]
@@ -454,16 +452,119 @@ fn mix_with(
 
 /// The gain (dB) bringing a mix measured at `integrated` LUFS with a true
 /// peak of `peak` (linear) to `target`, held so the peak stays under the ceiling.
-pub fn normalising_gain(integrated: f64, peak: f64, target: f64) -> f64 {
+pub fn normalising_gain(integrated: f64, target: f64) -> f64 {
     if !integrated.is_finite() {
         return 0.0;
     }
-    let gain = target - integrated;
-    if peak > 0.0 {
-        let peak_db = 20.0 * peak.log10();
-        gain.min(TRUE_PEAK_CEILING - peak_db)
-    } else {
-        gain
+    // Peaks are the limiter's job: capping the gain at the loudest one let a
+    // single hit hold a whole video several LU under the target.
+    (target - integrated).clamp(-30.0, 40.0)
+}
+
+/// Sample-peak ceiling the limiter holds (dBFS): under -1 dBTP with
+/// room for peaks between samples and for the encoder.
+const LIMIT_CEILING_DB: f32 = -2.0;
+/// The limiter's look-ahead (and its attack): 5 ms.
+const LIMIT_LOOK: usize = RATE / 200;
+/// How quickly it lets go after a peak (time constant, seconds).
+const LIMIT_RELEASE: f32 = 0.1;
+
+/// A look-ahead peak limiter, streaming (constant memory however long the
+/// mix): each frame's gain is the lowest any frame in the look-ahead needs,
+/// averaged over the look-ahead (so it ramps down before a peak and every
+/// peak still lands under the ceiling), recovering over ~100 ms. Delays the
+/// sound by `LIMIT_LOOK - 1` frames, which `finish` gives back.
+pub struct Limiter {
+    ceiling: f32,
+    release: f32,
+    /// Frames waiting for their gain.
+    delay: std::collections::VecDeque<[f32; 2]>,
+    /// (frame, gain it needs), increasing gains: the window's minimum first.
+    mins: std::collections::VecDeque<(usize, f32)>,
+    /// The last LIMIT_LOOK window minimums, and their sum.
+    boxed: std::collections::VecDeque<f32>,
+    sum: f64,
+    gain: f32,
+    frame: usize,
+    /// Frames turned down, and the deepest reduction (linear gain).
+    pub limited: usize,
+    pub deepest: f32,
+}
+
+impl Default for Limiter {
+    fn default() -> Self {
+        Self {
+            ceiling: 10_f32.powf(LIMIT_CEILING_DB / 20.0),
+            release: 1.0 - (-1.0 / (LIMIT_RELEASE * RATE as f32)).exp(),
+            delay: std::collections::VecDeque::with_capacity(LIMIT_LOOK + 1),
+            mins: std::collections::VecDeque::new(),
+            boxed: std::collections::VecDeque::with_capacity(LIMIT_LOOK + 1),
+            sum: 0.0,
+            gain: 1.0,
+            frame: 0,
+            limited: 0,
+            deepest: 1.0,
+        }
+    }
+}
+
+impl Limiter {
+    /// Takes interleaved stereo frames, appends the limited ones ready so far to `out`.
+    pub fn process(&mut self, samples: &[f32], out: &mut Vec<f32>) {
+        for frame in samples.as_chunks::<2>().0 {
+            self.push(*frame, out);
+        }
+    }
+
+    /// The frames still held back (the look-ahead's worth).
+    pub fn finish(&mut self, out: &mut Vec<f32>) {
+        for _ in 1..LIMIT_LOOK {
+            self.push([0.0, 0.0], out);
+        }
+    }
+
+    fn push(&mut self, frame: [f32; 2], out: &mut Vec<f32>) {
+        let [left, right] = frame;
+        let peak = left.abs().max(right.abs());
+        let needs = if peak > self.ceiling {
+            self.ceiling / peak
+        } else {
+            1.0
+        };
+        // The lowest gain any frame in the trailing look-ahead needs.
+        while self.mins.back().is_some_and(|(_, gain)| *gain >= needs) {
+            self.mins.pop_back();
+        }
+        self.mins.push_back((self.frame, needs));
+        while self
+            .mins
+            .front()
+            .is_some_and(|(at, _)| *at + LIMIT_LOOK <= self.frame)
+        {
+            self.mins.pop_front();
+        }
+        let lowest = self.mins.front().map_or(1.0, |(_, gain)| *gain);
+        // Averaged over the look-ahead: every average covering a peak's frame is at most its need.
+        self.boxed.push_back(lowest);
+        self.sum += f64::from(lowest);
+        if self.boxed.len() > LIMIT_LOOK {
+            self.sum -= f64::from(self.boxed.pop_front().unwrap_or(1.0));
+        }
+        self.delay.push_back(frame);
+        self.frame += 1;
+        if self.delay.len() < LIMIT_LOOK {
+            return;
+        }
+        let smooth = (self.sum / LIMIT_LOOK as f64) as f32;
+        // Down at once, back up gently.
+        self.gain = smooth.min(self.gain + (1.0 - self.gain) * self.release);
+        if self.gain < 0.999 {
+            self.limited += 1;
+            self.deepest = self.deepest.min(self.gain);
+        }
+        let [left, right] = self.delay.pop_front().unwrap_or([0.0, 0.0]);
+        out.push(left * self.gain);
+        out.push(right * self.gain);
     }
 }
 
@@ -646,22 +747,62 @@ pub fn render(
     let peak = (0..2)
         .filter_map(|channel| meter.true_peak(channel).ok())
         .fold(0.0_f64, f64::max);
-    let gain = normalising_gain(integrated, peak, target);
+    // The gain, limited: measured once more after the limiter (its cuts take
+    // a little loudness with them) and corrected, then written.
+    let mut gain = normalising_gain(integrated, target);
+    // Usually one look settles it; a mix whose peaks the limiter works hard
+    // gets a second.
+    for _ in 0..2 {
+        let mut meter = ebur128::EbuR128::new(2, RATE as u32, ebur128::Mode::I)
+            .map_err(|error| format!("loudness meter: {error}"))?;
+        limited_pass(scratch, gain, cancel, |window| {
+            meter
+                .add_frames_f32(window)
+                .map_err(|error| format!("loudness meter: {error}"))
+        })?;
+        let after = meter
+            .loudness_global()
+            .map_err(|error| format!("loudness: {error}"))?;
+        if !after.is_finite() || (target - after).abs() < 0.2 {
+            break;
+        }
+        gain = (gain + (target - after)).clamp(-30.0, 40.0);
+    }
+    let mut done = 0_usize;
+    let limiter = limited_pass(scratch, gain, cancel, |window| {
+        done += window.len() / 2;
+        progress(0.85 + 0.15 * done as f32 / total.max(1) as f32);
+        sink.write(window)
+    })?;
     crate::diag::info(
         "export",
         format!(
-            "loudness {integrated:.1} LUFS, true peak {:.1} dBTP: {gain:+.1} dB to {target:.1} LUFS",
-            20.0 * peak.max(1e-9).log10()
+            "loudness {integrated:.1} LUFS, true peak {:.1} dBTP: {gain:+.1} dB to {target:.1} LUFS, the limiter under {LIMIT_CEILING_DB} dBFS on {:.1} s (at most {:.1} dB)",
+            20.0 * peak.max(1e-9).log10(),
+            limiter.limited as f64 / RATE as f64,
+            20.0 * limiter.deepest.max(1e-6).log10(),
         ),
     );
+    sink.finish()
+}
+
+/// The mix in `scratch` at `gain` dB through a fresh limiter, a window at a
+/// time to `each`; returns the limiter (what it did).
+fn limited_pass(
+    scratch: &Path,
+    gain: f64,
+    cancel: &AtomicBool,
+    mut each: impl FnMut(&[f32]) -> Result<(), String>,
+) -> Result<Limiter, String> {
     let factor = 10_f64.powf(gain / 20.0) as f32;
+    let mut limiter = Limiter::default();
+    let mut limited = Vec::with_capacity(WINDOW * 2 + LIMIT_LOOK * 2);
     let mut file = BufReader::with_capacity(
         1 << 20,
         std::fs::File::open(scratch).map_err(|error| error.to_string())?,
     );
     let mut raw = vec![0_u8; WINDOW * 8];
     let mut samples = vec![0.0_f32; WINDOW * 2];
-    let mut done = 0_usize;
     loop {
         if cancel.load(Ordering::Acquire) {
             return Err("cancelled".to_owned());
@@ -677,15 +818,18 @@ pub fn render(
         if filled == 0 {
             break;
         }
-        let count = filled / 4;
+        let count = filled / 8 * 2;
         for (sample, bytes) in samples.iter_mut().zip(raw.as_chunks::<4>().0).take(count) {
             *sample = f32::from_le_bytes(*bytes) * factor;
         }
-        sink.write(samples.get(..count).unwrap_or_default())?;
-        done += count / 2;
-        progress(0.85 + 0.15 * done as f32 / total.max(1) as f32);
+        limited.clear();
+        limiter.process(samples.get(..count).unwrap_or_default(), &mut limited);
+        each(&limited)?;
     }
-    sink.finish()
+    limited.clear();
+    limiter.finish(&mut limited);
+    each(&limited)?;
+    Ok(limiter)
 }
 
 #[cfg(test)]
@@ -937,15 +1081,25 @@ mod tests {
     }
 
     #[test]
-    fn normalising_stops_at_the_true_peak_ceiling() {
-        // Quiet speech with low peaks: the whole way to the target.
-        assert!((normalising_gain(-24.0, 0.1, -14.0) - 10.0).abs() < 1e-9);
-        // A loud peak (-3 dBTP): only up to -1 dBTP.
-        let peak = 10_f64.powf(-3.0 / 20.0);
-        assert!((normalising_gain(-20.0, peak, -14.0) - 2.0).abs() < 1e-9);
-        // Too loud: brought down to the target, below the ceiling anyway.
-        assert!((normalising_gain(-8.0, 1.5, -14.0) - -6.0).abs() < 1e-9);
-        assert_eq!(normalising_gain(f64::NEG_INFINITY, 0.0, -14.0), 0.0);
+    fn normalising_reaches_the_target_and_the_limiter_holds_peaks() {
+        assert!((normalising_gain(-24.0, -14.0) - 10.0).abs() < 1e-9);
+        assert!((normalising_gain(-8.0, -14.0) - -6.0).abs() < 1e-9);
+        assert_eq!(normalising_gain(f64::NEG_INFINITY, -14.0), 0.0);
+        // Quiet sound with one full-scale spike: the spike comes down under
+        // the ceiling, the rest passes untouched, nothing is lost or added.
+        let mut input = vec![0.1_f32; RATE];
+        for sample in input.iter_mut().skip(20_000).take(200) {
+            *sample = 1.4;
+        }
+        let mut out = Vec::new();
+        let mut limiter = Limiter::default();
+        limiter.process(&input, &mut out);
+        limiter.finish(&mut out);
+        assert_eq!(out.len(), input.len());
+        let ceiling = 10_f32.powf(LIMIT_CEILING_DB / 20.0);
+        assert!(out.iter().all(|sample| sample.abs() <= ceiling + 1e-6));
+        assert!((out[2_000] - 0.1).abs() < 1e-6);
+        assert!((out[RATE - 2] - 0.1).abs() < 0.01);
     }
 
     #[test]
@@ -957,6 +1111,18 @@ mod tests {
             .arg("sine=frequency=1000:sample_rate=48000:duration=6")
             .args(["-af", "volume=-20dB", "-ac", "2"])
             .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // One full-scale hit in it, as a boom on a transition: it must not
+        // hold the rest under the target (the limiter takes it).
+        let hit = dir.join("hit.wav");
+        let made = Command::new(crate::tools::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("sine=frequency=200:sample_rate=48000:duration=0.08")
+            // lavfi's sine is 1/8 of full scale: this is 20 dB over the tone.
+            .args(["-af", "volume=0dB", "-ac", "2"])
+            .arg(&hit)
             .status()
             .unwrap();
         assert!(made.success());
@@ -981,7 +1147,10 @@ mod tests {
         ] {
             let output = dir.join(name);
             render(
-                &[part(&path, segment(0.0, 6.0, 0.0))],
+                &[
+                    part(&path, segment(0.0, 6.0, 0.0)),
+                    part(&hit, segment(3.0, 0.08, 0.0)),
+                ],
                 RATE * 6,
                 Some(-14.0),
                 &encoding,
@@ -1012,7 +1181,8 @@ mod tests {
                 (integrated - -14.0).abs() < 0.3,
                 "{name}: {integrated} LUFS\n{summary}"
             );
-            assert!(peak <= TRUE_PEAK_CEILING + 0.2, "{name}: {peak} dBTP");
+            // Under -1 dBTP, with a little room for the encoder.
+            assert!(peak <= -0.8, "{name}: {peak} dBTP");
             // As decoded (the encoder's priming trimmed by the file's edit list).
             let decoded = Command::new(crate::tools::ffmpeg())
                 .args(["-v", "error", "-i"])

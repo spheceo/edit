@@ -328,35 +328,215 @@ fn transition(project: &mut Project, args: &Value) -> Result<Value, String> {
     Ok(json!(id))
 }
 
-/// The evidence board's glide between photos (frames) unless told otherwise.
+/// The evidence board's glide between photos (frames) in the old
+/// `frames`/`pan` timing, unless told otherwise.
 const BOARD_PAN: i64 = 30;
-/// How far along a glide each end's Bezier handle reaches: 0.42 is CSS
-/// ease-in-out, a soft start and landing (peak speed ~1.7x the average,
-/// where the old in_out preset's was ~2.9x).
-const GLIDE_INFLUENCE: f64 = 0.42;
+/// How fast the camera passes each photo: this share of its average speed on
+/// the way in and out. It eases a little to show each photo and picks up
+/// between them (peaking ~1.25x the average); it never stops.
+const BOARD_PASS: f64 = 0.7;
+/// The camera picks up speed into the first photo over the whole way in (at
+/// most this many frames, a slow drift before that)...
+const BOARD_LEAD: f64 = 45.0;
+/// ...from at most this share of the frame's height before it, so the photo
+/// is rising into the picture from the board's first frame (on a short way
+/// in it arrives a little slower than BOARD_PASS would have it).
+const BOARD_LEAD_REACH: f64 = 0.4;
+/// After the last photo it settles into the slow drift within this many
+/// frames...
+const BOARD_SETTLE: f64 = 36.0;
+/// ...and this share of the frame's height, so the last photo stays in the
+/// picture to the board's end.
+const BOARD_SETTLE_REACH: f64 = 0.17;
+/// That slow drift (px a frame at 1080p): slow, but still visibly moving.
+const BOARD_DRIFT: f64 = 1.0;
+/// The camera path is written as keyframes this many frames apart where it
+/// curves past the photos (close enough that each key-to-key cubic follows
+/// it to a fraction of a pixel), and this far apart on the straight ramps.
+const BOARD_KEY_SPACING: (f64, f64) = (2.0, 6.0);
+/// A Bezier handle reaching a third of its segment: with every key's speed
+/// set, each segment is the cubic Hermite through its ends.
+const HERMITE_INFLUENCE: f64 = 1.0 / 3.0;
 
-/// A camera keyframe on an evidence board (board pixels): `glide` when the
-/// camera leaves for the next photo here; `speed` the drift's (px a frame).
+/// A camera keyframe on an evidence board (board pixels; velocity in px a frame).
+#[derive(Clone, Copy)]
 struct CameraKey {
-    frame: i64,
+    frame: f64,
     x: f64,
     y: f64,
-    glide: bool,
-    speed: (f64, f64),
+    vx: f64,
+    vy: f64,
+}
+
+/// One stretch of an evidence board's camera path (board pixels and frames):
+/// the cubic curve from `p0` to `p1` leaving along `t0` and arriving along
+/// `t1`, travelled from `from` to `to` with the speed easing from `enter` to
+/// `leave` (flat at both ends, so the speed is smooth where stretches meet)
+/// and rising in the middle by just enough to cover the curve's length.
+struct Stretch {
+    from: f64,
+    to: f64,
+    p0: (f64, f64),
+    t0: (f64, f64),
+    p1: (f64, f64),
+    t1: (f64, f64),
+    enter: f64,
+    leave: f64,
+    /// Frames between its keyframes (a steady drift in a straight line needs
+    /// only its two ends).
+    spacing: f64,
+    /// Length along the curve at u = i / (len - 1).
+    lengths: Vec<f64>,
+}
+
+impl Stretch {
+    fn new(
+        span: (f64, f64),
+        p0: (f64, f64),
+        t0: (f64, f64),
+        p1: (f64, f64),
+        t1: (f64, f64),
+    ) -> Self {
+        let mut stretch = Stretch {
+            from: span.0,
+            to: span.1,
+            p0,
+            t0,
+            p1,
+            t1,
+            enter: 0.0,
+            leave: 0.0,
+            spacing: BOARD_KEY_SPACING.0,
+            lengths: Vec::new(),
+        };
+        let steps = 256;
+        let mut total = 0.0;
+        let mut last = p0;
+        stretch.lengths.push(0.0);
+        for step in 1..=steps {
+            let here = stretch.point(f64::from(step) / f64::from(steps));
+            total += (here.0 - last.0).hypot(here.1 - last.1);
+            stretch.lengths.push(total);
+            last = here;
+        }
+        stretch
+    }
+
+    /// Straight from `p0` to `p1`, the speed easing from `enter` to `leave`.
+    fn straight(span: (f64, f64), p0: (f64, f64), p1: (f64, f64), enter: f64, leave: f64) -> Self {
+        let chord = (p1.0 - p0.0, p1.1 - p0.1);
+        let mut stretch = Stretch::new(span, p0, chord, p1, chord);
+        stretch.enter = enter;
+        stretch.leave = leave;
+        stretch.spacing = if (enter - leave).abs() < 1e-9 {
+            f64::INFINITY
+        } else {
+            BOARD_KEY_SPACING.1
+        };
+        stretch
+    }
+
+    fn point(&self, u: f64) -> (f64, f64) {
+        let (u2, u3) = (u * u, u * u * u);
+        let (a, b, c, d) = (
+            2.0 * u3 - 3.0 * u2 + 1.0,
+            u3 - 2.0 * u2 + u,
+            3.0 * u2 - 2.0 * u3,
+            u3 - u2,
+        );
+        (
+            a * self.p0.0 + b * self.t0.0 + c * self.p1.0 + d * self.t1.0,
+            a * self.p0.1 + b * self.t0.1 + c * self.p1.1 + d * self.t1.1,
+        )
+    }
+
+    fn tangent(&self, u: f64) -> (f64, f64) {
+        let u2 = u * u;
+        let (a, b, c, d) = (
+            6.0 * u2 - 6.0 * u,
+            3.0 * u2 - 4.0 * u + 1.0,
+            6.0 * u - 6.0 * u2,
+            3.0 * u2 - 2.0 * u,
+        );
+        (
+            a * self.p0.0 + b * self.t0.0 + c * self.p1.0 + d * self.t1.0,
+            a * self.p0.1 + b * self.t0.1 + c * self.p1.1 + d * self.t1.1,
+        )
+    }
+
+    fn length(&self) -> f64 {
+        self.lengths.last().copied().unwrap_or(0.0)
+    }
+
+    /// Where on the curve (u) the camera is once it has come `distance` along.
+    fn u_at(&self, distance: f64) -> f64 {
+        let last = self.lengths.len().saturating_sub(1).max(1);
+        let index = self.lengths.partition_point(|length| *length < distance);
+        if index == 0 {
+            return 0.0;
+        }
+        match (self.lengths.get(index - 1), self.lengths.get(index)) {
+            (Some(&below), Some(&above)) => {
+                let share = if above > below {
+                    (distance - below) / (above - below)
+                } else {
+                    0.0
+                };
+                (index as f64 - 1.0 + share) / last as f64
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// The camera at `frame`: speed `enter` + (`leave` - `enter`) smoothstep +
+    /// a bump 16 t^2 (1 - t)^2 (flat at both ends) sized so the stretch ends
+    /// exactly at `p1`; position from the distance that speed covers.
+    fn at(&self, frame: f64) -> CameraKey {
+        let span = (self.to - self.from).max(f64::EPSILON);
+        let t = ((frame - self.from) / span).clamp(0.0, 1.0);
+        let (t2, t3) = (t * t, t * t * t);
+        let (t4, t5) = (t3 * t, t3 * t2);
+        let bump = ((self.length() / span - (self.enter + self.leave) / 2.0) * 15.0 / 8.0).max(0.0);
+        let change = self.leave - self.enter;
+        let speed =
+            self.enter + change * (3.0 * t2 - 2.0 * t3) + bump * 16.0 * t2 * (1.0 - t) * (1.0 - t);
+        let distance = span
+            * (self.enter * t
+                + change * (t3 - t4 / 2.0)
+                + bump * 16.0 * (t3 / 3.0 - t4 / 2.0 + t5 / 5.0));
+        let u = self.u_at(distance);
+        let (x, y) = self.point(u);
+        let (dx, dy) = self.tangent(u);
+        let norm = dx.hypot(dy).max(f64::EPSILON);
+        CameraKey {
+            frame,
+            x,
+            y,
+            vx: speed * dx / norm,
+            vy: speed * dy / norm,
+        }
+    }
 }
 
 /// An evidence board: photos laid out on paper like prints on a desk, each in
-/// a dark frame with a soft shadow and a red handwritten note under it, the
-/// camera holding on one (drifting slowly), then gliding to the next (~1 s),
-/// zig-zagging down the board; each note writes itself on, a letter every 2
-/// frames, just after its photo arrives. The camera never stops dead or
-/// jerks: each glide leaves and lands at the drift's own speed and eases in
-/// and out softly (CSS ease-in-out, Bezier handles), so the move is one
-/// continuous motion. Built in one go from
-/// `{"op":"evidence_board","start":F,"items":[{"media":"m1","label":"arson?","frames":75}]}`
-/// (frames = how long the camera stays on that photo; `pan` the glide's frames,
-/// for the board or per photo: a quick run through things named in a breath;
-/// `illustrative: true` adds a small "Illustrative images" in the corner).
+/// a dark frame with a soft shadow and a red handwritten note under it,
+/// zig-zagging down the board. The camera glides down it in ONE continuous
+/// movement: each photo is centred at its moment (`at`, the frame of the word
+/// that names it), the camera easing a little as it passes a photo (to ~70%
+/// of its average speed) and picking up between them, smooth in position and
+/// speed everywhere (never a hold, a stop or a jolt): the path is one S curve
+/// through the photos, travelled at a speed set apart from its shape, and
+/// written as keyframes close enough together to follow it. Before the first
+/// photo it picks up from a slow drift; after the last it settles back into
+/// one until the board ends.
+/// Each note writes itself on, a letter every 2 frames, as its photo arrives.
+/// Built in one go from
+/// `{"op":"evidence_board","start":F,"end":F,"items":[{"media":"m1","label":"arson?","at":F}]}`
+/// (all frames on the timeline; `end` defaults to 45 frames after the last
+/// photo). The older timing still works: without `at`, `frames` is the time
+/// around each photo (default 75), centred in its middle, and `pan` the
+/// frames between (for the board or per photo, default 30).
+/// `illustrative: true` adds a small "Illustrative images" in the corner.
 fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> {
     let start = args["start"]
         .as_i64()
@@ -365,109 +545,257 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
     let items = args["items"]
         .as_array()
         .filter(|items| !items.is_empty() && items.len() <= 8)
-        .ok_or("evidence_board needs items: 1 to 8 photos [{media, label, frames}]")?;
-    let pan = args["pan"].as_i64().unwrap_or(BOARD_PAN).clamp(8, 60);
+        .ok_or("evidence_board needs items: 1 to 8 photos [{media, label, at}]")?;
     let (width, height) = (
         f64::from(project.settings.width),
         f64::from(project.settings.height),
     );
     let k = height / 1080.0;
+    // When each photo is centred (board frames) and how long the board lasts.
+    let (centred, total): (Vec<i64>, i64) = if items.iter().any(|item| !item["at"].is_null()) {
+        let centred = items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                item["at"].as_i64().map(|at| at - start).ok_or_else(|| {
+                    format!(
+                        "item {}: at (frames) is required when any item has at",
+                        index + 1
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if centred.first().is_some_and(|first| *first < 0) {
+            return Err("evidence_board: the first photo's at is before start".to_owned());
+        }
+        if centred
+            .windows(2)
+            .any(|pair| matches!(pair, [a, b] if b - a < 4))
+        {
+            return Err(
+                "evidence_board: items' at must increase, at least 4 frames apart".to_owned(),
+            );
+        }
+        let last = centred.last().copied().unwrap_or(0);
+        let total = match (args["end"].as_i64(), args["duration"].as_i64()) {
+            (Some(end), _) => end - start,
+            (None, Some(duration)) => duration,
+            (None, None) => last + 45,
+        };
+        if total <= last {
+            return Err("evidence_board: end must come after the last photo's at".to_owned());
+        }
+        (centred, total)
+    } else {
+        let pan = args["pan"].as_i64().unwrap_or(BOARD_PAN).clamp(8, 60);
+        let mut centred = Vec::new();
+        let mut at = 0;
+        let mut last_pan = pan;
+        for item in items {
+            let hold = item["frames"].as_i64().unwrap_or(75).clamp(4, 600);
+            last_pan = item["pan"].as_i64().map_or(pan, |own| own.clamp(6, 60));
+            centred.push(at + hold / 2);
+            at += hold + last_pan;
+        }
+        (centred, at - last_pan)
+    };
     // Where each photo sits on the board (its centre, project pixels): down
     // the board, alternately straight under and off to the right.
-    let spots: Vec<(f64, f64)> = (0..items.len())
+    let spot = |index: i64| -> (f64, f64) {
+        let x = if index.rem_euclid(2) == 0 {
+            0.0
+        } else {
+            0.42 * width
+        };
+        (x, index as f64 * 0.5 * height)
+    };
+    let spots: Vec<(f64, f64)> = (0..items.len() as i64).map(spot).collect();
+    let drift = BOARD_DRIFT * k;
+    // The camera's path: through every photo heading down the board's way
+    // (from the photo before to the one after, as if the zig-zag carried on
+    // past the ends), so it turns as it passes each photo and swings across
+    // between them, one smooth S down the board.
+    let headings: Vec<(f64, f64)> = (0..spots.len() as i64)
         .map(|index| {
-            let x = if index % 2 == 0 { 0.0 } else { 0.42 * width };
-            (x, index as f64 * 0.5 * height)
+            let ((ax, ay), (bx, by)) = (spot(index - 1), spot(index + 1));
+            let length = (bx - ax).hypot(by - ay).max(1.0);
+            ((bx - ax) / length, (by - ay) / length)
         })
         .collect();
-    let holds: Vec<i64> = items
+    // How hard the curve leaves each photo: how far the neighbours are along
+    // the heading (straight down the board, the curve's y moves evenly).
+    let pulls: Vec<f64> = headings
         .iter()
-        .map(|item| item["frames"].as_i64().unwrap_or(75).clamp(4, 600))
+        .enumerate()
+        .map(|(index, &(hx, hy))| {
+            let around: Vec<f64> = [index.checked_sub(1), Some(index)]
+                .into_iter()
+                .flatten()
+                .filter_map(|from| Some((spots.get(from)?, spots.get(from + 1)?)))
+                .map(|(a, b)| ((b.0 - a.0) * hx + (b.1 - a.1) * hy).abs())
+                .collect();
+            (around.iter().sum::<f64>() / around.len().max(1) as f64).max(1.0)
+        })
         .collect();
-    // Each photo's glide on to the next: its own `pan`, else the board's.
-    let pans: Vec<i64> = items
-        .iter()
-        .map(|item| item["pan"].as_i64().map_or(pan, |own| own.clamp(6, 60)))
-        .collect();
-    // The camera: a slow drift along the way it's going while it holds, then
-    // a glide to the next photo that leaves and lands at the drift's speed.
-    let drift = 0.35 * k;
-    let mut camera: Vec<CameraKey> = Vec::new();
-    let mut at = 0;
-    let mut arrivals = Vec::new();
-    for (index, (&(x, y), &hold)) in spots.iter().zip(&holds).enumerate() {
-        let toward = spots
-            .get(index + 1)
-            .or_else(|| index.checked_sub(1).and_then(|before| spots.get(before)))
-            .map_or((0.6, 0.8), |&(nx, ny)| {
-                let (dx, dy) = if index + 1 < spots.len() {
-                    (nx - x, ny - y)
-                } else {
-                    (x - nx, y - ny)
-                };
-                let length = dx.hypot(dy).max(1.0);
-                (dx / length, dy / length)
-            });
-        let reach = drift * hold as f64 / 2.0;
-        let speed = (toward.0 * drift, toward.1 * drift);
-        arrivals.push(at);
-        camera.push(CameraKey {
-            frame: at,
-            x: x - toward.0 * reach,
-            y: y - toward.1 * reach,
-            glide: false,
-            speed,
-        });
-        camera.push(CameraKey {
-            frame: at + hold,
-            x: x + toward.0 * reach,
-            y: y + toward.1 * reach,
-            glide: true,
-            speed,
-        });
-        at += hold + pans.get(index).copied().unwrap_or(pan);
-    }
-    let total = at - pans.last().copied().unwrap_or(pan);
-    // Where the camera is at `frame` (only asked inside a hold, which is linear).
-    let camera_at = |frame: i64| -> (f64, f64) {
-        camera
-            .windows(2)
-            .find_map(|pair| match pair {
-                [from, to] if from.frame <= frame && frame <= to.frame => {
-                    let share = (frame - from.frame) as f64 / (to.frame - from.frame).max(1) as f64;
-                    Some((
-                        from.x + (to.x - from.x) * share,
-                        from.y + (to.y - from.y) * share,
-                    ))
-                }
-                _ => None,
-            })
-            .unwrap_or((0.0, 0.0))
+    let scaled = |index: usize| -> (f64, f64) {
+        let (hx, hy) = headings.get(index).copied().unwrap_or((0.0, 1.0));
+        let pull = pulls.get(index).copied().unwrap_or(1.0);
+        (hx * pull, hy * pull)
     };
+    let mut glides: Vec<Stretch> = (0..spots.len().saturating_sub(1))
+        .filter_map(|index| {
+            let (from, to) = (centred.get(index)?, centred.get(index + 1)?);
+            Some(Stretch::new(
+                (*from as f64, *to as f64),
+                *spots.get(index)?,
+                scaled(index),
+                *spots.get(index + 1)?,
+                scaled(index + 1),
+            ))
+        })
+        .collect();
+    // Passing each photo at BOARD_PASS of the average speed either side (no
+    // faster than the slower side's average, so each stretch's speed rises
+    // in its middle and never dips below its ends).
+    let averages: Vec<f64> = glides
+        .iter()
+        .map(|glide| glide.length() / (glide.to - glide.from).max(1.0))
+        .collect();
+    let mut passes: Vec<f64> = (0..spots.len())
+        .map(|index| {
+            let around: Vec<f64> = [
+                index.checked_sub(1).and_then(|before| averages.get(before)),
+                averages.get(index),
+            ]
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+            if around.is_empty() {
+                return drift;
+            }
+            let mean = around.iter().sum::<f64>() / around.len() as f64;
+            let slowest = around.iter().copied().fold(f64::INFINITY, f64::min);
+            (BOARD_PASS * mean).max(drift).min(slowest)
+        })
+        .collect();
+    // The way in: picking up speed evenly over the last BOARD_LEAD frames
+    // before the first photo, from no further than BOARD_LEAD_REACH.
+    let first_at = centred.first().copied().unwrap_or(0) as f64;
+    let lead = first_at.min(BOARD_LEAD);
+    if let Some(pass) = passes.first_mut().filter(|_| lead > 0.0) {
+        *pass = pass
+            .min(2.0 * BOARD_LEAD_REACH * height / lead - drift)
+            .max(drift);
+    }
+    for (index, glide) in glides.iter_mut().enumerate() {
+        glide.enter = passes.get(index).copied().unwrap_or(drift);
+        glide.leave = passes.get(index + 1).copied().unwrap_or(drift);
+    }
+    let along = |(x, y): (f64, f64), (hx, hy): (f64, f64), distance: f64| {
+        (x + hx * distance, y + hy * distance)
+    };
+    let mut path: Vec<Stretch> = Vec::new();
+    if let (Some(&spot0), Some(&heading), Some(&pass)) =
+        (spots.first(), headings.first(), passes.first())
+    {
+        if lead > 0.0 {
+            let begins = along(spot0, heading, -lead * (pass + drift) / 2.0);
+            if first_at > lead {
+                let drifts = along(begins, heading, -drift * (first_at - lead));
+                path.push(Stretch::straight(
+                    (0.0, first_at - lead),
+                    drifts,
+                    begins,
+                    drift,
+                    drift,
+                ));
+            }
+            path.push(Stretch::straight(
+                (first_at - lead, first_at),
+                begins,
+                spot0,
+                drift,
+                pass,
+            ));
+        }
+    }
+    path.extend(glides);
+    // The way out: easing from the last photo into the drift within
+    // BOARD_SETTLE frames and BOARD_SETTLE_REACH, then drifting to the end.
+    if let (Some(&last), Some(&spot_n), Some(&heading), Some(&pass)) =
+        (centred.last(), spots.last(), headings.last(), passes.last())
+    {
+        let (last, end) = (last as f64, total as f64);
+        let frames = (end - last)
+            .min(BOARD_SETTLE)
+            .min(2.0 * BOARD_SETTLE_REACH * height / (pass + drift));
+        let settles = along(spot_n, heading, frames * (pass + drift) / 2.0);
+        path.push(Stretch::straight(
+            (last, last + frames),
+            spot_n,
+            settles,
+            pass,
+            drift,
+        ));
+        if end > last + frames {
+            let ends = along(settles, heading, drift * (end - last - frames));
+            path.push(Stretch::straight(
+                (last + frames, end),
+                settles,
+                ends,
+                drift,
+                drift,
+            ));
+        }
+    }
+    // Where the camera is at `frame` (and how fast it's going).
+    let camera_at = |frame: f64| -> CameraKey {
+        path.iter()
+            .find(|stretch| frame <= stretch.to)
+            .or_else(|| path.last())
+            .map_or(
+                CameraKey {
+                    frame,
+                    x: 0.0,
+                    y: 0.0,
+                    vx: 0.0,
+                    vy: 0.0,
+                },
+                |stretch| stretch.at(frame),
+            )
+    };
+    // Its keyframes: every stretch's ends and, on a moving one, every few frames.
+    let mut camera: Vec<CameraKey> = Vec::new();
+    for stretch in &path {
+        let span = stretch.to - stretch.from;
+        let steps = (span / stretch.spacing).ceil().max(1.0);
+        for step in 0..steps as usize {
+            camera.push(stretch.at(stretch.from + span * step as f64 / steps));
+        }
+    }
+    if let Some(stretch) = path.last() {
+        camera.push(stretch.at(stretch.to));
+    }
     // An element at board position (bx, by), on screen from `from` (board
-    // frames): it moves against the camera, so its handles' speeds are the
-    // camera's turned round. A glide's ends get handles (leaving at the
-    // drift's speed, landing at the next drift's), the holds stay linear.
+    // frames): it moves against the camera, so its keys are the camera's
+    // turned round, each with the camera's speed on both sides.
     let keys = |bx: f64, by: f64, from: i64| -> Value {
         let mut xs = Vec::new();
         let mut ys = Vec::new();
-        let (cx, cy) = camera_at(from);
-        xs.push(json!({"frame": 0, "value": bx - cx, "ease": "linear"}));
-        ys.push(json!({"frame": 0, "value": by - cy, "ease": "linear"}));
-        let mut landing = false;
-        for key in camera.iter().filter(|key| key.frame > from) {
+        let here = camera_at(from as f64);
+        let later = camera.iter().filter(|key| key.frame > from as f64 + 0.01);
+        for key in std::iter::once(&here).chain(later) {
             for (keys, value, speed) in [
-                (&mut xs, bx - key.x, -key.speed.0),
-                (&mut ys, by - key.y, -key.speed.1),
+                (&mut xs, bx - key.x, -key.vx),
+                (&mut ys, by - key.y, -key.vy),
             ] {
-                let handle = json!({"speed": speed, "influence": GLIDE_INFLUENCE});
+                let handle = json!({"speed": speed, "influence": HERMITE_INFLUENCE});
                 keys.push(
-                    json!({"frame": key.frame - from, "value": value, "ease": "linear",
-                    "handle_out": key.glide.then(|| handle.clone()),
-                    "handle_in": landing.then_some(handle)}),
+                    json!({"frame": key.frame - from as f64, "value": value, "ease": "linear",
+                    "handle_in": handle.clone(), "handle_out": handle}),
                 );
             }
-            landing = key.glide;
         }
         json!({"x": xs, "y": ys})
     };
@@ -489,7 +817,8 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
         json!({"type": "solid", "name": "Evidence board · paper", "track": paper,
         "start": start, "duration": total, "fill": [0.93, 0.93, 0.915, 1.0]}),
     )?;
-    for (index, ((&(x, y), item), &arrival)) in spots.iter().zip(items).zip(&arrivals).enumerate() {
+    let opening = camera_at(0.0);
+    for (index, ((&(x, y), item), &at)) in spots.iter().zip(items).zip(&centred).enumerate() {
         let media_id = item["media"].as_str().ok_or_else(|| {
             format!(
                 "item {}: media (an image's media id) is required",
@@ -516,7 +845,7 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
             project,
             json!({"type": "video", "name": format!("Evidence board · photo {}", index + 1),
             "track": photo, "media": media_id, "source_in": 0.0, "start": start, "duration": total,
-            "transform": {"x": x - camera_at(0).0, "y": y - camera_at(0).1, "scale": scale},
+            "transform": {"x": x - opening.x, "y": y - opening.y, "scale": scale},
             "frame": {"width": 16.0 * k, "shadow": 0.5},
             "keyframes": keys(x, y, 0)}),
         )?;
@@ -524,26 +853,26 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
             .as_str()
             .filter(|label| !label.trim().is_empty())
         {
-            // Written just after the photo arrives (at once on a short stop).
-            let from = arrival
-                + if holds.get(index).is_some_and(|hold| *hold < 24) {
-                    2
-                } else {
-                    8
-                };
+            // Written as the photo comes in: starting a little before it's
+            // centred (a third of the way from the last one, at most 12 frames).
+            let gap = index
+                .checked_sub(1)
+                .and_then(|before| centred.get(before))
+                .map_or(at, |before| at - before);
+            let from = at - (gap / 3).min(12);
             let (lx, ly) = (
                 x + if index % 2 == 0 { 0.02 } else { -0.02 } * width,
                 y + shown / 2.0 + 0.06 * height,
             );
             let track = project.add_track(TrackKind::Video);
-            let (cx, cy) = camera_at(from);
+            let here = camera_at(from as f64);
             add(
                 project,
                 json!({"type": "text", "name": format!("Evidence board · note {}", index + 1),
                 "track": track, "start": start + from, "duration": total - from, "text": label,
                 "style": {"font": "Reenie Beanie", "weight": 400, "size": 128.0 * k,
                     "color": [0.8, 0.07, 0.15, 1.0], "glow": {"enabled": false}},
-                "transform": {"x": lx - cx, "y": ly - cy, "rotation": -4.0},
+                "transform": {"x": lx - here.x, "y": ly - here.y, "rotation": -4.0},
                 "animation": {"preset": "typewriter", "stagger": 2.0, "duration": 1.0},
                 "keyframes": keys(lx, ly, from)}),
             )?;
@@ -569,7 +898,8 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
             "transform": {"x": 0.5 * width - 190.0 * k, "y": 0.5 * height - 50.0 * k}}),
         )?;
     }
-    Ok(json!({"clips": made, "end": start + total}))
+    let centred: Vec<i64> = centred.iter().map(|at| start + at).collect();
+    Ok(json!({"clips": made, "end": start + total, "centred": centred}))
 }
 
 /// Selects many clips without having to enumerate hundreds of subtitle IDs.
@@ -1060,71 +1390,170 @@ mod tests {
         assert_eq!(past[0]["start"], 80);
     }
 
-    #[test]
-    fn an_evidence_board_holds_and_glides_between_photos() {
+    fn board_project(photos: usize) -> Project {
         let mut p = project();
-        for id in ["m1", "m2", "m3"] {
-            p.media.push(serde_json::from_value(json!({"id":id,"name":id,"path":"/p.jpg","kind":"image","duration":30.0,"width":1200,"height":900})).unwrap());
+        for index in 1..=photos {
+            p.media.push(serde_json::from_value(json!({"id":format!("m{index}"),"name":"photo","path":"/p.jpg","kind":"image","duration":30.0,"width":1200,"height":900})).unwrap());
         }
-        let result = apply(
-            &mut p,
-            &[
-                json!({"op":"evidence_board", "start":0, "illustrative":true, "items":[
-                    {"media":"m1", "label":"accident?", "frames":60},
-                    {"media":"m2", "label":"arson?", "frames":60},
-                    {"media":"m3", "frames":60},
-                ]}),
-            ],
-        )
-        .unwrap();
-        // Paper, three photos, two notes, the vignette, "Illustrative images".
-        assert_eq!(p.clips.len(), 8);
-        assert_eq!(result.results[0]["end"], 60 * 3 + 30 * 2);
-        let photo = p
-            .clips
+        p
+    }
+
+    fn board_clip<'a>(p: &'a Project, name: &str) -> &'a Clip {
+        p.clips
             .iter()
-            .find(|clip| clip.name.as_deref() == Some("Evidence board · photo 2"))
-            .unwrap();
-        // On screen in the middle once the camera has arrived there (drifting a little).
-        let x = &photo.keyframes["x"];
-        let arrived = x.iter().find(|key| key.frame as i64 == 60 + 30).unwrap();
-        assert!(arrived.value.abs() < 40.0, "{arrived:?}");
-        // Softly: the glide leaves and lands at the drift's speed (no jolt
-        // where a hold meets a glide) and never whips past ~1.8x its average.
-        let leaves = x.iter().find(|key| key.frame as i64 == 60).unwrap();
-        assert!(leaves
-            .handle_out
-            .is_some_and(|handle| (handle.influence - 0.42).abs() < 1e-6));
-        assert!(arrived.handle_in.is_some());
-        for keys in [&photo.keyframes["x"], &photo.keyframes["y"]] {
-            let at = |frame: f32| edit_core::sample(keys, frame).unwrap();
-            let speed = |frame: f32| at(frame + 0.05) - at(frame - 0.05);
-            for joint in [60.0, 90.0] {
-                let (before, after) = (speed(joint - 0.1), speed(joint + 0.1));
+            .find(|clip| clip.name.as_deref() == Some(name))
+            .unwrap()
+    }
+
+    /// The camera's speed (px a frame) at `frame` of a board element, from its
+    /// x and y keyframes as the renderer samples them.
+    fn board_speed(clip: &Clip, frame: f32) -> f32 {
+        let at =
+            |param: &str, frame: f32| edit_core::sample(&clip.keyframes[param], frame).unwrap();
+        let step = 0.02;
+        let dx = at("x", frame + step) - at("x", frame - step);
+        let dy = at("y", frame + step) - at("y", frame - step);
+        dx.hypot(dy) / (2.0 * step)
+    }
+
+    /// One continuous movement: never a stop, the speed smooth through every
+    /// key, easing a little at each photo (`photos`: when each is centred) and
+    /// picking up between, within ~0.5x-1.5x its average from first to last.
+    fn assert_glides(clip: &Clip, photos: &[f32], end: f32) {
+        let speed = |frame: f32| board_speed(clip, frame);
+        if std::env::var_os("BOARD_PROFILE").is_some() {
+            let profile: Vec<String> = (0..end as usize)
+                .map(|frame| format!("{frame}:{:.1}", speed(frame as f32)))
+                .collect();
+            eprintln!("PROFILE {}", profile.join(" "));
+        }
+        for key in &clip.keyframes["x"] {
+            if key.frame > 0.5 && key.frame < end - 0.5 {
+                let (before, here, after) = (
+                    speed(key.frame - 0.1),
+                    speed(key.frame),
+                    speed(key.frame + 0.1),
+                );
+                let jump = ((after - here) - (here - before)).abs();
                 assert!(
-                    (before - after).abs() < 0.1,
-                    "jolt at {joint}: {before} then {after}"
+                    jump < 0.05 + 0.01 * here,
+                    "jolt at {}: {before}, {here}, {after}",
+                    key.frame
                 );
             }
-            let average = (at(90.0) - at(60.0)).abs() / 30.0;
-            let peak = (0..300)
-                .map(|step| {
-                    (at(60.0 + step as f32 * 0.1 + 0.1) - at(60.0 + step as f32 * 0.1)).abs() * 10.0
-                })
-                .fold(0.0, f32::max);
-            assert!(peak < 1.8 * average, "peak {peak} vs average {average}");
         }
-        let note = p
-            .clips
+        // From one photo to the next it only eases a little and picks up a little.
+        for pair in photos.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            let speeds: Vec<f32> = (0..=((to - from) * 4.0) as usize)
+                .map(|step| speed(from + step as f32 * 0.25))
+                .collect();
+            let average = speeds.iter().sum::<f32>() / speeds.len() as f32;
+            let slowest = speeds.iter().copied().fold(f32::INFINITY, f32::min);
+            let fastest = speeds.iter().copied().fold(0.0, f32::max);
+            assert!(
+                slowest > 0.5 * average && fastest < 1.35 * average,
+                "{from}-{to}: {slowest} to {fastest}, average {average}"
+            );
+        }
+        // Slowest as it passes each photo between the first and the last.
+        for &at in &photos[1..photos.len() - 1] {
+            assert!(
+                speed(at) < speed(at - 3.0) && speed(at) < speed(at + 3.0),
+                "not easing at the photo at {at}"
+            );
+        }
+        // Before the first photo and after the last it drifts, never stops.
+        for step in 0..(end as usize) {
+            assert!(speed(step as f32 + 0.5) > 0.3, "stopped at {step}");
+        }
+    }
+
+    #[test]
+    fn an_evidence_board_glides_continuously_past_photos_centred_on_their_words() {
+        let mut p = board_project(5);
+        let ats = [139, 165, 185, 207, 243];
+        let items: Vec<Value> = ats
             .iter()
-            .find(|clip| clip.name.as_deref() == Some("Evidence board · note 2"))
-            .unwrap();
-        assert_eq!(note.start, 60 + 30 + 8);
+            .enumerate()
+            .map(|(index, at)| json!({"media": format!("m{}", index + 1), "label": "zip ties", "at": at}))
+            .collect();
+        let result = apply(
+            &mut p,
+            &[json!({"op":"evidence_board", "start":100, "end":346, "illustrative":true, "items":items})],
+        )
+        .unwrap();
+        // Paper, five photos and notes, the vignette, "Illustrative images".
+        assert_eq!(p.clips.len(), 13);
+        assert_eq!(result.results[0]["end"], 346);
+        assert_eq!(result.results[0]["centred"], json!(ats));
+        for (index, at) in ats.iter().enumerate() {
+            let photo = board_clip(&p, &format!("Evidence board · photo {}", index + 1));
+            assert_eq!((photo.start, photo.duration), (100, 246));
+            let frame = (at - 100) as f32;
+            for param in ["x", "y"] {
+                let value = edit_core::sample(&photo.keyframes[param], frame).unwrap();
+                assert!(
+                    value.abs() < 0.5,
+                    "photo {index} {param} {value} at its word"
+                );
+            }
+            assert_glides(photo, &[39.0, 65.0, 85.0, 107.0, 143.0], 246.0);
+        }
+        // Each note writes on as its photo comes in, moving with the board.
+        let note = board_clip(&p, "Evidence board · note 2");
+        assert_eq!(note.start, 165 - 8);
+        let photo = board_clip(&p, "Evidence board · photo 2");
+        let offset = |frame: f32, param: &str| {
+            edit_core::sample(&note.keyframes[param], frame).unwrap()
+                - edit_core::sample(&photo.keyframes[param], frame + 57.0).unwrap()
+        };
+        for frame in [5.0, 10.0, 40.0, 100.0, 188.0] {
+            for param in ["x", "y"] {
+                let (now, first) = (offset(frame, param), offset(0.0, param));
+                assert!(
+                    (now - first).abs() < 0.5,
+                    "note drifts from its photo: {now} vs {first}"
+                );
+            }
+        }
+        // Nothing to flag but the empty timeline before the board.
+        let issues = audit(&p)["issues"].as_array().unwrap().clone();
         assert!(
-            audit(&p)["issues"].as_array().unwrap().is_empty(),
-            "{:?}",
-            audit(&p)
+            issues
+                .iter()
+                .all(|issue| issue["kind"] == "picture_gap" && issue["end"] == 100),
+            "{issues:?}"
         );
+        // Every item needs at once one has it, in order.
+        let mut bad = board_project(2);
+        assert!(apply(&mut bad, &[json!({"op":"evidence_board", "start":0, "items":[{"media":"m1","at":10},{"media":"m2"}]})]).is_err());
+        assert!(apply(&mut bad, &[json!({"op":"evidence_board", "start":0, "items":[{"media":"m1","at":30},{"media":"m2","at":20}]})]).is_err());
+        assert!(apply(&mut bad, &[json!({"op":"evidence_board", "start":0, "end":20, "items":[{"media":"m1","at":10},{"media":"m2","at":30}]})]).is_err());
+    }
+
+    #[test]
+    fn an_evidence_board_keeps_the_old_frames_timing() {
+        let mut p = board_project(3);
+        let result = apply(
+            &mut p,
+            &[json!({"op":"evidence_board", "start":0, "items":[
+                {"media":"m1", "label":"accident?", "frames":60},
+                {"media":"m2", "label":"arson?", "frames":60},
+                {"media":"m3", "frames":60},
+            ]})],
+        )
+        .unwrap();
+        // Same length as before; each photo centred in the middle of its frames.
+        assert_eq!(result.results[0]["end"], 60 * 3 + 30 * 2);
+        assert_eq!(result.results[0]["centred"], json!([30, 120, 210]));
+        assert_eq!(p.clips.len(), 7);
+        let photo = board_clip(&p, "Evidence board · photo 2");
+        let x = edit_core::sample(&photo.keyframes["x"], 120.0).unwrap();
+        assert!(x.abs() < 0.5, "{x}");
+        assert_glides(photo, &[30.0, 120.0, 210.0], 240.0);
+        assert_eq!(board_clip(&p, "Evidence board · note 2").start, 120 - 12);
+        assert!(audit(&p)["issues"].as_array().unwrap().is_empty());
     }
 
     #[test]

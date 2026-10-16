@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use edit_core::{Clip, ClipColor, ClipContent, Project, ScriptBlock, TrackKind};
+use edit_core::{Clip, ClipColor, ClipContent, MediaKind, Project, ScriptBlock, TrackKind};
 use serde_json::{json, Value};
 
 use crate::server::App;
@@ -401,6 +401,22 @@ fn voiceovers_in(project: &Project, from: i64, to: i64) -> Vec<&Clip> {
     clips
 }
 
+/// The voice-overs heard in frames `[from, to)`: voice-over clips of sound
+/// files on audio tracks that aren't muted (a video file's own sound is
+/// `subtitles::footage_sound`). Their house words are muted like the footage's.
+pub(crate) fn voiceover_sound(project: &Project, from: i64, to: i64) -> Vec<&Clip> {
+    voiceovers_in(project, from, to)
+        .into_iter()
+        .filter(|clip| {
+            project
+                .track(&clip.track)
+                .is_some_and(|track| track.kind == TrackKind::Audio && !track.muted)
+                && matches!(&clip.content, ClipContent::Audio { media, .. }
+                    if project.media(media).is_some_and(|media| media.kind != MediaKind::Video))
+        })
+        .collect()
+}
+
 /// A silence between two words of a voice-over, and the frames of the
 /// timeline that shortening it takes out (`[from, to)`).
 #[derive(Clone, Debug, PartialEq)]
@@ -658,6 +674,48 @@ mod tests {
             said("Then", 6.5, 6.8),
             said("silence", 7.0, 7.5),
         ]
+    }
+
+    #[test]
+    fn voiceovers_are_heard_for_house_words_beside_the_footage() {
+        let mut project = cut_in();
+        let ids = |clips: Vec<&Clip>| clips.iter().map(|clip| clip.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(voiceover_sound(&project, 0, 400)), ["voice"]);
+        assert_eq!(
+            ids(crate::subtitles::footage_sound(&project, 0, 400)),
+            ["snd"]
+        );
+        // Narration says a house word: its mute lands on the voice-over clip.
+        let heard = [
+            said("he", 2.0, 2.2),
+            said("abused", 2.3, 2.9),
+            said("her", 3.0, 3.2),
+        ];
+        let words = crate::subtitles::timed_words(&heard, 1.0, 11.0);
+        let found = crate::subtitles::suggestions(&words, true, 1000.0, 11_000.0);
+        let mutes = found
+            .iter()
+            .map(|found| edit_core::Mute {
+                from: found.start_ms / 1000.0,
+                to: found.end_ms / 1000.0,
+            })
+            .collect();
+        let pending = HashMap::from([("voice".to_owned(), (1.0, 11.0, mutes))]);
+        crate::subtitles::write_mutes(&mut project, &pending);
+        let Some(ClipContent::Audio { mutes, .. }) =
+            project.clip("voice").map(|clip| &clip.content)
+        else {
+            panic!("no voice-over");
+        };
+        assert_eq!(mutes.len(), 1);
+        assert!(mutes
+            .first()
+            .is_some_and(|mute| mute.from < 2.3 && mute.to > 2.9));
+        // A muted track isn't heard, so nothing on it is muted.
+        if let Some(track) = project.tracks.iter_mut().find(|track| track.id == "a1") {
+            track.muted = true;
+        }
+        assert!(voiceover_sound(&project, 0, 400).is_empty());
     }
 
     #[test]

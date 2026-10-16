@@ -1576,7 +1576,8 @@ pub(crate) fn timed_words(words: &[crate::transcribe::Word], from: f64, to: f64)
 }
 
 /// Finds the house words (and the neglect list's when `neglect`) said in the
-/// footage between `from` and `to` (timeline frames), and the mutes for them.
+/// footage and the voice-overs between `from` and `to` (timeline frames), and
+/// the mutes for them. Only the footage's go in `found` (they star subtitles).
 pub(crate) async fn house_words(
     app: &App,
     project: &Project,
@@ -1585,15 +1586,23 @@ pub(crate) async fn house_words(
     neglect: bool,
 ) -> Result<HouseWords, String> {
     let fps = project.fps();
-    let mut sound = footage_sound(project, from, to);
-    sound.sort_by_key(|clip| clip.start);
+    let mut sound: Vec<(&Clip, bool)> = footage_sound(project, from, to)
+        .into_iter()
+        .map(|clip| (clip, false))
+        .chain(
+            crate::voiceover::voiceover_sound(project, from, to)
+                .into_iter()
+                .map(|clip| (clip, true)),
+        )
+        .collect();
+    sound.sort_by_key(|(clip, _)| clip.start);
     let mut transcripts: HashMap<String, crate::transcribe::Transcript> = HashMap::new();
     let mut out = HouseWords {
         mutes: HashMap::new(),
         found: Vec::new(),
         listed: Vec::new(),
     };
-    for clip in sound {
+    for (clip, voice_over) in sound {
         let ClipContent::Audio {
             media,
             source_in,
@@ -1628,12 +1637,20 @@ pub(crate) async fn house_words(
                 from: suggestion.start_ms / 1000.0,
                 to: suggestion.end_ms / 1000.0,
             });
-            out.listed.push(json!({
+            let mut listed = json!({
                 "term": suggestion.term,
                 "time": (on_timeline(suggestion.at_ms) / 10.0).round() / 100.0,
                 "starred": suggestion.starred,
                 "clip": clip.id,
-            }));
+            });
+            if voice_over {
+                if let Some(fields) = listed.as_object_mut() {
+                    fields.insert("voice_over".into(), json!(true));
+                }
+                out.listed.push(listed);
+                continue;
+            }
+            out.listed.push(listed);
             out.found.push(Found {
                 clip: clip.id.clone(),
                 timeline_ms: (
@@ -1661,8 +1678,8 @@ fn said_during(found: &[Found], start: i64, end: i64, fps: f64) -> Vec<&Suggesti
         .collect()
 }
 
-/// Mutes the house words in the footage's sound between `from` and `to`
-/// (timeline frames) and stars them out in the subtitles already there,
+/// Mutes the house words in the footage's sound and the voice-overs between
+/// `from` and `to` (timeline frames) and stars them out in the subtitles already there,
 /// moving nothing: for subtitles finished by hand. Replaces the mutes made
 /// before in that span.
 pub async fn mute_house_words(

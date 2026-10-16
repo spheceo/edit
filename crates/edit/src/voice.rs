@@ -64,7 +64,8 @@ impl Default for VoiceSettings {
             similarity_boost: similarity(),
             style: 0.0,
             use_speaker_boost: true,
-            speed: 1.0,
+            // A touch quicker than the voice's own pace (the team's call; 1.2 is ElevenLabs' fastest).
+            speed: 1.1,
         }
     }
 }

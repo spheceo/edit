@@ -2057,6 +2057,7 @@ async fn repack_subtitles(
             .filter(|hold| hold.is_finite() && (0.0..=3000.0).contains(hold))
             .unwrap_or(crate::subtitles::DEFAULT_HOLD_MS),
         overlap: body.overlap,
+        faces: body.overlap,
     };
     let summary = crate::diag::time_async(
         "subtitles",

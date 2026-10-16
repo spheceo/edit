@@ -20,6 +20,7 @@ mod mix;
 mod render;
 mod research;
 mod script;
+mod seats;
 mod server;
 mod sfx;
 mod skills;

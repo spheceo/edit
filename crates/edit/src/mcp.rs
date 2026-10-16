@@ -693,7 +693,8 @@ fn tools() -> Vec<Value> {
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
                 "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false." },
                 "hold_ms": { "type": "number", "description": "How long a subtitle stays after its last word unless the next starts first (default 1000)." },
-                "overlap": { "type": "boolean", "description": "Interrogation footage: people talking over each other are shown together, each line its own box stacked above the one already up (each person's lines still one at a time). Default false." }
+                "overlap": { "type": "boolean", "description": "Interrogation footage: people talking over each other are shown together, each line its own box stacked above the one already up (each person's lines still one at a time). Default false." },
+                "faces": { "type": "boolean", "description": "Each speaker's lines sit under their face (Repack's positions): the footage's camera angles are found and, per angle, where each speaker sits (a model watches a clip or two); cutaways, people off camera and faces in a bottom corner stay bottom middle. Default: on with overlap." }
             }),
             &[],
         ),
@@ -2077,6 +2078,9 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     .filter(|hold| hold.is_finite() && (0.0..=3000.0).contains(hold))
                     .unwrap_or(crate::subtitles::DEFAULT_HOLD_MS),
                 overlap: args["overlap"].as_bool().unwrap_or(false),
+                faces: args["faces"]
+                    .as_bool()
+                    .unwrap_or_else(|| args["overlap"].as_bool().unwrap_or(false)),
             };
             let summary = crate::subtitles::repack_subtitles(app, &id, options).await?;
             Ok(text(format!(

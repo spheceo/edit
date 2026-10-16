@@ -771,6 +771,8 @@ pub struct Options {
     pub hold_ms: f64,
     /// People talking over each other shown together, stacked (interrogations).
     pub overlap: bool,
+    /// Each speaker's lines under their face (seats.rs), else bottom middle.
+    pub faces: bool,
 }
 
 /// Whether `project` is a subtitled video: subtitles over its footage and
@@ -898,21 +900,86 @@ pub fn longest_ms(word: &str) -> f64 {
 /// Between two subtitles stacked because their people talk at once, in 1080p pixels.
 const STACK_GAP: f32 = 12.0;
 
-/// About how tall a house-style subtitle's box is (project pixels): Montserrat
-/// SemiBold averages ~0.58 em a character, wrapped at 80% of the frame.
-fn box_height(text: &str, width: u32, k: f32) -> f32 {
+/// Where a face in a footage clip is on the project's frame (both in %): the
+/// clip's picture fitted to the frame, scaled and moved by its transform.
+fn on_project(
+    dot: crate::seats::Dot,
+    media: (u32, u32),
+    transform: &Transform,
+    frame: (u32, u32),
+) -> crate::seats::Dot {
+    let (fw, fh) = (f64::from(frame.0.max(1)), f64::from(frame.1.max(1)));
+    let (mw, mh) = (f64::from(media.0.max(1)), f64::from(media.1.max(1)));
+    let fit = (fw / mw).min(fh / mh) * f64::from(transform.scale);
+    let x = fw / 2.0 + f64::from(transform.x) + (dot.x / 100.0 - 0.5) * mw * fit;
+    let y = fh / 2.0 + f64::from(transform.y) + (dot.y / 100.0 - 0.5) * mh * fit;
+    crate::seats::Dot {
+        x: x / fw * 100.0,
+        y: y / fh * 100.0,
+        h: dot.h * mh * fit / fh,
+    }
+}
+
+/// A footage clip as subtitles look it up: start, end (frames), media,
+/// source_in, speed, transform and the media's size.
+type Footage = (i64, i64, String, f64, f64, Transform, (u32, u32));
+
+/// About how big a house-style subtitle's box is (project pixels) with its
+/// text wrapped at `text_width`: Montserrat SemiBold averages ~0.58 em.
+fn box_size(text: &str, text_width: f32, k: f32) -> (f32, f32) {
     let size = 48.0 * k;
-    let max_width = width as f32 * 0.8 - 24.0 * k;
-    let lines: f32 = text
-        .lines()
-        .map(|line| {
-            (line.chars().count() as f32 * 0.58 * size / max_width)
-                .ceil()
-                .max(1.0)
-        })
-        .sum::<f32>()
-        .max(1.0);
-    lines * size * 1.15 + 16.0 * k
+    let text_width = text_width.max(size);
+    let mut lines = 0.0_f32;
+    let mut widest = 0.0_f32;
+    for line in text.lines() {
+        let natural = line.chars().count() as f32 * 0.58 * size;
+        lines += (natural / text_width).ceil().max(1.0);
+        widest = widest.max(natural.min(text_width));
+    }
+    (widest + 24.0 * k, lines.max(1.0) * size * 1.15 + 16.0 * k)
+}
+
+/// A line under its speaker's face, the way Repack lays it out
+/// (subtitleLayout): 80 px under the face (more for a big face), at most
+/// 40% of the frame wide (less near an edge, never under 28%), beside the
+/// face, towards the middle, when under it would leave the frame; none for
+/// a face in a bottom corner (those stay bottom middle). Returns the box's
+/// centre from the frame's centre, the text's wrap width and the box's size.
+fn under_face(
+    dot: crate::seats::Dot,
+    text: &str,
+    width: u32,
+    height: u32,
+    k: f32,
+) -> Option<(f32, f32, f32, f32, f32)> {
+    let (x, y) = (dot.x as f32, dot.y as f32);
+    if y >= 60.0 && (x <= 33.0 || x >= 67.0) {
+        return None;
+    }
+    let (fw, fh) = (width as f32, height as f32);
+    let share = 80.0_f32.min(28.0_f32.max(40.0_f32.min(2.0 * x.min(100.0 - x))));
+    let text_width = fw * share / 100.0 - 24.0 * k;
+    let (w, h) = box_size(text, text_width, k);
+    let (face_x, face_y) = (fw * x / 100.0, fh * y / 100.0);
+    let gap = (80.0 * k).max(0.9 * fh * dot.h as f32 / 100.0);
+    let beside = face_y + gap + h > fh - 50.0 * k;
+    let cy = (if beside {
+        face_y
+    } else {
+        face_y + gap + h / 2.0
+    })
+    .clamp(h / 2.0, (fh - h / 2.0).max(h / 2.0));
+    let cx = if beside {
+        if face_x > fw / 2.0 {
+            face_x - 110.0 * k - w / 2.0
+        } else {
+            face_x + 110.0 * k + w / 2.0
+        }
+    } else {
+        face_x
+    }
+    .clamp(w / 2.0, (fw - w / 2.0).max(w / 2.0));
+    Some((cx - fw / 2.0, cy - fh / 2.0, text_width, w, h))
 }
 
 /// One voice in the footage, for the summary and the subtitles' colour.
@@ -1097,6 +1164,7 @@ pub async fn repack_subtitles(
         neglect,
         hold_ms,
         overlap,
+        faces,
     } = options;
     if to <= from {
         return Err("the span is empty".into());
@@ -1200,6 +1268,27 @@ pub async fn repack_subtitles(
     );
     let (width, height) = (project.settings.width, project.settings.height);
     let frame = |ms: f64| (ms / 1000.0 * fps).round() as i64;
+    // Where each speaker sits, per file, for lines under their face.
+    let mut seats: HashMap<String, crate::seats::Seats> = HashMap::new();
+    if faces {
+        for (media_id, transcript) in &transcripts {
+            let Some(media) = project.media(media_id) else {
+                continue;
+            };
+            match crate::seats::seats(std::path::Path::new(&media.path), transcript).await {
+                Ok(found) => {
+                    seats.insert(media_id.clone(), found);
+                }
+                Err(error) => crate::diag::warn(
+                    "subtitles",
+                    format!(
+                        "no face positions for {}: {error}; bottom middle",
+                        media.name
+                    ),
+                ),
+            }
+        }
+    }
     let (live, (placed, skipped, outside, texts)) =
         app.store.update(project_id, "agent", |project| {
             // Stacked lines (overlap) go on tracks of their own under the
@@ -1235,8 +1324,34 @@ pub async fn repack_subtitles(
             tracks.extend(stacked);
             let base_y = height as f32 * 0.4;
             let k = height as f32 / 1080.0;
-            // Lines up now: when each ends (frames), its centre and box height.
-            let mut open: Vec<(i64, f32, f32)> = Vec::new();
+            // The footage the seats were found in, to find where a line is in it:
+            // (start, end, media, source_in, speed, transform, media size).
+            let footage: Vec<Footage> = project
+                .clips
+                .iter()
+                .filter_map(|clip| match &clip.content {
+                    ClipContent::Video {
+                        media,
+                        source_in,
+                        speed,
+                        transform,
+                        ..
+                    } if seats.contains_key(media) => project.media(media).map(|found| {
+                        (
+                            clip.start,
+                            clip.end(),
+                            media.clone(),
+                            *source_in,
+                            *speed,
+                            *transform,
+                            (found.width, found.height),
+                        )
+                    }),
+                    _ => None,
+                })
+                .collect();
+            // Lines up now: when each ends (frames), its centre (x, y) and box size.
+            let mut open: Vec<(i64, f32, f32, f32, f32)> = Vec::new();
             let (mut placed, mut skipped) = (0, 0);
             // Only inside footage segments: a line across a segment's edge shows
             // only inside it (narration and already-subtitled stretches get none).
@@ -1280,23 +1395,48 @@ pub async fn repack_subtitles(
                         continue;
                     }
                 };
-                // Stacked: a line whose box would cover one already up goes above it.
-                open.retain(|(until, _, _)| *until > start);
-                let box_height = box_height(&line.text, width, k);
-                let mut y = base_y;
+                let voice = voices.get(&line.speaker);
+                // Under the speaker's face when they're seen there (where the
+                // line starts), else bottom middle.
+                let face = voice.and_then(|voice| {
+                    let (clip_start, _, media, source_in, speed, transform, size) = footage
+                        .iter()
+                        .find(|clip| clip.0 <= start && start < clip.1)?;
+                    let at = source_in + (start - clip_start) as f64 / fps * speed;
+                    let dot = seats.get(media)?.dot(&voice.name, at)?;
+                    Some(on_project(dot, *size, transform, (width, height)))
+                });
+                let (x, mut y, text_width, box_width, box_height) =
+                    match face.and_then(|dot| under_face(dot, &line.text, width, height, k)) {
+                        Some(placed) => placed,
+                        None => {
+                            let text_width = width as f32 * 0.8 - 24.0 * k;
+                            let (box_width, box_height) = box_size(&line.text, text_width, k);
+                            (0.0, base_y, text_width, box_width, box_height)
+                        }
+                    };
+                // Stacked: a line whose box would cover one already up goes
+                // above it (below when there's no room above).
+                open.retain(|(until, ..)| *until > start);
                 for _ in 0..=open.len() {
-                    let Some(&(_, over_y, over_height)) =
-                        open.iter().find(|(_, other, other_height)| {
-                            (y - other).abs()
-                                < (box_height + other_height) / 2.0 + STACK_GAP * k / 2.0
-                        })
+                    let Some(&(_, _, _, over_y, over_height)) =
+                        open.iter()
+                            .find(|(_, other_x, other_width, other_y, other_height)| {
+                                (x - other_x).abs() < (box_width + other_width) / 2.0
+                                    && (y - other_y).abs()
+                                        < (box_height + other_height) / 2.0 + STACK_GAP * k / 2.0
+                            })
                     else {
                         break;
                     };
-                    y = over_y - over_height / 2.0 - STACK_GAP * k - box_height / 2.0;
+                    let above = over_y - over_height / 2.0 - STACK_GAP * k - box_height / 2.0;
+                    y = if above - box_height / 2.0 >= -(height as f32) / 2.0 {
+                        above
+                    } else {
+                        over_y + over_height / 2.0 + STACK_GAP * k + box_height / 2.0
+                    };
                 }
-                open.push((end, y, box_height));
-                let voice = voices.get(&line.speaker);
+                open.push((end, x, box_width, y, box_height));
                 let color = voice
                     .and_then(|voice| crate::captions::hex(&voice.color))
                     .unwrap_or(Rgba::WHITE);
@@ -1315,8 +1455,12 @@ pub async fn repack_subtitles(
                     keyframes: Default::default(),
                     content: ClipContent::Text {
                         text: line.text.clone(),
-                        style: house_style(width, height, color),
+                        style: TextStyle {
+                            max_width: Some(text_width.round()),
+                            ..house_style(width, height, color)
+                        },
                         transform: Transform {
+                            x,
                             y,
                             ..Transform::default()
                         },
@@ -1612,6 +1756,54 @@ pub(crate) fn star_on_screen(project: &mut Project, from: i64, to: i64, neglect:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lines_sit_under_faces_the_repack_way() {
+        use crate::seats::Dot;
+        // A face upper left: under it, narrowed near the edge.
+        let (x, y, text_width, _, h) = super::under_face(
+            Dot {
+                x: 25.0,
+                y: 30.0,
+                h: 10.0,
+            },
+            "Yes, sir.",
+            1920,
+            1080,
+            1.0,
+        )
+        .unwrap();
+        assert!((x - (480.0 - 960.0)).abs() < 1.0, "{x}");
+        assert!((y - (324.0 + 97.2 + h / 2.0 - 540.0)).abs() < 1.0, "{y}");
+        assert!((text_width - (1920.0 * 0.4 - 24.0)).abs() < 0.5);
+        // A face low down: beside it, towards the middle.
+        let (x, ..) = super::under_face(
+            Dot {
+                x: 40.0,
+                y: 70.0,
+                h: 30.0,
+            },
+            "Okay.",
+            1920,
+            1080,
+            1.0,
+        )
+        .unwrap();
+        assert!(x > 768.0 - 960.0, "{x}");
+        // A face in a bottom corner: bottom middle instead.
+        assert!(super::under_face(
+            Dot {
+                x: 10.0,
+                y: 80.0,
+                h: 10.0
+            },
+            "Okay.",
+            1920,
+            1080,
+            1.0
+        )
+        .is_none());
+    }
+
     #[test]
     fn overlapping_lines_stay_up_long_enough_to_read() {
         let line = |start_ms: f64, end_ms: f64, speaker: &str| super::Line {
@@ -1992,8 +2184,8 @@ mod tests {
 
     #[test]
     fn box_heights_grow_with_wrapped_lines() {
-        let one = box_height("Short line", 1920, 1.0);
-        let two = box_height(&"word ".repeat(20), 1920, 1.0);
+        let (_, one) = super::box_size("Short line", 1920.0 * 0.8 - 24.0, 1.0);
+        let (_, two) = super::box_size(&"word ".repeat(20), 1920.0 * 0.8 - 24.0, 1.0);
         assert!((one - (48.0 * 1.15 + 16.0)).abs() < 0.01);
         assert!(two > one * 1.5);
     }

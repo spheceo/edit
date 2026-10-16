@@ -28,7 +28,7 @@ use crate::speakers::BACKGROUND;
 use crate::subtitles::{segment, TimedWord};
 
 const GATEWAY: &str = "https://ai-gateway.vercel.sh/v1/chat/completions";
-const MODEL: &str = "google/gemini-3.8-flash";
+pub(crate) const MODEL: &str = "google/gemini-3.8-flash";
 /// A window's length: long enough to know the people in it, short enough to watch closely (s).
 const TARGET: f64 = 240.0;
 const SHORTEST: f64 = 150.0;
@@ -402,7 +402,12 @@ fn cache_key(media_key: &str, window: &Window, lines: &[WatchLine]) -> String {
 /// second's frame, and its AAC sound is copied as it is. That is several
 /// times cheaper than decoding the 1080p original, which is what every
 /// window waited on once the model answered faster than it was cut.
-async fn cut(source: &Path, cache: &Path, window: &Window, out: &Path) -> Result<(), String> {
+pub(crate) async fn cut(
+    source: &Path,
+    cache: &Path,
+    window: &Window,
+    out: &Path,
+) -> Result<(), String> {
     let light = cache.join("preview-light.mp4");
     let sound = cache.join("preview.m4a");
     let preview = (light.is_file() && sound.is_file()).then_some((light, sound));
@@ -411,7 +416,7 @@ async fn cut(source: &Path, cache: &Path, window: &Window, out: &Path) -> Result
 
 /// Whether the video's keyframes are at most 2 s apart (judged on its first
 /// 30 s), so keyframes alone show it about once a second. Remembered per file.
-async fn keyframes_close(source: &Path) -> bool {
+pub(crate) async fn keyframes_close(source: &Path) -> bool {
     static KNOWN: std::sync::OnceLock<
         parking_lot::Mutex<std::collections::HashMap<PathBuf, bool>>,
     > = std::sync::OnceLock::new();
@@ -553,7 +558,7 @@ fn api_key() -> Result<String, String> {
 }
 
 /// Posts `body` (a file) to the gateway through curl, the key on stdin.
-async fn post(body: &Path) -> Result<Value, String> {
+pub(crate) async fn post(body: &Path) -> Result<Value, String> {
     let config = format!("header = \"Authorization: Bearer {}\"\n", api_key()?);
     let mut child = tokio::process::Command::new("curl")
         .args([
@@ -612,7 +617,7 @@ async fn post(body: &Path) -> Result<Value, String> {
 }
 
 /// The JSON in a model's answer, without Markdown fences.
-fn unfence(text: &str) -> &str {
+pub(crate) fn unfence(text: &str) -> &str {
     let text = text.trim();
     let text = text
         .strip_prefix("```json")

@@ -27,6 +27,32 @@ pub fn background_slots() -> &'static tokio::sync::Semaphore {
     SLOTS.get_or_init(|| tokio::sync::Semaphore::new(1))
 }
 
+/// Work the user is waiting on (an export) that's running now. Background
+/// previews pause while there is any: a fresh 30-minute import's two preview
+/// transcodes ran beside its export and slowed it from ~7 to 12 minutes.
+static FOREGROUND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Held while foreground work runs.
+pub struct Foreground(());
+
+impl Drop for Foreground {
+    fn drop(&mut self) {
+        FOREGROUND.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+pub fn foreground() -> Foreground {
+    FOREGROUND.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    Foreground(())
+}
+
+/// Waits while foreground work runs (background work calls it as it goes).
+fn yield_to_foreground() {
+    while FOREGROUND.load(std::sync::atomic::Ordering::Acquire) > 0 {
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
 pub const PROXY_MAX_WIDTH: u32 = 1920;
 pub const PROXY_MAX_HEIGHT: u32 = 1080;
 /// Waveform resolution.
@@ -842,6 +868,9 @@ fn native_proxy(
         let order = crate::mac_media::Order::Bgra;
         let mut reported = Instant::now();
         for frame in 0..frames {
+            if frame % 8 == 0 {
+                yield_to_foreground();
+            }
             reader.frame(frame as f64 / fps, &mut bgra, order, frame > 0)?;
             writer.frame(frame, &bgra, width as usize * 4, order)?;
             if reported.elapsed() >= Duration::from_millis(250) {

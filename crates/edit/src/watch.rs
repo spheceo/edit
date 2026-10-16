@@ -409,6 +409,54 @@ async fn cut(source: &Path, cache: &Path, window: &Window, out: &Path) -> Result
     cut_at(source, preview, window, out, 1).await
 }
 
+/// Whether the video's keyframes are at most 2 s apart (judged on its first
+/// 30 s), so keyframes alone show it about once a second. Remembered per file.
+async fn keyframes_close(source: &Path) -> bool {
+    static KNOWN: std::sync::OnceLock<
+        parking_lot::Mutex<std::collections::HashMap<PathBuf, bool>>,
+    > = std::sync::OnceLock::new();
+    let known = KNOWN.get_or_init(Default::default);
+    if let Some(close) = known.lock().get(source).copied() {
+        return close;
+    }
+    let output = tokio::process::Command::new(crate::tools::ffprobe())
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-skip_frame",
+            "nokey",
+            "-show_entries",
+            "frame=pts_time",
+            "-of",
+            "csv=p=0",
+            "-read_intervals",
+            "%+30",
+        ])
+        .arg(source)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await;
+    let times: Vec<f64> = output
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.trim().trim_end_matches(',').parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let close = times.len() >= 5
+        && times
+            .windows(2)
+            .all(|pair| matches!(pair, [a, b] if b - a <= 2.0));
+    known.lock().insert(source.to_owned(), close);
+    close
+}
+
 async fn cut_at(
     source: &Path,
     preview: Option<(PathBuf, PathBuf)>,
@@ -444,6 +492,13 @@ async fn cut_at(
         None => {
             if cfg!(target_os = "macos") {
                 command.args(["-hwaccel", "videotoolbox"]);
+            }
+            // Keyframes close together (Premiere exports put one every
+            // ~1.25 s): decode only those, about as often as Gemini samples,
+            // a thirtieth of the work. A fresh import has no light preview
+            // yet, and full decodes of the original made the watch wait.
+            if keyframes_close(source).await {
+                command.args(["-skip_frame", "nokey"]);
             }
             command
                 .args(["-ss", &start, "-t", &length, "-i"])

@@ -750,9 +750,12 @@ pub fn render(
     // The gain, limited: measured once more after the limiter (its cuts take
     // a little loudness with them) and corrected, then written.
     let mut gain = normalising_gain(integrated, target);
+    // With every peak under the limiter's ceiling at this gain (the true
+    // peak bounds the samples) it won't touch the mix: nothing to correct.
+    let untouched = 20.0 * peak.max(1e-9).log10() + gain <= f64::from(LIMIT_CEILING_DB);
     // Usually one look settles it; a mix whose peaks the limiter works hard
     // gets a second.
-    for _ in 0..2 {
+    for _ in 0..if untouched { 0 } else { 2 } {
         let mut meter = ebur128::EbuR128::new(2, RATE as u32, ebur128::Mode::I)
             .map_err(|error| format!("loudness meter: {error}"))?;
         limited_pass(scratch, gain, cancel, |window| {

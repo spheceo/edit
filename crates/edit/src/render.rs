@@ -1316,6 +1316,8 @@ fn export(
     cancel: &AtomicBool,
     mut progress: impl FnMut(f32),
 ) -> Result<(), String> {
+    // Background previews wait until it's done.
+    let _first = crate::media::foreground();
     let pending = crate::broll::smoothing_pending(&project.id);
     if !pending.is_empty() {
         crate::diag::info("export", format!("exporting current timeline snapshot; {} optional optical-flow renders still pending", pending.len()));

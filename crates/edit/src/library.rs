@@ -284,18 +284,30 @@ impl Library {
             .join(sound.kind)
             .join(sound.md5.get(..12).unwrap_or(&sound.md5));
         let path = dir.join(safe_name(&sound.file));
-        let lock = Arc::clone(self.downloads.lock().entry(sound.id.clone()).or_default());
+        if path.is_file() {
+            return Ok(path);
+        }
+        // One download per file at a time (two sounds in Drive can be the
+        // same file): a second ask for it waits, then finds it there. Other
+        // sounds download meanwhile.
+        let lock = Arc::clone(
+            self.downloads
+                .lock()
+                .entry(path.to_string_lossy().into_owned())
+                .or_default(),
+        );
         let _guard = lock.lock();
         if path.is_file() {
             return Ok(path);
         }
         std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-        let part = dir.join(".download");
+        let part = dir.join(format!(".{}.download", safe_name(&sound.file)));
         let config = format!(
             "header = {}\n",
             quote(&format!("Authorization: Bearer {}", self.token()?))?
         );
         let url = format!("{API}/files/{}?alt=media&supportsAllDrives=true", sound.id);
+        let started = Instant::now();
         let (code, _) = curl(
             &config,
             &[
@@ -303,11 +315,28 @@ impl Library {
                 "3",
                 "--connect-timeout",
                 "20",
+                // A stalled download gives up (and is retried) rather than
+                // holding the sound forever.
+                "--speed-limit",
+                "1024",
+                "--speed-time",
+                "20",
+                "--max-time",
+                "600",
                 "-o",
                 &part.to_string_lossy(),
                 &url,
             ],
-        )?;
+        )
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&part);
+        })?;
+        crate::diag::record(
+            "library",
+            "library: download",
+            started.elapsed(),
+            (code != 200).then_some("refused"),
+        );
         if code != 200 {
             let body = std::fs::read_to_string(&part).unwrap_or_default();
             let _ = std::fs::remove_file(&part);

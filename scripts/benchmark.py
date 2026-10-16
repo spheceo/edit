@@ -384,6 +384,7 @@ def main():
     parser.add_argument("--quality", choices=["high", "balanced", "small"], help="export quality (default high)")
     parser.add_argument("--format", choices=["h264", "hevc", "prores", "wav", "mp3"], help="export format (default h264)")
     parser.add_argument("--revisions", type=int, default=80)
+    parser.add_argument("--full", action="store_true", help="with --project, export the whole timeline (one frame short)")
     args = parser.parse_args()
     if args.loudness is not None:
         EXPORT_OPTIONS["loudness"] = args.loudness
@@ -400,6 +401,7 @@ def main():
         project = generated(args.fixture, args.minutes)
     else:
         project = json.loads(args.project.read_text()) if args.project else synthetic(root)
+        FULL = bool(args.project and args.full)
     project = copy.deepcopy(project)
     project.update(id="bench", name="Performance fixture")
     project.pop("drive", None)

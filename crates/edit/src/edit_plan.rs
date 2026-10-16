@@ -497,6 +497,70 @@ pub fn audit(project: &Project) -> Value {
             issues.push(json!({"kind":"sliver", "clip":clip.id, "start":clip.start, "frames":clip.duration}));
         }
     }
+    // The same moment of footage shown as B-roll in two places (more than
+    // a couple of seconds apart: cuts of one moment butted together are one shot).
+    let base = project
+        .tracks
+        .iter()
+        .find(|track| track.kind == TrackKind::Video)
+        .map(|track| track.id.as_str());
+    let broll: Vec<(&Clip, &str, f64, f64)> = project
+        .clips
+        .iter()
+        .filter(|clip| Some(clip.track.as_str()) != base)
+        .filter_map(|clip| match &clip.content {
+            ClipContent::Video {
+                media,
+                source_in,
+                speed,
+                ..
+            } => Some((
+                clip,
+                media.as_str(),
+                *source_in,
+                source_in + clip.duration as f64 / project.fps() * speed,
+            )),
+            _ => None,
+        })
+        .collect();
+    let apart = (2.0 * project.fps()).round() as i64;
+    for (index, (one, media, from, to)) in broll.iter().enumerate() {
+        for (other, other_media, other_from, other_to) in broll.iter().skip(index + 1) {
+            let overlap = to.min(*other_to) - from.max(*other_from);
+            let gap = (other.start - one.end()).max(one.start - other.end());
+            if media == other_media && overlap >= 1.0 && gap > apart {
+                issues.push(json!({"kind":"repeated_broll", "clips":[one.id, other.id], "media":media, "seconds_shared":(overlap * 10.0).round() / 10.0}));
+            }
+        }
+    }
+    // Every transition is heard: one of the plan's transitions with no sound
+    // from an audio file (not footage or voice-over) starting within half a
+    // second of its middle, or a short one (a riser, a hit) across it.
+    let heard: Vec<(i64, i64)> = project
+        .clips
+        .iter()
+        .filter(|clip| clip.name.as_deref() != Some("Voice-over"))
+        .filter_map(|clip| match &clip.content {
+            ClipContent::Audio { media, .. } => project
+                .media(media)
+                .filter(|media| media.kind == edit_core::MediaKind::Audio)
+                .map(|_| (clip.start, clip.end())),
+            _ => None,
+        })
+        .collect();
+    let near = (0.5 * project.fps()).round() as i64;
+    let short = (4.0 * project.fps()).round() as i64;
+    for clip in &project.clips {
+        if matches!(clip.name.as_deref(), Some("Drop" | "Flash" | "Dip")) {
+            let middle = clip.start + clip.duration / 2;
+            if !heard.iter().any(|(start, end)| {
+                (start - middle).abs() <= near
+                    || (end - start <= short && *start <= middle && middle <= end + near)
+            }) {
+                issues.push(json!({"kind":"silent_transition", "clip":clip.id, "at":middle}));
+            }
+        }
+    }
     // A review note left in on-screen text would be burned into the video.
     for clip in &project.clips {
         if let ClipContent::Text { text, .. } = &clip.content {
@@ -626,6 +690,50 @@ mod tests {
         ]).unwrap();
         assert_ne!(p.clips[0].track, "v1");
         assert!(p.track(&p.clips[0].track).is_some());
+    }
+
+    #[test]
+    fn the_same_broll_moment_twice_is_flagged() {
+        let mut p = project();
+        p.media.push(serde_json::from_value(json!({"id":"m1","name":"f","path":"/f.mp4","kind":"video","duration":600.0,"width":1920,"height":1080,"has_audio":false})).unwrap());
+        apply(&mut p, &[
+            json!({"op":"add", "clip":{"type":"solid", "track":"v1", "start":0, "duration":900, "fill":[0,0,0,1]}}),
+            // Two cuts of one moment, butted: one shot.
+            json!({"op":"add", "clip":{"type":"video", "track":"new", "media":"m1", "source_in":10.0, "start":0, "duration":60}}),
+            json!({"op":"add", "clip":{"type":"video", "track":"v2", "media":"m1", "source_in":11.0, "start":60, "duration":60}}),
+            // The same moment again, later.
+            json!({"op":"add", "clip":{"type":"video", "track":"v2", "media":"m1", "source_in":10.5, "start":600, "duration":90}}),
+        ]).unwrap();
+        let issues = audit(&p)["issues"].as_array().unwrap().clone();
+        let repeated: Vec<_> = issues
+            .iter()
+            .filter(|issue| issue["kind"] == "repeated_broll")
+            .collect();
+        assert_eq!(repeated.len(), 2, "{issues:?}");
+    }
+
+    #[test]
+    fn a_transition_without_a_sound_is_flagged() {
+        let mut p = project();
+        p.media.push(
+            serde_json::from_value(
+                json!({"id":"s1","name":"whoosh","path":"/w.wav","kind":"audio","duration":1.0}),
+            )
+            .unwrap(),
+        );
+        apply(&mut p, &[
+            json!({"op":"add", "clip":{"type":"solid", "track":"v1", "start":0, "duration":300, "fill":[0,0,0,1]}}),
+            json!({"op":"transition", "kind":"drop", "at":100}),
+            json!({"op":"transition", "kind":"flash", "at":200}),
+            json!({"op":"add", "clip":{"type":"audio", "media":"s1", "source_in":0.0, "start":98, "duration":30}}),
+        ]).unwrap();
+        let issues = audit(&p)["issues"].as_array().unwrap().clone();
+        let silent: Vec<_> = issues
+            .iter()
+            .filter(|issue| issue["kind"] == "silent_transition")
+            .collect();
+        assert_eq!(silent.len(), 1, "{issues:?}");
+        assert_eq!(silent[0]["at"], 200);
     }
 
     #[test]

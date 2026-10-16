@@ -265,7 +265,7 @@ pub async fn smooth_slow_motion(
     // Interpolation loses a few frames at the ends: render a little more than
     // the clip plays, so the result always covers it at 1×.
     let length = (clip.duration as f64 / fps + 0.25) * speed;
-    let dir = app.store.uploads_dir(project_id).join("smooth");
+    let dir = app.store.uploads_dir(project_id)?.join("smooth");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let stem = Path::new(&source.name).file_stem().map_or_else(
         || "clip".to_owned(),
@@ -275,7 +275,8 @@ pub async fn smooth_slow_motion(
         "bounded-optical-flow-v2",
         &crate::media::media_key(Path::new(&source.path)),
         &format!("{}x{}", project.settings.width, project.settings.height),
-        &source.path,
+        // Named as its cache key names it, so a move to the media drive keeps it.
+        &crate::media_drive::key_path(Path::new(&source.path)).to_string_lossy(),
         &format!("{source_in:.4}"),
         &format!("{length:.4}"),
         &format!("{speed:.4}"),
@@ -1034,7 +1035,7 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
         fields.insert("orbit".to_owned(), json!(orbit));
         fields.insert("push".to_owned(), json!(push));
     }
-    let dir = app.store.uploads_dir(project_id).join("maps");
+    let dir = app.store.uploads_dir(project_id)?.join("maps");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     // A capture-page change (including its baked-in grade) must not reuse
     // footage made with the previous look.

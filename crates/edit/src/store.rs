@@ -18,6 +18,10 @@ const HISTORY_KEEP: usize = 30;
 
 pub struct Store {
     home: PathBuf,
+    /// Where media goes (the media drive, when set) and how it's found.
+    layout: parking_lot::RwLock<crate::media_drive::Layout>,
+    /// Layout changes reach cache keys (`media_drive::publish`): the server's store.
+    publishes: std::sync::atomic::AtomicBool,
     projects: Mutex<HashMap<String, Live>>,
     /// The project the UI opened last; agent tools default to it.
     active: Mutex<Option<String>>,
@@ -62,8 +66,12 @@ impl Store {
         std::fs::create_dir_all(home.join("projects"))?;
         std::fs::create_dir_all(home.join("cache"))?;
         let (events, _) = broadcast::channel(256);
+        let layout = crate::media_drive::Layout::load(&home);
+        crate::media_drive::prepare_env(&layout);
         Ok(Self {
             home,
+            layout: parking_lot::RwLock::new(layout),
+            publishes: std::sync::atomic::AtomicBool::new(false),
             projects: Mutex::new(HashMap::new()),
             active: Mutex::new(None),
             events,
@@ -79,14 +87,66 @@ impl Store {
         &self.home
     }
 
-    /// Where footage downloaded from Google Drive is kept, one folder per file (shared by projects).
-    pub fn drive_dir(&self) -> PathBuf {
-        self.home.join("media").join("drive")
+    /// Where footage downloaded from Google Drive is kept, one folder per file
+    /// (shared by projects): on the media drive when one is set, and an error
+    /// (never the internal disk) while it isn't connected.
+    pub fn drive_dir(&self) -> Result<PathBuf, String> {
+        Ok(self.layout().media_root()?.join("media").join("drive"))
     }
 
-    /// Where footage uploaded from other devices is kept, per project.
-    pub fn uploads_dir(&self, project: &str) -> PathBuf {
-        self.home.join("media").join(project)
+    /// Where media made for a project is kept (uploads from other devices,
+    /// voice-over takes, stills, smoothed shots, map renders): on the media
+    /// drive when one is set, as `drive_dir`.
+    pub fn uploads_dir(&self, project: &str) -> Result<PathBuf, String> {
+        Ok(self.layout().media_root()?.join("media").join(project))
+    }
+
+    /// Where media goes and how it's found (`media_drive`).
+    pub fn layout(&self) -> crate::media_drive::Layout {
+        self.layout.read().clone()
+    }
+
+    /// Makes this store's layout the one cache keys use (the server's store).
+    pub fn publish_layout(&self) {
+        self.publishes.store(true, Ordering::Relaxed);
+        crate::media_drive::publish(&self.layout.read());
+    }
+
+    /// Sets (or, with `None`, turns off) the media drive and saves it in
+    /// `settings.json`. Files already somewhere stay there.
+    pub fn set_media_dir(&self, dir: Option<&Path>) -> Result<crate::media_drive::Layout, String> {
+        let mut layout = self.layout.write();
+        if layout.from_env {
+            return Err(format!(
+                "{} is set, and it decides the media drive: change or unset it instead.",
+                crate::media_drive::ENV
+            ));
+        }
+        let mut next = layout.clone();
+        match dir {
+            Some(dir) => {
+                let dir = crate::media_drive::prepare(&next.home, dir)?;
+                if !next.known.contains(&dir) {
+                    next.known.push(dir.clone());
+                }
+                next.media = Some(dir);
+            }
+            None => next.media = None,
+        }
+        crate::media_drive::save(&next)?;
+        *layout = next.clone();
+        drop(layout);
+        if self.publishes.load(Ordering::Relaxed) {
+            crate::media_drive::publish(&next);
+        }
+        crate::diag::info(
+            "media",
+            match &next.media {
+                Some(dir) => format!("new media goes to the media drive, {}", dir.display()),
+                None => format!("new media goes to {}", next.home.display()),
+            },
+        );
+        Ok(next)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Value> {
@@ -190,14 +250,18 @@ impl Store {
         };
         let problem = match serde_json::from_str::<Project>(&text) {
             Ok(project) if project.id != id => format!("its file holds project {}", project.id),
-            Ok(project) => match project.validate() {
-                Ok(()) => {
-                    let live = Live { rev: 1, project };
-                    projects.insert(id.to_owned(), live.clone());
-                    return Ok(live);
+            Ok(mut project) => {
+                // Files moved to (or back from) the media drive are found.
+                self.layout.read().resolve_project(&mut project);
+                match project.validate() {
+                    Ok(()) => {
+                        let live = Live { rev: 1, project };
+                        projects.insert(id.to_owned(), live.clone());
+                        return Ok(live);
+                    }
+                    Err(error) => format!("it doesn't validate: {error}"),
                 }
-                Err(error) => format!("it doesn't validate: {error}"),
-            },
+            }
             Err(error) => format!("it can't be read: {error}"),
         };
         Err(Some(problem))

@@ -16,6 +16,7 @@ mod loudness;
 mod mac_media;
 mod mcp;
 mod media;
+mod media_drive;
 mod mix;
 mod render;
 mod research;
@@ -52,12 +53,16 @@ USAGE
       devices use `tailscale serve --bg http://127.0.0.1:7700`).
   edit mcp
       Print how to connect Codex / Claude Code to the editor.
+  edit media [use DIR | off | move --to DIR]
+      Keep big media files (downloads, uploads, exports) on another drive;
+      `edit media help` says more.
   edit update
       Install the newest release (the editor also offers it, one click).
   edit --version
 
 ENV
   EDIT_HOME   data directory (default ~/.edit)
+  EDIT_MEDIA_DIR  keep big media files here instead (overrides the setting)
   EDIT_HOSTS  extra Host names to accept, comma-separated
   GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DOCS_REFRESH_TOKEN
               a Google sign-in that can read the team's sound library in Drive
@@ -94,6 +99,7 @@ fn main() {
                 "Start the editor with `edit serve`, then register it once:\n\n  claude mcp add --transport http edit http://127.0.0.1:{port}/mcp\n  codex mcp add edit --url http://127.0.0.1:{port}/mcp\n\nAgents then see tools like get_project, add_text, update_clip, set_keyframes,\nrender_frame and contact_sheet, and their edits appear live in the open project."
             );
         }
+        Some("media") => media_drive::run_cli(&home(), port(), args.get(1..).unwrap_or_default()),
         Some("update") => update::run_cli(
             &std::env::var_os("EDIT_HOME")
                 .map(PathBuf::from)
@@ -187,6 +193,13 @@ async fn start(home: PathBuf, host: Option<String>, port: u16) -> Vec<tokio::tas
             .unwrap_or_else(|error| fail(&format!("{}: {error}", home.display()))),
     );
     tools::use_cache_dir(store.cache_dir());
+    store.publish_layout();
+    media_drive::hold_lock(&home);
+    match store.layout().drive() {
+        Ok(Some(dir)) => diag::info("media", format!("media drive: {}", dir.display())),
+        Ok(None) => {}
+        Err(problem) => diag::warn("media", problem),
+    }
     let mut allowed = vec![
         "localhost".to_owned(),
         "127.0.0.1".to_owned(),

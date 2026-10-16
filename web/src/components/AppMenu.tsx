@@ -1,11 +1,11 @@
 import { writeSetting } from "../lib/storage";
 // The ⋯ menu at the top (shortcuts, settings) and the dialogs it opens.
 
-import { Bug, Ellipsis, Keyboard, RotateCw, Settings } from "lucide-react";
+import { Bug, Check, Copy, Ellipsis, Keyboard, RotateCw, Settings } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { chooseEffort, chooseModel, currentEffort, currentModel, EFFORT_LABELS, useAgent, type AgentModel, type AgentStatus } from "../lib/agent";
-import { fetchRetrying, useMachine } from "../lib/api";
+import { api, fetchRetrying, useMachine, type MediaDrive } from "../lib/api";
 import { closeDialog, openDialog, SHORTCUTS, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { setPreviewQuality, usePreviewQuality } from "../lib/previewQuality";
@@ -268,6 +268,9 @@ function SettingsBody() {
         <PreviewQualityRow />
         <p className="mt-2 text-[12px] leading-relaxed text-muted">Light streams a 720p copy (a quarter of the data) so playback keeps up over the internet. Export always uses the originals.</p>
       </Group>
+      <Group title="Media drive">
+        <MediaDriveSettings />
+      </Group>
       <Group title="Transcription">
         <div className="rounded-xl bg-black ring-1 ring-line">
           <Line label="Model">ElevenLabs Scribe v2</Line>
@@ -277,6 +280,124 @@ function SettingsBody() {
         </div>
       </Group>
     </div>
+  );
+}
+
+const formatSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`);
+
+/** Keeps big media files (downloads, uploads, exports) in a folder on another drive. */
+function MediaDriveSettings() {
+  const machine = useMachine();
+  const [drive, setDrive] = useState<MediaDrive | null>(null);
+  const [dir, setDir] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const adopt = (next: MediaDrive) => {
+    setDrive(next);
+    setDir(next.dir ?? "");
+  };
+  const load = () =>
+    void api
+      .mediaDrive()
+      .then(adopt)
+      .catch((reason) => setError((reason as Error).message));
+  useEffect(load, []);
+
+  const apply = async (next: string | null) => {
+    setBusy(true);
+    setError(null);
+    try {
+      adopt(await api.setMediaDrive(next));
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!drive) return <div className="rounded-xl bg-black px-3 py-3 text-[12px] text-muted ring-1 ring-line">{error ?? "Checking…"}</div>;
+  const [label, tone] =
+    drive.state === "connected"
+      ? ["Connected", "bg-green-500/15 text-green-300"]
+      : drive.state === "offline"
+        ? ["Not connected", "bg-amber-500/15 text-amber-300"]
+        : ["Off", "bg-hover text-muted"];
+  const changed = dir.trim() !== (drive.dir ?? "");
+  return (
+    <>
+      <div className="rounded-xl bg-black ring-1 ring-line">
+        <Line label="Status">
+          <span className={cx("rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>
+        </Line>
+        <Line label="Folder" last={!drive.volumes.length || drive.env}>
+          <form
+            className="flex min-w-0 items-center gap-1.5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (changed && dir.trim()) void apply(dir.trim());
+            }}
+          >
+            <input
+              value={dir}
+              disabled={drive.env || busy}
+              onChange={(event) => setDir(event.target.value)}
+              placeholder={`Off · media stays in ${drive.home}`}
+              spellCheck={false}
+              className="h-7 w-56 min-w-0 rounded-md border border-line bg-panel px-2 font-mono text-[11px] outline-none placeholder:font-sans placeholder:text-faint focus:border-line-strong disabled:opacity-60"
+            />
+            {!drive.env && changed && dir.trim() && (
+              <button type="submit" disabled={busy} className="h-7 rounded-md bg-white px-2.5 text-[12px] font-medium text-black disabled:opacity-40">
+                Use
+              </button>
+            )}
+            {!drive.env && drive.dir && !changed && (
+              <button type="button" disabled={busy} onClick={() => void apply(null)} className="h-7 rounded-md px-2 text-[12px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40">
+                Turn off
+              </button>
+            )}
+          </form>
+        </Line>
+        {!drive.env && drive.volumes.length > 0 && (
+          <Line label="Drives" last>
+            <span className="flex flex-wrap justify-end gap-1">
+              {drive.volumes.map((volume) => (
+                <button
+                  key={volume.path}
+                  type="button"
+                  onClick={() => setDir(`${volume.path}/Edit`)}
+                  className="h-6 rounded-md bg-raised px-2 text-[11px] text-muted hover:bg-hover hover:text-fg"
+                >
+                  {volume.name}
+                </button>
+              ))}
+            </span>
+          </Line>
+        )}
+      </div>
+      <p className="mt-2 text-[12px] leading-relaxed text-muted">
+        Downloads, uploads and renders made into media go to this folder on {machine}, and exports to its Exports folder. Projects, previews and the cache stay in {drive.home}. While the drive is unplugged its footage shows as missing and new media is refused rather than put on this disk.
+        {drive.env && " Set by EDIT_MEDIA_DIR."}
+      </p>
+      {(error || drive.problem) && <p className="mt-2 text-[12px] leading-relaxed text-amber-300">{error ?? drive.problem}</p>}
+      {drive.dir && drive.move_command && drive.internal_bytes > 0 && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          <p className="text-[12px] leading-relaxed text-muted">
+            {formatSize(drive.internal_bytes)} of media is still in {drive.home}. To move it, quit Edit and run:
+          </p>
+          <button
+            type="button"
+            title="Copy"
+            onClick={() => void copyText(drive.move_command ?? "").then(setCopied)}
+            className="flex items-center gap-2 self-start rounded-md border border-line bg-black/40 px-2 py-1 font-mono text-[11px] text-muted hover:text-fg"
+          >
+            <span className="truncate">{drive.move_command}</span>
+            {copied ? <Check size={12} className="shrink-0 text-green-400" /> : <Copy size={12} className="shrink-0" />}
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 

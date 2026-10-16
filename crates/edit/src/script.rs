@@ -1418,13 +1418,15 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                         entry.state = "downloading";
                     }
                 });
-                let dir = app.store.drive_dir().join(file);
+                let dir = app.store.drive_dir().map(|dir| dir.join(file));
                 let result = {
                     let (app, id, file) = (app.clone(), id.clone(), file.clone());
                     tokio::task::spawn_blocking(move || {
                         let last = Mutex::new(Instant::now() - Duration::from_secs(1));
                         let drive = format!("Drive file {file}");
                         crate::diag::time_on("script", "script: download", &drive, || {
+                            // The media drive not connected: said, not downloaded elsewhere.
+                            let dir = dir?;
                             download(&dir, &file, &|bytes, total, name| {
                                 let mut last = last.lock();
                                 if last.elapsed() < Duration::from_millis(350) {

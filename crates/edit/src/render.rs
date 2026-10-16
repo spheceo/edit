@@ -1145,6 +1145,9 @@ impl Exports {
         // Settings that can't work (a target size too small for the span) fail here, not mid-render.
         crate::export::codec_args(&options, &plan, project.fps())?;
         let output = crate::export::with_extension(&output, options.format);
+        // Never into an unplugged media drive's folder (or the empty mount
+        // point it leaves behind).
+        store.layout().writable(&output)?;
         let parent = output
             .parent()
             .filter(|path| !path.as_os_str().is_empty())

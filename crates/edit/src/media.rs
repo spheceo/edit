@@ -206,11 +206,18 @@ fn parse_rate(rate: Option<&str>) -> Option<f64> {
     (num.is_finite() && den.is_finite() && num > 0.0 && den > 0.0).then_some(num / den)
 }
 
-/// Identity of a source file's content for cache reuse across projects.
+/// Identity of a source file's content for cache reuse across projects. A
+/// file on the media drive is named by its place in the data folder
+/// (`media_drive::key_path`), so moving it there keeps its key.
 pub fn media_key(path: &Path) -> String {
-    let meta = std::fs::metadata(path).ok();
+    key_of(&crate::media_drive::key_path(path), path)
+}
+
+/// The key of `file` (its size and modification time) under `name`.
+pub(crate) fn key_of(name: &Path, file: &Path) -> String {
+    let meta = std::fs::metadata(file).ok();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    path.hash(&mut hasher);
+    name.hash(&mut hasher);
     meta.as_ref().map(|meta| meta.len()).hash(&mut hasher);
     meta.and_then(|meta| meta.modified().ok()).hash(&mut hasher);
     format!("{:016x}", hasher.finish())

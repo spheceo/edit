@@ -724,7 +724,7 @@ fn tools() -> Vec<Value> {
             "export",
             "Export the project (default: the whole edit as an MP4, H.264 + AAC, at the project's size). Progress shows in the UI. Options as the export dialog: format, range (frames [start, end)), shape (vertical = 9:16 for Shorts/Reels, filled per fill: blur | crop | black), size (short side px), quality or target_mb, loudness (LUFS, e.g. -14 for YouTube), chapters. A whole subtitled video is then uploaded to the team's Subtitles folder on Drive; its link becomes the project's drive.url.",
             json!({
-                "path": { "type": "string", "description": "Output path (default ~/Movies/Edit/<name>.mp4); the extension follows the format." },
+                "path": { "type": "string", "description": "Output path (default <name>.mp4 in the media drive's Exports folder when one is set, else ~/Movies/Edit); the extension follows the format." },
                 "options": {
                     "type": "object",
                     "properties": {
@@ -1187,7 +1187,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 })
                 .take(60)
                 .collect();
-            let dir = store.uploads_dir(&id);
+            let dir = store.uploads_dir(&id)?;
             std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
             let out = dir.join(format!("{} {:.2}s.png", label.trim(), time));
             let (media, path) = (media.clone(), out.clone());
@@ -2210,7 +2210,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 .as_str()
                 .filter(|path| !path.trim().is_empty())
                 .map(crate::server::expand_home)
-                .unwrap_or_else(|| crate::server::default_export_path(&live.project));
+                .unwrap_or_else(|| crate::server::default_export_path(store, &live.project));
             let subtitled = crate::subtitles::is_subtitled(&live.project);
             let path = app.exports.start(
                 std::sync::Arc::clone(store),

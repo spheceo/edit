@@ -65,6 +65,7 @@ pub fn router(app: App) -> Router {
         .route("/api/health", get(health))
         .route("/api/diagnostics", get(diagnostics))
         .route("/api/setup", get(setup))
+        .route("/api/media-drive", get(media_drive).post(set_media_drive))
         .route("/api/voice", get(voice_list).post(voice_create))
         .route("/api/voice/voices", get(voice_voices))
         .route(
@@ -454,7 +455,11 @@ async fn voice_send(
     app.store
         .get(&body.project)
         .ok_or_else(|| not_found("no such project"))?;
-    let dir = app.store.uploads_dir(&body.project).join("voice-over");
+    let dir = app
+        .store
+        .uploads_dir(&body.project)
+        .map_err(bad)?
+        .join("voice-over");
     std::fs::create_dir_all(&dir).map_err(|error| bad(error.to_string()))?;
     let mut paths = Vec::new();
     for (number, label, take) in takes {
@@ -513,7 +518,25 @@ async fn setup(State(app): State<App>) -> Json<Value> {
         Some("logged_out") => "codex login",
         _ => "npm install -g @openai/codex && codex login",
     };
-    Json(json!({ "checks": [
+    // Only when a media drive is set (`crate::media_drive`).
+    let layout = app.store.layout();
+    let drive = match &layout.media {
+        Some(dir) => {
+            let dir = dir.clone();
+            let ok = tokio::task::spawn_blocking(move || crate::media_drive::check(&dir).is_ok())
+                .await
+                .unwrap_or(false);
+            vec![json!({
+                "id": "media-drive",
+                "ok": ok,
+                "title": format!("The media drive ({})", layout.media.as_deref().map(Path::display).map(|dir| dir.to_string()).unwrap_or_default()),
+                "why": "Its footage shows as missing, and imports, downloads and exports to it are refused until it's back.",
+                "fix": "Plug it in, or turn it off in Settings (⌘,)",
+            })]
+        }
+        None => Vec::new(),
+    };
+    let mut answer = json!({ "checks": [
         {
             "id": "ffmpeg",
             "ok": ffmpeg,
@@ -535,7 +558,45 @@ async fn setup(State(app): State<App>) -> Json<Value> {
             "why": "Map shots and research.",
             "fix": "https://www.google.com/chrome/",
         },
-    ]}))
+    ]});
+    if let Some(checks) = answer.get_mut("checks").and_then(Value::as_array_mut) {
+        checks.splice(0..0, drive);
+    }
+    Json(answer)
+}
+
+/// The media drive setting (`crate::media_drive`): where new media goes,
+/// whether the drive is connected, and what's still in the data folder.
+async fn media_drive(State(app): State<App>) -> Json<Value> {
+    let layout = app.store.layout();
+    Json(
+        tokio::task::spawn_blocking(move || crate::media_drive::status(&layout))
+            .await
+            .unwrap_or_else(|error| json!({ "error": error.to_string() })),
+    )
+}
+
+#[derive(Deserialize)]
+struct MediaDriveBody {
+    /// The media folder; null (or empty) turns the media drive off.
+    dir: Option<String>,
+}
+
+async fn set_media_drive(State(app): State<App>, Json(body): Json<MediaDriveBody>) -> ApiResult {
+    let dir = body
+        .dir
+        .map(|dir| dir.trim().to_owned())
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| expand_home(&dir));
+    let store = Arc::clone(&app.store);
+    let layout = tokio::task::spawn_blocking(move || {
+        let layout = store.set_media_dir(dir.as_deref())?;
+        Ok::<_, String>(crate::media_drive::status(&layout))
+    })
+    .await
+    .map_err(|error| bad(error.to_string()))?
+    .map_err(bad)?;
+    Ok(Json(layout).into_response())
 }
 
 #[derive(Deserialize)]
@@ -624,7 +685,7 @@ async fn upload_media(
             "{name} is not a supported video or audio file"
         )));
     }
-    let dir = app.store.uploads_dir(&id);
+    let dir = app.store.uploads_dir(&id).map_err(bad)?;
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|error| bad(error.to_string()))?;
@@ -914,7 +975,13 @@ pub async fn import_paths(
                 let name = path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned());
-                let dir = app.store.uploads_dir(id).join("stills");
+                let dir = match app.store.uploads_dir(id) {
+                    Ok(dir) => dir.join("stills"),
+                    Err(error) => {
+                        errors.push(error);
+                        continue;
+                    }
+                };
                 let image = path.clone();
                 match tokio::task::spawn_blocking(move || crate::broll::still_video(&image, &dir))
                     .await
@@ -1517,16 +1584,10 @@ struct ExportBody {
     options: crate::export::ExportOptions,
 }
 
-pub fn default_export_path(project: &Project) -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let movies = home.join("Movies");
-    let dir = if movies.is_dir() {
-        movies.join("Edit")
-    } else {
-        home.join("Videos").join("Edit")
-    };
+/// `<exports folder>/<name>.mp4`: the media drive's `Exports` when one is
+/// set, else ~/Movies/Edit.
+pub fn default_export_path(store: &crate::store::Store, project: &Project) -> PathBuf {
+    let dir = store.layout().exports_dir();
     let safe: String = project
         .name
         .chars()
@@ -1580,7 +1641,7 @@ async fn start_export(
     let path = path
         .filter(|path| !path.trim().is_empty())
         .map(|path| expand_home(&path))
-        .unwrap_or_else(|| default_export_path(&live.project));
+        .unwrap_or_else(|| default_export_path(&app.store, &live.project));
     let path = app
         .exports
         .start(

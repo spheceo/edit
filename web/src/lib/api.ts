@@ -184,7 +184,29 @@ export const api = {
   scriptJob: (id: string) => request<{ job: ScriptJob | null; unfinished: boolean }>("GET", `/api/projects/${id}/script/job`),
   /** Picks up a stopped import; `recut` lays the script out again from fresh transcript cuts. */
   resumeScript: (id: string, recut = false) => request<{ job: ScriptJob | null }>("POST", `/api/projects/${id}/script/job${recut ? "?recut=true" : ""}`),
+  /** Where Edit keeps big media files (Settings → Media drive). */
+  mediaDrive: () => request<MediaDrive>("GET", "/api/media-drive"),
+  /** Sets the media folder; null turns the media drive off. */
+  setMediaDrive: (dir: string | null) => request<MediaDrive>("POST", "/api/media-drive", { dir }),
 };
+
+/** The media drive: an optional folder (usually on an external drive) for downloads, uploads and exports. */
+export interface MediaDrive {
+  dir: string | null;
+  /** Set by EDIT_MEDIA_DIR (the setting can't change it). */
+  env: boolean;
+  state: "off" | "connected" | "offline";
+  problem: string | null;
+  home: string;
+  /** Where exports go by default. */
+  exports: string;
+  /** Media still in the data folder (media/ and uploads/). */
+  internal_bytes: number;
+  /** The command that moves it to the media drive. */
+  move_command: string | null;
+  /** Drives mounted under /Volumes. */
+  volumes: { name: string; path: string }[];
+}
 
 export const mediaUrl = (project: string, media: string, kind: "proxy" | "light" | "audio" | "thumbs" | "peaks") =>
   `/api/projects/${project}/media/${media}/${kind}`;

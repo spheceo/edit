@@ -70,6 +70,8 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [more, setMore] = useState(false);
   const [path, setPath] = useState("");
   const [pathEdited, setPathEdited] = useState(false);
+  // The media drive's Exports folder when one is set (Settings → Media drive).
+  const [exportsDir, setExportsDir] = useState("~/Movies/Edit");
   const [encoders, setEncoders] = useState<Encoders | null>(null);
   const [preparing, setPreparing] = useState(false);
   const starting = useRef(false);
@@ -86,6 +88,10 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   useEffect(() => {
     if (!open) return;
     setSpanChoice(inOut ? "inout" : "whole");
+    void api
+      .mediaDrive()
+      .then((drive) => setExportsDir(drive.exports))
+      .catch(() => undefined);
     if (!encoders) void api.exportEncoders().then(setEncoders).catch(() => setEncoders({ videotoolbox: false, hevc: false, prores: false, mp3: false }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -94,10 +100,10 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   useEffect(() => {
     if (!open || !project) return;
     const extension = extensionOf(settings.format);
-    if (!pathEdited) setPath(`~/Movies/Edit/${safeName(project.name)}.${extension}`);
+    if (!pathEdited) setPath(`${exportsDir}/${safeName(project.name)}.${extension}`);
     else setPath((current) => current.replace(/\.[a-z0-9]{2,4}$/i, "") + `.${extension}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, project?.name, settings.format]);
+  }, [open, project?.name, settings.format, exportsDir]);
 
   useEffect(() => writeSetting(SAVED, JSON.stringify({ settings, chapters: embed })), [settings, embed]);
 

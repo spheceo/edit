@@ -57,6 +57,7 @@ fn keeps_uniforms_independent_beyond_512_draws() {
                 },
                 opacity: 1.0,
                 crop: Default::default(),
+                frame: None,
             })
             .collect(),
     };
@@ -114,6 +115,7 @@ fn renders_gradient_glowing_title_and_grade() {
                 transform: Transform::default(),
                 opacity: 1.0,
                 crop: Default::default(),
+                frame: None,
             },
             Layer::Adjustment {
                 grade: Grade {
@@ -203,7 +205,7 @@ fn renders_repack_subtitle_style() {
         width: w,
         height: h,
         layers: vec![
-            Layer::Video { clip: "c1".into(), media: "m1".into(), source_time: 0.0, transform: Transform::default(), opacity: 1.0, crop: Default::default() },
+            Layer::Video { clip: "c1".into(), media: "m1".into(), source_time: 0.0, transform: Transform::default(), opacity: 1.0, crop: Default::default(), frame: None },
             Layer::Text {
                 clip: "s1".into(),
                 text: "This is how a subtitle looks in Repack's house style, wrapping onto a second line when it runs long".into(),
@@ -248,6 +250,7 @@ fn independent_moments_of_one_source_do_not_share_a_texture() {
         },
         opacity: 1.0,
         crop: Default::default(),
+        frame: None,
     };
     renderer.render(&Scene {
         width: 80,
@@ -288,6 +291,7 @@ fn crops_a_picture_and_fades_a_gradient() {
                     right: 0.5,
                     ..Crop::default()
                 },
+                frame: None,
             },
             // Black, clear at 60% across, full by 90%.
             Layer::Solid {
@@ -362,6 +366,7 @@ fn blurs_only_inside_the_region() {
         transform: Transform::default(),
         opacity: 1.0,
         crop: Default::default(),
+        frame: None,
     };
     let word = Layer::Text {
         clip: "t1".into(),

@@ -18,6 +18,7 @@ pub enum Layer {
         transform: Transform,
         opacity: f32,
         crop: Crop,
+        frame: Option<PhotoFrame>,
     },
     Text {
         clip: String,
@@ -159,6 +160,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 transform,
                 opacity,
                 crop,
+                frame,
             } => Layer::Video {
                 clip: clip.id.clone(),
                 media: media.clone(),
@@ -166,6 +168,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 transform: animated_transform(transform),
                 opacity: anim("opacity", *opacity) * fade,
                 crop: *crop,
+                frame: *frame,
             },
             ClipContent::Text {
                 text,
@@ -754,6 +757,7 @@ mod tests {
                 transform: Transform::default(),
                 opacity: 1.0,
                 crop: Default::default(),
+                frame: None,
             },
         });
         project.clips.push(Clip {

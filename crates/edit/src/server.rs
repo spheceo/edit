@@ -1077,6 +1077,7 @@ pub fn place_at_end(project: &mut Project, media_id: &str) {
                     transform: Transform::default(),
                     opacity: 1.0,
                     crop: Default::default(),
+                    frame: None,
                 },
             });
         }

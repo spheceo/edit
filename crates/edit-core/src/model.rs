@@ -295,6 +295,30 @@ impl Clip {
     }
 }
 
+/// A printed photo's border and drop shadow (project pixels).
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+pub struct PhotoFrame {
+    #[serde(default = "frame_width")]
+    pub width: f32,
+    #[serde(default = "frame_color")]
+    pub color: Rgba,
+    /// How dark the shadow is under the photo (0 none, 1 black).
+    #[serde(default = "frame_shadow")]
+    pub shadow: f32,
+}
+
+fn frame_width() -> f32 {
+    12.0
+}
+
+fn frame_color() -> Rgba {
+    Rgba([0.08, 0.08, 0.08, 1.0])
+}
+
+fn frame_shadow() -> f32 {
+    0.55
+}
+
 /// A muted stretch of an audio clip's source, in seconds of the media.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Mute {
@@ -365,6 +389,10 @@ pub enum ClipContent {
         /// Cut off the picture's edges (a split screen's halves).
         #[serde(default, skip_serializing_if = "Crop::is_none")]
         crop: Crop,
+        /// A border and soft drop shadow around the picture: a printed photo
+        /// on an evidence board.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<PhotoFrame>,
     },
     Audio {
         media: String,

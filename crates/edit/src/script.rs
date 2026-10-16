@@ -1992,6 +1992,7 @@ fn lay_out(project: &mut Project) {
                         transform: Transform::default(),
                         opacity: 1.0,
                         crop: Default::default(),
+                        frame: None,
                     },
                 });
                 if media.has_audio {

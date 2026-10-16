@@ -679,6 +679,7 @@ impl Renderer {
                     transform,
                     opacity,
                     crop,
+                    frame,
                     ..
                 } => {
                     let Some(video) = self.videos.get(clip).or_else(|| self.videos.get(media))
@@ -707,11 +708,84 @@ impl Renderer {
                         y: transform.y + shift[0] * sin + shift[1] * cos,
                         ..*transform
                     };
+                    let shown = [size[0] * kept[0], size[1] * kept[1]];
+                    // A printed photo: a soft shadow down and to the right, then
+                    // the border, then the picture on it.
+                    if let Some(frame) = frame {
+                        let scale = transform.scale.max(0.0);
+                        let outer = [
+                            shown[0] + 2.0 * frame.width.max(0.0),
+                            shown[1] + 2.0 * frame.width.max(0.0),
+                        ];
+                        if frame.shadow > 0.0 && scale > 0.0 {
+                            let sigma = (0.012 * self.height as f32 * scale).max(0.01);
+                            let distance = 0.008 * self.height as f32 * scale;
+                            let (sin, cos) = transform.rotation.to_radians().sin_cos();
+                            let (dx, dy) = (distance * 0.5, distance);
+                            let moved = Transform {
+                                x: placed.x + dx * cos - dy * sin,
+                                y: placed.y + dx * sin + dy * cos,
+                                ..placed
+                            };
+                            let reach = 3.0 * sigma / scale;
+                            let uniforms = LayerUniforms {
+                                blur: sigma,
+                                ..quad_uniforms(
+                                    &moved,
+                                    [outer[0] + 2.0 * reach, outer[1] + 2.0 * reach],
+                                    half_canvas,
+                                    *opacity,
+                                    [0.0, 0.0, 0.0, frame.shadow.clamp(0.0, 1.0)],
+                                    MODE_BOX_SHADOW,
+                                )
+                            };
+                            let offset = slots.push(
+                                &self.queue,
+                                &self.uniforms,
+                                bytemuck::bytes_of(&uniforms),
+                            );
+                            let group = self.bind(&self.blank.view);
+                            draw(
+                                &mut encoder,
+                                &self.over_pipeline,
+                                &self.accum(current).view,
+                                &group,
+                                offset,
+                                4,
+                                None,
+                            );
+                        }
+                        if frame.width > 0.0 {
+                            let uniforms = quad_uniforms(
+                                &placed,
+                                outer,
+                                half_canvas,
+                                *opacity,
+                                frame.color.0,
+                                MODE_SOLID,
+                            );
+                            let offset = slots.push(
+                                &self.queue,
+                                &self.uniforms,
+                                bytemuck::bytes_of(&uniforms),
+                            );
+                            let group = self.bind(&self.blank.view);
+                            draw(
+                                &mut encoder,
+                                &self.over_pipeline,
+                                &self.accum(current).view,
+                                &group,
+                                offset,
+                                4,
+                                None,
+                            );
+                        }
+                    }
                     let uniforms = LayerUniforms {
                         uv: [crop.left, crop.top, 1.0 - crop.right, 1.0 - crop.bottom],
                         ..quad_uniforms(
                             &placed,
-                            [size[0] * kept[0], size[1] * kept[1]],
+                            shown,
                             half_canvas,
                             *opacity,
                             [1.0; 4],

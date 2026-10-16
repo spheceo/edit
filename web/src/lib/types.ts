@@ -297,6 +297,8 @@ export interface VideoClip extends ClipBase {
   opacity: number;
   /** Shares of the picture cut off each side (edit-core Crop). */
   crop?: Crop;
+  /** A printed photo's border (project px) and drop shadow (0–1), as on an evidence board. */
+  frame?: { width?: number; color?: Rgba; shadow?: number };
 }
 
 export interface Crop {

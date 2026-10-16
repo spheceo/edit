@@ -54,7 +54,8 @@ impl FontBook {
     }
 }
 
-/// Fonts that ship with Edit (Geist and Montserrat, both SIL OFL 1.1).
+/// Fonts that ship with Edit (Geist, Montserrat and Reenie Beanie, a marker
+/// handwriting for notes on evidence; all SIL OFL 1.1).
 pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
     ("Montserrat", 600, "Montserrat-SemiBold.ttf"),
     ("Geist", 400, "Geist-Regular.ttf"),
@@ -62,6 +63,7 @@ pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
     ("Geist", 600, "Geist-SemiBold.ttf"),
     ("Geist", 700, "Geist-Bold.ttf"),
     ("Geist", 900, "Geist-Black.ttf"),
+    ("Reenie Beanie", 400, "ReenieBeanie.ttf"),
 ];
 
 #[cfg(feature = "bundled-fonts")]
@@ -73,6 +75,7 @@ pub fn bundled_font_bytes(file: &str) -> Option<&'static [u8]> {
         "Geist-Bold.ttf" => include_bytes!("../fonts/Geist-Bold.ttf"),
         "Geist-Black.ttf" => include_bytes!("../fonts/Geist-Black.ttf"),
         "Montserrat-SemiBold.ttf" => include_bytes!("../fonts/Montserrat-SemiBold.ttf"),
+        "ReenieBeanie.ttf" => include_bytes!("../fonts/ReenieBeanie.ttf"),
         _ => return None,
     })
 }

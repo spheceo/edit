@@ -708,6 +708,36 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A file whose first picture isn't at 0 has an empty edit there (our
+    /// slowed clips' renders do), which AVFoundation fills with a made-up
+    /// black picture: a clip from 0 showed it as a black frame at the cut.
+    #[test]
+    fn a_leading_empty_edit_shows_the_first_picture_not_black() {
+        let dir = temp_dir("empty-edit");
+        let path = dir.join("late-start.mp4");
+        let made = Command::new(crate::tools::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("testsrc2=size=64x32:rate=30:duration=1")
+            .args(["-vf", "setpts=PTS+0.1/TB", "-c:v", "libx264"])
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let mut reader = Reader::open(&path, 64, 32).unwrap();
+        let mut first = vec![0; 64 * 32 * 4];
+        reader.frame(0.1, &mut first, Order::Rgba, false).unwrap();
+        let mut reader = Reader::open(&path, 64, 32).unwrap();
+        for time in [0.0, 0.05] {
+            let mut pixels = vec![0; 64 * 32 * 4];
+            reader.frame(time, &mut pixels, Order::Rgba, false).unwrap();
+            let bright = pixels.iter().map(|&value| u64::from(value)).sum::<u64>();
+            assert!(bright > 64 * 32 * 255, "{time}: a black picture");
+            assert_eq!(pixels, first, "{time}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn sound_stretches_start_on_the_sample() {
         let dir = temp_dir("sound");

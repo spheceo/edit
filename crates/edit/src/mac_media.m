@@ -137,6 +137,11 @@ int edit_scale(const uint8_t *source, uint32_t sw, uint32_t sh, size_t sstride,
 @property uint32_t height;
 @property unsigned rotation;
 @property NSMutableData *rotated;
+// The track's empty edits (movie seconds): AVFoundation fills each with a
+// made-up black picture (alpha 0) that no frame of the source shows. FFmpeg
+// writes one at the start of a file whose first picture isn't at 0, as our
+// slowed clips' renders are, so a clip from 0 opened on a black frame.
+@property NSArray<NSValue *> *gaps;
 @end
 
 @implementation EditReader
@@ -174,12 +179,26 @@ int edit_scale(const uint8_t *source, uint32_t sw, uint32_t sh, size_t sstride,
                                                   CMTimeMakeWithSeconds(MAX(_end, start + _step), 600000));
     return [_reader startReading];
 }
-// The next sample with a picture: marker and empty samples are skipped.
+// Whether a picture at `time` is an empty edit's filler. The filler starts the
+// edit; the source's own next picture may land a hair before the edit's end
+// (timescale rounding), so only the edit's first part counts.
+- (BOOL)inGap:(double)time {
+    for (NSValue *value in _gaps) {
+        CMTimeRange gap = value.CMTimeRangeValue;
+        double start = CMTimeGetSeconds(gap.start);
+        double length = CMTimeGetSeconds(gap.duration);
+        if (time >= start - 0.000001 && time < start + length - MIN(_step, length) * 0.5) return YES;
+    }
+    return NO;
+}
+// The next sample with a picture: marker and empty samples, and empty edits'
+// filler, are skipped.
 - (CMSampleBufferRef)copyNextPicture {
     for (;;) {
         CMSampleBufferRef sample = [_output copyNextSampleBuffer];
         if (!sample) return NULL;
-        if (CMSampleBufferGetImageBuffer(sample) && CMTIME_IS_NUMERIC(CMSampleBufferGetPresentationTimeStamp(sample)))
+        CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
+        if (CMSampleBufferGetImageBuffer(sample) && CMTIME_IS_NUMERIC(pts) && ![self inGap:CMTimeGetSeconds(pts)])
             return sample;
         CFRelease(sample);
     }
@@ -202,6 +221,11 @@ void *edit_reader_open(const char *path, uint32_t width, uint32_t height,
             ? CMTimeGetSeconds(CMTimeRangeGetEnd(range)) : CMTimeGetSeconds(r.asset.duration);
         if (!isfinite(end) || end <= 0) { fail(error, capacity, @"Native track has no finite duration"); return NULL; }
         r.end = end;
+        NSMutableArray<NSValue *> *gaps = [NSMutableArray array];
+        for (AVAssetTrackSegment *segment in r.track.segments) {
+            if (segment.empty) [gaps addObject:[NSValue valueWithCMTimeRange:segment.timeMapping.target]];
+        }
+        r.gaps = gaps;
         CGAffineTransform t = r.track.preferredTransform;
         double angle = atan2(t.b, t.a);
         // vImage's positive rotation is counterclockwise; track transforms use y down.

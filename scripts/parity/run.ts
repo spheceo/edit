@@ -387,6 +387,19 @@ try {
   say(`parity: rust on :7801 (${rustBin}), ts on :7802 (bun, ${nativeNode}); homes in ${runDir}`);
   for (const step of steps) {
     if (only !== undefined && !step.name.includes(only) && !step.always) continue;
+    if (step.restart !== undefined) {
+      // Both servers again on the same homes, with the cloud on or off (a relay token or none).
+      await Promise.all([sides.rust.stop(), sides.ts.stop()]);
+      for (const name of ["rust", "ts"] as const) {
+        const side = sides[name];
+        const fresh = new Side(config(name, side.home, user, serviceEnv(mocks[name], step.restart === "cloud"), nodePath.join(runDir, `${name}.log`)));
+        Object.assign(fresh.vars, side.vars);
+        for (const asked of side.asked) fresh.asked.add(asked);
+        sides[name] = fresh;
+      }
+      await Promise.all([sides.rust.start(), sides.ts.start()]);
+      say(`parity: both servers restarted, cloud ${step.restart === "cloud" ? "on" : "off"}`);
+    }
     const started = Date.now();
     const before = { rust: sides.rust.events.length, ts: sides.ts.events.length };
     const callsBefore = { rust: mocks.rust.server.requests.length, ts: mocks.ts.server.requests.length };

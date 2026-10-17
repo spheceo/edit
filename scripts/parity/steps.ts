@@ -42,6 +42,8 @@ export interface Step {
   settle?: number;
   /** Runs even with --only (it sets up what later steps use). */
   always?: boolean;
+  /** Restart both servers before this step, with the cloud on (a relay token) or off. */
+  restart?: "cloud" | "local";
 }
 
 // ---------------------------------------------------------------------------
@@ -808,8 +810,8 @@ export const steps: Step[] = [
       const first = shown(await side.http("PUT", `/api/projects/${id}`, { base_rev: current.rev, project: renamed, origin: "ui" }));
       const stale = shown(await side.http("PUT", `/api/projects/${id}`, { base_rev: current.rev, project: current.project, origin: "ui" }));
       // Keys sorted, so the place serde reports is the same in both bodies.
-      const invalid = shown(await side.http("PUT", `/api/projects/${id}`, sorted({ base_rev: current.rev + 1, project: { ...renamed, clips: [{ id: "x", track: "nope" }] }, origin: "ui" })));
-      const wrongType = shown(await side.http("PUT", `/api/projects/${id}`, sorted({ base_rev: current.rev + 1, project: { ...renamed, name: 3 }, origin: "ui" })));
+      const invalid = shown(await side.http("PUT", `/api/projects/${id}`, sorted({ base_rev: current.rev + 1, project: { ...renamed, media: [], clips: [{ id: "x", track: "nope" }] }, origin: "ui" })));
+      const wrongType = shown(await side.http("PUT", `/api/projects/${id}`, sorted({ base_rev: current.rev + 1, project: { ...renamed, media: [], clips: [], name: 3 }, origin: "ui" })));
       return { first, stale, invalid, wrongType };
     },
     settle: 3000,
@@ -846,6 +848,37 @@ export const steps: Step[] = [
     settle: 5000,
   },
   { name: "GET script/job", run: async (side) => shown(await side.http("GET", `/api/projects/${scripted(side)}/script/job`)) },
+  // The same script with the cloud off: the footage downloaded to disk and cut there (the
+  // cloud path can't run against an http mock: the shipped FFmpeg's -ca_file is TLS-only).
+  {
+    name: "POST script (attach and import, cloud off)",
+    restart: "local",
+    always: true,
+    run: async (side, world) => {
+      const reply = await side.http("POST", "/api/projects", { name: "Parity case (local)" });
+      const id = (reply.body as { project: { id: string } }).project.id;
+      side.vars.scriptedLocal = id;
+      world.alias(side, id, "<scripted-local>");
+      const from = side.events.length;
+      const attached = shown(await side.http("POST", `/api/projects/${id}/script`, { url: `https://docs.google.com/document/d/${SCRIPT_DOC}/edit` }));
+      const done = await event(side, from, (item) => item.type === "script" && ["done", "failed"].includes(String((item.job as { state?: string } | undefined)?.state)), 900_000);
+      return { attached, done };
+    },
+    settle: 5000,
+  },
+  { name: "the locally imported script project", run: async (side) => live(side, String(side.vars.scriptedLocal)) },
+  { name: "realign_script (the imported script)", run: async (side) => call(side, "realign_script", { project_id: String(side.vars.scriptedLocal) }) },
+  { name: "place_voiceovers (the imported script)", run: async (side) => call(side, "place_voiceovers", { project_id: String(side.vars.scriptedLocal) }), settle: 2000 },
+  { name: "export (the imported script, local)", run: async (side, world) => {
+      const from = side.events.length;
+      const path = nodePath.join(world.dir, `export-${side.name}`, "script.mp4");
+      const answer = await call(side, "export", { project_id: String(side.vars.scriptedLocal), path, options: { size: 360, quality: "small" } });
+      return { answer, done: await exported(side, String(side.vars.scriptedLocal), from) };
+    },
+    expect: [MIX_FIX],
+  },
+  { name: "the cloud back on", restart: "cloud", always: true, run: get("/api/cloud") },
+
   {
     name: "POST script/job (resume)",
     run: async (side) => {
@@ -925,6 +958,20 @@ export const steps: Step[] = [
   { name: "GET /api/agent", run: get("/api/agent") },
   { name: "GET /api/projects/{id}/agent", run: get((world) => `/api/projects/${world.seed.small}/agent`) },
   { name: "POST agent (empty)", run: post((world) => `/api/projects/${world.seed.small}/agent`, { text: "" }) },
+  {
+    name: "POST agent (a message: Codex isn't signed in here)",
+    run: async (side, world) => {
+      const id = world.seed.small;
+      const sent = shown(await side.http("POST", `/api/projects/${id}/agent`, { text: "Tighten the intro by a second.", effort: "low" }));
+      await side.until(async () => !((await side.http("GET", `/api/projects/${id}/agent`)).body as { running?: boolean }).running, 60_000, 500);
+      const chat = (await side.http("GET", `/api/projects/${id}/agent`)).body as { entries?: { kind?: string; text?: string }[] };
+      // Codex failing to start ends the turn twice (its error, the process's exit): which wins is a race.
+      const entries = (chat.entries ?? []).filter((entry) => !(entry.kind === "error" && /^Codex stopped/.test(entry.text ?? "")));
+      return { sent, chat: { ...chat, entries } };
+    },
+    settle: 2000,
+    calls: false,
+  },
   { name: "POST agent/stop", run: post((world) => `/api/projects/${world.seed.small}/agent/stop`) },
   { name: "POST agent/reset", run: post((world) => `/api/projects/${world.seed.small}/agent/reset`) },
   {

@@ -21,9 +21,12 @@
 // isn't here: call it directly.
 
 import type { App } from "./app.ts";
+import type { Router } from "./http/router.ts";
+import * as appModule from "./app_seam.ts";
 import * as captionsCore from "./captions_core.ts";
 import * as facesModule from "./faces.ts";
 import * as peopleModule from "./people.ts";
+import * as serverModule from "./server_seam.ts";
 import * as speakersModule from "./speakers.ts";
 import * as subtitlesModule from "./subtitles.ts";
 import type {
@@ -68,6 +71,36 @@ function stub<T extends object>(module: string, known: Partial<T> = {}): T {
 
 type Json = unknown;
 
+/** A package's REST routes (its handlers from server.rs), registered on the router. */
+export type Routes = (router: Router<App>) => void;
+
+/** Whether `error` is a seam's "not ported yet" (callers with a sensible fallback use it meanwhile). */
+export function isNotPorted(error: unknown): boolean {
+  return error instanceof Error && error.message.endsWith(" is not ported yet");
+}
+
+/**
+ * Until a package lands, its routes are there and answer that they aren't
+ * ported (a 500 naming them), so the server has every path server.rs has (the
+ * route-coverage test) and none falls through to the UI's shell. The package's
+ * own `routes` registers the same paths when it fills its seam.
+ */
+function placeholders(module: string, routes: [method: string, pattern: string, bodyLimit?: number | null][]): Routes {
+  return (router) => {
+    for (const [method, pattern, bodyLimit] of routes) {
+      router.route(
+        method,
+        pattern,
+        () => notPorted(`${module} (${method} ${pattern})`),
+        bodyLimit === undefined ? {} : { bodyLimit },
+      );
+    }
+  };
+}
+
+/** axum's `DefaultBodyLimit::max(64 << 20)` (map shots and frames). */
+const MAP_BODY_LIMIT = 64 << 20;
+
 // ---------------------------------------------------------------------------
 // WP2: shell, server core, shipping
 
@@ -101,8 +134,9 @@ export interface AppSeam {
   originalExe(): string;
 }
 
-export const server: ServerSeam = stub<ServerSeam>("server");
-export const app: AppSeam = stub<AppSeam>("app");
+// WP2 has landed: server_seam.ts and app_seam.ts.
+export const server: ServerSeam = serverModule;
+export const app: AppSeam = appModule;
 
 // ---------------------------------------------------------------------------
 // WP3: cloud
@@ -151,10 +185,35 @@ export interface CloudProjectsSeam {
   routes(router: import("./http/router.ts").Router<App>): void;
   /** On the way out: pushes what's left and lets every lock go. */
   shutdown(): Promise<void>;
+  /**
+   * The server's cloud projects (main.rs: `Cloud::open(home, machine)` then
+   * `cloud_projects::start`): attaches the store's hook and starts the push loop.
+   */
+  start(app: App): void;
+  /** `edit cloud …` outside a server: the relay token saved in Settings → Cloud, unless the env sets one. */
+  useSavedToken(home: string): void;
+}
+
+export interface CloudSeam {
+  /** `edit cloud [url | put | get | head | ls | rm | convex] …` (cloud.rs run_cli); exits as it did. */
+  runCli(args: string[]): Promise<void>;
 }
 
 export const cloudMedia: CloudMediaSeam = stub<CloudMediaSeam>("cloud_media");
-export const cloudProjects: CloudProjectsSeam = stub<CloudProjectsSeam>("cloud_projects");
+export const cloudProjects: CloudProjectsSeam = stub<CloudProjectsSeam>("cloud_projects", {
+  routes: placeholders("cloud_projects", [
+    ["GET", "/api/cloud"],
+    ["POST", "/api/cloud"],
+    ["GET", "/api/cloud/projects"],
+    ["GET", "/api/projects/{id}/cloud"],
+    ["POST", "/api/projects/{id}/cloud/open"],
+    ["POST", "/api/projects/{id}/cloud/close"],
+    ["POST", "/api/projects/{id}/cloud/takeover"],
+    ["POST", "/api/projects/{id}/cloud/upload"],
+    ["POST", "/api/projects/{id}/cloud/backfill"],
+  ]),
+});
+export const cloud: CloudSeam = stub<CloudSeam>("cloud");
 
 // ---------------------------------------------------------------------------
 // WP4: script, voice, research
@@ -209,6 +268,8 @@ export interface ScriptSeam {
   start(app: App, projectId: string, recut: boolean): void;
   summary(parsed: Parsed): Json;
   unfinished(project: Project): boolean;
+  /** `/api/scripts/preview`, `/api/projects/{id}/script`, `/api/projects/{id}/script/job`. */
+  routes: Routes;
 }
 
 /** Voice-over projects (voice.rs Voices). */
@@ -219,6 +280,8 @@ export interface Voices {
 export interface VoiceSeam {
   /** The lines of a video project's script narration (its cut-ins), in order, with their labels. */
   narrationLines(project: Project): [string, string | null][];
+  /** `/api/voice/*`. */
+  routes: Routes;
 }
 
 export interface VoiceoverSeam {
@@ -275,12 +338,43 @@ export interface ResearchSeam {
   /** A found image shrunk into a 320×240 cell (letterboxed) as RGBA, for contact sheets. */
   thumbnail(path: string): Promise<import("./native/index.ts").RawImage | null>;
   update(home: string, project: string, id: string, change: (item: ResearchItem) => void): ResearchItem;
+  /** `/api/projects/{id}/research/*` (the review route keeps through `server.reviewFound`). */
+  routes: Routes;
 }
 
-export const script: ScriptSeam = stub<ScriptSeam>("script");
-export const voice: VoiceSeam = stub<VoiceSeam>("voice");
+export const script: ScriptSeam = stub<ScriptSeam>("script", {
+  routes: placeholders("script", [
+    ["POST", "/api/scripts/preview"],
+    ["POST", "/api/projects/{id}/script"],
+    ["GET", "/api/projects/{id}/script/job"],
+    ["POST", "/api/projects/{id}/script/job"],
+  ]),
+});
+export const voice: VoiceSeam = stub<VoiceSeam>("voice", {
+  routes: placeholders("voice", [
+    ["GET", "/api/voice"],
+    ["POST", "/api/voice"],
+    ["GET", "/api/voice/voices"],
+    ["GET", "/api/voice/{id}"],
+    ["PUT", "/api/voice/{id}"],
+    ["DELETE", "/api/voice/{id}"],
+    ["GET", "/api/voice/{id}/full.mp3"],
+    ["POST", "/api/voice/{id}/send"],
+    ["POST", "/api/voice/{id}/lines/{line}/generate"],
+    ["GET", "/api/voice/{id}/lines/{line}/takes/{take}"],
+    ["DELETE", "/api/voice/{id}/lines/{line}/takes/{take}"],
+  ]),
+});
 export const voiceover: VoiceoverSeam = stub<VoiceoverSeam>("voiceover");
-export const research: ResearchSeam = stub<ResearchSeam>("research");
+export const research: ResearchSeam = stub<ResearchSeam>("research", {
+  routes: placeholders("research", [
+    ["GET", "/api/projects/{id}/research"],
+    ["POST", "/api/projects/{id}/research"],
+    ["POST", "/api/projects/{id}/research/clear"],
+    ["POST", "/api/projects/{id}/research/{item}"],
+    ["GET", "/api/projects/{id}/research/{item}/image"],
+  ]),
+});
 
 // ---------------------------------------------------------------------------
 // WP5: subtitles, speakers, people, seats, faces
@@ -463,6 +557,8 @@ export interface CaptionsSeam {
   subtitles(app: App, projectId: string, from: number, to: number, neglect: boolean): Promise<Json>;
   /** A media's transcript, transcribing it first if needed. */
   transcriptOf(app: App, media: Media): Promise<Transcript>;
+  /** `/api/projects/{id}/captions` and `/api/projects/{id}/media/{media}/transcribe`. */
+  routes: Routes;
 }
 
 export interface EditReviewSeam {
@@ -497,6 +593,8 @@ export interface WatchSeam {
   watchFootage(app: App, projectId: string, options: WatchOptions): Promise<Json>;
   /** Starts watching `projectId`'s footage in the background. */
   watchInBackground(app: App, projectId: string): void;
+  /** `/api/projects/{id}/watch`. */
+  routes: Routes;
 }
 
 // `hex`, `transcriptOf`, `subtitleName` and `captionSize` moved to WP5
@@ -506,10 +604,17 @@ export const captions: CaptionsSeam = stub<CaptionsSeam>("captions", {
   transcriptOf: (app, media) => captionsCore.transcriptOf(app, media),
   subtitleName: (name) => captionsCore.subtitleName(name),
   captionSize: (text, style) => captionsCore.captionSize(text, style),
+  routes: placeholders("captions", [
+    ["POST", "/api/projects/{id}/media/{media}/transcribe"],
+    ["POST", "/api/projects/{id}/captions"],
+  ]),
 });
 export const editReview: EditReviewSeam = stub<EditReviewSeam>("edit_review");
 export const footageSearch: FootageSearchSeam = stub<FootageSearchSeam>("footage_search");
-export const watch: WatchSeam = stub<WatchSeam>("watch", { MODEL: "google/gemini-3.8-flash" });
+export const watch: WatchSeam = stub<WatchSeam>("watch", {
+  MODEL: "google/gemini-3.8-flash",
+  routes: placeholders("watch", [["POST", "/api/projects/{id}/watch"]]),
+});
 
 // ---------------------------------------------------------------------------
 // WP7: editing tools and plans
@@ -574,6 +679,8 @@ export interface BrollSeam {
   stillVideo(image: string, dir: string): Promise<string>;
   waitForMaps(app: App, projectId: string, limitMs: number): Promise<void>;
   waitForSmoothing(projectId: string, limitMs: number): Promise<boolean>;
+  /** `/api/maps/{token}` and `/api/maps/{token}/frame/{index}` (64 MiB bodies). */
+  routes: Routes;
 }
 
 export interface DriveSeam {
@@ -582,6 +689,8 @@ export interface DriveSeam {
   uploading(): boolean;
   /** Whether an export is uploaded: a video file (MP4 or MOV) of all of it. */
   wanted(project: Project, options: ExportOptions, plan: Plan): boolean;
+  /** `/api/projects/{id}/drive` (the link, checked; and uploading an export again). */
+  routes: Routes;
 }
 
 export interface LibrarySeam {
@@ -591,11 +700,46 @@ export interface LibrarySeam {
   gainTo(project: Project, clip: Clip, target: number): Promise<number>;
   import(app: App, project: string, sound: string, origin: string): Promise<[string, Sound]>;
   loudness(path: string, from: number, seconds: number): Promise<number>;
+  /** `/api/library` and `/api/projects/{id}/library`. */
+  routes: Routes;
 }
 
-export const broll: BrollSeam = stub<BrollSeam>("broll", { MAP_EXPORT_WAIT: 600_000 });
-export const drive: DriveSeam = stub<DriveSeam>("drive");
-export const library: LibrarySeam = stub<LibrarySeam>("library");
+/** The agent panel's routes (server.rs's agent_* handlers over `Agents`). */
+export interface AgentSeam {
+  /** `/api/agent`, `/api/agent/models`, `/api/projects/{id}/agent` (and `/stop`, `/reset`). */
+  routes: Routes;
+}
+
+export const broll: BrollSeam = stub<BrollSeam>("broll", {
+  MAP_EXPORT_WAIT: 600_000,
+  routes: placeholders("broll", [
+    ["GET", "/api/maps/{token}", MAP_BODY_LIMIT],
+    ["POST", "/api/maps/{token}", MAP_BODY_LIMIT],
+    ["POST", "/api/maps/{token}/frame/{index}", MAP_BODY_LIMIT],
+  ]),
+});
+export const drive: DriveSeam = stub<DriveSeam>("drive", {
+  routes: placeholders("drive", [
+    ["GET", "/api/projects/{id}/drive"],
+    ["POST", "/api/projects/{id}/drive"],
+  ]),
+});
+export const library: LibrarySeam = stub<LibrarySeam>("library", {
+  routes: placeholders("library", [
+    ["GET", "/api/library"],
+    ["POST", "/api/projects/{id}/library"],
+  ]),
+});
+export const agent: AgentSeam = stub<AgentSeam>("agent", {
+  routes: placeholders("agent", [
+    ["GET", "/api/agent"],
+    ["GET", "/api/agent/models"],
+    ["GET", "/api/projects/{id}/agent"],
+    ["POST", "/api/projects/{id}/agent"],
+    ["POST", "/api/projects/{id}/agent/stop"],
+    ["POST", "/api/projects/{id}/agent/reset"],
+  ]),
+});
 
 /** The services App carries that other packages make (stubs until they land). */
 export function unportedServices(): {

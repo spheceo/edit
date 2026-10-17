@@ -45,7 +45,7 @@ export interface AppOptions {
 }
 
 export function createApp(options: AppOptions): App {
-  const services = { ...unportedServices(), ...options.services };
+  const services = { ...unportedServices(options.store.home), ...options.services };
   return {
     store: options.store,
     media: new Processor(options.store),

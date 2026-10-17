@@ -9,7 +9,6 @@ import { baseRouter, respond } from "../src/http/server.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import type { AudioClip, Media, Project, TextClip } from "../src/model.ts";
 import { f32, fixed } from "../src/rust.ts";
-import * as seams from "../src/seams.ts";
 import { routes } from "../src/subtitles_tools.ts";
 import { serialize, type Transcript } from "../src/transcribe.ts";
 import { fixtureHome, write } from "./helpers/home.ts";
@@ -146,9 +145,7 @@ test("set_segments fills the gaps with footage and says what's wrong with a segm
 
 test("mute_house_words mutes the sound and stars the subtitles already there, moving nothing", async () => {
   const { app, dir, store, cleanup } = fixtureHome("mute");
-  // The voice-overs are WP4's; none in this edit.
-  const voiceover = seams.voiceover as unknown as Record<string, unknown>;
-  voiceover.voiceoverSound = () => [];
+  // No voice-overs in this edit (voiceover.voiceoverSound finds none).
   try {
     const id = await footage(app, dir);
     await store.update(id, "test", (project) => {
@@ -179,7 +176,6 @@ test("mute_house_words mutes the sound and stars the subtitles already there, mo
     expect([subtitle.text, subtitle.transform.y]).toEqual(["Stop f****** moving.", -200]);
     expect((project.clips.find((clip) => clip.id === "a") as AudioClip).mutes).toEqual([{ from: 1.32, to: 1.725 }]);
   } finally {
-    delete voiceover.voiceoverSound;
     cleanup();
   }
 });

@@ -8,9 +8,9 @@ wasm:
     cargo build -p edit-wasm --target wasm32-unknown-unknown --release
     wasm-bindgen --target web --out-dir apps/web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
 
-# Install web dependencies (first run only)
+# Install the Bun workspace's dependencies (apps/*, packages/*; first run only)
 web-install:
-    @if [ ! -d apps/web/node_modules ]; then bun install --cwd apps/web; fi
+    @if [ ! -d apps/web/node_modules ] || [ ! -d apps/server/node_modules ]; then bun install; fi
 
 # Build the UI into apps/web/dist (embedded into the binary)
 web: wasm web-install
@@ -82,11 +82,11 @@ publish: check
         exit 1
     fi
     # Put the version back if anything fails before the release commit.
-    trap 'git checkout -- Cargo.toml Cargo.lock apps/web/package.json' ERR
+    trap 'git checkout -- Cargo.toml Cargo.lock apps/web/package.json apps/server/package.json' ERR
     sed -i '' "s/^version = \"$current\"/version = \"$version\"/" Cargo.toml
-    sed -i '' "s/\"version\": \"$current\"/\"version\": \"$version\"/" apps/web/package.json
+    sed -i '' "s/\"version\": \"$current\"/\"version\": \"$version\"/" apps/web/package.json apps/server/package.json
     cargo update --workspace -q
-    git commit -q -m "Release $tag" Cargo.toml Cargo.lock apps/web/package.json
+    git commit -q -m "Release $tag" Cargo.toml Cargo.lock apps/web/package.json apps/server/package.json
     trap - ERR
     git tag "$tag"
     git push origin main "$tag"
@@ -125,3 +125,5 @@ check:
     cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
     bun run --cwd apps/web typecheck
     bun run --cwd apps/web test
+    bun run --cwd apps/server typecheck
+    bun run --cwd apps/server test

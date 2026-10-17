@@ -736,6 +736,20 @@ async fn upload_media(
     }
     let project = app.store.get(&id).map(|live| live.project);
     target_guard.keep();
+    // Cloud mode: footage that went up (edited from its proxy now) needs no
+    // copy here. Sounds and pictures stay where they are (`cloud_media`).
+    let in_cloud = project
+        .as_ref()
+        .and_then(|project| project.media(added.first()?))
+        .filter(|media| media.cloud.is_some())
+        .is_some_and(|media| {
+            target
+                .canonicalize()
+                .is_ok_and(|uploaded| Path::new(&media.path) != uploaded)
+        });
+    if in_cloud {
+        let _ = tokio::fs::remove_file(&target).await;
+    }
     Ok(Json(json!({ "rev": rev, "added": added, "project": project })).into_response())
 }
 
@@ -996,9 +1010,68 @@ pub async fn import_paths(
             Err(error) => errors.push(error),
         }
     }
+    let name_of = |path: &Path| {
+        names.get(path).cloned().unwrap_or_else(|| {
+            path.file_name().map_or_else(
+                || path.to_string_lossy().into_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            )
+        })
+    };
+    let mut items = Vec::new();
+    for (path, probe) in probed {
+        let name = name_of(&path);
+        if !crate::cloud::enabled() {
+            items.push(crate::cloud_media::Made {
+                path,
+                name,
+                probe,
+                cloud: None,
+            });
+            continue;
+        }
+        // Cloud mode: the original goes to R2 and footage is edited from its
+        // proxy (`cloud_media`); the file on disk is left as it is.
+        let cache = app.store.cache_dir();
+        let shown = name.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::diag::time_on("cloud", "cloud: import", &path.to_string_lossy(), || {
+                crate::cloud_media::import_local(&cache, &path, &probe, &name)
+            })
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()))
+        {
+            Ok(made) => items.push(made),
+            Err(error) => errors.push(format!("{shown} couldn't go to the cloud: {error}")),
+        }
+    }
+    add_media(app, id, items, errors, place, origin).await
+}
+
+/// Adds already-made media (a cloud excerpt's proxy and where it is on R2).
+pub async fn import_made(
+    app: &App,
+    id: &str,
+    items: Vec<crate::cloud_media::Made>,
+    place: bool,
+    origin: &str,
+) -> Result<(u64, Vec<String>, Vec<String>), String> {
+    add_media(app, id, items, Vec::new(), place, origin).await
+}
+
+async fn add_media(
+    app: &App,
+    id: &str,
+    items: Vec<crate::cloud_media::Made>,
+    errors: Vec<String>,
+    place: bool,
+    origin: &str,
+) -> Result<(u64, Vec<String>, Vec<String>), String> {
     let (live, added) = app.store.update(id, origin, |project| {
         let mut added = Vec::new();
-        for (path, probe) in &probed {
+        for item in &items {
+            let (path, probe) = (&item.path, &item.probe);
             let path_text = path.to_string_lossy().to_string();
             let media_id = match project.media.iter().find(|media| media.path == path_text) {
                 Some(existing) => existing.id.clone(),
@@ -1006,12 +1079,7 @@ pub async fn import_paths(
                     let media_id = project.fresh_id("m");
                     project.media.push(edit_core::Media {
                         id: media_id.clone(),
-                        name: names.get(path).cloned().unwrap_or_else(|| {
-                            path.file_name().map_or_else(
-                                || path_text.clone(),
-                                |name| name.to_string_lossy().to_string(),
-                            )
-                        }),
+                        name: item.name.clone(),
                         path: path_text.clone(),
                         kind: probe.kind,
                         duration: probe.duration,
@@ -1020,7 +1088,7 @@ pub async fn import_paths(
                         fps: probe.fps,
                         has_audio: probe.has_audio,
                         markers: Vec::new(),
-                        cloud: None,
+                        cloud: item.cloud.clone(),
                     });
                     media_id
                 }
@@ -1038,7 +1106,7 @@ pub async fn import_paths(
     // (A script's import transcribes its own footage; voice-overs have theirs.)
     let transcribe = live.project.script.is_none() && !matches!(origin, "voice" | "script");
     let mut transcribing = Vec::new();
-    for (path, probe) in probed {
+    for crate::cloud_media::Made { path, probe, .. } in items {
         if transcribe && probe.kind == MediaKind::Video && probe.has_audio {
             app.media.transcribe(path.clone(), true);
             transcribing.push(path.clone());

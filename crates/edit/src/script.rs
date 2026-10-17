@@ -795,16 +795,16 @@ impl Jobs {
     }
 }
 
-struct Head {
+pub(crate) struct DriveHead {
     status: u32,
     html: bool,
-    name: Option<String>,
-    total: Option<u64>,
+    pub(crate) name: Option<String>,
+    pub(crate) total: Option<u64>,
 }
 
 /// Asks for the first byte: the final headers say whether Drive will send the
 /// file (and its name and size) or a page instead.
-fn probe(url: &str, scratch: &Path) -> Result<Head, String> {
+fn probe(url: &str, scratch: &Path) -> Result<DriveHead, String> {
     let output = Command::new("curl")
         .args([
             "-sS",
@@ -862,7 +862,7 @@ fn probe(url: &str, scratch: &Path) -> Result<Head, String> {
                 .and_then(|length| length.parse().ok())
                 .filter(|_| status == 200)
         });
-    Ok(Head {
+    Ok(DriveHead {
         status,
         html: header("content-type").is_some_and(|kind| kind.starts_with("text/html")),
         name: header("content-disposition").and_then(|value| disposition_name(&value)),
@@ -887,7 +887,7 @@ fn disposition_name(value: &str) -> Option<String> {
 }
 
 /// A file name safe to write: no separators or leading dots.
-fn safe_name(name: &str) -> String {
+pub(crate) fn safe_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
@@ -999,46 +999,7 @@ pub fn download(
             return Ok(path);
         }
     }
-    let scratch = dir.join(".probe");
-    let mut url = format!(
-        "https://drive.usercontent.google.com/download?id={file}&export=download&confirm=t"
-    );
-    let mut head = probe(&url, &scratch)?;
-    if head.html {
-        let page = Command::new("curl")
-            .args([
-                "-sS",
-                "-L",
-                "--proto",
-                "=https",
-                "--proto-redir",
-                "=https",
-                "--max-time",
-                "30",
-                "--max-filesize",
-                "5000000",
-            ])
-            .arg(&url)
-            .output()
-            .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
-            .unwrap_or_default();
-        url = confirm_link(&page).ok_or_else(|| page_problem(&page))?;
-        head = probe(&url, &scratch)?;
-        if head.html {
-            return Err(page_problem(""));
-        }
-    }
-    if head.status == 403 || head.status == 401 {
-        return Err(
-            "This Drive file isn't shared. Set it so anyone with the link can view.".into(),
-        );
-    }
-    if head.status == 404 {
-        return Err("Google Drive can't find this file (deleted, or in the trash).".into());
-    }
-    if head.status >= 400 || head.status == 0 {
-        return Err(format!("Google Drive answered {}.", head.status));
-    }
+    let (url, head) = resolve(file, &dir.join(".probe"))?;
     let name = safe_name(head.name.as_deref().unwrap_or(&format!("{file}.mp4")));
     let part = dir.join(".download");
     stop_stale(dir);
@@ -1103,6 +1064,52 @@ pub fn download(
     Ok(path)
 }
 
+/// What Drive serves for a file: the URL that downloads it (past the "can't
+/// scan for viruses" page) and its headers (name, size). `scratch` is a file
+/// the first-byte probe may write (removed again).
+pub(crate) fn resolve(file: &str, scratch: &Path) -> Result<(String, DriveHead), String> {
+    let mut url = format!(
+        "https://drive.usercontent.google.com/download?id={file}&export=download&confirm=t"
+    );
+    let mut head = probe(&url, scratch)?;
+    if head.html {
+        let page = Command::new("curl")
+            .args([
+                "-sS",
+                "-L",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--max-time",
+                "30",
+                "--max-filesize",
+                "5000000",
+            ])
+            .arg(&url)
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
+            .unwrap_or_default();
+        url = confirm_link(&page).ok_or_else(|| page_problem(&page))?;
+        head = probe(&url, scratch)?;
+        if head.html {
+            return Err(page_problem(""));
+        }
+    }
+    if head.status == 403 || head.status == 401 {
+        return Err(
+            "This Drive file isn't shared. Set it so anyone with the link can view.".into(),
+        );
+    }
+    if head.status == 404 {
+        return Err("Google Drive can't find this file (deleted, or in the trash).".into());
+    }
+    if head.status >= 400 || head.status == 0 {
+        return Err(format!("Google Drive answered {}.", head.status));
+    }
+    Ok((url, head))
+}
+
 // ---------------------------------------------------------------------------
 // Excerpts: police footage runs for hours and a script uses minutes of it.
 // Only what the script uses (with room to trim) becomes media, so proxies
@@ -1119,31 +1126,41 @@ pub struct Excerpt {
     pub path: PathBuf,
     pub from: f64,
     pub to: f64,
+    /// In cloud mode: `path` is the local proxy, and this is the media to make.
+    pub cloud: Option<crate::cloud_media::Made>,
 }
 
-fn duration_of(path: &Path) -> Result<f64, String> {
+/// Seconds of a file (or a presigned URL's object).
+pub(crate) fn duration_of(path: &Path) -> Result<f64, String> {
     let output = Command::new(crate::tools::ffprobe())
         .args([
             "-v",
             "error",
             "-protocol_whitelist",
-            "file,pipe",
+            crate::tools::protocols(path),
             "-show_entries",
             "format=duration",
             "-of",
             "csv=p=0",
         ])
+        .args(crate::tools::tls_args(path))
         .arg(path)
         .output()
         .map_err(|error| format!("ffprobe: {error}"))?;
     String::from_utf8_lossy(&output.stdout)
         .trim()
         .parse()
-        .map_err(|_| format!("couldn't read {}", path.display()))
+        .map_err(|_| {
+            if crate::tools::is_url(path) {
+                "couldn't read the footage in the cloud".to_owned()
+            } else {
+                format!("couldn't read {}", path.display())
+            }
+        })
 }
 
 /// The last keyframe at or before `time` (an excerpt must start on one to be cut without re-encoding).
-fn keyframe_before(path: &Path, time: f64) -> f64 {
+pub(crate) fn keyframe_before(path: &Path, time: f64) -> f64 {
     for window in [20.0, 120.0, 600.0] {
         let from = (time - window).max(0.0);
         let output = Command::new(crate::tools::ffprobe())
@@ -1151,7 +1168,7 @@ fn keyframe_before(path: &Path, time: f64) -> f64 {
                 "-v",
                 "error",
                 "-protocol_whitelist",
-                "file,pipe",
+                crate::tools::protocols(path),
                 "-select_streams",
                 "v:0",
                 "-skip_frame",
@@ -1162,6 +1179,7 @@ fn keyframe_before(path: &Path, time: f64) -> f64 {
                 "csv=p=0",
             ])
             .args(["-read_intervals", &format!("{from}%{}", time + 0.001)])
+            .args(crate::tools::tls_args(path))
             .arg(path)
             .output();
         let best = output
@@ -1185,7 +1203,7 @@ fn keyframe_before(path: &Path, time: f64) -> f64 {
 }
 
 /// Merged, padded spans of a file that `ranges` (seconds) need.
-fn spans(ranges: &[(f64, f64)], duration: f64) -> Vec<(f64, f64)> {
+pub(crate) fn spans(ranges: &[(f64, f64)], duration: f64) -> Vec<(f64, f64)> {
     let mut sorted: Vec<(f64, f64)> = ranges
         .iter()
         .map(|(from, to)| {
@@ -1220,6 +1238,7 @@ pub fn excerpts(source: &Path, ranges: &[(f64, f64)]) -> Result<Vec<Excerpt>, St
             path: source.to_path_buf(),
             from: 0.0,
             to: duration,
+            cloud: None,
         }]);
     }
     let dir = source.parent().unwrap_or(Path::new(".")).join("excerpts");
@@ -1236,10 +1255,6 @@ pub fn excerpts(source: &Path, ranges: &[(f64, f64)]) -> Result<Vec<Excerpt>, St
     let mut out = Vec::new();
     for (from, to) in spans {
         let start = keyframe_before(source, from);
-        let clock = |seconds: f64| {
-            let whole = seconds.round() as u64;
-            format!("{}h{:02}m{:02}s", whole / 3600, whole / 60 % 60, whole % 60)
-        };
         let path = dir.join(format!(
             "{stem} {}-{}-{source_key}-{:016x}-{:016x}.{extension}",
             clock(start),
@@ -1268,47 +1283,68 @@ pub fn excerpts(source: &Path, ranges: &[(f64, f64)]) -> Result<Vec<Excerpt>, St
                 }
             }
             let partial = Partial(partial);
-            let status = Command::new(crate::tools::ffmpeg())
-                .args([
-                    "-v",
-                    "error",
-                    "-y",
-                    "-ss",
-                    &format!("{start}"),
-                    "-protocol_whitelist",
-                    "file,pipe",
-                    "-i",
-                ])
-                .arg(source)
-                .args([
-                    "-t",
-                    &format!("{}", to - start),
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "0:a?",
-                    "-c:v",
-                    "copy",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "192k",
-                ])
-                .arg(&partial.0)
-                .status()
-                .map_err(|error| format!("ffmpeg: {error}"))?;
-            if !status.success() {
-                return Err("Couldn't cut an excerpt from the footage.".into());
-            }
+            cut(source, start, to, &partial.0)?;
             std::fs::rename(&partial.0, &path).map_err(|error| error.to_string())?;
         }
         out.push(Excerpt {
             path,
             from: start,
             to,
+            cloud: None,
         });
     }
     Ok(out)
+}
+
+/// Cuts `start`..`to` seconds of `source` (a file or a presigned URL: FFmpeg
+/// seeks before reading, so only that stretch is fetched) into `out`: picture
+/// copied from the keyframe at `start`, sound re-encoded to start with it.
+pub(crate) fn cut(source: &Path, start: f64, to: f64, out: &Path) -> Result<(), String> {
+    let output = Command::new(crate::tools::ffmpeg())
+        .args([
+            "-v",
+            "error",
+            "-nostdin",
+            "-y",
+            "-ss",
+            &format!("{start}"),
+            "-protocol_whitelist",
+            crate::tools::protocols(source),
+        ])
+        .args(crate::tools::tls_args(source))
+        .arg("-i")
+        .arg(source)
+        .args([
+            "-t",
+            &format!("{}", to - start),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+        ])
+        .arg(out)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    if !output.status.success() {
+        // FFmpeg's words, without the URL (a credential) it may repeat.
+        let why = crate::cloud_media::scrub(String::from_utf8_lossy(&output.stderr).trim());
+        crate::diag::warn("script", format!("cutting an excerpt: {why}"));
+        return Err("Couldn't cut an excerpt from the footage.".into());
+    }
+    Ok(())
+}
+
+/// `1h02m03s`: a time in an excerpt's name.
+pub(crate) fn clock(seconds: f64) -> String {
+    let whole = seconds.round() as u64;
+    format!("{}h{:02}m{:02}s", whole / 3600, whole / 60 % 60, whole % 60)
 }
 
 /// The ranges (seconds) a project's script plays from one file.
@@ -1420,71 +1456,13 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                         entry.state = "downloading";
                     }
                 });
-                let dir = app.store.drive_dir().map(|dir| dir.join(file));
-                let result = {
-                    let (app, id, file) = (app.clone(), id.clone(), file.clone());
-                    tokio::task::spawn_blocking(move || {
-                        let last = Mutex::new(Instant::now() - Duration::from_secs(1));
-                        let drive = format!("Drive file {file}");
-                        crate::diag::time_on("script", "script: download", &drive, || {
-                            // The media drive not connected: said, not downloaded elsewhere.
-                            let dir = dir?;
-                            download(&dir, &file, &|bytes, total, name| {
-                                let mut last = last.lock();
-                                if last.elapsed() < Duration::from_millis(350) {
-                                    return;
-                                }
-                                *last = Instant::now();
-                                app.scripts.set(&app, &id, |job| {
-                                    if let Some(entry) = job.files.get_mut(index) {
-                                        entry.bytes = bytes;
-                                        entry.total = total;
-                                        entry.name = Some(name.to_owned());
-                                    }
-                                });
-                            })
-                        })
-                    })
-                    .await
-                    .unwrap_or_else(|error| Err(error.to_string()))
-                };
-                // Then only the parts the script uses become media.
-                let result = match result {
-                    Ok(path) => {
-                        app.scripts.set(&app, &id, |job| {
-                            if let Some(entry) = job.files.get_mut(index) {
-                                entry.state = "cutting";
-                            }
-                        });
-                        let ranges = app
-                            .store
-                            .get(&id)
-                            .map(|live| file_ranges(&live.project, file))
-                            .unwrap_or_default();
-                        let cut = tokio::task::spawn_blocking({
-                            let path = path.clone();
-                            move || {
-                                crate::diag::time_on(
-                                    "script",
-                                    "script: cut excerpts",
-                                    &path.to_string_lossy(),
-                                    || excerpts(&path, &ranges),
-                                )
-                            }
-                        })
-                        .await
-                        .unwrap_or_else(|error| Err(error.to_string()));
-                        cut.map(|cut| (path, cut))
-                    }
-                    Err(error) => Err(error),
+                let result = if crate::cloud::enabled() {
+                    footage_to_cloud(&app, &id, index, file).await
+                } else {
+                    footage_to_disk(&app, &id, index, file).await
                 };
                 match result {
-                    Ok((path, cut)) => {
-                        let (bytes, name) = (
-                            std::fs::metadata(&path).map_or(0, |meta| meta.len()),
-                            path.file_name()
-                                .map(|name| name.to_string_lossy().to_string()),
-                        );
+                    Ok((bytes, name, cut)) => {
                         app.scripts.set(&app, &id, |job| {
                             if let Some(entry) = job.files.get_mut(index) {
                                 entry.state = "done";
@@ -1568,6 +1546,120 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
     });
 }
 
+/// What a fetched footage file gave: its bytes, its name and the excerpts the
+/// script plays from.
+type Fetched = Result<(u64, Option<String>, Vec<Excerpt>), String>;
+
+/// A file's download progress, into its row of the job (a few times a second).
+fn file_progress(app: &App, id: &str, index: usize) -> impl Fn(u64, Option<u64>, &str) + Sync {
+    let last = Mutex::new(Instant::now() - Duration::from_secs(1));
+    let (app, id) = (app.clone(), id.to_owned());
+    move |bytes, total, name| {
+        let mut last = last.lock();
+        if last.elapsed() < Duration::from_millis(350) {
+            return;
+        }
+        *last = Instant::now();
+        app.scripts.set(&app, &id, |job| {
+            if let Some(entry) = job.files.get_mut(index) {
+                entry.bytes = bytes;
+                entry.total = total;
+                entry.name = Some(name.to_owned());
+            }
+        });
+    }
+}
+
+fn set_file_state(app: &App, id: &str, index: usize, state: &'static str) {
+    app.scripts.set(app, id, |job| {
+        if let Some(entry) = job.files.get_mut(index) {
+            entry.state = state;
+        }
+    });
+}
+
+/// Downloads a Drive file to this machine and cuts the script's excerpts from it.
+async fn footage_to_disk(app: &App, id: &str, index: usize, file: &str) -> Fetched {
+    let dir = app.store.drive_dir().map(|dir| dir.join(file));
+    let path = {
+        let progress = file_progress(app, id, index);
+        let file = file.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let drive = format!("Drive file {file}");
+            crate::diag::time_on("script", "script: download", &drive, || {
+                // The media drive not connected: said, not downloaded elsewhere.
+                let dir = dir?;
+                download(&dir, &file, &progress)
+            })
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()))?
+    };
+    // Then only the parts the script uses become media.
+    set_file_state(app, id, index, "cutting");
+    let ranges = app
+        .store
+        .get(id)
+        .map(|live| file_ranges(&live.project, file))
+        .unwrap_or_default();
+    let cut = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || {
+            crate::diag::time_on(
+                "script",
+                "script: cut excerpts",
+                &path.to_string_lossy(),
+                || excerpts(&path, &ranges),
+            )
+        }
+    })
+    .await
+    .unwrap_or_else(|error| Err(error.to_string()))?;
+    Ok((
+        std::fs::metadata(&path).map_or(0, |meta| meta.len()),
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_string()),
+        cut,
+    ))
+}
+
+/// Cloud mode: streams the Drive file to R2 (never to this disk; skipped when
+/// the registry has it already), then cuts the script's excerpts from R2 and
+/// keeps only their proxies here (`cloud_media`).
+async fn footage_to_cloud(app: &App, id: &str, index: usize, file: &str) -> Fetched {
+    let original = {
+        let progress = file_progress(app, id, index);
+        let (file, scratch) = (
+            file.to_owned(),
+            crate::cloud_media::scratch_dir(&app.store.cache_dir()),
+        );
+        tokio::task::spawn_blocking(move || {
+            let drive = format!("Drive file {file}");
+            crate::diag::time_on("script", "script: download to cloud", &drive, || {
+                crate::cloud_media::drive_original(&file, &scratch?, &progress)
+            })
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()))?
+    };
+    set_file_state(app, id, index, "cutting");
+    let ranges = app
+        .store
+        .get(id)
+        .map(|live| file_ranges(&live.project, file))
+        .unwrap_or_default();
+    let cache = app.store.cache_dir();
+    let (bytes, name) = (original.size, Some(original.name.clone()));
+    let cut = tokio::task::spawn_blocking(move || {
+        crate::diag::time_on("script", "script: cloud excerpts", &original.key, || {
+            crate::cloud_media::drive_excerpts(&cache, &original, &ranges)
+        })
+    })
+    .await
+    .unwrap_or_else(|error| Err(error.to_string()))?;
+    Ok((bytes, name, cut))
+}
+
 /// What the agent is asked once a script is first laid out.
 const RESEARCH: &str = "The script is imported and laid out. Research the case now (RESEARCH in your house style): start from the script and the transcripts, find the news articles about this case, check each matches and save it, then collect images of the scene, the people involved and the vehicles, and weed out anything off-target so only real candidates wait for review. Don't change the timeline. Finish with a short summary: the key facts the articles add, how many articles you saved and how many images are waiting.";
 
@@ -1580,18 +1672,27 @@ async fn place(
     done: Vec<(String, Vec<Excerpt>)>,
     recut: bool,
 ) -> Result<(), String> {
-    if !done.is_empty() {
-        let paths = done
+    // Excerpts on this disk are imported as files; cloud ones come made.
+    let (made, paths): (Vec<_>, Vec<_>) = done
+        .iter()
+        .flat_map(|(_, cut)| cut)
+        .partition(|excerpt| excerpt.cloud.is_some());
+    if !paths.is_empty() {
+        let paths = paths
             .iter()
-            .flat_map(|(_, cut)| {
-                cut.iter()
-                    .map(|excerpt| excerpt.path.to_string_lossy().to_string())
-            })
+            .map(|excerpt| excerpt.path.to_string_lossy().to_string())
             .collect();
         let (_, _, errors) = import_paths(app, id, paths, false, "script").await?;
         if let Some(error) = errors.first() {
             return Err(error.clone());
         }
+    }
+    if !made.is_empty() {
+        let made = made
+            .into_iter()
+            .filter_map(|excerpt| excerpt.cloud.clone())
+            .collect();
+        crate::server::import_made(app, id, made, false, "script").await?;
     }
     let files: HashMap<String, Vec<Excerpt>> = done.into_iter().collect();
     let (live, ()) = app.store.update(id, "script", |project| {

@@ -195,7 +195,9 @@ impl FfmpegSource {
                 "-t",
                 &format!("{:.6}", segment.duration * segment.speed + 0.05),
             ])
-            .args(["-protocol_whitelist", "file,pipe", "-i"])
+            .args(["-protocol_whitelist", crate::tools::protocols(path)])
+            .args(crate::tools::tls_args(path))
+            .arg("-i")
             .arg(path)
             .args([
                 "-vn",
@@ -274,7 +276,8 @@ impl Sources {
     fn open(&mut self, part: &Part) -> Result<Box<dyn Source>, String> {
         let segment = &part.segment;
         #[cfg(target_os = "macos")]
-        if self.native && (segment.speed - 1.0).abs() < 1e-9 {
+        // AVFoundation only reads local files: a cloud original's URL is FFmpeg's.
+        if self.native && (segment.speed - 1.0).abs() < 1e-9 && !crate::tools::is_url(&part.path) {
             let sound = self.sounds.entry(part.path.clone()).or_insert_with(|| {
                 crate::mac_media::Sound::open(&part.path)
                     .map_err(|error| {

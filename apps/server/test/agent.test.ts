@@ -16,6 +16,7 @@ import {
   tomlKey,
   withConfiguredEffort,
 } from "../src/agent.ts";
+import * as diag from "../src/diag.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
 test("a_ready_status_is_kept_for_a_while", () => {
@@ -260,4 +261,31 @@ test("tool arguments read as one short line; a busy model is tried again", () =>
   expect(summarizeArgs({ a: "x".repeat(200), b: "y".repeat(200), c: "z".repeat(10) })).toBe(`a: ${"x".repeat(60)} · b: ${"y".repeat(60)} · c: zzzzz…`);
   expect(busyModel("The model is at capacity")).toBe(true);
   expect(busyModel("Invalid request")).toBe(false);
+});
+
+test("a turn's tokens are logged when it ends: read, cached, written, reasoning, calls", async () => {
+  const fixture = new Fixture();
+  try {
+    const started = fixture.start();
+    const request = await fixture.request("turn/start");
+    fixture.reply(request, { turn: { id: "test-turn" } });
+    await started;
+    const tokens = (input: number, cached: number, output: number, reasoning: number) => ({
+      inputTokens: input,
+      cachedInputTokens: cached,
+      outputTokens: output,
+      reasoningOutputTokens: reasoning,
+      totalTokens: input + output,
+    });
+    const usage = (total: ReturnType<typeof tokens>, last: ReturnType<typeof tokens>) =>
+      fixture.agents.onMessage({ method: "thread/tokenUsage/updated", params: { threadId: "test-thread", turnId: "test-turn", tokenUsage: { total, last, modelContextWindow: 272000 } } });
+    // The thread had read 1000 before; two calls this turn.
+    usage(tokens(1500, 400, 120, 80), tokens(500, 400, 20, 10));
+    usage(tokens(2300, 1100, 200, 130), tokens(800, 700, 80, 50));
+    fixture.complete();
+    const line = diag.lines(50).map((one) => one.message).find((text) => text.includes("model calls"));
+    expect(line).toContain("over 2 model calls, reading 1300 tokens (1100 cached) and writing 100 (60 reasoning); the last call read 800 of 272000");
+  } finally {
+    fixture.cleanup();
+  }
 });

@@ -140,7 +140,29 @@ class Lock {
   }
 }
 
+/** Codex's token counts (the app server's TokenUsageBreakdown). */
+interface Tokens {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+}
+
+/** A running turn's token use: the thread's totals when it started and now, and the last call's. */
+interface TurnUsage {
+  start: Tokens | null;
+  /** The first update's own call, already in `start`. */
+  first: Tokens | null;
+  total: Tokens;
+  last: Tokens | null;
+  calls: number;
+  window: number | null;
+}
+
 export class Agents implements seams.AgentPanel {
+  /** Token use of each project's running turn. */
+  private usage = new Map<string, TurnUsage>();
   private dir: string;
   private codexProcess: Codex | null = null;
   private codexLock = new Lock();
@@ -630,6 +652,17 @@ export class Agents implements seams.AgentPanel {
     const started = chat.started;
     chat.started = null;
     if (started !== null) diag.record("agent", "agent turn", timing.now() - started, error);
+    const used = this.usage.get(project);
+    this.usage.delete(project);
+    if (used !== undefined && used.start !== null) {
+      // The first update already includes the turn's first call: count from before it.
+      const minus = (key: keyof Tokens) => (used.total[key] ?? 0) - (used.start![key] ?? 0) + (used.first?.[key] ?? 0);
+      const context = used.last === null ? "" : `; the last call read ${used.last.inputTokens}${used.window === null ? "" : ` of ${used.window}`}`;
+      diag.info(
+        "agent",
+        `${project}: the turn took ${started === null ? "?" : diag.human(timing.now() - started)} over ${used.calls} model calls, reading ${minus("inputTokens")} tokens (${minus("cachedInputTokens")} cached) and writing ${minus("outputTokens")} (${minus("reasoningOutputTokens")} reasoning)${context}`,
+      );
+    }
     if (error !== null) this.upsert(project, entry({ id: `error-${nowMs()}`, kind: "error", text: error }));
     const now = nowMs();
     chat.running = false;
@@ -663,6 +696,23 @@ export class Agents implements seams.AgentPanel {
     const project = this.threads.get(thread);
     if (project === undefined) return;
     switch (method) {
+      case "thread/tokenUsage/updated": {
+        // What the turn reads and writes, logged when it ends (speed-plan 2.1):
+        // long full edits were model round trips, not tools.
+        const usage = params.tokenUsage as { total?: Tokens; last?: Tokens; modelContextWindow?: number | null } | undefined;
+        if (usage?.total === undefined) break;
+        const turnUsage = this.usage.get(project) ?? { start: null, first: null, total: usage.total, last: usage.last ?? null, calls: 0, window: null };
+        if (turnUsage.start === null) {
+          turnUsage.start = usage.total;
+          turnUsage.first = usage.last ?? null;
+        }
+        turnUsage.total = usage.total;
+        turnUsage.last = usage.last ?? null;
+        turnUsage.calls += 1;
+        turnUsage.window = typeof usage.modelContextWindow === "number" ? usage.modelContextWindow : turnUsage.window;
+        this.usage.set(project, turnUsage);
+        break;
+      }
       case "item/agentMessage/delta": {
         const id = typeof params.itemId === "string" ? params.itemId : "";
         const delta = typeof params.delta === "string" ? params.delta : "";

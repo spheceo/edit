@@ -9,12 +9,6 @@ use std::process::{Command, Stdio};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const DEFAULT_RELAY: &str = "https://edit-relay.sphe-g-personal.workers.dev";
-
-pub(crate) fn relay() -> String {
-    std::env::var("EDIT_RELAY_URL").unwrap_or_else(|_| DEFAULT_RELAY.to_owned())
-}
-
 /// One spoken word. Times are seconds into the source.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Word {
@@ -46,7 +40,7 @@ pub struct Transcript {
 
 /// Extracts audio, sends it to the relay, writes `target` (transcript JSON).
 pub fn run(source: &Path, target: &Path) -> Result<(), String> {
-    let config = relay_config(std::env::var("EDIT_RELAY_TOKEN").ok().as_deref())?;
+    let config = crate::relay::auth_config(crate::relay::token().as_deref())?;
     let audio = target.with_extension("ogg");
     let encoded = Command::new(crate::tools::ffmpeg())
         .args([
@@ -102,7 +96,7 @@ pub fn run(source: &Path, target: &Path) -> Result<(), String> {
                 "-T",
             ])
             .arg(&audio)
-            .arg(format!("{}/v1/transcribe", relay()))
+            .arg(format!("{}/v1/transcribe", crate::relay::url()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -145,39 +139,6 @@ pub fn run(source: &Path, target: &Path) -> Result<(), String> {
         &serde_json::to_vec(&transcript).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())
-}
-
-/// Optional private-relay authentication. Feed curl's config through stdin so
-/// the token isn't exposed in process arguments. Reject config/header injection.
-pub(crate) fn relay_config(token: Option<&str>) -> Result<String, String> {
-    match token.filter(|token| !token.is_empty()) {
-        Some(token) if token.chars().any(char::is_control) => {
-            Err("EDIT_RELAY_TOKEN contains a control character".to_owned())
-        }
-        Some(token) => Ok(format!(
-            "header = \"Authorization: Bearer {}\"\n",
-            token.replace('\\', "\\\\").replace('"', "\\\"")
-        )),
-        None => Ok(String::new()),
-    }
-}
-
-#[cfg(test)]
-mod relay_auth_tests {
-    use super::relay_config;
-    #[test]
-    fn private_relay_token_is_escaped_and_cannot_add_headers() {
-        assert_eq!(relay_config(None).unwrap(), "");
-        assert_eq!(
-            relay_config(Some("test-token")).unwrap(),
-            "header = \"Authorization: Bearer test-token\"\n"
-        );
-        assert_eq!(
-            relay_config(Some("a\"b\\c")).unwrap(),
-            "header = \"Authorization: Bearer a\\\"b\\\\c\"\n"
-        );
-        assert!(relay_config(Some("token\nheader = evil")).is_err());
-    }
 }
 
 /// Scribe's answer, keeping only spoken words (not spacing or sound events).

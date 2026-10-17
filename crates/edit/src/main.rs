@@ -2,6 +2,7 @@ mod agent;
 mod app;
 mod broll;
 mod captions;
+mod cloud;
 mod cutin;
 mod diag;
 mod drive;
@@ -18,6 +19,7 @@ mod mcp;
 mod media;
 mod media_drive;
 mod mix;
+mod relay;
 mod render;
 mod research;
 mod script;
@@ -56,6 +58,9 @@ USAGE
   edit media [use DIR | off | move --to DIR]
       Keep big media files (downloads, uploads, exports) on another drive;
       `edit media help` says more.
+  edit cloud [url | put | get | head | ls | rm | convex] …
+      Try Edit's cloud storage (R2) and Convex through the relay by hand;
+      `edit cloud help` says more.
   edit update
       Install the newest release (the editor also offers it, one click).
   edit --version
@@ -64,6 +69,8 @@ ENV
   EDIT_HOME   data directory (default ~/.edit)
   EDIT_MEDIA_DIR  keep big media files here instead (overrides the setting)
   EDIT_HOSTS  extra Host names to accept, comma-separated
+  EDIT_RELAY_URL, EDIT_RELAY_TOKEN
+              another relay (default Edit's), and the token it wants (cloud needs it)
   GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DOCS_REFRESH_TOKEN
               a Google sign-in that can read the team's sound library in Drive
 ";
@@ -100,6 +107,7 @@ fn main() {
             );
         }
         Some("media") => media_drive::run_cli(&home(), port(), args.get(1..).unwrap_or_default()),
+        Some("cloud") => cloud::run_cli(args.get(1..).unwrap_or_default()),
         Some("update") => update::run_cli(
             &std::env::var_os("EDIT_HOME")
                 .map(PathBuf::from)

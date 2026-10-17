@@ -79,7 +79,7 @@ pub fn run(source: &Path, target: &Path) -> Result<(), String> {
         ));
     }
     // curl streams the file (-T) and is on every Mac and Linux box; no TLS stack in Edit.
-    let response = (|| -> std::io::Result<std::process::Output> {
+    let send = || -> std::io::Result<std::process::Output> {
         let mut child = Command::new("curl")
             .args([
                 "-sS",
@@ -112,26 +112,50 @@ pub fn run(source: &Path, target: &Path) -> Result<(), String> {
             return Err(error);
         }
         child.wait_with_output()
-    })()
-    .map_err(|error| format!("curl: {error}"));
+    };
+    // The relay takes a few transcriptions at once (a script import's footage
+    // and voice-over takes can ask together): a 429 waits and asks again.
+    let mut waits = [15u64, 30, 60, 60, 60, 60].into_iter();
+    let (code, value, body) = loop {
+        let response = send().map_err(|error| format!("curl: {error}"));
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                let _ = std::fs::remove_file(&audio);
+                return Err(error);
+            }
+        };
+        if !response.status.success() {
+            let _ = std::fs::remove_file(&audio);
+            return Err(format!(
+                "could not reach the transcription relay: {}",
+                String::from_utf8_lossy(&response.stderr).trim()
+            ));
+        }
+        let text = String::from_utf8_lossy(&response.stdout).into_owned();
+        let (body, code) = text.rsplit_once('\n').unwrap_or((&text, "0"));
+        let (body, code) = (body.to_owned(), code.trim().to_owned());
+        if code == "429" {
+            if let Some(wait) = waits.next() {
+                crate::diag::warn(
+                    "media",
+                    format!("transcription busy (429): asking again in {wait} s"),
+                );
+                std::thread::sleep(std::time::Duration::from_secs(wait));
+                continue;
+            }
+        }
+        let value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        break (code, value, body);
+    };
     let _ = std::fs::remove_file(&audio);
-    let response = response?;
-    if !response.status.success() {
-        return Err(format!(
-            "could not reach the transcription relay: {}",
-            String::from_utf8_lossy(&response.stderr).trim()
-        ));
-    }
-    let text = String::from_utf8_lossy(&response.stdout);
-    let (body, code) = text.rsplit_once('\n').unwrap_or((&text, "0"));
-    let value: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-    if code.trim() != "200" {
+    if code != "200" {
         let message = value
             .get("error")
             .and_then(Value::as_str)
             .or_else(|| value.pointer("/detail/message").and_then(Value::as_str))
             .unwrap_or(body.trim());
-        return Err(format!("transcription failed ({}): {message}", code.trim()));
+        return Err(format!("transcription failed ({code}): {message}"));
     }
     let transcript = parse_scribe(&value)?;
     crate::store::write_atomic(

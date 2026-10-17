@@ -53,7 +53,7 @@ House editing style (videos cut from a script of police footage):
 - SCOPE: do the part of the edit that's asked for, and nothing past it. "Edit the intro" = the intro section only (sections.intro): its teasers, the cut-ins between them and their B-roll, captions, transitions and their sound; not the date cut-in (it opens the story) or any later cut-in or B-roll. "Subtitles" = add_subtitles (everything after the intro). Music, the date cut-in's map and other cut-ins' B-roll wait until they're asked for. When it's unclear whether something is in (music under the intro, say), ask instead of doing it, and say at the end what you left for later.
 - When the user corrects something or tells you how they like it, apply it everywhere it fits in the project, not just the one spot they pointed at.
 - Every footage range must play from its first word to its last (the Doc's "first....last" note). If one stops or starts a word short (e.g. it cuts at "hit that" when the range ends on "priuses"), run realign_script, then re-caption the clips it changed. A range ends right on its last word: with a pause after it, a breath of room; when the speaker runs straight on, no room at all (the cut sits in the dip right after the word, so none of the next word is heard). realign_script cuts this way; if a cut still catches the start of the next word, realign it. A range also never cuts a sentence off: if its last word leaves the speaker mid-phrase (a teaser whose caption ends "She hit me in the…" before "head"), read the transcript's words around the out point (read_transcript) and extend the clip, picture and sound together, to the end of that phrase, even past the Doc's last word, shifting everything after it by the same amount so nothing overlaps or gaps; then re-caption it, and don't run realign_script over it again (it would cut back to the Doc's word). Intro teasers above all: each is a complete thought.
-- Redactions and blurs in the footage are deliberate; never cover or move them. Subtitles are the exception: they stay bottom middle even where that overlaps a blur, never moved aside to dodge it (AFTER THE INTRO).
+- Redactions and blurs in the footage are deliberate; never cover or move them. Subtitles are the exception: they stay bottom middle even where that overlaps a blur, never moved aside to dodge it (AFTER THE INTRO); only a face moves them, and Edit does that itself (add_subtitles, place_subtitles).
 - VOICE-OVERS GENERATED IN EDIT (ElevenLabs, made when the script import finishes) arrive as audio media named "<project> (voice-over) - Cut-in N" and are laid on their cut-ins already (place_voiceovers did it); treat them like recorded ones.
 - FACTS: when the editing needs a fact (how a name is spelled, the date or exact place for a title or map_view, who the victim was, the charges or outcome for an outro), check the saved articles with case_articles (find "<name>") rather than guessing; the transcript and script come first, the articles fill what they don't say. If none are saved, research the case first.
 - MINORS' FACES are never shown: a minor's face in a photo, a news image or footage that doesn't already redact it gets a blur that follows the face: an adjustment over the shot's span (above the picture, beneath any text) {blur {radius ~35 at 1080p, shape ellipse}}, then track_region target "blur" with a box around the whole head (hair included); include its start, middle and end in the stage's review frames to see the face can't be recognised. A name or other detail that must not be read gets the same with shape rect.
@@ -251,11 +251,11 @@ fn tools() -> Vec<Value> {
             "start":{"type":"number"}, "end":{"type":"number"},
             "include_transcript":{"type":"boolean"}
         }), &[]),
-        tool("apply_edit_plan", "Apply a complete section or a revision in ONE atomic save. Requires base_rev from get_edit_context; a stale revision or invalid operation saves NOTHING. Operations run in memory; intermediate overlaps are allowed if the final project validates. ALL times in a plan are FRAMES (the model's own units; get_edit_context's cut-in words are seconds: multiply by fps). op add takes clip with start and duration (required; omit id and track to choose them; track \"new\" makes one, in update too); update/delete/keyframes use select {ids?,track?,label?,media?,type?,name_prefix?,start?,end?} (all filters intersect); update takes patch, and moving or trimming one half of a linked pair moves the other with it, as delete removes both (unlinked: true to touch only the selected); keyframes takes param,keyframes; cover_cut_in takes the same cut_in/shots/look/into as cover_cut_in; transition builds a house transition at a cut in one line: kind drop (the vertical slam, 6 frames straddling at), flash (white, 6 frames, fading; with a shutter), dip (to black and back, frames 12 centred on at) or open (the reverse dip that opens the video; no at); its sound goes in the batch; evidence_board builds a whole evidence board from start and end (frames: where the board begins and the next shot starts) and items [{media (an image's id), label (a short handwritten note, e.g. \"zip ties\"), at (the timeline frame of the first word that names it, the start of its phrase: that photo is centred and its shutter clicks then)}] (1–8, at increasing; illustrative: true adds a small \"Illustrative images\" in the corner; older plans' frames/pan per item still work): framed photos on paper and ONE continuous camera glide down them, easing a little as it passes each photo (to ~70% of its average speed) and picking up between (never a hold or a stop), picking up from a slow drift before the first and settling into one after the last, each note writing itself on as its photo arrives; returns end, centred and shutters: each photo's moment gets a \"board photo\" timeline marker and a quiet camera shutter whose click lands on it (shutters: false for none; a shutter already within 8 frames, such as the cut's, stands in) (EVIDENCE BOARD in the cut-ins skill); desktop_profile builds the house profile screen for a person whose only picture is a still (never a lone still on black) from start, duration (or end), media (their photo) and lines (1–6 short lines: their age and role, charges only as a source states them; \"- \" is added), with title (the Notepad window's, default \"Notepad\") and line_at (a timeline frame per line) optional: a blue desktop, the photo in a Photo Viewer window and the lines typed into a Notepad window beside it, the windows scaling up from 96% one after the other, a slow push-in, the windows leaving over the last 8 frames (exit: false keeps them); returns lines_at and windows_open, marked \"desktop window opens\" and \"desktop line\" for their sounds (DESKTOP PROFILE in the cut-ins skill); markers takes add/remove as the markers tool; tidy_tracks needs no arguments. An operation's `as` names its result; later arguments use {\"$ref\":\"name\"} (added clip id) or {\"$ref\":\"name/shots/0/clip\"} (cover result). Examples: add as hero, then update select.ids [{\"$ref\":\"hero\"}]. dry_run validates without saving. Optional review_frames renders one contact sheet AFTER the commit; rendering failure is reported separately and never retries the edits. Returns revision, operation results, and mechanical issues. Prefer this over many batch/update calls.", json!({
+        tool("apply_edit_plan", "Apply a complete section or a revision in ONE atomic save. Requires base_rev from get_edit_context; a stale revision or invalid operation saves NOTHING. Operations run in memory; intermediate overlaps are allowed if the final project validates. ALL times in a plan are FRAMES (the model's own units; get_edit_context's cut-in words are seconds: multiply by fps). op add takes clip with start and duration (required; omit id and track to choose them; track \"new\" makes one, in update too); update/delete/keyframes use select {ids?,track?,label?,media?,type?,name_prefix?,start?,end?} (all filters intersect); update takes patch, and moving or trimming one half of a linked pair moves the other with it, as delete removes both (unlinked: true to touch only the selected); keyframes takes param,keyframes; cover_cut_in takes the same cut_in/shots/look/into as cover_cut_in; transition builds a house transition at a cut in one line: kind drop (the vertical slam, 6 frames straddling at), flash (white, 6 frames, fading; with a shutter), dip (to black and back, frames 12 centred on at) or open (the reverse dip that opens the video; no at); its sound goes in the batch; evidence_board builds a whole evidence board from start and end (frames: where the board begins and the next shot starts) and items [{media (an image's id), label (a short handwritten note, e.g. \"zip ties\"), at (the timeline frame of the first word that names it, the start of its phrase: that photo is centred and its shutter clicks then)}] (1–8, at increasing; illustrative: true adds a small \"Illustrative images\" in the corner; older plans' frames/pan per item still work): framed photos on paper and ONE continuous camera glide down them, easing a little as it passes each photo (to ~70% of its average speed) and picking up between (never a hold or a stop), picking up from a slow drift before the first and settling into one after the last, each note writing itself on as its photo arrives; returns end, centred and shutters: each photo's moment gets a \"board photo\" timeline marker and a quiet camera shutter whose click lands on it (shutters: false for none; a shutter already within 8 frames, such as the cut's, stands in) (EVIDENCE BOARD in the cut-ins skill); desktop_profile builds the house profile screen for a person whose only picture is a still (never a lone still on black) from start, duration (or end), media (their photo) and lines (1–6 short lines: their age and role, charges only as a source states them; \"- \" is added), with title (the Notepad window's, default \"Notepad\") and line_at (a timeline frame per line) optional: a blue desktop, the photo in a Photo Viewer window and the lines typed into a Notepad window beside it, the windows scaling up from 96% one after the other, a slow push-in, the windows leaving over the last 8 frames (exit: false keeps them); returns lines_at and windows_open, marked \"desktop window opens\" and \"desktop line\" for their sounds (DESKTOP PROFILE in the cut-ins skill); markers takes add/remove as the markers tool; evidence_card puts ONE picture on screen the house way from media (an image's id), start, end and an optional label: the photo framed with a shadow over a dark blurred copy of itself filling the frame, easing in and pushing in slowly, the label in the house label box under it (a picture is never plain B-roll: the audit flags bare_still); date_title builds the date cut-in's date from text (\"July 22, 2023\"), start and end: white Geist 600 ~120 centred with only the house drop shadow (no box, no glow), rising letter by letter and fading out, over an adjustment darkening the picture (darken: false leaves that out; the audit flags a boxed or glowing date as date_style); place_label builds the map's place label from text (the street or place only), start (the marker's reveal), end, map (the map's clip id) and building_track (as map_view returned it; building for a still): the house label (white Geist 600, opaque black box, red border, soft shadow) just above the building, pinned to it, fading in and out; tidy_tracks needs no arguments. An operation's `as` names its result; later arguments use {\"$ref\":\"name\"} (added clip id) or {\"$ref\":\"name/shots/0/clip\"} (cover result). Examples: add as hero, then update select.ids [{\"$ref\":\"hero\"}]. dry_run validates without saving. Optional review_frames renders one contact sheet AFTER the commit; rendering failure is reported separately and never retries the edits. Returns revision, operation results, and mechanical issues. Prefer this over many batch/update calls.", json!({
             "base_rev":{"type":"integer"},
             "operations":{"type":"array", "minItems":1, "maxItems":2000, "items":{"type":"object", "properties":{
-                "op":{"type":"string", "enum":["add","update","delete","keyframes","cover_cut_in","transition","evidence_board","desktop_profile","markers","tidy_tracks"]},
-                "kind":{"type":"string", "enum":["drop","flash","dip","open"]}, "at":{"type":"integer"}, "frames":{"type":"integer"}, "start":{"type":"integer"}, "end":{"type":"integer"}, "pan":{"type":"integer"}, "illustrative":{"type":"boolean"}, "shutters":{"type":"boolean"}, "duration":{"type":"integer"}, "media":{"type":"string"}, "lines":{"type":"array", "items":{"type":"string"}}, "line_at":{"type":"array", "items":{"type":"integer"}}, "title":{"type":"string"}, "exit":{"type":"boolean"}, "add":{"type":"array", "items":{"type":"object"}}, "remove":{"type":"array", "items":{"type":"object"}}, "items":{"type":"array", "items":{"type":"object", "properties":{"media":{"type":"string"}, "label":{"type":"string"}, "at":{"type":"integer"}, "frames":{"type":"integer"}, "pan":{"type":"integer"}}, "required":["media"]}},
+                "op":{"type":"string", "enum":["add","update","delete","keyframes","cover_cut_in","transition","evidence_board","evidence_card","date_title","place_label","desktop_profile","markers","tidy_tracks"]},
+                "kind":{"type":"string", "enum":["drop","flash","dip","open"]}, "at":{"type":"integer"}, "frames":{"type":"integer"}, "start":{"type":"integer"}, "end":{"type":"integer"}, "pan":{"type":"integer"}, "illustrative":{"type":"boolean"}, "shutters":{"type":"boolean"}, "duration":{"type":"integer"}, "media":{"type":"string"}, "label":{"type":"string"}, "text":{"type":"string"}, "darken":{"type":"boolean"}, "map":{"type":"string"}, "building_track":{"type":"array", "items":{"type":"object"}}, "building":{"type":"object"}, "lines":{"type":"array", "items":{"type":"string"}}, "line_at":{"type":"array", "items":{"type":"integer"}}, "title":{"type":"string"}, "exit":{"type":"boolean"}, "add":{"type":"array", "items":{"type":"object"}}, "remove":{"type":"array", "items":{"type":"object"}}, "items":{"type":"array", "items":{"type":"object", "properties":{"media":{"type":"string"}, "label":{"type":"string"}, "at":{"type":"integer"}, "frames":{"type":"integer"}, "pan":{"type":"integer"}}, "required":["media"]}},
                 "as":{"type":"string"}, "clip":{"type":"object"}, "select":{"type":"object"}, "patch":{"type":"object"},
                 "param":{"type":"string"}, "keyframes":{"type":"array", "items":{"type":"object"}},
                 "cut_in":{"type":["integer","string"]}, "shots":{"type":"array", "items":{"type":"object"}},
@@ -295,7 +295,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "update_clips",
-            "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, or by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\"), optionally only on one track and within start/end (timeline seconds). E.g. one person's name and colour on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\", color: [1,1,0,1]}}}}.",
+            "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, or by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\"), optionally only on one track and within start/end (timeline seconds). E.g. one person's short name on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\"}}}}. A relabel or recolour then gives every person (label) one colour across the video, kept apart from everyone else's (subtitles, intro captions, \"Quote · <label>\" clips); the result lists them.",
             json!({
                 "clip_ids": { "type": "array", "items": { "type": "string" } },
                 "label": { "type": "string", "description": "Text clips whose style.label.text is exactly this." },
@@ -418,7 +418,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "cover_cut_in",
-            "Cover a cut-in with B-roll in one call, the house way (B-ROLL IN CUT-INS, PUSH-INS, B-ROLL LOOK, VOICE-OVERS): your shots butted end to end from the cut-in's first frame to its last (each picture only, slowed to speed 0.5, a linear push-in 1 → 1.08; native frame sampling with no background render by default), the B-roll look adjustment over the stretch, the vertical drop into the cut-in (into \"none\" when you'll put another transition there), the black card and its words deleted and the voice-over moved onto A1 in purple. You pick the shots (media_transcript, look_at_media) and time them to the narration's phrases (media_transcript words on the voice-over); this does the rest. Running it again on the same cut-in replaces what it placed. Afterwards add what's particular to the cut-in (a person's vignette and label, a quote, other transitions and their sounds) with batch. Returns each shot's clip id and span.",
+            "Cover a cut-in with B-roll in one call, the house way (B-ROLL IN CUT-INS, PUSH-INS, B-ROLL LOOK, VOICE-OVERS): your shots butted end to end from the cut-in's first frame to its last (each picture only, slowed to speed 0.5, a linear push-in 1 → 1.08; native frame sampling with no background render by default), the B-roll look adjustment over the stretch, the vertical drop into the cut-in (into \"none\" when you'll put another transition there), the black card and its words deleted and the voice-over moved onto A1 in purple. You pick the shots (media_transcript, look_at_media) and time them to the narration's phrases (media_transcript words on the voice-over); this does the rest. A picture (an image media: a found photo, a still) is never laid on as a bare still: it goes on as an evidence card (framed, over a dark blurred copy of itself, easing in, with its label under it when the shot has one). Running it again on the same cut-in replaces what it placed. Afterwards add what's particular to the cut-in (a person's vignette and label, a quote, other transitions and their sounds) with batch. Returns each shot's clip id and span.",
             json!({
                 "cut_in": { "type": ["integer", "string"], "description": "The cut-in's number among the script's narration blocks (1-based: \"Cut-in N\"), or its card's or voice-over's clip id." },
                 "shots": { "type": "array", "items": { "type": "object", "properties": {
@@ -430,7 +430,8 @@ fn tools() -> Vec<Value> {
                     "push": { "type": "array", "items": { "type": "number" }, "description": "[from, to] scale across the shot, default [1, 1.08]; continue a run of the same moment with e.g. [1.04, 1.08]." },
                     "x": { "type": "number" }, "y": { "type": "number" },
                     "scale": { "type": "number", "description": "Base scale the push multiplies (default 1)." },
-                    "smooth": { "type": "boolean", "description": "Expensive optional optical-flow render, limited to 120 s per shot; default false. Leave false for normal edits." }
+                    "smooth": { "type": "boolean", "description": "Expensive optional optical-flow render, limited to 120 s per shot; default false. Leave false for normal edits." },
+                    "label": { "type": "string", "description": "A picture's short label under it on its evidence card (\"The building on Capitol Avenue\")." }
                 }, "required": ["media", "source_in"] } },
                 "look": { "type": "boolean", "description": "The B-roll look adjustment (default true)." },
                 "into": { "type": "string", "enum": ["drop", "none"], "description": "The transition into the cut-in: the vertical drop (default), or none." }
@@ -666,7 +667,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "caption_speakers",
-            "Speaker captions for intro footage: splits what's said into lines, asks a vision model (Luna) who says each line and where they are (stills + sound), then adds a word-by-word caption per line in the house box style beside its speaker, tracked to their face with a little shake. Replaces captions it made before in that span. Takes a few minutes. Defaults to the intro (start to the cut-in before the full footage).",
+            "Speaker captions for intro footage: splits what's said into lines, asks a vision model (Luna) who says each line and where they are (stills + sound), then adds a word-by-word caption per line in the house box style: under the speaker's face when the face detector sees it clearly through the line (followed smoothly), else bottom middle; never on a face. Replaces captions it made before in that span. Takes a few minutes. Defaults to the intro (start to the cut-in before the full footage).",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end of the intro)." }
@@ -675,11 +676,30 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "add_subtitles",
-            "Plain subtitles for everything said (Repack's style): bottom middle, no animation, no tracking, each line in its speaker's colour. Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words (in their other forms too: punched, hitting) are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and in every other text on the timeline; some are muted but stay readable. Replaces subtitles and mutes it made before in that span; a new subtitle over one moved, resized or keyframed by hand keeps that position and size (subtitles stay bottom middle even over a blur: move one only when the user asks). Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, and every mute (term, timeline time, starred).",
+            "Plain subtitles for everything said (Repack's style): bottom middle unless a face is there, no animation, no tracking, each line under its person's label and colour (one colour per person across the video). Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words (in their other forms too: punched, hitting) are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and in every other text on the timeline; some are muted but stay readable. Replaces subtitles and mutes it made before in that span, keeping the label and colour each voice's subtitles had (your relabels survive a re-run); a new subtitle over one moved, resized or keyframed by hand keeps that position and size. Then it moves any subtitle that would cover a face (found in the footage under it, cached per file) to the first clear place: bottom left or right, else top middle, left or right (place_subtitles; off_faces in the result). Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, every mute (term, timeline time, starred) and each person's colour.",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default: the end of the intro)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
                 "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false." }
+            }),
+            &[],
+        ),
+        tool(
+            "place_subtitles",
+            "Moves the edit's subtitles off faces, changing nothing else (text, timing, labels and colours stay): each subtitle stays bottom middle unless a face in the footage under it while it's up would be covered, then goes to the first clear place (bottom left, bottom right, top middle, top left, top right; the least covered when none is clear), staying beside the previous line while the face is still near so a conversation doesn't jump about. Faces come from Apple's Vision on the footage (two frames a second, cached per file: the first run on a 30-minute edit takes a minute or two, later ones are instant). Subtitles moved or keyframed by hand are left alone. add_subtitles already does this; use it on subtitles made before, or after footage moves. Seconds; default the whole timeline.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
+                "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." }
+            }),
+            &[],
+        ),
+        tool(
+            "place_captions",
+            "Lays the intro's speaker captions (\"Caption · <who>\") out again the house way without retyping them: under the speaker's face only when the face detector sees it clearly through the line (followed by the detector, smoothed, never covering any face), else bottom middle (clear of faces). By default a caption keeps the face it already sits beside, if that face is clearly visible; one that sat on a face, or by none, goes bottom middle. Pass `under` for the lines where that isn't the speaker. Returns each caption's place and why. Seconds; default the whole timeline.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
+                "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
+                "under": { "type": "object", "description": "Clip id → \"bottom\" (the speaker is off screen or unclear), \"auto\", or [x, y]: a point on the speaker's face at the caption's first frame, project pixels from the top-left." }
             }),
             &[],
         ),
@@ -730,7 +750,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "track_region",
-            "Track a box in the footage (a face, a redaction block, an object) and make a clip follow it: bakes x/y keyframes onto `follow` (one per footage frame for a short stretch) so it stays above, below or on the box. Give the box as it appears at `time` in project pixels from the top-left of the frame (as render_frame shows it, scaled to the project size). The camera's own move (a swinging bodycam, a whip) is followed, small faces in zoomed-in shots are tracked from the original footage, and drift is checked against the box as given. It answers with the cuts it saw in the footage and any stretch where it lost the box (it rides with the camera there): look at those moments and track again with `boxes` there. For a fast or long stretch, a cut inside the footage, or a person who turns, give the box at its start, middle and end (`time`/`box` plus `boxes`).",
+            "Track a box in the footage (a face, a redaction block, an object) and make a clip follow it: bakes x/y keyframes onto `follow` (one per footage frame for a short stretch) so it stays above, below or on the box. Give the box as it appears at `time` in project pixels from the top-left of the frame (as render_frame shows it, scaled to the project size). The camera's own move (a swinging bodycam, a whip) is followed, small faces in zoomed-in shots are tracked from the original footage, and drift is checked against the box as given. It answers with the cuts it saw in the footage and any stretch where it lost the box (it rides with the camera there): look at those moments and track again with `boxes` there. For a fast or long stretch, a cut inside the footage, or a person who turns, give the box at its start, middle and end (`time`/`box` plus `boxes`). Target leader (a callout's pointer) follows the face in the box with the face detector and refuses when there's no clearly visible face there (listing the faces it found): then drop the leader and keep a plain label.",
             json!({
                 "time": { "type": "number", "description": "Timeline seconds where the box is as given." },
                 "box": { "type": "array", "items": { "type": "number" }, "description": "[x0, y0, x1, y1] in project pixels from the top-left." },
@@ -1010,12 +1030,15 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     .clip_mut(&clip_id)
                     .ok_or_else(|| format!("no clip {clip_id}"))?;
                 let mut value = serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
-                merge(&mut value, &patch);
+                merge_clip(&mut value, &patch);
                 if let Some(fields) = value.as_object_mut() {
                     fields.insert("id".to_owned(), json!(clip_id));
                 }
                 *clip = serde_json::from_value(value)
                     .map_err(|error| format!("patched clip is invalid: {error}"))?;
+                if touches_people(&patch) {
+                    crate::people::one_colour_per_person(project);
+                }
                 Ok(())
             })?;
             let clip = store
@@ -1072,7 +1095,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     let clip_id = clip.id.clone();
                     let mut value =
                         serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
-                    merge(&mut value, &patch);
+                    merge_clip(&mut value, &patch);
                     if let Some(fields) = value.as_object_mut() {
                         fields.insert("id".to_owned(), json!(clip_id));
                     }
@@ -1080,11 +1103,21 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                         .map_err(|error| format!("patched {clip_id} is invalid: {error}"))?;
                     changed.push(clip_id);
                 }
-                Ok(changed)
+                // A relabel or recolour: one colour per person, everywhere.
+                let people = (touches_people(&patch) && !changed.is_empty())
+                    .then(|| crate::people::one_colour_per_person(project));
+                Ok((changed, people))
             })?;
+            let (changed, people) = changed;
             Ok(text(match changed.len() {
                 0 => "no clips matched; nothing changed".to_owned(),
-                count => format!("updated {count} clip(s): {}", changed.join(", ")),
+                count => format!(
+                    "updated {count} clip(s): {}{}",
+                    changed.join(", "),
+                    people.map_or_else(String::new, |people| format!(
+                        "\npeople (one colour each, kept apart; a colour too near someone else's was changed): {people}"
+                    ))
+                ),
             }))
         }
         "batch" => run_batch(app, args, scope).await,
@@ -2050,6 +2083,52 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 serde_json::to_string(&summary).unwrap_or_default()
             )))
         }
+        "place_subtitles" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let from = args["start"]
+                .as_f64()
+                .map_or(0, |seconds| (seconds * fps).round() as i64);
+            let to = args["end"]
+                .as_f64()
+                .map_or(live.project.duration(), |seconds| {
+                    (seconds * fps).round() as i64
+                });
+            let report = crate::faces::place_subtitles(app, &id, from, to).await?;
+            Ok(text(serde_json::to_string(&report).unwrap_or_default()))
+        }
+        "place_captions" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let from = args["start"]
+                .as_f64()
+                .map_or(0, |seconds| (seconds * fps).round() as i64);
+            let to = args["end"]
+                .as_f64()
+                .map_or(live.project.duration(), |seconds| {
+                    (seconds * fps).round() as i64
+                });
+            let mut under = std::collections::HashMap::new();
+            if let Some(given) = args["under"].as_object() {
+                for (clip, value) in given {
+                    let choice = match value {
+                        Value::String(word) if word == "bottom" => crate::captions::Under::Bottom,
+                        Value::String(word) if word == "auto" => crate::captions::Under::Auto,
+                        Value::Array(point) => match point[..] {
+                            [ref x, ref y] => crate::captions::Under::At(
+                                x.as_f64().ok_or("under points are [x, y] numbers")?,
+                                y.as_f64().ok_or("under points are [x, y] numbers")?,
+                            ),
+                            _ => return Err(format!("under.{clip}: a point is [x, y]")),
+                        },
+                        _ => return Err(format!("under.{clip}: \"bottom\", \"auto\" or [x, y]")),
+                    };
+                    under.insert(clip.clone(), choice);
+                }
+            }
+            let report = crate::captions::place_captions(app, &id, from, to, &under).await?;
+            Ok(text(serde_json::to_string(&report).unwrap_or_default()))
+        }
         "set_segments" => {
             let live = store.get(&id).ok_or("project vanished")?;
             let fps = live.project.fps();
@@ -2436,15 +2515,11 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
     let inside = |start: i64, end: i64| {
         !from.is_some_and(|from| end <= from) && !to.is_some_and(|to| start >= to)
     };
-    let mut speakers: std::collections::BTreeMap<String, usize> = Default::default();
+    // Each label: its lines, colour and the transcript voices it covers.
+    let speakers = crate::people::summary(p);
     let mut clips = Vec::new();
     let mut subtitles = 0;
     for clip in &p.clips {
-        if let ClipContent::Text { style, .. } = &clip.content {
-            if let Some(label) = &style.label {
-                *speakers.entry(label.text.clone()).or_default() += 1;
-            }
-        }
         if ids.is_some_and(|ids| !ids.iter().any(|id| id.as_str() == Some(&clip.id)))
             || !inside(clip.start, clip.end())
         {
@@ -2731,6 +2806,8 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
         "batch",
         "caption_speakers",
         "add_subtitles",
+        "place_subtitles",
+        "place_captions",
         "repack_subtitles",
         "watch_footage",
         "map_view",
@@ -3318,6 +3395,31 @@ pub(crate) fn free_track_from(
     project.add_track(kind)
 }
 
+/// Whether a patch can change whose words a clip is or their colour (a
+/// label, a colour, a clip name): then every person gets one colour again.
+pub(crate) fn touches_people(patch: &Value) -> bool {
+    patch.get("name").is_some()
+        || patch
+            .get("style")
+            .is_some_and(|style| style.get("label").is_some() || style.get("color").is_some())
+}
+
+/// A clip (as JSON) changed by a merge patch. The intro's speaker captions
+/// (`caption_speakers`) never carry a name label above them: that's for
+/// subtitles only, so a patch giving one a label (a relabel across a
+/// speaker's clips, say) leaves it off.
+pub(crate) fn merge_clip(clip: &mut Value, patch: &Value) {
+    merge(clip, patch);
+    let caption = clip["name"]
+        .as_str()
+        .is_some_and(|name| name.starts_with(crate::captions::CAPTION_PREFIX));
+    if caption {
+        if let Some(style) = clip.get_mut("style").and_then(Value::as_object_mut) {
+            style.remove("label");
+        }
+    }
+}
+
 /// RFC 7386 JSON merge patch.
 pub(crate) fn merge(target: &mut Value, patch: &Value) {
     let Some(patch) = patch.as_object() else {
@@ -3474,6 +3576,19 @@ mod tests {
         project.clips = vec![clip("music", &v2, 0, 300), clip("footage", &v1, 90, 100)];
         assert_eq!(close_gaps(&mut project, &[clip("card", &v1, 0, 90)]), 0);
         assert_eq!(project.clip("footage").unwrap().start, 90);
+    }
+
+    #[test]
+    fn speaker_captions_never_take_a_label() {
+        let label =
+            json!({"style": {"label": {"text": "Officer:", "color": [1, 1, 1, 1], "size": 26}}});
+        let mut caption = json!({"name": "Caption · Sinclair (Officer)", "style": {"size": 40}});
+        super::merge_clip(&mut caption, &label);
+        assert!(caption["style"].get("label").is_none());
+        assert_eq!(caption["style"]["size"], 40);
+        let mut subtitle = json!({"name": "Subtitle · Sinclair (Officer)", "style": {}});
+        super::merge_clip(&mut subtitle, &label);
+        assert_eq!(subtitle["style"]["label"]["text"], "Officer:");
     }
 
     #[test]

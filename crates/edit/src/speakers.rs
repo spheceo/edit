@@ -438,7 +438,7 @@ const SPARE: [&str; 4] = ["#c9a8ff", "#ff9e9e", "#e0ff8a", "#ffc2f0"];
 const DISTINCT: f64 = 20.0;
 
 /// "#rrggbb" in CIELAB, to judge how far apart two colours look.
-fn lab(hex: &str) -> [f64; 3] {
+pub(crate) fn lab(hex: &str) -> [f64; 3] {
     let channel = |at: usize| {
         let v = hex
             .get(at..at + 2)
@@ -465,7 +465,7 @@ fn lab(hex: &str) -> [f64; 3] {
 }
 
 /// How far apart two colours look (CIE76 ΔE).
-fn apart(a: &str, b: &str) -> f64 {
+pub(crate) fn apart(a: &str, b: &str) -> f64 {
     let ([l1, a1, b1], [l2, a2, b2]) = (lab(a), lab(b));
     ((l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)).sqrt()
 }
@@ -501,7 +501,7 @@ pub fn pinkish(hex: &str) -> bool {
 }
 
 /// Whether `color` may go to someone in `role`.
-fn allowed(role: &str, color: &str) -> bool {
+pub(crate) fn allowed(role: &str, color: &str) -> bool {
     !(official(role) && pinkish(color))
 }
 

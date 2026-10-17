@@ -1,3 +1,6 @@
+// The apply_edit_plan schema in `mcp.rs` is one big `json!`.
+#![recursion_limit = "256"]
+
 mod agent;
 mod app;
 mod broll;
@@ -13,7 +16,9 @@ mod drive;
 mod edit_plan;
 mod edit_review;
 mod export;
+mod faces;
 mod footage_search;
+mod graphics;
 mod guard;
 mod library;
 mod loudness;
@@ -25,6 +30,7 @@ mod media;
 mod media_drive;
 mod mix;
 mod motion;
+mod people;
 mod relay;
 mod render;
 mod research;
@@ -68,6 +74,9 @@ USAGE
   edit cloud [url | put | get | head | ls | rm | convex] …
       Try Edit's cloud storage (R2) and Convex through the relay by hand;
       `edit cloud help` says more.
+  edit cloud backfill <project id> [--port N]
+      Put every file a cloud project uses that isn't in the cloud yet there
+      now, through the running Edit (it also happens by itself after saves).
   edit update
       Install the newest release (the editor also offers it, one click).
   edit --version
@@ -118,6 +127,9 @@ fn main() {
             );
         }
         Some("media") => media_drive::run_cli(&home(), port(), args.get(1..).unwrap_or_default()),
+        Some("cloud") if args.get(1).map(String::as_str) == Some("backfill") => {
+            cloud_backfill(args.get(2).map(String::as_str), port());
+        }
         Some("cloud") => {
             cloud_projects::use_saved_token(&home());
             cloud::run_cli(args.get(1..).unwrap_or_default())
@@ -130,6 +142,32 @@ fn main() {
         Some("--version" | "-V" | "version") => println!("edit {}", env!("CARGO_PKG_VERSION")),
         Some("--help" | "-h" | "help") => print!("{HELP}"),
         Some(other) => fail(&format!("unknown command {other}\n\n{HELP}")),
+    }
+}
+
+/// `edit cloud backfill <project id>`: asks the running Edit to put every
+/// media of a cloud project that isn't in the cloud yet there now.
+fn cloud_backfill(id: Option<&str>, port: u16) {
+    let id = id
+        .filter(|id| store::valid_id(id))
+        .unwrap_or_else(|| fail("usage: edit cloud backfill <project id> [--port N]"));
+    let url = format!("http://127.0.0.1:{port}/api/projects/{id}/cloud/backfill");
+    eprintln!("backfilling {id} through the Edit on port {port} (big files take a while)…");
+    let output = std::process::Command::new("curl")
+        .args(["-sS", "-X", "POST", "-w", "\n%{http_code}", &url])
+        .output()
+        .unwrap_or_else(|error| fail(&format!("curl: {error}")));
+    let text = String::from_utf8_lossy(&output.stdout);
+    let (body, status) = text.rsplit_once('\n').unwrap_or((&text, ""));
+    if !output.status.success() || status == "000" {
+        fail(&format!(
+            "couldn't reach Edit on port {port} (is it running?): {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    println!("{body}");
+    if !status.starts_with('2') {
+        std::process::exit(1);
     }
 }
 

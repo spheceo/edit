@@ -50,19 +50,10 @@ const STALL: [&str; 6] = [
     "30",
 ];
 
-/// Cloud switched off in Settings (`crate::cloud_projects`), whatever the token.
-static OFF: AtomicBool = AtomicBool::new(false);
-
-/// Whether cloud calls can work and are wanted: a relay token is set
-/// (`EDIT_RELAY_TOKEN`, else the one saved in Settings → Cloud) and cloud
-/// isn't switched off.
+/// Whether cloud calls can work: a relay token is set (`EDIT_RELAY_TOKEN`,
+/// else the one saved in Settings → Cloud). Cloud is always on with one.
 pub fn enabled() -> bool {
-    !OFF.load(Ordering::Relaxed) && crate::relay::token().is_some()
-}
-
-/// Switches cloud off (or back on) for this process (Settings → Cloud).
-pub fn set_off(off: bool) {
-    OFF.store(off, Ordering::Relaxed);
+    crate::relay::token().is_some()
 }
 
 /// POSTs `body` to the relay's `/v1/cloud/<path>` and returns its JSON answer.

@@ -18,12 +18,13 @@ export interface CloudStatus {
   rev?: number;
   dirty?: boolean;
   message?: string | null;
+  /** Files the edit uses that are neither on this machine nor in the cloud, in a sentence naming them. */
+  missing?: string | null;
 }
 
 /** Settings → Cloud. */
 export interface CloudSettings {
   on: boolean;
-  off: boolean;
   /** Where the token comes from (EDIT_RELAY_TOKEN, or saved here). */
   token: "env" | "saved" | null;
   /** How teammates see this machine. */
@@ -70,8 +71,8 @@ export interface CloudList {
 
 export const cloudApi = {
   settings: (check = true) => request<CloudSettings>("GET", `/api/cloud${check ? "?check=true" : ""}`),
-  /** `token: null` forgets the saved token; `off` switches cloud off (the token is kept). */
-  setSettings: (body: { token?: string | null; off?: boolean; holder?: string | null }) => request<CloudSettings>("POST", "/api/cloud", body),
+  /** `token: null` forgets the saved token. */
+  setSettings: (body: { token?: string | null; holder?: string | null }) => request<CloudSettings>("POST", "/api/cloud", body),
   projects: () => request<CloudList>("GET", "/api/cloud/projects"),
   status: (id: string) => request<CloudStatus>("GET", `/api/projects/${id}/cloud`),
   /** The editor opened it: a cloud-only project is downloaded, the lock asked for. */
@@ -88,6 +89,9 @@ export const readOnly = (status: CloudStatus | null | undefined) => status?.lock
 /** What the top bar says about a project's sync, or null when there's nothing to say. */
 export function syncLabel(status: CloudStatus | null | undefined): { text: string; tone: "ok" | "busy" | "warn" | "bad" } | null {
   if (!status?.cloud || !status.on) return null;
+  if (status.missing && (status.sync === "synced" || status.sync === "pending" || status.sync === "syncing")) {
+    return { text: "Files missing", tone: "bad" };
+  }
   switch (status.sync) {
     case "synced":
       return { text: "Saved to cloud", tone: "ok" };

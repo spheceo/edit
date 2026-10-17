@@ -7,7 +7,7 @@
 //! refuses one another machine holds.
 //!
 //! What this machine knows lives in the data folder: `cloud.json` (the
-//! setting: token, off, holder label; mode 600, it holds the token) and
+//! setting: token, holder label; mode 600, it holds the token) and
 //! `cloud/projects.json` (per cloud project: the cloud rev its copy is based
 //! on, whether it has changes not pushed yet, and its lock token). A
 //! background loop ([`start`]) pushes changes ~2 s after the last one (the
@@ -72,9 +72,6 @@ struct Settings {
     /// The relay's cloud token (used when `EDIT_RELAY_TOKEN` isn't set).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token: Option<String>,
-    /// Cloud switched off (the token is kept).
-    #[serde(default)]
-    off: bool,
     /// How teammates see this machine ("<holder> is editing").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     holder: Option<String>,
@@ -171,6 +168,9 @@ pub struct Entry {
     /// UI clients with it open, and when they last said so.
     viewers: HashMap<String, Instant>,
     note: Option<Note>,
+    /// Media the project uses that are neither on this machine nor in the
+    /// cloud (`cloud_media::ensure_local`), said in a sentence naming them.
+    missing: Option<String>,
 }
 
 impl Entry {
@@ -198,6 +198,7 @@ impl Entry {
             want_media: false,
             viewers: HashMap::new(),
             note: None,
+            missing: None,
         }
     }
 
@@ -399,6 +400,7 @@ impl Entry {
             "rev": self.saved.rev,
             "dirty": self.saved.dirty,
             "message": message,
+            "missing": self.missing,
         })
     }
 }
@@ -436,7 +438,7 @@ impl Cloud {
         }
     }
 
-    /// Whether cloud is on (a token, not switched off).
+    /// Whether cloud is on (a token: always on with one).
     pub fn on(&self) -> bool {
         crate::cloud::enabled()
     }
@@ -497,6 +499,20 @@ impl Cloud {
             .and_then(|bytes| write_private(&dir.join(STATE), &bytes));
         if let Err(error) = result {
             crate::diag::warn("cloud", format!("saving cloud/{STATE}: {error}"));
+        }
+    }
+
+    /// What `cloud_media::ensure_local` found missing (None: nothing).
+    pub fn set_missing(&self, store: &Store, id: &str, missing: Option<String>) {
+        let changed = self
+            .with(id, |entry| {
+                let changed = entry.missing != missing;
+                entry.missing = missing;
+                changed
+            })
+            .unwrap_or(false);
+        if changed {
+            self.emit(store, id);
         }
     }
 
@@ -707,7 +723,6 @@ impl Cloud {
         };
         json!({
             "on": self.on(),
-            "off": settings.off,
             "token": source,
             "holder": self.holder(),
             "relay": crate::relay::url(),
@@ -718,7 +733,6 @@ impl Cloud {
     pub fn set_settings(
         &self,
         token: Option<Option<String>>,
-        off: Option<bool>,
         holder: Option<Option<String>>,
     ) -> Result<(), String> {
         let mut settings = self.settings.lock();
@@ -739,9 +753,6 @@ impl Cloud {
                 }
             }
             next.token = token;
-        }
-        if let Some(off) = off {
-            next.off = off;
         }
         if let Some(holder) = holder {
             let holder = holder
@@ -781,10 +792,9 @@ impl Cloud {
     }
 }
 
-/// Uses the setting: its token (unless `EDIT_RELAY_TOKEN` is set) and on/off.
+/// Uses the setting: its token (unless `EDIT_RELAY_TOKEN` is set).
 fn apply(settings: &Settings) {
     crate::relay::set_saved_token(settings.token.clone());
-    crate::cloud::set_off(settings.off);
 }
 
 fn read_settings(home: &Path) -> Settings {
@@ -1390,6 +1400,8 @@ async fn push(app: &App, cloud: &Arc<Cloud>, id: &str) -> Result<(), String> {
         Ok(rev) => {
             crate::diag::record("cloud", "cloud: push", started.elapsed(), None);
             cloud.with(id, |entry| entry.pushed(rev, edits));
+            // Whatever the edit uses that isn't in the cloud yet goes up.
+            crate::cloud_media::backfill_soon(app, id);
             Ok(())
         }
         Err(error) => failure(app, cloud, id, error).await,
@@ -1494,6 +1506,7 @@ pub async fn open(app: &App, id: &str, client: &str) -> Result<Value, String> {
         cloud.persist();
         cloud.emit(&app.store, id);
     }
+    crate::cloud_media::backfill_soon(app, id);
     Ok(cloud.status(id))
 }
 
@@ -1563,8 +1576,8 @@ pub async fn take_over(app: &App, id: &str) -> Result<Value, String> {
     Ok(cloud.status(id))
 }
 
-/// Moves a project only on this machine to the cloud (its footage isn't
-/// moved by this).
+/// Moves a project only on this machine to the cloud; its media follow in
+/// the background after the first push (`cloud_media::backfill_soon`).
 pub async fn move_to_cloud(app: &App, id: &str) -> Result<Value, String> {
     let cloud = app.store.cloud().cloned().ok_or("cloud is off")?;
     if !cloud.on() {
@@ -1740,6 +1753,7 @@ pub fn routes() -> Router<App> {
         .route("/api/projects/{id}/cloud/close", post(post_close))
         .route("/api/projects/{id}/cloud/takeover", post(post_takeover))
         .route("/api/projects/{id}/cloud/upload", post(post_upload))
+        .route("/api/projects/{id}/cloud/backfill", post(post_backfill))
 }
 
 #[derive(Deserialize)]
@@ -1782,7 +1796,6 @@ fn present<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
 struct SettingsBody {
     #[serde(default, deserialize_with = "present")]
     token: Option<Option<String>>,
-    off: Option<bool>,
     #[serde(default, deserialize_with = "present")]
     holder: Option<Option<String>>,
 }
@@ -1795,19 +1808,19 @@ async fn post_settings(State(app): State<App>, Json(body): Json<SettingsBody>) -
         .ok_or_else(|| refuse(StatusCode::NOT_FOUND, "no cloud here"))?;
     let was_on = cloud.on();
     // Let go of this machine's locks while the old token still works.
-    let going_off = body.off == Some(true) || matches!(body.token, Some(None));
+    let going_off = matches!(body.token, Some(None));
     if was_on && going_off {
         release_all(&app).await;
     }
     cloud
-        .set_settings(body.token, body.off, body.holder)
+        .set_settings(body.token, body.holder)
         .map_err(|error| refuse(StatusCode::BAD_REQUEST, error))?;
     crate::diag::info(
         "cloud",
         if cloud.on() {
             format!("cloud on as {}", cloud.holder())
         } else {
-            "cloud off".to_owned()
+            "cloud off: no token".to_owned()
         },
     );
     app.store
@@ -1871,6 +1884,15 @@ async fn post_takeover(State(app): State<App>, UrlPath(id): UrlPath<String>) -> 
         .map_err(|error| refuse(StatusCode::CONFLICT, error))
 }
 
+/// Puts every media of a cloud project that isn't in the cloud yet there now
+/// (`cloud_media::backfill`); answers what went, what failed and what's missing.
+async fn post_backfill(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Reply {
+    crate::cloud_media::backfill(&app, &id)
+        .await
+        .map(Json)
+        .map_err(|error| refuse(StatusCode::BAD_REQUEST, error))
+}
+
 async fn post_upload(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Reply {
     move_to_cloud(&app, &id)
         .await
@@ -1878,7 +1900,7 @@ async fn post_upload(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Re
         .map_err(|error| refuse(StatusCode::BAD_REQUEST, error))
 }
 
-/// Lets go of every lock (cloud switched off).
+/// Lets go of every lock (the token forgotten).
 pub async fn release_all(app: &App) {
     let Some(cloud) = app.store.cloud().cloned() else {
         return;
@@ -2099,7 +2121,6 @@ mod tests {
         // The setting holds the token: this user only.
         let settings = Settings {
             token: Some("secret-token".into()),
-            off: true,
             holder: Some("Sphe's Mac".into()),
         };
         write_private(

@@ -36,6 +36,15 @@ unsafe extern "C" {
         dh: u32,
         dstride: usize,
     ) -> i32;
+    fn edit_faces(
+        bgra: *const u8,
+        width: u32,
+        height: u32,
+        stride: usize,
+        out: *mut f32,
+        max: usize,
+        count: *mut usize,
+    ) -> i32;
     fn edit_reader_open(
         path: *const c_char,
         width: u32,
@@ -198,6 +207,40 @@ pub fn encode_image(
         copy
     };
     Ok(bytes)
+}
+
+/// Faces in a packed BGRA picture (Apple's Vision): each as x0, y0, x1, y1
+/// (0..1 from the top left) and the detector's confidence.
+pub fn faces(bgra: &[u8], width: u32, height: u32) -> Result<Vec<[f32; 5]>, String> {
+    const MAX: usize = 32;
+    let stride = width as usize * 4;
+    if width == 0 || height == 0 || bgra.len() < stride * height as usize {
+        return Err("face picture doesn't match its size".to_owned());
+    }
+    let mut out = [0.0_f32; MAX * 5];
+    let mut count = 0_usize;
+    // The bridge reads the pixels during the call only and writes at most MAX faces.
+    let ok = unsafe {
+        edit_faces(
+            bgra.as_ptr(),
+            width,
+            height,
+            stride,
+            out.as_mut_ptr(),
+            MAX,
+            &mut count,
+        )
+    };
+    if ok != 1 {
+        return Err("Vision couldn't look for faces".to_owned());
+    }
+    Ok(out
+        .as_chunks::<5>()
+        .0
+        .iter()
+        .take(count.min(MAX))
+        .copied()
+        .collect())
 }
 
 /// High-quality resample of a 4-channel, 8-bit picture (`sw`×`sh`, rows

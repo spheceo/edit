@@ -90,6 +90,15 @@ pub fn apply_with(
         .map_err(|error: String| format!("operation {}: {error}; nothing saved", index + 1))?;
         results.push(result);
     }
+    // Text placed or relabelled (a quote, a caption's speaker): one colour
+    // per person across the video, as add_subtitles leaves it.
+    if operations.iter().any(|operation| {
+        (operation["op"] == "add"
+            && operation.pointer("/clip/type").and_then(Value::as_str) == Some("text"))
+            || (operation["op"] == "update" && crate::mcp::touches_people(&operation["patch"]))
+    }) {
+        crate::people::one_colour_per_person(project);
+    }
     project
         .validate()
         .map_err(|error| format!("final plan is invalid: {error}; nothing saved"))?;
@@ -207,7 +216,7 @@ fn operation_on(
             {
                 let (start, duration) = (clip.start, clip.duration);
                 let mut value = serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
-                crate::mcp::merge(&mut value, &Value::Object(patch.clone()));
+                crate::mcp::merge_clip(&mut value, &Value::Object(patch.clone()));
                 value
                     .as_object_mut()
                     .ok_or("patched clip must be an object")?
@@ -302,9 +311,12 @@ fn operation_on(
                 .ok_or("desktop_profile's pictures weren't prepared (run it through apply_edit_plan)")?;
             crate::desktop::profile(project, args, art)
         }
+        "evidence_card" => crate::graphics::evidence_card(project, args),
+        "date_title" => crate::graphics::date_title(project, args),
+        "place_label" => crate::graphics::place_label(project, args),
         "markers" => crate::markers::edit(project, args),
         other => Err(format!(
-            "unknown op {other}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, desktop_profile, markers, tidy_tracks"
+            "unknown op {other}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, evidence_card, date_title, place_label, desktop_profile, markers, tidy_tracks"
         )),
     }
 }
@@ -1415,6 +1427,60 @@ pub fn audit(project: &Project) -> Value {
             }
         }
     }
+    // The same transitions over and over (an edit went drop in, dip out on
+    // every one of fourteen cut-ins): a run of four alike, or of eight
+    // alternating between two, reads as a template.
+    let mut cuts: Vec<(i64, &str)> = project
+        .clips
+        .iter()
+        .filter_map(|clip| {
+            let name = clip.name.as_deref()?;
+            let kind = match name {
+                "Dip" => "dip",
+                "Flash" => "flash",
+                "Drop" => "drop",
+                _ if name.ends_with("vertical drop") => "drop",
+                _ if name.to_lowercase().contains("glitch") => "glitch",
+                _ => return None,
+            };
+            Some((clip.start + clip.duration / 2, kind))
+        })
+        .collect();
+    cuts.sort_unstable();
+    let mut at = 0;
+    while at < cuts.len() {
+        let alike = |period: usize| {
+            let mut end = at + period;
+            while end < cuts.len()
+                && cuts.get(end).map(|cut| cut.1) == cuts.get(end - period).map(|cut| cut.1)
+            {
+                end += 1;
+            }
+            end
+        };
+        let (same, alternating) = (alike(1), alike(2));
+        let end = if same - at >= 4 {
+            same
+        } else if alternating - at >= 8 {
+            alternating
+        } else {
+            at += 1;
+            continue;
+        };
+        let run = cuts.get(at..end).unwrap_or_default();
+        let kinds: Vec<&str> = run.iter().take(2).map(|cut| cut.1).collect();
+        issues.push(json!({"kind":"repetitive_transitions", "start":run.first().map(|cut| cut.0),
+            "end":run.last().map(|cut| cut.0), "count":run.len(), "pattern":kinds.join(", "),
+            "fix":"vary them for their moments: flash or shutter, crossfade, dip, drop (TRANSITIONS)"}));
+        at = end;
+    }
+    // A found photo or still as plain B-roll (letterboxed, often): pictures
+    // go on screen only inside a designed graphic (an evidence card or board).
+    issues.extend(crate::graphics::bare_stills(project));
+    // The date in a box or glowing: it's white with a drop shadow only.
+    issues.extend(crate::graphics::date_drift(project));
+    // A subtitle or intro caption on someone's face (faces found so far).
+    issues.extend(crate::faces::text_on_faces(project));
     issues.sort_by_key(Value::to_string);
     json!({"issues":issues, "frames":project.duration(), "clips":project.clips.len()})
 }
@@ -1530,6 +1596,36 @@ mod tests {
             .collect();
         assert_eq!(silent.len(), 1, "{issues:?}");
         assert_eq!(silent[0]["at"], 200);
+    }
+
+    #[test]
+    fn the_same_transitions_over_and_over_are_flagged() {
+        let repeated = |kinds: &[&str]| {
+            let mut p = project();
+            let mut plan = vec![
+                json!({"op":"add", "clip":{"type":"solid", "track":"v1", "start":0, "duration":3000, "fill":[0,0,0,1]}}),
+            ];
+            for (index, kind) in kinds.iter().enumerate() {
+                plan.push(json!({"op":"transition", "kind":kind, "at":100 + index as i64 * 200}));
+            }
+            apply(&mut p, &plan).unwrap();
+            audit(&p)["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|issue| issue["kind"] == "repetitive_transitions")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // Drop in, dip out, cut-in after cut-in.
+        let template = repeated(&["drop", "dip", "drop", "dip", "drop", "dip", "drop", "dip"]);
+        assert_eq!(template.len(), 1);
+        assert_eq!(template[0]["count"], 8);
+        assert_eq!(repeated(&["dip", "dip", "dip", "dip"]).len(), 1);
+        // Varied for their moments: nothing to say.
+        assert!(
+            repeated(&["drop", "dip", "flash", "drop", "dip", "dip", "flash", "drop"]).is_empty()
+        );
     }
 
     #[test]

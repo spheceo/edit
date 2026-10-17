@@ -12,7 +12,7 @@ import { buildReport, closeReport, copyText, openReport, useReport } from "../li
 import { setPreviewQuality, usePreviewQuality } from "../lib/previewQuality";
 import { OpenAIMark } from "./AgentPanel";
 import { toggleMenu } from "./ContextMenu";
-import { cx, IconButton, Kbd, Modal, Select, Switch } from "./ui";
+import { cx, IconButton, Kbd, Modal, Select } from "./ui";
 
 export function AppMenu() {
   return (
@@ -319,21 +319,14 @@ function CloudSettingsPanel() {
   if (!settings) return <div className="rounded-xl bg-black px-3 py-3 text-[12px] text-muted ring-1 ring-line">{error ?? "Checking…"}</div>;
   const [label, tone] = !settings.token
     ? ["Off · no token", "bg-hover text-muted"]
-    : settings.off
-      ? ["Off", "bg-hover text-muted"]
-      : settings.connected === false
-        ? ["Not connected", "bg-amber-500/15 text-amber-300"]
-        : ["On", "bg-green-500/15 text-green-300"];
+    : settings.connected === false
+      ? ["Not connected", "bg-amber-500/15 text-amber-300"]
+      : ["On", "bg-green-500/15 text-green-300"];
   return (
     <>
       <div className="rounded-xl bg-black ring-1 ring-line">
         <Line label="Status">
-          <span className="flex items-center gap-2">
-            <span className={cx("rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>
-            {settings.token && (
-              <Switch checked={!settings.off} onChange={(on) => void apply({ off: !on })} />
-            )}
-          </span>
+          <span className={cx("rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>
         </Line>
         <Line label="Token" last={!settings.token}>
           {settings.token === "env" ? (
@@ -377,9 +370,9 @@ function CloudSettingsPanel() {
         )}
       </div>
       <p className="mt-2 text-[12px] leading-relaxed text-muted">
-        With cloud on, projects are kept in the team's cloud: close one here and a teammate opens it on their Mac where you left off. One Mac edits a project at a time; the others see it read-only. The token is kept in Edit's data folder on {machine}, readable only by you.
+        Projects are kept in the team's cloud: close one here and a teammate opens it on their Mac where you left off. One Mac edits a project at a time; the others see it read-only. The token is kept in Edit's data folder on {machine}, readable only by you.
       </p>
-      {(error || (settings.token && !settings.off && settings.problem)) && (
+      {(error || (settings.token && settings.problem)) && (
         <p className="mt-2 text-[12px] leading-relaxed text-amber-300">{error ?? settings.problem}</p>
       )}
     </>

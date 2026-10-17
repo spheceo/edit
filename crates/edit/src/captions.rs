@@ -27,6 +27,8 @@ use crate::transcribe::Word;
 pub const WATCH_MODEL: &str = "gpt-6-luna";
 /// Names caption clips so a second run replaces the first.
 const NAME: &str = "Caption";
+/// How every speaker caption's clip name starts ("Caption · <who>").
+pub const CAPTION_PREFIX: &str = "Caption · ";
 /// How long a finished caption stays up after its last word (seconds).
 const HOLD: f64 = 0.35;
 /// Camera shake on captions, in pixels at 1080p.
@@ -146,13 +148,11 @@ struct Watched {
 #[derive(Debug, Deserialize)]
 struct Said {
     n: usize,
-    /// Room for a caption above the speaker's head.
-    above: bool,
-    /// Everyone whose face (or redaction box) is in the still, and who they are.
+    /// Everyone whose face (or redaction box) is in the still, and who they
+    /// are. Only who the speaker is counts: where faces are, and whether the
+    /// speaker's is clearly visible, the face detector says (the model's
+    /// boxes landed on hands and on the wrong person).
     people: Vec<Seen>,
-    /// Burned-in overlays in the still: a bodycam's timestamp, a logo.
-    #[serde(default)]
-    overlays: Vec<Vec<f64>>,
 }
 
 /// A face in a still: whose (a name from "Who's who", or "other") and where, [ymin, xmin, ymax, xmax] 0–1000.
@@ -254,13 +254,11 @@ pub fn caption_style(width: u32, height: u32) -> TextStyle {
     }
 }
 
-/// Which side of the speaker's face a caption sits on.
+/// Which side of a face a caption sits on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Side {
     Above,
     Below,
-    Left,
-    Right,
 }
 
 /// Where a caption sits: its centre (project pixels from the frame's centre),
@@ -271,9 +269,6 @@ fn anchor(face: [f64; 4], side: Side, text: (f64, f64), frame: (f64, f64), gap: 
     let (x, y) = match side {
         Side::Above => ((left + right) / 2.0, top - gap - half_h),
         Side::Below => ((left + right) / 2.0, bottom + gap + half_h),
-        // Beside the face, level with it.
-        Side::Left => (left - gap - half_w, (top + bottom) / 2.0),
-        Side::Right => (right + gap + half_w, (top + bottom) / 2.0),
     };
     let margin = frame.1 * 0.04;
     (
@@ -291,83 +286,196 @@ fn anchor(face: [f64; 4], side: Side, text: (f64, f64), frame: (f64, f64), gap: 
 /// Caption widths to try, as shares of the frame: narrower stacks the words into more lines.
 const WIDTHS: [f32; 4] = [0.42, 0.32, 0.24, 0.18];
 
-fn overlaps(a: [f64; 4], b: [f64; 4]) -> bool {
-    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+/// The house place of an intro caption with nobody to sit under: bottom
+/// middle, this far below the frame's centre (a share of its height).
+pub const CAPTION_BOTTOM: f64 = 0.36;
+
+/// One sample of the footage under a caption: when (frames from the
+/// caption's start), every face found there and the speaker's (when it's
+/// followed there), as [x0, y0, x1, y1] project pixels from the frame's centre.
+#[derive(Clone, Debug)]
+pub(crate) struct Glimpse {
+    pub frame: f64,
+    pub faces: Vec<[f32; 4]>,
+    pub speaker: Option<[f32; 4]>,
 }
 
-/// Where a caption goes and how wide it is: the first spot by the speaker
-/// (where their previous line sat, so a run of lines doesn't jump about, then
-/// above when there's room, below, and only then beside them, towards the
-/// middle of the frame first), narrowing it so lines stack, that covers no
-/// face and no burned-in overlay (`avoid`, as [top, left, bottom, right]
-/// project pixels from the frame's centre).
-#[allow(clippy::too_many_arguments)]
-fn choose(
-    face: [f64; 4],
-    above: bool,
-    previous: Option<Side>,
-    avoid: &[[f64; 4]],
+/// Where a caption goes: its centre, wrap width, x/y keyframes when it
+/// follows the speaker, and whether it sits under their face.
+#[derive(Clone, Debug)]
+pub(crate) struct Laid {
+    pub x: f32,
+    pub y: f32,
+    pub max_width: f32,
+    pub keys: Option<(Vec<Keyframe>, Vec<Keyframe>)>,
+    pub under_face: bool,
+}
+
+fn key(frame: f64, value: f64) -> Keyframe {
+    Keyframe {
+        frame: frame as f32,
+        value: value as f32,
+        ease: Ease::Linear,
+        handle_in: None,
+        handle_out: None,
+    }
+}
+
+/// The house placement of an intro caption. Under the speaker's face only
+/// when `speaker_clear` (their face found by the face detector, the right
+/// person, clearly visible through the line) and, at every sample, the
+/// caption covers no face (each grown for hair and chin, the speaker's
+/// included) and stays below the top band where bodycam stamps sit; narrowed
+/// so the lines stack before giving up; smoothed, and still when the face
+/// hardly moves. Otherwise bottom middle, or the first place of
+/// `faces::spots` clear of every face seen while it's up.
+pub(crate) fn lay_out(
     text: &str,
     style: &TextStyle,
     frame: (f64, f64),
-    gap: f64,
-) -> (Side, f32) {
-    let centre = if (face[1] + face[3]) / 2.0 > 0.0 {
-        Side::Left
-    } else {
-        Side::Right
-    };
-    let away = if centre == Side::Left {
-        Side::Right
-    } else {
-        Side::Left
-    };
-    let mut sides: Vec<Side> = Vec::new();
-    for side in previous
-        .into_iter()
-        .chain([Side::Above, Side::Below, centre, away])
-    {
-        if (side != Side::Above || above) && !sides.contains(&side) {
-            sides.push(side);
-        }
-    }
-    let pad = gap / 2.0;
-    for side in sides {
-        for share in WIDTHS {
+    glimpses: &[Glimpse],
+    speaker_clear: bool,
+) -> Laid {
+    let k = frame.1 / 1080.0;
+    let band = -frame.1 / 2.0 + frame.1 * 0.11;
+    let followed: Vec<&Glimpse> = glimpses.iter().filter(|g| g.speaker.is_some()).collect();
+    if speaker_clear && !followed.is_empty() {
+        'widths: for share in WIDTHS {
             let width = (frame.0 as f32 * share).round();
-            let style = TextStyle {
+            let narrowed = TextStyle {
                 max_width: Some(width),
                 ..style.clone()
             };
-            let size = caption_size(text, &style);
-            let (x, y) = anchor(face, side, size, frame, gap);
-            let rect = [
-                y - size.1 / 2.0,
-                x - size.0 / 2.0,
-                y + size.1 / 2.0,
-                x + size.0 / 2.0,
-            ];
-            let covers = |other: &[f64; 4]| {
-                overlaps(
-                    rect,
-                    [
-                        other[0] - pad,
-                        other[1] - pad,
-                        other[2] + pad,
-                        other[3] + pad,
-                    ],
-                )
-            };
-            if !covers(&face) && !avoid.iter().any(covers) {
-                return (side, width);
+            let size = caption_size(text, &narrowed);
+            let points: Vec<(f64, f64)> = followed
+                .iter()
+                .filter_map(|g| g.speaker)
+                .map(|f| {
+                    let face = [f[1], f[0], f[3], f[2]].map(f64::from);
+                    // Clear of the chin's margin (faces::grown adds a fifth of the face).
+                    let gap = (14.0 * k).max(0.25 * (face[2] - face[0]));
+                    anchor(face, Side::Below, size, frame, gap)
+                })
+                .collect();
+            let points = crate::faces::smooth(&points);
+            for (g, (x, y)) in followed.iter().zip(&points) {
+                let area = [
+                    (x - size.0 / 2.0) as f32,
+                    (y - size.1 / 2.0) as f32,
+                    (x + size.0 / 2.0) as f32,
+                    (y + size.1 / 2.0) as f32,
+                ];
+                let covers = g
+                    .faces
+                    .iter()
+                    .chain(g.speaker.iter())
+                    .any(|face| crate::faces::overlap(area, crate::faces::grown(*face)) > 0.0);
+                if f64::from(area[1]) < band || covers {
+                    continue 'widths;
+                }
             }
+            let n = points.len() as f64;
+            let (mx, my) = points
+                .iter()
+                .fold((0.0, 0.0), |(a, b), (x, y)| (a + x / n, b + y / n));
+            let spread = points
+                .iter()
+                .map(|(x, y)| ((x - mx).powi(2) + (y - my).powi(2)).sqrt())
+                .fold(0.0, f64::max);
+            let keys = (spread > 8.0 * k && points.len() > 1).then(|| {
+                followed
+                    .iter()
+                    .zip(&points)
+                    .map(|(g, (x, y))| (key(g.frame, *x), key(g.frame, *y)))
+                    .unzip()
+            });
+            return Laid {
+                x: mx as f32,
+                y: my as f32,
+                max_width: width,
+                keys,
+                under_face: true,
+            };
         }
     }
-    (Side::Below, (frame.0 as f32 * WIDTHS[0]).round())
+    let size = caption_size(text, style);
+    let all: Vec<[f32; 4]> = glimpses
+        .iter()
+        .flat_map(|g| g.faces.iter().copied())
+        .collect();
+    let spot = crate::faces::place_from(
+        (size.0 as f32, size.1 as f32),
+        (frame.0 as f32, frame.1 as f32),
+        0.0,
+        &all,
+        None,
+        (CAPTION_BOTTOM * frame.1) as f32,
+    );
+    Laid {
+        x: spot.x,
+        y: spot.y,
+        max_width: style
+            .max_width
+            .unwrap_or((frame.0 as f32 * WIDTHS[0]).round()),
+        keys: None,
+        under_face: false,
+    }
+}
+
+/// The speaker's face followed through `indexes` (faces::RATE samples of the
+/// source): the detected face that `target` (shares of the picture: the box
+/// a model or the agent drew around them) means, at `at` or within a second
+/// of it, followed by the face detector. Empty when no face is there (the
+/// box was on a hand, an object, the wrong spot).
+pub(crate) fn speaker_track(
+    found: &std::collections::BTreeMap<i64, Vec<[f32; 4]>>,
+    indexes: &[i64],
+    at: i64,
+    target: [f32; 4],
+) -> Vec<(i64, [f32; 4])> {
+    let mut near: Vec<i64> = indexes
+        .iter()
+        .copied()
+        .filter(|index| (index - at).abs() <= crate::faces::RATE as i64)
+        .collect();
+    near.sort_by_key(|index| (index - at).abs());
+    near.iter()
+        .find_map(|index| Some((*index, crate::faces::pick(found.get(index)?, target)?)))
+        .map(|(index, start)| crate::faces::follow(found, indexes, index, start))
+        .unwrap_or_default()
+}
+
+/// The glimpses of a caption: at each sample of `indexes`, every face found
+/// and the speaker's from `track`, in project pixels; `local` turns source
+/// seconds into frames from the caption's start.
+pub(crate) fn glimpses(
+    found: Option<&std::collections::BTreeMap<i64, Vec<[f32; 4]>>>,
+    indexes: &[i64],
+    track: &[(i64, [f32; 4])],
+    media: (u32, u32),
+    fit: &Transform,
+    frame: (u32, u32),
+    local: impl Fn(f64) -> f64,
+) -> Vec<Glimpse> {
+    let place = |face: [f32; 4]| crate::faces::in_frame(media, fit, frame, face);
+    indexes
+        .iter()
+        .map(|index| Glimpse {
+            frame: local(*index as f64 / crate::faces::RATE),
+            faces: found
+                .and_then(|found| found.get(index))
+                .map(|faces| faces.iter().copied().map(place).collect())
+                .unwrap_or_default(),
+            speaker: track
+                .iter()
+                .find(|(at, _)| at == index)
+                .map(|(_, face)| place(*face)),
+        })
+        .collect()
 }
 
 /// A caption's rough size (project pixels): wrapped at the style's width.
-fn caption_size(text: &str, style: &TextStyle) -> (f64, f64) {
+pub(crate) fn caption_size(text: &str, style: &TextStyle) -> (f64, f64) {
     let size = f64::from(style.size);
     let width = text.chars().count() as f64 * size * 0.56;
     let max = f64::from(style.max_width.unwrap_or(f32::MAX));
@@ -607,7 +715,7 @@ pub fn subtitle_style(width: u32, height: u32) -> TextStyle {
 }
 
 /// A known speaker's first name; retain a short role when no name is known.
-fn subtitle_name(name: &str) -> &str {
+pub(crate) fn subtitle_name(name: &str) -> &str {
     let name = name
         .split(" (")
         .next()
@@ -616,6 +724,15 @@ fn subtitle_name(name: &str) -> &str {
         .trim_end_matches(':');
     let mut words = name.split_whitespace();
     let first = words.next().unwrap_or("Speaker");
+    // "Child 2" is another person than "Child": the number stays.
+    let rest: Vec<&str> = name.split_whitespace().skip(1).collect();
+    if !rest.is_empty()
+        && rest
+            .iter()
+            .all(|word| word.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        return name;
+    }
     if matches!(
         first,
         "Officer" | "Deputy" | "Detective" | "Sergeant" | "Sgt." | "Det."
@@ -652,9 +769,16 @@ struct Adjusted {
 }
 
 /// `clip`'s hand adjustments, when it's a subtitle whose transform, width or
-/// size isn't what add_subtitles gives (`style`, `transform`), or that has keyframes.
-fn adjusted(clip: &Clip, style: &TextStyle, transform: &Transform) -> Option<Adjusted> {
+/// size isn't what add_subtitles gives (`style`, `transform`, or a place
+/// Edit moved it to off a face: `faces::placed_by_edit`), or that has keyframes.
+fn adjusted(
+    clip: &Clip,
+    style: &TextStyle,
+    transform: &Transform,
+    frame: (u32, u32),
+) -> Option<Adjusted> {
     let ClipContent::Text {
+        text,
         style: own,
         transform: placed,
         ..
@@ -662,7 +786,7 @@ fn adjusted(clip: &Clip, style: &TextStyle, transform: &Transform) -> Option<Adj
     else {
         return None;
     };
-    let changed = placed != transform
+    let changed = (placed != transform && !crate::faces::placed_by_edit(text, own, placed, frame))
         || own.max_width != style.max_width
         || own.size != style.size
         || !clip.keyframes.is_empty();
@@ -796,168 +920,225 @@ pub async fn subtitles(
         y: height as f32 * 0.4,
         ..Transform::default()
     };
-    let (live, (placed, kept, texts)) = app.store.update(project_id, "agent", |project| {
-        let old: HashSet<String> = project
-            .clips
-            .iter()
-            .filter(|clip| {
-                clip.name
-                    .as_deref()
-                    .is_some_and(|name| name.starts_with(SUBTITLE))
-                    && clip.start < to
-                    && clip.end() > from
-            })
-            .map(|clip| clip.id.clone())
-            .collect();
-        let moved: Vec<Adjusted> = project
-            .clips
-            .iter()
-            .filter(|clip| old.contains(&clip.id))
-            .filter_map(|clip| adjusted(clip, &style, &transform))
-            .collect();
-        project.clips.retain(|clip| !old.contains(&clip.id));
-        crate::subtitles::write_mutes(project, &house.mutes);
-        let snap = (SNAP * fps).round() as i64;
-        let least = (MIN_SUBTITLE * fps).round() as i64;
-        // Last line first, so each knows where the next one it must give way to starts.
-        let mut slots = Vec::new();
-        let mut next_start: HashMap<String, i64> = HashMap::new();
-        for (index, line) in lines.iter().enumerate().rev() {
-            let Some(clip) = project.clip(&line.clip).cloned() else {
-                continue;
-            };
-            let ClipContent::Audio { speed, .. } = clip.content else {
-                continue;
-            };
-            let Some(&(said_from, said_to)) = spans.get(index) else {
-                continue;
-            };
-            let mut start = (said_from.floor() as i64).max(clip.start).max(from);
-            if start - clip.start <= snap {
-                start = clip.start.max(from);
-            }
-            let until = next_start
-                .get(&line.clip)
-                .copied()
-                .unwrap_or(i64::MAX)
-                .min(clip.end())
-                .min(to);
-            let natural = (said_to + HOLD / speed * fps).ceil() as i64;
-            let mut end = natural.min(until).max(start);
-            if until - end <= snap {
-                end = until.max(start);
-            }
-            // Someone's "okay" over the next line: no room to read it, so it's left out.
-            if end - start < least && line.words.len() <= 2 {
-                continue;
-            }
-            next_start.insert(line.clip.clone(), start);
-            slots.push((index, line, start, end, natural));
-        }
-        slots.reverse();
-        // Crosstalk: a line squeezed by the next one gets time to be read,
-        // and the next starts a moment later (keeping its own time to read).
-        let read = (READ_SUBTITLE * fps).round() as i64;
-        for index in 0..slots.len().saturating_sub(1) {
-            let Some([current, next, ..]) = slots.get_mut(index..) else {
-                continue;
-            };
-            let (_, line, start, end, natural) = *current;
-            let need = (start + read).min(natural.max(start + least));
-            let (_, next_line, next_start, next_end, _) = *next;
-            if end < need
-                && next_line.clip == line.clip
-                && next_start < need
-                && need <= next_end - least
-            {
-                current.3 = need;
-                next.2 = need;
-            }
-        }
-        slots.retain(|(_, _, start, end, _)| end > start);
-        let (mut placed, mut kept) = (0, 0);
-        // Every subtitle on the subtitles' own track, one after another.
-        let track = project.subtitles_track();
-        let mut free_from = 0;
-        for (index, line, start, end, _) in slots {
-            let start = start.max(free_from);
-            let busy = project
+    let (live, (placed, kept, texts, people)) =
+        app.store.update(project_id, "agent", |project| {
+            // Who each transcript voice was made out to be (a relabel: "Mother" →
+            // "Tabitha:") and their colour: a re-run keeps them.
+            let relabelled = relabels(project);
+            let old: HashSet<String> = project
                 .clips
                 .iter()
-                .filter(|clip| clip.track == track && clip.start < end && start < clip.end())
-                .map(|clip| clip.end())
-                .max();
-            let start = busy.map_or(start, |taken| start.max(taken));
-            if end <= start {
-                continue;
-            }
-            free_from = end;
-            let who = line
-                .name
-                .clone()
-                .or_else(|| line.voice.clone())
-                .unwrap_or_else(|| "Speaker".into());
-            let color = line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE);
-            let mut line_style = TextStyle {
-                label: Some(TextLabel {
-                    text: format!("{}:", subtitle_name(&who)),
-                    color,
-                    size: (LABEL_SIZE * height as f32 / 1080.0).round(),
-                }),
-                ..style.clone()
-            };
-            let mut line_transform = transform;
-            let mut keyframes = std::collections::BTreeMap::new();
-            if let Some(old) = carried(&moved, start, end) {
-                line_transform = old.transform;
-                line_style.max_width = old.max_width;
-                line_style.size = old.size;
-                // Keyframes are frames into the clip: shifted to the new start.
-                let shift = (old.start - start) as f32;
-                keyframes = old.keyframes.clone();
-                for key in keyframes.values_mut().flatten() {
-                    key.frame += shift;
+                .filter(|clip| {
+                    clip.name
+                        .as_deref()
+                        .is_some_and(|name| name.starts_with(SUBTITLE))
+                        && clip.start < to
+                        && clip.end() > from
+                })
+                .map(|clip| clip.id.clone())
+                .collect();
+            let moved: Vec<Adjusted> = project
+                .clips
+                .iter()
+                .filter(|clip| old.contains(&clip.id))
+                .filter_map(|clip| adjusted(clip, &style, &transform, (width, height)))
+                .collect();
+            project.clips.retain(|clip| !old.contains(&clip.id));
+            crate::subtitles::write_mutes(project, &house.mutes);
+            let snap = (SNAP * fps).round() as i64;
+            let least = (MIN_SUBTITLE * fps).round() as i64;
+            // Last line first, so each knows where the next one it must give way to starts.
+            let mut slots = Vec::new();
+            let mut next_start: HashMap<String, i64> = HashMap::new();
+            for (index, line) in lines.iter().enumerate().rev() {
+                let Some(clip) = project.clip(&line.clip).cloned() else {
+                    continue;
+                };
+                let ClipContent::Audio { speed, .. } = clip.content else {
+                    continue;
+                };
+                let Some(&(said_from, said_to)) = spans.get(index) else {
+                    continue;
+                };
+                let mut start = (said_from.floor() as i64).max(clip.start).max(from);
+                if start - clip.start <= snap {
+                    start = clip.start.max(from);
                 }
-                kept += 1;
+                let until = next_start
+                    .get(&line.clip)
+                    .copied()
+                    .unwrap_or(i64::MAX)
+                    .min(clip.end())
+                    .min(to);
+                let natural = (said_to + HOLD / speed * fps).ceil() as i64;
+                let mut end = natural.min(until).max(start);
+                if until - end <= snap {
+                    end = until.max(start);
+                }
+                // Someone's "okay" over the next line: no room to read it, so it's left out.
+                if end - start < least && line.words.len() <= 2 {
+                    continue;
+                }
+                next_start.insert(line.clip.clone(), start);
+                slots.push((index, line, start, end, natural));
             }
-            let track = track.clone();
-            let id = project.fresh_id("c");
-            project.clips.push(Clip {
-                id,
-                track,
-                start,
-                duration: end - start,
-                color: ClipColor::Cyan,
-                name: Some(format!("{SUBTITLE} · {who}")),
-                link: None,
-                fade_in: 0,
-                fade_out: 0,
-                keyframes,
-                content: ClipContent::Text {
-                    // White words; who says them above, in their colour.
-                    text: texts.get(index).cloned().unwrap_or_else(|| line.text()),
-                    style: line_style,
-                    transform: line_transform,
-                    animation: TextAnimation::default(),
-                    opacity: 1.0,
-                    word_times: Vec::new(),
-                },
-            });
-            placed += 1;
-        }
-        // Every other text on screen too (captions, callouts, charges), all of the video.
-        let texts = crate::subtitles::star_on_screen(project, 0, i64::MAX, neglect);
-        Ok((placed, kept, texts))
-    })?;
+            slots.reverse();
+            // Crosstalk: a line squeezed by the next one gets time to be read,
+            // and the next starts a moment later (keeping its own time to read).
+            let read = (READ_SUBTITLE * fps).round() as i64;
+            for index in 0..slots.len().saturating_sub(1) {
+                let Some([current, next, ..]) = slots.get_mut(index..) else {
+                    continue;
+                };
+                let (_, line, start, end, natural) = *current;
+                let need = (start + read).min(natural.max(start + least));
+                let (_, next_line, next_start, next_end, _) = *next;
+                if end < need
+                    && next_line.clip == line.clip
+                    && next_start < need
+                    && need <= next_end - least
+                {
+                    current.3 = need;
+                    next.2 = need;
+                }
+            }
+            slots.retain(|(_, _, start, end, _)| end > start);
+            let (mut placed, mut kept) = (0, 0);
+            // Every subtitle on the subtitles' own track, one after another.
+            let track = project.subtitles_track();
+            let mut free_from = 0;
+            for (index, line, start, end, _) in slots {
+                let start = start.max(free_from);
+                let busy = project
+                    .clips
+                    .iter()
+                    .filter(|clip| clip.track == track && clip.start < end && start < clip.end())
+                    .map(|clip| clip.end())
+                    .max();
+                let start = busy.map_or(start, |taken| start.max(taken));
+                if end <= start {
+                    continue;
+                }
+                free_from = end;
+                let who = line
+                    .name
+                    .clone()
+                    .or_else(|| line.voice.clone())
+                    .unwrap_or_else(|| "Speaker".into());
+                let (label, color) = relabelled.get(&who).cloned().unwrap_or_else(|| {
+                    (
+                        format!("{}:", subtitle_name(&who)),
+                        line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE),
+                    )
+                });
+                let mut line_style = TextStyle {
+                    label: Some(TextLabel {
+                        text: label,
+                        color,
+                        size: (LABEL_SIZE * height as f32 / 1080.0).round(),
+                    }),
+                    ..style.clone()
+                };
+                let mut line_transform = transform;
+                let mut keyframes = std::collections::BTreeMap::new();
+                if let Some(old) = carried(&moved, start, end) {
+                    line_transform = old.transform;
+                    line_style.max_width = old.max_width;
+                    line_style.size = old.size;
+                    // Keyframes are frames into the clip: shifted to the new start.
+                    let shift = (old.start - start) as f32;
+                    keyframes = old.keyframes.clone();
+                    for key in keyframes.values_mut().flatten() {
+                        key.frame += shift;
+                    }
+                    kept += 1;
+                }
+                let track = track.clone();
+                let id = project.fresh_id("c");
+                project.clips.push(Clip {
+                    id,
+                    track,
+                    start,
+                    duration: end - start,
+                    color: ClipColor::Cyan,
+                    name: Some(format!("{SUBTITLE} · {who}")),
+                    link: None,
+                    fade_in: 0,
+                    fade_out: 0,
+                    keyframes,
+                    content: ClipContent::Text {
+                        // White words; who says them above, in their colour.
+                        text: texts.get(index).cloned().unwrap_or_else(|| line.text()),
+                        style: line_style,
+                        transform: line_transform,
+                        animation: TextAnimation::default(),
+                        opacity: 1.0,
+                        word_times: Vec::new(),
+                    },
+                });
+                placed += 1;
+            }
+            // Every other text on screen too (captions, callouts, charges), all of the video.
+            let texts = crate::subtitles::star_on_screen(project, 0, i64::MAX, neglect);
+            // One colour per person across the video (their captions and quotes too).
+            let people = crate::people::one_colour_per_person(project);
+            Ok((placed, kept, texts, people))
+        })?;
+    // Then off the faces under them (bottom middle unless one is there).
+    let faces = match crate::faces::place_subtitles(app, project_id, from, to).await {
+        Ok(report) => report,
+        Err(error) => json!({"error": error}),
+    };
+    let rev = app.store.get(project_id).map_or(live.rev, |live| live.rev);
     Ok(json!({
-        "rev": live.rev,
+        "rev": rev,
+        "off_faces": faces,
         "lines": said,
         "hidden": hidden,
         "placed": placed,
         "kept_hand_adjustments": kept,
         "texts_starred": texts,
         "mutes": house.listed,
+        "people": people,
     }))
+}
+
+/// The label and colour each transcript voice's subtitles are shown under
+/// now ("Subtitle · Mother" → "Tabitha:" in red), the most used of each, so
+/// a re-run of add_subtitles keeps who is who and their colours.
+fn relabels(project: &Project) -> HashMap<String, (String, Rgba)> {
+    // Per voice: each (label, colour) it's shown under, how often.
+    type Shown = HashMap<(String, [u32; 4]), (usize, Rgba)>;
+    let mut seen: HashMap<String, Shown> = HashMap::new();
+    for clip in &project.clips {
+        let (Some(who), ClipContent::Text { style, .. }) = (
+            clip.name
+                .as_deref()
+                .and_then(|name| name.strip_prefix(SUBTITLE))
+                .and_then(|rest| rest.strip_prefix(" · ")),
+            &clip.content,
+        ) else {
+            continue;
+        };
+        let Some(label) = &style.label else {
+            continue;
+        };
+        let bits = label.color.0.map(f32::to_bits);
+        let entry = seen
+            .entry(who.to_owned())
+            .or_default()
+            .entry((label.text.clone(), bits))
+            .or_insert((0, label.color));
+        entry.0 += 1;
+    }
+    seen.into_iter()
+        .filter_map(|(who, labels)| {
+            labels
+                .into_iter()
+                .max_by(|a, b| a.1 .0.cmp(&b.1 .0).then(b.0 .0.cmp(&a.0 .0)))
+                .map(|((text, _), (_, colour))| (who, (text, colour)))
+        })
+        .collect()
 }
 
 /// Captions every line spoken in the footage between `from` and `to` (timeline frames).
@@ -1083,18 +1264,21 @@ pub async fn caption_speakers(
     let watched: Watched = serde_json::from_str(answer.trim())
         .map_err(|error| format!("{WATCH_MODEL} answered in an unexpected shape: {error}"))?;
 
-    // Track each speaker's face through their line (in the background threads).
+    // The model only says who the speaker is; where their face is, and whether
+    // it's clearly visible through the line, the face detector says.
     struct Plan {
         line: usize,
         who: String,
-        above: bool,
-        face: Option<[f64; 4]>,
-        /// Faces and overlays to keep the caption off ([x0, y0, x1, y1] source pixels).
-        avoid: Vec<[f64; 4]>,
-        track: Vec<crate::track::Sample>,
+        /// The model's box around the speaker's face (shares of the picture).
+        face: Option<[f32; 4]>,
+        path: PathBuf,
+        indexes: Vec<i64>,
+        /// The sample the still was taken at.
+        at: i64,
+        track: Vec<(i64, [f32; 4])>,
+        clear: bool,
     }
     let mut plans = Vec::new();
-    let mut tracks = Vec::new();
     for said in &watched.lines {
         let Some(line) = lines.get(said.n) else {
             continue;
@@ -1119,19 +1303,14 @@ pub async fn caption_speakers(
             .people
             .iter()
             .find(|seen| names.iter().any(|name| same_speaker(&seen.who, name)))
-            .and_then(|seen| box_pixels(&seen.face, media_size));
-        if let Some(region) = face {
-            tracks.push((
-                plans.len(),
-                PathBuf::from(&media.path),
-                (media.width, media.height, media.fps),
-                line.start(),
-                line.end() + HOLD,
-                (line.start() + line.end()) / 2.0,
-                region,
-            ));
-        }
-        let track = Vec::new();
+            .and_then(|seen| box_pixels(&seen.face, media_size))
+            .map(|[x0, y0, x1, y1]| {
+                let (w, h) = (
+                    f64::from(media.width.max(1)),
+                    f64::from(media.height.max(1)),
+                );
+                [x0 / w, y0 / h, x1 / w, y1 / h].map(|share| share as f32)
+            });
         plans.push(Plan {
             line: said.n,
             // Who says it is the transcript's: its voices were named from the conversation.
@@ -1140,42 +1319,44 @@ pub async fn caption_speakers(
                 .clone()
                 .or_else(|| line.voice.clone())
                 .unwrap_or_else(|| "Speaker".into()),
-            above: said.above,
             face,
-            avoid: said
-                .people
-                .iter()
-                .map(|seen| &seen.face)
-                .chain(&said.overlays)
-                .filter_map(|b| box_pixels(b, media_size))
+            path: PathBuf::from(&media.path),
+            indexes: crate::faces::indexes_between(line.start(), line.end() + HOLD)
+                .into_iter()
                 .collect(),
-            track,
+            at: (((line.start() + line.end()) / 2.0) * crate::faces::RATE).round() as i64,
+            track: Vec::new(),
+            clear: false,
         });
     }
 
-    // Every speaker's face tracked side by side, a few at a time.
-    {
-        use futures_util::StreamExt as _;
-        let tracked: Vec<(usize, Vec<crate::track::Sample>)> =
-            futures_util::stream::iter(tracks.into_iter().map(
-                |(plan, path, (width, height, fps), from, to, at, region)| async move {
-                    let samples = tokio::task::spawn_blocking(move || {
-                        crate::track::track(&path, (width, height), fps, from, to, at, region)
-                    })
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .unwrap_or_default();
-                    (plan, samples)
-                },
-            ))
-            .buffer_unordered(3)
-            .collect()
-            .await;
-        for (plan, samples) in tracked {
-            if let Some(plan) = plans.get_mut(plan) {
-                plan.track = samples;
-            }
+    // The faces under every line, one file at a time (cached per file).
+    let mut wanted: std::collections::BTreeMap<
+        PathBuf,
+        ((u32, u32), std::collections::BTreeSet<i64>),
+    > = std::collections::BTreeMap::new();
+    for plan in &plans {
+        let Some(media) = project
+            .media
+            .iter()
+            .find(|m| Path::new(&m.path) == plan.path)
+        else {
+            continue;
+        };
+        wanted
+            .entry(plan.path.clone())
+            .or_insert_with(|| ((media.width, media.height), Default::default()))
+            .1
+            .extend(plan.indexes.iter().copied());
+    }
+    let seen = faces_in(wanted).await;
+    for plan in &mut plans {
+        let Some(found) = seen.get(&plan.path) else {
+            continue;
+        };
+        if let Some(target) = plan.face {
+            plan.track = speaker_track(found, &plan.indexes, plan.at, target);
+            plan.clear = crate::faces::clearly_visible(&plan.track, plan.indexes.len());
         }
     }
 
@@ -1211,8 +1392,7 @@ pub async fn caption_speakers(
             .collect();
         project.clips.retain(|clip| !old.contains(&clip.id));
         let mut placed = 0;
-        // Where each speaker's last caption in a clip sat.
-        let mut sides: HashMap<(String, String), Side> = HashMap::new();
+        let mut under_faces = 0;
         for plan in &plans {
             let Some(line) = lines.get(plan.line) else {
                 continue;
@@ -1260,104 +1440,38 @@ pub async fn caption_speakers(
             }
             let end = end.max(start + 1);
             let text = line.text();
-            let gap = 14.0 * k;
-            let corners = |region: [f64; 4]| {
-                let (x0, y0) = to_project(
-                    &media,
-                    footage_transform,
-                    (width, height),
-                    (region[0], region[1]),
-                );
-                let (x1, y1) = to_project(
-                    &media,
-                    footage_transform,
-                    (width, height),
-                    (region[2], region[3]),
-                );
-                [y0, x0, y1, x1]
-            };
-            // Off every face and overlay, and off the band at the top where bodycam timestamps sit.
-            let mut avoid: Vec<[f64; 4]> =
-                plan.avoid.iter().map(|region| corners(*region)).collect();
-            avoid.push([
-                -height / 2.0,
-                -width / 2.0,
-                -height / 2.0 + height * 0.11,
-                width / 2.0,
-            ]);
-            let (side, max_width) = match plan.face {
-                Some(face) => choose(
-                    corners(face),
-                    plan.above,
-                    sides.get(&(line.clip.clone(), plan.who.clone())).copied(),
-                    &avoid,
-                    &text,
-                    &style,
-                    (width, height),
-                    gap,
-                ),
-                None => (
-                    Side::Below,
-                    style.max_width.unwrap_or(width as f32 * WIDTHS[0]),
-                ),
-            };
-            if plan.face.is_some() {
-                sides.insert((line.clip.clone(), plan.who.clone()), side);
+            let local = |seconds: f64| on_timeline(seconds) - start as f64;
+            let indexes: Vec<i64> = plan
+                .indexes
+                .iter()
+                .copied()
+                .filter(|index| {
+                    let at = local(*index as f64 / crate::faces::RATE);
+                    (-1.0..=(end - start) as f64 + 1.0).contains(&at)
+                })
+                .collect();
+            let seen_here = glimpses(
+                seen.get(&plan.path),
+                &indexes,
+                &plan.track,
+                (media.width, media.height),
+                footage_transform,
+                (project.settings.width, project.settings.height),
+                local,
+            );
+            let laid = lay_out(&text, &style, (width, height), &seen_here, plan.clear);
+            if laid.under_face {
+                under_faces += 1;
             }
             let line_style = TextStyle {
-                max_width: Some(max_width),
+                max_width: Some(laid.max_width),
                 ..style.clone()
             };
-            let size = caption_size(&text, &line_style);
-            // Where the caption goes by `region` (source pixels) with the
-            // footage framed as at timeline `frame` (a push-in moves the face).
-            let place_at = |region: [f64; 4], frame: i64| {
-                let framing = footage_framing(&footage, footage_transform, frame);
-                let (x0, y0) =
-                    to_project(&media, &framing, (width, height), (region[0], region[1]));
-                let (x1, y1) =
-                    to_project(&media, &framing, (width, height), (region[2], region[3]));
-                anchor([y0, x0, y1, x1], side, size, (width, height), gap)
-            };
-            let place = |region: [f64; 4]| place_at(region, start);
-            let (x, y) = match plan.face {
-                Some(face) => place(face),
-                // Nobody to sit by (the camera wearer, a radio): bottom middle.
-                None => (0.0, height * 0.36),
-            };
+            let (x, y) = (laid.x, laid.y);
             let mut keyframes = std::collections::BTreeMap::new();
-            if let Some(face) = plan.face.filter(|_| plan.track.len() > 1) {
-                let (w, h) = (face[2] - face[0], face[3] - face[1]);
-                let mut xs = Vec::new();
-                let mut ys = Vec::new();
-                for sample in &plan.track {
-                    let frame = on_timeline(sample.time) - start as f64;
-                    if frame < -1.0 || frame > (end - start) as f64 + 1.0 {
-                        continue;
-                    }
-                    let (px, py) = place_at(
-                        [
-                            sample.x - w / 2.0,
-                            sample.y - h / 2.0,
-                            sample.x + w / 2.0,
-                            sample.y + h / 2.0,
-                        ],
-                        start + frame.round() as i64,
-                    );
-                    let key = |value: f64| Keyframe {
-                        frame: frame as f32,
-                        value: value as f32,
-                        ease: Ease::Linear,
-                        handle_in: None,
-                        handle_out: None,
-                    };
-                    xs.push(key(px));
-                    ys.push(key(py));
-                }
-                if xs.len() > 1 {
-                    keyframes.insert("x".to_owned(), xs);
-                    keyframes.insert("y".to_owned(), ys);
-                }
+            if let Some((xs, ys)) = laid.keys {
+                keyframes.insert("x".to_owned(), xs);
+                keyframes.insert("y".to_owned(), ys);
             }
             let word_times: Vec<f32> = line
                 .words
@@ -1405,8 +1519,8 @@ pub async fn caption_speakers(
                         ..line_style.clone()
                     },
                     transform: Transform {
-                        x: x as f32,
-                        y: y as f32,
+                        x,
+                        y,
                         shake: SHAKE * k as f32,
                         ..Transform::default()
                     },
@@ -1420,15 +1534,336 @@ pub async fn caption_speakers(
             });
             placed += 1;
         }
-        Ok(placed)
+        // One colour per person: the same as their subtitles and quotes.
+        crate::people::one_colour_per_person(project);
+        Ok((placed, under_faces))
     })?;
-    let tracked = plans.iter().filter(|plan| plan.track.len() > 1).count();
+    let (placed, under_faces) = placed;
     Ok(json!({
         "rev": live.rev,
         "lines": lines.len(),
         "placed": placed,
-        "tracked": tracked,
+        "under_the_speakers_face": under_faces,
+        "bottom_middle": placed - under_faces,
         "speakers": speakers,
+    }))
+}
+
+/// The faces under `wanted` (per file: its picture size and the sample
+/// indexes), one file at a time; a file that can't be analysed is logged and
+/// left out (its captions go bottom middle).
+async fn faces_in(
+    wanted: std::collections::BTreeMap<PathBuf, ((u32, u32), std::collections::BTreeSet<i64>)>,
+) -> HashMap<PathBuf, std::collections::BTreeMap<i64, Vec<[f32; 4]>>> {
+    let mut seen = HashMap::new();
+    for (path, (size, indexes)) in wanted {
+        let source = path.clone();
+        let found =
+            tokio::task::spawn_blocking(move || crate::faces::detect(&source, size, &indexes))
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|found| found);
+        match found {
+            Ok(found) => {
+                seen.insert(path, found);
+            }
+            Err(error) => {
+                crate::diag::warn("captions", format!("faces in {}: {error}", path.display()));
+            }
+        }
+    }
+    seen
+}
+
+/// Who an existing intro caption sits under (place_captions).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Under {
+    /// The face it already sits beside, if that face is clearly visible.
+    Auto,
+    /// Bottom middle: the speaker is off screen or not clearly visible.
+    Bottom,
+    /// The face at this point (project pixels from the top-left, at the caption's first frame).
+    At(f64, f64),
+}
+
+/// Lays the intro captions between `from` and `to` (frames) out again the
+/// house way without retyping them (see `lay_out`): under the speaker's face
+/// only when the face detector sees it clearly through the line, else bottom
+/// middle, never on a face. `under` says whose face a caption goes under
+/// (by clip id); the rest keep the face they already sit beside when it's
+/// clearly visible. Returns where each went.
+pub async fn place_captions(
+    app: &App,
+    project_id: &str,
+    from: i64,
+    to: i64,
+    under: &HashMap<String, Under>,
+) -> Result<Value, String> {
+    let started = std::time::Instant::now();
+    let project = app.store.get(project_id).ok_or("no such project")?.project;
+    let fps = project.fps();
+    let frame_px = (project.settings.width, project.settings.height);
+    let frame = (f64::from(frame_px.0), f64::from(frame_px.1));
+    /// The footage under a caption: media path, size, transform, start,
+    /// source in and speed.
+    type Footage = (PathBuf, (u32, u32), Transform, i64, f64, f64);
+    struct Job {
+        id: String,
+        text: String,
+        style: TextStyle,
+        start: i64,
+        end: i64,
+        /// Its centre now, at its middle (project pixels from the frame's centre).
+        now: (f32, f32),
+        footage: Option<Footage>,
+        indexes: Vec<i64>,
+        under: Under,
+    }
+    let mut jobs = Vec::new();
+    for clip in &project.clips {
+        let ClipContent::Text {
+            text,
+            style,
+            transform,
+            ..
+        } = &clip.content
+        else {
+            continue;
+        };
+        if !clip
+            .name
+            .as_deref()
+            .is_some_and(|name| name.starts_with(CAPTION_PREFIX))
+            || clip.start >= to
+            || clip.end() <= from
+        {
+            continue;
+        }
+        let middle = clip.start + clip.duration / 2;
+        let local = (middle - clip.start) as f32;
+        let at = |param: &str, base: f32| {
+            clip.keyframes
+                .get(param)
+                .and_then(|keys| edit_core::sample(keys, local))
+                .unwrap_or(base)
+        };
+        let footage = crate::faces::picture_at(&project, middle).and_then(|picture| {
+            let ClipContent::Video {
+                media,
+                source_in,
+                speed,
+                transform,
+                ..
+            } = &picture.content
+            else {
+                return None;
+            };
+            let media = project
+                .media(media)
+                .filter(|media| media.kind == edit_core::MediaKind::Video)?;
+            Some((
+                PathBuf::from(&media.path),
+                (media.width, media.height),
+                *transform,
+                picture.start,
+                *source_in,
+                *speed,
+            ))
+        });
+        let indexes = footage
+            .as_ref()
+            .map(|(_, _, _, picture_start, source_in, speed)| {
+                let source = |frame: i64| source_in + (frame - picture_start) as f64 / fps * speed;
+                crate::faces::indexes_between(source(clip.start), source(clip.end()))
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default();
+        jobs.push(Job {
+            id: clip.id.clone(),
+            text: text.clone(),
+            style: style.clone(),
+            start: clip.start,
+            end: clip.end(),
+            now: (at("x", transform.x), at("y", transform.y)),
+            footage,
+            indexes,
+            under: under.get(&clip.id).cloned().unwrap_or(Under::Auto),
+        });
+    }
+    let mut wanted: std::collections::BTreeMap<
+        PathBuf,
+        ((u32, u32), std::collections::BTreeSet<i64>),
+    > = std::collections::BTreeMap::new();
+    for job in &jobs {
+        if let Some((path, size, ..)) = &job.footage {
+            wanted
+                .entry(path.clone())
+                .or_insert_with(|| (*size, Default::default()))
+                .1
+                .extend(job.indexes.iter().copied());
+        }
+    }
+    let seen = faces_in(wanted).await;
+    let mut laid_out: Vec<(String, Laid, &'static str)> = Vec::new();
+    let mut report = Vec::new();
+    for job in &jobs {
+        let found = job.footage.as_ref().and_then(|(path, ..)| seen.get(path));
+        let (track, why) = match (&job.footage, found) {
+            (Some((_, media, fit, picture_start, source_in, speed)), Some(found)) => {
+                let to_index = |frame: i64| {
+                    ((source_in + (frame - picture_start) as f64 / fps * speed)
+                        * crate::faces::RATE)
+                        .round() as i64
+                };
+                // Project pixels from the frame's centre → shares of the picture.
+                let fit_k = (frame.0 / f64::from(media.0.max(1)))
+                    .min(frame.1 / f64::from(media.1.max(1)))
+                    * f64::from(fit.scale);
+                let share = |x: f64, y: f64| {
+                    (
+                        ((x - f64::from(fit.x)) / fit_k / f64::from(media.0.max(1)) + 0.5) as f32,
+                        ((y - f64::from(fit.y)) / fit_k / f64::from(media.1.max(1)) + 0.5) as f32,
+                    )
+                };
+                match &job.under {
+                    Under::Bottom => (Vec::new(), "asked: bottom middle"),
+                    Under::At(x, y) => {
+                        let (sx, sy) = share(x - frame.0 / 2.0, y - frame.1 / 2.0);
+                        let target = [sx - 0.005, sy - 0.005, sx + 0.005, sy + 0.005];
+                        let track = speaker_track(found, &job.indexes, to_index(job.start), target);
+                        let why = if track.is_empty() {
+                            "no face found at that point"
+                        } else {
+                            "the face asked for"
+                        };
+                        (track, why)
+                    }
+                    Under::Auto => {
+                        // The face it sits just beside now, unless it covers a face
+                        // (then where it was is no guide to whose line it is).
+                        let middle = to_index(job.start + (job.end - job.start) / 2);
+                        let (w, h) = caption_size(&job.text, &job.style);
+                        let area = [
+                            job.now.0 - w as f32 / 2.0,
+                            job.now.1 - h as f32 / 2.0,
+                            job.now.0 + w as f32 / 2.0,
+                            job.now.1 + h as f32 / 2.0,
+                        ];
+                        let faces: Vec<([f32; 4], [f32; 4])> = found
+                            .get(&middle)
+                            .map(|faces| {
+                                faces
+                                    .iter()
+                                    .map(|face| {
+                                        (
+                                            *face,
+                                            crate::faces::in_frame(*media, fit, frame_px, *face),
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let on_one = faces
+                            .iter()
+                            .any(|(_, face)| crate::faces::overlap(area, *face) > 0.0);
+                        let beside = faces
+                            .iter()
+                            .filter_map(|(share, face)| {
+                                let dx = (area[0] - face[2]).max(face[0] - area[2]).max(0.0);
+                                let dy = (area[1] - face[3]).max(face[1] - area[3]).max(0.0);
+                                let distance = (dx * dx + dy * dy).sqrt();
+                                (distance <= 0.75 * (face[3] - face[1]))
+                                    .then_some((distance, *share))
+                            })
+                            .min_by(|a, b| a.0.total_cmp(&b.0))
+                            .map(|(_, share)| share);
+                        match beside.filter(|_| !on_one) {
+                            Some(target) => (
+                                speaker_track(found, &job.indexes, middle, target),
+                                "the face it sat beside",
+                            ),
+                            None if on_one => {
+                                (Vec::new(), "it sat on a face: whose line it is isn't known")
+                            }
+                            None => (Vec::new(), "no face beside it"),
+                        }
+                    }
+                }
+            }
+            _ => (Vec::new(), "no footage analysed under it"),
+        };
+        let clear = crate::faces::clearly_visible(&track, job.indexes.len());
+        let glimpsed = match &job.footage {
+            Some((_, media, fit, picture_start, source_in, speed)) => glimpses(
+                found,
+                &job.indexes,
+                &track,
+                *media,
+                fit,
+                frame_px,
+                |seconds| {
+                    *picture_start as f64 + (seconds - source_in) / speed * fps - job.start as f64
+                },
+            ),
+            None => Vec::new(),
+        };
+        let laid = lay_out(&job.text, &job.style, frame, &glimpsed, clear);
+        let why = if !track.is_empty() && !clear {
+            "the face isn't clearly visible through the line"
+        } else if clear && !laid.under_face {
+            "no room under the face without covering one"
+        } else {
+            why
+        };
+        report.push(json!({
+            "clip": job.id,
+            "text": job.text,
+            "under_face": laid.under_face,
+            "why": why,
+        }));
+        laid_out.push((job.id.clone(), laid, why));
+    }
+    let (live, moved) = app.store.update(project_id, "agent", |project| {
+        let mut moved = 0;
+        for (id, laid, _) in &laid_out {
+            let Some(clip) = project.clip_mut(id) else {
+                continue;
+            };
+            clip.keyframes.remove("x");
+            clip.keyframes.remove("y");
+            if let Some((xs, ys)) = &laid.keys {
+                clip.keyframes.insert("x".into(), xs.clone());
+                clip.keyframes.insert("y".into(), ys.clone());
+            }
+            if let ClipContent::Text {
+                transform, style, ..
+            } = &mut clip.content
+            {
+                transform.x = laid.x;
+                transform.y = laid.y;
+                style.max_width = Some(laid.max_width);
+                moved += 1;
+            }
+        }
+        Ok(moved)
+    })?;
+    crate::diag::record(
+        "captions",
+        "faces: placed captions",
+        started.elapsed(),
+        None,
+    );
+    let under_faces = laid_out
+        .iter()
+        .filter(|(_, laid, _)| laid.under_face)
+        .count();
+    Ok(json!({
+        "rev": live.rev,
+        "captions": moved,
+        "under_the_speakers_face": under_faces,
+        "bottom_middle": laid_out.len() - under_faces,
+        "each": report,
     }))
 }
 
@@ -1562,6 +1997,113 @@ pub async fn follow_region(
     }
     let path = PathBuf::from(&media.path);
     let size = (media.width, media.height);
+    if what == "leader" {
+        let at = to_source_time(frame);
+        // A callout points at a person: the face the box is on, followed by
+        // the face detector (template matching drifted off onto someone else).
+        let indexes: Vec<i64> = crate::faces::indexes_between(from, to)
+            .into_iter()
+            .collect();
+        let wanted = std::collections::BTreeMap::from([(
+            path.clone(),
+            (size, indexes.iter().copied().collect()),
+        )]);
+        let seen = faces_in(wanted).await;
+        let empty = std::collections::BTreeMap::new();
+        let found = seen.get(&path).unwrap_or(&empty);
+        let (mw, mh) = (f64::from(size.0.max(1)), f64::from(size.1.max(1)));
+        let aim = [
+            source_region[0] / mw,
+            source_region[1] / mh,
+            source_region[2] / mw,
+            source_region[3] / mh,
+        ]
+        .map(|share| share as f32);
+        let at_index = (at * crate::faces::RATE).round() as i64;
+        let track = speaker_track(found, &indexes, at_index, aim);
+        let frame_px = (project.settings.width, project.settings.height);
+        let listed = |index: i64| -> String {
+            found
+                .get(&index)
+                .map(|faces| {
+                    faces
+                        .iter()
+                        .map(|face| {
+                            let f = crate::faces::in_frame(size, transform, frame_px, *face);
+                            format!(
+                                "[{:.0}, {:.0}, {:.0}, {:.0}]",
+                                f[0] + width as f32 / 2.0,
+                                f[1] + height as f32 / 2.0,
+                                f[2] + width as f32 / 2.0,
+                                f[3] + height as f32 / 2.0
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|list| !list.is_empty())
+                .unwrap_or_else(|| "none".into())
+        };
+        if !crate::faces::clearly_visible(&track, indexes.len()) {
+            return Err(format!(
+                "No face Edit can follow clearly in that box at {time:.2}s (faces found there, project pixels from the top-left: {}). A callout's leader points only at a clearly visible face: give the box of the right person's face from that list, or drop the leader (style.leader null) and keep the callout a plain label.",
+                listed(at_index)
+            ));
+        }
+        let points: Vec<(f64, f64)> = track
+            .iter()
+            .map(|(_, face)| {
+                let f = crate::faces::in_frame(size, transform, frame_px, *face);
+                let x = f64::from(f[0] + f[2]) / 2.0;
+                let y = match place {
+                    "above" => f64::from(f[1]),
+                    "below" => f64::from(f[3]),
+                    _ => f64::from(f[1] + f[3]) / 2.0,
+                };
+                (x, y)
+            })
+            .collect();
+        let points = crate::faces::smooth(&points);
+        let mut xs = Vec::new();
+        let mut ys = Vec::new();
+        for ((index, _), (x, y)) in track.iter().zip(&points) {
+            let local = footage.start as f64
+                + (*index as f64 / crate::faces::RATE - source_in) / speed * fps
+                - target.start as f64;
+            if local < -1.0 || local > target.duration as f64 + 1.0 {
+                continue;
+            }
+            xs.push(key(local, x + offset[0]));
+            ys.push(key(local, y + offset[1]));
+        }
+        if xs.is_empty() {
+            return Err("the face isn't on screen while the callout is up".into());
+        }
+        let count = xs.len();
+        app.store.update(project_id, "agent", |project| {
+            let clip = project.clip_mut(follow).ok_or("clip vanished")?;
+            if let ClipContent::Text { style, .. } = &mut clip.content {
+                if let (Some(leader), Some(x), Some(y)) =
+                    (&mut style.leader, xs.first(), ys.first())
+                {
+                    leader.x = x.value;
+                    leader.y = y.value;
+                }
+            }
+            clip.keyframes.insert("leader.x".into(), xs);
+            clip.keyframes.insert("leader.y".into(), ys);
+            Ok(())
+        })?;
+        return Ok(format!(
+            "{follow}'s leader now points at the face {} (the one found in your box at {time:.2}s; faces there: {}), followed by the face detector at {count} points",
+            match place {
+                "above" => "top",
+                "below" => "chin",
+                _ => "centre",
+            },
+            listed(at_index)
+        ));
+    }
     let media_fps = media.fps;
     let tracked = tokio::task::spawn_blocking(move || {
         crate::track::track_anchors(&path, size, media_fps, from, to, &anchors)
@@ -1841,65 +2383,78 @@ mod tests {
         assert!(x + 200.0 <= 960.0);
     }
 
-    #[test]
-    fn keeps_captions_off_faces_and_the_timestamp() {
-        let frame = (1920.0, 1080.0);
-        let style = caption_style(1920, 1080);
-        let gap = 14.0;
-        let hud = [-540.0, -960.0, -540.0 + 1080.0 * 0.11, 960.0];
-        // A witness at the right edge, head near the top; an officer's face on the left.
-        let witness = [-380.0, 560.0, -180.0, 760.0];
-        let officer = [-240.0, -820.0, -60.0, -620.0];
-        let text = "Lost control of it right there,";
-        let (side, _) = choose(
-            witness,
-            true,
-            None,
-            &[hud, officer, witness],
-            text,
-            &style,
+    fn glimpse(frame: f64, faces: Vec<[f32; 4]>, speaker: Option<[f32; 4]>) -> Glimpse {
+        Glimpse {
             frame,
-            gap,
-        );
-        // Above would sit on the timestamp: below them instead, not beside.
-        assert_eq!(side, Side::Below);
-        // Squeezed between two faces, it narrows so the lines stack rather than cover either.
-        let left = [-200.0, -400.0, 0.0, -200.0];
-        let right = [-200.0, 120.0, 0.0, 320.0];
-        let long = "where one of his friends was driving, and they hit and killed somebody";
-        let (side, width) = choose(
-            left,
-            false,
-            None,
-            &[hud, left, right, [100.0, -960.0, 540.0, 960.0]],
-            long,
-            &style,
-            frame,
-            gap,
-        );
-        // Between them is too tight even narrowed, and below is taken: the open side, narrowed.
-        assert_eq!(side, Side::Left);
-        assert!(width < 1920.0 * 0.42);
+            faces,
+            speaker,
+        }
     }
 
     #[test]
-    fn a_run_of_lines_stays_on_one_side() {
+    fn a_caption_sits_under_a_clear_speaker_and_never_on_a_face() {
         let frame = (1920.0, 1080.0);
         let style = caption_style(1920, 1080);
-        let hud = [-540.0, -960.0, -540.0 + 1080.0 * 0.11, 960.0];
-        // Head near the top, left of centre: no room above.
-        let face = [-470.0, -520.0, -230.0, -260.0];
-        let avoid = [hud, face];
-        let pick = |text: &str, previous| {
-            choose(face, false, previous, &avoid, text, &style, frame, 14.0).0
-        };
-        // A long line and a one-word line both go below; a short line fitting beside isn't reason to move.
-        let first = pick("I have no idea how he got his arm", None);
-        assert_eq!(first, Side::Below);
-        assert_eq!(pick("injured.", Some(first)), Side::Below);
-        assert_eq!(pick("injured.", None), Side::Below);
-        // Pushed beside by something below, the next line keeps that side while it fits.
-        assert_eq!(pick("injured.", Some(Side::Right)), Side::Right);
+        // The speaker mid-frame, steady: under their chin, still, off their face.
+        let face = [-100.0, -300.0, 100.0, -60.0];
+        let seen: Vec<Glimpse> = (0..6)
+            .map(|i| glimpse(f64::from(i) * 15.0, vec![face], Some(face)))
+            .collect();
+        let laid = lay_out("told me that,", &style, frame, &seen, true);
+        assert!(laid.under_face);
+        assert!(laid.keys.is_none(), "a face that hardly moves: no jitter");
+        let (w, h) = caption_size("told me that,", &style);
+        let top = laid.y - h as f32 / 2.0;
+        assert!(top > crate::faces::grown(face)[3], "{top}");
+        assert!(laid.x.abs() < 1.0 && w > 0.0);
+        // Not clearly visible (or the wrong person): bottom middle.
+        let laid = lay_out("told me that,", &style, frame, &seen, false);
+        assert!(!laid.under_face);
+        assert_eq!((laid.x, laid.y), (0.0, (CAPTION_BOTTOM * 1080.0) as f32));
+        // Under the speaker would sit on someone else's face: bottom middle, still off it.
+        let other = [-150.0, 0.0, 150.0, 200.0];
+        let crowded: Vec<Glimpse> = (0..6)
+            .map(|i| glimpse(f64::from(i) * 15.0, vec![face, other], Some(face)))
+            .collect();
+        let laid = lay_out("told me that,", &style, frame, &crowded, true);
+        assert!(!laid.under_face);
+        // A face at the bottom middle moves the fallback aside.
+        let low = [-120.0, 250.0, 120.0, 520.0];
+        let seen = vec![glimpse(0.0, vec![low], None)];
+        let laid = lay_out(
+            "in that moment, but if I lose my baby",
+            &style,
+            frame,
+            &seen,
+            false,
+        );
+        let (w, h) = caption_size("in that moment, but if I lose my baby", &style);
+        let area = [
+            laid.x - w as f32 / 2.0,
+            laid.y - h as f32 / 2.0,
+            laid.x + w as f32 / 2.0,
+            laid.y + h as f32 / 2.0,
+        ];
+        assert_eq!(crate::faces::overlap(area, crate::faces::grown(low)), 0.0);
+    }
+
+    #[test]
+    fn a_moving_speaker_is_followed_smoothly() {
+        let frame = (1920.0, 1080.0);
+        let style = caption_style(1920, 1080);
+        let seen: Vec<Glimpse> = (0..8)
+            .map(|i| {
+                let x = -400.0 + 60.0 * i as f32 + if i % 2 == 0 { 8.0 } else { -8.0 };
+                let face = [x, -300.0, x + 180.0, -80.0];
+                glimpse(f64::from(i) * 15.0, vec![face], Some(face))
+            })
+            .collect();
+        let laid = lay_out("saying", &style, frame, &seen, true);
+        let (xs, _) = laid.keys.expect("follows the face");
+        // Smoothed: each step forward, no back-and-forth jitter.
+        assert!(xs
+            .windows(2)
+            .all(|pair| pair[1].value >= pair[0].value - 0.5));
     }
 
     #[test]
@@ -2039,6 +2594,34 @@ mod tests {
     }
 
     #[test]
+    fn a_rerun_keeps_who_is_who_and_their_colour() {
+        let labelled = |text: &str, colour: Rgba| TextStyle {
+            label: Some(TextLabel {
+                text: text.into(),
+                color: colour,
+                size: 26.0,
+            }),
+            ..subtitle_style(1920, 1080)
+        };
+        let red = Rgba([1.0, 0.3, 0.35, 1.0]);
+        let mut project = Project::new("p".into(), "t".into(), edit_core::Settings::default());
+        // "Officer" was renamed Sinclair on two lines of three; one slipped.
+        project.clips = vec![
+            subtitle_clip(0, 10, Transform::default(), labelled("Sinclair:", red)),
+            subtitle_clip(20, 10, Transform::default(), labelled("Sinclair:", red)),
+            subtitle_clip(
+                40,
+                10,
+                Transform::default(),
+                labelled("Officer:", Rgba::WHITE),
+            ),
+        ];
+        let kept = relabels(&project);
+        assert_eq!(kept.get("Officer"), Some(&("Sinclair:".to_owned(), red)));
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
     fn edit_subtitles_use_first_names_without_glow() {
         let style = subtitle_style(1920, 1080);
         assert!(!style.glow.enabled);
@@ -2046,6 +2629,8 @@ mod tests {
         assert_eq!(subtitle_name("Hayven:"), "Hayven");
         assert_eq!(subtitle_name("Officer Diaz"), "Diaz");
         assert_eq!(subtitle_name("Deputy 2"), "Deputy 2");
+        assert_eq!(subtitle_name("Child 2"), "Child 2");
+        assert_eq!(subtitle_name("Sister 3"), "Sister 3");
         assert_eq!(subtitle_name(""), "Speaker");
         let subtitled = crate::subtitles::house_style(1920, 1080, Rgba::WHITE);
         assert!(subtitled.glow.enabled);
@@ -2064,7 +2649,8 @@ mod tests {
             adjusted(
                 &subtitle_clip(0, 30, placed, style.clone()),
                 &style,
-                &placed
+                &placed,
+                (1920, 1080)
             ),
             None
         );
@@ -2078,7 +2664,12 @@ mod tests {
             ..style.clone()
         };
         assert_eq!(
-            adjusted(&subtitle_clip(0, 30, placed, labelled), &style, &placed),
+            adjusted(
+                &subtitle_clip(0, 30, placed, labelled),
+                &style,
+                &placed,
+                (1920, 1080)
+            ),
             None
         );
         // Moved up off a blur, and another narrowed.
@@ -2097,7 +2688,7 @@ mod tests {
             subtitle_clip(300, 50, placed, style.clone()),
         ]
         .iter()
-        .filter_map(|clip| adjusted(clip, &style, &placed))
+        .filter_map(|clip| adjusted(clip, &style, &placed, (1920, 1080)))
         .collect();
         assert_eq!(old.len(), 2);
         // A new line over most of the first takes its place; mostly over the second, its width and size.

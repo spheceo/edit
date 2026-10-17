@@ -91,7 +91,9 @@ pub struct Tracked {
 
 /// Follows `region` ([x0, y0, x1, y1] in source pixels, as it is at `at`
 /// seconds) from `from` to `to` seconds of the source at `path`, whose frame
-/// rate is `fps` (0 if unknown).
+/// rate is `fps` (0 if unknown). Callers give more sightings through
+/// `track_anchors`; this one-box form is the tests'.
+#[cfg(test)]
 pub fn track(
     path: &Path,
     size: (u32, u32),
@@ -864,7 +866,7 @@ pub(crate) fn frames(
 /// full-resolution original and plenty when frames are looked at small; the
 /// original when they're looked at bigger (a small face in a zoomed-in
 /// shot), where the preview's compression would blur what's followed.
-fn decode_source(path: &Path, width: usize) -> PathBuf {
+pub(crate) fn decode_source(path: &Path, width: usize) -> PathBuf {
     if width as f64 > PREVIEW_WIDTH {
         return path.to_owned();
     }

@@ -277,7 +277,9 @@ pub fn make_light(source: &Path, paths: &CachePaths, probe: &Probe) -> Result<()
         source
     };
     #[cfg(target_os = "macos")]
-    if native_proxy(input, &partial, probe, 1280, 720, 1_500_000, |_| {}) {
+    if hardware_video(input, probe, (1280, 720), 1_500_000, false, &partial)
+        || native_proxy(input, &partial, probe, 1280, 720, 1_500_000, |_| {})
+    {
         return std::fs::rename(&partial, &paths.light).map_err(|error| error.to_string());
     }
     let gop = (probe.fps / 2.0).round().max(1.0).to_string();
@@ -542,6 +544,21 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
     let picture = out.with_extension("picture.mp4");
     let _scratch = Scratch(vec![partial.clone(), picture.clone()]);
     let bitrate = cloud_proxy_bitrate(probe.width, probe.height);
+    // Decoding, scaling and encoding all in VideoToolbox, frames never
+    // leaving the GPU: twice the native path's speed (a 29-minute 1080p
+    // interrogation in 4.4 minutes instead of 8.5; the native path copies
+    // every frame out as BGRA and back), at the hardware encoder's own rate.
+    #[cfg(target_os = "macos")]
+    if hardware_video(
+        source,
+        probe,
+        (PROXY_MAX_WIDTH, PROXY_MAX_HEIGHT),
+        bitrate,
+        true,
+        &partial,
+    ) {
+        return std::fs::rename(&partial, out).map_err(|error| error.to_string());
+    }
     #[cfg(target_os = "macos")]
     let native = !crate::util::is_url(source)
         && native_proxy(
@@ -693,6 +710,133 @@ pub fn preview_from_cloud_proxy(
 /// AVFoundation/VideoToolbox transcodes the picture without a raw-video pipe
 /// or x264 frame queues. Audio is produced separately by the compatibility path.
 #[cfg(target_os = "macos")]
+/// A preview (the cloud proxy, the light preview) through FFmpeg with
+/// VideoToolbox from end to end, as the other paths make it: fitted within
+/// `max`, BT.709, the footage's rate, a keyframe each half second, no
+/// B-frames, `bitrate`, and with `sound` AAC 160k stereo. False when it can't (a codec VideoToolbox doesn't decode, a
+/// rotated phone video, `EDIT_FFMPEG_VIDEO`), leaving nothing behind.
+/// A file's name for a log line (never a URL's query).
+fn probe_name(source: &Path) -> String {
+    if crate::util::is_url(source) {
+        "a cloud file".to_owned()
+    } else {
+        source.display().to_string()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn hardware_video(
+    source: &Path,
+    probe: &Probe,
+    (max_w, max_h): (u32, u32),
+    bitrate: u64,
+    sound: bool,
+    partial: &Path,
+) -> bool {
+    if std::env::var_os("EDIT_FFMPEG_VIDEO").is_some()
+        || std::env::var_os("EDIT_NO_HARDWARE_PROXY").is_some()
+    {
+        return false;
+    }
+    let fit = (f64::from(max_w) / f64::from(probe.width.max(2)))
+        .min(f64::from(max_h) / f64::from(probe.height.max(2)))
+        .min(1.0);
+    let even = |size: u32| ((f64::from(size) * fit).round() as u32 / 2 * 2).max(2);
+    let (width, height) = (even(probe.width), even(probe.height));
+    let fps = if probe.fps.is_finite() && probe.fps > 0.0 {
+        probe.fps
+    } else {
+        30.0
+    };
+    let gop = (fps / 2.0).round().max(1.0).to_string();
+    let rate = format!("{}k", bitrate / 1000);
+    let ceiling = format!("{}k", bitrate * 5 / 4 / 1000);
+    let buffer = format!("{}k", bitrate * 2 / 1000);
+    let mut command = Command::new(crate::util::ffmpeg());
+    command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-threads",
+            "2",
+            "-hwaccel",
+            "videotoolbox",
+            "-hwaccel_output_format",
+            "videotoolbox_vld",
+            "-protocol_whitelist",
+            crate::util::protocols(source),
+        ])
+        .args(crate::util::url_args(source))
+        .arg("-i")
+        .arg(source)
+        .args(["-map", "0:v:0"])
+        .args(if sound { &["-map", "0:a:0?"][..] } else { &[][..] })
+        .args([
+            "-vf",
+            &format!(
+                "scale_vt=w={width}:h={height}:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709"
+            ),
+            "-fps_mode",
+            "cfr",
+            "-r",
+            &format!("{fps}"),
+            "-c:v",
+            "h264_videotoolbox",
+            "-prio_speed",
+            "1",
+            "-b:v",
+            &rate,
+            "-maxrate",
+            &ceiling,
+            "-bufsize",
+            &buffer,
+            "-g",
+            &gop,
+            "-bf",
+            "0",
+            "-colorspace",
+            "bt709",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-color_range",
+            "tv",
+        ])
+        .args(if sound {
+            &["-c:a", "aac", "-b:a", "160k", "-ac", "2"][..]
+        } else {
+            &["-an"][..]
+        })
+        .args(["-movflags", "+faststart"])
+        .arg(partial);
+    // A rotated phone video: FFmpeg turns it on the GPU, or fails and the
+    // other paths do it.
+    match run(&mut command) {
+        Ok(_) => true,
+        Err(error) => {
+            let _ = std::fs::remove_file(partial);
+            // FFmpeg's complaint can name a URL, which is a credential.
+            let why = if crate::util::is_url(source) {
+                "FFmpeg failed".to_owned()
+            } else {
+                error
+            };
+            crate::log::warn(
+                "media",
+                format!(
+                    "hardware proxy of {}: {why}; trying the others",
+                    probe_name(source)
+                ),
+            );
+            false
+        }
+    }
+}
+
 pub fn native_proxy(
     source: &Path,
     output: &Path,

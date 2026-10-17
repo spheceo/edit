@@ -467,6 +467,13 @@ export function createStub(): Stub {
     async desktopFiles() {
       notInStub("desktopFiles");
     },
+    textBlock(text, px, _weight, lineHeight) {
+      // No font metrics here: a character-count estimate (Geist's average
+      // advance is about half its size), lines × px × line height tall.
+      const lines = text.split("\n");
+      const widest = Math.max(...lines.map((line) => [...line].length));
+      return [widest * px * 0.5 + 4, lines.length * px * lineHeight + 4];
+    },
   };
   return stub;
 }

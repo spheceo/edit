@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { dispatch, INSTRUCTIONS, registerTool, targetProject, text, toolReference, TOOLS } from "../src/mcp/index.ts";
-import { unregisterTool, unported } from "../src/mcp/registry.ts";
+import { handlerFor, unregisterTool, unported } from "../src/mcp/registry.ts";
 import { stableStringify } from "../src/stable.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -106,11 +106,16 @@ test("tools/call: the project preamble, errors as content, and registered handle
       isError: true,
     });
     const id = store.create("p", { width: 1920, height: 1080, fps: 30 }).project.id;
-    expect((await call("get_edit_context")).result.content[0]!.text).toBe("get_edit_context is not ported yet");
+    // A declared tool no package has registered yet says so (packages register theirs as they land).
+    const waiting = unported()[0];
+    if (waiting !== undefined) expect((await call(waiting)).result.content[0]!.text).toBe(`${waiting} is not ported yet`);
     expect((await call("no_such_tool")).result.content[0]!.text).toBe("unknown tool no_such_tool");
     expect((await call("delete_clips", { project_id: "p2" }, id)).result.content[0]!.text).toBe(
       `this chat works on project ${id} only: delete_clips can't touch p2 (get_edit_context and get_project can read it)`,
     );
+    // These tools' own handlers (WP7's) step aside while the test's stand in.
+    const own = new Map(["markers", "tidy_tracks"].map((name) => [name, handlerFor(name)]));
+    for (const name of own.keys()) unregisterTool(name);
     registerTool("markers", ({ projectId, args }) => text(stableStringify({ project: projectId, args })));
     try {
       expect((await call("markers", { b: 1, a: 2 })).result).toEqual({
@@ -133,6 +138,9 @@ test("tools/call: the project preamble, errors as content, and registered handle
       expect(crashed.content[0]!.text).toMatch(/^tool tidy_tracks crashed \(.*\); this is a bug in Edit$/);
     } finally {
       unregisterTool("tidy_tracks");
+      for (const [name, before] of own) {
+        if (before !== undefined) registerTool(name, before.handler, { noProject: before.noProject });
+      }
     }
   } finally {
     cleanup();

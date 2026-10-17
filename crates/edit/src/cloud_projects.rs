@@ -7,7 +7,7 @@
 //! refuses one another machine holds.
 //!
 //! What this machine knows lives in the data folder: `cloud.json` (the
-//! setting: token, off, holder label; mode 600, it holds the token) and
+//! setting: token, holder label; mode 600, it holds the token) and
 //! `cloud/projects.json` (per cloud project: the cloud rev its copy is based
 //! on, whether it has changes not pushed yet, and its lock token). A
 //! background loop ([`start`]) pushes changes ~2 s after the last one (the
@@ -72,9 +72,6 @@ struct Settings {
     /// The relay's cloud token (used when `EDIT_RELAY_TOKEN` isn't set).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token: Option<String>,
-    /// Cloud switched off (the token is kept).
-    #[serde(default)]
-    off: bool,
     /// How teammates see this machine ("<holder> is editing").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     holder: Option<String>,
@@ -436,7 +433,7 @@ impl Cloud {
         }
     }
 
-    /// Whether cloud is on (a token, not switched off).
+    /// Whether cloud is on (a token: always on with one).
     pub fn on(&self) -> bool {
         crate::cloud::enabled()
     }
@@ -707,7 +704,6 @@ impl Cloud {
         };
         json!({
             "on": self.on(),
-            "off": settings.off,
             "token": source,
             "holder": self.holder(),
             "relay": crate::relay::url(),
@@ -718,7 +714,6 @@ impl Cloud {
     pub fn set_settings(
         &self,
         token: Option<Option<String>>,
-        off: Option<bool>,
         holder: Option<Option<String>>,
     ) -> Result<(), String> {
         let mut settings = self.settings.lock();
@@ -739,9 +734,6 @@ impl Cloud {
                 }
             }
             next.token = token;
-        }
-        if let Some(off) = off {
-            next.off = off;
         }
         if let Some(holder) = holder {
             let holder = holder
@@ -781,10 +773,9 @@ impl Cloud {
     }
 }
 
-/// Uses the setting: its token (unless `EDIT_RELAY_TOKEN` is set) and on/off.
+/// Uses the setting: its token (unless `EDIT_RELAY_TOKEN` is set).
 fn apply(settings: &Settings) {
     crate::relay::set_saved_token(settings.token.clone());
-    crate::cloud::set_off(settings.off);
 }
 
 fn read_settings(home: &Path) -> Settings {
@@ -1782,7 +1773,6 @@ fn present<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
 struct SettingsBody {
     #[serde(default, deserialize_with = "present")]
     token: Option<Option<String>>,
-    off: Option<bool>,
     #[serde(default, deserialize_with = "present")]
     holder: Option<Option<String>>,
 }
@@ -1795,19 +1785,19 @@ async fn post_settings(State(app): State<App>, Json(body): Json<SettingsBody>) -
         .ok_or_else(|| refuse(StatusCode::NOT_FOUND, "no cloud here"))?;
     let was_on = cloud.on();
     // Let go of this machine's locks while the old token still works.
-    let going_off = body.off == Some(true) || matches!(body.token, Some(None));
+    let going_off = matches!(body.token, Some(None));
     if was_on && going_off {
         release_all(&app).await;
     }
     cloud
-        .set_settings(body.token, body.off, body.holder)
+        .set_settings(body.token, body.holder)
         .map_err(|error| refuse(StatusCode::BAD_REQUEST, error))?;
     crate::diag::info(
         "cloud",
         if cloud.on() {
             format!("cloud on as {}", cloud.holder())
         } else {
-            "cloud off".to_owned()
+            "cloud off: no token".to_owned()
         },
     );
     app.store
@@ -1878,7 +1868,7 @@ async fn post_upload(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Re
         .map_err(|error| refuse(StatusCode::BAD_REQUEST, error))
 }
 
-/// Lets go of every lock (cloud switched off).
+/// Lets go of every lock (the token forgotten).
 pub async fn release_all(app: &App) {
     let Some(cloud) = app.store.cloud().cloned() else {
         return;
@@ -2099,7 +2089,6 @@ mod tests {
         // The setting holds the token: this user only.
         let settings = Settings {
             token: Some("secret-token".into()),
-            off: true,
             holder: Some("Sphe's Mac".into()),
         };
         write_private(

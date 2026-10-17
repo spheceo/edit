@@ -23,7 +23,6 @@ export interface CloudStatus {
 /** Settings → Cloud. */
 export interface CloudSettings {
   on: boolean;
-  off: boolean;
   /** Where the token comes from (EDIT_RELAY_TOKEN, or saved here). */
   token: "env" | "saved" | null;
   /** How teammates see this machine. */
@@ -70,8 +69,8 @@ export interface CloudList {
 
 export const cloudApi = {
   settings: (check = true) => request<CloudSettings>("GET", `/api/cloud${check ? "?check=true" : ""}`),
-  /** `token: null` forgets the saved token; `off` switches cloud off (the token is kept). */
-  setSettings: (body: { token?: string | null; off?: boolean; holder?: string | null }) => request<CloudSettings>("POST", "/api/cloud", body),
+  /** `token: null` forgets the saved token. */
+  setSettings: (body: { token?: string | null; holder?: string | null }) => request<CloudSettings>("POST", "/api/cloud", body),
   projects: () => request<CloudList>("GET", "/api/cloud/projects"),
   status: (id: string) => request<CloudStatus>("GET", `/api/projects/${id}/cloud`),
   /** The editor opened it: a cloud-only project is downloaded, the lock asked for. */

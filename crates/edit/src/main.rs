@@ -4,6 +4,7 @@ mod broll;
 mod captions;
 mod cloud;
 mod cloud_media;
+mod cloud_projects;
 mod cutin;
 mod diag;
 mod drive;
@@ -72,7 +73,11 @@ ENV
   EDIT_MEDIA_DIR  keep big media files here instead (overrides the setting)
   EDIT_HOSTS  extra Host names to accept, comma-separated
   EDIT_RELAY_URL, EDIT_RELAY_TOKEN
-              another relay (default Edit's), and the token it wants (cloud needs it)
+              another relay (default Edit's), and the token it wants (cloud needs it;
+              else the one saved in Settings → Cloud)
+  EDIT_CLOUD_HOLDER
+              how teammates see this machine when it's editing a cloud project
+              (default: the setting, else the machine's name)
   GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DOCS_REFRESH_TOKEN
               a Google sign-in that can read the team's sound library in Drive
 ";
@@ -109,7 +114,10 @@ fn main() {
             );
         }
         Some("media") => media_drive::run_cli(&home(), port(), args.get(1..).unwrap_or_default()),
-        Some("cloud") => cloud::run_cli(args.get(1..).unwrap_or_default()),
+        Some("cloud") => {
+            cloud_projects::use_saved_token(&home());
+            cloud::run_cli(args.get(1..).unwrap_or_default())
+        }
         Some("update") => update::run_cli(
             &std::env::var_os("EDIT_HOME")
                 .map(PathBuf::from)
@@ -252,6 +260,16 @@ async fn start(home: PathBuf, host: Option<String>, port: u16) -> Vec<tokio::tas
             .into(),
     };
     speakers::watch(app.clone());
+    // Cloud projects (Settings → Cloud): sync, locks, and letting them go on
+    // the way out.
+    let cloud = Arc::new(cloud_projects::Cloud::open(&home, &app.machine));
+    cloud_projects::start(app.clone(), cloud);
+    tokio::spawn(async {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let _ = tokio::task::spawn_blocking(cloud_projects::shutdown).await;
+            std::process::exit(130);
+        }
+    });
     let router = server::router(app);
     let mut handles = Vec::new();
     for address in server::bind_addresses(host.as_deref(), port) {

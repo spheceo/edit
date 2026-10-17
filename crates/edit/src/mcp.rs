@@ -820,7 +820,8 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                         crate::store::UpdateError::Conflict(live) => {
                             format!("revision conflict: current {}; nothing saved", live.rev)
                         }
-                        crate::store::UpdateError::Invalid(error) => error,
+                        crate::store::UpdateError::Invalid(error)
+                        | crate::store::UpdateError::Refused(error) => error,
                     })?
             };
             let smoothing = if dry_run {

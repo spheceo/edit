@@ -44,6 +44,8 @@ pub fn run(url: Url) -> ! {
     if let Err(error) = result {
         crate::fail(&format!("could not open the window: {error}"));
     }
+    // Cloud projects open here are pushed and their locks let go.
+    crate::cloud_projects::shutdown();
     std::process::exit(0);
 }
 

@@ -66,6 +66,7 @@ pub fn router(app: App) -> Router {
         .route("/api/diagnostics", get(diagnostics))
         .route("/api/setup", get(setup))
         .route("/api/media-drive", get(media_drive).post(set_media_drive))
+        .merge(crate::cloud_projects::routes())
         .route("/api/voice", get(voice_list).post(voice_create))
         .route("/api/voice/voices", get(voice_voices))
         .route(
@@ -812,6 +813,10 @@ async fn agent_send(
     if text.is_empty() {
         return Err(bad("say something"));
     }
+    // The agent edits the project: a cloud project needs this machine's lock.
+    app.store
+        .may_write(&id)
+        .map_err(|error| ApiError(StatusCode::LOCKED, error))?;
     app.agents
         .send(&id, text, body.model, body.effort)
         .await
@@ -906,6 +911,8 @@ async fn put_project(
         Ok(live) => Ok(Json(json!({ "rev": live.rev })).into_response()),
         Err(UpdateError::NotFound) => Err(not_found("no such project")),
         Err(UpdateError::Invalid(error)) => Err(bad(error)),
+        // A cloud project someone else is editing (`crate::cloud_projects`).
+        Err(UpdateError::Refused(error)) => Err(ApiError(StatusCode::LOCKED, error)),
         Err(UpdateError::Conflict(live)) => Ok((
             StatusCode::CONFLICT,
             Json(json!({ "error": "conflict", "rev": live.rev, "project": live.project })),
@@ -915,6 +922,15 @@ async fn put_project(
 }
 
 async fn delete_project(State(app): State<App>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    // A cloud project goes from the cloud first (refused while someone else
+    // edits it or the cloud can't be reached); one only there, only there.
+    let local = app.store.get(&id).is_some();
+    let in_cloud = crate::cloud_projects::delete(&app, &id)
+        .await
+        .map_err(|error| ApiError(StatusCode::CONFLICT, error))?;
+    if !local && in_cloud {
+        return Ok(Json(json!({ "ok": true })).into_response());
+    }
     if app.store.delete(&id) {
         Ok(Json(json!({ "ok": true })).into_response())
     } else {
@@ -2024,6 +2040,9 @@ async fn script_resume(
     app.store
         .get(&id)
         .ok_or_else(|| not_found("no such project"))?;
+    app.store
+        .may_write(&id)
+        .map_err(|error| ApiError(StatusCode::LOCKED, error))?;
     crate::script::start(&app, &id, query.recut);
     Ok(Json(json!({ "job": app.scripts.get(&id) })).into_response())
 }

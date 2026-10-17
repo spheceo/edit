@@ -58,7 +58,7 @@ export async function fetchRetrying(url: string, init?: RequestInit, patienceMs 
   }
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+export async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const response = await fetchRetrying(url, {
     method,
     headers: body === undefined ? undefined : { "content-type": "application/json" },

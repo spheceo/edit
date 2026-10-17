@@ -307,7 +307,8 @@ fn put(
         quote("Expect:")?
     );
     let mut child = Command::new("curl")
-        .args(["-#", "-S", "--proto", "=https", "--config", "-"])
+        .args(["-#", "-S", "--proto", crate::endpoints::google_proto()])
+        .args(["--config", "-"])
         .args(["--connect-timeout", "30", "-w", "\n%{http_code}"])
         .arg("--upload-file")
         .arg(path)
@@ -386,7 +387,7 @@ fn location(answer: &str) -> Option<String> {
             .then(|| value.trim().to_owned())
     })?;
     // Only ever Google's upload address: the bytes go nowhere else.
-    url.starts_with("https://www.googleapis.com/")
+    url.starts_with(&crate::endpoints::google("https://www.googleapis.com/"))
         .then_some(url)
 }
 

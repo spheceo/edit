@@ -77,15 +77,17 @@ fn query<'a>(url: &'a str, key: &str) -> Option<&'a str> {
 /// Fetches a Doc that's shared with anyone who has the link, as HTML (which
 /// keeps each link's target), and its title (the export's file name).
 pub fn fetch_doc(id: &str) -> Result<(String, String), String> {
-    let url = format!("https://docs.google.com/document/d/{id}/export?format=html");
+    let url = crate::endpoints::google(&format!(
+        "https://docs.google.com/document/d/{id}/export?format=html"
+    ));
     let output = Command::new("curl")
         .args([
             "-sS",
             "-L",
             "--proto",
-            "=https",
+            crate::endpoints::google_proto(),
             "--proto-redir",
-            "=https",
+            crate::endpoints::google_proto(),
             "--max-time",
             "30",
             "--max-filesize",
@@ -810,9 +812,9 @@ fn probe(url: &str, scratch: &Path) -> Result<DriveHead, String> {
             "-sS",
             "-L",
             "--proto",
-            "=https",
+            crate::endpoints::google_proto(),
             "--proto-redir",
-            "=https",
+            crate::endpoints::google_proto(),
             "-r",
             "0-0",
             "--max-filesize",
@@ -929,7 +931,10 @@ fn confirm_link(page: &str) -> Option<String> {
             ))
         })
         .collect();
-    Some(format!("{action}?{}", fields.join("&")))
+    Some(crate::endpoints::google(&format!(
+        "{action}?{}",
+        fields.join("&")
+    )))
 }
 
 fn page_problem(page: &str) -> String {
@@ -1009,9 +1014,9 @@ pub fn download(
             "-L",
             "--fail",
             "--proto",
-            "=https",
+            crate::endpoints::google_proto(),
             "--proto-redir",
-            "=https",
+            crate::endpoints::google_proto(),
             "-C",
             "-",
             "--retry",
@@ -1068,9 +1073,9 @@ pub fn download(
 /// scan for viruses" page) and its headers (name, size). `scratch` is a file
 /// the first-byte probe may write (removed again).
 pub(crate) fn resolve(file: &str, scratch: &Path) -> Result<(String, DriveHead), String> {
-    let mut url = format!(
+    let mut url = crate::endpoints::google(&format!(
         "https://drive.usercontent.google.com/download?id={file}&export=download&confirm=t"
-    );
+    ));
     let mut head = probe(&url, scratch)?;
     if head.html {
         let page = Command::new("curl")
@@ -1078,9 +1083,9 @@ pub(crate) fn resolve(file: &str, scratch: &Path) -> Result<(String, DriveHead),
                 "-sS",
                 "-L",
                 "--proto",
-                "=https",
+                crate::endpoints::google_proto(),
                 "--proto-redir",
-                "=https",
+                crate::endpoints::google_proto(),
                 "--max-time",
                 "30",
                 "--max-filesize",

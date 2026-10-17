@@ -3,7 +3,7 @@
 // click one to jump there. Also attaches a Google Doc; its downloads have their own tab.
 
 import { ArrowUpRight, CircleAlert, FileText, RotateCw, Scissors } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "../lib/api";
 import { CLIP_HEX } from "../lib/colors";
@@ -12,8 +12,6 @@ import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import type { Project, ScriptBlock, ScriptJob } from "../lib/types";
 import { Button, cx } from "./ui";
-
-const usePlayheadFrame = () => useSyncExternalStore(playhead.subscribe, () => Math.floor(playhead.frame));
 
 export function ScriptPanel() {
   const project = useEditor((state) => state.project)!;
@@ -76,14 +74,19 @@ function fileLabels(project: Project) {
 }
 
 function Blocks({ project }: { project: Project }) {
-  const frame = usePlayheadFrame();
   const list = useRef<HTMLDivElement>(null);
   const blocks = project.script!.blocks;
-  const labels = fileLabels(project);
-  const clipOf = (block: ScriptBlock) => (block.clip ? project.clips.find((clip) => clip.id === block.clip) : undefined);
-  const active = blocks.findIndex((block) => {
-    const clip = clipOf(block);
-    return clip && frame >= clip.start && frame < clipEnd(clip);
+  const labels = useMemo(() => fileLabels(project), [project.script, project.media]);
+  const clips = useMemo(() => new Map(project.clips.map((clip) => [clip.id, clip])), [project.clips]);
+  const clipOf = (block: ScriptBlock) => (block.clip ? clips.get(block.clip) : undefined);
+  // Each placed block's span, so the playhead only re-renders the list when it enters another block.
+  const spans = useMemo(() => blocks.flatMap((block, index) => {
+    const clip = block.clip ? clips.get(block.clip) : undefined;
+    return clip ? [{ index, start: clip.start, end: clipEnd(clip) }] : [];
+  }), [blocks, clips]);
+  const active = useSyncExternalStore(playhead.subscribe, () => {
+    const frame = Math.floor(playhead.frame);
+    return spans.find((span) => frame >= span.start && frame < span.end)?.index ?? -1;
   });
 
   // Keep the block that's playing in view.

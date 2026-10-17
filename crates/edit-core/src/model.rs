@@ -7,6 +7,7 @@ pub const PROJECT_VERSION: u32 = 1;
 /// A whole edit. Times on the timeline are integer frames at `settings.fps`;
 /// source offsets are seconds because sources keep their own frame rates.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Project {
     pub version: u32,
     pub id: String,
@@ -26,12 +27,15 @@ pub struct Project {
     pub next_id: u64,
     /// The script the edit follows (e.g. imported from a Google Doc).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub script: Option<Script>,
     /// In point (I): the first frame of the span that export renders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub mark_in: Option<i64>,
     /// Out point (O): the last frame of that span (shown, inclusive); playback stops on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub mark_out: Option<i64>,
     /// A subtitled video's stretches and what each is (footage to subtitle,
     /// picture already subtitled, narration…): sorted, never overlapping.
@@ -41,6 +45,7 @@ pub struct Project {
     /// The last whole export of a subtitled video, uploaded to the team's
     /// "Subtitles" folder on Google Drive. Cleared when the file is gone from Drive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub drive: Option<DriveFile>,
     /// Moments marked on the timeline itself (frames): what happens there
     /// ("photo lands", "door slam"), for lining sounds up on. A moment of a
@@ -52,6 +57,7 @@ pub struct Project {
 
 /// A marked moment on the timeline.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TimelineMarker {
     pub frame: i64,
     #[serde(default)]
@@ -64,6 +70,7 @@ pub struct TimelineMarker {
 /// The kind of video a project is. Each gets its own teaching for the agent
 /// (`crates/edit/src/styles.rs`); projects from before styles are bodycam.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "lowercase")]
 pub enum Style {
     #[default]
@@ -86,6 +93,7 @@ impl Style {
 
 /// A file on Google Drive.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct DriveFile {
     pub file_id: String,
     /// Where it opens: `https://drive.google.com/file/d/<file_id>/view`.
@@ -96,6 +104,7 @@ pub struct DriveFile {
 
 /// A stretch of a subtitled video (frames, `end` exclusive).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Segment {
     pub start: i64,
     pub end: i64,
@@ -106,6 +115,7 @@ pub struct Segment {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum SegmentKind {
     /// Footage that gets subtitles.
@@ -136,15 +146,18 @@ impl SegmentKind {
 
 /// A script: footage ranges and the narration between them, in order.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Script {
     /// Where it came from (a Google Doc link).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub source: Option<String>,
     #[serde(default)]
     pub blocks: Vec<ScriptBlock>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ScriptBlock {
     /// A range of linked footage, in seconds of that file.
@@ -161,19 +174,24 @@ pub enum ScriptBlock {
         notes: Vec<String>,
         /// The media this range plays from, once downloaded.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         media: Option<String>,
         /// Seconds into the file where `media` begins, when it's an excerpt of it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         media_start: Option<f64>,
         /// The range's first and last spoken words, from the Doc's "word....word" comment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         words: Option<[String; 2]>,
         /// Where the range really plays (seconds of the file): just before its
         /// first word and just after its last, as the transcript times them.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         cut: Option<[f64; 2]>,
         /// The clip that plays it on the timeline.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         clip: Option<String>,
     },
     /// Words between footage: shown as a cut-in card until there's a voice-over.
@@ -182,15 +200,18 @@ pub enum ScriptBlock {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         notes: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         clip: Option<String>,
         /// The voice-over clip reading it, once placed: it stands in for the
         /// card once the card is gone.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         voiceover: Option<String>,
     },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Settings {
     pub width: u32,
     pub height: u32,
@@ -208,6 +229,7 @@ impl Default for Settings {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum MediaKind {
     Video,
@@ -216,6 +238,7 @@ pub enum MediaKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Media {
     pub id: String,
     pub name: String,
@@ -237,11 +260,13 @@ pub struct Media {
     /// Footage kept in the cloud (R2): the original stays there and `path`
     /// is this machine's copy of its small proxy (`crate::cloud_media` in edit).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub cloud: Option<CloudMedia>,
 }
 
 /// Where a cloud media's files are on R2 (keys under `edit/`).
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct CloudMedia {
     /// What it was made from, the key of Convex's footage registry (`edit:getMedia`):
     /// `drive:<file id>`, or `sha256:<hex>` for a file from a disk.
@@ -250,6 +275,7 @@ pub struct CloudMedia {
     pub original: String,
     /// The proxy every machine edits with, once it's made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub proxy: Option<String>,
     /// Bytes of the original.
     #[serde(default)]
@@ -258,6 +284,7 @@ pub struct CloudMedia {
 
 /// A point in a media file.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Marker {
     /// Seconds into the source.
     pub time: f64,
@@ -269,6 +296,7 @@ pub struct Marker {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum TrackKind {
     Video,
@@ -276,6 +304,7 @@ pub enum TrackKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Track {
     pub id: String,
     pub kind: TrackKind,
@@ -292,6 +321,7 @@ pub struct Track {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ClipColor {
     #[default]
@@ -306,6 +336,7 @@ pub enum ClipColor {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Clip {
     pub id: String,
     pub track: String,
@@ -316,9 +347,11 @@ pub struct Clip {
     #[serde(default)]
     pub color: ClipColor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub name: Option<String>,
     /// Clips sharing a link id move, trim and delete together (picture + sound).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub link: Option<String>,
     /// Frames.
     #[serde(default)]
@@ -363,6 +396,7 @@ impl Clip {
 
 /// A printed photo's border and drop shadow (project pixels).
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PhotoFrame {
     #[serde(default = "frame_width")]
     pub width: f32,
@@ -387,6 +421,7 @@ fn frame_shadow() -> f32 {
 
 /// A muted stretch of an audio clip's source, in seconds of the media.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Mute {
     pub from: f64,
     pub to: f64,
@@ -409,6 +444,7 @@ pub fn mute_gain(mutes: &[Mute], time: f64) -> f64 {
 
 /// How much of a picture is cut off each side, as shares of its width and height.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Crop {
     #[serde(default)]
     pub left: f32,
@@ -430,6 +466,7 @@ impl Crop {
 /// full at `to` (shares of the frame width, 0 the left edge, 1 the right; `to`
 /// below `from` fades the other way).
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Gradient {
     pub from: f32,
     pub to: f32,
@@ -439,6 +476,7 @@ pub struct Gradient {
 // size is fine and boxing it would only add a hop to every match.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClipContent {
     Video {
@@ -458,6 +496,7 @@ pub enum ClipContent {
         /// A border and soft drop shadow around the picture: a printed photo
         /// on an evidence board.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         frame: Option<PhotoFrame>,
     },
     Audio {
@@ -508,6 +547,7 @@ pub enum ClipContent {
         opacity: f32,
         /// Fades across the frame instead of covering it evenly.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         gradient: Option<Gradient>,
     },
     /// A glowing waveform of the sound heard on the timeline (phone calls,
@@ -515,6 +555,7 @@ pub enum ClipContent {
     Waveform {
         /// Only this media's sound; everything heard when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
         media: Option<String>,
         #[serde(default)]
         style: WaveformStyle,
@@ -527,6 +568,7 @@ pub enum ClipContent {
 
 /// How a waveform looks. Sizes are project pixels.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct WaveformStyle {
     #[serde(default)]
     pub kind: WaveformKind,
@@ -559,6 +601,7 @@ pub struct WaveformStyle {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum WaveformKind {
     /// Glowing strands that zigzag with the sound, tangled together, like a real signal.
@@ -627,6 +670,7 @@ fn white() -> Rgba {
 
 /// Straight (not premultiplied) sRGB colour, 0..1.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Rgba(pub [f32; 4]);
 
 impl Rgba {
@@ -636,6 +680,7 @@ impl Rgba {
 
 /// Offsets are project pixels from the frame centre; scale is a multiplier.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Transform {
     #[serde(default)]
     pub x: f32,
@@ -672,6 +717,7 @@ impl Default for Transform {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TextStyle {
     #[serde(default = "default_font")]
     pub font: String,
@@ -691,20 +737,25 @@ pub struct TextStyle {
     pub glow: Glow,
     /// Wrap lines wider than this many project pixels (subtitles). `None` = only at newlines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub max_width: Option<f32>,
     /// A box behind the text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub background: Option<TextBox>,
     /// A soft drop shadow (the text grown, blurred and offset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub shadow: Option<TextShadow>,
     /// A small line above the text, in its own colour (and box, when the
     /// text has one): who's speaking ("Officer:").
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub label: Option<TextLabel>,
     /// A straight line from a point in the picture (a person's chin) to the
     /// text's box, drawn in from the point when the clip starts: a callout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub leader: Option<Box<Leader>>,
     /// How lines line up with each other (the block stays where it's placed).
     #[serde(default, skip_serializing_if = "TextAlign::is_center")]
@@ -712,6 +763,7 @@ pub struct TextStyle {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "lowercase")]
 pub enum TextAlign {
     Left,
@@ -728,6 +780,7 @@ impl TextAlign {
 
 /// A callout's line: from (x, y) to the nearest edge of the text's box.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Leader {
     /// The point it starts from: project pixels from the frame centre (y down).
     #[serde(default)]
@@ -752,6 +805,7 @@ pub struct Leader {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum LeaderAttach {
     /// The nearest point of the box's edge, on the way to its centre.
@@ -778,6 +832,7 @@ fn default_leader_draw() -> f32 {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TextLabel {
     pub text: String,
     #[serde(default = "white")]
@@ -793,6 +848,7 @@ fn default_label_size() -> f32 {
 
 /// Behind-the-text box, sized to the lines plus padding (project pixels).
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TextBox {
     #[serde(default = "black")]
     pub color: Rgba,
@@ -841,6 +897,7 @@ impl Default for TextBox {
 /// Drop shadow as Premiere/Repack describe it (project pixels, degrees clockwise from up).
 /// Text in a box: the box casts it.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TextShadow {
     #[serde(default = "black")]
     pub color: Rgba,
@@ -930,6 +987,7 @@ impl Default for TextStyle {
 /// A soft glow in the text's colour, drawn close and wide under the letters
 /// (the house style carried over from Repack's subtitles).
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Glow {
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -968,6 +1026,7 @@ impl Default for Glow {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum TextPreset {
     #[default]
@@ -989,6 +1048,7 @@ pub enum TextPreset {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct TextAnimation {
     #[serde(default)]
     pub preset: TextPreset,
@@ -1023,35 +1083,45 @@ impl Default for TextAnimation {
 /// `amount` px at its peak, with real motion blur along the movement and
 /// mirrored edges. A preset supplies every number; any given here overrides it.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Shake {
     #[serde(default)]
     pub preset: ShakePreset,
     /// Pixels at its peak, at 1080p (scaled with the frame).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub amount: Option<f32>,
     /// Wiggles per second.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub frequency: Option<f32>,
     /// Degrees of tilt at its peak.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub rotation: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub direction: Option<ShakeDirection>,
     /// How strong it is across the clip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub envelope: Option<ShakeEnvelope>,
     /// Motion blur length in frames of movement (S_Shake's Mo Blur Length): 0 = sharp, 1 = a full frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub motion_blur: Option<f32>,
     /// What shows past the frame's edges as it moves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub edges: Option<ShakeEdges>,
     /// A random wiggle, or one fast move in a single direction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub motion: Option<ShakeMotion>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ShakeMotion {
     /// Random jolts `frequency` times a second, shaped by the envelope.
@@ -1065,6 +1135,7 @@ pub enum ShakeMotion {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ShakePreset {
     /// No preset: only the numbers given (none = no shake).
@@ -1083,6 +1154,7 @@ pub enum ShakePreset {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ShakeDirection {
     #[default]
@@ -1093,6 +1165,7 @@ pub enum ShakeDirection {
 
 /// The shake's strength over the clip.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ShakeEnvelope {
     /// Full strength throughout.
@@ -1120,6 +1193,7 @@ impl ShakeEnvelope {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum ShakeEdges {
     /// Mirror the picture past its edges (S_Shake's Reflect): big moves, no crop.
@@ -1203,6 +1277,7 @@ impl Shake {
 
 /// A basic grade. All zeros (and a vignette of size 1, round, centred) is identity.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Grade {
     /// Stops.
     #[serde(default)]
@@ -1262,6 +1337,7 @@ impl Default for Grade {
 /// is cut into horizontal bands of uneven height and some slide sideways,
 /// a new pattern every frame, with only a touch of colour split.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Glitch {
     /// How far the bands slide at most, in pixels at 1080p (0 = off).
     #[serde(default)]
@@ -1302,6 +1378,7 @@ impl Glitch {
 /// minor's face, a name on screen) or the whole frame: blurred before the
 /// grade, so the grade and shake apply to it as to the rest.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Blur {
     /// How strong: the Gaussian's spread in project px, as CSS `blur()`
     /// (0 = off; ~35 at 1080p leaves a face unrecognisable).
@@ -1337,6 +1414,7 @@ impl Blur {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum BlurShape {
     /// Fits a face.
@@ -1353,6 +1431,7 @@ impl BlurShape {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Ease {
     Linear,
@@ -1365,6 +1444,7 @@ pub enum Ease {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Keyframe {
     /// Frame relative to the clip start.
     pub frame: f32,
@@ -1374,15 +1454,18 @@ pub struct Keyframe {
     pub ease: Ease,
     /// Bezier handle arriving at this keyframe. `None` = from the previous keyframe's `ease`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub handle_in: Option<Handle>,
     /// Bezier handle leaving this keyframe. `None` = from `ease`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub handle_out: Option<Handle>,
 }
 
 /// After Effects-style temporal ease: how fast the value moves at the
 /// keyframe and how far along the segment that speed pulls the curve.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Handle {
     /// Value units per frame at the keyframe.
     pub speed: f32,

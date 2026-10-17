@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "Edit's native engine: frame renders, exports, previews, sound measurement, tracking and face detection"
 
+[features]
+# TypeScript types for the export options, plans and probes the native
+# addon hands out (`just types`).
+ts = ["dep:ts-rs", "edit-core/ts"]
+
 [dependencies]
 edit-core.workspace = true
 edit-render = { workspace = true, features = ["bundled-fonts"] }
@@ -16,6 +21,7 @@ png = "0.18"
 pollster = "1"
 parking_lot = "0.12"
 ebur128 = "0.1"
+ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

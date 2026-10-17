@@ -1,0 +1,28 @@
+[package]
+name = "edit-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Edit's native addon: edit-engine and edit-core for the Bun server (napi-rs)"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+edit-core.workspace = true
+edit-engine.workspace = true
+edit-render = { workspace = true, features = ["bundled-fonts"] }
+serde.workspace = true
+serde_json.workspace = true
+napi = { version = "3", default-features = false, features = ["napi8", "tokio_rt", "serde-json"] }
+napi-derive = "3"
+tokio = { version = "1", features = ["rt", "sync"] }
+parking_lot = "0.12"
+libc = "0.2"
+
+[build-dependencies]
+napi-build = "2"
+
+[lints]
+workspace = true

@@ -556,6 +556,8 @@ pub struct FrameRenderer {
 struct JobQueue {
     jobs: Mutex<Queues>,
     ready: Condvar,
+    /// Set by `stop`: the thread ends, and its GPU and readers go with it.
+    stopped: AtomicBool,
 }
 
 #[derive(Default)]
@@ -587,6 +589,7 @@ impl FrameRenderer {
         let queue = Arc::new(JobQueue {
             jobs: Mutex::new(Queues::default()),
             ready: Condvar::new(),
+            stopped: AtomicBool::new(false),
         });
         let jobs = Arc::clone(&queue);
         std::thread::spawn(move || {
@@ -597,6 +600,12 @@ impl FrameRenderer {
                 let job = {
                     let mut queues = jobs.jobs.lock();
                     loop {
+                        if jobs.stopped.load(Ordering::Acquire) {
+                            // Waiting callers hear "renderer stopped".
+                            queues.agent.clear();
+                            queues.ui.clear();
+                            return;
+                        }
                         if let Some(job) =
                             queues.agent.pop_front().or_else(|| queues.ui.pop_front())
                         {
@@ -657,6 +666,14 @@ impl FrameRenderer {
         Arc::new(Self { queue })
     }
 
+    /// Ends the renderer's thread once the frame it's on is done; renders
+    /// waiting, and any asked for later, fail with "renderer stopped".
+    pub fn stop(&self) {
+        self.queue.stopped.store(true, Ordering::Release);
+        let _held = self.queue.jobs.lock();
+        self.queue.ready.notify_all();
+    }
+
     /// Renders for the UI (covers, the export dialog, saving a frame).
     pub async fn render(
         &self,
@@ -687,6 +704,9 @@ impl FrameRenderer {
         let (reply, response) = tokio::sync::oneshot::channel();
         {
             let mut queues = self.queue.jobs.lock();
+            if self.queue.stopped.load(Ordering::Acquire) {
+                return Err("renderer stopped".to_owned());
+            }
             // Callers that gave up leave nothing to wait behind.
             queues.agent.retain(|job| !job.reply.is_closed());
             queues.ui.retain(|job| !job.reply.is_closed());

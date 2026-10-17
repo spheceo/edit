@@ -5,9 +5,10 @@
 use std::sync::OnceLock;
 
 use edit_core::Project;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Format {
     /// MP4, H.264 + AAC: plays everywhere.
@@ -50,7 +51,8 @@ impl Format {
 }
 
 /// The picture's shape.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Shape {
     /// The project's own.
@@ -65,7 +67,8 @@ pub enum Shape {
 }
 
 /// How the edit fills a different shape.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Fill {
     /// The whole picture, over a blurred, zoomed copy of itself.
@@ -77,7 +80,8 @@ pub enum Fill {
     Black,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Quality {
     #[default]
@@ -87,13 +91,15 @@ pub enum Quality {
 }
 
 /// A chapter mark: frame on the timeline (not in the span) and its title.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Chapter {
     pub start: i64,
     pub title: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(default)]
 pub struct ExportOptions {
     pub format: Format,
@@ -158,7 +164,8 @@ pub fn with_extension(path: &std::path::Path, format: Format) -> std::path::Path
 }
 
 /// The options worked out against a project.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Plan {
     /// Frames `[start, end)` of the edit to render.
     pub start: i64,
@@ -511,7 +518,8 @@ pub fn chapters_file(options: &ExportOptions, plan: &Plan, fps: f64) -> Option<S
 }
 
 /// The encoders this FFmpeg has that the dialog's choices depend on.
-#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Encoders {
     pub videotoolbox: bool,
     pub hevc: bool,

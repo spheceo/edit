@@ -5,6 +5,7 @@ members = [
     "crates/edit-render",
     "crates/edit-wasm",
     "crates/edit-engine",
+    "crates/edit-native",
     "crates/edit",
 ]
 
@@ -22,6 +23,8 @@ serde_json = "1"
 wgpu = "30"
 fontdue = "0.9"
 bytemuck = { version = "1", features = ["derive"] }
+# TypeScript types from the serde types (`just types`); off by default.
+ts-rs = { version = "12", features = ["no-serde-warnings"] }
 
 # Edit must not fail unexpectedly: no panicking shortcuts outside tests (see
 # clippy.toml). Handle the failure, or prove it can't happen and say why in an

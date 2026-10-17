@@ -49,6 +49,7 @@ pub const PEAKS_PER_SECOND: u32 = 100;
 pub const THUMB_HEIGHT: u32 = 72;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Probe {
     pub kind: MediaKind,
     pub duration: f64,

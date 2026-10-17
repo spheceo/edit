@@ -12,6 +12,7 @@ import * as diag from "../diag.ts";
 import { isBug, panicResponse } from "../guard.ts";
 import * as mcp from "../mcp/index.ts";
 import { staticAsset } from "./assets.ts";
+import { compressed } from "./compress.ts";
 import { ApiError, notFound, text } from "./errors.ts";
 import { checkHost, secure } from "./host.ts";
 import { Router, withPosition, type RouteContext } from "./router.ts";
@@ -64,7 +65,7 @@ export async function respond(
       response = refused;
     } else {
       if (match.kind === "route") {
-        response = await match.route.handler({
+        const answer = await match.route.handler({
           app,
           request,
           url,
@@ -74,10 +75,11 @@ export async function respond(
           bodyLimit: match.route.bodyLimit,
           upgrade: (data) => server?.upgrade(request, { data: data as Socket }) ?? false,
         });
+        response = answer === undefined ? undefined : await compressed(request, answer);
       } else if (match.kind === "method") {
         response = new Response(null, { status: 405, headers: { allow: match.allowed.join(",") } });
       } else if (method === "GET" || method === "HEAD") {
-        response = staticAsset(url.pathname);
+        response = await compressed(request, staticAsset(url.pathname), url.pathname);
       } else {
         response = new Response(null, { status: 405, headers: { allow: "GET,HEAD" } });
       }
@@ -149,6 +151,8 @@ export function listen(app: App, router: Router<App>, hostname: string, port: nu
     idleTimeout: 0,
     fetch: (request, server) => respond(app, router, request, server),
     websocket: {
+      // Every commit sends the whole project (a couple of MB): compressed, a tenth of that.
+      perMessageDeflate: true,
       open(ws: ServerWebSocket<Socket>) {
         ws.data.unsubscribe = app.store.subscribe((_event, text) => {
           if (ws.data.lagged) return;

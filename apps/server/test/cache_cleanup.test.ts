@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import { cleanCache } from "../src/cache_cleanup.ts";
+import * as cloudMedia from "../src/cloud_media.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
 test("the cache loses rebuildable files of media nobody uses and old half-written ones, never paid analysis or what's in use", async () => {
@@ -44,6 +45,43 @@ test("the cache loses rebuildable files of media nobody uses and old half-writte
     expect(fs.existsSync(`${cache}/${gone}/transcript.json`)).toBe(true);
     expect(fs.existsSync(`${cache}/${gone}/watch/abc.json`)).toBe(true);
     expect(fs.existsSync(`${cache}/fedcba9876543210/preview.mp4`)).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a Drive download goes days after its last export, never one a project uses or a file of the user's", async () => {
+  const { dir, app, store, cleanup } = fixtureHome("cache-drive");
+  try {
+    const cache = store.cacheDir();
+    const live = store.create("p", { width: 1920, height: 1080, fps: 30 });
+    const uploads = store.uploadsDir(live.project.id);
+    const make = (path: string) => {
+      fs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+      fs.writeFileSync(path, "video");
+      return path;
+    };
+    const old = make(`${uploads}/drive/1yg-M2MtATPMklbr1buzd0mgR9sNzsgOZ/Old.mp4`);
+    const fresh = make(`${uploads}/drive/1v-D25jVesJWbr72fktxOvccIIeX11aHz/Fresh.mp4`);
+    const theirs = make(`${dir}/Movies/drive/1abcdefghijk/Mine.mp4`);
+    const inUse = make(`${uploads}/drive/1zzzzzzzzzzzz/Used.mp4`);
+    const project = structuredClone(live.project);
+    project.media = [{ id: "m1", name: "Used.mp4", path: inUse, kind: "video", duration: 1, width: 2, height: 2, fps: 30, has_audio: false }];
+    await store.replace(project.id, null, project, "test");
+    for (const [key, path] of [["a", old], ["b", fresh], ["c", theirs], ["d", inUse]] as const) {
+      cloudMedia.rememberLocalOriginal(cache, `edit/originals/sha256/${key}/x.mp4`, path);
+    }
+    // Four days pass for all but the fresh one, which an export just read.
+    const later = Date.now() + 4 * 24 * 3600 * 1000;
+    const known = cloudMedia.readLocalOriginals(cache);
+    known["edit/originals/sha256/b/x.mp4"]!.used_ms = later;
+    cloudMedia.writeLocalOriginals(cache, known);
+    cleanCache(app, false, later);
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    expect(fs.existsSync(theirs)).toBe(true);
+    expect(fs.existsSync(inUse)).toBe(true);
+    expect(Object.keys(cloudMedia.readLocalOriginals(cache)).sort()).toEqual(["edit/originals/sha256/b/x.mp4", "edit/originals/sha256/c/x.mp4", "edit/originals/sha256/d/x.mp4"]);
   } finally {
     cleanup();
   }

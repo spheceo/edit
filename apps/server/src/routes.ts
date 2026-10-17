@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { cleanCache } from "./cache_cleanup.ts";
+import { importDrive } from "./drive_import.ts";
 import { deleteExport, listExports } from "./exports.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
@@ -55,6 +56,7 @@ export function buildRouter(): Router<App> {
     .put("/api/projects/{id}", putProject)
     .delete("/api/projects/{id}", deleteProject)
     .post("/api/projects/{id}/import", importMedia)
+    .post("/api/projects/{id}/import-drive", importDriveMedia)
     .post("/api/projects/{id}/upload", uploadMedia, { bodyLimit: null })
     .get("/api/projects/{id}/media-status", mediaStatus);
   mediaRoutes(router);
@@ -457,6 +459,25 @@ async function importMedia(context: Context): Promise<Response> {
   let imported;
   try {
     imported = await importPaths(context.app, id, paths as string[], place, origin);
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
+  const [rev, added, errors] = imported;
+  const project = context.app.store.get(id)?.project ?? null;
+  return json({ rev, added, errors, project });
+}
+
+/** Footage from a Google Drive folder or file link (drive_import.ts): downloaded, then imported as `import` does. */
+async function importDriveMedia(context: Context): Promise<Response> {
+  const given = await body(context);
+  const url = field<string>(given, "url", "string", true);
+  const place = field<boolean>(given, "place", "boolean") ?? true;
+  const origin = field<string>(given, "origin", "string") ?? "";
+  const id = context.params.id!;
+  liveOr404(context.app, id);
+  let imported;
+  try {
+    imported = await importDrive(context.app, id, url, place, origin);
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

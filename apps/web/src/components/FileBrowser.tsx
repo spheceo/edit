@@ -21,6 +21,7 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
   const [place, setPlace] = useState(true);
   const [busy, setBusy] = useState(false);
   const [pathInput, setPathInput] = useState("");
+  const [driveLink, setDriveLink] = useState("");
   const toast = useEditor((state) => state.toast);
   const machine = useMachine();
 
@@ -61,6 +62,24 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
+  // A Drive folder's videos (or one file): downloaded on the machine running Edit, then imported.
+  const importDrive = async () => {
+    const project = useEditor.getState().project;
+    if (!project || !driveLink.trim()) return;
+    setBusy(true);
+    try {
+      const result = await api.importDrive(project.id, driveLink.trim(), place, clientId);
+      useEditor.getState().adopt(result.rev, result.project);
+      for (const error of result.errors) toast(error, "error");
+      setDriveLink("");
+      onClose();
+    } catch (error) {
+      toast((error as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const crumbs = listing ? listing.path.split("/").filter(Boolean) : [];
 
   return (
@@ -81,6 +100,29 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
               {place.name}
             </button>
           ))}
+          <form
+            className="mt-auto flex flex-col gap-1.5 border-t border-line px-1 pt-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void importDrive();
+            }}
+          >
+            <label htmlFor="edit-drive-link" className="px-1 text-[11px] font-medium tracking-wide text-faint uppercase">
+              From Google Drive
+            </label>
+            <input
+              id="edit-drive-link"
+              value={driveLink}
+              onChange={(event) => setDriveLink(event.target.value)}
+              placeholder="Folder or file link"
+              spellCheck={false}
+              className="h-7 w-full min-w-0 rounded-md bg-raised px-2 text-[12px] text-fg outline-none ring-1 ring-line focus:ring-line-strong"
+            />
+            <Button size="sm" variant="subtle" disabled={!driveLink.trim() || busy} type="submit">
+              {busy ? <Spinner /> : null}
+              Download and import
+            </Button>
+          </form>
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-12 shrink-0 items-center gap-1 overflow-hidden border-b border-line px-3">

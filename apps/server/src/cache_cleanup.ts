@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
+import { readLocalOriginals, writeLocalOriginals } from "./cloud_media.ts";
 import { join } from "./paths.ts";
 
 /** Made again cheaply from the source. */
@@ -23,6 +24,8 @@ const PARTIAL = /\.partial([.-]|$)|\.sb-[0-9a-f]+-/;
 const DAY = 24 * 3600 * 1000;
 /** Recently touched: maybe in use right now. */
 const RECENT = 2 * DAY;
+/** A Drive download (its original in the cloud) not read by an export for this long goes. */
+const DOWNLOADED = 3 * DAY;
 
 export interface CleanReport {
   folders: number;
@@ -47,6 +50,28 @@ function age(path: string, now: number): number {
   } catch {
     return 0;
   }
+}
+
+/** Every saved project's media paths. */
+function projectPaths(app: App): Set<string> {
+  const out = new Set<string>();
+  const dir = join(app.store.home, "projects");
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir).filter((name) => name.endsWith(".json"));
+  } catch {
+    names = [];
+  }
+  for (const name of names) {
+    try {
+      const value = JSON.parse(fs.readFileSync(join(dir, name), "utf8")) as { media?: { path?: unknown }[] };
+      for (const item of value.media ?? []) if (typeof item.path === "string") out.add(item.path);
+    } catch {
+      // Unreadable: its files aren't known, so nothing downloaded is removed.
+      return new Set(["*"]);
+    }
+  }
+  return out;
 }
 
 /**
@@ -111,6 +136,22 @@ export function cleanCache(app: App, dryRun: boolean, now = Date.now()): CleanRe
   } catch {
     return report;
   }
+  // Footage Edit downloaded from Drive (drive_import.ts) whose original is in
+  // the cloud: the copy only speeds exports up, so it goes once unused a while.
+  const known = readLocalOriginals(cache);
+  const paths = projectPaths(app);
+  let dropped = false;
+  for (const [key, entry] of Object.entries(known)) {
+    const downloaded = entry.path.startsWith(`${app.store.home}/`) || entry.path.includes("/uploads/");
+    if (!downloaded || !/\/drive\/[A-Za-z0-9_-]{10,}\//.test(entry.path)) continue;
+    if (paths.has("*") || paths.has(entry.path) || now - (entry.used_ms ?? entry.mtime_ms) < DOWNLOADED) continue;
+    remove(entry.path);
+    if (!dryRun) {
+      delete known[key];
+      dropped = true;
+    }
+  }
+  if (dropped) writeLocalOriginals(cache, known);
   for (const name of names) {
     if (!/^[0-9a-f]{16}$/.test(name)) continue;
     const dir = join(cache, name);

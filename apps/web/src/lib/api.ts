@@ -159,6 +159,9 @@ export const api = {
       place,
       origin,
     }),
+  /** Footage from a Google Drive folder or file link: downloaded on the machine running Edit, then imported. */
+  importDrive: (id: string, url: string, place: boolean, origin: string) =>
+    request<{ rev: number; added: string[]; errors: string[]; project: Project }>("POST", `/api/projects/${id}/import-drive`, { url, place, origin }),
   library: (refresh = false) => request<{ sounds: LibrarySound[]; guide: string }>("GET", `/api/library${refresh ? "?refresh=true" : ""}`),
   /** Downloads a library sound (first time) and adds it to the project's media. */
   importLibrary: (id: string, sound: string, origin: string) =>

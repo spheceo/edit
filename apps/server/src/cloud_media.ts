@@ -324,17 +324,19 @@ export async function fetchKey(key: string, local: string): Promise<void> {
  * the file, its size and modification time; machine-local, never shared.
  * The user's file is only ever read.
  */
-interface LocalOriginal {
+export interface LocalOriginal {
   path: string;
   size: number;
   mtime_ms: number;
+  /** When an export last read it (or it was noted): copies Edit downloaded go a few days after. */
+  used_ms?: number;
 }
 
 function localOriginalsFile(cache: string): string {
   return join(cache, "cloud", "local-originals.json");
 }
 
-function readLocalOriginals(cache: string): Record<string, LocalOriginal> {
+export function readLocalOriginals(cache: string): Record<string, LocalOriginal> {
   try {
     const value = JSON.parse(fs.readFileSync(localOriginalsFile(cache), "utf8")) as unknown;
     return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, LocalOriginal>) : {};
@@ -348,7 +350,7 @@ export function rememberLocalOriginal(cache: string, key: string, path: string):
   try {
     const stat = fs.statSync(path);
     const known = readLocalOriginals(cache);
-    known[key] = { path, size: stat.size, mtime_ms: stat.mtimeMs };
+    known[key] = { path, size: stat.size, mtime_ms: stat.mtimeMs, used_ms: Date.now() };
     fs.mkdirSync(join(cache, "cloud"), { recursive: true });
     writeAtomic(localOriginalsFile(cache), JSON.stringify(known, null, 1));
   } catch (error) {
@@ -356,16 +358,36 @@ export function rememberLocalOriginal(cache: string, key: string, path: string):
   }
 }
 
-/** The file on this machine that is still the original at `key` (same size and modification time), if any. */
-export function localOriginal(cache: string, key: string): string | null {
-  const entry = readLocalOriginals(cache)[key];
+/** Replaces the notes (cache_cleanup.ts drops the copies it removes). */
+export function writeLocalOriginals(cache: string, known: Record<string, LocalOriginal>): void {
+  fs.mkdirSync(join(cache, "cloud"), { recursive: true });
+  writeAtomic(localOriginalsFile(cache), JSON.stringify(known, null, 1));
+}
+
+/**
+ * The file on this machine that is still the original at `key` (same size and
+ * modification time), if any; `use`: an export reads it now (noted, so a
+ * copy Edit downloaded stays while it's used).
+ */
+export function localOriginal(cache: string, key: string, use = false): string | null {
+  const known = readLocalOriginals(cache);
+  const entry = known[key];
   if (entry === undefined || typeof entry.path !== "string") return null;
   try {
     const stat = fs.statSync(entry.path);
-    return stat.isFile() && stat.size === entry.size && stat.mtimeMs === entry.mtime_ms ? entry.path : null;
+    if (!(stat.isFile() && stat.size === entry.size && stat.mtimeMs === entry.mtime_ms)) return null;
   } catch {
     return null;
   }
+  if (use) {
+    try {
+      entry.used_ms = Date.now();
+      writeLocalOriginals(cache, known);
+    } catch {
+      // Only a note.
+    }
+  }
+  return entry.path;
 }
 
 /** The SHA-256 of a file, in lowercase hex. */
@@ -940,7 +962,7 @@ export async function forExport(project: Project, start: number, end: number, ca
     }
     const own = where.proxy === where.original;
     if (own && isFile(media.path)) continue;
-    const here = localOriginal(cache, where.original);
+    const here = localOriginal(cache, where.original, true);
     if (here !== null) {
       onDisk.set(mediaId, here);
       continue;

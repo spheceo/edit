@@ -7,6 +7,7 @@ import type { Server } from "bun";
 
 import { createApp, hostname, type App } from "./app.ts";
 import { pauseForExports, setListening } from "./broll.ts";
+import { startCleaning } from "./cache_cleanup.ts";
 import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
 import { registerEditingTools } from "./edit_tools.ts";
@@ -157,6 +158,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   pauseForExports(() => app.exports.running());
   // Slowed cut-in shots are smoothed unless asked not to, where it takes seconds.
   setSmoothByDefault(app.native.smoothSupported());
+  // The cache kept to what's used.
+  startCleaning(app);
   // Tools register here; WP5's and WP6's register as their modules load (through seams).
   registerEditingTools();
   registerMediaTools();

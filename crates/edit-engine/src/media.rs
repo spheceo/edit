@@ -432,9 +432,18 @@ pub fn make_proxy(
     let video = probe.kind == MediaKind::Video;
     let video_tmp = paths.proxy.with_extension("partial.mp4");
     let audio_tmp = paths.audio.with_extension("partial.m4a");
+    // The picture in VideoToolbox from end to end first (`hardware_video`),
+    // then the native BGRA path, then libx264 below.
     #[cfg(target_os = "macos")]
     let native = video
-        && native_proxy(
+        && (hardware_video(
+            source,
+            probe,
+            (PROXY_MAX_WIDTH, PROXY_MAX_HEIGHT),
+            8_000_000,
+            false,
+            &video_tmp,
+        ) || native_proxy(
             source,
             &video_tmp,
             probe,
@@ -442,7 +451,7 @@ pub fn make_proxy(
             PROXY_MAX_HEIGHT,
             8_000_000,
             &mut progress,
-        );
+        ));
     #[cfg(not(target_os = "macos"))]
     let native = false;
     if native && !probe.has_audio {
@@ -495,6 +504,12 @@ pub fn make_proxy(
                 "veryfast",
                 "-crf",
                 "20",
+                // Never past the other paths' 8 Mbit/s: grainy bodycam at
+                // CRF 20 alone came out at ~29 (a 6.6 GB preview).
+                "-maxrate",
+                "8M",
+                "-bufsize",
+                "16M",
                 "-g",
                 &gop,
                 // No reordering: each frame comes out of the decoder as soon as it goes in.

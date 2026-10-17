@@ -44,7 +44,7 @@ test.skipIf(!fs.existsSync(SERVER_RS))("every route in server.rs's router is ser
   const expected = [...rustRoutes(router), ...rustRoutes(cloudRouter.slice(0, cloudRouter.indexOf("\n}\n") + 3))];
   expect(expected.length).toBeGreaterThan(70);
   // Routes added after the switch-over to this server, which server.rs never had.
-  const sinceRust = ["GET /api/projects/{id}/exports", "POST /api/projects/{id}/exports/delete"];
+  const sinceRust = ["GET /api/projects/{id}/exports", "POST /api/projects/{id}/exports/delete", "POST /api/cache/clean"];
   const served = buildRouter()
     .list()
     .filter((route) => !sinceRust.includes(route));

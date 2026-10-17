@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
+import { cleanCache } from "./cache_cleanup.ts";
 import { deleteExport, listExports } from "./exports.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
@@ -66,6 +67,7 @@ export function buildRouter(): Router<App> {
     .post("/api/projects/{id}/export", startExport)
     .post("/api/projects/{id}/export/cancel", cancelExport)
     .get("/api/projects/{id}/exports", projectExports)
+    .post("/api/cache/clean", cleanTheCache)
     .post("/api/projects/{id}/exports/delete", deleteProjectExport);
   router
     .get("/api/export/encoders", exportEncoders)
@@ -758,6 +760,13 @@ async function exportEncoders({ app }: Context): Promise<Response> {
   } catch {
     return json({ videotoolbox: false, hevc: false, prores: false, mp3: false });
   }
+}
+
+/** Cleans the cache now (`dry_run`: only says what would go); cache_cleanup.ts. */
+async function cleanTheCache(context: Context): Promise<Response> {
+  const given = (await optionalBody(context)) ?? {};
+  const dryRun = field<boolean>(given, "dry_run", "boolean") ?? false;
+  return json(cleanCache(context.app, dryRun));
 }
 
 /** The project's exports, newest first (this machine's: each downloads from Edit, on the Mac or over Tailscale). */

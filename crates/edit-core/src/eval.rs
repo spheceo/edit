@@ -324,6 +324,66 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
     }
 }
 
+/// The scene at `frame` as it's seen: [`evaluate`]'s, less the layers wholly
+/// hidden under an opaque full-frame video above them ([`covers_frame`]:
+/// footage under full-frame B-roll). What the preview and the export both
+/// draw, so neither decodes a picture nobody sees, and they draw alike.
+pub fn evaluate_seen(project: &Project, frame: i64) -> Scene {
+    let mut scene = evaluate(project, frame);
+    scene.drop_hidden(project);
+    scene
+}
+
+impl Scene {
+    /// Removes the layers beneath the topmost one that covers the frame.
+    pub fn drop_hidden(&mut self, project: &Project) {
+        let hidden = self
+            .layers
+            .iter()
+            .rposition(|layer| covers_frame(project, self, layer))
+            .unwrap_or(0);
+        self.layers.drain(..hidden);
+    }
+}
+
+/// Whether `layer` hides everything beneath it: an opaque video (not an image,
+/// which may have see-through parts), uncropped and unturned, filling the frame.
+pub fn covers_frame(project: &Project, scene: &Scene, layer: &Layer) -> bool {
+    let Layer::Video {
+        media,
+        transform,
+        opacity,
+        crop,
+        ..
+    } = layer
+    else {
+        return false;
+    };
+    let Some(media) = project.media(media) else {
+        return false;
+    };
+    if media.kind != MediaKind::Video
+        || *opacity < 0.999
+        || !crop.is_none()
+        || transform.rotation.abs() > 1e-3
+        || media.width == 0
+        || media.height == 0
+    {
+        return false;
+    }
+    let (width, height) = (scene.width as f32, scene.height as f32);
+    let fit = (width / media.width as f32).min(height / media.height as f32) * transform.scale;
+    let (half_w, half_h) = (
+        media.width as f32 * fit / 2.0,
+        media.height as f32 * fit / 2.0,
+    );
+    // A pixel's slack: a fitted 16:9 shot is exactly the frame.
+    transform.x - half_w <= -width / 2.0 + 0.5
+        && transform.x + half_w >= width / 2.0 - 0.5
+        && transform.y - half_h <= -height / 2.0 + 0.5
+        && transform.y + half_h >= height / 2.0 - 0.5
+}
+
 /// The text up to the last word that has appeared by `local` (frames into the
 /// clip): at `times` when given, else one word every `stagger` frames.
 /// Whitespace and line breaks are kept as written.
@@ -900,6 +960,90 @@ mod tests {
             layer,
             Layer::Adjustment { blur, .. } if blur.radius == 0.0 && (blur.x + 100.0).abs() < 1e-4
         )));
+    }
+
+    #[test]
+    fn layers_under_full_frame_footage_are_not_seen() {
+        let mut project = project();
+        let v2 = project.tracks[1].id.clone();
+        let Some(over) = project.clips.get_mut(1) else {
+            panic!("no clip");
+        };
+        // Full-frame footage over the footage on V1.
+        over.track = v2;
+        over.keyframes = Default::default();
+        over.content = ClipContent::Video {
+            media: "m1".into(),
+            source_in: 0.0,
+            speed: 1.0,
+            transform: Transform::default(),
+            opacity: 1.0,
+            crop: Default::default(),
+            frame: None,
+        };
+        let seen = evaluate_seen(&project, 40);
+        assert_eq!(evaluate(&project, 40).layers.len(), 2);
+        assert_eq!(seen.layers.len(), 1);
+        assert!(matches!(&seen.layers[0], Layer::Video { clip, .. } if clip == "c2"));
+        // Not quite covering: smaller, see-through, or cropped.
+        let changed = |change: &dyn Fn(&mut Clip)| {
+            let mut project = project.clone();
+            if let Some(clip) = project.clips.get_mut(1) {
+                change(clip);
+            }
+            evaluate_seen(&project, 40).layers.len()
+        };
+        fn content(clip: &mut Clip) -> Option<(&mut Transform, &mut f32, &mut Crop)> {
+            match &mut clip.content {
+                ClipContent::Video {
+                    transform,
+                    opacity,
+                    crop,
+                    ..
+                } => Some((transform, opacity, crop)),
+                _ => None,
+            }
+        }
+        assert_eq!(
+            changed(&|clip| {
+                if let Some((transform, _, _)) = content(clip) {
+                    transform.scale = 0.9;
+                }
+            }),
+            2
+        );
+        assert_eq!(
+            changed(&|clip| {
+                if let Some((_, opacity, _)) = content(clip) {
+                    *opacity = 0.5;
+                }
+            }),
+            2
+        );
+        assert_eq!(
+            changed(&|clip| {
+                if let Some((_, _, crop)) = content(clip) {
+                    crop.left = 0.1;
+                }
+            }),
+            2
+        );
+        // Pushed in it still covers.
+        assert_eq!(
+            changed(&|clip| {
+                if let Some((transform, _, _)) = content(clip) {
+                    transform.scale = 1.2;
+                    transform.x = 50.0;
+                }
+            }),
+            1
+        );
+        // An image may be see-through.
+        let mut still = project.clone();
+        if let Some(media) = still.media.get_mut(0) {
+            media.kind = MediaKind::Image;
+        }
+        assert_eq!(evaluate_seen(&still, 40).layers.len(), 2);
     }
 
     #[test]

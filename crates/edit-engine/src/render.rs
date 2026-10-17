@@ -19,7 +19,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use edit_core::{audio_segments, evaluate, AudioSegment, Layer, Media, Project, Scene};
+use edit_core::{audio_segments, evaluate_seen, AudioSegment, Layer, Media, Project, Scene};
 use edit_render::{text::BUNDLED_FONTS, wgpu, Renderer};
 use serde_json::{json, Value};
 
@@ -812,7 +812,7 @@ fn render_job(
     );
     let scenes: Vec<Scene> = frames
         .iter()
-        .map(|frame| evaluate(project, *frame))
+        .map(|frame| evaluate_seen(project, *frame))
         .collect();
     let mut requests = Vec::new();
     let mut layers = Vec::new();
@@ -1689,7 +1689,7 @@ fn planner(
         if cancel.load(Ordering::Acquire) {
             break;
         }
-        let scene = evaluate(project, frame);
+        let scene = evaluate_seen(project, frame);
         let mut decodes = Vec::new();
         let mut present = HashSet::new();
         for layer in &scene.layers {
@@ -2272,6 +2272,96 @@ mod tests {
                     assert_eq!(counted(&frame), n, "native at {time:.4}");
                 }
             }
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Times a 1080p export of footage wholly under full-frame B-roll (the
+    /// footage isn't seen, so it isn't decoded). Ignored: a measurement.
+    /// `cargo test -p edit-engine --release covered_footage -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_export_of_covered_footage() {
+        // The export's own account of where the time went.
+        struct Print;
+        impl crate::log::Sink for Print {
+            fn log(&self, _: crate::log::Level, area: &str, message: String) {
+                if area == "export" {
+                    println!("  {message}");
+                }
+            }
+            fn record(&self, _: &str, _: &str, _: Duration, _: Option<&str>) {}
+        }
+        crate::log::use_sink(Box::new(Print));
+        let dir = temp_dir("covered");
+        let make = |name: &str, pattern: &str| {
+            let path = dir.join(name);
+            let made = Command::new(crate::util::ffmpeg())
+                .args(["-v", "error", "-f", "lavfi", "-i"])
+                .arg(format!("{pattern}=size=1920x1080:rate=30:duration=20"))
+                .args([
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "-g",
+                    "60",
+                    "-pix_fmt",
+                    "yuv420p",
+                ])
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(made.success());
+            path
+        };
+        let footage = make("footage.mp4", "testsrc2");
+        let broll = make("broll.mp4", "testsrc");
+        let project = |covered: bool| -> Project {
+            let mut clips = vec![
+                json!({"id": "b", "track": "v2", "type": "video", "media": "b",
+                "source_in": 0.0, "start": 0, "duration": 600}),
+            ];
+            if covered {
+                clips.push(
+                    json!({"id": "f", "track": "v1", "type": "video", "media": "f",
+                    "source_in": 0.0, "start": 0, "duration": 600}),
+                );
+            }
+            serde_json::from_value(json!({
+                "version": 1, "id": "p", "name": "t",
+                "settings": {"width": 1920, "height": 1080, "fps": 30},
+                "media": [
+                    {"id": "f", "name": "footage", "path": footage, "kind": "video", "duration": 20.0, "width": 1920, "height": 1080, "fps": 30, "has_audio": false},
+                    {"id": "b", "name": "broll", "path": broll, "kind": "video", "duration": 20.0, "width": 1920, "height": 1080, "fps": 30, "has_audio": false}
+                ],
+                "tracks": [{"id": "v1", "kind": "video"}, {"id": "v2", "kind": "video"}],
+                "clips": clips,
+            }))
+            .unwrap()
+        };
+        // Twice each, alternating: the first export also warms the GPU up.
+        for (label, covered) in [
+            ("B-roll alone", false),
+            ("B-roll over footage", true),
+            ("B-roll alone", false),
+            ("B-roll over footage", true),
+        ] {
+            let project = project(covered);
+            let options = ExportOptions::default();
+            let plan = crate::export::plan(&options, &project, false).unwrap();
+            let started = Instant::now();
+            export(
+                &project,
+                &options,
+                &plan,
+                &dir.join("out.mp4"),
+                &dir,
+                &AtomicBool::new(false),
+                |_| {},
+            )
+            .unwrap();
+            println!("{label}: 600 frames in {:.2?}", started.elapsed());
         }
         std::fs::remove_dir_all(dir).ok();
     }

@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use edit_core::{evaluate, Layer, Project, Scene};
+use edit_core::{evaluate_seen, Layer, Project, Scene};
 use edit_render::{wgpu, Renderer};
 use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, VideoFrame};
@@ -136,31 +136,25 @@ impl Engine {
     }
 
     /// JSON `[{clip, media, time}]`: the video frames `frame` needs. A video
-    /// wholly covered by an opaque one above it is left out: nobody sees it,
-    /// and decoding it (footage under full-frame B-roll) doubles what a remote
+    /// wholly covered by an opaque one above it is left out of the scene
+    /// (`edit_core::evaluate_seen`, as the export): nobody sees it, and
+    /// decoding it (footage under full-frame B-roll) doubles what a remote
     /// preview has to download.
     pub fn sources(&mut self, frame: f64) -> String {
         self.evaluate(frame.floor() as i64);
-        let (Some((_, scene)), Some(project)) = (&self.evaluated, &self.project) else {
+        let Some((_, scene)) = &self.evaluated else {
             return "[]".to_owned();
         };
-        let covers = |layer: &Layer| covers_frame(project, scene, layer);
         let list: Vec<_> = scene
             .layers
             .iter()
-            .enumerate()
-            .filter_map(|(index, layer)| match layer {
+            .filter_map(|layer| match layer {
                 Layer::Video {
                     clip,
                     media,
                     source_time,
                     ..
-                } => {
-                    let hidden = scene.layers.iter().skip(index + 1).any(covers);
-                    (!hidden).then(
-                        || serde_json::json!({ "clip": clip, "media": media, "time": source_time }),
-                    )
-                }
+                } => Some(serde_json::json!({ "clip": clip, "media": media, "time": source_time })),
                 _ => None,
             })
             .collect();
@@ -254,7 +248,7 @@ impl Engine {
             self.evaluated = self
                 .project
                 .as_ref()
-                .map(|project| (frame, evaluate(project, frame)));
+                .map(|project| (frame, evaluate_seen(project, frame)));
         }
     }
 
@@ -284,42 +278,4 @@ impl Engine {
         self.renderer.queue().present(texture);
         Ok(())
     }
-}
-
-/// Whether `layer` hides everything beneath it: an opaque video (not an image,
-/// which may have see-through parts), uncropped and unturned, filling the frame.
-fn covers_frame(project: &Project, scene: &Scene, layer: &Layer) -> bool {
-    let Layer::Video {
-        media,
-        transform,
-        opacity,
-        crop,
-        ..
-    } = layer
-    else {
-        return false;
-    };
-    let Some(media) = project.media(media) else {
-        return false;
-    };
-    if media.kind != edit_core::MediaKind::Video
-        || *opacity < 0.999
-        || !crop.is_none()
-        || transform.rotation.abs() > 1e-3
-        || media.width == 0
-        || media.height == 0
-    {
-        return false;
-    }
-    let (width, height) = (scene.width as f32, scene.height as f32);
-    let fit = (width / media.width as f32).min(height / media.height as f32) * transform.scale;
-    let (half_w, half_h) = (
-        media.width as f32 * fit / 2.0,
-        media.height as f32 * fit / 2.0,
-    );
-    // A pixel's slack: a fitted 16:9 shot is exactly the frame.
-    transform.x - half_w <= -width / 2.0 + 0.5
-        && transform.x + half_w >= width / 2.0 - 0.5
-        && transform.y - half_h <= -height / 2.0 + 0.5
-        && transform.y + half_h >= height / 2.0 - 0.5
 }

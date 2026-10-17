@@ -280,7 +280,12 @@ int edit_reader_frame(void *handle, double time, uint8_t *out, size_t length, in
                       int if_changed, char *error, size_t capacity) {
     @autoreleasepool {
         EditReader *r = (__bridge EditReader *)handle;
-        if (length != (size_t)r.width * r.height * 4 || !isfinite(time)) return 0;
+        if (length != (size_t)r.width * r.height * 4) {
+            fail(error, capacity, [NSString stringWithFormat:@"Frame buffer of %zu bytes doesn't fit the %ux%u reader",
+                                   length, r.width, r.height]);
+            return 0;
+        }
+        if (!isfinite(time)) { fail(error, capacity, @"Frame time is not a number"); return 0; }
         NSError *problem = nil;
         double step = r.step;
         // An over-trimmed clip holds its last picture.
@@ -350,6 +355,16 @@ int edit_reader_frame(void *handle, double time, uint8_t *out, size_t length, in
             r.shown = (CMSampleBufferRef)CFRetain(chosen);
         }
         return 1;
+    }
+}
+
+// Where the video track's pictures end (seconds), and one frame's length:
+// asked past `end`, the reader holds its last picture.
+void edit_reader_span(void *handle, double *end, double *step) {
+    @autoreleasepool {
+        EditReader *r = (__bridge EditReader *)handle;
+        *end = r.end;
+        *step = r.step;
     }
 }
 
@@ -663,7 +678,11 @@ int edit_writer_frame(void *handle, int64_t frame, const uint8_t *pixels, size_t
                       size_t stride, int rgba, char *error, size_t capacity) {
     @autoreleasepool {
         EditWriter *w = (__bridge EditWriter *)handle;
-        if (stride < (size_t)w.width * 4 || length < stride * (w.height - 1) + (size_t)w.width * 4) return 0;
+        if (stride < (size_t)w.width * 4 || length < stride * (w.height - 1) + (size_t)w.width * 4) {
+            fail(error, capacity, [NSString stringWithFormat:@"Frame of %zu bytes (rows %zu apart) is too small for the %ux%u encoder",
+                                   length, stride, w.width, w.height]);
+            return 0;
+        }
         // Bound both the encoder's queue and the pixel-buffer pool. Offline writers
         // must obey readiness, otherwise a long export buffers the entire movie.
         NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:30];

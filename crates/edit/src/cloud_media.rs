@@ -473,8 +473,12 @@ fn put_local(
             &local,
         )?;
     }
+    let made = canonical(local);
+    // The media is the proxy from now on, whose cache dir is another (the
+    // media key follows the path): what was paid for on the original comes along.
+    carry_analysis(cache, path, &made);
     Ok(Made {
-        path: canonical(local),
+        path: made,
         name: name.to_owned(),
         probe: probe.clone(),
         cloud: Some(CloudMedia {
@@ -1440,6 +1444,55 @@ fn analysis_files(dir: &Path) -> Vec<(String, PathBuf)> {
     files
 }
 
+/// Copies the shared analysis (transcript, faces, seats, the watcher's
+/// answers) of the file at `from` to the cache dir of the file at `to`, when
+/// a media's path moves from one to the other (an original to its proxy):
+/// the media key follows the path, so without this they'd be lost and paid
+/// for again. Files `to` has already are kept. `from` must still be as it was
+/// analysed (its key covers size and mtime). Returns how many were copied.
+fn carry_analysis(cache: &Path, from: &Path, to: &Path) -> usize {
+    let (old, new) = (
+        cache.join(crate::media::media_key(from)),
+        cache.join(crate::media::media_key(to)),
+    );
+    if old == new {
+        return 0;
+    }
+    let mut carried = 0;
+    for (name, file) in analysis_files(&old) {
+        let target = new.join(&name);
+        if target.exists() {
+            continue;
+        }
+        let copied = target
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::read(&file))
+            .and_then(|bytes| crate::store::write_atomic(&target, &bytes));
+        match copied {
+            Ok(()) => carried += 1,
+            Err(error) => crate::diag::warn(
+                "cloud",
+                format!(
+                    "carrying {name} of {} to its proxy: {error}",
+                    from.display()
+                ),
+            ),
+        }
+    }
+    if carried > 0 {
+        crate::diag::info(
+            "cloud",
+            format!(
+                "{}: {carried} analysis files carried to {}",
+                from.display(),
+                to.display()
+            ),
+        );
+    }
+    carried
+}
+
 fn stamp(path: &Path) -> String {
     let meta = std::fs::metadata(path).ok();
     let modified = meta
@@ -1638,6 +1691,54 @@ mod tests {
         assert!(is_analysis("transcript.json") && is_analysis("watch/7bc98.json"));
         assert!(!is_analysis("preview.mp4") && !is_analysis("watch/../x.json"));
         assert!(!is_analysis("watch/.hidden.json"));
+    }
+
+    /// A media repointed from its original to its proxy keeps the analysis
+    /// paid for on the original (transcript, faces, seats, watch answers),
+    /// not what's cheap to make again, and nothing the proxy has already.
+    #[test]
+    fn analysis_follows_the_media_to_its_proxy() {
+        let home = std::env::temp_dir().join(format!(
+            "edit-cloud-carry-{}-{}",
+            std::process::id(),
+            crate::store::now_ms()
+        ));
+        let cache = home.join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let original = home.join("original.mov");
+        let proxy = home.join("proxy.mp4");
+        std::fs::write(&original, b"original").unwrap();
+        std::fs::write(&proxy, b"proxy").unwrap();
+        let old = cache.join(crate::media::media_key(&original));
+        let new = cache.join(crate::media::media_key(&proxy));
+        assert_ne!(old, new);
+        std::fs::create_dir_all(old.join("watch")).unwrap();
+        for name in [
+            "transcript.json",
+            "faces-v1.json",
+            "seats-v2.json",
+            "watch/0123abcd.json",
+            "loudness-v1.bin",
+            "peaks.bin",
+        ] {
+            std::fs::write(old.join(name), name).unwrap();
+        }
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join("seats-v2.json"), b"the proxy's own").unwrap();
+        assert_eq!(carry_analysis(&cache, &original, &proxy), 3);
+        let read = |name: &str| std::fs::read_to_string(new.join(name)).ok();
+        assert_eq!(read("transcript.json").as_deref(), Some("transcript.json"));
+        assert_eq!(read("faces-v1.json").as_deref(), Some("faces-v1.json"));
+        assert_eq!(
+            read("watch/0123abcd.json").as_deref(),
+            Some("watch/0123abcd.json")
+        );
+        assert_eq!(read("seats-v2.json").as_deref(), Some("the proxy's own"));
+        assert_eq!(read("loudness-v1.bin"), None);
+        assert_eq!(read("peaks.bin"), None);
+        // Again: nothing more to carry.
+        assert_eq!(carry_analysis(&cache, &original, &proxy), 0);
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]

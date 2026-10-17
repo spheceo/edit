@@ -69,6 +69,13 @@ pub fn parts(
 
 /// The gain of a clip's fades at `time` seconds into it (as FFmpeg's afade:
 /// linear ramps from the clip's start and to its end); volume is applied apart.
+///
+/// This is the reference for a sound's fades: the preview's gain automation
+/// (apps/web playback.ts) computes the same `time / fade` and
+/// `(length - time) / fade` in seconds and multiplies them, as here. Picture
+/// fades (`edit_core::eval`'s `fade_factor`) differ on purpose: they count
+/// whole frames (`(local + 1) / (fade + 1)`) and take the lower of the two
+/// where a fade in and a fade out overlap, rather than multiplying.
 fn fade_gain(segment: &AudioSegment, original: f64, time: f64) -> f32 {
     let mut gain = 1.0;
     if segment.fade_in > 0.0 {
@@ -255,6 +262,45 @@ impl Drop for FfmpegSource {
     }
 }
 
+/// A part's volume, sampled once a frame from its keyframes and ramped
+/// linearly between (`AudioSegment::volume_at`), without solving the curve
+/// for every sample.
+struct Volume<'a> {
+    segment: &'a AudioSegment,
+    /// The frame (into the clip) the gains below are for, and its gain and the next frame's.
+    below: f64,
+    from: f32,
+    to: f32,
+}
+
+impl<'a> Volume<'a> {
+    fn new(segment: &'a AudioSegment) -> Self {
+        let gain = segment.volume_at(0.0);
+        Self {
+            segment,
+            below: f64::NAN,
+            from: gain,
+            to: gain,
+        }
+    }
+
+    /// The gain `time` seconds into the clip.
+    fn at(&mut self, time: f64) -> f32 {
+        if self.segment.volume_keys.is_empty() {
+            return self.from;
+        }
+        let frame = time * self.segment.fps;
+        let below = frame.floor();
+        if below != self.below {
+            let gain = |frame: f64| 10_f32.powf(self.segment.volume_db_at(frame as f32) / 20.0);
+            self.below = below;
+            self.from = gain(below);
+            self.to = gain(below + 1.0);
+        }
+        self.from + (self.to - self.from) * (frame - below) as f32
+    }
+}
+
 /// Opens the decoder for a part: native at speed 1 where AVFoundation reads
 /// the file, FFmpeg otherwise.
 struct Sources {
@@ -415,7 +461,7 @@ fn mix_with(
             // A source that ends early (a clip past its file's end) is silent after.
             buffer.get_mut(got * 2..).unwrap_or_default().fill(0.0);
             let offset = start - from;
-            let volume = 10_f64.powf(f64::from(part.segment.volume_db) / 20.0) as f32;
+            let mut volume = Volume::new(&part.segment);
             for (index, (frame, mixed)) in buffer
                 .as_chunks::<2>()
                 .0
@@ -430,7 +476,7 @@ fn mix_with(
                 .enumerate()
             {
                 let time = part.elapsed + (start - sound.first + index) as f64 / RATE as f64;
-                let gain = volume * fade_gain(&part.segment, part.original, time);
+                let gain = volume.at(time) * fade_gain(&part.segment, part.original, time);
                 for (value, sample) in mixed.iter_mut().zip(frame) {
                     *value += sample * gain;
                 }
@@ -851,6 +897,8 @@ mod tests {
             source_in,
             speed: 1.0,
             volume_db: 0.0,
+            volume_keys: vec![],
+            fps: 30.0,
             fade_in: 0.0,
             fade_out: 0.0,
             mutes: vec![],
@@ -947,6 +995,42 @@ mod tests {
         let right = out[(1.4 * RATE as f64) as usize * 2 + 1];
         assert!((right - 0.25 * volume * 0.5).abs() < 2e-3, "{right}");
         assert_eq!(left(&out, 1.75), 0.0, "silent after it");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn volume_keyframes_shape_the_mix_as_the_preview_hears_them() {
+        let dir = temp_dir("keys");
+        let path = ramp(&dir, "ramp.wav");
+        let key = |frame: f32, value: f32| edit_core::Keyframe {
+            frame,
+            value,
+            ease: edit_core::Ease::Linear,
+            handle_in: None,
+            handle_out: None,
+        };
+        // 2 s of the source from 1 s at 0.5 s on the timeline, -20 dB rising
+        // to 0 dB over its first second (30 frames), then held.
+        let mut keyed = segment(0.5, 2.0, 1.0);
+        keyed.volume_db = -40.0;
+        keyed.volume_keys = vec![key(0.0, -20.0), key(30.0, 0.0)];
+        // Cut to a span starting 0.25 s in: the keys stay on the clip's clock.
+        let cut = parts(&[keyed.clone()], |_| Some(path.clone()), 0.75, 2.0);
+        for native in [true, false] {
+            let out = mixed_with(native, &cut, RATE * 2);
+            for clip_time in [0.3, 0.5, 0.51, 0.9, 1.5] {
+                let source = (1.0 + clip_time) / 10.0;
+                let expected = source as f32 * keyed.volume_at(clip_time);
+                let got = left(&out, clip_time - 0.25);
+                assert!(
+                    (got - expected).abs() < 2e-4,
+                    "native {native}, {clip_time} s into the clip: {got} vs {expected}"
+                );
+            }
+            // Halfway up: -10 dB, not the static -40.
+            let got = left(&out, 0.25);
+            assert!((got - 0.15 * 10_f32.powf(-0.5)).abs() < 2e-4, "{got}");
+        }
         std::fs::remove_dir_all(dir).ok();
     }
 

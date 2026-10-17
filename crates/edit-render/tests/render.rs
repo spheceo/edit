@@ -487,3 +487,200 @@ fn blurs_only_inside_the_region() {
     }
     assert!(checked > 150_000);
 }
+
+/// Times compositing a busy frame (footage, B-roll, a grade and 30 boxed,
+/// glowing subtitles: some 200 draws) over and over. Ignored: a measurement.
+/// `cargo test -p edit-render --features bundled-fonts --test render busy -- --ignored --nocapture`
+#[test]
+#[ignore]
+#[allow(clippy::unwrap_used)]
+fn bench_busy_frames() {
+    let (w, h) = (1920, 1080);
+    let Some(mut renderer) = renderer(w, h) else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let picture = vec![128_u8; (w * h * 4) as usize];
+    renderer.upload_video_rgba("a", w, h, &picture);
+    renderer.upload_video_rgba("b", w, h, &picture);
+    let mut layers = vec![
+        Layer::Video {
+            clip: "a".into(),
+            media: "a".into(),
+            source_time: 0.0,
+            transform: Transform::default(),
+            opacity: 1.0,
+            crop: Default::default(),
+            frame: None,
+        },
+        Layer::Video {
+            clip: "b".into(),
+            media: "b".into(),
+            source_time: 0.0,
+            transform: Transform {
+                scale: 0.5,
+                ..Transform::default()
+            },
+            opacity: 1.0,
+            crop: Default::default(),
+            frame: None,
+        },
+    ];
+    for index in 0..30 {
+        layers.push(Layer::Text {
+            clip: format!("t{index}"),
+            text: format!("Subtitle number {index}"),
+            style: TextStyle {
+                font: "Montserrat".into(),
+                weight: 600,
+                size: 32.0,
+                background: Some(TextBox::default()),
+                shadow: Some(TextShadow::default()),
+                glow: Glow {
+                    enabled: true,
+                    ..Glow::default()
+                },
+                ..TextStyle::default()
+            },
+            transform: Transform {
+                x: (index % 5) as f32 * 300.0 - 600.0,
+                y: (index / 5) as f32 * 150.0 - 400.0,
+                ..Transform::default()
+            },
+            animation: TextAnimation::default(),
+            local_frame: 0.0,
+            opacity: 1.0,
+            shown_glyphs: None,
+        });
+    }
+    layers.push(Layer::Adjustment {
+        grade: Grade {
+            contrast: 1.1,
+            ..Grade::default()
+        },
+        shake: Default::default(),
+        glitch: Default::default(),
+        blur: Default::default(),
+        opacity: 1.0,
+    });
+    let scene = Scene {
+        width: w,
+        height: h,
+        layers,
+    };
+    renderer.render(&scene);
+    renderer.read_output().unwrap();
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        for _ in 0..120 {
+            renderer.render(&scene);
+        }
+        let submitted = started.elapsed();
+        renderer.read_output().unwrap();
+        eprintln!(
+            "120 busy frames: {submitted:.1?} to record and submit, {:.1?} with the GPU done",
+            started.elapsed()
+        );
+    }
+}
+
+/// A glowing, shadowed title on a flat background, animated by `animation` at `frame`.
+fn title_scene(animation: TextAnimation, frame: f32, opacity: f32) -> Scene {
+    let style = TextStyle {
+        font: "Montserrat".into(),
+        weight: 800,
+        size: 120.0,
+        glow: Glow {
+            enabled: true,
+            radius: 40.0,
+            strength: 0.8,
+            ..Glow::default()
+        },
+        shadow: Some(TextShadow::default()),
+        ..TextStyle::default()
+    };
+    Scene {
+        width: 1920,
+        height: 1080,
+        layers: vec![
+            Layer::Solid {
+                color: Rgba([0.1, 0.2, 0.4, 1.0]),
+                opacity: 1.0,
+                gradient: None,
+            },
+            Layer::Text {
+                clip: "title".into(),
+                text: "A fade that costs nothing".into(),
+                style,
+                transform: Transform::default(),
+                animation,
+                local_frame: frame,
+                opacity,
+                shown_glyphs: None,
+            },
+        ],
+    }
+}
+
+/// A fade-in is drawn as the words' opacity (one raster, not one a frame),
+/// the same picture as the still text at that opacity; a typewriter's raster
+/// changes only when a glyph appears, and every frame is what a renderer
+/// with nothing cached draws.
+#[test]
+#[allow(clippy::unwrap_used)]
+fn fades_and_typewriters_rasterize_only_on_change() {
+    let (w, h) = (1920, 1080);
+    let Some(mut renderer) = renderer(w, h) else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let fade = TextAnimation {
+        preset: TextPreset::Fade,
+        duration: 12.0,
+        stagger: 0.0,
+    };
+    let still = TextAnimation {
+        preset: TextPreset::None,
+        ..fade
+    };
+    let timed = |animation: TextAnimation, renderer: &mut Renderer| {
+        let started = std::time::Instant::now();
+        for frame in 0..12 {
+            renderer.render(&title_scene(animation, frame as f32, 1.0));
+            renderer.read_output().unwrap();
+        }
+        started.elapsed()
+    };
+    timed(still, &mut renderer);
+    let (fading, standing) = (timed(fade, &mut renderer), timed(still, &mut renderer));
+    eprintln!("12 frames of a fade: {fading:.1?}; of the still title: {standing:.1?}");
+    // Halfway through the fade, the still title at the fade's opacity.
+    renderer.render(&title_scene(fade, 6.0, 1.0));
+    let faded = renderer.read_output().unwrap();
+    save("fade-mid.png", w, h, &faded);
+    let alpha = glyph_reveal(&fade, 6.0, 0, 120.0).0;
+    renderer.render(&title_scene(still, 0.0, alpha));
+    assert!(faded == renderer.read_output().unwrap(), "mid-fade differs");
+
+    let typing = TextAnimation {
+        preset: TextPreset::Typewriter,
+        duration: 1.0,
+        stagger: 1.5,
+    };
+    let mut frames = Vec::new();
+    let started = std::time::Instant::now();
+    for frame in 0..40 {
+        renderer.render(&title_scene(typing, frame as f32 * 0.5, 1.0));
+        frames.push(renderer.read_output().unwrap());
+    }
+    eprintln!("40 frames of a typewriter: {:.1?}", started.elapsed());
+    for frame in [0, 5, 6, 13, 39] {
+        let mut fresh = self::renderer(w, h).unwrap();
+        fresh.render(&title_scene(typing, frame as f32 * 0.5, 1.0));
+        assert!(
+            frames[frame] == fresh.read_output().unwrap(),
+            "typewriter frame {frame} differs from a fresh render"
+        );
+    }
+    assert!(frames[5] != frames[6], "a glyph appears at 3.0");
+}

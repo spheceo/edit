@@ -19,7 +19,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use edit_core::{audio_segments, evaluate, AudioSegment, Layer, Media, Project, Scene};
+use edit_core::{audio_segments, evaluate_seen, AudioSegment, Layer, Media, Project, Scene};
 use edit_render::{text::BUNDLED_FONTS, wgpu, Renderer};
 use serde_json::{json, Value};
 
@@ -147,10 +147,24 @@ impl VideoReader {
         }
     }
 
+    /// The source frame nearest `time` (as the preview's `videoTime` and the
+    /// native reader pick it): frame n covers `[(n - 0.5) / fps, (n + 0.5) / fps)`.
+    fn nearest(&self, time: f64) -> i64 {
+        (time.max(0.0) * self.source.fps + 0.5 + 1e-7).floor() as i64
+    }
+
+    /// Restarts FFmpeg at the frame nearest `time`. FFmpeg begins at the first
+    /// frame at or after the time it's given, so it's given half a frame
+    /// before that frame (seeking to `time` itself landed a frame late when
+    /// `time` was in the first half of a frame), and the timestamps are
+    /// re-based on it (`setpts`) so `fps=` keeps every frame in its own slot
+    /// rather than rounding half-frame times one way or the other.
     fn restart(&mut self, time: f64) -> Result<(), String> {
         self.stop();
         self.spare.resize(self.source.bytes(), 0);
-        let time = time.max(0.0);
+        let first = self.nearest(time);
+        let fps = self.source.fps;
+        let time = ((first as f64 - 0.5) / fps).max(0.0);
         let mut child = Command::new(crate::util::ffmpeg())
             .args([
                 "-hide_banner",
@@ -178,7 +192,7 @@ impl VideoReader {
                 "-an",
                 "-vf",
                 &format!(
-                    "fps={:.6},scale={}:{}:flags=bicubic",
+                    "setpts=PTS-STARTPTS,fps={:.6},scale={}:{}:flags=bicubic",
                     self.source.fps, self.width, self.height
                 ),
                 "-threads",
@@ -199,7 +213,7 @@ impl VideoReader {
             .map_err(|error| format!("ffmpeg: {error}"))?;
         let stdout = child.stdout.take().ok_or("ffmpeg stdout")?;
         self.child = Some((child, stdout));
-        self.start = time;
+        self.start = first as f64 / fps;
         self.next_index = 0;
         self.eof = false;
         self.has_frame = false;
@@ -321,16 +335,20 @@ impl VideoReader {
 
     fn read_ffmpeg(&mut self, time: f64) -> Result<(), String> {
         let fps = self.source.fps;
+        // Index 0 is the frame at `start`; the one wanted is the nearest to `time`.
+        let target = |reader: &Self| reader.nearest(time) - (reader.start * fps).round() as i64;
         let ahead = time - (self.start + self.next_index as f64 / fps);
+        let wanted = target(self);
         if self.child.is_none()
-            || time < self.start - 1e-6
+            || wanted < 0
             || (!self.eof && ahead > 2.0)
-            || (self.next_index > 0 && ahead < -1.5 / fps)
+            // Already past it: the frame held now is index `next_index - 1`.
+            || (self.next_index > 0 && wanted < self.next_index - 1)
         {
             self.restart(time)?;
         }
         self.frame.resize(self.source.bytes(), 0);
-        let target = ((time - self.start) * fps + 1e-6).floor() as i64;
+        let target = target(self);
         while !self.eof && self.next_index <= target {
             let Some((child, stdout)) = self.child.as_mut() else {
                 break;
@@ -794,7 +812,7 @@ fn render_job(
     );
     let scenes: Vec<Scene> = frames
         .iter()
-        .map(|frame| evaluate(project, *frame))
+        .map(|frame| evaluate_seen(project, *frame))
         .collect();
     let mut requests = Vec::new();
     let mut layers = Vec::new();
@@ -1671,7 +1689,7 @@ fn planner(
         if cancel.load(Ordering::Acquire) {
             break;
         }
-        let scene = evaluate(project, frame);
+        let scene = evaluate_seen(project, frame);
         let mut decodes = Vec::new();
         let mut present = HashSet::new();
         for layer in &scene.layers {
@@ -2172,6 +2190,178 @@ mod tests {
                 (loudest as i64 - 4800).abs() < 96,
                 "cut {index}: click at {loudest} samples, expected 4800"
             );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A 2 s 30 fps 64×36 grey source whose frame n is lit 16 + 3n (flat, so
+    /// nearly lossless; not lossless, which AVFoundation can't decode),
+    /// so every decoded picture says which frame it is.
+    fn frame_counter(dir: &Path) -> PathBuf {
+        let path = dir.join("counter.mp4");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("color=c=black:size=64x36:rate=30:duration=2,format=yuv420p,geq=lum='16+3*N':cb=128:cr=128")
+            .args(["-c:v", "libx264", "-qp", "4", "-g", "10", "-bf", "0"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        path
+    }
+
+    /// Which frame of [`frame_counter`] a decoded RGBA picture is.
+    fn counted(frame: &[u8]) -> i64 {
+        // Limited-range grey 16 + 3n is full-range 3n × 255 / 219.
+        (f64::from(frame[0]) * 219.0 / 255.0 / 3.0).round() as i64
+    }
+
+    /// FFmpeg's reader (cloud originals, URL sources) shows the frame nearest
+    /// the time asked, as the preview and the native reader do, whether it
+    /// starts there or reads on to it.
+    #[test]
+    fn ffmpeg_reader_picks_the_nearest_frame() {
+        let dir = temp_dir("nearest");
+        let path = frame_counter(&dir);
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "m", "path": path, "kind": "video",
+            "duration": 2.0, "width": 64, "height": 36, "fps": 30
+        }))
+        .unwrap();
+        let source = Source::new(&media, path.clone(), (64, 36), Order::Rgba);
+        let reader = || {
+            #[allow(unused_mut)]
+            let mut reader = VideoReader::open(source.clone());
+            #[cfg(target_os = "macos")]
+            {
+                reader.native_failed = true;
+            }
+            reader
+        };
+        // Fresh readers, each started in the first or second half of a frame.
+        for n in [0_i64, 1, 7, 15, 31, 44, 58] {
+            for offset in [-0.45, -0.2, 0.0, 0.2, 0.45] {
+                let time = ((n as f64 + offset) / 30.0).max(0.0);
+                let mut fresh = reader();
+                let got = counted(fresh.frame_at(time).unwrap());
+                assert_eq!(got, n, "started at {time:.4} s (frame {n} {offset:+})");
+            }
+        }
+        // One reader reading on, a frame at a time and skipping, at times in
+        // either half of a frame; then back.
+        let mut on = reader();
+        let mut times = vec![];
+        for n in 3..40 {
+            times.push((n, (n as f64 + if n % 2 == 0 { -0.3 } else { 0.3 }) / 30.0));
+        }
+        for n in [42, 47, 55, 12, 13] {
+            times.push((n, (n as f64 - 0.4) / 30.0));
+        }
+        for (n, time) in times {
+            assert_eq!(counted(on.frame_at(time).unwrap()), n, "at {time:.4} s");
+        }
+        // The native reader picks the same frames.
+        #[cfg(target_os = "macos")]
+        {
+            let mut native = crate::mac_media::Reader::open(&path, 64, 36).unwrap();
+            let mut frame = vec![0_u8; 64 * 36 * 4];
+            for n in [0_i64, 7, 8, 9, 31, 44] {
+                for offset in [-0.3, 0.3] {
+                    let time = ((n as f64 + offset) / 30.0).max(0.0);
+                    native.frame(time, &mut frame, Order::Rgba, false).unwrap();
+                    assert_eq!(counted(&frame), n, "native at {time:.4}");
+                }
+            }
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Times a 1080p export of footage wholly under full-frame B-roll (the
+    /// footage isn't seen, so it isn't decoded). Ignored: a measurement.
+    /// `cargo test -p edit-engine --release covered_footage -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_export_of_covered_footage() {
+        // The export's own account of where the time went.
+        struct Print;
+        impl crate::log::Sink for Print {
+            fn log(&self, _: crate::log::Level, area: &str, message: String) {
+                if area == "export" {
+                    println!("  {message}");
+                }
+            }
+            fn record(&self, _: &str, _: &str, _: Duration, _: Option<&str>) {}
+        }
+        crate::log::use_sink(Box::new(Print));
+        let dir = temp_dir("covered");
+        let make = |name: &str, pattern: &str| {
+            let path = dir.join(name);
+            let made = Command::new(crate::util::ffmpeg())
+                .args(["-v", "error", "-f", "lavfi", "-i"])
+                .arg(format!("{pattern}=size=1920x1080:rate=30:duration=20"))
+                .args([
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "-g",
+                    "60",
+                    "-pix_fmt",
+                    "yuv420p",
+                ])
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(made.success());
+            path
+        };
+        let footage = make("footage.mp4", "testsrc2");
+        let broll = make("broll.mp4", "testsrc");
+        let project = |covered: bool| -> Project {
+            let mut clips = vec![
+                json!({"id": "b", "track": "v2", "type": "video", "media": "b",
+                "source_in": 0.0, "start": 0, "duration": 600}),
+            ];
+            if covered {
+                clips.push(
+                    json!({"id": "f", "track": "v1", "type": "video", "media": "f",
+                    "source_in": 0.0, "start": 0, "duration": 600}),
+                );
+            }
+            serde_json::from_value(json!({
+                "version": 1, "id": "p", "name": "t",
+                "settings": {"width": 1920, "height": 1080, "fps": 30},
+                "media": [
+                    {"id": "f", "name": "footage", "path": footage, "kind": "video", "duration": 20.0, "width": 1920, "height": 1080, "fps": 30, "has_audio": false},
+                    {"id": "b", "name": "broll", "path": broll, "kind": "video", "duration": 20.0, "width": 1920, "height": 1080, "fps": 30, "has_audio": false}
+                ],
+                "tracks": [{"id": "v1", "kind": "video"}, {"id": "v2", "kind": "video"}],
+                "clips": clips,
+            }))
+            .unwrap()
+        };
+        // Twice each, alternating: the first export also warms the GPU up.
+        for (label, covered) in [
+            ("B-roll alone", false),
+            ("B-roll over footage", true),
+            ("B-roll alone", false),
+            ("B-roll over footage", true),
+        ] {
+            let project = project(covered);
+            let options = ExportOptions::default();
+            let plan = crate::export::plan(&options, &project, false).unwrap();
+            let started = Instant::now();
+            export(
+                &project,
+                &options,
+                &plan,
+                &dir.join("out.mp4"),
+                &dir,
+                &AtomicBool::new(false),
+                |_| {},
+            )
+            .unwrap();
+            println!("{label}: 600 frames in {:.2?}", started.elapsed());
         }
         std::fs::remove_dir_all(dir).ok();
     }

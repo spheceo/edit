@@ -3,6 +3,7 @@
 
 pub mod text;
 
+use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -217,6 +218,11 @@ pub struct Renderer {
     /// Sound levels by media id: one byte (peak, 0..255) per 1/PEAKS_PER_SECOND s.
     peaks: HashMap<String, Vec<u8>>,
     frame_counter: u64,
+    /// Bind groups by the texture view they bind, kept while it's drawn
+    /// (a frame binds the same few views dozens of times: the accumulators,
+    /// the blank, each video's and text's texture) and made again for a new
+    /// uniform buffer. With the frame each was last used in.
+    binds: RefCell<HashMap<wgpu::TextureView, (wgpu::BindGroup, u64)>>,
 }
 
 /// Resolution of the sound levels a waveform reads (as the media cache's peaks.bin).
@@ -466,6 +472,7 @@ impl Renderer {
             glyphs: GlyphCache::default(),
             peaks: HashMap::new(),
             frame_counter: 0,
+            binds: RefCell::default(),
         }
     }
 
@@ -649,6 +656,12 @@ impl Renderer {
             self.resize(scene.width, scene.height);
         }
         self.frame_counter += 1;
+        // Bind groups of views not drawn last frame go (and the textures they
+        // hold with them).
+        let previous = self.frame_counter - 1;
+        self.binds
+            .get_mut()
+            .retain(|_, (_, used)| *used >= previous);
         // Text with glow/shadow uses several slots. Reusing the last slot on
         // overflow makes earlier draws read another layer's final uniforms.
         let needed = (scene.layers.len() as u64 * 12 + 1).max(UNIFORM_SLOTS) * UNIFORM_SLOT;
@@ -659,6 +672,8 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            // Every bind group binds the uniforms: made again for the new buffer.
+            self.binds.get_mut().clear();
         }
         let half_canvas = [self.width as f32 / 2.0, self.height as f32 / 2.0];
         let mut encoder = self
@@ -872,6 +887,10 @@ impl Renderer {
                             });
                     let opacity = &(*opacity * shown);
                     let local_frame = &words_frame;
+                    // A fade-in is the words' opacity rather than a new raster
+                    // every frame; the box behind them doesn't fade.
+                    let words_opacity =
+                        *opacity * text_fade(animation, *local_frame, style).unwrap_or(1.0);
                     if !self.prepare_text(
                         &mut encoder,
                         &mut slots,
@@ -1129,7 +1148,7 @@ impl Renderer {
                                 &moved,
                                 slot.size,
                                 half_canvas,
-                                *opacity,
+                                words_opacity,
                                 tint,
                                 MODE_SHADOW,
                             );
@@ -1163,7 +1182,7 @@ impl Renderer {
                         clip,
                         &placed,
                         glow,
-                        *opacity,
+                        words_opacity,
                         false,
                     );
                 }
@@ -1464,6 +1483,12 @@ impl Renderer {
             (shadow.distance + shadow.size + shadow.blur * 1.5) * scale
         });
         let pad = glow_radius * 2.0 + shadow_reach + px * 0.5 + 2.0;
+        // A fade drawn as the words' opacity is rasterized once, whole.
+        let local_frame = if text_fade(animation, local_frame, style).is_some() {
+            animation.duration.max(1.0)
+        } else {
+            local_frame
+        };
         let animating = text_animating(animation, local_frame, text);
         // Blur passes: glow close & wide (CSS text-shadow radii r/2 and r, i.e.
         // sigma r/4 and r/2), then the shadow (grown by `size`, blurred by `blur`).
@@ -1498,7 +1523,14 @@ impl Renderer {
         shown_glyphs.hash(&mut hasher);
         format!("{:?}", style.label).hash(&mut hasher);
         if animating {
-            local_frame.to_bits().hash(&mut hasher);
+            match animation.preset {
+                // Glyphs appear whole one after another: the same picture
+                // until the next one does.
+                edit_core::TextPreset::Typewriter => {
+                    typed_glyphs(animation, local_frame).hash(&mut hasher);
+                }
+                _ => local_frame.to_bits().hash(&mut hasher),
+            }
         }
         let key = hasher.finish();
         let glow_key = {
@@ -1989,7 +2021,20 @@ impl Renderer {
         );
     }
 
+    /// The bind group for drawing from `view` (with the uniforms and the
+    /// sampler), made once and reused while the view is drawn.
     fn bind(&self, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        let mut binds = self.binds.borrow_mut();
+        if let Some((group, used)) = binds.get_mut(view) {
+            *used = self.frame_counter;
+            return group.clone();
+        }
+        let group = self.make_bind(view);
+        binds.insert(view.clone(), (group.clone(), self.frame_counter));
+        group
+    }
+
+    fn make_bind(&self, view: &wgpu::TextureView) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.layer_layout,
@@ -2028,6 +2073,49 @@ impl Renderer {
         );
         self.present_pipelines.insert(format, pipeline.clone());
         pipeline
+    }
+}
+
+/// A Fade's progress at `local_frame`, when it's drawn as the words' opacity
+/// (the same as fading each glyph: `glyph_reveal`'s Fade is one alpha for all
+/// of them, and the glow and the text scale with it), so the text is
+/// rasterized once rather than every frame of the fade. Not for a labelled
+/// text: its label shares the raster and doesn't fade.
+fn text_fade(
+    animation: &edit_core::TextAnimation,
+    local_frame: f32,
+    style: &edit_core::TextStyle,
+) -> Option<f32> {
+    (animation.preset == edit_core::TextPreset::Fade && style.label.is_none())
+        .then(|| glyph_reveal_alpha(animation, local_frame))
+}
+
+fn glyph_reveal_alpha(animation: &edit_core::TextAnimation, local_frame: f32) -> f32 {
+    edit_core::glyph_reveal(animation, local_frame, 0, 0.0).0
+}
+
+/// How many glyphs a Typewriter shows at `local_frame` (`glyph_reveal`'s:
+/// glyph i from `stagger * i`), the most there could be past the end.
+fn typed_glyphs(animation: &edit_core::TextAnimation, local_frame: f32) -> usize {
+    let stagger = animation.stagger.max(0.0);
+    if local_frame < 0.0 {
+        0
+    } else if stagger <= 0.0 {
+        usize::MAX
+    } else {
+        // Glyph i shows once `stagger * i <= local_frame`, worked out the same
+        // way here so the count changes on exactly the frames the picture does.
+        let shows = |index: usize| stagger * index as f32 <= local_frame;
+        // Capped well past any text's length.
+        const MOST: usize = 1 << 24;
+        let mut last = ((local_frame / stagger).floor().max(0.0) as usize).min(MOST);
+        while last < MOST && shows(last + 1) {
+            last += 1;
+        }
+        while last > 0 && !shows(last) {
+            last -= 1;
+        }
+        last + 1
     }
 }
 

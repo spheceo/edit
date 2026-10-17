@@ -108,13 +108,26 @@ fn look(
         let mut out = Vec::with_capacity(part.len());
         for &index in part {
             let time = index as f64 / RATE;
-            if reader
-                .frame(time, &mut bgra, crate::render::Order::Bgra, false)
-                .is_err()
-            {
-                // Past the end: nothing to see there.
-                out.push((index, Vec::new()));
-                continue;
+            // The reader holds its last picture past the end, so a failure is
+            // real: tried once more on a fresh reader, else the whole look
+            // fails rather than caching "no faces" for good.
+            if let Err(error) = reader.frame(time, &mut bgra, crate::render::Order::Bgra, false) {
+                crate::log::warn(
+                    "faces",
+                    format!(
+                        "reading {} at {time:.2}s: {error}; opening it again",
+                        decode.display()
+                    ),
+                );
+                reader = crate::mac_media::Reader::open(&decode, wide, high)?;
+                reader
+                    .frame(time, &mut bgra, crate::render::Order::Bgra, false)
+                    .map_err(|error| {
+                        format!(
+                            "couldn't read {} at {time:.2}s to find faces: {error}",
+                            decode.display()
+                        )
+                    })?;
             }
             let faces = crate::mac_media::faces(&bgra, wide, high)?
                 .into_iter()

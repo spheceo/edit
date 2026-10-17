@@ -417,6 +417,8 @@ async fn swap_in_smooth(
         Ok(json!({"clip":rendered.id, "media":smooth, "seconds":clip.duration as f64 / fps}))
     })?;
     app.media.ensure(out.to_owned(), probe);
+    // A cloud project's copy of it goes up in the background.
+    crate::cloud_media::backfill_soon(app, project_id);
     Ok(done)
 }
 
@@ -895,7 +897,7 @@ fn maps_rendering(project_id: &str) -> bool {
 }
 
 /// Whether a media file is a moving map shot's first frame standing in for it.
-fn is_map_stand_in(path: &str) -> bool {
+pub fn is_map_stand_in(path: &str) -> bool {
     Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -1392,6 +1394,8 @@ async fn swap_media(app: &App, project_id: &str, first: &Path, out: &Path) -> Re
     })?;
     if replaced {
         app.media.ensure(PathBuf::from(&out_path), probe);
+        // The footage (never the stand-in) goes up for a cloud project.
+        crate::cloud_media::backfill_soon(app, project_id);
     }
     Ok(())
 }

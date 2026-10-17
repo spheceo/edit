@@ -18,6 +18,8 @@ export interface CloudStatus {
   rev?: number;
   dirty?: boolean;
   message?: string | null;
+  /** Files the edit uses that are neither on this machine nor in the cloud, in a sentence naming them. */
+  missing?: string | null;
 }
 
 /** Settings → Cloud. */
@@ -87,6 +89,9 @@ export const readOnly = (status: CloudStatus | null | undefined) => status?.lock
 /** What the top bar says about a project's sync, or null when there's nothing to say. */
 export function syncLabel(status: CloudStatus | null | undefined): { text: string; tone: "ok" | "busy" | "warn" | "bad" } | null {
   if (!status?.cloud || !status.on) return null;
+  if (status.missing && (status.sync === "synced" || status.sync === "pending" || status.sync === "syncing")) {
+    return { text: "Files missing", tone: "bad" };
+  }
   switch (status.sync) {
     case "synced":
       return { text: "Saved to cloud", tone: "ok" };

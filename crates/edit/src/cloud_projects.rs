@@ -168,6 +168,9 @@ pub struct Entry {
     /// UI clients with it open, and when they last said so.
     viewers: HashMap<String, Instant>,
     note: Option<Note>,
+    /// Media the project uses that are neither on this machine nor in the
+    /// cloud (`cloud_media::ensure_local`), said in a sentence naming them.
+    missing: Option<String>,
 }
 
 impl Entry {
@@ -195,6 +198,7 @@ impl Entry {
             want_media: false,
             viewers: HashMap::new(),
             note: None,
+            missing: None,
         }
     }
 
@@ -396,6 +400,7 @@ impl Entry {
             "rev": self.saved.rev,
             "dirty": self.saved.dirty,
             "message": message,
+            "missing": self.missing,
         })
     }
 }
@@ -494,6 +499,20 @@ impl Cloud {
             .and_then(|bytes| write_private(&dir.join(STATE), &bytes));
         if let Err(error) = result {
             crate::diag::warn("cloud", format!("saving cloud/{STATE}: {error}"));
+        }
+    }
+
+    /// What `cloud_media::ensure_local` found missing (None: nothing).
+    pub fn set_missing(&self, store: &Store, id: &str, missing: Option<String>) {
+        let changed = self
+            .with(id, |entry| {
+                let changed = entry.missing != missing;
+                entry.missing = missing;
+                changed
+            })
+            .unwrap_or(false);
+        if changed {
+            self.emit(store, id);
         }
     }
 
@@ -1381,6 +1400,8 @@ async fn push(app: &App, cloud: &Arc<Cloud>, id: &str) -> Result<(), String> {
         Ok(rev) => {
             crate::diag::record("cloud", "cloud: push", started.elapsed(), None);
             cloud.with(id, |entry| entry.pushed(rev, edits));
+            // Whatever the edit uses that isn't in the cloud yet goes up.
+            crate::cloud_media::backfill_soon(app, id);
             Ok(())
         }
         Err(error) => failure(app, cloud, id, error).await,
@@ -1485,6 +1506,7 @@ pub async fn open(app: &App, id: &str, client: &str) -> Result<Value, String> {
         cloud.persist();
         cloud.emit(&app.store, id);
     }
+    crate::cloud_media::backfill_soon(app, id);
     Ok(cloud.status(id))
 }
 
@@ -1554,8 +1576,8 @@ pub async fn take_over(app: &App, id: &str) -> Result<Value, String> {
     Ok(cloud.status(id))
 }
 
-/// Moves a project only on this machine to the cloud (its footage isn't
-/// moved by this).
+/// Moves a project only on this machine to the cloud; its media follow in
+/// the background after the first push (`cloud_media::backfill_soon`).
 pub async fn move_to_cloud(app: &App, id: &str) -> Result<Value, String> {
     let cloud = app.store.cloud().cloned().ok_or("cloud is off")?;
     if !cloud.on() {
@@ -1731,6 +1753,7 @@ pub fn routes() -> Router<App> {
         .route("/api/projects/{id}/cloud/close", post(post_close))
         .route("/api/projects/{id}/cloud/takeover", post(post_takeover))
         .route("/api/projects/{id}/cloud/upload", post(post_upload))
+        .route("/api/projects/{id}/cloud/backfill", post(post_backfill))
 }
 
 #[derive(Deserialize)]
@@ -1859,6 +1882,15 @@ async fn post_takeover(State(app): State<App>, UrlPath(id): UrlPath<String>) -> 
         .await
         .map(Json)
         .map_err(|error| refuse(StatusCode::CONFLICT, error))
+}
+
+/// Puts every media of a cloud project that isn't in the cloud yet there now
+/// (`cloud_media::backfill`); answers what went, what failed and what's missing.
+async fn post_backfill(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Reply {
+    crate::cloud_media::backfill(&app, &id)
+        .await
+        .map(Json)
+        .map_err(|error| refuse(StatusCode::BAD_REQUEST, error))
 }
 
 async fn post_upload(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Reply {

@@ -36,11 +36,13 @@
 //! Scratch files (an excerpt between cutting and uploading) live in
 //! `<cache>/cloud/tmp` and are removed when done or failed.
 
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 
 use edit_core::{ClipContent, CloudMedia, MediaKind, Project};
 use serde::Deserialize;
@@ -283,8 +285,7 @@ fn probe_url(url: &str) -> Result<Probe, String> {
 /// file at a time (two would write the same partial file); a second ask waits
 /// for the first and finds the file.
 fn fetch(key: &str, local: &Path) -> Result<(), String> {
-    use std::collections::HashMap;
-    use std::sync::{Arc, LazyLock, Weak};
+    use std::sync::Weak;
     static FETCHING: LazyLock<parking_lot::Mutex<HashMap<PathBuf, Weak<parking_lot::Mutex<()>>>>> =
         LazyLock::new(Default::default);
     let lock = {
@@ -391,6 +392,18 @@ fn publish(
 /// the cloud has it already), a sound or picture as the file itself. The file
 /// is never changed or removed.
 pub fn import_local(cache: &Path, path: &Path, probe: &Probe, name: &str) -> Result<Made, String> {
+    put_local(cache, path, probe, name, probe.kind != MediaKind::Video)
+}
+
+/// `import_local`; `own`: the file goes up as it is and is its own proxy
+/// (sounds, pictures, short renders Edit made), else it gets a proxy.
+fn put_local(
+    cache: &Path,
+    path: &Path,
+    probe: &Probe,
+    name: &str,
+    own: bool,
+) -> Result<Made, String> {
     let hex = sha256_file(path)?;
     let source = format!("sha256:{hex}");
     let size = std::fs::metadata(path).map_or(0, |meta| meta.len());
@@ -409,7 +422,7 @@ pub fn import_local(cache: &Path, path: &Path, probe: &Probe, name: &str) -> Res
         }))?;
     }
     let need_original = record.as_ref().and_then(Record::ready_original).is_none();
-    if probe.kind != MediaKind::Video {
+    if own {
         if need_original {
             cloud::upload_file(path, &original_key, &|_, _| {})?;
         }
@@ -809,32 +822,77 @@ fn excerpt_media(
 /// Makes every cloud media of project `id` playable here: fetches proxies this
 /// machine doesn't have yet and points their `path` at them. Called when a
 /// cloud project is opened (it may have been edited on another machine).
-/// Media whose file is here, or that aren't in the cloud, are left alone; a
-/// proxy already in this machine's cache isn't fetched again.
+/// Media whose file is here are left alone; a proxy already in this machine's
+/// cache isn't fetched again. The analysis other machines shared comes too
+/// (`fetch_analysis`). Media that are neither here nor in the cloud (made on
+/// a machine that hasn't backfilled them yet) are named in the error and in
+/// the project's cloud status (`missing`), never silently left out.
 pub async fn ensure_local(app: &App, id: &str) -> Result<(), String> {
+    let fetched = fetch_proxies(app, id).await;
+    fetch_analysis(app, id).await;
+    let stranded = app
+        .store
+        .get(id)
+        .map(|live| stranded(&live.project))
+        .unwrap_or_default();
+    let missing = (!stranded.is_empty()).then(|| {
+        format!(
+            "{} {} on this machine and not in the cloud ({}): open the project on the machine that made {} so {} upload{}",
+            stranded.len(),
+            if stranded.len() == 1 { "file isn't" } else { "files aren't" },
+            stranded.join(", "),
+            if stranded.len() == 1 { "it" } else { "them" },
+            if stranded.len() == 1 { "it" } else { "they" },
+            if stranded.len() == 1 { "s" } else { "" },
+        )
+    });
+    if let Some(cloud) = app.store.cloud() {
+        cloud.set_missing(&app.store, id, missing.clone());
+    }
+    match (fetched, missing) {
+        (Ok(()), None) => Ok(()),
+        (Ok(()), Some(missing)) => {
+            crate::diag::warn("cloud", format!("{id}: {missing}"));
+            Err(missing)
+        }
+        (Err(error), None) => Err(error),
+        (Err(error), Some(missing)) => {
+            crate::diag::warn("cloud", format!("{id}: {missing}"));
+            Err(format!("{error}; {missing}"))
+        }
+    }
+}
+
+/// Fetches the proxies of `id`'s cloud media that aren't here (`ensure_local`).
+async fn fetch_proxies(app: &App, id: &str) -> Result<(), String> {
     let live = app.store.get(id).ok_or("no such project")?;
     let cache = app.store.cache_dir();
-    // Media whose file isn't here: (media id, source, proxy key if known).
-    let missing: Vec<(String, String, Option<String>)> = live
+    // Media whose file isn't here: (media id, name, source, proxy key if known).
+    let missing: Vec<(String, String, String, Option<String>)> = live
         .project
         .media
         .iter()
         .filter(|media| !Path::new(&media.path).is_file())
         .filter_map(|media| {
             let cloud = media.cloud.as_ref()?;
-            Some((media.id.clone(), cloud.source.clone(), cloud.proxy.clone()))
+            Some((
+                media.id.clone(),
+                media.name.clone(),
+                cloud.source.clone(),
+                cloud.proxy.clone(),
+            ))
         })
         .collect();
     if missing.is_empty() {
         return Ok(());
     }
     let enabled = cloud::enabled();
-    let jobs = tokio::task::spawn_blocking(move || {
+    let (jobs, unready) = tokio::task::spawn_blocking(move || {
         // A proxy another machine finished after this project was saved.
         let unknown: Vec<String> = missing
             .iter()
-            .filter(|(_, _, proxy)| proxy.is_none())
-            .map(|(_, source, _)| source.clone())
+            .filter(|(_, _, _, proxy)| proxy.is_none())
+            .map(|(_, _, source, _)| source.clone())
             .collect();
         let records = if enabled && !unknown.is_empty() {
             list_records(&unknown).unwrap_or_else(|error| {
@@ -844,20 +902,26 @@ pub async fn ensure_local(app: &App, id: &str) -> Result<(), String> {
         } else {
             Vec::new()
         };
+        // A media whose upload another machine hasn't finished has no proxy yet.
+        let mut unready = Vec::new();
         let jobs: Vec<(String, String, PathBuf)> = missing
             .into_iter()
-            .filter_map(|(media, source, proxy)| {
-                let key = proxy.or_else(|| {
-                    records
-                        .iter()
-                        .find(|record| record.source == source)
-                        .and_then(Record::ready_proxy)
-                        .map(str::to_owned)
-                })?;
-                cloud::valid_key(&key).then(|| {
-                    let local = local_path(&cache, &key);
-                    (media, key, local)
-                })
+            .filter_map(|(media, name, source, proxy)| {
+                let key = proxy
+                    .or_else(|| {
+                        records
+                            .iter()
+                            .find(|record| record.source == source)
+                            .and_then(Record::ready_proxy)
+                            .map(str::to_owned)
+                    })
+                    .filter(|key| cloud::valid_key(key));
+                let Some(key) = key else {
+                    unready.push(name);
+                    return None;
+                };
+                let local = local_path(&cache, &key);
+                Some((media, key, local))
             })
             .collect();
         // Three at a time; the ones already in this machine's cache cost nothing.
@@ -891,11 +955,17 @@ pub async fn ensure_local(app: &App, id: &str) -> Result<(), String> {
                 })
             })
             .collect();
-        results
+        (results, unready)
     })
     .await
     .map_err(|error| error.to_string())?;
     let mut errors = Vec::new();
+    if !unready.is_empty() {
+        errors.push(format!(
+            "still uploading from another machine: {}",
+            unready.join(", ")
+        ));
+    }
     let mut found = Vec::new();
     for result in jobs {
         match result {
@@ -944,25 +1014,15 @@ pub async fn ensure_local(app: &App, id: &str) -> Result<(), String> {
         // Previews, thumbnails and waveforms for the files now here.
         for (media_id, _, _) in &found {
             if let Some(media) = live.project.media(media_id) {
-                app.media.ensure(
-                    PathBuf::from(&media.path),
-                    Probe {
-                        kind: media.kind,
-                        duration: media.duration,
-                        width: media.width,
-                        height: media.height,
-                        fps: media.fps,
-                        has_audio: media.has_audio,
-                    },
-                );
+                app.media
+                    .ensure(PathBuf::from(&media.path), probe_of(media));
             }
         }
     }
     if !errors.is_empty() {
         crate::diag::warn("cloud", format!("{id}: {}", errors.join("; ")));
         return Err(format!(
-            "{} of the project's files couldn't be fetched: {}",
-            errors.len(),
+            "some of the project's files couldn't be fetched: {}",
             errors.join("; ")
         ));
     }
@@ -1023,11 +1083,18 @@ pub fn for_export(
     let mut out = project.clone();
     let mut originals = Originals::default();
     let mut needed: Vec<(String, String, u64)> = Vec::new();
+    // In an edit with cloud media, one that's neither here nor in the cloud
+    // was made on another machine that hasn't uploaded it: say so.
+    let cloud_edit = project.media.iter().any(|media| media.cloud.is_some());
+    let mut stranded = Vec::new();
     for media_id in used_media(project, start, end) {
         let Some(media) = project.media(&media_id) else {
             continue;
         };
         let Some(cloud) = &media.cloud else {
+            if cloud_edit && !Path::new(&media.path).is_file() {
+                stranded.push(media.name.clone());
+            }
             continue;
         };
         let own = cloud.proxy.as_deref() == Some(cloud.original.as_str());
@@ -1035,6 +1102,12 @@ pub fn for_export(
             continue;
         }
         needed.push((media_id, cloud.original.clone(), cloud.size));
+    }
+    if !stranded.is_empty() {
+        return Err(format!(
+            "the edit uses files that aren't on this machine or in the cloud ({}): open the project on the machine that made them so they upload, then export again",
+            stranded.join(", ")
+        ));
     }
     let set_path = |out: &mut Project, media_id: &str, path: String| {
         if let Some(media) = out.media.iter_mut().find(|media| media.id == media_id) {
@@ -1083,9 +1156,511 @@ pub fn for_export(
     Ok((out, originals))
 }
 
+// ---------------------------------------------------------------------------
+// Everything else a cloud project uses: the backfill.
+
+/// A video Edit made up to this size goes up as it is and is its own proxy
+/// (a smoothed shot, a map render); bigger is footage and gets a proxy.
+const OWN_FILE_MAX: u64 = 256 << 20;
+
+/// A file that failed to go up isn't tried again for this long (unless asked),
+/// and a media's shared analysis isn't looked for again sooner.
+const RETRY_AFTER: Duration = Duration::from_secs(600);
+
+/// Puts a file Edit made itself (or one that never went up) in the cloud, as
+/// `import_local` does an added file: deduplicated by content; a sound,
+/// picture or short render as the file itself, footage-sized video with a
+/// proxy (then `Made::path` is the proxy).
+pub fn upload_made(cache: &Path, path: &Path, probe: &Probe, name: &str) -> Result<Made, String> {
+    let own = probe.kind != MediaKind::Video
+        || std::fs::metadata(path).is_ok_and(|meta| meta.len() <= OWN_FILE_MAX);
+    put_local(cache, path, probe, name, own)
+}
+
+fn probe_of(media: &edit_core::Media) -> Probe {
+    Probe {
+        kind: media.kind,
+        duration: media.duration,
+        width: media.width,
+        height: media.height,
+        fps: media.fps,
+        has_audio: media.has_audio,
+    }
+}
+
+/// Whether `id` is a cloud project on this machine (and cloud is on).
+fn cloud_project(app: &App, id: &str) -> bool {
+    cloud::enabled() && app.store.cloud().is_some_and(|cloud| cloud.is_cloud(id))
+}
+
+#[derive(Default)]
+struct Backfills {
+    /// Projects waiting for a backfill (one runs at a time, for every project).
+    queued: HashSet<String>,
+    /// Files that failed to go up, and when.
+    failed: HashMap<String, Instant>,
+}
+
+fn backfills() -> &'static parking_lot::Mutex<Backfills> {
+    static STATE: LazyLock<parking_lot::Mutex<Backfills>> = LazyLock::new(Default::default);
+    &STATE
+}
+
+/// One backfill at a time: uploads are big and the network is shared.
+fn backfill_slot() -> &'static tokio::sync::Mutex<()> {
+    static SLOT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    &SLOT
+}
+
+/// Starts a backfill of cloud project `id` in the background (one waiting
+/// per project is enough: it reads the project when it starts). Called after
+/// every push, on opening, and wherever Edit makes media itself (smoothed
+/// shots, map renders), so whatever a cloud project uses ends up in the
+/// cloud. Nothing happens for a project only on this machine.
+pub fn backfill_soon(app: &App, id: &str) {
+    if !cloud_project(app, id) || !backfills().lock().queued.insert(id.to_owned()) {
+        return;
+    }
+    let (app, id) = (app.clone(), id.to_owned());
+    tokio::spawn(async move {
+        let _slot = backfill_slot().lock().await;
+        backfills().lock().queued.remove(&id);
+        if let Err(error) = backfill_now(&app, &id, false).await {
+            crate::diag::warn("cloud", format!("backfill {id}: {error}"));
+        }
+    });
+}
+
+/// `POST /api/projects/{id}/cloud/backfill` (`edit cloud backfill <id>`): a
+/// backfill now, failed files tried again; answers what it did.
+pub async fn backfill(app: &App, id: &str) -> Result<Value, String> {
+    if app.store.get(id).is_none() {
+        return Err("no such project".to_owned());
+    }
+    if !cloud::enabled() {
+        return Err("cloud is off here (Settings → Cloud)".to_owned());
+    }
+    if !cloud_project(app, id) {
+        return Err("this isn't a cloud project (Move to cloud first)".to_owned());
+    }
+    let _slot = backfill_slot().lock().await;
+    backfill_now(app, id, true).await
+}
+
+/// Uploads every media of cloud project `id` that has no cloud copy but whose
+/// file is here (made by Edit, added while cloud was off, an upload that
+/// failed), and shares the media's analysis (`share_analysis`). A map shot's
+/// first frame standing in for it waits for the footage. Saved one media at a
+/// time, so a long backfill keeps what it has done.
+async fn backfill_now(app: &App, id: &str, retry_failed: bool) -> Result<Value, String> {
+    let live = app.store.get(id).ok_or("no such project")?;
+    let now = Instant::now();
+    let mut skipped = Vec::new();
+    let todo: Vec<(String, PathBuf, Probe, String)> = {
+        let mut state = backfills().lock();
+        state
+            .failed
+            .retain(|_, at| now.saturating_duration_since(*at) < RETRY_AFTER);
+        live.project
+            .media
+            .iter()
+            .filter(|media| media.cloud.is_none() && Path::new(&media.path).is_file())
+            .filter(|media| {
+                if crate::broll::is_map_stand_in(&media.path) {
+                    skipped.push(format!("{} (a map still rendering)", media.name));
+                    return false;
+                }
+                retry_failed || !state.failed.contains_key(&media.path)
+            })
+            .map(|media| {
+                (
+                    media.id.clone(),
+                    PathBuf::from(&media.path),
+                    probe_of(media),
+                    media.name.clone(),
+                )
+            })
+            .collect()
+    };
+    let missing = stranded(&live.project);
+    if !todo.is_empty() {
+        // Someone else editing it: refused (their machine has their files).
+        let (store, task_id) = (Arc::clone(&app.store), id.to_owned());
+        tokio::task::spawn_blocking(move || match store.cloud() {
+            Some(cloud) => cloud.may_write(&store, &task_id),
+            None => Ok(()),
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+    }
+    let cache = app.store.cache_dir();
+    let mut uploaded = Vec::new();
+    let mut failed = Vec::new();
+    for (media_id, path, probe, name) in todo {
+        let task = (cache.clone(), path.clone(), probe.clone(), name.clone());
+        let made = tokio::task::spawn_blocking(move || {
+            let (cache, path, probe, name) = task;
+            crate::diag::time_on("cloud", "cloud: backfill", &path.to_string_lossy(), || {
+                upload_made(&cache, &path, &probe, &name)
+            })
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+        let made = match made {
+            Ok(made) => made,
+            Err(error) => {
+                backfills()
+                    .lock()
+                    .failed
+                    .insert(path.to_string_lossy().into_owned(), now);
+                failed.push(json!({ "media": media_id, "name": name, "error": scrub(&error) }));
+                continue;
+            }
+        };
+        let old_path = path.to_string_lossy().into_owned();
+        let new_path = made.path.to_string_lossy().into_owned();
+        let up = made.cloud.clone();
+        let (store, task_id, task_media) =
+            (Arc::clone(&app.store), id.to_owned(), media_id.clone());
+        let saved = tokio::task::spawn_blocking(move || {
+            let mut tries = 0;
+            loop {
+                tries += 1;
+                let result = store.update(&task_id, "cloud", |project| {
+                    // Only while it's still that file with no cloud copy.
+                    let Some(media) = project.media.iter_mut().find(|media| {
+                        media.id == task_media && media.path == old_path && media.cloud.is_none()
+                    }) else {
+                        return Ok(false);
+                    };
+                    media.path.clone_from(&new_path);
+                    media.cloud.clone_from(&up);
+                    Ok(true)
+                });
+                match result {
+                    Err(error) if tries < 3 && error.contains("retry") => continue,
+                    other => break other.map(|(_, changed)| changed),
+                }
+            }
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        match saved {
+            Ok(true) => {
+                if made.path != path {
+                    app.media.ensure(made.path.clone(), probe);
+                }
+                uploaded.push(json!({ "media": media_id, "name": name }));
+            }
+            Ok(false) => skipped.push(format!("{name} (changed meanwhile)")),
+            Err(error) => {
+                failed.push(json!({ "media": media_id, "name": name, "error": error }));
+                break;
+            }
+        }
+    }
+    if !uploaded.is_empty() || !failed.is_empty() {
+        crate::diag::info(
+            "cloud",
+            format!(
+                "{id}: backfill put {} media in the cloud, {} failed",
+                uploaded.len(),
+                failed.len()
+            ),
+        );
+    }
+    let shared = share_analysis(app, id).await;
+    Ok(json!({
+        "uploaded": uploaded,
+        "failed": failed,
+        "skipped": skipped,
+        "missing": missing,
+        "analysis_shared": shared,
+    }))
+}
+
+/// Media of `project` that aren't on this machine and have no cloud copy:
+/// only the machine that made them has them.
+pub fn stranded(project: &Project) -> Vec<String> {
+    project
+        .media
+        .iter()
+        .filter(|media| media.cloud.is_none() && !Path::new(&media.path).is_file())
+        .map(|media| media.name.clone())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Analysis that costs money to redo, shared beside the media.
+
+/// Files of a media's cache dir another machine reuses rather than paying for
+/// again: its transcript, the faces and seats found in it, the watcher's
+/// answers (`watch/<hash>.json`). Under `edit/analysis/<source path>/<file>`.
+const ANALYSIS: [&str; 3] = ["transcript.json", "faces-v1.json", "seats-v2.json"];
+/// What went up from (or came down to) a cache dir: file → size and mtime,
+/// so each version goes once.
+const SHARED: &str = "cloud-shared.json";
+
+/// `edit/analysis/drive/<id>[/<s>-<e>]/` or `edit/analysis/sha256/<hex>/`.
+fn analysis_prefix(source: &str) -> Option<String> {
+    let proxy = proxy_key(source)?;
+    let rest = proxy.strip_prefix("edit/proxies/")?.strip_suffix(".mp4")?;
+    Some(format!("edit/analysis/{rest}/"))
+}
+
+/// Whether `name` (relative to a media's cache dir) is shared analysis.
+fn is_analysis(name: &str) -> bool {
+    ANALYSIS.contains(&name)
+        || name.strip_prefix("watch/").is_some_and(|file| {
+            file.ends_with(".json")
+                && !file.starts_with('.')
+                && file
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        })
+}
+
+/// The shared analysis in a media's cache dir: (name, file).
+fn analysis_files(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut files: Vec<(String, PathBuf)> = ANALYSIS
+        .iter()
+        .map(|name| ((*name).to_owned(), dir.join(name)))
+        .filter(|(_, path)| path.is_file())
+        .collect();
+    for entry in std::fs::read_dir(dir.join("watch"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let name = format!("watch/{}", entry.file_name().to_string_lossy());
+        if is_analysis(&name) && entry.path().is_file() {
+            files.push((name, entry.path()));
+        }
+    }
+    files
+}
+
+fn stamp(path: &Path) -> String {
+    let meta = std::fs::metadata(path).ok();
+    let modified = meta
+        .as_ref()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |at| at.as_millis());
+    format!("{}-{modified}", meta.map_or(0, |meta| meta.len()))
+}
+
+fn read_shared(dir: &Path) -> serde_json::Map<String, Value> {
+    std::fs::read(dir.join(SHARED))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn write_shared(dir: &Path, shared: &serde_json::Map<String, Value>) {
+    if let Ok(bytes) = serde_json::to_vec(shared) {
+        let _ = std::fs::write(dir.join(SHARED), bytes);
+    }
+}
+
+/// `id`'s cloud footage and sounds whose file is here: (source, cache dir).
+fn analysis_dirs(app: &App, id: &str) -> Vec<(String, PathBuf)> {
+    let Some(live) = app.store.get(id) else {
+        return Vec::new();
+    };
+    let cache = app.store.cache_dir();
+    live.project
+        .media
+        .iter()
+        .filter(|media| matches!(media.kind, MediaKind::Video | MediaKind::Audio))
+        .filter_map(|media| {
+            let cloud = media.cloud.as_ref()?;
+            let path = Path::new(&media.path);
+            path.is_file().then(|| {
+                (
+                    cloud.source.clone(),
+                    cache.join(crate::media::media_key(path)),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Uploads the analysis of `id`'s cloud media made here since it last went
+/// up. Returns how many files went.
+async fn share_analysis(app: &App, id: &str) -> usize {
+    let dirs = analysis_dirs(app, id);
+    tokio::task::spawn_blocking(move || {
+        let mut sent = 0;
+        for (source, dir) in dirs {
+            let Some(prefix) = analysis_prefix(&source) else {
+                continue;
+            };
+            let mut shared = read_shared(&dir);
+            let mut changed = false;
+            for (name, path) in analysis_files(&dir) {
+                let stamp = stamp(&path);
+                if shared.get(&name).and_then(Value::as_str) == Some(stamp.as_str()) {
+                    continue;
+                }
+                match cloud::upload_file(&path, &format!("{prefix}{name}"), &|_, _| {}) {
+                    Ok(()) => {
+                        shared.insert(name, Value::String(stamp));
+                        changed = true;
+                        sent += 1;
+                    }
+                    Err(error) => crate::diag::warn(
+                        "cloud",
+                        format!("sharing {name} of {source}: {}", scrub(&error)),
+                    ),
+                }
+            }
+            if changed {
+                write_shared(&dir, &shared);
+            }
+        }
+        sent
+    })
+    .await
+    .unwrap_or(0)
+}
+
+/// Fetches the analysis other machines shared for `id`'s cloud media into
+/// this machine's cache (what's here already is kept). Each source is looked
+/// up at most every ten minutes.
+async fn fetch_analysis(app: &App, id: &str) {
+    static CHECKED: LazyLock<parking_lot::Mutex<HashMap<String, Instant>>> =
+        LazyLock::new(Default::default);
+    if !cloud::enabled() {
+        return;
+    }
+    let now = Instant::now();
+    let dirs: Vec<(String, PathBuf)> = {
+        let mut checked = CHECKED.lock();
+        analysis_dirs(app, id)
+            .into_iter()
+            .filter(|(source, _)| {
+                let due = checked
+                    .get(source)
+                    .is_none_or(|at| now.saturating_duration_since(*at) >= RETRY_AFTER);
+                if due {
+                    checked.insert(source.clone(), now);
+                }
+                due
+            })
+            .collect()
+    };
+    if dirs.is_empty() {
+        return;
+    }
+    let fetched = tokio::task::spawn_blocking(move || {
+        dirs.chunks(PARALLEL)
+            .map(|batch| {
+                std::thread::scope(|scope| {
+                    let running: Vec<_> = batch
+                        .iter()
+                        .map(|(source, dir)| scope.spawn(move || fetch_analysis_of(source, dir)))
+                        .collect();
+                    running
+                        .into_iter()
+                        .map(|job| job.join().unwrap_or(0))
+                        .sum::<usize>()
+                })
+            })
+            .sum::<usize>()
+    })
+    .await
+    .unwrap_or(0);
+    if fetched > 0 {
+        crate::diag::info(
+            "cloud",
+            format!("{id}: {fetched} analysis files from the cloud"),
+        );
+    }
+}
+
+fn fetch_analysis_of(source: &str, dir: &Path) -> usize {
+    let Some(prefix) = analysis_prefix(source) else {
+        return 0;
+    };
+    let objects = match cloud::list(&prefix) {
+        Ok(objects) => objects,
+        Err(error) => {
+            crate::diag::warn("cloud", format!("listing {source}'s analysis: {error}"));
+            return 0;
+        }
+    };
+    let mut shared = read_shared(dir);
+    let mut fetched = 0;
+    for object in objects {
+        let Some(name) = object.key.strip_prefix(&prefix) else {
+            continue;
+        };
+        let local = dir.join(name);
+        if !is_analysis(name) || local.exists() {
+            continue;
+        }
+        if let Some(parent) = local.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match cloud::download(&object.key, &local, &|_, _| {}) {
+            Ok(()) => {
+                // Came from the cloud: nothing to send back.
+                shared.insert(name.to_owned(), Value::String(stamp(&local)));
+                fetched += 1;
+            }
+            Err(error) => crate::diag::warn(
+                "cloud",
+                format!("fetching {}: {}", object.key, scrub(&error)),
+            ),
+        }
+    }
+    if fetched > 0 {
+        write_shared(dir, &shared);
+    }
+    fetched
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analysis_sits_beside_the_source() {
+        assert_eq!(
+            analysis_prefix("sha256:abc").as_deref(),
+            Some("edit/analysis/sha256/abc/")
+        );
+        assert_eq!(
+            analysis_prefix("drive:F1#100-2000").as_deref(),
+            Some("edit/analysis/drive/F1/100-2000/")
+        );
+        assert!(is_analysis("transcript.json") && is_analysis("watch/7bc98.json"));
+        assert!(!is_analysis("preview.mp4") && !is_analysis("watch/../x.json"));
+        assert!(!is_analysis("watch/.hidden.json"));
+    }
+
+    #[test]
+    fn stranded_media_are_named() {
+        let mut project = Project::new(
+            "p".into(),
+            "t".into(),
+            edit_core::Settings {
+                width: 1920,
+                height: 1080,
+                fps: 30,
+            },
+        );
+        project.media.push(
+            serde_json::from_value(json!({"id": "m1", "name": "map-x.mp4",
+                "path": "/nowhere/map-x.mp4", "kind": "video", "duration": 5.0,
+                "width": 1920, "height": 1080}))
+            .unwrap(),
+        );
+        assert_eq!(stranded(&project), vec!["map-x.mp4".to_owned()]);
+        // No cloud media in it: an ordinary project, left to the export.
+        assert!(for_export(&project, 0, 150, &std::env::temp_dir()).is_ok());
+    }
 
     #[test]
     fn sources_name_their_proxies() {

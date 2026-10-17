@@ -5,7 +5,6 @@ mod agent;
 mod app;
 mod broll;
 mod captions;
-mod censor;
 mod cloud;
 mod cloud_media;
 mod cloud_projects;
@@ -15,21 +14,16 @@ mod diag;
 mod drive;
 mod edit_plan;
 mod edit_review;
-mod export;
+mod endpoints;
 mod faces;
 mod footage_search;
 mod graphics;
 mod guard;
 mod library;
-mod loudness;
-#[cfg(target_os = "macos")]
-mod mac_media;
 mod markers;
 mod mcp;
 mod media;
 mod media_drive;
-mod mix;
-mod motion;
 mod people;
 mod relay;
 mod render;
@@ -44,12 +38,14 @@ mod store;
 mod styles;
 mod subtitles;
 mod tools;
-mod track;
 mod transcribe;
 mod update;
 mod voice;
 mod voiceover;
 mod watch;
+
+// The engine's modules, by the names the server has always used.
+use edit_engine::{censor, export, loudness, track};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -96,6 +92,8 @@ ENV
 ";
 
 fn main() {
+    // The engine's log lines and timings join the server's.
+    edit_engine::log::use_sink(Box::new(diag::Engine));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| {
         args.iter()

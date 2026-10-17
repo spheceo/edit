@@ -8,6 +8,45 @@ wasm:
     cargo build -p edit-wasm --target wasm32-unknown-unknown --release
     wasm-bindgen --target web --out-dir apps/web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
 
+# TypeScript types from the Rust model and the engine's options (ts-rs) into
+# packages/edit-types/src/generated: run after changing edit-core's model or
+# the engine's export options, plans or probes, and commit the result.
+types:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="$PWD/packages/edit-types/src/generated"
+    rm -rf "$out"
+    TS_RS_EXPORT_DIR="$out" TS_RS_LARGE_INT=number \
+        cargo test -q -p edit-core -p edit-engine --features edit-core/ts,edit-engine/ts export_bindings >/dev/null
+    bun packages/edit-types/scripts/index.ts
+
+# The native addon (crates/edit-native/edit-native.node and its index.d.ts),
+# for the Bun server; `just native debug` for a quick unoptimised one.
+native profile="release":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd crates/edit-native
+    [ -d node_modules ] || bun install --frozen-lockfile
+    if [ "{{profile}}" = release ]; then bun run build; else bun run build:debug; fi
+
+# The native addon's smoke tests under Bun (builds it first; GPU tests skip
+# without one, or with EDIT_NO_GPU=1), and its types
+native-test: (native "debug")
+    cd crates/edit-native && bun test && bun run typecheck
+
+# The addon embedded in a `bun build --compile` binary, run from elsewhere
+# with the .node out of the way (what shipping it inside `edit` relies on)
+native-compiled: (native "debug")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$(mktemp -d)"
+    trap 'mv -f crates/edit-native/edit-native.node.away crates/edit-native/edit-native.node 2>/dev/null || true; rm -rf "$dir"' EXIT
+    bun build --compile crates/edit-native/test/compiled/main.ts --outfile "$dir/edit-compiled"
+    codesign -s - -f "$dir/edit-compiled"
+    mv crates/edit-native/edit-native.node crates/edit-native/edit-native.node.away
+    mkdir "$dir/home"
+    (cd "$dir" && ./edit-compiled "$dir/home")
+
 # Install the Bun workspace's dependencies (apps/*, packages/*; first run only)
 web-install:
     @if [ ! -d apps/web/node_modules ] || [ ! -d apps/server/node_modules ]; then bun install; fi
@@ -118,10 +157,16 @@ dev: wasm web-install
     bun run --cwd apps/web dev
 
 # Format, lint and test
-check:
+check: types
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
+    # The generated TS types are committed: they must match the Rust.
+    git diff --exit-code -- packages/edit-types
+    test -z "$(git status --porcelain -- packages/edit-types)"
+    just native-test
+    # So is the addon's index.d.ts (napi writes it as it builds).
+    git diff --exit-code -- crates/edit-native/index.d.ts
     cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
     bun run --cwd apps/web typecheck
     bun run --cwd apps/web test

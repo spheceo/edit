@@ -1,0 +1,23 @@
+{
+  "name": "@edit/native",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Edit's native addon (napi-rs): edit-engine and edit-core for the Bun server",
+  "main": "edit-native.node",
+  "types": "index.d.ts",
+  "napi": {
+    "binaryName": "edit-native",
+    "dtsHeaderFile": "dts-header.d.ts"
+  },
+  "scripts": {
+    "build": "napi build --release --dts index.d.ts && codesign -s - -f edit-native.node",
+    "build:debug": "napi build --dts index.d.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.8",
+    "@types/bun": "^1.3.0",
+    "typescript": "^7.0.2"
+  }
+}

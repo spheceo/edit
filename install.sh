@@ -7,6 +7,10 @@
 # puts it in ~/.local/bin (or $EDIT_INSTALL_DIR), with the FFmpeg it ships
 # with beside it (edit-ffmpeg, edit-ffprobe: they don't shadow your own). Later versions install themselves from
 # the editor (or `edit update`).
+#
+# A particular version (to pin one, or to go back to the one before):
+#
+#   curl -fsSL https://raw.githubusercontent.com/spheceo/edit/main/install.sh | EDIT_VERSION=v0.0.12 sh
 
 set -eu
 
@@ -24,12 +28,20 @@ case "$(uname -s)/$(uname -m)" in
 esac
 
 ARCHIVE="edit-$TARGET.tar.gz"
-BASE="https://github.com/$REPO/releases/latest/download"
+VERSION="${EDIT_VERSION:-}"
+case "$VERSION" in
+  "" | latest) BASE="https://github.com/$REPO/releases/latest/download" ;;
+  v*) BASE="https://github.com/$REPO/releases/download/$VERSION" ;;
+  *) BASE="https://github.com/$REPO/releases/download/v$VERSION" ;;
+esac
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "Installing Edit..."
-curl -fSL --retry 3 --progress-bar -o "$TMP/$ARCHIVE" "$BASE/$ARCHIVE"
+echo "Installing Edit${VERSION:+ $VERSION}..."
+if ! curl -fSL --retry 3 --progress-bar -o "$TMP/$ARCHIVE" "$BASE/$ARCHIVE"; then
+  [ -z "$VERSION" ] || echo "Is $VERSION a release? They're listed at https://github.com/$REPO/releases" >&2
+  exit 1
+fi
 curl -fsSL --retry 3 -o "$TMP/$ARCHIVE.sha256" "$BASE/$ARCHIVE.sha256"
 EXPECTED="$(cut -d' ' -f1 <"$TMP/$ARCHIVE.sha256")"
 ACTUAL="$(shasum -a 256 "$TMP/$ARCHIVE" | cut -d' ' -f1)"
@@ -38,14 +50,22 @@ if [ "$ACTUAL" != "$EXPECTED" ]; then
   exit 1
 fi
 
-mkdir -p "$PREFIX"
-tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
-for tool in edit edit-ffmpeg edit-ffprobe; do
-  # Older releases had no FFmpeg; Edit then uses the one on PATH.
-  [ -f "$TMP/$tool" ] || continue
-  chmod +x "$TMP/$tool"
-  mv "$TMP/$tool" "$PREFIX/$tool"
+mkdir -p "$PREFIX" "$TMP/unpacked"
+tar -xzf "$TMP/$ARCHIVE" -C "$TMP/unpacked"
+[ -f "$TMP/unpacked/edit" ] || { echo "The download has no edit in it." >&2; exit 1; }
+# Every program in the archive goes in (edit last). Older releases had no
+# FFmpeg; Edit then uses the one on PATH.
+for path in "$TMP"/unpacked/*; do
+  tool="$(basename "$path")"
+  [ -f "$path" ] && [ "$tool" != edit ] || continue
+  case "$tool" in
+    edit-ffmpeg | edit-ffprobe) chmod +x "$path" ;;
+    *) [ -x "$path" ] || continue ;;
+  esac
+  mv "$path" "$PREFIX/$tool"
 done
+chmod +x "$TMP/unpacked/edit"
+mv "$TMP/unpacked/edit" "$PREFIX/edit"
 
 echo
 echo "$("$PREFIX/edit" --version) is in $PREFIX/edit."

@@ -9,7 +9,8 @@ use std::collections::{HashMap, HashSet};
 use crate::model::{Clip, ClipContent, Keyframe, Project, ScriptBlock};
 
 /// What a ripple did.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Rippled {
     /// Frames the timeline got shorter by.
     pub frames: i64,

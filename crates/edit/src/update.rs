@@ -293,35 +293,78 @@ pub fn install(
             release.sha256
         ));
     }
-    let unpacked = Command::new("tar")
+    let unpacked = staged.join("unpacked");
+    std::fs::create_dir_all(&unpacked).map_err(|error| error.to_string())?;
+    let tar = Command::new("tar")
         .arg("-xzf")
         .arg(&archive)
         .arg("-C")
-        .arg(staged)
+        .arg(&unpacked)
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("tar: {error}"))?;
-    if !unpacked.status.success() {
+    if !tar.status.success() {
         return Err(format!(
             "could not unpack the update: {}",
-            String::from_utf8_lossy(&unpacked.stderr).trim()
+            String::from_utf8_lossy(&tar.stderr).trim()
         ));
     }
-    let binary = staged.join("edit");
-    if !binary.is_file() {
-        return Err("the update has no edit binary".to_owned());
-    }
-    // The FFmpeg shipped with it goes beside it first, so the new version finds its own.
-    for tool in ["edit-ffmpeg", "edit-ffprobe"] {
-        let shipped = staged.join(tool);
-        if shipped.is_file() {
-            swap_in(&shipped, tool)?;
-        }
-    }
-    let exe = swap_in(&binary, "edit")?;
+    // The binary that was started, not the `Edit` link the app runs as.
+    let running = crate::app::original_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|error| format!("could not find the running binary: {error}"))?;
+    let exe = swap_all(&unpacked, &running)?;
     let _ = std::fs::remove_dir_all(staged);
     progress(1.0);
     Ok(exe)
+}
+
+/// The programs in an unpacked release besides `edit`: every executable
+/// file at its top (and the FFmpeg it ships, whatever its mode), sorted.
+/// Whatever a later release adds (a window helper, an addon) is swapped in
+/// with the rest, so the archive's layout can change.
+fn programs(unpacked: &Path) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(unpacked).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if name == "edit" || name.starts_with('.') || !meta.is_file() {
+            continue;
+        }
+        #[cfg(unix)]
+        let executable = {
+            use std::os::unix::fs::PermissionsExt;
+            meta.permissions().mode() & 0o111 != 0
+        };
+        #[cfg(not(unix))]
+        let executable = true;
+        if executable || name == "edit-ffmpeg" || name == "edit-ffprobe" {
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Swaps every program in `unpacked` in beside `running`: the others first,
+/// so the new `edit` finds its own FFmpeg and helpers, then `edit` itself
+/// over `running`. Returns the binary to restart into.
+fn swap_all(unpacked: &Path, running: &Path) -> Result<PathBuf, String> {
+    let binary = unpacked.join("edit");
+    if !binary.is_file() {
+        return Err("the update has no edit binary".to_owned());
+    }
+    let dir = running.parent().ok_or("the running binary has no folder")?;
+    for name in programs(unpacked)? {
+        swap_in(&unpacked.join(&name), dir, &dir.join(&name), &name)?;
+    }
+    swap_in(&binary, dir, running, "edit")?;
+    Ok(running.to_path_buf())
 }
 
 /// Fetches `url` into `path` with curl, reporting 0–1 as the file grows.
@@ -381,21 +424,11 @@ fn sha256(path: &Path) -> Result<String, String> {
         .collect())
 }
 
-/// Replaces the running binary with `new`. The copy lands beside it first so
+/// Replaces `exe` (in `dir`) with `new`. The copy lands beside it first so
 /// the final rename is atomic (and works when ~/.edit is on another disk); a
 /// fresh file rather than an overwrite also keeps macOS's signature check happy.
-/// `name` is "edit" (the running binary) or a tool shipped beside it.
-fn swap_in(new: &Path, name: &str) -> Result<PathBuf, String> {
-    // The binary that was started, not the `Edit` link the app runs as.
-    let running = crate::app::original_exe()
-        .and_then(std::fs::canonicalize)
-        .map_err(|error| format!("could not find the running binary: {error}"))?;
-    let dir = running.parent().ok_or("the running binary has no folder")?;
-    let exe = if name == "edit" {
-        running.clone()
-    } else {
-        dir.join(name)
-    };
+/// `name` is "edit" (the running binary) or a program shipped beside it.
+fn swap_in(new: &Path, dir: &Path, exe: &Path, name: &str) -> Result<(), String> {
     let temp = dir.join(format!(".{name}-update"));
     let unwritable = |error: std::io::Error| {
         format!(
@@ -410,11 +443,11 @@ fn swap_in(new: &Path, name: &str) -> Result<PathBuf, String> {
         std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
             .map_err(unwritable)?;
     }
-    std::fs::rename(&temp, &exe).map_err(|error| {
+    std::fs::rename(&temp, exe).map_err(|error| {
         let _ = std::fs::remove_file(&temp);
         unwritable(error)
     })?;
-    Ok(exe)
+    Ok(())
 }
 
 /// Becomes `exe`, with the same arguments. Sockets are close-on-exec, so the
@@ -467,5 +500,55 @@ mod tests {
         assert!(!newer("0.0.9", "0.1.0"));
         assert!(!newer("0.2.0-beta", "0.1.0"));
         assert!(!newer("garbage", "0.1.0"));
+    }
+
+    /// Every program in the archive is swapped in, the edit binary last
+    /// over the running one; other files and anything hidden are left.
+    #[cfg(unix)]
+    #[test]
+    fn every_program_in_the_archive_is_swapped_in() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "edit-update-{}-{}",
+            std::process::id(),
+            crate::store::now_ms()
+        ));
+        let (unpacked, installed) = (root.join("unpacked"), root.join("bin"));
+        std::fs::create_dir_all(&unpacked).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        let write = |dir: &Path, name: &str, text: &str, mode: u32| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let running = installed.join("edit-installed-as");
+        write(&installed, "edit-installed-as", "old edit", 0o755);
+        write(&installed, "edit-ffmpeg", "old ffmpeg", 0o755);
+        write(&unpacked, "edit", "new edit", 0o755);
+        write(&unpacked, "edit-ffmpeg", "new ffmpeg", 0o644);
+        write(&unpacked, "edit-ffprobe", "new ffprobe", 0o755);
+        write(&unpacked, "edit-window", "new window", 0o755);
+        write(&unpacked, "README", "notes", 0o644);
+        write(&unpacked, ".hidden", "no", 0o755);
+        assert_eq!(
+            programs(&unpacked).unwrap(),
+            ["edit-ffmpeg", "edit-ffprobe", "edit-window"]
+        );
+        assert_eq!(swap_all(&unpacked, &running).unwrap(), running);
+        let read = |name: &str| std::fs::read_to_string(installed.join(name)).unwrap();
+        assert_eq!(read("edit-installed-as"), "new edit");
+        assert_eq!(read("edit-ffmpeg"), "new ffmpeg");
+        assert_eq!(read("edit-ffprobe"), "new ffprobe");
+        assert_eq!(read("edit-window"), "new window");
+        assert!(!installed.join("README").exists() && !installed.join(".hidden").exists());
+        let mode = std::fs::metadata(installed.join("edit-ffmpeg"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
+        // No edit binary: nothing is touched.
+        std::fs::remove_file(unpacked.join("edit")).unwrap();
+        assert!(swap_all(&unpacked, &running).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

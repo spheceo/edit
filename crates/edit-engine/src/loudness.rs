@@ -83,11 +83,11 @@ pub fn blocks(path: &Path) -> Result<Arc<Blocks>, String> {
 }
 
 fn load_or_analyse(path: &Path) -> Result<Blocks, String> {
-    let file = crate::tools::media_cache(path).map(|dir| dir.join(FILE));
+    let file = crate::util::media_cache(path).map(|dir| dir.join(FILE));
     if let Some(blocks) = file.as_deref().and_then(read) {
         return Ok(blocks);
     }
-    let blocks = crate::diag::time_on(
+    let blocks = crate::log::time_on(
         "audio",
         "audio: loudness analysis",
         &path.to_string_lossy(),
@@ -95,7 +95,7 @@ fn load_or_analyse(path: &Path) -> Result<Blocks, String> {
     )?;
     if let Some(file) = &file {
         if let Err(error) = write(file, &blocks) {
-            crate::diag::warn(
+            crate::log::warn(
                 "audio",
                 format!("keeping the loudness of {}: {error}", path.display()),
             );
@@ -394,7 +394,7 @@ impl Analyser {
 /// Decodes the first audio stream (as 32-bit float WAV, mono or stereo:
 /// more channels are mixed down) and analyses it.
 fn analyse(path: &Path) -> Result<Blocks, String> {
-    let mut child = Command::new(crate::tools::ffmpeg())
+    let mut child = Command::new(crate::util::ffmpeg())
         .args([
             "-hide_banner",
             "-loglevel",
@@ -655,7 +655,7 @@ mod tests {
         ];
         for (name, filter) in sounds {
             let path = dir.join(name);
-            let made = Command::new(crate::tools::ffmpeg())
+            let made = Command::new(crate::util::ffmpeg())
                 .args([
                     "-hide_banner",
                     "-loglevel",
@@ -730,7 +730,7 @@ mod tests {
 
     /// FFmpeg's measurement as `library::levels` used to make it.
     fn ebur128(path: &Path, from: f64, seconds: f64) -> (f64, f64) {
-        let output = Command::new(crate::tools::ffmpeg())
+        let output = Command::new(crate::util::ffmpeg())
             .args(["-hide_banner", "-nostats"])
             .args(["-ss", &format!("{from:.3}"), "-t", &format!("{seconds:.3}")])
             .arg("-i")

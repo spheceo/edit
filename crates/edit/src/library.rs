@@ -615,12 +615,20 @@ fn clean_note(note: &str) -> Option<String> {
 /// never shows in process arguments. Returns the status and the body (empty
 /// when `args` writes it to a file).
 pub(crate) fn curl(config: &str, args: &[&str]) -> Result<(u16, Vec<u8>), String> {
+    // Google's addresses go wherever this run reaches Google (`endpoints`).
+    let args = args.iter().map(|arg| {
+        if arg.starts_with("https://") {
+            crate::endpoints::google(arg)
+        } else {
+            (*arg).to_owned()
+        }
+    });
     let mut child = Command::new("curl")
         .args([
             "-sS",
             "-L",
             "--proto",
-            "=https",
+            crate::endpoints::google_proto(),
             "--config",
             "-",
             "-w",

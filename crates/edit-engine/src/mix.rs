@@ -181,7 +181,7 @@ struct FfmpegSource {
 
 impl FfmpegSource {
     fn open(path: &Path, segment: &AudioSegment) -> Result<Self, String> {
-        let mut child = Command::new(crate::tools::ffmpeg())
+        let mut child = Command::new(crate::util::ffmpeg())
             .args([
                 "-hide_banner",
                 "-loglevel",
@@ -195,8 +195,8 @@ impl FfmpegSource {
                 "-t",
                 &format!("{:.6}", segment.duration * segment.speed + 0.05),
             ])
-            .args(["-protocol_whitelist", crate::tools::protocols(path)])
-            .args(crate::tools::url_args(path))
+            .args(["-protocol_whitelist", crate::util::protocols(path)])
+            .args(crate::util::url_args(path))
             .arg("-i")
             .arg(path)
             .args([
@@ -277,11 +277,11 @@ impl Sources {
         let segment = &part.segment;
         #[cfg(target_os = "macos")]
         // AVFoundation only reads local files: a cloud original's URL is FFmpeg's.
-        if self.native && (segment.speed - 1.0).abs() < 1e-9 && !crate::tools::is_url(&part.path) {
+        if self.native && (segment.speed - 1.0).abs() < 1e-9 && !crate::util::is_url(&part.path) {
             let sound = self.sounds.entry(part.path.clone()).or_insert_with(|| {
                 crate::mac_media::Sound::open(&part.path)
                     .map_err(|error| {
-                        crate::diag::warn(
+                        crate::log::warn(
                             "export",
                             format!(
                                 "native sound of {}: {error}; using FFmpeg",
@@ -300,7 +300,7 @@ impl Sources {
                             time: segment.source_in,
                         }))
                     }
-                    Err(error) => crate::diag::warn(
+                    Err(error) => crate::log::warn(
                         "export",
                         format!(
                             "native sound of {} at {:.2}s: {error}; using FFmpeg",
@@ -442,12 +442,12 @@ fn mix_with(
         from = to;
         progress(from as f32 / total.max(1) as f32);
     }
-    crate::diag::info(
+    crate::log::info(
         "export",
         format!(
             "mixed {opened} sounds: {} opening them, {} decoding",
-            crate::diag::human(opening),
-            crate::diag::human(reading)
+            crate::log::human(opening),
+            crate::log::human(reading)
         ),
     );
     Ok(())
@@ -604,7 +604,7 @@ struct FfmpegSink {
 
 impl FfmpegSink {
     fn open(codec: &[String], output: &Path) -> Result<Self, String> {
-        let mut child = Command::new(crate::tools::ffmpeg())
+        let mut child = Command::new(crate::util::ffmpeg())
             .args(["-hide_banner", "-loglevel", "error", "-y", "-threads", "2"])
             .args([
                 "-f", "f32le", "-ar", "48000", "-ac", "2", "-i", "pipe:0", "-vn",
@@ -687,7 +687,7 @@ fn open_sink(encoding: &Encoding, output: &Path) -> Result<Box<dyn Sink>, String
     if let Some(bitrate) = encoding.aac {
         match crate::mac_media::SoundWriter::open(output, bitrate) {
             Ok(writer) => return Ok(Box::new(writer)),
-            Err(error) => crate::diag::warn(
+            Err(error) => crate::log::warn(
                 "export",
                 format!("native sound encoder unavailable: {error}; using FFmpeg"),
             ),
@@ -780,7 +780,7 @@ pub fn render(
         progress(0.85 + 0.15 * done as f32 / total.max(1) as f32);
         sink.write(window)
     })?;
-    crate::diag::info(
+    crate::log::info(
         "export",
         format!(
             "loudness {integrated:.1} LUFS, true peak {:.1} dBTP: {gain:+.1} dB to {target:.1} LUFS, the limiter under {LIMIT_CEILING_DB} dBFS on {:.1} s (at most {:.1} dB)",
@@ -861,7 +861,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "edit-mix-{name}-{}-{}",
             std::process::id(),
-            crate::store::now_ms()
+            crate::util::now_ms()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -871,7 +871,7 @@ mod tests {
     /// n / 48000 / 10 (0 to 1 over 10 s), so every sample says where it came from.
     fn ramp(dir: &Path, name: &str) -> PathBuf {
         let path = dir.join(name);
-        let made = Command::new(crate::tools::ffmpeg())
+        let made = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-f", "lavfi", "-i"])
             .arg("aevalsrc='t/10|0.25':s=48000:d=10")
             .args(["-c:a", "pcm_f32le"])
@@ -1036,7 +1036,7 @@ mod tests {
     fn a_partial_export_preserves_a_fade_already_in_progress() {
         let dir = temp_dir("partial");
         let path = dir.join("flat.wav");
-        let made = Command::new(crate::tools::ffmpeg())
+        let made = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-f", "lavfi", "-i"])
             .arg("aevalsrc=0.5|0.5:s=48000:d=5")
             .args(["-c:a", "pcm_f32le"])
@@ -1112,7 +1112,7 @@ mod tests {
     fn renders_normalised_sound_to_the_target() {
         let dir = temp_dir("loudness");
         let path = dir.join("tone.wav");
-        let made = Command::new(crate::tools::ffmpeg())
+        let made = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-f", "lavfi", "-i"])
             .arg("sine=frequency=1000:sample_rate=48000:duration=6")
             .args(["-af", "volume=-20dB", "-ac", "2"])
@@ -1123,7 +1123,7 @@ mod tests {
         // One full-scale hit in it, as a boom on a transition: it must not
         // hold the rest under the target (the limiter takes it).
         let hit = dir.join("hit.wav");
-        let made = Command::new(crate::tools::ffmpeg())
+        let made = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-f", "lavfi", "-i"])
             .arg("sine=frequency=200:sample_rate=48000:duration=0.08")
             // lavfi's sine is 1/8 of full scale: this is 20 dB over the tone.
@@ -1166,7 +1166,7 @@ mod tests {
                 |_| {},
             )
             .unwrap();
-            let measured = Command::new(crate::tools::ffmpeg())
+            let measured = Command::new(crate::util::ffmpeg())
                 .args(["-hide_banner", "-nostats", "-i"])
                 .arg(&output)
                 .args(["-af", "ebur128=peak=true", "-f", "null", "-"])
@@ -1190,7 +1190,7 @@ mod tests {
             // Under -1 dBTP, with a little room for the encoder.
             assert!(peak <= -0.8, "{name}: {peak} dBTP");
             // As decoded (the encoder's priming trimmed by the file's edit list).
-            let decoded = Command::new(crate::tools::ffmpeg())
+            let decoded = Command::new(crate::util::ffmpeg())
                 .args(["-v", "error", "-i"])
                 .arg(&output)
                 .args(["-f", "f32le", "-ac", "2", "-"])

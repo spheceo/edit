@@ -27,7 +27,6 @@ use crate::server::App;
 use crate::speakers::BACKGROUND;
 use crate::subtitles::{segment, TimedWord};
 
-const GATEWAY: &str = "https://ai-gateway.vercel.sh/v1/chat/completions";
 pub(crate) const MODEL: &str = "google/gemini-3.8-flash";
 /// A window's length: long enough to know the people in it, short enough to watch closely (s).
 const TARGET: f64 = 240.0;
@@ -564,7 +563,7 @@ pub(crate) async fn post(body: &Path) -> Result<Value, String> {
         .args([
             "-sS",
             "--proto",
-            "=https",
+            crate::endpoints::gateway_proto(),
             "--config",
             "-",
             "-X",
@@ -576,7 +575,8 @@ pub(crate) async fn post(body: &Path) -> Result<Value, String> {
         .arg(TIMEOUT.as_secs().to_string())
         .arg("--data-binary")
         .arg(format!("@{}", body.display()))
-        .args(["-w", "\n%{http_code}", GATEWAY])
+        .args(["-w", "\n%{http_code}"])
+        .arg(crate::endpoints::gateway())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

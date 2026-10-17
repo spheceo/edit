@@ -335,6 +335,63 @@ pub fn callout_timing(project: &Project, transcripts: &HashMap<String, Transcrip
 mod tests {
     use super::*;
     use crate::transcribe::Word;
+    use edit_core::MediaKind;
+    use edit_engine::censor;
+    use std::path::{Path, PathBuf};
+
+    /// Audits a real project read-only (its media cache read, results kept
+    /// in a temp folder): `EDIT_AUDIT_PROJECT=<project.json>
+    /// EDIT_AUDIT_CACHE=<~/.edit/cache> cargo test -p edit
+    /// edit_review::tests::audit_a_real_project -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads a real project and its media"]
+    fn audit_a_real_project() {
+        let project: Project = serde_json::from_slice(
+            &std::fs::read(std::env::var("EDIT_AUDIT_PROJECT").unwrap()).unwrap(),
+        )
+        .unwrap();
+        let cache = PathBuf::from(std::env::var("EDIT_AUDIT_CACHE").unwrap());
+        let scratch = std::env::temp_dir().join(format!("edit-audit-{}", std::process::id()));
+        let mut transcripts = HashMap::new();
+        // A file on the media drive is keyed by its place in the data folder.
+        let drive = std::env::var("EDIT_AUDIT_MEDIA_DIR")
+            .ok()
+            .map(PathBuf::from);
+        let home = cache.parent().map(Path::to_path_buf).unwrap_or_default();
+        for media in &project.media {
+            let source = Path::new(&media.path);
+            let name = drive
+                .as_ref()
+                .and_then(|drive| source.strip_prefix(drive).ok())
+                .map_or_else(|| source.to_path_buf(), |rest| home.join(rest));
+            let key = cache.join(edit_engine::media::key_of(&name, source));
+            if let Ok(bytes) = std::fs::read(key.join("transcript.json")) {
+                if let Ok(transcript) = serde_json::from_slice(&bytes) {
+                    transcripts.insert(media.id.clone(), transcript);
+                }
+            }
+            if media.kind == MediaKind::Video
+                && source.is_file()
+                && std::env::var_os("EDIT_AUDIT_SKIP_CENSOR").is_none()
+            {
+                let seconds = censor::analyse(&cache, source).unwrap();
+                let path = censor::file(&scratch, source);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, &seconds).unwrap();
+                let censored = seconds.iter().filter(|&&second| second == 1).count();
+                eprintln!(
+                    "{} {}: {censored} of {} s censored",
+                    media.id,
+                    media.name,
+                    seconds.len()
+                );
+            }
+        }
+        let (issues, waiting) = censor::issues(&project, &scratch, false);
+        eprintln!("censored: {issues:#?} waiting {waiting:?}");
+        eprintln!("callouts: {:#?}", callout_timing(&project, &transcripts));
+        let _ = std::fs::remove_dir_all(scratch);
+    }
 
     #[test]
     fn a_callout_after_its_words_were_said_is_flagged() {

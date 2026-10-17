@@ -226,15 +226,23 @@ pub async fn time_async<T, E: Display>(
 }
 
 /// "850 ms", "12.4 s", "3 min 05 s".
-pub fn human(took: Duration) -> String {
-    let seconds = took.as_secs_f64();
-    if seconds < 1.0 {
-        format!("{:.0} ms", seconds * 1000.0)
-    } else if seconds < 60.0 {
-        format!("{seconds:.1} s")
-    } else {
-        let whole = seconds.round() as u64;
-        format!("{} min {:02} s", whole / 60, whole % 60)
+pub use edit_engine::log::human;
+
+/// Where the engine's lines and timings go: here, as if the server's own.
+pub struct Engine;
+
+impl edit_engine::log::Sink for Engine {
+    fn log(&self, level: edit_engine::log::Level, area: &str, message: String) {
+        let level = match level {
+            edit_engine::log::Level::Info => Level::Info,
+            edit_engine::log::Level::Warn => Level::Warn,
+            edit_engine::log::Level::Error => Level::Error,
+        };
+        log(level, area, message);
+    }
+
+    fn record(&self, area: &str, name: &str, took: Duration, failure: Option<&str>) {
+        record(area, name, took, failure);
     }
 }
 

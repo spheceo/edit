@@ -23,6 +23,7 @@ const FULL_FOOTAGE: f64 = 20.0;
 const SOUND_EFFECT_SECONDS: f64 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum SectionKind {
     Intro,
@@ -39,6 +40,7 @@ pub enum SectionKind {
 
 /// A stretch of the timeline, in frames (`end` exclusive).
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Section {
     pub kind: SectionKind,
     pub start: i64,
@@ -48,6 +50,7 @@ pub struct Section {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Sections {
     /// Frames `[start, end)` of the intro, cut-ins included.
     pub intro: Option<(i64, i64)>,

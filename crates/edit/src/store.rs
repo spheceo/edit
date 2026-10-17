@@ -2,10 +2,9 @@
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::Ordering;
+use std::time::UNIX_EPOCH;
 
 use edit_core::{Project, Settings};
 use serde::Serialize;
@@ -558,28 +557,9 @@ impl Store {
 }
 
 /// Writes through a temporary file, so a crash mid-write leaves the old file whole.
-pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".{}-{}.tmp", std::process::id(), next_file_id()));
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
+pub use edit_engine::util::write_atomic;
 
-fn next_file_id() -> u64 {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    NEXT.fetch_add(1, Ordering::Relaxed)
-}
+use edit_engine::util::next_file_id;
 
 pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -589,11 +569,7 @@ pub(crate) fn valid_id(id: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
-pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64)
-}
+pub use edit_engine::util::now_ms;
 
 #[cfg(test)]
 mod tests {

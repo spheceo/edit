@@ -22,3 +22,9 @@ node_modules/
 # Mood-board stills from other channels: kept locally, not published
 /docs/moodboard/shots/
 /.claude/worktrees/
+/apps/relay/node_modules/
+/packages/*/node_modules/
+
+# The native addon (built by `just native`) and its tooling
+/crates/edit-native/node_modules/
+/crates/edit-native/*.node

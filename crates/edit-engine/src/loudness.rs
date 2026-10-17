@@ -422,20 +422,35 @@ fn analyse(path: &Path) -> Result<Blocks, String> {
         .spawn()
         .map_err(|error| format!("ffmpeg: {error}"))?;
     let stdout = child.stdout.take().ok_or("ffmpeg stdout")?;
+    // Drained beside the decode: a file FFmpeg complains about at length
+    // would otherwise fill the pipe (64 KB) and stall both ends for good.
+    let stderr = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut text = Vec::new();
+            let _ = stderr.read_to_end(&mut text);
+            text
+        })
+    });
     let read = analyse_wav(BufReader::with_capacity(1 << 20, stdout));
     if read.is_err() {
         let _ = child.kill();
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("ffmpeg: {error}"))?;
+    let status = child.wait().map_err(|error| format!("ffmpeg: {error}"))?;
+    let errors = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
     let blocks = read?;
-    if !output.status.success() && blocks.energy.is_empty() {
-        return Err(format!(
-            "couldn't measure {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    if !status.success() && blocks.energy.is_empty() {
+        let errors = String::from_utf8_lossy(&errors);
+        // The last lines say what went wrong; a flood of them isn't a message.
+        let errors = errors.trim();
+        let tail = errors
+            .char_indices()
+            .rev()
+            .nth(2000)
+            .and_then(|(at, _)| errors.get(at..))
+            .unwrap_or(errors);
+        return Err(format!("couldn't measure {}: {tail}", path.display()));
     }
     Ok(blocks)
 }
@@ -620,6 +635,39 @@ mod tests {
         let file = dir.join(FILE);
         write(&file, &blocks).unwrap();
         assert_eq!(read(&file).as_ref(), Some(&blocks));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A damaged file FFmpeg complains about at length (hundreds of KB of
+    /// errors, more than a pipe holds) is still measured, not stalled forever.
+    #[test]
+    fn a_noisy_decode_does_not_stall() {
+        let dir = std::env::temp_dir().join(format!("edit-loudness-noisy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clean = dir.join("clean.mp3");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=200"])
+            .args(["-c:a", "libmp3lame", "-b:a", "128k"])
+            .arg(&clean)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // A bogus frame header every 100 bytes: an error or two for each.
+        let mut bytes = std::fs::read(&clean).unwrap();
+        for at in (2000..bytes.len().saturating_sub(8)).step_by(100) {
+            bytes[at..at + 8].copy_from_slice(b"\xff\xfb\x00\x00\x12\x34\x56\x78");
+        }
+        let damaged = dir.join("damaged.mp3");
+        std::fs::write(&damaged, bytes).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let path = damaged.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(analyse(&path));
+        });
+        let measured = receiver
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .expect("the analysis stalled on FFmpeg's errors");
+        assert!(measured.is_ok(), "{measured:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

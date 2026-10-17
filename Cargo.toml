@@ -6,6 +6,7 @@ members = [
     "crates/edit-wasm",
     "crates/edit-engine",
     "crates/edit-native",
+    "crates/edit-window",
     "crates/edit",
 ]
 

@@ -1042,6 +1042,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "edit-window"
+version = "0.0.0"
+dependencies = [
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
 name = "embed-resource"
 version = "3.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

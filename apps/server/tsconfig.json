@@ -18,5 +18,6 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["src", "test", "scripts"]
+  "include": ["src", "test", "scripts"],
+  "exclude": ["src/embedded.gen.ts"]
 }

@@ -5,11 +5,24 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+#[cfg(feature = "app")]
 use tauri::webview::NewWindowResponse;
+#[cfg(feature = "app")]
 use tauri::{Url, WebviewUrl, WebviewWindowBuilder};
 
+/// A build without the `app` feature (the dev server's) has no window
+/// (`main::app` refuses before starting anything).
+#[cfg(not(feature = "app"))]
+pub fn run(url: &str) -> ! {
+    crate::fail(&format!(
+        "this build has no window; open {url} in a browser"
+    ));
+}
+
 /// Opens the editor at `url` and runs until the window closes.
-pub fn run(url: Url) -> ! {
+#[cfg(feature = "app")]
+pub fn run(url: &str) -> ! {
+    let url: Url = url.parse().unwrap_or_else(|_| crate::fail("bad URL"));
     let local = url.clone();
     let result = tauri::Builder::default()
         .setup(move |app| {
@@ -49,6 +62,7 @@ pub fn run(url: Url) -> ! {
     std::process::exit(0);
 }
 
+#[cfg(feature = "app")]
 fn open_in_browser(url: &Url) {
     if matches!(url.scheme(), "http" | "https" | "mailto") {
         let _ = Command::new("open").arg(url.as_str()).spawn();

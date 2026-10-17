@@ -30,6 +30,8 @@ const SAME_ANGLE: f32 = 0.09;
 /// Each angle is watched in up to two stretches this long (seconds).
 const WINDOW: f64 = 90.0;
 const WINDOWS: usize = 2;
+/// Stretches watched at once (model calls; watch's own lane limits the cuts).
+const LOOKS_AT_ONCE: usize = 8;
 /// The analysis's file in the media's cache dir; a new method is a new file.
 const FILE: &str = "seats-v2.json";
 
@@ -87,49 +89,40 @@ pub async fn seats(source: &Path, transcript: &Transcript) -> Result<Seats, Stri
     let started = std::time::Instant::now();
     let frames = frames(source, &cache).await?;
     let (scenes, middles) = scenes(&frames);
-    let mut angles: Vec<BTreeMap<String, Dot>> = vec![BTreeMap::new(); middles];
     let work = std::env::temp_dir().join(format!(
         "edit-seats-{}-{}",
         std::process::id(),
         crate::media::media_key(source)
     ));
     std::fs::create_dir_all(&work).map_err(|error| error.to_string())?;
-    for (angle, faces) in angles.iter_mut().enumerate() {
-        let mut seen: BTreeMap<String, Vec<(f64, f64, f64)>> = BTreeMap::new();
-        for (index, (start, end)) in windows(&scenes, angle, transcript).into_iter().enumerate() {
-            match look(
-                source, &cache, &work, transcript, &wanted, start, end, index,
-            )
-            .await
-            {
-                Ok(sightings) => {
-                    for (name, sighting) in sightings {
-                        seen.entry(name).or_default().push(sighting);
-                    }
-                }
-                Err(error) => crate::diag::warn(
+    // Every angle's stretches at once: each look is a model call of a minute
+    // or more, network-bound (the cuts queue in watch's own lane), so one
+    // after another a six-angle interview took 18 minutes.
+    use futures_util::StreamExt as _;
+    let looks: Vec<(usize, Vec<Sighting>)> = futures_util::stream::iter(
+        stretches(&scenes, middles, transcript)
+            .into_iter()
+            .enumerate(),
+    )
+    .map(|(index, (angle, start, end))| {
+        let (cache, work, wanted) = (&cache, &work, &wanted);
+        async move {
+            let result = look(source, cache, work, transcript, wanted, start, end, index).await;
+            let sightings = result.unwrap_or_else(|error| {
+                crate::diag::warn(
                     "watch",
                     format!("seats: angle {angle} at {start:.0}s: {error}"),
-                ),
-            }
+                );
+                Vec::new()
+            });
+            (angle, sightings)
         }
-        for (name, sightings) in seen {
-            let median = |pick: fn(&(f64, f64, f64)) -> f64| {
-                let mut values: Vec<f64> = sightings.iter().map(pick).collect();
-                values.sort_by(f64::total_cmp);
-                values.get(values.len() / 2).copied().unwrap_or(0.0)
-            };
-            faces.insert(
-                name,
-                Dot {
-                    x: (median(|s| s.0) * 10.0).round() / 10.0,
-                    y: (median(|s| s.1) * 10.0).round() / 10.0,
-                    h: (median(|s| s.2) * 10.0).round() / 10.0,
-                },
-            );
-        }
-    }
+    })
+    .buffer_unordered(LOOKS_AT_ONCE)
+    .collect()
+    .await;
     let _ = std::fs::remove_dir_all(&work);
+    let angles = faces(middles, looks);
     let seats = Seats {
         scenes,
         angles,
@@ -141,6 +134,59 @@ pub async fn seats(source: &Path, transcript: &Transcript) -> Result<Seats, Stri
     );
     crate::diag::record("watch", "seats: found", started.elapsed(), None);
     Ok(seats)
+}
+
+/// A named speaker's face seen in one stretch: (name, (centre x, y, height in %)).
+type Sighting = (String, Place);
+/// A face's centre x, y and height, in % of the frame.
+type Place = (f64, f64, f64);
+
+/// Every stretch to watch, as (angle, start, end): each angle's `windows`.
+fn stretches(
+    scenes: &[(f64, f64, Option<usize>)],
+    angles: usize,
+    transcript: &Transcript,
+) -> Vec<(usize, f64, f64)> {
+    (0..angles)
+        .flat_map(|angle| {
+            windows(scenes, angle, transcript)
+                .into_iter()
+                .map(move |(start, end)| (angle, start, end))
+        })
+        .collect()
+}
+
+/// Each angle's faces: per speaker, the median of where they were seen in
+/// that angle's stretches (in whatever order the looks came back).
+fn faces(angles: usize, looks: Vec<(usize, Vec<Sighting>)>) -> Vec<BTreeMap<String, Dot>> {
+    let mut seen: Vec<BTreeMap<String, Vec<Place>>> = vec![BTreeMap::new(); angles];
+    for (angle, sightings) in looks {
+        let Some(seen) = seen.get_mut(angle) else {
+            continue;
+        };
+        for (name, sighting) in sightings {
+            seen.entry(name).or_default().push(sighting);
+        }
+    }
+    seen.into_iter()
+        .map(|seen| {
+            seen.into_iter()
+                .map(|(name, sightings)| {
+                    let median = |pick: fn(&(f64, f64, f64)) -> f64| {
+                        let mut values: Vec<f64> = sightings.iter().map(pick).collect();
+                        values.sort_by(f64::total_cmp);
+                        values.get(values.len() / 2).copied().unwrap_or(0.0)
+                    };
+                    let dot = Dot {
+                        x: (median(|s| s.0) * 10.0).round() / 10.0,
+                        y: (median(|s| s.1) * 10.0).round() / 10.0,
+                        h: (median(|s| s.2) * 10.0).round() / 10.0,
+                    };
+                    (name, dot)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Small greyscale frames, FPS a second, one after another (WIDE × HIGH bytes each):
@@ -319,7 +365,7 @@ async fn look(
     start: f64,
     end: f64,
     index: usize,
-) -> Result<Vec<(String, (f64, f64, f64))>, String> {
+) -> Result<Vec<Sighting>, String> {
     use base64::Engine as _;
     let clip = work.join(format!("window-{index}-{start:.0}.mp4"));
     let still = work.join(format!("still-{index}-{start:.0}.jpg"));
@@ -463,7 +509,35 @@ async fn look(
 
 #[cfg(test)]
 mod tests {
-    use super::{scenes, HIGH, WIDE};
+    use super::{faces, scenes, Dot, HIGH, WIDE};
+
+    #[test]
+    fn faces_are_each_angles_medians_in_any_order() {
+        let seen = |name: &str, x: f64| (name.to_owned(), (x, 40.0, 20.0));
+        let looks = vec![
+            (1, vec![seen("Officer", 70.0)]),
+            (0, vec![seen("Officer", 30.0), seen("Suspect", 60.0)]),
+            (1, vec![seen("Officer", 72.0)]),
+            (0, vec![seen("Officer", 34.0)]),
+            (1, vec![seen("Officer", 90.0)]),
+        ];
+        let mut reversed = looks.clone();
+        reversed.reverse();
+        let found = faces(3, looks);
+        assert_eq!(found, faces(3, reversed));
+        assert_eq!(found.len(), 3);
+        let officer = |angle: usize| found.get(angle).and_then(|faces| faces.get("Officer"));
+        assert_eq!(officer(0).map(|dot| dot.x), Some(34.0));
+        assert_eq!(
+            officer(1).copied(),
+            Some(Dot {
+                x: 72.0,
+                y: 40.0,
+                h: 20.0
+            })
+        );
+        assert!(found.get(2).is_some_and(|faces| faces.is_empty()));
+    }
 
     #[test]
     fn a_room_seen_again_is_the_same_angle_however_short() {

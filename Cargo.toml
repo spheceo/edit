@@ -49,3 +49,17 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 strip = true
+
+# The dev server's build (`just serve-build`): release speed where it matters,
+# minutes less to link. No LTO and many codegen units with incremental
+# compilation, so a one-line change in `edit` rebuilds just that crate's
+# changed units. Every crate still builds at opt-level 3 (edit-core and
+# edit-render run per frame; `edit` mixes sound and drives the export
+# pipeline). Releases (`[profile.release]`, `just publish`) are unchanged.
+[profile.serve]
+inherits = "release"
+lto = "off"
+codegen-units = 256
+incremental = true
+strip = false
+debug = 0

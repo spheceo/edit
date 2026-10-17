@@ -20,5 +20,6 @@ fn main() {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
     }
+    #[cfg(feature = "app")]
     tauri_build::build();
 }

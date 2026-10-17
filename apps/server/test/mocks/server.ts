@@ -12,6 +12,8 @@
 
 import type { Server } from "bun";
 
+import { CloudMock } from "./cloud.ts";
+
 export interface Recorded {
   method: string;
   path: string;
@@ -45,14 +47,15 @@ export function scribeAnswer(words: string[] = ["Hello", "there."], speaker = "s
 
 export class MockServer {
   readonly requests: Recorded[] = [];
-  /** Objects put through presigned URLs (R2), by key. */
-  readonly objects = new Map<string, Uint8Array>();
+  /** The relay's cloud routes, R2 behind its presigned URLs, and Convex's `edit:` functions (mocks/cloud.ts). */
+  readonly cloud: CloudMock;
   /** What the gateway's model answers (the message content). */
   gatewayAnswer = "{}";
   private routes: Route[] = [];
   private server: Server<undefined>;
 
   private constructor() {
+    this.cloud = new CloudMock(this);
     this.server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
@@ -85,6 +88,11 @@ export class MockServer {
       },
     });
     this.defaults();
+  }
+
+  /** Objects put through presigned URLs (R2), by key. */
+  get objects(): Map<string, Uint8Array> {
+    return this.cloud.objects;
   }
 
   static start(): MockServer {
@@ -145,20 +153,8 @@ export class MockServer {
     this.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer()));
     this.on("POST", "/v1/speech", () => new Response(new Uint8Array([0xff, 0xfb, 0x90, 0x00]), { headers: { "content-type": "audio/mpeg" } }));
     this.on("GET", "/v1/voices", () => Response.json({ voices: [] }));
-    this.on("POST", "/v1/cloud/convex", () => Response.json({ status: "success", value: null }));
-    this.on("POST", "/v1/cloud/presign", (request, mock) => {
-      const { key } = request.json<{ key: string }>();
-      return Response.json({ url: `${mock.url}/r2/${key}` });
-    });
-    // R2 behind presigned URLs.
-    this.on("PUT", /^\/r2\//, (request, mock) => {
-      mock.objects.set(request.path.slice("/r2/".length), request.body);
-      return new Response(null, { status: 200, headers: { etag: `"${request.body.length}"` } });
-    });
-    this.on("GET", /^\/r2\//, (request, mock) => {
-      const object = mock.objects.get(request.path.slice("/r2/".length));
-      return object === undefined ? new Response("NoSuchKey", { status: 404 }) : new Response(object);
-    });
+    // The cloud: /v1/cloud/*, R2 behind presigned URLs, Convex.
+    this.cloud.install();
     // The AI gateway (OpenAI-style chat completions).
     this.on("POST", "/v1/chat/completions", (_request, mock) =>
       Response.json({ choices: [{ message: { role: "assistant", content: mock.gatewayAnswer } }] }),

@@ -76,7 +76,11 @@ function shown(reply: Reply, image = false): unknown {
   for (const name of ["content-type", "cache-control", "content-range", "accept-ranges", "content-disposition", "content-length"]) {
     if (reply.headers[name] !== undefined) headers[name] = reply.headers[name]!;
   }
-  if (reply.body !== null) return { status: reply.status, headers, body: reply.body };
+  // JSON is compared as values (serde writes 30.0 where JS writes 30), so not by length.
+  if (reply.body !== null) {
+    delete headers["content-length"];
+    return { status: reply.status, headers, body: reply.body };
+  }
   if (image && reply.type.startsWith("image/")) return { status: reply.status, headers: { "content-type": headers["content-type"] }, body: { image: reply.bytes, mime: reply.type } };
   return { status: reply.status, headers, bytes: reply.bytes.length, sha256: new Bun.CryptoHasher("sha256").update(reply.bytes).digest("hex") };
 }
@@ -161,19 +165,26 @@ async function exported(side: Side, id: string, from: number): Promise<unknown> 
   const done = await event(side, from, (item) => item.type === "export" && item.id === id && ["done", "failed", "cancelled"].includes(String(item.state)));
   if (done === null) return { timeout: true };
   const path = String((done as { path?: unknown }).path ?? "");
-  return { event: done, frames: fs.existsSync(path) ? framesOf(path) : null };
+  const { seconds: _seconds, ...shownEvent } = done as Record<string, unknown>;
+  return { event: shownEvent, frames: fs.existsSync(path) ? framesOf(path) : null };
 }
 
 /** An exported file's decoded frames and sound, by ffmpeg's framemd5 (so encoders' metadata doesn't count). */
 function framesOf(path: string): unknown {
-  const out = Bun.spawnSync(["ffmpeg", "-v", "error", "-i", path, "-map", "0", "-f", "framemd5", "-"]);
-  const lines = out.stdout
-    .toString()
-    .split("\n")
-    .filter((line) => line !== "" && !line.startsWith("#"));
-  const hash = new Bun.CryptoHasher("sha256").update(lines.join("\n")).digest("hex");
+  const streams: Record<string, { frames: number; sha256: string }> = {};
+  for (const [name, map] of [
+    ["video", "0:v?"],
+    ["audio", "0:a?"],
+  ] as const) {
+    const out = Bun.spawnSync(["ffmpeg", "-v", "error", "-i", path, "-map", map, "-f", "framemd5", "-"]);
+    const lines = out.stdout
+      .toString()
+      .split("\n")
+      .filter((line) => line !== "" && !line.startsWith("#"));
+    if (lines.length > 0) streams[name] = { frames: lines.length, sha256: new Bun.CryptoHasher("sha256").update(lines.join("\n")).digest("hex") };
+  }
   const probe = Bun.spawnSync(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,width,height,r_frame_rate,sample_rate,channels:format=duration", "-of", "json", path]);
-  return { frames: lines.length, sha256: hash, probe: JSON.parse(probe.stdout.toString() || "{}") };
+  return { ...streams, probe: JSON.parse(probe.stdout.toString() || "{}") };
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +375,7 @@ export const steps: Step[] = [
           },
           { op: "update", select: { ids: [{ $ref: "hero" }] }, patch: { opacity: 0.9, fade_in: 6 } },
           { op: "keyframes", select: { ids: [broll.id] }, param: "scale", keyframes: [{ frame: 0, value: 1, ease: "linear" }, { frame: 60, value: 1.1, ease: "out" }] },
-          { op: "update", select: { ids: [caption.id] }, patch: { text: "Officer Rodriguez", duration: caption.duration + 6 } },
+          { op: "update", select: { ids: [caption.id] }, patch: { text: "Officer Rodriguez" } },
           { op: "delete", select: { ids: [solid.id] } },
           { op: "transition", kind: "drop", at: 1248 },
           { op: "transition", kind: "flash", at: 4713 },
@@ -424,7 +435,10 @@ export const steps: Step[] = [
   },
   {
     name: "set_loudness (to a level)",
-    run: tool("set_loudness", reference, ({ project }) => ({ clip_ids: project.clips.filter((clip) => clip.type === "audio" && clip.track === "a5").slice(0, 2).map((clip) => clip.id), loudness: -26 })),
+    run: tool("set_loudness", reference, ({ project }) => ({
+      clip_ids: project.clips.filter((clip) => clip.type === "audio" && clip.track === "a4" && clip.duration > 90).slice(0, 2).map((clip) => clip.id),
+      loudness: -26,
+    })),
   },
   {
     name: "cover_cut_in (cut-in 2)",
@@ -435,7 +449,7 @@ export const steps: Step[] = [
         shots: [
           { media: video[0]!.id, source_in: 100, name: "the patrol car pulls up" },
           { media: video[1]!.id, source_in: 40, name: "the front door", at: 43.5 },
-          { media: project.media.find((media) => media.kind === "image")!.id, name: "the chat", label: "The message in the class chat", at: 46 },
+          { media: project.media.find((media) => media.kind === "image")!.id, source_in: 0, name: "the chat", label: "The message in the class chat", at: 46 },
         ],
       };
     }),
@@ -448,7 +462,7 @@ export const steps: Step[] = [
       return {
         keep_going: true,
         calls: [
-          { tool: "add_text", args: { text: "Margate, Florida", start: 1500, duration: 75, style: { size: 64 } } },
+          { tool: "add_text", args: { text: "Margate, Florida", start: 50, duration: 2.5, style: { size: 64 } } },
           { tool: "set_keyframes", args: { clip_id: "$1", param: "opacity", keyframes: [{ frame: 0, value: 0, ease: "linear" }, { frame: 10, value: 1, ease: "linear" }] } },
           { tool: "update_clip", args: { clip_id: text.id, patch: { text: `${text.text ?? ""} (checked)` } } },
           { tool: "update_clip", args: { clip_id: "c0", patch: { opacity: 1 } } },
@@ -505,7 +519,7 @@ export const steps: Step[] = [
         place: "on",
         target: "blur",
         time: (adjustment.start + 1) / 30,
-        boxes: [{ time: (adjustment.start + adjustment.duration - 2) / 30, box: [760, 420, 960, 660] }],
+        boxes: [{ time: (adjustment.start + 7) / 30, box: [760, 420, 960, 660] }],
       };
     }),
     settle: 1500,
@@ -541,6 +555,24 @@ export const steps: Step[] = [
     },
   },
   { name: "POST research clear (rejected)", run: post((world) => `/api/projects/${world.seed.reference}/research/clear?status=rejected`) },
+  { name: "search_web (no query)", run: tool("search_web", reference, () => ({ query: "  " })) },
+  { name: "collect_images (no queries)", run: tool("collect_images", reference, () => ({ queries: [" "], per_query: 2 })) },
+  // The two that read the live web through headless Chrome (DuckDuckGo, Bing): no
+  // stand-in reaches them, so what the web answers is allowed to differ between the
+  // two asks; how each server reads and reports it is still compared.
+  {
+    name: "search_web (live web)",
+    run: tool("search_web", reference, () => ({ query: "Margate police teen class chat aunt uncle arrested" })),
+    expect: [{ path: /^\.result\.content\[0\]/, why: "the live web (DuckDuckGo) answered each server on its own" }],
+    calls: false,
+  },
+  {
+    name: "collect_images (live web)",
+    run: tool("collect_images", reference, () => ({ queries: ["Margate Florida police car"], per_query: 2 })),
+    expect: [{ path: /^\.result\.content|^history|^p1791811932480-23\.json/, why: "the live web (Bing images) answered each server on its own" }],
+    calls: false,
+    settle: 3000,
+  },
   { name: "map_view (the map service isn't there)", run: tool("map_view", reference, () => ({ place: "4435 Paxton Drive South, Hilliard, Ohio", seconds: 5.5, highlight_after: 2.6, highlight_fade: 0.4, still: true })) },
   { name: "GET /api/maps/{token} (unknown)", run: get("/api/maps/nope") },
   { name: "POST /api/maps/{token} (unknown)", run: post("/api/maps/nope", { error: "x" }) },
@@ -591,7 +623,7 @@ export const steps: Step[] = [
   { name: "the subtitled video after its edits", run: async (side, world) => live(side, world.seed.subtitled) },
 
   // The small project: the editing tools one by one.
-  { name: "add_text", run: tool("add_text", small, () => ({ text: "Elm Street, Saturday", start: 0, duration: 60, animation: "fade", color: [1, 1, 1, 1], transform: { x: 0, y: 300, scale: 1, rotation: 0 } })) },
+  { name: "add_text", run: tool("add_text", small, () => ({ text: "Elm Street, Saturday", start: 0, duration: 2, animation: { preset: "rise" }, color: "yellow", style: { size: 64 }, transform: { x: 0, y: 300, scale: 1, rotation: 0 } })) },
   {
     name: "add_clip (a solid on a new track)",
     run: tool("add_clip", small, () => ({ clip: { type: "solid", start: 30, duration: 45, fill: [0, 0, 0, 0.5], track: "new", name: "Darken" } })),
@@ -755,9 +787,10 @@ export const steps: Step[] = [
   { name: "POST /api/cloud (holder)", run: post("/api/cloud", { holder: "parity-mac" }) },
   { name: "GET /api/cloud/projects", run: get("/api/cloud/projects"), settle: 3000 },
   { name: "GET project cloud status", run: async (side) => shown(await side.http("GET", `/api/projects/${created(side)}/cloud`)) },
-  { name: "POST cloud/open", run: async (side) => shown(await side.http("POST", `/api/projects/${created(side)}/cloud/open`)), settle: 3000 },
+  { name: "POST cloud/open", run: async (side) => shown(await side.http("POST", `/api/projects/${created(side)}/cloud/open`, {})), settle: 3000 },
+  { name: "POST cloud/open (no JSON body)", run: async (side) => shown(await side.http("POST", `/api/projects/${created(side)}/cloud/open`)) },
   { name: "POST cloud/takeover", run: async (side) => shown(await side.http("POST", `/api/projects/${created(side)}/cloud/takeover`)), settle: 3000 },
-  { name: "POST cloud/close", run: async (side) => shown(await side.http("POST", `/api/projects/${created(side)}/cloud/close`)), settle: 3000 },
+  { name: "POST cloud/close", run: async (side) => shown(await side.http("POST", `/api/projects/${created(side)}/cloud/close`, {})), settle: 3000 },
   { name: "POST cloud/upload (move the small project to the cloud)", run: post((world) => `/api/projects/${world.seed.small}/cloud/upload`), settle: 5000 },
   { name: "POST cloud/backfill (its media follow)", run: post((world) => `/api/projects/${world.seed.small}/cloud/backfill`), settle: 8000 },
   { name: "GET small project cloud status", run: get((world) => `/api/projects/${world.seed.small}/cloud`) },
@@ -844,6 +877,17 @@ export const steps: Step[] = [
     expect: [{ path: /full.*(sha256|bytes|content-length)/, why: "the full voice-over is joined by an encoder" }],
   },
   { name: "POST /api/voice/{id}/send", run: async (side) => shown(await side.http("POST", `/api/voice/${side.vars.voice}/send`, { project: created(side) })), settle: 3000 },
+  {
+    name: "POST /api/voice/{id}/send (a take chosen)",
+    run: async (side) => {
+      const current = (await side.http("GET", `/api/voice/${side.vars.voice}`)).body as Record<string, unknown>;
+      const project = structuredClone((current.project ?? current) as { lines?: { id: string; takes?: { id: string }[]; chosen?: string | null }[] });
+      for (const line of project.lines ?? []) if (line.takes?.[0] !== undefined) line.chosen = line.takes[0].id;
+      const saved = shown(await side.http("PUT", `/api/voice/${side.vars.voice}`, project));
+      return { saved, sent: shown(await side.http("POST", `/api/voice/${side.vars.voice}/send`, { project: created(side) })) };
+    },
+    settle: 3000,
+  },
   { name: "DELETE /api/voice/{id}", run: async (side) => shown(await side.http("DELETE", `/api/voice/${side.vars.voice}`)) },
 
   // The agent (Codex isn't signed in here: nothing reaches a model).

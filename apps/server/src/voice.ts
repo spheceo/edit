@@ -14,7 +14,7 @@ import * as media from "./media.ts";
 import type { Project } from "./model.ts";
 import { isFile, join, withExtension } from "./paths.ts";
 import * as relay from "./relay.ts";
-import { f32Saved, takeChars, trim, charCount } from "./rust.ts";
+import { charCount, f32Saved, serdeParse, takeChars, trim } from "./rust.ts";
 import { field, optional, readStruct, required, SerdeError, type Struct } from "./serde.ts";
 import { validId } from "./store.ts";
 import * as tools from "./tools.ts";
@@ -270,7 +270,7 @@ export class Voices {
       throw new Error("no such voice-over");
     }
     try {
-      return readStruct(PROJECT, JSON.parse(text)) as unknown as VoiceProject;
+      return readStruct(PROJECT, serdeParse(text)) as unknown as VoiceProject;
     } catch (error) {
       throw new Error(`${path} can't be read: ${diag.messageOf(error)}`);
     }

@@ -4,6 +4,7 @@
 // pattern itself as the name every request is timed under ("GET /api/projects/{id}").
 
 import { ApiError } from "./errors.ts";
+import { serdeParse } from "../rust.ts";
 
 /** axum's default body limit for extracted bodies (2 MiB); routes may raise or lift it. */
 export const DEFAULT_BODY_LIMIT = 2 << 20;
@@ -182,8 +183,9 @@ export async function readJson<T = unknown>(context: Pick<RouteContext<unknown>,
     throw new ApiError(415, "Expected request with `Content-Type: application/json`", true);
   }
   const body = await readText(context.request, context.bodyLimit);
+  bodies.set(context.request, body);
   try {
-    return JSON.parse(body) as T;
+    return serdeParse(body) as T;
   } catch (error) {
     throw new ApiError(400, `Failed to parse the request body as JSON: ${(error as Error).message}`, true);
   }
@@ -191,5 +193,119 @@ export async function readJson<T = unknown>(context: Pick<RouteContext<unknown>,
 
 /** A JSON body that isn't the shape a route wants (axum's 422). */
 export function badShape(why: string): ApiError {
-  return new ApiError(422, `Failed to deserialize the JSON body into the target type: ${why}`, true);
+  return new ApiError(422, `${SHAPE}${why}`, true);
+}
+
+const SHAPE = "Failed to deserialize the JSON body into the target type: ";
+
+/** The JSON bodies read, by request: where a 422 points (serde says the line and column). */
+const bodies = new WeakMap<Request, string>();
+
+/**
+ * A 422 from `badShape` as axum words it: serde's place in the body appended
+ * (" at line L column C"), which is just past the value the path names, or
+ * past the object a missing field belongs in.
+ */
+export function withPosition(error: ApiError, request: Request): ApiError {
+  if (error.status !== 422 || !error.message.startsWith(SHAPE) || / at line \d+ column \d+$/.test(error.message)) return error;
+  const text = bodies.get(request);
+  if (text === undefined) return error;
+  const why = error.message.slice(SHAPE.length);
+  // serde_path_to_error's path ("project.clips[0]: …"), when there is one.
+  const pathed = /^((?:[A-Za-z_][\w]*|\[\d+\])(?:\.[A-Za-z_]\w*|\[\d+\])*): /.exec(why);
+  const path = pathed === null ? [] : [...pathed[1]!.matchAll(/([A-Za-z_]\w*)|\[(\d+)\]/g)].map((part) => part[1] ?? Number(part[2]));
+  // The path names the value that failed; for a missing field, the object it's missing from,
+  // which serde notices at its closing brace. Either way the place is just past that value.
+  const end = valueEnd(text, path);
+  if (end === null) return error;
+  let line = 1;
+  let start = 0;
+  for (let index = 0; index < end; index++) {
+    if (text.charCodeAt(index) === 10) {
+      line += 1;
+      start = index + 1;
+    }
+  }
+  const column = new TextEncoder().encode(text.slice(start, end)).length;
+  return new ApiError(error.status, `${error.message} at line ${line} column ${column}`, error.plain);
+}
+
+/** Where the JSON value at `path` (keys and indexes) ends in `text` (exclusive), or null. */
+export function valueEnd(text: string, path: (string | number)[]): number | null {
+  let at = 0;
+  const space = () => {
+    while (at < text.length && " \t\n\r".includes(text[at]!)) at++;
+  };
+  const skipString = () => {
+    at++;
+    while (at < text.length && text[at] !== '"') at += text[at] === "\\" ? 2 : 1;
+    at++;
+  };
+  const readString = (): string => {
+    const from = at;
+    skipString();
+    try {
+      return JSON.parse(text.slice(from, at)) as string;
+    } catch {
+      return "";
+    }
+  };
+  // Skips the value at `at`; returns where it ends.
+  const skip = (): number => {
+    space();
+    const first = text[at];
+    if (first === '"') {
+      skipString();
+    } else if (first === "{" || first === "[") {
+      let depth = 0;
+      while (at < text.length) {
+        const char = text[at]!;
+        if (char === '"') {
+          skipString();
+          continue;
+        }
+        if (char === "{" || char === "[") depth++;
+        if (char === "}" || char === "]") depth--;
+        at++;
+        if (depth === 0) break;
+      }
+    } else {
+      while (at < text.length && !",}] \t\n\r".includes(text[at]!)) at++;
+    }
+    return at;
+  };
+  for (const step of path) {
+    space();
+    if (typeof step === "number") {
+      if (text[at] !== "[") return null;
+      at++;
+      for (let index = 0; index < step; index++) {
+        skip();
+        space();
+        if (text[at] !== ",") return null;
+        at++;
+      }
+    } else {
+      if (text[at] !== "{") return null;
+      at++;
+      let found = false;
+      while (!found) {
+        space();
+        if (text[at] !== '"') return null;
+        const key = readString();
+        space();
+        if (text[at] !== ":") return null;
+        at++;
+        if (key === step) {
+          found = true;
+          break;
+        }
+        skip();
+        space();
+        if (text[at] !== ",") return null;
+        at++;
+      }
+    }
+  }
+  return skip();
 }

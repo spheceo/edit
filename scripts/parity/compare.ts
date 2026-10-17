@@ -48,7 +48,7 @@ export interface Context {
   replacements: [string, string][];
 }
 
-export function contextOf(side: Side, mock: string, ids: Map<string, string>): Context {
+export function contextOf(side: Side, mock: string, ids: Map<string, string>, runDir?: string): Context {
   const replacements: [string, string][] = [];
   const add = (from: string, to: string) => {
     if (from !== "") replacements.push([from, to]);
@@ -62,6 +62,14 @@ export function contextOf(side: Side, mock: string, ids: Map<string, string>): C
       // not there yet
     }
     if (path.startsWith("/tmp/")) add(`/private${path}`, label);
+  }
+  if (runDir !== undefined) {
+    // Each side's own export and media-drive folders.
+    for (const folder of ["export", "drive"]) {
+      const path = `${runDir}/${folder}-${side.name}`;
+      add(path, `<${folder}>`);
+      if (path.startsWith("/tmp/")) add(`/private${path}`, `<${folder}>`);
+    }
   }
   add(mock, "<mock>");
   add(mock.replace("http://", ""), "<mock-host>");
@@ -77,7 +85,7 @@ export function replaceText(text: string, context: Context): string {
   for (const [from, to] of context.replacements) out = out.split(from).join(to);
   // Clocks inside strings: ISO times and ms since the epoch.
   out = out.replace(/\b20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)?/g, "<iso>");
-  out = out.replace(/\b1[789]\d{11}\b/g, "<ms>");
+  out = out.replace(/(?<![0-9])1[789]\d{11}(?![0-9])/g, "<ms>");
   return out;
 }
 
@@ -126,12 +134,14 @@ export function parseText(text: string): unknown {
       // not JSON
     }
   }
-  const prefixed = /^([^\n{[]{1,80}?): ([{[][\s\S]*)$/.exec(trimmed);
-  if (prefixed !== null) {
+  // "label: {json}" (also "[3] update_clip: updated c1: {json}"): the first ": {" / ": [" whose rest parses.
+  for (let at = trimmed.indexOf(": "); at >= 0 && at < 400; at = trimmed.indexOf(": ", at + 1)) {
+    const rest = trimmed.slice(at + 2);
+    if (!rest.startsWith("{") && !rest.startsWith("[")) continue;
     try {
-      return { prefix: prefixed[1], json: JSON.parse(prefixed[2]!) };
+      return { prefix: trimmed.slice(0, at), json: JSON.parse(rest) };
     } catch {
-      // not JSON
+      // not JSON from here
     }
   }
   return { text };

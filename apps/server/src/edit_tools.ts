@@ -40,20 +40,7 @@ import {
   trackLabel,
   trackOf,
 } from "./project.ts";
-import {
-  asInt,
-  byteLength,
-  debugInts,
-  debugStr,
-  debugStrings,
-  f32Saved as f32,
-  fixed,
-  isAlphanumeric,
-  round,
-  signed32,
-  takeChars,
-  trim,
-} from "./rust.ts";
+import { asInt, byteLength, debugInts, debugStr, debugStrings, f32Saved as f32, fixed, isAlphanumeric, round, serdeParse, signed32, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { read, readStruct, SerdeError, type Field, type Struct } from "./serde.ts";
 import * as sfx from "./sfx.ts";
@@ -788,7 +775,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
 function readTranscript(path: string): Transcript | null {
   let value: unknown;
   try {
-    value = JSON.parse(fs.readFileSync(path, "utf8"));
+    value = serdeParse(fs.readFileSync(path, "utf8"));
   } catch {
     return null;
   }

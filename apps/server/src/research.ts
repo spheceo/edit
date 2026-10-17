@@ -21,7 +21,7 @@ import { ioMessage, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
 import { importPaths } from "./import.ts";
 import { join } from "./paths.ts";
-import { byteLength, debugStrings, parseHex, splitWhitespace, takeChars, trim } from "./rust.ts";
+import { byteLength, debugStrings, parseHex, serdeParse, splitWhitespace, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Article, ResearchItem as Item, WebResult as Found } from "./seams.ts";
 import { compareKeys } from "./stable.ts";
@@ -61,7 +61,7 @@ export function items(home: string, project: string): Item[] {
 
 function readIndex(home: string, project: string): Item[] {
   try {
-    const value = JSON.parse(fs.readFileSync(join(dir(home, project), "index.json"), "utf8")) as unknown;
+    const value = serdeParse(fs.readFileSync(join(dir(home, project), "index.json"), "utf8")) as unknown;
     return Array.isArray(value) && value.every(isItem) ? value.map(shownItem) : [];
   } catch {
     return [];
@@ -338,7 +338,7 @@ export function readable(page: string): string {
 
 export function articles(home: string, project: string): Article[] {
   try {
-    const value = JSON.parse(fs.readFileSync(join(dir(home, project), "articles.json"), "utf8")) as unknown;
+    const value = serdeParse(fs.readFileSync(join(dir(home, project), "articles.json"), "utf8")) as unknown;
     return Array.isArray(value) && value.every(isArticle) ? value.map(shownArticle) : [];
   } catch {
     return [];

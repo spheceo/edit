@@ -9,6 +9,7 @@ import { ioMessage, writeAtomic } from "./files.ts";
 import { withExtension } from "./paths.ts";
 import * as relay from "./relay.ts";
 import * as tools from "./tools.ts";
+import { serdeParse } from "./rust.ts";
 
 /** One spoken word. Times are seconds into the source. */
 export interface Word {
@@ -142,7 +143,7 @@ export async function run(source: string, target: string): Promise<void> {
   }
   let value: unknown = null;
   try {
-    value = JSON.parse(body);
+    value = serdeParse(body);
   } catch {
     value = null;
   }

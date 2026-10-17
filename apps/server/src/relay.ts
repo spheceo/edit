@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 
 import { messageOf } from "./diag.ts";
+import { serdeParse } from "./rust.ts";
 
 const DEFAULT_RELAY = "https://edit-relay.sphe-g-personal.workers.dev";
 
@@ -160,7 +161,7 @@ export async function json<T = unknown>(
   }
   if (response.status !== 200) throw new Error(failure(String(response.status), text, feature));
   try {
-    return JSON.parse(text) as T;
+    return serdeParse(text) as T;
   } catch (error) {
     throw new Error(`the relay's answer: ${messageOf(error)}`);
   }

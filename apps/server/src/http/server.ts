@@ -14,7 +14,7 @@ import * as mcp from "../mcp/index.ts";
 import { staticAsset } from "./assets.ts";
 import { ApiError, notFound, text } from "./errors.ts";
 import { checkHost, secure } from "./host.ts";
-import { Router, type RouteContext } from "./router.ts";
+import { Router, withPosition, type RouteContext } from "./router.ts";
 
 interface Socket {
   unsubscribe: (() => void) | null;
@@ -85,7 +85,7 @@ export async function respond(
     }
   } catch (error) {
     if (error instanceof ApiError) {
-      response = secure(error.response());
+      response = secure(withPosition(error, request).response());
     } else if (isBug(error)) {
       response = panicResponse(error);
     } else {
@@ -105,6 +105,14 @@ export async function respond(
 async function logged(method: string, route: string, path: string, ms: number, response: Response): Promise<Response> {
   const name = `${method} ${route}`;
   const status = response.status;
+  // axum's Json says "application/json"; Bun's Response.json adds a charset.
+  if (response.headers.get("content-type") === "application/json;charset=utf-8") {
+    try {
+      response.headers.set("content-type", "application/json");
+    } catch {
+      // immutable headers (a passed-on response): leave them
+    }
+  }
   if (status < 400) {
     diag.record("http", name, ms, null);
     return response;

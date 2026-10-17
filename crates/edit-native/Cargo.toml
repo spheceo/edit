@@ -14,8 +14,14 @@ edit-core.workspace = true
 edit-engine.workspace = true
 edit-render = { workspace = true, features = ["bundled-fonts"] }
 serde.workspace = true
-serde_json.workspace = true
-napi = { version = "3", default-features = false, features = ["napi8", "tokio_rt", "serde-json"] }
+# float_roundtrip: the TS server hands projects to the addon as JSON on every
+# call, and serde's default float parsing isn't exact past 15 digits
+# ("9.299999999999999" read as 9.3), which the Rust server, keeping projects in
+# memory, never went through. Where the Rust server did read text with serde
+# (project files, request bodies), the TS reads it as serde did first
+# (apps/server/src/rust.ts `serdeParse`, `asSerdeRead`).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+napi ={ version = "3", default-features = false, features = ["napi8", "tokio_rt", "serde-json"] }
 napi-derive = "3"
 tokio = { version = "1", features = ["rt", "sync"] }
 parking_lot = "0.12"

@@ -284,3 +284,147 @@ export function f32Saved(x: number): number {
   }
   return single;
 }
+
+// ---------------------------------------------------------------------------
+// Reading JSON text the way serde_json does (no `float_roundtrip`)
+
+const U64_MAX = 18446744073709551615n;
+const POW10 = Array.from({ length: 309 }, (_, index) => Number(`1e${index}`));
+
+/**
+ * The f64 serde_json (without `float_roundtrip`) reads from a JSON number
+ * literal: the digits as a u64 (later ones dropped once it would overflow),
+ * as f64, times or over one power of ten. Correctly rounded for up to 15
+ * significant digits, but not always beyond: "9.299999999999999" is read as
+ * 9.3. The Rust server parses every file and request body so, and the addon
+ * reads exactly (it has `float_roundtrip`, so the values passed to it keep
+ * what they are); where Rust reads text, the TS reads it with this.
+ */
+export function serdeNumber(literal: string): number {
+  let at = 0;
+  const positive = literal[0] !== "-";
+  if (!positive) at++;
+  let significand = 0n;
+  let exponent = 0;
+  let overflowed = false;
+  const digit = () => {
+    const code = literal.charCodeAt(at) - 48;
+    return code >= 0 && code <= 9 ? code : -1;
+  };
+  const push = (value: number): boolean => {
+    const next = significand * 10n + BigInt(value);
+    if (next > U64_MAX) return false;
+    significand = next;
+    return true;
+  };
+  // The integer part: past u64, the rest only count as powers of ten.
+  for (let value = digit(); value >= 0; value = digit()) {
+    at++;
+    if (overflowed || !push(value)) {
+      overflowed = true;
+      exponent += 1;
+    }
+  }
+  const integerOnly = literal[at] !== "." && literal[at] !== "e" && literal[at] !== "E";
+  if (integerOnly && !overflowed) {
+    // An integer: u64 or i64 to serde, which an f64 field takes `as f64`.
+    return positive ? Number(significand) : -Number(significand);
+  }
+  if (literal[at] === ".") {
+    at++;
+    for (let value = digit(); value >= 0; value = digit()) {
+      at++;
+      if (overflowed) continue;
+      if (!push(value)) {
+        overflowed = true;
+        continue;
+      }
+      exponent -= 1;
+    }
+  }
+  if (literal[at] === "e" || literal[at] === "E") {
+    at++;
+    let sign = 1;
+    if (literal[at] === "+") at++;
+    else if (literal[at] === "-") {
+      sign = -1;
+      at++;
+    }
+    let exp = 0;
+    for (let value = digit(); value >= 0; value = digit()) {
+      at++;
+      exp = exp * 10 + value;
+      if (exp > 2147483647) return sign > 0 ? (positive ? Infinity : -Infinity) : positive ? 0 : -0;
+    }
+    exponent += sign * exp;
+  }
+  let f = Number(significand);
+  for (;;) {
+    const pow = POW10[Math.abs(exponent)];
+    if (pow !== undefined) {
+      if (exponent >= 0) f *= pow;
+      else f /= pow;
+      break;
+    }
+    if (f === 0) break;
+    if (exponent >= 0) return positive ? Infinity : -Infinity;
+    f /= 1e308;
+    exponent += 308;
+  }
+  return positive ? f : -f;
+}
+
+/** JSON.parse, numbers read as serde_json reads them (`serdeNumber`). */
+export function serdeParse<T = unknown>(text: string): T {
+  // Up to 15 significant digits and no exponent, serde is exact: JSON.parse's own value.
+  if (!LOSSY.test(text)) return JSON.parse(text) as T;
+  return JSON.parse(text, (_key, value: unknown, context?: { source?: string }) => {
+    if (typeof value !== "number" || context?.source === undefined) return value;
+    const source = context.source;
+    return source.length < 16 && !/[eE]/.test(source) ? value : serdeNumber(source);
+  }) as T;
+}
+
+/** A number literal serde might read differently from JS: 16+ digits, or an exponent. */
+const LOSSY = /[\d.]{16}|\d[eE][+-]?\d/;
+
+/**
+ * JSON text with each number literal that serde reads differently from its
+ * exact value rewritten as the value serde reads; everything else (strings,
+ * key order, spacing) untouched. For text handed to the addon, which reads
+ * exactly, where the Rust server read the same text with serde (project files).
+ */
+export function asSerdeRead(text: string): string {
+  if (!LOSSY.test(text)) return text;
+  let out = "";
+  let last = 0;
+  let at = 0;
+  while (at < text.length) {
+    const char = text.charCodeAt(at);
+    if (char === 34) {
+      // A string: skipped whole, escapes included.
+      at++;
+      while (at < text.length && text.charCodeAt(at) !== 34) at += text.charCodeAt(at) === 92 ? 2 : 1;
+      at++;
+      continue;
+    }
+    if (char === 45 || (char >= 48 && char <= 57)) {
+      const from = at;
+      at++;
+      while (at < text.length && NUMBER_CHAR.test(text[at]!)) at++;
+      const literal = text.slice(from, at);
+      if (literal.length >= 16 || /[eE]/.test(literal)) {
+        const value = serdeNumber(literal);
+        if (Number.isFinite(value) && value !== Number(literal)) {
+          out += text.slice(last, from) + String(value);
+          last = at;
+        }
+      }
+      continue;
+    }
+    at++;
+  }
+  return last === 0 ? text : out + text.slice(last);
+}
+
+const NUMBER_CHAR = /[0-9.eE+-]/;

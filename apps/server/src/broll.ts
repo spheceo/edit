@@ -20,7 +20,7 @@ import type { Clip, Media, Probe, Project, VideoClip } from "./model.ts";
 import { canonical, fileName, fileStem, isFile, join, withExtension } from "./paths.ts";
 import { clipMedia, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import * as relay from "./relay.ts";
-import { compareStrings, display, fixed, round, toI64, trim } from "./rust.ts";
+import { compareStrings, display, fixed, round, serdeParse, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
@@ -477,7 +477,7 @@ async function geocode(place: string): Promise<[number, number, string]> {
   const url = `${relay.url()}/v1/geocode?address=${urlencode(place)}`;
   let found: Record<string, unknown>;
   try {
-    found = JSON.parse(await fetchText(url)) as Record<string, unknown>;
+    found = serdeParse(await fetchText(url)) as Record<string, unknown>;
   } catch (error) {
     if (error instanceof SyntaxError) throw new Error(`unexpected answer from the map search: ${error.message}`);
     throw error;
@@ -501,7 +501,7 @@ async function geocode(place: string): Promise<[number, number, string]> {
 async function buildingOutline(lat: number, lon: number): Promise<[number, number][] | null> {
   try {
     const url = `${relay.url()}/v1/outline?lat=${display(lat)}&lon=${display(lon)}`;
-    return outlineIn(JSON.parse(await fetchText(url)));
+    return outlineIn(serdeParse(await fetchText(url)));
   } catch {
     return null;
   }
@@ -698,7 +698,7 @@ export function framesHad(dir: string, count: number): number[] {
 
 function parseOr(text: string | Uint8Array): Json {
   try {
-    return JSON.parse(typeof text === "string" ? text : new TextDecoder().decode(text));
+    return serdeParse(typeof text === "string" ? text : new TextDecoder().decode(text));
   } catch {
     return null;
   }
@@ -959,7 +959,7 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
   if (isFile(out)) {
     let kept: Json = null;
     try {
-      kept = JSON.parse(fs.readFileSync(measured, "utf8"));
+      kept = serdeParse(fs.readFileSync(measured, "utf8"));
     } catch {
       kept = null;
     }

@@ -20,7 +20,7 @@ import * as media from "./media.ts";
 import { native } from "./native/index.ts";
 import { join } from "./paths.ts";
 import { ioMessage } from "./files.ts";
-import { fixed, get, round, trim } from "./rust.ts";
+import { fixed, get, round, serdeParse, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
@@ -91,7 +91,7 @@ export class Seats {
   static parse(text: string): Seats | null {
     let value: unknown;
     try {
-      value = JSON.parse(text);
+      value = serdeParse(text);
     } catch {
       return null;
     }
@@ -408,7 +408,7 @@ async function look(
   if (typeof content !== "string") throw new Error("the model gave no answer");
   let answer: unknown;
   try {
-    answer = JSON.parse(seams.watch.unfence(content));
+    answer = serdeParse(seams.watch.unfence(content));
   } catch (error) {
     throw new Error(`the model's answer isn't JSON: ${diag.messageOf(error)}`);
   }

@@ -5,7 +5,7 @@ import { timings } from "../src/diag.ts";
 import { mapAssets, staticAsset, useAssets } from "../src/http/assets.ts";
 import { ApiError, bad, json } from "../src/http/errors.ts";
 import { sameOrigin } from "../src/http/host.ts";
-import { readJson, Router } from "../src/http/router.ts";
+import { badShape, readJson, Router, valueEnd } from "../src/http/router.ts";
 import { baseRouter, listen, respond } from "../src/http/server.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -97,6 +97,34 @@ test("failures answer with JSON and a crash doesn't take the server down", async
     ))!;
     expect([big.status, await big.text()]).toEqual([413, "Failed to buffer the request body: length limit exceeded"]);
     expect(new ApiError(423, "held", false).response().status).toBe(423);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a body of the wrong shape says where, as serde does (line and column just past the value)", async () => {
+  const { app, cleanup } = fixtureHome("http-shape");
+  try {
+    const routes = baseRouter().post("/api/shape", async (context) => {
+      const given = (await readJson(context)) as Record<string, unknown>;
+      if (given.name === undefined) throw badShape("missing field `name`");
+      if (typeof given.name !== "string") throw badShape("name: invalid type: integer `3`, expected a string");
+      throw badShape("project.clips[0]: missing field `start`");
+    });
+    const ask = async (body: string) => {
+      const init = { method: "POST", body, headers: { "content-type": "application/json" } };
+      const response = (await respond(app, routes, request("/api/shape", init), null))!;
+      return [response.status, await response.text()];
+    };
+    const prefix = "Failed to deserialize the JSON body into the target type: ";
+    // As the Rust server answered these (axum's Json, serde_path_to_error).
+    expect(await ask('{"width":3}')).toEqual([422, `${prefix}missing field \`name\` at line 1 column 11`]);
+    expect(await ask('{ "name": 3 }')).toEqual([422, `${prefix}name: invalid type: integer \`3\`, expected a string at line 1 column 11`]);
+    expect(await ask('{"name":"x",\n "project":{"clips":[{"id":"x","track":"nope"}]}}')).toEqual([
+      422,
+      `${prefix}project.clips[0]: missing field \`start\` at line 2 column 46`,
+    ]);
+    expect(valueEnd('{"a":[1,{"b":"}"}]}', ["a", 1])).toBe(17);
   } finally {
     cleanup();
   }

@@ -41,7 +41,7 @@ import type { Project } from "./model.ts";
 import { join } from "./paths.ts";
 import { duration } from "./project.ts";
 import * as relay from "./relay.ts";
-import { byteLength, isWhitespace, takeChars } from "./rust.ts";
+import { byteLength, isWhitespace, serdeParse, takeChars } from "./rust.ts";
 import { stableStringify } from "./stable.ts";
 import { isSubtitled, nowMs, validId, type CloudHook, type Store } from "./store.ts";
 
@@ -893,7 +893,7 @@ export const remote = {
     const bytes = await http("GET", url, null, SLOW);
     let value: unknown;
     try {
-      value = JSON.parse(new TextDecoder().decode(bytes));
+      value = serdeParse(new TextDecoder().decode(bytes));
     } catch (error) {
       throw new Error(`the cloud's project file: ${diag.messageOf(error)}`);
     }

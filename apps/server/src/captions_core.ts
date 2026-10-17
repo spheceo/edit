@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import { ioMessage } from "./files.ts";
 import type { Media, Rgba, TextStyle } from "./model.ts";
-import { charCount, f32, F32_MAX, parseHex, splitWhitespace, trim } from "./rust.ts";
+import { charCount, f32, F32_MAX, parseHex, serdeParse, splitWhitespace, trim } from "./rust.ts";
 import type { Transcript } from "./transcribe.ts";
 
 /** How long a transcript wait pauses between looks (tests make it instant). */
@@ -54,7 +54,7 @@ export async function transcriptOf(app: App, media: Media): Promise<Transcript> 
 export function parseTranscript(text: string): Transcript {
   let value: unknown;
   try {
-    value = JSON.parse(text);
+    value = serdeParse(text);
   } catch (error) {
     throw new Error((error as Error).message);
   }

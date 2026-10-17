@@ -49,7 +49,7 @@ import {
   sample,
   subtitlesTrack,
 } from "./project.ts";
-import { chars, f32, fixed, isAlphanumeric, round, toI64, trim } from "./rust.ts";
+import { chars, f32, fixed, isAlphanumeric, round, serdeParse, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Face, Found, Line as TimedLine, Suggestion } from "./seams.ts";
 import { compareKeys } from "./stable.ts";
@@ -196,7 +196,7 @@ interface Seen {
 function readWatched(text: string): Watched {
   let value: unknown;
   try {
-    value = JSON.parse(text);
+    value = serdeParse(text);
   } catch (error) {
     throw new Error(diag.messageOf(error));
   }

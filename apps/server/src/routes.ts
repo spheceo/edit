@@ -132,21 +132,29 @@ function kindOf(value: unknown): string {
   return "map";
 }
 
-function field<T>(object: Record<string, unknown>, name: string, kind: "string" | "boolean" | "number", required: true): T;
-function field<T>(object: Record<string, unknown>, name: string, kind: "string" | "boolean" | "number", required?: false): T | null;
-function field<T>(
-  object: Record<string, unknown>,
-  name: string,
-  kind: "string" | "boolean" | "number",
-  required = false,
-): T | null {
+/** What serde says it expected of a JSON kind ("a string"; numbers by their Rust type: "u32"). */
+type Expected = "string" | "boolean" | "u32" | "u64" | "f64";
+
+const EXPECTED: Record<Expected, string> = { string: "a string", boolean: "a boolean", u32: "u32", u64: "u64", f64: "f64" };
+
+function field<T>(object: Record<string, unknown>, name: string, kind: Expected, required: true): T;
+function field<T>(object: Record<string, unknown>, name: string, kind: Expected, required?: false): T | null;
+function field<T>(object: Record<string, unknown>, name: string, kind: Expected, required = false): T | null {
   const value = object[name];
+  const expected = EXPECTED[kind];
   if (value === undefined || value === null) {
     if (required && value === undefined) throw badShape(`missing field \`${name}\``);
-    if (required) throw badShape(`${name}: invalid type: null, expected a ${kind}`);
+    if (required) throw badShape(`${name}: invalid type: null, expected ${expected}`);
     return null;
   }
-  if (typeof value !== kind) throw badShape(`${name}: invalid type: ${kindOf(value)}, expected a ${kind}`);
+  const js = kind === "string" || kind === "boolean" ? kind : "number";
+  if (typeof value !== js) throw badShape(`${name}: invalid type: ${kindOf(value)}, expected ${expected}`);
+  if ((kind === "u32" || kind === "u64") && !Number.isInteger(value)) {
+    throw badShape(`${name}: invalid type: ${kindOf(value)}, expected ${expected}`);
+  }
+  if ((kind === "u32" || kind === "u64") && ((value as number) < 0 || (kind === "u32" && (value as number) > 0xffff_ffff))) {
+    throw badShape(`${name}: invalid value: ${kindOf(value)}, expected ${expected}`);
+  }
   return value as T;
 }
 
@@ -326,11 +334,8 @@ async function createProject(context: Context): Promise<Response> {
     throw badShape(`style: unknown variant \`${String(style)}\`, expected one of \`bodycam\`, \`interrogation\`, \`courtroom\``);
   }
   const size = (key: "width" | "height" | "fps") => {
-    const value = field<number>(given, key, "number");
+    const value = field<number>(given, key, "u32");
     if (value === null) return DEFAULT_SETTINGS[key];
-    if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
-      throw badShape(`${key}: invalid value: ${kindOf(value)}, expected u32`);
-    }
     return value;
   };
   const settings = { width: size("width"), height: size("height"), fps: size("fps") };
@@ -364,7 +369,7 @@ function getProject({ app, params }: Context): Response {
 
 async function putProject(context: Context): Promise<Response> {
   const given = await body(context);
-  const baseRev = field<number>(given, "base_rev", "number");
+  const baseRev = field<number>(given, "base_rev", "u64");
   if (given.project === undefined) throw badShape("missing field `project`");
   if (typeof given.project !== "object" || given.project === null || Array.isArray(given.project)) {
     throw badShape(`project: invalid type: ${kindOf(given.project)}, expected struct Project`);
@@ -634,8 +639,15 @@ async function mediaFile(context: Context): Promise<Response> {
       throw notFound("unknown media file");
   }
   if (!isFile(file)) throw notFound("not ready");
-  const response = serveFile(context.request, file);
-  if (kind === "peaks") response.headers.set("content-type", "application/octet-stream");
+  let response = serveFile(context.request, file);
+  if (kind === "peaks") {
+    // Bun names an octet-stream file in a content-disposition header; tower's ServeFile
+    // doesn't. The peaks are small: sent as bytes, the header stays out.
+    const headers = new Headers(response.headers);
+    headers.set("content-type", "application/octet-stream");
+    const body = response.body === null ? null : new Uint8Array(await response.arrayBuffer());
+    response = new Response(body, { status: response.status, headers });
+  }
   // Never the original standing in while the preview is missing.
   const keep = lasting && file !== media.path && response.status >= 200 && response.status < 300;
   response.headers.set("cache-control", keep ? "private, max-age=31536000, immutable" : "no-cache");

@@ -15,7 +15,7 @@ import { ioMessage, writeAtomic } from "./files.ts";
 import { catchBugs, catchBugsAsync } from "./guard.ts";
 import type { Person } from "./seams.ts";
 import { parseTranscript } from "./captions_core.ts";
-import { byteLength, chars, get, isAlphanumeric, parseHex, trim } from "./rust.ts";
+import { byteLength, chars, get, isAlphanumeric, parseHex, serdeParse, trim } from "./rust.ts";
 import { compareKeys } from "./stable.ts";
 import { serialize, type Transcript, type Word } from "./transcribe.ts";
 
@@ -297,7 +297,7 @@ function context(app: App, source: string): string {
 
 /** The model's answer as serde reads `Named` (its messages roughly serde's). */
 export function parseNamed(answer: string): Named {
-  const value = JSON.parse(answer) as unknown;
+  const value = serdeParse(answer) as unknown;
   const object = value as { speakers?: unknown } | null;
   if (typeof object !== "object" || object === null) throw new Error("invalid type: expected struct Named");
   if (!Array.isArray(object.speakers)) throw new Error("missing field `speakers`");

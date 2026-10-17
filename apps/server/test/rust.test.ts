@@ -2,9 +2,39 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { asInt, debugStr, debugStrings, display, f32Saved as f32, fixed, fixed32, idiv, round, signed, signed32 } from "../src/rust.ts";
+import {
+  asInt,
+  asSerdeRead,
+  debugStr,
+  debugStrings,
+  display,
+  f32Saved as f32,
+  fixed,
+  fixed32,
+  idiv,
+  round,
+  serdeNumber,
+  serdeParse,
+  signed,
+  signed32,
+} from "../src/rust.ts";
 import { fnv1a32, find, path } from "../src/sfx.ts";
 import { scratch } from "./helpers/home.ts";
+
+test("numbers are read as serde_json reads them without float_roundtrip", () => {
+  // As serde_json 1.0.151 read them (checked against the addon built without float_roundtrip
+  // on 24,000 literals): exact up to 15 digits, a u64 significand over a power of ten past that.
+  expect(serdeNumber("9.299999999999999")).toBe(9.3);
+  expect(serdeNumber("13.866666666666667")).toBe(13.866666666666667);
+  expect(serdeNumber("0.30000000000000004")).toBe(0.30000000000000004);
+  expect(serdeNumber("-1.5e3")).toBe(-1500);
+  expect(serdeNumber("12345678901234567890123.5")).toBe(12345678901234567000000);
+  expect(serdeNumber("-0")).toBe(-0);
+  expect(serdeParse<{ a: number[] }>('{"a": [9.299999999999999, 1.25]}').a).toEqual([9.3, 1.25]);
+  // Only the numbers change; a number in a string is left alone.
+  expect(asSerdeRead('{"s": "9.299999999999999", "n": 9.299999999999999}')).toBe('{"s": "9.299999999999999", "n": 9.3}');
+  expect(asSerdeRead('{"n": 1.5}')).toBe('{"n": 1.5}');
+});
 
 test("{:.N} rounds the exact value, ties to even, and keeps a negative zero's sign", () => {
   expect(fixed(104, 2)).toBe("104.00");

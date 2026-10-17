@@ -21,6 +21,7 @@ import type { Clip, DriveFile, Project, ProjectSummary, Settings, Style } from "
 import { native } from "./native/index.ts";
 import { extension, fileStem, join } from "./paths.ts";
 import { duration, mediaOf, newProject } from "./project.ts";
+import { asSerdeRead } from "./rust.ts";
 
 export { nextFileId, nowMs, writeAtomic } from "./files.ts";
 
@@ -295,7 +296,8 @@ export class Store {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       return { problem: `can't read it: ${ioMessage(error)}` };
     }
-    const loaded = native().projectLoad(text);
+    // As serde read it in the Rust server (the addon reads numbers exactly).
+    const loaded = native().projectLoad(asSerdeRead(text));
     if (loaded.problem !== undefined) {
       // A file holding another project says so, even when it doesn't validate either.
       const holds = idIn(text);

@@ -27,7 +27,7 @@ import { mediaKey, Semaphore } from "./media.ts";
 import type { Project, Segment } from "./model.ts";
 import { join, parent } from "./paths.ts";
 import { clipEnd, clipMedia, duration as durationOf, fps as fpsOf, mediaOf } from "./project.ts";
-import { fixed, round, splitWhitespace, toI64, trim } from "./rust.ts";
+import { fixed, round, serdeParse, splitWhitespace, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { TimedWord, Window, WatchOptions } from "./seams.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
@@ -572,7 +572,7 @@ export async function post(body: string): Promise<unknown> {
   }
   let value: unknown = null;
   try {
-    value = JSON.parse(text);
+    value = serdeParse(text);
   } catch {
     value = null;
   }
@@ -635,7 +635,7 @@ async function ask(clip: string, text: string, lines: number, scratch: string, e
   if (typeof content !== "string") throw new Error("the model gave no answer");
   let answer: Answer;
   try {
-    answer = readAnswer(JSON.parse(unfence(content)));
+    answer = readAnswer(serdeParse(unfence(content)));
   } catch (error) {
     throw new Error(`the model's answer isn't the JSON asked for: ${diag.messageOf(error)}`);
   }
@@ -680,7 +680,7 @@ export async function watchWindow(
     const others = otherKeys(dir).map((other) => join(dir, `${cacheKey(other, window, lines)}.json`));
     for (const file of [cached, ...others]) {
       try {
-        const value = JSON.parse(fs.readFileSync(file, "utf8")) as { answer?: unknown } | null;
+        const value = serdeParse(fs.readFileSync(file, "utf8")) as { answer?: unknown } | null;
         if (value !== null && typeof value === "object" && value.answer !== undefined) return [readAnswer(value.answer), 0.0, true];
       } catch {
         // Not cached (or not readable): watched again.
@@ -1045,7 +1045,7 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
     const key = completedKey(project, transcripts, setSegments);
     let report: unknown;
     try {
-      const value = JSON.parse(fs.readFileSync(receipt, "utf8")) as { key?: unknown; report?: unknown } | null;
+      const value = serdeParse(fs.readFileSync(receipt, "utf8")) as { key?: unknown; report?: unknown } | null;
       if (value !== null && typeof value === "object" && value.key === key && value.report !== undefined) report = value.report;
     } catch {
       report = undefined;

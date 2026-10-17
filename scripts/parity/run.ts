@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as nodePath from "node:path";
 
 import { ParityMock } from "../../apps/server/test/mocks/parity.ts";
-import { compare, compareText, contextOf, normalize, type Difference, type Context } from "./compare.ts";
+import { compare, compareText, contextOf, normalize, replaceText, type Difference, type Context } from "./compare.ts";
 import { makeFixtures, remapProject, type Fixtures } from "./fixtures.ts";
 import { parityDir, writeStubWeb } from "./paths.ts";
 import { Side, type ServerConfig, type SideName } from "./servers.ts";
@@ -39,7 +39,7 @@ const REAL = [
   { id: "p1791811932480-23", role: "reference edit (script, cut-ins, voice-overs, music)" },
   { id: "p1792146274480-1", role: "subtitled video" },
 ];
-const SEED_VERSION = 4;
+const SEED_VERSION = 5;
 
 for (const file of [rustBin, nativeNode]) {
   if (!fs.existsSync(file)) {
@@ -61,6 +61,10 @@ function serviceEnv(mock: ParityMock, cloud: boolean): Record<string, string> {
     GOOGLE_DRIVE_CLIENT_SECRET: "parity-secret",
     GOOGLE_DOCS_REFRESH_TOKEN: "parity-refresh",
     EDIT_CLOUD_HOLDER: "parity-mac",
+    // Both on the FFmpeg Edit ships (build.ts fetches it).
+    ...(fs.existsSync(nodePath.join(bin, "ffmpeg/ffmpeg"))
+      ? { EDIT_FFMPEG: nodePath.join(bin, "ffmpeg/ffmpeg"), EDIT_FFPROBE: nodePath.join(bin, "ffmpeg/ffprobe") }
+      : {}),
     ...(cloud ? { EDIT_RELAY_TOKEN: "parity-relay-token" } : {}),
   };
 }
@@ -261,8 +265,8 @@ const world: World = {
 };
 
 const contexts = (): Record<SideName, Context> => ({
-  rust: contextOf(sides.rust, mocks.rust.url, ids.rust),
-  ts: contextOf(sides.ts, mocks.ts.url, ids.ts),
+  rust: contextOf(sides.rust, mocks.rust.url, ids.rust, runDir),
+  ts: contextOf(sides.ts, mocks.ts.url, ids.ts, runDir),
 });
 
 /** The project files on disk, normalized: projects/*.json, history counts, deleted names. */
@@ -281,14 +285,25 @@ function projectFiles(side: Side, context: Context): Record<string, string> {
       } else if (name === "deleted") {
         out.deleted = fs
           .readdirSync(full)
-          .map((file) => contextLabel(file, context))
+          .map((file) => replaceText(file, context))
           .sort()
           .join(", ");
       }
       continue;
     }
-    if (name.endsWith(".chat.json")) continue; // agent chats: compared by their route
-    out[contextLabel(name, context)] = fs.readFileSync(full, "utf8");
+    let text = fs.readFileSync(full, "utf8");
+    if (name.endsWith(".chat.json")) {
+      // Codex failing to start ends a turn twice (the turn's error, the process's exit): which
+      // lands first is a race, and both can be kept. Compared without them.
+      try {
+        const chat = JSON.parse(text) as { entries?: { kind?: string; text?: string }[] };
+        chat.entries = (chat.entries ?? []).filter((entry) => !(entry.kind === "error" && /^Codex stopped/.test(entry.text ?? "")));
+        text = JSON.stringify(chat);
+      } catch {
+        // compared as it is
+      }
+    }
+    out[contextLabel(name, context)] = replaceText(text, context);
   }
   return out;
 }
@@ -307,9 +322,13 @@ function eventsOf(side: Side, from: number, context: Context): { project: unknow
     const normalized = normalize(event, context) as Record<string, unknown>;
     if (event.type === "project") project.push(normalized);
     else if (event.type === "media") lastMedia.set(String(normalized.path), normalized);
+    // Codex failing to start ends a turn twice (the turn's error, the process's exit):
+    // which lands first is a race, and the later one replaces the entry. The chat file says how it ended.
+    else if (event.type === "agent" && (event.entry as { kind?: string } | undefined)?.kind === "error") continue;
     else {
       // Progress is a matter of timing: only the states reached count.
       const { progress: _progress, bytes: _bytes, frames: _frames, fps: _fps, done: _done, ...rest } = normalized;
+      if (event.type === "export") delete rest.seconds;
       other.add(JSON.stringify(sortKeys(rest)));
     }
   }
@@ -339,6 +358,10 @@ function expectedFor(step: Step, differences: Difference[]): string | undefined 
 }
 
 const findings: Finding[] = [];
+/** File differences already reported (file → the difference), so one isn't reported again by every later step. */
+const reported = new Map<string, string>();
+/** Steps whose (Rust) answer was a refusal or failure: the same on both sides, but not a success. */
+const outcomes = new Map<string, string>();
 const log: string[] = [];
 const say = (line: string) => {
   log.push(line);
@@ -381,7 +404,18 @@ try {
         }
         compareText(left[name]!, right[name]!, name, files);
       }
-      if (files.length > 0) stepFindings.push({ step: step.name, kind: "files", differences: files });
+      // A difference already reported stays until the file changes: only what this step changed is its own.
+      const fresh = files.filter((difference) => {
+        const name = difference.path.replace(/:\d+$/, "");
+        const seen = JSON.stringify([difference.rust, difference.ts]);
+        const same = reported.get(name) === seen;
+        reported.set(name, seen);
+        return !same;
+      });
+      for (const name of [...reported.keys()]) {
+        if (!files.some((difference) => difference.path.replace(/:\d+$/, "") === name)) reported.delete(name);
+      }
+      if (fresh.length > 0) stepFindings.push({ step: step.name, kind: "files", differences: fresh });
     }
     if (step.events !== "none") {
       const left = eventsOf(sides.rust, before.rust, context.rust);
@@ -391,10 +425,21 @@ try {
       if (events.length > 0) stepFindings.push({ step: step.name, kind: "events", differences: events });
     }
     if (step.calls !== false) {
-      const left = mocks.rust.server.requests.slice(callsBefore.rust).map((request) => `${request.method} ${contextLabel(request.path, context.rust)}`).sort();
-      const right = mocks.ts.server.requests.slice(callsBefore.ts).map((request) => `${request.method} ${contextLabel(request.path, context.ts)}`).sort();
-      const calls = compare(left, right, "outside calls");
+      // The cloud's sync runs in the background on its own clock: compared over the whole run instead.
+      const own = (side: SideName, from: number) =>
+        callKeys(mocks[side].server.requests.slice(from), context[side]).filter((key) => !isCloudCall(key));
+      const calls = multisetDifference(own("rust", callsBefore.rust), own("ts", callsBefore.ts), "outside calls");
       if (calls.length > 0) stepFindings.push({ step: step.name, kind: "calls", differences: calls });
+    }
+    const outcome = (value: unknown) => outcomeOf(normalize(value, context.rust));
+    if (failed.rust === null && failed.ts === null) {
+      const rustOutcome = outcome(said.rust);
+      fs.mkdirSync(nodePath.join(dir, "answers"), { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(dir, "answers", `${String(steps.indexOf(step)).padStart(3, "0")} ${step.name.replace(/[^\w .()-]+/g, "_")}.json`),
+        JSON.stringify(normalize(said.rust, context.rust), (_key, item) => (item instanceof Uint8Array ? `<${item.length} bytes>` : item), 2),
+      );
+      if (rustOutcome !== "ok") outcomes.set(step.name, rustOutcome);
     }
     for (const finding of stepFindings) {
       finding.expected = expectedFor(step, finding.differences);
@@ -402,7 +447,8 @@ try {
     }
     const unexpected = stepFindings.filter((finding) => finding.expected === undefined);
     const status = stepFindings.length === 0 ? "same" : unexpected.length === 0 ? "expected" : "DIFFERENT";
-    say(`${status.padEnd(9)} ${step.name} (${((Date.now() - started) / 1000).toFixed(1)} s)`);
+    const note = outcomes.has(step.name) ? ` [rust answered: ${outcomes.get(step.name)}]` : "";
+    say(`${status.padEnd(9)} ${step.name} (${((Date.now() - started) / 1000).toFixed(1)} s)${note}`);
     for (const finding of stepFindings) {
       for (const difference of finding.differences.slice(0, 12)) {
         say(
@@ -420,6 +466,22 @@ try {
   // What the mock answered, by request hash (for --replay).
   const recording = Object.fromEntries([...mocks.rust.answers, ...mocks.ts.answers]);
   fs.writeFileSync(nodePath.join(dir, "recording.json"), JSON.stringify(recording));
+}
+
+/** Lease renewals and the like: how many depends on how long the run took. */
+const BACKGROUND = /renew|heartbeat|getLock|listProjects|edit:status/i;
+
+// The outside calls over the whole run (the cloud's background sync included), as counts.
+{
+  const context = contexts();
+  const all = (side: SideName) => callKeys(mocks[side].server.requests, context[side]).filter((key) => !BACKGROUND.test(key));
+  const calls = multisetDifference(all("rust"), all("ts"), "all outside calls");
+  if (calls.length > 0) {
+    const finding: Finding = { step: "(the whole run)", kind: "calls", differences: calls };
+    findings.push(finding);
+    say("calls over the whole run differ:");
+    for (const difference of calls) say(`    ! ${difference.path}: rust ${JSON.stringify(difference.rust)} | ts ${JSON.stringify(difference.ts)}`);
+  }
 }
 
 // Coverage: every route in the Rust router and every tool in tools/list.
@@ -451,6 +513,63 @@ if (!args.includes("--keep")) {
   // The homes stay for a look until the next run; the servers are stopped.
 }
 process.exit(unexpected.length > 0 ? 1 : 0);
+
+/** A mock request as compared: method, path, and for Convex the function called. */
+function callKeys(requests: { method: string; path: string; text(): string }[], context: Context): string[] {
+  return requests.map((request) => {
+    let key = `${request.method} ${replaceText(request.path, context)}`;
+    if (request.path === "/v1/cloud/convex") {
+      try {
+        key += ` ${String((JSON.parse(request.text()) as { path?: unknown }).path)}`;
+      } catch {
+        // not JSON
+      }
+    }
+    return key;
+  });
+}
+
+function isCloudCall(key: string): boolean {
+  return / \/v1\/cloud\/| \/r2\/| \/convex\//.test(key);
+}
+
+
+function multisetDifference(left: string[], right: string[], label: string): Difference[] {
+  const counts = new Map<string, [number, number]>();
+  for (const key of left) counts.set(key, [(counts.get(key)?.[0] ?? 0) + 1, counts.get(key)?.[1] ?? 0]);
+  for (const key of right) counts.set(key, [counts.get(key)?.[0] ?? 0, (counts.get(key)?.[1] ?? 0) + 1]);
+  const out: Difference[] = [];
+  for (const [key, [a, b]] of [...counts].sort()) if (a !== b) out.push({ path: `${label}: ${key}`, rust: a, ts: b });
+  return out;
+}
+
+/** "ok", or what went wrong, from a step's answer (HTTP >= 400, an MCP error). */
+function outcomeOf(value: unknown): string {
+  const found: string[] = [];
+  const visit = (item: unknown): void => {
+    if (found.length > 0 || item === null || typeof item !== "object") return;
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.status === "number" && record.status >= 400) {
+      found.push(`${record.status} ${JSON.stringify(record.body ?? "").slice(0, 120)}`);
+      return;
+    }
+    if (record.isError === true) {
+      found.push(`error ${JSON.stringify(record.content ?? "").slice(0, 160)}`);
+      return;
+    }
+    if (record.error !== undefined && record.error !== null && typeof record.error === "object") {
+      found.push(`rpc error ${JSON.stringify(record.error).slice(0, 120)}`);
+      return;
+    }
+    Object.values(record).forEach(visit);
+  };
+  visit(value);
+  return found[0] ?? "ok";
+}
 
 /** The Rust router's routes (server.rs `router`, cloud_projects `routes`), as "METHOD /path/{param}". */
 function rustRoutes(): string[] {

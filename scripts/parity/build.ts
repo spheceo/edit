@@ -5,7 +5,9 @@
 // Each build has its own target and build dirs (the shared build-dir corrupts
 // concurrent builds), deleted afterwards; CARGO_BUILD_JOBS=4 by default.
 //
-//     bun scripts/parity/build.ts [--dir /tmp/edit-parity] [--only rust|native]
+// - ffmpeg/: the FFmpeg that ships with Edit (scripts/ffmpeg.sh), which both use.
+//
+//     bun scripts/parity/build.ts [--dir /tmp/edit-parity] [--only rust|native|ffmpeg]
 
 import * as fs from "node:fs";
 import * as nodePath from "node:path";
@@ -65,5 +67,10 @@ if (only === undefined || only === "native") {
   } finally {
     fs.rmSync(target, { recursive: true, force: true });
   }
+}
+if (only === undefined || only === "ffmpeg") {
+  // The FFmpeg Edit ships (the dev one on PATH lacks options the cloud paths use).
+  const arch = process.arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+  run(["sh", "scripts/ffmpeg.sh", arch, nodePath.join(bin, "ffmpeg")], repo);
 }
 console.log(`parity: built into ${bin}`);

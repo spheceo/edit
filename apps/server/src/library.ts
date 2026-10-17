@@ -32,7 +32,7 @@ import type { AudioClip, Clip, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { join } from "./paths.ts";
 import { fps as fpsOf, isSoundEffect, mediaOf } from "./project.ts";
-import { debugStrings, lines, trim } from "./rust.ts";
+import { debugStrings, lines, serdeParse, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Sound } from "./seams.ts";
 import { compareKeys } from "./stable.ts";
@@ -184,7 +184,7 @@ export class Library implements seams.Library {
       if (page !== "") url += `&pageToken=${encode(page)}`;
       let value: unknown;
       try {
-        value = JSON.parse(await this.text(url));
+        value = serdeParse(await this.text(url));
       } catch (error) {
         if (error instanceof SyntaxError) throw new Error(error.message);
         throw error;
@@ -236,7 +236,7 @@ export class Library implements seams.Library {
     const [code, body] = await curl(config, ["--max-time", "30", "https://oauth2.googleapis.com/token"]);
     let value: unknown = null;
     try {
-      value = JSON.parse(new TextDecoder().decode(body));
+      value = serdeParse(new TextDecoder().decode(body));
     } catch {
       value = null;
     }

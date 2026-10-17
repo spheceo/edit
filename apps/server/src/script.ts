@@ -1330,6 +1330,8 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
   if (!app.scripts.claim(app, projectId, job)) return null;
   const id = projectId;
   const work = async () => {
+    // As tokio::spawn: the job runs after the caller has answered with it (files still queued).
+    await Promise.resolve();
     const done: [string, Excerpt[]][] = [];
     for (const [index, file] of files.entries()) {
       setFileState(app, id, index, "downloading");

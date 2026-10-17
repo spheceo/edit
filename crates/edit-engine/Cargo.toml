@@ -21,6 +21,7 @@ png = "0.18"
 pollster = "1"
 parking_lot = "0.12"
 ebur128 = "0.1"
+libc = "0.2"
 ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]

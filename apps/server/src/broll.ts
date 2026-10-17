@@ -15,7 +15,7 @@ import * as diag from "./diag.ts";
 import { copyFile, ioMessage } from "./files.ts";
 import { debugModified, fingerprint } from "./hash.ts";
 import { importPaths } from "./import.ts";
-import { backgroundSlots, probe as probeFile, Semaphore } from "./media.ts";
+import { probe as probeFile, Semaphore } from "./media.ts";
 import type { Clip, Media, Probe, Project, VideoClip } from "./model.ts";
 import { canonical, fileName, fileStem, isFile, join, withExtension } from "./paths.ts";
 import { clipMedia, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts";
@@ -55,8 +55,17 @@ export const timing = {
 
 type Json = unknown;
 
-/** Runs FFmpeg to the end; its exit status and stderr. */
-async function ffmpeg(args: string[], timeoutMs: number | null = null): Promise<{ ok: boolean; stderr: string; timedOut: boolean }> {
+/**
+ * Runs FFmpeg to the end; its exit status and stderr. `background` work
+ * (smoothing) is stopped (SIGSTOP) while an export runs and continued after,
+ * so it never takes the CPU from an export; the time limit only counts the
+ * time it ran.
+ */
+async function ffmpeg(
+  args: string[],
+  timeoutMs: number | null = null,
+  background = false,
+): Promise<{ ok: boolean; stderr: string; timedOut: boolean }> {
   let child: Bun.Subprocess<"ignore", "ignore", "pipe">;
   try {
     child = Bun.spawn([tools.ffmpeg(), ...args], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
@@ -64,16 +73,38 @@ async function ffmpeg(args: string[], timeoutMs: number | null = null): Promise<
     throw new Error(`ffmpeg: ${diag.messageOf(error)}`);
   }
   let timedOut = false;
-  const timer =
-    timeoutMs === null
-      ? null
-      : setTimeout(() => {
-          timedOut = true;
-          child.kill();
-        }, timeoutMs);
-  const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
-  if (timer !== null) clearTimeout(timer);
-  return { ok: code === 0 && !timedOut, stderr, timedOut };
+  let ran = 0;
+  let paused = false;
+  let last = Date.now();
+  const tick = setInterval(() => {
+    const now = Date.now();
+    if (!paused) ran += now - last;
+    last = now;
+    if (timeoutMs !== null && ran >= timeoutMs) {
+      timedOut = true;
+      if (paused) child.kill("SIGCONT");
+      child.kill();
+      return;
+    }
+    const stop = background && exportsRunning();
+    if (stop !== paused) {
+      child.kill(stop ? "SIGSTOP" : "SIGCONT");
+      paused = stop;
+    }
+  }, 250);
+  try {
+    const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    return { ok: code === 0 && !timedOut, stderr, timedOut };
+  } finally {
+    clearInterval(tick);
+    if (paused) child.kill("SIGCONT");
+  }
+}
+
+/** Whether an export is running (the server sets it; background FFmpeg waits for it). */
+let exportsRunning: () => boolean = () => false;
+export function pauseForExports(running: () => boolean): void {
+  exportsRunning = running;
 }
 
 /**
@@ -212,8 +243,10 @@ function sourceOf(clip: Clip): string | null {
 }
 
 /**
- * Optical flow is optional and uses one shared background slot. Serializing
- * it also prevents duplicate requests from writing the same cached file.
+ * One smoothing render at a time, in a lane of its own: it never holds the
+ * media processor's slot (`backgroundSlots`), so an import's previews don't
+ * wait behind minutes of optical flow. Serializing it also prevents
+ * duplicate requests from writing the same cached file.
  */
 const smoothingSlots = new Semaphore(1);
 
@@ -275,8 +308,7 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
     // A few renders at a time (see `smoothingSlots`); the rest wait their turn.
     const slot = await smoothingSlots.acquire();
     try {
-      const work = await backgroundSlots.acquire();
-      try {
+      {
         const partial = join(dir, `${stem}-${key}.partial.mp4`);
         // Never two renders into one file: a second ask waits for the first.
         if (isFile(out)) return await swapInSmooth(app, projectId, clip, out, fps);
@@ -322,6 +354,7 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
             partial,
           ],
           timing.smoothLimitMs,
+          true,
         );
         if (made.timedOut) {
           fs.rmSync(partial, { force: true });
@@ -336,8 +369,6 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
         } catch (error) {
           throw new Error(ioMessage(error));
         }
-      } finally {
-        work();
       }
     } finally {
       slot();

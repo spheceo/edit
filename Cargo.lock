@@ -989,6 +989,7 @@ dependencies = [
  "ebur128",
  "edit-core",
  "edit-render",
+ "libc",
  "parking_lot",
  "png 0.18.1",
  "pollster",

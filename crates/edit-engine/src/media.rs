@@ -241,6 +241,84 @@ pub struct CachePaths {
 }
 
 /// Runs FFmpeg to the end: its output, or its last line of complaint.
+/// `run` for background work (previews, proxies): while foreground work runs
+/// (an export), the FFmpeg child is stopped (SIGSTOP) and continued after
+/// (SIGCONT), so it never takes the hardware encoder, the decoders or the CPU
+/// from the export; FFmpeg children used to run on beside it (the same
+/// project's export took 4:33, 8:55 and 14:45).
+pub fn run_background(command: &mut Command) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("ffmpeg is not available ({error}); install FFmpeg"))?;
+    // Both pipes read as they fill, so a full one never blocks the child.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+    );
+    struct Paused(i32, bool);
+    impl Paused {
+        fn set(&mut self, stop: bool) {
+            if stop != self.1 {
+                // SAFETY: signalling our own child by its pid.
+                unsafe {
+                    libc::kill(self.0, if stop { libc::SIGSTOP } else { libc::SIGCONT });
+                }
+                self.1 = stop;
+            }
+        }
+    }
+    impl Drop for Paused {
+        // Never left stopped, whatever happens here.
+        fn drop(&mut self) {
+            self.set(false);
+        }
+    }
+    let mut paused = Paused(child.id() as i32, false);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        paused.set(FOREGROUND.load(std::sync::atomic::Ordering::Acquire) > 0);
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    drop(paused);
+    let stdout = out.join().unwrap_or_default();
+    let stderr = err.join().unwrap_or_default();
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
+        let last = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("ffmpeg failed");
+        return Err(last.trim().to_owned());
+    }
+    Ok(stdout)
+}
+
 pub fn run(command: &mut Command) -> Result<Vec<u8>, String> {
     let output = command
         .stdin(Stdio::null())
@@ -653,7 +731,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
     // Never the command line in an error: a URL in it is a credential. FFmpeg's
     // own complaint can still name the URL, so callers scrub this error
     // (`cloud_media::scrub`) before showing or logging it.
-    run(&mut command).map_err(|error| format!("proxy: {error}"))?;
+    run_background(&mut command).map_err(|error| format!("proxy: {error}"))?;
     std::fs::rename(&partial, out).map_err(|error| error.to_string())
 }
 
@@ -815,7 +893,7 @@ fn hardware_video(
         .arg(partial);
     // A rotated phone video: FFmpeg turns it on the GPU, or fails and the
     // other paths do it.
-    match run(&mut command) {
+    match run_background(&mut command) {
         Ok(_) => true,
         Err(error) => {
             let _ = std::fs::remove_file(partial);
@@ -1007,4 +1085,34 @@ pub fn make_peaks(source: &Path, out: &Path) -> Result<(), String> {
         return Err("waveform decoding failed".to_owned());
     }
     std::fs::rename(tmp, out).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+
+    #[test]
+    fn background_work_stops_while_foreground_work_runs() {
+        // A one-second job, with an export taking the foreground for 1.5 s
+        // of it: it's held, then finishes with its output.
+        let held = std::thread::spawn(|| {
+            let _export = foreground();
+            std::thread::sleep(Duration::from_millis(1500));
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        let out = run_background(Command::new("sh").args(["-c", "sleep 1; echo done"])).unwrap();
+        held.join().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out).trim(), "done");
+        assert!(
+            started.elapsed() >= Duration::from_millis(2200),
+            "{:?}",
+            started.elapsed()
+        );
+        // Failures say what FFmpeg said last.
+        let error =
+            run_background(Command::new("sh").args(["-c", "echo first >&2; echo why >&2; exit 3"]))
+                .unwrap_err();
+        assert_eq!(error, "why");
+    }
 }

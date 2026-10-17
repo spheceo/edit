@@ -181,11 +181,6 @@ test("ensure names a file's voices once, through the agent, keeping what's there
     services: {
       agents: {
         status: async () => ({}),
-        models: async () => ({}),
-        chat: () => ({}),
-        send: async () => {},
-        stop: async () => {},
-        reset: () => {},
         ask: async (_model, _effort, _instructions, input) => {
           asked.push((input[0] as { text: string }).text);
           return answer;

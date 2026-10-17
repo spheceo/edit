@@ -355,7 +355,7 @@ async function driveUploadRoute(context: RouteContext<App>): Promise<Response> {
 async function agentStatusRoute(context: RouteContext<App>): Promise<Response> {
   let status: unknown;
   try {
-    status = await context.app.agents.status();
+    status = await seams.agentPanel(context.app).status();
   } catch {
     status = { ready: false };
   }
@@ -365,7 +365,7 @@ async function agentStatusRoute(context: RouteContext<App>): Promise<Response> {
 async function agentModelsRoute(context: RouteContext<App>): Promise<Response> {
   const refresh = refreshQuery(context);
   try {
-    return sortedJson(await context.app.agents.models(refresh));
+    return sortedJson(await seams.agentPanel(context.app).models(refresh));
   } catch (error) {
     failed(error);
   }
@@ -374,7 +374,7 @@ async function agentModelsRoute(context: RouteContext<App>): Promise<Response> {
 function agentChatRoute(context: RouteContext<App>): Response {
   const id = context.params.id ?? "";
   if (context.app.store.get(id) === null) throw notFound("no such project");
-  return sortedJson(context.app.agents.chat(id));
+  return sortedJson(seams.agentPanel(context.app).chat(id));
 }
 
 async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
@@ -391,7 +391,7 @@ async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
     throw new ApiError(423, diag.messageOf(error));
   }
   try {
-    await app.agents.send(id, said, given.model ?? null, given.effort ?? null);
+    await seams.agentPanel(app).send(id, said, given.model ?? null, given.effort ?? null);
   } catch (error) {
     failed(error);
   }
@@ -400,7 +400,7 @@ async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
 
 async function agentStopRoute(context: RouteContext<App>): Promise<Response> {
   try {
-    await context.app.agents.stop(context.params.id ?? "");
+    await seams.agentPanel(context.app).stop(context.params.id ?? "");
   } catch (error) {
     failed(error);
   }
@@ -408,7 +408,7 @@ async function agentStopRoute(context: RouteContext<App>): Promise<Response> {
 }
 
 function agentResetRoute(context: RouteContext<App>): Response {
-  context.app.agents.reset(context.params.id ?? "");
+  seams.agentPanel(context.app).reset(context.params.id ?? "");
   return sortedJson({ ok: true });
 }
 

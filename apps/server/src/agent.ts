@@ -140,7 +140,7 @@ class Lock {
   }
 }
 
-export class Agents implements seams.Agents {
+export class Agents implements seams.AgentPanel {
   private dir: string;
   private codexProcess: Codex | null = null;
   private codexLock = new Lock();

@@ -22,12 +22,15 @@
 
 import type { App } from "./app.ts";
 import * as brollModule from "./broll.ts";
-import * as captionsCore from "./captions_core.ts";
+import * as captionsModule from "./captions.ts";
 import * as driveModule from "./drive.ts";
+import * as editReviewModule from "./edit_review.ts";
+import * as footageSearchModule from "./footage_search.ts";
 import * as facesModule from "./faces.ts";
 import * as peopleModule from "./people.ts";
 import * as speakersModule from "./speakers.ts";
 import * as subtitlesModule from "./subtitles.ts";
+import * as watchModule from "./watch.ts";
 import type {
   Clip,
   DriveFile,
@@ -459,7 +462,22 @@ export interface CaptionsSeam {
   /** A caption's rough size (project pixels): wrapped at the style's width. */
   captionSize(text: string, style: TextStyle): [number, number];
   captionSpeakers(app: App, projectId: string, from: number, to: number): Promise<Json>;
-  followRegion(app: App, projectId: string, time: number, region: [number, number, number, number], args: Json): Promise<Json>;
+  /**
+   * Tracks `region` (project pixels from the top-left at timeline `time`) and keys clip `follow` to move with it
+   * (track_region): `more` are sightings at other moments (timeline seconds, box); `what` the param keyed
+   * (position, vignette, leader, blur); `place` on, above or below. What it did, in words.
+   */
+  followRegion(
+    app: App,
+    projectId: string,
+    time: number,
+    region: [number, number, number, number],
+    more: [number, [number, number, number, number]][],
+    follow: string,
+    place: string,
+    what: string,
+    offset: [number, number],
+  ): Promise<string>;
   /** "#00e5c7" → a colour. */
   hex(text: string): Rgba | null;
   /** The intro (frames), when the project follows a script. */
@@ -470,6 +488,12 @@ export interface CaptionsSeam {
   subtitles(app: App, projectId: string, from: number, to: number, neglect: boolean): Promise<Json>;
   /** A media's transcript, transcribing it first if needed. */
   transcriptOf(app: App, media: Media): Promise<Transcript>;
+  /**
+   * The captions package's routes (`/api/projects/{id}/captions`, `/api/projects/{id}/watch`,
+   * `/api/projects/{id}/media/{media}/transcribe`), registered on the router. Its MCP tools
+   * register when the package loads (any use of this file).
+   */
+  routes(router: import("./http/router.ts").Router<App>): void;
 }
 
 export interface EditReviewSeam {
@@ -506,17 +530,13 @@ export interface WatchSeam {
   watchInBackground(app: App, projectId: string): void;
 }
 
-// `hex`, `transcriptOf`, `subtitleName` and `captionSize` moved to WP5
-// (captions_core.ts) to break the cycle; the rest is WP6's.
-export const captions: CaptionsSeam = stub<CaptionsSeam>("captions", {
-  hex: (text) => captionsCore.hex(text),
-  transcriptOf: (app, media) => captionsCore.transcriptOf(app, media),
-  subtitleName: (name) => captionsCore.subtitleName(name),
-  captionSize: (text, style) => captionsCore.captionSize(text, style),
-});
-export const editReview: EditReviewSeam = stub<EditReviewSeam>("edit_review");
-export const footageSearch: FootageSearchSeam = stub<FootageSearchSeam>("footage_search");
-export const watch: WatchSeam = stub<WatchSeam>("watch", { MODEL: "google/gemini-3.8-flash" });
+// WP6 has landed: captions.ts (with WP5's captions_core.ts for `hex`,
+// `transcriptOf`, `subtitleName` and `captionSize`), edit_review.ts,
+// footage_search.ts and watch.ts; captions_tools.ts has their tools and routes.
+export const captions: CaptionsSeam = captionsModule;
+export const editReview: EditReviewSeam = editReviewModule;
+export const footageSearch: FootageSearchSeam = footageSearchModule;
+export const watch: WatchSeam = watchModule;
 
 // ---------------------------------------------------------------------------
 // WP7: editing tools and plans
@@ -563,6 +583,8 @@ export interface EditingSeam {
   ): Promise<string>;
   /** Timeline seconds for each marker name; an unknown name is an error listing the names there are (markers.rs times). */
   markerTimes(project: Project, names: string[]): number[];
+  /** Words heard on the timeline as phrases with timeline times (mcp.rs timeline_transcript; read_transcript's answer). */
+  timelineTranscript(app: App, project: Project): string;
 }
 
 export const styles: StylesSeam = stylesModule;
@@ -572,6 +594,7 @@ export const editing: EditingSeam = {
   soundTimes: (...args) => (require("./edit_tools.ts") as typeof import("./edit_tools.ts")).soundTimes(...args),
   placeSound: (...args) => (require("./edit_tools.ts") as typeof import("./edit_tools.ts")).placeSound(...args),
   markerTimes: (...args) => markersModule.times(...args),
+  timelineTranscript: (...args) => (require("./edit_tools.ts") as typeof import("./edit_tools.ts")).timelineTranscript(...args),
 };
 
 // ---------------------------------------------------------------------------
@@ -588,6 +611,14 @@ export interface Agents {
    * `timeoutMs`. speakers.ts names voices with it.
    */
   ask(model: string, effort: string, instructions: string, input: Json[], schema: Json | null, timeoutMs: number): Promise<string>;
+}
+
+/**
+ * The agent panel's side of the bridge (agent.rs Agents), which `App.agents`
+ * is in the server (agent.ts): `agentPanel(app)` for it. Tests' agents may
+ * answer only `status` and `ask`.
+ */
+export interface AgentPanel extends Agents {
   /** The models the user's Codex offers (cached a day; `refresh` asks now). */
   models(refresh: boolean): Promise<Json>;
   /** A project's chat: its entries, whether a turn is running, its model and effort. */
@@ -598,6 +629,11 @@ export interface Agents {
   stop(project: string): Promise<void>;
   /** Forgets a project's chat (and its Codex thread). */
   reset(project: string): void;
+}
+
+/** The app's agents as the panel (and script.rs's research turn) use them. */
+export function agentPanel(app: App): AgentPanel {
+  return app.agents as AgentPanel;
 }
 
 /** The team's sound library on Drive (library.rs Library). */

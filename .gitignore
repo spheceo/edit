@@ -1,8 +1,10 @@
 # Rust build output
 /target/
 
+# Bun workspace installs (root and every app/package)
+node_modules/
+
 # Web build output and the generated WASM engine
-/apps/web/node_modules/
 /apps/web/dist/
 /apps/web/src/engine/pkg
 
@@ -20,4 +22,3 @@
 # Mood-board stills from other channels: kept locally, not published
 /docs/moodboard/shots/
 /.claude/worktrees/
-/apps/relay/node_modules/

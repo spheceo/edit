@@ -1,0 +1,2019 @@
+[
+  {
+    "description": "List projects on this machine.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "list_projects"
+  },
+  {
+    "description": "Load one part of the house style (the SKILLS list in the instructions): how the team does that part of an edit. Load it before working on that part, once per conversation. edit-workflow is the whole edit in one go, and also starts watching the footage in the background.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "enum": [
+            "edit-workflow",
+            "research",
+            "intro",
+            "transitions",
+            "cut-ins",
+            "outro",
+            "subtitles",
+            "subtitle-video",
+            "music-and-sound",
+            "final-pass"
+          ],
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "skill"
+  },
+  {
+    "description": "Start here, once per stage: the revision (base_rev), sections, tracks, media, each cut-in's narration with its word timings (word@seconds) and the footage blocks with their notes, speaker line counts, mechanical issues, and the clips as one line each (id, track, type, [start,end) frames, media@source seconds, text, keyframed params). Subtitles are only counted. section (intro, story = between intro and outro, outro) or start/end (seconds) narrow everything to that span; clip_ids returns those clips in full (keyframes too). include_transcript adds the timeline's cached speech for the span. Never needs get_project.",
+    "inputSchema": {
+      "properties": {
+        "clip_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "end": {
+          "type": "number"
+        },
+        "include_transcript": {
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "section": {
+          "enum": [
+            "intro",
+            "story",
+            "outro"
+          ],
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "get_edit_context"
+  },
+  {
+    "description": "Apply a complete section or a revision in ONE atomic save. Requires base_rev from get_edit_context; a stale revision or invalid operation saves NOTHING. Operations run in memory; intermediate overlaps are allowed if the final project validates. ALL times in a plan are FRAMES (the model's own units; get_edit_context's cut-in words are seconds: multiply by fps). op add takes clip with start and duration (required; omit id and track to choose them; track \"new\" makes one, in update too); update/delete/keyframes use select {ids?,track?,label?,media?,type?,name_prefix?,start?,end?} (all filters intersect); update takes patch, and moving or trimming one half of a linked pair moves the other with it, as delete removes both (unlinked: true to touch only the selected); keyframes takes param,keyframes; cover_cut_in takes the same cut_in/shots/look/into as cover_cut_in; transition builds a house transition at a cut in one line: kind drop (the vertical slam, 6 frames straddling at), flash (white, 6 frames, fading; with a shutter), dip (to black and back, frames 12 centred on at) or open (the reverse dip that opens the video; no at); its sound goes in the batch; evidence_board builds a whole evidence board from start and end (frames: where the board begins and the next shot starts) and items [{media (an image's id), label (a short handwritten note, e.g. \"zip ties\"), at (the timeline frame of the first word that names it, the start of its phrase: that photo is centred and its shutter clicks then)}] (1–8, at increasing; illustrative: true adds a small \"Illustrative images\" in the corner; older plans' frames/pan per item still work): framed photos on paper and ONE continuous camera glide down them, easing a little as it passes each photo (to ~70% of its average speed) and picking up between (never a hold or a stop), picking up from a slow drift before the first and settling into one after the last, each note writing itself on as its photo arrives; returns end, centred and shutters: each photo's moment gets a \"board photo\" timeline marker and a quiet camera shutter whose click lands on it (shutters: false for none; a shutter already within 8 frames, such as the cut's, stands in) (EVIDENCE BOARD in the cut-ins skill); desktop_profile builds the house profile screen for a person whose only picture is a still (never a lone still on black) from start, duration (or end), media (their photo) and lines (1–6 short lines: their age and role, charges only as a source states them; \"- \" is added), with title (the Notepad window's, default \"Notepad\") and line_at (a timeline frame per line) optional: a blue desktop, the photo in a Photo Viewer window and the lines typed into a Notepad window beside it, the windows scaling up from 96% one after the other, a slow push-in, the windows leaving over the last 8 frames (exit: false keeps them); returns lines_at and windows_open, marked \"desktop window opens\" and \"desktop line\" for their sounds (DESKTOP PROFILE in the cut-ins skill); markers takes add/remove as the markers tool; evidence_card puts ONE picture on screen the house way from media (an image's id), start, end and an optional label: the photo framed with a shadow over a dark blurred copy of itself filling the frame, easing in and pushing in slowly, the label in the house label box under it (a picture is never plain B-roll: the audit flags bare_still); date_title builds the date cut-in's date from text (\"July 22, 2023\"), start and end: white Geist 600 ~120 centred with only the house drop shadow (no box, no glow), rising letter by letter and fading out, over an adjustment darkening the picture (darken: false leaves that out; the audit flags a boxed or glowing date as date_style); place_label builds the map's place label from text (the street or place only), start (the marker's reveal), end, map (the map's clip id) and building_track (as map_view returned it; building for a still): the house label (white Geist 600, opaque black box, red border, soft shadow) just above the building, pinned to it, fading in and out; tidy_tracks needs no arguments. An operation's `as` names its result; later arguments use {\"$ref\":\"name\"} (added clip id) or {\"$ref\":\"name/shots/0/clip\"} (cover result). Examples: add as hero, then update select.ids [{\"$ref\":\"hero\"}]. dry_run validates without saving. Optional review_frames renders one contact sheet AFTER the commit; rendering failure is reported separately and never retries the edits. Returns revision, operation results, and mechanical issues. Prefer this over many batch/update calls.",
+    "inputSchema": {
+      "properties": {
+        "base_rev": {
+          "type": "integer"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "operations": {
+          "items": {
+            "properties": {
+              "add": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "as": {
+                "type": "string"
+              },
+              "at": {
+                "type": "integer"
+              },
+              "building": {
+                "type": "object"
+              },
+              "building_track": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "clip": {
+                "type": "object"
+              },
+              "cut_in": {
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "darken": {
+                "type": "boolean"
+              },
+              "duration": {
+                "type": "integer"
+              },
+              "end": {
+                "type": "integer"
+              },
+              "exit": {
+                "type": "boolean"
+              },
+              "frames": {
+                "type": "integer"
+              },
+              "illustrative": {
+                "type": "boolean"
+              },
+              "into": {
+                "type": "string"
+              },
+              "items": {
+                "items": {
+                  "properties": {
+                    "at": {
+                      "type": "integer"
+                    },
+                    "frames": {
+                      "type": "integer"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "media": {
+                      "type": "string"
+                    },
+                    "pan": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "media"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "keyframes": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "drop",
+                  "flash",
+                  "dip",
+                  "open"
+                ],
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "line_at": {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "lines": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "look": {
+                "type": "boolean"
+              },
+              "map": {
+                "type": "string"
+              },
+              "media": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "add",
+                  "update",
+                  "delete",
+                  "keyframes",
+                  "cover_cut_in",
+                  "transition",
+                  "evidence_board",
+                  "evidence_card",
+                  "date_title",
+                  "place_label",
+                  "desktop_profile",
+                  "markers",
+                  "tidy_tracks"
+                ],
+                "type": "string"
+              },
+              "pan": {
+                "type": "integer"
+              },
+              "param": {
+                "type": "string"
+              },
+              "patch": {
+                "type": "object"
+              },
+              "remove": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "select": {
+                "type": "object"
+              },
+              "shots": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "shutters": {
+                "type": "boolean"
+              },
+              "start": {
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "unlinked": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          "maxItems": 2000,
+          "minItems": 1,
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "review_frames": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 24,
+          "type": "array"
+        }
+      },
+      "required": [
+        "base_rev",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "name": "apply_edit_plan"
+  },
+  {
+    "description": "One structural audit and optional contact sheet for a completed stage. Returns picture gaps, exhausted source ranges and misaligned linked audio, plus cached transcript coverage (uncovered speech timecodes, hidden roles excluded) and a compact revision. Does not edit. Supply frames (integer timeline frames, up to 24) for one targeted visual review; avoid rendering every clip individually.",
+    "inputSchema": {
+      "properties": {
+        "frames": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 24,
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "review_edit"
+  },
+  {
+    "description": "The full project JSON plus track labels and duration. For routine planning use get_edit_context; request this only when the full model is needed.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "get_project"
+  },
+  {
+    "description": "Add a text clip. Times in seconds. Picks a free video track above existing clips unless track is given.",
+    "inputSchema": {
+      "properties": {
+        "animation": {
+          "description": "TextAnimation.",
+          "type": "object"
+        },
+        "color": {
+          "description": "Timeline label colour.",
+          "type": "string"
+        },
+        "duration": {
+          "description": "Seconds.",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds.",
+          "type": "number"
+        },
+        "style": {
+          "description": "Partial TextStyle.",
+          "type": "object"
+        },
+        "text": {
+          "type": "string"
+        },
+        "track": {
+          "description": "Track id (optional).",
+          "type": "string"
+        },
+        "transform": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "text",
+        "start",
+        "duration"
+      ],
+      "type": "object"
+    },
+    "name": "add_text"
+  },
+  {
+    "description": "Add any clip (video/audio/text/adjustment/solid/waveform) using the model in the server instructions. Omit id. If track is omitted a free track of the right kind is chosen (created if needed); track \"new\" puts it on a new track on top of the rest.",
+    "inputSchema": {
+      "properties": {
+        "clip": {
+          "type": "object"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clip"
+      ],
+      "type": "object"
+    },
+    "name": "add_clip"
+  },
+  {
+    "description": "Change a clip with a JSON merge patch (RFC 7386), e.g. {\"start\": 90, \"style\": {\"glow\": {\"enabled\": true}}}. Set a key to null to remove it.",
+    "inputSchema": {
+      "properties": {
+        "clip_id": {
+          "type": "string"
+        },
+        "patch": {
+          "type": "object"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clip_id",
+        "patch"
+      ],
+      "type": "object"
+    },
+    "name": "update_clip"
+  },
+  {
+    "description": "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, or by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\"), optionally only on one track and within start/end (timeline seconds). E.g. one person's short name on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\"}}}}. A relabel or recolour then gives every person (label) one colour across the video, kept apart from everyone else's (subtitles, intro captions, \"Quote · <label>\" clips); the result lists them.",
+    "inputSchema": {
+      "properties": {
+        "clip_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "end": {
+          "description": "Only clips that start before this (timeline seconds).",
+          "type": "number"
+        },
+        "label": {
+          "description": "Text clips whose style.label.text is exactly this.",
+          "type": "string"
+        },
+        "patch": {
+          "type": "object"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Only clips that start at or after this (timeline seconds).",
+          "type": "number"
+        },
+        "track": {
+          "description": "Only clips on this track id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "patch"
+      ],
+      "type": "object"
+    },
+    "name": "update_clips"
+  },
+  {
+    "description": "Run several tool calls in one go, in order, and get every result back: use it whenever you already know the next few edits (placing sounds, transitions and flashes across a section, setting keyframes on several clips, deleting and relabelling), instead of one call at a time; it's far faster. Any argument that is exactly \"$N\" (a string) becomes the id of the clip that call N (1-based) added, so a batch can add a clip and then animate or track it. Stops at the first error unless keep_going (what ran before it stays). Not for tools that take minutes (caption_speakers, add_subtitles, watch_footage, map_view, place_voiceovers): call those on their own.",
+    "inputSchema": {
+      "properties": {
+        "calls": {
+          "items": {
+            "properties": {
+              "args": {
+                "type": "object"
+              },
+              "tool": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tool"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "keep_going": {
+          "description": "Run the rest after a call fails. Default false.",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "calls"
+      ],
+      "type": "object"
+    },
+    "name": "batch"
+  },
+  {
+    "description": "Set the in and out points (seconds on the timeline; the out point's frame is the last one in). Null clears one; omit to leave it. Export without a range renders just that span, and playback stops at the out point.",
+    "inputSchema": {
+      "properties": {
+        "in": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "out": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "set_in_out"
+  },
+  {
+    "description": "Delete clips by id.",
+    "inputSchema": {
+      "properties": {
+        "clip_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "close_gap": {
+          "description": "Then close the gap: where nothing on any track plays any more in the span they left, everything after it slides back by that much (all tracks together, so picture and sound stay in sync; the in/out points move too).",
+          "type": "boolean"
+        },
+        "drop_from_script": {
+          "description": "Also remove the script's narration blocks these clips were the cut-in cards of (for a card that never belonged in the video, such as the Doc's heading imported as a cut-in).",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clip_ids"
+      ],
+      "type": "object"
+    },
+    "name": "delete_clips"
+  },
+  {
+    "description": "Replace one parameter's keyframes on a clip. Frames are relative to the clip start. Empty list removes the animation.",
+    "inputSchema": {
+      "properties": {
+        "clip_id": {
+          "type": "string"
+        },
+        "keyframes": {
+          "items": {
+            "properties": {
+              "ease": {
+                "enum": [
+                  "linear",
+                  "in_out",
+                  "in",
+                  "out",
+                  "hold"
+                ],
+                "type": "string"
+              },
+              "frame": {
+                "type": "number"
+              },
+              "handle_in": {
+                "properties": {
+                  "influence": {
+                    "type": "number"
+                  },
+                  "speed": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "speed",
+                  "influence"
+                ],
+                "type": "object"
+              },
+              "handle_out": {
+                "properties": {
+                  "influence": {
+                    "type": "number"
+                  },
+                  "speed": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "speed",
+                  "influence"
+                ],
+                "type": "object"
+              },
+              "value": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "frame",
+              "value"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "param": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clip_id",
+        "param",
+        "keyframes"
+      ],
+      "type": "object"
+    },
+    "name": "set_keyframes"
+  },
+  {
+    "description": "Import media files by absolute path. place=true also appends them to the end of the timeline.",
+    "inputSchema": {
+      "properties": {
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "place": {
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
+    "name": "import_media"
+  },
+  {
+    "description": "Keep a found image (from collect_images / look_at_found, by its id) and put it in the project's media; returns the media id to place, e.g. a mugshot for the outro.",
+    "inputSchema": {
+      "properties": {
+        "found_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "found_id"
+      ],
+      "type": "object"
+    },
+    "name": "use_found"
+  },
+  {
+    "description": "Save one frame of a video media as a still image in the project (a new image media, returned), e.g. a clear shot of a person for the outro when no mugshot is found. time = SECONDS into the media (look_at_media / media_transcript to find a good one).",
+    "inputSchema": {
+      "properties": {
+        "media_id": {
+          "type": "string"
+        },
+        "name": {
+          "description": "What it shows (\"Latricia Crawley\"); names the file.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "time": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "media_id",
+        "time"
+      ],
+      "type": "object"
+    },
+    "name": "still_frame"
+  },
+  {
+    "description": "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. For finding B-roll moments that show what a cut-in says. Single moments in several files: one batch of them, not a call each.",
+    "inputSchema": {
+      "properties": {
+        "columns": {
+          "description": "Default 4.",
+          "type": "integer"
+        },
+        "count": {
+          "description": "Frames, max 24 (default 12).",
+          "type": "integer"
+        },
+        "end": {
+          "type": "number"
+        },
+        "media_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "media_id",
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "name": "look_at_media"
+  },
+  {
+    "description": "Where things are said in all of the project's footage at once, from the transcripts already made: for each phrase, the best places (media id, source seconds at/end, speaker, the words around it), exact runs first. Use it to find B-roll for every cut-in in one call: a phrase per idea in the narration (\"baby in a bucket\", \"arrested her mother\", \"the trunk\"), then look_at_media only where a moment's picture is in doubt. Transcribes nothing; untranscribed_media lists videos without a transcript.",
+    "inputSchema": {
+      "properties": {
+        "context": {
+          "description": "Words of context before each place (default 8).",
+          "type": "integer"
+        },
+        "limit": {
+          "description": "Places per phrase (default 4).",
+          "type": "integer"
+        },
+        "phrases": {
+          "description": "Up to 60 phrases.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phrases"
+      ],
+      "type": "object"
+    },
+    "name": "find_in_footage"
+  },
+  {
+    "description": "What's said in a media file (its own seconds, the whole source), as phrases with times and speakers; transcribes it first if needed. For finding moments to use as B-roll (someone confused, a witness reacting). Several files: one batch, not a call each.",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Default the end of the file.",
+          "type": "number"
+        },
+        "media_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Default 0.",
+          "type": "number"
+        },
+        "words": {
+          "description": "Each word with its times, to time a shot to an exact word (default: phrases).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "media_id"
+      ],
+      "type": "object"
+    },
+    "name": "media_transcript"
+  },
+  {
+    "description": "Make slowed video clips (speed below 1) play smoothly: the stretch of each one's media is rendered at that speed with new frames made between the real ones (motion interpolation, like After Effects' pixel-motion frame blending), and the clip then plays that at 1×. Timing is unchanged. Set the clip's speed and trim first; run again after changing them. Optical flow is expensive and optional; each render has a 120-second limit and they run one at a time. By default it returns at once and each swaps in when done (get_project's smoothing lists those still going; exports use the current timeline snapshot unless options.wait_for_smoothing is true).",
+    "inputSchema": {
+      "properties": {
+        "clip_id": {
+          "type": "string"
+        },
+        "clip_ids": {
+          "description": "Several requests queued together; one expensive optical-flow render runs at a time.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "wait": {
+          "description": "Wait for the renders (default false). False: smooth in the background and carry on.",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "smooth_slow_motion"
+  },
+  {
+    "description": "Cover a cut-in with B-roll in one call, the house way (B-ROLL IN CUT-INS, PUSH-INS, B-ROLL LOOK, VOICE-OVERS): your shots butted end to end from the cut-in's first frame to its last (each picture only, slowed to speed 0.5, a linear push-in 1 → 1.08; native frame sampling with no background render by default), the B-roll look adjustment over the stretch, the vertical drop into the cut-in (into \"none\" when you'll put another transition there), the black card and its words deleted and the voice-over moved onto A1 in purple. You pick the shots (media_transcript, look_at_media) and time them to the narration's phrases (media_transcript words on the voice-over); this does the rest. A picture (an image media: a found photo, a still) is never laid on as a bare still: it goes on as an evidence card (framed, over a dark blurred copy of itself, easing in, with its label under it when the shot has one). Running it again on the same cut-in replaces what it placed. Afterwards add what's particular to the cut-in (a person's vignette and label, a quote, other transitions and their sounds) with batch. Returns each shot's clip id and span.",
+    "inputSchema": {
+      "properties": {
+        "cut_in": {
+          "description": "The cut-in's number among the script's narration blocks (1-based: \"Cut-in N\"), or its card's or voice-over's clip id.",
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "into": {
+          "description": "The transition into the cut-in: the vertical drop (default), or none.",
+          "enum": [
+            "drop",
+            "none"
+          ],
+          "type": "string"
+        },
+        "look": {
+          "description": "The B-roll look adjustment (default true).",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "shots": {
+          "items": {
+            "properties": {
+              "at": {
+                "description": "Timeline seconds where it starts (the first defaults to the cut-in's start; each later one is required). Each shot runs until the next starts; the last to the cut-in's end.",
+                "type": "number"
+              },
+              "label": {
+                "description": "A picture's short label under it on its evidence card (\"The building on Capitol Avenue\").",
+                "type": "string"
+              },
+              "media": {
+                "description": "Media id (video or image).",
+                "type": "string"
+              },
+              "name": {
+                "description": "What it shows (\"the locked closet\"); names the clip.",
+                "type": "string"
+              },
+              "push": {
+                "description": "[from, to] scale across the shot, default [1, 1.08]; continue a run of the same moment with e.g. [1.04, 1.08].",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "scale": {
+                "description": "Base scale the push multiplies (default 1).",
+                "type": "number"
+              },
+              "smooth": {
+                "description": "Expensive optional optical-flow render, limited to 120 s per shot; default false. Leave false for normal edits.",
+                "type": "boolean"
+              },
+              "source_in": {
+                "description": "Seconds into the media where the shot starts.",
+                "type": "number"
+              },
+              "speed": {
+                "description": "Default 0.5.",
+                "type": "number"
+              },
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "media",
+              "source_in"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cut_in",
+        "shots"
+      ],
+      "type": "object"
+    },
+    "name": "cover_cut_in"
+  },
+  {
+    "description": "A tilted 3D view of a place from Google's photorealistic 3D map (real buildings and trees, darker exposure and a vignette, the building at the place marked in glowing red), imported as footage: by default a moving shot, the camera slowly circling the building and closing in while aimed at it (it answers once the first frame and the building track are in, usually well under a minute, and renders the rest in the background: place it right away; the media is the first frame until the footage swaps in, and exports wait for it), or a still. Give the place as an address or name (\"Kent Police Department, Kent, Washington\"; Google finds it and the building's outline) or lat/lon. Each new view is a paid map session (a few a day): get it right the first time, and asking for the same view again reuses the footage. Returns the media id, the address it found, whether the building was outlined and where it sits in the frame (`building`: x, top, bottom, left, right in timeline transform coordinates; for a moving shot also `building_track`, where it is every half second), to place text by it.",
+    "inputSchema": {
+      "properties": {
+        "heading": {
+          "description": "Compass direction the camera faces in degrees at the start; default -25.",
+          "type": "number"
+        },
+        "highlight": {
+          "description": "Mark the building in red (default true).",
+          "type": "boolean"
+        },
+        "highlight_after": {
+          "description": "Reveal the marker after this many source seconds, e.g. once a date title has faded away (default 0). Building tracking is returned even while hidden.",
+          "type": "number"
+        },
+        "highlight_fade": {
+          "description": "Marker reveal fade duration in seconds (default 0, immediate).",
+          "type": "number"
+        },
+        "lat": {
+          "type": "number"
+        },
+        "lon": {
+          "type": "number"
+        },
+        "orbit": {
+          "description": "Degrees the camera circles the building over the shot, positive to its right (default 15).",
+          "type": "number"
+        },
+        "pitch": {
+          "description": "Tilt from straight down in degrees; default 55.",
+          "type": "number"
+        },
+        "place": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "push": {
+          "description": "How much closer the camera ends, as a fraction of the range (default 0.12).",
+          "type": "number"
+        },
+        "range": {
+          "description": "Camera distance in metres at the start: 170 (default) close on the building, ~330 the block around it, 800+ the neighbourhood.",
+          "type": "number"
+        },
+        "seconds": {
+          "description": "Length of the moving shot: how long it's on screen (default 6).",
+          "type": "number"
+        },
+        "still": {
+          "description": "A still picture instead of a moving shot (30 s of footage, for a push-in).",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "map_view"
+  },
+  {
+    "description": "Mark moments to plan sounds on (no arguments: list them). A moment in a source (add {name, note?, media, time: source seconds} or {name, note?, clip, frame: the timeline frame where that clip shows it}) stays on that moment however its clips move; a moment of the edit itself (add {name, note?, frame}) stays on the timeline. Then place sounds on them by name (add_sound_effect / add_from_library markers). remove [{name?, media?, frame?}] removes every match. Also an apply_edit_plan op. Evidence boards mark each photo themselves. Returns the markers now set (name@frame; name media@seconds → frames shown).",
+    "inputSchema": {
+      "properties": {
+        "add": {
+          "items": {
+            "properties": {
+              "clip": {
+                "type": "string"
+              },
+              "frame": {
+                "description": "Timeline frame (alone: a timeline marker; with clip: the moment that clip shows there).",
+                "type": "integer"
+              },
+              "media": {
+                "type": "string"
+              },
+              "name": {
+                "description": "What happens: \"door slam\", \"camera flash\", \"photo lands\".",
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              },
+              "time": {
+                "description": "Seconds into media.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "remove": {
+          "items": {
+            "properties": {
+              "frame": {
+                "type": "integer"
+              },
+              "media": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "markers"
+  },
+  {
+    "description": "Place a sound effect bundled with Edit at timeline times or on markers, on a free audio track. Each is lined up by its \"hit\" marker (see media markers): for a cut, give the cut's time (where the two clips meet) and the sound straddles it. The same sound already within 0.5 s of a time is replaced, so placing again (or after the sound is updated) never doubles up.",
+    "inputSchema": {
+      "properties": {
+        "markers": {
+          "description": "Marker names (markers tool): the hit lands on every place each is.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "sound": {
+          "description": "shutter = a camera shutter (evidence boards place their own).",
+          "enum": [
+            "shutter"
+          ],
+          "type": "string"
+        },
+        "times": {
+          "description": "Seconds on the timeline.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "volume_db": {
+          "description": "Default 0.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "sound"
+      ],
+      "type": "object"
+    },
+    "name": "add_sound_effect"
+  },
+  {
+    "description": "The team's sound library (a Google Drive folder): music by mood and sound effects by kind, each with its id and the team's note on how it's used (\"first ~20 seconds\", \"very low volume\"), then the library's usage guide (what each category is for). Read it before picking music or a sound effect.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Read Drive again now (it's re-read every 2 minutes anyway), e.g. after a sound was added there.",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "list_library"
+  },
+  {
+    "description": "Place a sound or music from the team's library (list_library) at timeline times, on a free audio track (downloaded from Drive the first time; large music can take a minute). A short sound effect is lined up by its \"hit\" marker (its loudest moment, found automatically; see media markers): for a cut, give the cut's time and the hit lands on it; a riser builds into the time. Music and long beds start at the time. The same sound already within 0.5 s of a time is replaced, so placing again never doubles up.",
+    "inputSchema": {
+      "properties": {
+        "fade_out": {
+          "description": "Seconds of fade at the end, e.g. 1.5 when music is cut short. Default 0.",
+          "type": "number"
+        },
+        "id": {
+          "description": "The sound's id from list_library.",
+          "type": "string"
+        },
+        "lead": {
+          "description": "With seconds, on a sound effect: how much of it plays before the hit (default half of seconds; a riser wants most of it before).",
+          "type": "number"
+        },
+        "loudness": {
+          "description": "How loud it's heard, in LUFS (see the house style's levels): the tool measures the part that plays (a short sound by its loudest moment) and sets the volume to match. Prefer this to volume_db: library files differ in loudness by 20 dB or more.",
+          "type": "number"
+        },
+        "markers": {
+          "description": "Marker names (markers tool) instead of or beside times: the hit (or the start) lands on every place each is.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "seconds": {
+          "description": "Play at most this long: music from its start (a track's \"first ~20 seconds\"); a sound effect, the stretch around its hit (a long glitch or whoosh file cut to its transition's length, e.g. 0.3 s for an 8-frame glitch).",
+          "type": "number"
+        },
+        "times": {
+          "description": "Seconds on the timeline.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "under_speech": {
+          "description": "LU under the edit's speech (the footage and voice-overs): music 14, low-volume notes 16, music with nothing said over it 6, risers 8, hits 0, whooshes and shutters 3, clicks 8. Use instead of loudness; nothing to measure first.",
+          "type": "number"
+        },
+        "volume_db": {
+          "description": "A raw gain instead of loudness. Default 0.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "name": "add_from_library"
+  },
+  {
+    "description": "Search the web privately from this machine (its own Chrome, headless, a throwaway profile: nothing in anyone's search history). Returns titles, links and snippets. Use it to learn a case from the news (names, the place, the date, what happened) before collecting images.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "search_web"
+  },
+  {
+    "description": "The readable text of a web page (a news story from search_web), the same private way.",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "description": "Characters to return (default 12000).",
+          "type": "integer"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "read_page"
+  },
+  {
+    "description": "Save a news article about THIS case into the project (the user reads it in the Research view: its text, outlet and date), and put the photos it carries into the review: an article's own photos are of the case, the best images there are. Only for articles you've checked match the case.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "What it adds to the case in two or three sentences (who, where, what it reports that the footage doesn't).",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "name": "add_article"
+  },
+  {
+    "description": "The news articles saved for this project (add_article), read from the saved copies (no web needed): without id, each one's title, outlet, date and what it adds; with id, its full text. Check them for facts the editing needs (spellings of names, the date and place, the victim, charges and outcome) instead of guessing.",
+    "inputSchema": {
+      "properties": {
+        "find": {
+          "description": "Only the passages that mention this (a name, a street, a word), across every article.",
+          "type": "string"
+        },
+        "id": {
+          "description": "An article's id to read in full.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "case_articles"
+  },
+  {
+    "description": "A contact sheet of found images still waiting for the user's review, numbered, with their ids and pages, so you can weed out what's off-target before the user looks (reject_found).",
+    "inputSchema": {
+      "properties": {
+        "count": {
+          "description": "How many (default 24, up to 36).",
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Skip this many (default 0).",
+          "type": "integer"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "look_at_found"
+  },
+  {
+    "description": "Reject found images (by id from look_at_found) that aren't of the scene, the people involved or what the user asked for. The user can still see them under Rejected.",
+    "inputSchema": {
+      "properties": {
+        "ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ids"
+      ],
+      "type": "object"
+    },
+    "name": "reject_found"
+  },
+  {
+    "description": "Search images for each query (Bing, privately from this machine) and download the results into the project's Research review, where the user looks through them and keeps the ones they want (kept images land in the media bin). Skips duplicates and anything smaller than 360 px. Takes a minute or two a call, so put every query in one call. Make the queries specific, from what search_web and read_page found: names with the place, the street, \"<name> mugshot\", \"<place> crash scene\", the department.",
+    "inputSchema": {
+      "properties": {
+        "per_query": {
+          "description": "Results to try per query (default 40, up to 150).",
+          "type": "integer"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "queries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "queries"
+      ],
+      "type": "object"
+    },
+    "name": "collect_images"
+  },
+  {
+    "description": "Set audio clips to a loudness as heard (LUFS): measures what each plays and sets its volume_db (peaks kept under -1 dBFS). Without loudness, they match the footage's own sound across the timeline (its average loudness), as voice-overs should.",
+    "inputSchema": {
+      "properties": {
+        "clip_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "loudness": {
+          "description": "LUFS (default: the footage's average loudness).",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clip_ids"
+      ],
+      "type": "object"
+    },
+    "name": "set_loudness"
+  },
+  {
+    "description": "Cached source loudness of unmuted audio clips after static volume (does not include fades, mutes, speed processing or combined mix), over a span of the timeline, in LUFS: integrated over stretches longer than 3 s, a short sound by its loudest moment. Use it to set music under the speech and voice-overs there, and to check a mix after placing sounds.",
+    "inputSchema": {
+      "properties": {
+        "clip_ids": {
+          "description": "Measure only these audio clips, e.g. sounds just added. Repeated source measurements are cached.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "end": {
+          "description": "Seconds on the timeline (default the end).",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline (default 0).",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "measure_audio"
+  },
+  {
+    "description": "Re-finds each script range's first and last words in its transcript (forgiving how the Doc spells them: plurals, possessives, a letter off, e.g. \"priuses\" for \"Prius\") and moves that clip's in/out points to them, shifting everything after it so nothing overlaps or gaps (effects ending on its cut move with the cut). Use it when a range starts or ends a word early or late. Re-run caption_speakers over any clip it changes.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "realign_script"
+  },
+  {
+    "description": "Lay voice-over recordings on the script's cut-ins. The recordings read the cut-ins' text: each is transcribed, the words that read each cut-in are found, and that stretch of audio is placed where the cut-in is (on a voice-over track). The cut-in (card and words) takes the voice-over's length and everything after moves with it, so the timeline stays butted. Placing again replaces what it placed. Takes a while the first time (transcription). Reports what was placed and any cut-in whose words weren't found.",
+    "inputSchema": {
+      "properties": {
+        "media_ids": {
+          "description": "The recordings (default: every audio file not on the timeline that isn't a sound effect, plus ones placed before).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "place_voiceovers"
+  },
+  {
+    "description": "Takes a stretch of time out of the whole timeline (a ripple delete across every track): clips wholly inside it are deleted; footage, B-roll and sound crossing it are cut so what's before and after it stays and joins up (the later piece plays on from where it would have); text, solids and adjustments crossing it are shortened; everything after moves left by its length. Keyframes stay with the picture they describe, fades at the cut are dropped, the in/out points, segments and script links follow. Returns what it cut, deleted and moved.",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Seconds on the timeline.",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "name": "remove_time"
+  },
+  {
+    "description": "Shortens the long pauses inside voice-overs: each silence between two words longer than max_pause (from the recording's word times) is cut down to keep, by taking the rest out of the timeline (remove_time at that spot), so the B-roll over it and everything after follow. Never touches the silence before a voice-over clip's first word or after its last, never cuts into a word, and leaves a pause where the footage's own sound is heard over it. Run it with dry_run first on a stretch that drags. Returns each pause (timeline seconds, the words either side, its length, how much went) and the total removed.",
+    "inputSchema": {
+      "properties": {
+        "dry_run": {
+          "description": "Only list the pauses it would shorten. Default false.",
+          "type": "boolean"
+        },
+        "end": {
+          "description": "Seconds on the timeline (default: the end).",
+          "type": "number"
+        },
+        "keep": {
+          "description": "Seconds of each long pause kept. Default 0.35.",
+          "type": "number"
+        },
+        "max_pause": {
+          "description": "Seconds: shorter pauses are left alone. Default 0.7.",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline (default 0).",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "tighten_voiceover"
+  },
+  {
+    "description": "Plays the voice-over in a span faster (pitch kept, as audio speed always is), and everything laid over it with it: the B-roll plays faster to fit, graphics and keyframes in the span squeeze to the new length, so all still lines up with the words (music and sound effects keep their own speed: a bed plays on unbroken, a sound moves with its word); the timeline after it moves up by the time saved. The span is trimmed to the voice-over clips in it; refused where the footage's own sound plays (it would speed up what people say). Returns the span sped and the seconds saved.",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Seconds on the timeline.",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "speed": {
+          "description": "1.01 to 1.25; 1.04 to 1.08 is usual.",
+          "type": "number"
+        },
+        "start": {
+          "description": "Seconds on the timeline.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "speed"
+      ],
+      "type": "object"
+    },
+    "name": "speed_voiceover"
+  },
+  {
+    "description": "Moves every clip down onto the track below wherever that track is empty for the clip's whole span (never into V1/A1, the footage tracks), so layers don't float above gaps and clips that overlap keep their order, then removes tracks left empty. Run it after adding or removing layers.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "tidy_tracks"
+  },
+  {
+    "description": "What is said on the timeline, with timeline times in seconds, grouped into phrases. Only audio clips whose media has been transcribed appear; use `transcribe` first.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "read_transcript"
+  },
+  {
+    "description": "Transcribe a media item's speech (word timings). Costs money and runs once per file; check get_project's media first. Poll read_transcript afterwards.",
+    "inputSchema": {
+      "properties": {
+        "media_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_id"
+      ],
+      "type": "object"
+    },
+    "name": "transcribe"
+  },
+  {
+    "description": "Render one frame exactly as it will export and return it as an image. Give time (seconds) or frame.",
+    "inputSchema": {
+      "properties": {
+        "frame": {
+          "type": "integer"
+        },
+        "max_size": {
+          "description": "Longest side in px (default 960).",
+          "type": "integer"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "time": {
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "render_frame"
+  },
+  {
+    "description": "Render evenly spaced frames between start and end (seconds) into one grid image, to review motion or many moments at once.",
+    "inputSchema": {
+      "properties": {
+        "columns": {
+          "description": "Default 4.",
+          "type": "integer"
+        },
+        "count": {
+          "description": "Frames, max 24 (default 12).",
+          "type": "integer"
+        },
+        "end": {
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "name": "contact_sheet"
+  },
+  {
+    "description": "Speaker captions for intro footage: splits what's said into lines, asks a vision model (Luna) who says each line and where they are (stills + sound), then adds a word-by-word caption per line in the house box style: under the speaker's face when the face detector sees it clearly through the line (followed smoothly), else bottom middle; never on a face. Replaces captions it made before in that span. Takes a few minutes. Defaults to the intro (start to the cut-in before the full footage).",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Seconds on the timeline (default: the end of the intro).",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline (default 0).",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "caption_speakers"
+  },
+  {
+    "description": "Plain subtitles for everything said (Repack's style): bottom middle unless a face is there, no animation, no tracking, each line under its person's label and colour (one colour per person across the video). Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words (in their other forms too: punched, hitting) are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and in every other text on the timeline; some are muted but stay readable. Replaces subtitles and mutes it made before in that span, keeping the label and colour each voice's subtitles had (your relabels survive a re-run); a new subtitle over one moved, resized or keyframed by hand keeps that position and size. Then it moves any subtitle that would cover a face (found in the footage under it, cached per file) to the first clear place: bottom left or right, else top middle, left or right (place_subtitles; off_faces in the result). Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, every mute (term, timeline time, starred) and each person's colour.",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Seconds on the timeline (default: the end).",
+          "type": "number"
+        },
+        "neglect": {
+          "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false.",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline (default: the end of the intro).",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "add_subtitles"
+  },
+  {
+    "description": "Moves the edit's subtitles off faces, changing nothing else (text, timing, labels and colours stay): each subtitle stays bottom middle unless a face in the footage under it while it's up would be covered, then goes to the first clear place (bottom left, bottom right, top middle, top left, top right; the least covered when none is clear), staying beside the previous line while the face is still near so a conversation doesn't jump about. Faces come from Apple's Vision on the footage (two frames a second, cached per file: the first run on a 30-minute edit takes a minute or two, later ones are instant). Subtitles moved or keyframed by hand are left alone. add_subtitles already does this; use it on subtitles made before, or after footage moves. Seconds; default the whole timeline.",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Seconds on the timeline (default: the end).",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline (default 0).",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "place_subtitles"
+  },
+  {
+    "description": "Lays the intro's speaker captions (\"Caption · <who>\") out again the house way without retyping them: under the speaker's face only when the face detector sees it clearly through the line (followed by the detector, smoothed, never covering any face), else bottom middle (clear of faces). By default a caption keeps the face it already sits beside, if that face is clearly visible; one that sat on a face, or by none, goes bottom middle. Pass `under` for the lines where that isn't the speaker. Returns each caption's place and why. Seconds; default the whole timeline.",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Seconds on the timeline (default: the end).",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline (default 0).",
+          "type": "number"
+        },
+        "under": {
+          "description": "Clip id → \"bottom\" (the speaker is off screen or unclear), \"auto\", or [x, y]: a point on the speaker's face at the caption's first frame, project pixels from the top-left.",
+          "type": "object"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "place_captions"
+  },
+  {
+    "description": "Mutes the house words in the footage's sound (the intro's too) and in the voice-overs (the narration, from their takes' transcripts) and stars them out in every text on screen: subtitles, speaker captions, callouts, quotes, charges, labels; moving and re-timing nothing. Words count in their other forms (punched, hitting, abusive). Run it over the whole timeline (no start/end) once the captions and text are in, once per turn (after the turn's last text change, not after each plan). Replaces the mutes made before in that span. Returns how many subtitles and other texts changed and every mute (term, timeline time, starred, clip; voice_over: true for the narration's).",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Seconds on the timeline (default: the end).",
+          "type": "number"
+        },
+        "neglect": {
+          "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false.",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline (default 0).",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "mute_house_words"
+  },
+  {
+    "description": "Sets a subtitled video's segments (replacing them all): what each stretch is, so repack_subtitles subtitles only the footage. Gaps between the ones given are footage. Re-run repack_subtitles after.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "segments": {
+          "items": {
+            "properties": {
+              "end": {
+                "description": "Seconds on the timeline.",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "footage",
+                  "captioned",
+                  "narration",
+                  "other"
+                ],
+                "type": "string"
+              },
+              "note": {
+                "description": "What's in it, briefly.",
+                "type": "string"
+              },
+              "start": {
+                "description": "Seconds on the timeline.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "start",
+              "end",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "segments"
+      ],
+      "type": "object"
+    },
+    "name": "set_segments"
+  },
+  {
+    "description": "A subtitled video the Repack way: every line said in the footage (its own sound, transcribed if needed), split by Repack's rules, held a second after its last word (one at a time), in the house style in each speaker's colour (no two alike), on the subtitles track; the narrator, radio and background talk are hidden. The house words are muted in the footage's sound (sample-accurate, 12 ms cosine ramps; written as `mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and every other text on the timeline; words count in their other forms (punched, hitting); some are muted but stay readable. Replaces subtitles and mutes made before in the span (add_subtitles' too). Returns the subtitles placed, the speakers (name, role, colour, lines) and every mute (term, timeline time, starred).",
+    "inputSchema": {
+      "properties": {
+        "end": {
+          "description": "Seconds on the timeline (default: the end).",
+          "type": "number"
+        },
+        "faces": {
+          "description": "Each speaker's lines sit under their face (Repack's positions): the footage's camera angles are found and, per angle, where each speaker sits (a model watches a clip or two); cutaways, people off camera and faces in a bottom corner stay bottom middle. Default: on with overlap.",
+          "type": "boolean"
+        },
+        "hold_ms": {
+          "description": "How long a subtitle stays after its last word unless the next starts first (default 1000).",
+          "type": "number"
+        },
+        "neglect": {
+          "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false.",
+          "type": "boolean"
+        },
+        "overlap": {
+          "description": "Interrogation footage: people talking over each other are shown together, each line its own box stacked above the one already up (each person's lines still one at a time). Default false.",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds on the timeline (default 0).",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "repack_subtitles"
+  },
+  {
+    "description": "The watcher: Gemini watches the footage (a few minutes at a time, with sound) and says who speaks each subtitle line, correcting the speakers in the transcript (a voice the transcriber merged with another becomes its own, named when the footage says the name; a second conversation going on behind the one followed goes to a hidden \"Background talk\" voice), and, for a subtitled video, marks its segments (footage to subtitle, already subtitled e.g. a cold open with burned-in subtitles, narration, other). Answers are cached per window, so a re-run costs nothing unless force. Returns the windows watched, the cost (USD), the lines re-assigned (count and examples), the people seen per window and the segments. Run repack_subtitles (a subtitled video) or add_subtitles (an edit) after it.",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Watch again even where an answer is cached (costs again). Default false.",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "segments": {
+          "description": "Set the project's segments from what's seen. Default: only for a subtitled video (never on an edit).",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "watch_footage"
+  },
+  {
+    "description": "Track a box in the footage (a face, a redaction block, an object) and make a clip follow it: bakes x/y keyframes onto `follow` (one per footage frame for a short stretch) so it stays above, below or on the box. Give the box as it appears at `time` in project pixels from the top-left of the frame (as render_frame shows it, scaled to the project size). The camera's own move (a swinging bodycam, a whip) is followed, small faces in zoomed-in shots are tracked from the original footage, and drift is checked against the box as given. It answers with the cuts it saw in the footage and any stretch where it lost the box (it rides with the camera there): look at those moments and track again with `boxes` there. For a fast or long stretch, a cut inside the footage, or a person who turns, give the box at its start, middle and end (`time`/`box` plus `boxes`). Target leader (a callout's pointer) follows the face in the box with the face detector and refuses when there's no clearly visible face there (listing the faces it found): then drop the leader and keep a plain label.",
+    "inputSchema": {
+      "properties": {
+        "box": {
+          "description": "[x0, y0, x1, y1] in project pixels from the top-left.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "boxes": {
+          "description": "More sightings of the same thing on the same footage clip, [{time, box}] as `time`/`box`: tracked from each to the next and blended, so the path is held to each (after a cut, where it was lost, at a turn).",
+          "items": {
+            "properties": {
+              "box": {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "time": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "follow": {
+          "description": "Clip id to move with it (text or video; an adjustment for target vignette or blur).",
+          "type": "string"
+        },
+        "offset": {
+          "description": "[dx, dy] px added to every tracked position, e.g. a callout label set off to the side with more room ([260, 140]: right of and below where place puts it).",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "place": {
+          "description": "Where the clip sits relative to the box (default on). For a vignette or leader, the point: the box's centre, or the middle of its top or bottom edge (below a face's box = the chin).",
+          "enum": [
+            "above",
+            "below",
+            "on"
+          ],
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "target": {
+          "description": "What follows: the clip's position (default), an adjustment's vignette centre (vignette_x/y: light kept on a person), a text's callout line start (leader.x/y), or an adjustment's blur region (blur.x/y, place on; its width/height set to the box, radius 35 and feather 20 at 1080p unless already set: a face hidden as it moves).",
+          "enum": [
+            "position",
+            "vignette",
+            "leader",
+            "blur"
+          ],
+          "type": "string"
+        },
+        "time": {
+          "description": "Timeline seconds where the box is as given.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "time",
+        "box",
+        "follow"
+      ],
+      "type": "object"
+    },
+    "name": "track_region"
+  },
+  {
+    "description": "Export the project (default: the whole edit as an MP4, H.264 + AAC, at the project's size). Progress shows in the UI. Options as the export dialog: format, range (frames [start, end)), shape (vertical = 9:16 for Shorts/Reels, filled per fill: blur | crop | black), size (short side px), quality or target_mb, loudness (LUFS, e.g. -14 for YouTube), chapters. A whole subtitled video is then uploaded to the team's Subtitles folder on Drive; its link becomes the project's drive.url.",
+    "inputSchema": {
+      "properties": {
+        "options": {
+          "properties": {
+            "audio": {
+              "type": "boolean"
+            },
+            "chapters": {
+              "items": {
+                "properties": {
+                  "start": {
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "fill": {
+              "enum": [
+                "blur",
+                "crop",
+                "black"
+              ],
+              "type": "string"
+            },
+            "format": {
+              "enum": [
+                "h264",
+                "hevc",
+                "prores",
+                "gif",
+                "wav",
+                "mp3",
+                "png"
+              ],
+              "type": "string"
+            },
+            "hardware": {
+              "description": "Encode on the Mac's media engine: much faster.",
+              "type": "boolean"
+            },
+            "loudness": {
+              "type": "number"
+            },
+            "quality": {
+              "enum": [
+                "high",
+                "balanced",
+                "small"
+              ],
+              "type": "string"
+            },
+            "range": {
+              "description": "[start, end) frames of the edit; png uses start.",
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "shape": {
+              "enum": [
+                "original",
+                "vertical",
+                "square",
+                "portrait"
+              ],
+              "type": "string"
+            },
+            "size": {
+              "description": "Short side in px (e.g. 1080, 720).",
+              "type": "integer"
+            },
+            "target_mb": {
+              "type": "number"
+            }
+          },
+          "type": "object"
+        },
+        "path": {
+          "description": "Output path (default <name>.mp4 in the media drive's Exports folder when one is set, else ~/Movies/Edit); the extension follows the format.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "export"
+  }
+]

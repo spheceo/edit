@@ -986,7 +986,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     .clip_mut(&clip_id)
                     .ok_or_else(|| format!("no clip {clip_id}"))?;
                 let mut value = serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
-                merge(&mut value, &patch);
+                merge_clip(&mut value, &patch);
                 if let Some(fields) = value.as_object_mut() {
                     fields.insert("id".to_owned(), json!(clip_id));
                 }
@@ -1048,7 +1048,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     let clip_id = clip.id.clone();
                     let mut value =
                         serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
-                    merge(&mut value, &patch);
+                    merge_clip(&mut value, &patch);
                     if let Some(fields) = value.as_object_mut() {
                         fields.insert("id".to_owned(), json!(clip_id));
                     }
@@ -3140,6 +3140,22 @@ fn free_track_from(
     project.add_track(kind)
 }
 
+/// A clip (as JSON) changed by a merge patch. The intro's speaker captions
+/// (`caption_speakers`) never carry a name label above them: that's for
+/// subtitles only, so a patch giving one a label (a relabel across a
+/// speaker's clips, say) leaves it off.
+pub(crate) fn merge_clip(clip: &mut Value, patch: &Value) {
+    merge(clip, patch);
+    let caption = clip["name"]
+        .as_str()
+        .is_some_and(|name| name.starts_with(crate::captions::CAPTION_PREFIX));
+    if caption {
+        if let Some(style) = clip.get_mut("style").and_then(Value::as_object_mut) {
+            style.remove("label");
+        }
+    }
+}
+
 /// RFC 7386 JSON merge patch.
 pub(crate) fn merge(target: &mut Value, patch: &Value) {
     let Some(patch) = patch.as_object() else {
@@ -3296,6 +3312,19 @@ mod tests {
         project.clips = vec![clip("music", &v2, 0, 300), clip("footage", &v1, 90, 100)];
         assert_eq!(close_gaps(&mut project, &[clip("card", &v1, 0, 90)]), 0);
         assert_eq!(project.clip("footage").unwrap().start, 90);
+    }
+
+    #[test]
+    fn speaker_captions_never_take_a_label() {
+        let label =
+            json!({"style": {"label": {"text": "Officer:", "color": [1, 1, 1, 1], "size": 26}}});
+        let mut caption = json!({"name": "Caption · Sinclair (Officer)", "style": {"size": 40}});
+        super::merge_clip(&mut caption, &label);
+        assert!(caption["style"].get("label").is_none());
+        assert_eq!(caption["style"]["size"], 40);
+        let mut subtitle = json!({"name": "Subtitle · Sinclair (Officer)", "style": {}});
+        super::merge_clip(&mut subtitle, &label);
+        assert_eq!(subtitle["style"]["label"]["text"], "Officer:");
     }
 
     #[test]

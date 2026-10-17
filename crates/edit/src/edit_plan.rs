@@ -151,7 +151,7 @@ fn operation_on(
             {
                 let (start, duration) = (clip.start, clip.duration);
                 let mut value = serde_json::to_value(&*clip).map_err(|error| error.to_string())?;
-                crate::mcp::merge(&mut value, &Value::Object(patch.clone()));
+                crate::mcp::merge_clip(&mut value, &Value::Object(patch.clone()));
                 value
                     .as_object_mut()
                     .ok_or("patched clip must be an object")?

@@ -27,6 +27,8 @@ use crate::transcribe::Word;
 pub const WATCH_MODEL: &str = "gpt-6-luna";
 /// Names caption clips so a second run replaces the first.
 const NAME: &str = "Caption";
+/// How every speaker caption's clip name starts ("Caption · <who>").
+pub const CAPTION_PREFIX: &str = "Caption · ";
 /// How long a finished caption stays up after its last word (seconds).
 const HOLD: f64 = 0.35;
 /// Camera shake on captions, in pixels at 1080p.

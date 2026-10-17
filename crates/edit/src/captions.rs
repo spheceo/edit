@@ -567,7 +567,7 @@ pub fn subtitle_style(width: u32, height: u32) -> TextStyle {
 }
 
 /// A known speaker's first name; retain a short role when no name is known.
-fn subtitle_name(name: &str) -> &str {
+pub(crate) fn subtitle_name(name: &str) -> &str {
     let name = name
         .split(" (")
         .next()
@@ -755,159 +755,170 @@ pub async fn subtitles(
         y: height as f32 * 0.4,
         ..Transform::default()
     };
-    let (live, (placed, kept, texts)) = app.store.update(project_id, "agent", |project| {
-        let old: HashSet<String> = project
-            .clips
-            .iter()
-            .filter(|clip| {
-                clip.name
-                    .as_deref()
-                    .is_some_and(|name| name.starts_with(SUBTITLE))
-                    && clip.start < to
-                    && clip.end() > from
-            })
-            .map(|clip| clip.id.clone())
-            .collect();
-        let moved: Vec<Adjusted> = project
-            .clips
-            .iter()
-            .filter(|clip| old.contains(&clip.id))
-            .filter_map(|clip| adjusted(clip, &style, &transform))
-            .collect();
-        project.clips.retain(|clip| !old.contains(&clip.id));
-        crate::subtitles::write_mutes(project, &house.mutes);
-        let snap = (SNAP * fps).round() as i64;
-        let least = (MIN_SUBTITLE * fps).round() as i64;
-        // Last line first, so each knows where the next one it must give way to starts.
-        let mut slots = Vec::new();
-        let mut next_start: HashMap<String, i64> = HashMap::new();
-        for (index, line) in lines.iter().enumerate().rev() {
-            let Some(clip) = project.clip(&line.clip).cloned() else {
-                continue;
-            };
-            let ClipContent::Audio { speed, .. } = clip.content else {
-                continue;
-            };
-            let Some(&(said_from, said_to)) = spans.get(index) else {
-                continue;
-            };
-            let mut start = (said_from.floor() as i64).max(clip.start).max(from);
-            if start - clip.start <= snap {
-                start = clip.start.max(from);
-            }
-            let until = next_start
-                .get(&line.clip)
-                .copied()
-                .unwrap_or(i64::MAX)
-                .min(clip.end())
-                .min(to);
-            let natural = (said_to + HOLD / speed * fps).ceil() as i64;
-            let mut end = natural.min(until).max(start);
-            if until - end <= snap {
-                end = until.max(start);
-            }
-            // Someone's "okay" over the next line: no room to read it, so it's left out.
-            if end - start < least && line.words.len() <= 2 {
-                continue;
-            }
-            next_start.insert(line.clip.clone(), start);
-            slots.push((index, line, start, end, natural));
-        }
-        slots.reverse();
-        // Crosstalk: a line squeezed by the next one gets time to be read,
-        // and the next starts a moment later (keeping its own time to read).
-        let read = (READ_SUBTITLE * fps).round() as i64;
-        for index in 0..slots.len().saturating_sub(1) {
-            let Some([current, next, ..]) = slots.get_mut(index..) else {
-                continue;
-            };
-            let (_, line, start, end, natural) = *current;
-            let need = (start + read).min(natural.max(start + least));
-            let (_, next_line, next_start, next_end, _) = *next;
-            if end < need
-                && next_line.clip == line.clip
-                && next_start < need
-                && need <= next_end - least
-            {
-                current.3 = need;
-                next.2 = need;
-            }
-        }
-        slots.retain(|(_, _, start, end, _)| end > start);
-        let (mut placed, mut kept) = (0, 0);
-        // Every subtitle on the subtitles' own track, one after another.
-        let track = project.subtitles_track();
-        let mut free_from = 0;
-        for (index, line, start, end, _) in slots {
-            let start = start.max(free_from);
-            let busy = project
+    let (live, (placed, kept, texts, people)) =
+        app.store.update(project_id, "agent", |project| {
+            // Who each transcript voice was made out to be (a relabel: "Mother" →
+            // "Tabitha:") and their colour: a re-run keeps them.
+            let relabelled = relabels(project);
+            let old: HashSet<String> = project
                 .clips
                 .iter()
-                .filter(|clip| clip.track == track && clip.start < end && start < clip.end())
-                .map(|clip| clip.end())
-                .max();
-            let start = busy.map_or(start, |taken| start.max(taken));
-            if end <= start {
-                continue;
-            }
-            free_from = end;
-            let who = line
-                .name
-                .clone()
-                .or_else(|| line.voice.clone())
-                .unwrap_or_else(|| "Speaker".into());
-            let color = line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE);
-            let mut line_style = TextStyle {
-                label: Some(TextLabel {
-                    text: format!("{}:", subtitle_name(&who)),
-                    color,
-                    size: (LABEL_SIZE * height as f32 / 1080.0).round(),
-                }),
-                ..style.clone()
-            };
-            let mut line_transform = transform;
-            let mut keyframes = std::collections::BTreeMap::new();
-            if let Some(old) = carried(&moved, start, end) {
-                line_transform = old.transform;
-                line_style.max_width = old.max_width;
-                line_style.size = old.size;
-                // Keyframes are frames into the clip: shifted to the new start.
-                let shift = (old.start - start) as f32;
-                keyframes = old.keyframes.clone();
-                for key in keyframes.values_mut().flatten() {
-                    key.frame += shift;
+                .filter(|clip| {
+                    clip.name
+                        .as_deref()
+                        .is_some_and(|name| name.starts_with(SUBTITLE))
+                        && clip.start < to
+                        && clip.end() > from
+                })
+                .map(|clip| clip.id.clone())
+                .collect();
+            let moved: Vec<Adjusted> = project
+                .clips
+                .iter()
+                .filter(|clip| old.contains(&clip.id))
+                .filter_map(|clip| adjusted(clip, &style, &transform))
+                .collect();
+            project.clips.retain(|clip| !old.contains(&clip.id));
+            crate::subtitles::write_mutes(project, &house.mutes);
+            let snap = (SNAP * fps).round() as i64;
+            let least = (MIN_SUBTITLE * fps).round() as i64;
+            // Last line first, so each knows where the next one it must give way to starts.
+            let mut slots = Vec::new();
+            let mut next_start: HashMap<String, i64> = HashMap::new();
+            for (index, line) in lines.iter().enumerate().rev() {
+                let Some(clip) = project.clip(&line.clip).cloned() else {
+                    continue;
+                };
+                let ClipContent::Audio { speed, .. } = clip.content else {
+                    continue;
+                };
+                let Some(&(said_from, said_to)) = spans.get(index) else {
+                    continue;
+                };
+                let mut start = (said_from.floor() as i64).max(clip.start).max(from);
+                if start - clip.start <= snap {
+                    start = clip.start.max(from);
                 }
-                kept += 1;
+                let until = next_start
+                    .get(&line.clip)
+                    .copied()
+                    .unwrap_or(i64::MAX)
+                    .min(clip.end())
+                    .min(to);
+                let natural = (said_to + HOLD / speed * fps).ceil() as i64;
+                let mut end = natural.min(until).max(start);
+                if until - end <= snap {
+                    end = until.max(start);
+                }
+                // Someone's "okay" over the next line: no room to read it, so it's left out.
+                if end - start < least && line.words.len() <= 2 {
+                    continue;
+                }
+                next_start.insert(line.clip.clone(), start);
+                slots.push((index, line, start, end, natural));
             }
-            let track = track.clone();
-            let id = project.fresh_id("c");
-            project.clips.push(Clip {
-                id,
-                track,
-                start,
-                duration: end - start,
-                color: ClipColor::Cyan,
-                name: Some(format!("{SUBTITLE} · {who}")),
-                link: None,
-                fade_in: 0,
-                fade_out: 0,
-                keyframes,
-                content: ClipContent::Text {
-                    // White words; who says them above, in their colour.
-                    text: texts.get(index).cloned().unwrap_or_else(|| line.text()),
-                    style: line_style,
-                    transform: line_transform,
-                    animation: TextAnimation::default(),
-                    opacity: 1.0,
-                    word_times: Vec::new(),
-                },
-            });
-            placed += 1;
-        }
-        // Every other text on screen too (captions, callouts, charges), all of the video.
-        let texts = crate::subtitles::star_on_screen(project, 0, i64::MAX, neglect);
-        Ok((placed, kept, texts))
-    })?;
+            slots.reverse();
+            // Crosstalk: a line squeezed by the next one gets time to be read,
+            // and the next starts a moment later (keeping its own time to read).
+            let read = (READ_SUBTITLE * fps).round() as i64;
+            for index in 0..slots.len().saturating_sub(1) {
+                let Some([current, next, ..]) = slots.get_mut(index..) else {
+                    continue;
+                };
+                let (_, line, start, end, natural) = *current;
+                let need = (start + read).min(natural.max(start + least));
+                let (_, next_line, next_start, next_end, _) = *next;
+                if end < need
+                    && next_line.clip == line.clip
+                    && next_start < need
+                    && need <= next_end - least
+                {
+                    current.3 = need;
+                    next.2 = need;
+                }
+            }
+            slots.retain(|(_, _, start, end, _)| end > start);
+            let (mut placed, mut kept) = (0, 0);
+            // Every subtitle on the subtitles' own track, one after another.
+            let track = project.subtitles_track();
+            let mut free_from = 0;
+            for (index, line, start, end, _) in slots {
+                let start = start.max(free_from);
+                let busy = project
+                    .clips
+                    .iter()
+                    .filter(|clip| clip.track == track && clip.start < end && start < clip.end())
+                    .map(|clip| clip.end())
+                    .max();
+                let start = busy.map_or(start, |taken| start.max(taken));
+                if end <= start {
+                    continue;
+                }
+                free_from = end;
+                let who = line
+                    .name
+                    .clone()
+                    .or_else(|| line.voice.clone())
+                    .unwrap_or_else(|| "Speaker".into());
+                let (label, color) = relabelled.get(&who).cloned().unwrap_or_else(|| {
+                    (
+                        format!("{}:", subtitle_name(&who)),
+                        line.color.as_deref().and_then(hex).unwrap_or(Rgba::WHITE),
+                    )
+                });
+                let mut line_style = TextStyle {
+                    label: Some(TextLabel {
+                        text: label,
+                        color,
+                        size: (LABEL_SIZE * height as f32 / 1080.0).round(),
+                    }),
+                    ..style.clone()
+                };
+                let mut line_transform = transform;
+                let mut keyframes = std::collections::BTreeMap::new();
+                if let Some(old) = carried(&moved, start, end) {
+                    line_transform = old.transform;
+                    line_style.max_width = old.max_width;
+                    line_style.size = old.size;
+                    // Keyframes are frames into the clip: shifted to the new start.
+                    let shift = (old.start - start) as f32;
+                    keyframes = old.keyframes.clone();
+                    for key in keyframes.values_mut().flatten() {
+                        key.frame += shift;
+                    }
+                    kept += 1;
+                }
+                let track = track.clone();
+                let id = project.fresh_id("c");
+                project.clips.push(Clip {
+                    id,
+                    track,
+                    start,
+                    duration: end - start,
+                    color: ClipColor::Cyan,
+                    name: Some(format!("{SUBTITLE} · {who}")),
+                    link: None,
+                    fade_in: 0,
+                    fade_out: 0,
+                    keyframes,
+                    content: ClipContent::Text {
+                        // White words; who says them above, in their colour.
+                        text: texts.get(index).cloned().unwrap_or_else(|| line.text()),
+                        style: line_style,
+                        transform: line_transform,
+                        animation: TextAnimation::default(),
+                        opacity: 1.0,
+                        word_times: Vec::new(),
+                    },
+                });
+                placed += 1;
+            }
+            // Every other text on screen too (captions, callouts, charges), all of the video.
+            let texts = crate::subtitles::star_on_screen(project, 0, i64::MAX, neglect);
+            // One colour per person across the video (their captions and quotes too).
+            let people = crate::people::one_colour_per_person(project);
+            Ok((placed, kept, texts, people))
+        })?;
     Ok(json!({
         "rev": live.rev,
         "lines": said,
@@ -916,7 +927,44 @@ pub async fn subtitles(
         "kept_hand_adjustments": kept,
         "texts_starred": texts,
         "mutes": house.listed,
+        "people": people,
     }))
+}
+
+/// The label and colour each transcript voice's subtitles are shown under
+/// now ("Subtitle · Mother" → "Tabitha:" in red), the most used of each, so
+/// a re-run of add_subtitles keeps who is who and their colours.
+fn relabels(project: &Project) -> HashMap<String, (String, Rgba)> {
+    let mut seen: HashMap<String, HashMap<(String, [u32; 4]), (usize, Rgba)>> = HashMap::new();
+    for clip in &project.clips {
+        let (Some(who), ClipContent::Text { style, .. }) = (
+            clip.name
+                .as_deref()
+                .and_then(|name| name.strip_prefix(SUBTITLE))
+                .and_then(|rest| rest.strip_prefix(" · ")),
+            &clip.content,
+        ) else {
+            continue;
+        };
+        let Some(label) = &style.label else {
+            continue;
+        };
+        let bits = label.color.0.map(f32::to_bits);
+        let entry = seen
+            .entry(who.to_owned())
+            .or_default()
+            .entry((label.text.clone(), bits))
+            .or_insert((0, label.color));
+        entry.0 += 1;
+    }
+    seen.into_iter()
+        .filter_map(|(who, labels)| {
+            labels
+                .into_iter()
+                .max_by(|a, b| a.1 .0.cmp(&b.1 .0).then(b.0 .0.cmp(&a.0 .0)))
+                .map(|((text, _), (_, colour))| (who, (text, colour)))
+        })
+        .collect()
 }
 
 /// Captions every line spoken in the footage between `from` and `to` (timeline frames).
@@ -1380,6 +1428,8 @@ pub async fn caption_speakers(
             });
             placed += 1;
         }
+        // One colour per person: the same as their subtitles and quotes.
+        crate::people::one_colour_per_person(project);
         Ok(placed)
     })?;
     let tracked = plans.iter().filter(|plan| plan.track.len() > 1).count();
@@ -1919,6 +1969,34 @@ mod tests {
                 word_times: Vec::new(),
             },
         }
+    }
+
+    #[test]
+    fn a_rerun_keeps_who_is_who_and_their_colour() {
+        let labelled = |text: &str, colour: Rgba| TextStyle {
+            label: Some(TextLabel {
+                text: text.into(),
+                color: colour,
+                size: 26.0,
+            }),
+            ..subtitle_style(1920, 1080)
+        };
+        let red = Rgba([1.0, 0.3, 0.35, 1.0]);
+        let mut project = Project::new("p".into(), "t".into(), edit_core::Settings::default());
+        // "Officer" was renamed Sinclair on two lines of three; one slipped.
+        project.clips = vec![
+            subtitle_clip(0, 10, Transform::default(), labelled("Sinclair:", red)),
+            subtitle_clip(20, 10, Transform::default(), labelled("Sinclair:", red)),
+            subtitle_clip(
+                40,
+                10,
+                Transform::default(),
+                labelled("Officer:", Rgba::WHITE),
+            ),
+        ];
+        let kept = relabels(&project);
+        assert_eq!(kept.get("Officer"), Some(&("Sinclair:".to_owned(), red)));
+        assert_eq!(kept.len(), 1);
     }
 
     #[test]

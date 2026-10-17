@@ -294,7 +294,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "update_clips",
-            "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, or by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\"), optionally only on one track and within start/end (timeline seconds). E.g. one person's name and colour on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\", color: [1,1,0,1]}}}}.",
+            "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, or by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\"), optionally only on one track and within start/end (timeline seconds). E.g. one person's short name on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\"}}}}. A relabel or recolour then gives every person (label) one colour across the video, kept apart from everyone else's (subtitles, intro captions, \"Quote · <label>\" clips); the result lists them.",
             json!({
                 "clip_ids": { "type": "array", "items": { "type": "string" } },
                 "label": { "type": "string", "description": "Text clips whose style.label.text is exactly this." },
@@ -992,6 +992,9 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 }
                 *clip = serde_json::from_value(value)
                     .map_err(|error| format!("patched clip is invalid: {error}"))?;
+                if touches_people(&patch) {
+                    crate::people::one_colour_per_person(project);
+                }
                 Ok(())
             })?;
             let clip = store
@@ -1056,11 +1059,21 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                         .map_err(|error| format!("patched {clip_id} is invalid: {error}"))?;
                     changed.push(clip_id);
                 }
-                Ok(changed)
+                // A relabel or recolour: one colour per person, everywhere.
+                let people = (touches_people(&patch) && !changed.is_empty())
+                    .then(|| crate::people::one_colour_per_person(project));
+                Ok((changed, people))
             })?;
+            let (changed, people) = changed;
             Ok(text(match changed.len() {
                 0 => "no clips matched; nothing changed".to_owned(),
-                count => format!("updated {count} clip(s): {}", changed.join(", ")),
+                count => format!(
+                    "updated {count} clip(s): {}{}",
+                    changed.join(", "),
+                    people.map_or_else(String::new, |people| format!(
+                        "\npeople (one colour each, kept apart; a colour too near someone else's was changed): {people}"
+                    ))
+                ),
             }))
         }
         "batch" => run_batch(app, args, scope).await,
@@ -2353,15 +2366,11 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
     let inside = |start: i64, end: i64| {
         !from.is_some_and(|from| end <= from) && !to.is_some_and(|to| start >= to)
     };
-    let mut speakers: std::collections::BTreeMap<String, usize> = Default::default();
+    // Each label: its lines, colour and the transcript voices it covers.
+    let speakers = crate::people::summary(p);
     let mut clips = Vec::new();
     let mut subtitles = 0;
     for clip in &p.clips {
-        if let ClipContent::Text { style, .. } = &clip.content {
-            if let Some(label) = &style.label {
-                *speakers.entry(label.text.clone()).or_default() += 1;
-            }
-        }
         if ids.is_some_and(|ids| !ids.iter().any(|id| id.as_str() == Some(&clip.id)))
             || !inside(clip.start, clip.end())
         {
@@ -3138,6 +3147,15 @@ fn free_track_from(
         }
     }
     project.add_track(kind)
+}
+
+/// Whether a patch can change whose words a clip is or their colour (a
+/// label, a colour, a clip name): then every person gets one colour again.
+pub(crate) fn touches_people(patch: &Value) -> bool {
+    patch.get("name").is_some()
+        || patch
+            .get("style")
+            .is_some_and(|style| style.get("label").is_some() || style.get("color").is_some())
 }
 
 /// A clip (as JSON) changed by a merge patch. The intro's speaker captions

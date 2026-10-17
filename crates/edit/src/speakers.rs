@@ -465,7 +465,7 @@ fn lab(hex: &str) -> [f64; 3] {
 }
 
 /// How far apart two colours look (CIE76 ΔE).
-fn apart(a: &str, b: &str) -> f64 {
+pub(crate) fn apart(a: &str, b: &str) -> f64 {
     let ([l1, a1, b1], [l2, a2, b2]) = (lab(a), lab(b));
     ((l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)).sqrt()
 }

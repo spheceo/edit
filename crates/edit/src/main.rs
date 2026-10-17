@@ -21,6 +21,7 @@ mod mcp;
 mod media;
 mod media_drive;
 mod mix;
+mod people;
 mod relay;
 mod render;
 mod research;

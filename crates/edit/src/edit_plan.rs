@@ -35,6 +35,14 @@ pub fn apply(project: &mut Project, operations: &[Value]) -> Result<Applied, Str
         .map_err(|error: String| format!("operation {}: {error}; nothing saved", index + 1))?;
         results.push(result);
     }
+    // Text placed or relabelled (a quote, a caption's speaker): one colour
+    // per person across the video, as add_subtitles leaves it.
+    if operations.iter().any(|operation| {
+        (operation["op"] == "add" && operation["clip"]["type"] == "text")
+            || (operation["op"] == "update" && crate::mcp::touches_people(&operation["patch"]))
+    }) {
+        crate::people::one_colour_per_person(project);
+    }
     project
         .validate()
         .map_err(|error| format!("final plan is invalid: {error}; nothing saved"))?;

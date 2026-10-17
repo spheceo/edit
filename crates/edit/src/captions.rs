@@ -1124,7 +1124,7 @@ pub async fn caption_speakers(
             tracks.push((
                 plans.len(),
                 PathBuf::from(&media.path),
-                (media.width, media.height),
+                (media.width, media.height, media.fps),
                 line.start(),
                 line.end() + HOLD,
                 (line.start() + line.end()) / 2.0,
@@ -1158,9 +1158,9 @@ pub async fn caption_speakers(
         use futures_util::StreamExt as _;
         let tracked: Vec<(usize, Vec<crate::track::Sample>)> =
             futures_util::stream::iter(tracks.into_iter().map(
-                |(plan, path, size, from, to, at, region)| async move {
+                |(plan, path, (width, height, fps), from, to, at, region)| async move {
                     let samples = tokio::task::spawn_blocking(move || {
-                        crate::track::track(&path, size, from, to, at, region)
+                        crate::track::track(&path, (width, height), fps, from, to, at, region)
                     })
                     .await
                     .ok()
@@ -1309,21 +1309,17 @@ pub async fn caption_speakers(
                 ..style.clone()
             };
             let size = caption_size(&text, &line_style);
-            let place = |region: [f64; 4]| {
-                let (x0, y0) = to_project(
-                    &media,
-                    footage_transform,
-                    (width, height),
-                    (region[0], region[1]),
-                );
-                let (x1, y1) = to_project(
-                    &media,
-                    footage_transform,
-                    (width, height),
-                    (region[2], region[3]),
-                );
+            // Where the caption goes by `region` (source pixels) with the
+            // footage framed as at timeline `frame` (a push-in moves the face).
+            let place_at = |region: [f64; 4], frame: i64| {
+                let framing = footage_framing(&footage, footage_transform, frame);
+                let (x0, y0) =
+                    to_project(&media, &framing, (width, height), (region[0], region[1]));
+                let (x1, y1) =
+                    to_project(&media, &framing, (width, height), (region[2], region[3]));
                 anchor([y0, x0, y1, x1], side, size, (width, height), gap)
             };
+            let place = |region: [f64; 4]| place_at(region, start);
             let (x, y) = match plan.face {
                 Some(face) => place(face),
                 // Nobody to sit by (the camera wearer, a radio): bottom middle.
@@ -1339,12 +1335,15 @@ pub async fn caption_speakers(
                     if frame < -1.0 || frame > (end - start) as f64 + 1.0 {
                         continue;
                     }
-                    let (px, py) = place([
-                        sample.x - w / 2.0,
-                        sample.y - h / 2.0,
-                        sample.x + w / 2.0,
-                        sample.y + h / 2.0,
-                    ]);
+                    let (px, py) = place_at(
+                        [
+                            sample.x - w / 2.0,
+                            sample.y - h / 2.0,
+                            sample.x + w / 2.0,
+                            sample.y + h / 2.0,
+                        ],
+                        start + frame.round() as i64,
+                    );
                     let key = |value: f64| Keyframe {
                         frame: frame as f32,
                         value: value as f32,
@@ -1453,13 +1452,17 @@ fn to_source(
 
 /// Tracks `region` ([x0, y0, x1, y1] project pixels from the top-left, as at
 /// timeline `time`) in the footage there, and keys clip `follow` to move with
-/// it for its whole length: centred on it, or just above or below it.
+/// it for its whole length: centred on it, or just above or below it. `more`
+/// are the same thing seen at other moments of the same footage (timeline
+/// seconds, box): tracking runs from each to the next and blends between,
+/// so a long or fast stretch, or one with a cut in it, stays on it.
 #[allow(clippy::too_many_arguments)]
 pub async fn follow_region(
     app: &App,
     project_id: &str,
     time: f64,
     region: [f64; 4],
+    more: &[(f64, [f64; 4])],
     follow: &str,
     place: &str,
     what: &str,
@@ -1508,34 +1511,64 @@ pub async fn follow_region(
         .ok_or_else(|| format!("no clip {follow}"))?
         .clone();
     let centre = |x: f64, y: f64| (x - width / 2.0, y - height / 2.0);
-    let (a, b) = (
-        to_source(
-            &media,
-            transform,
-            (width, height),
-            centre(region[0], region[1]),
-        ),
-        to_source(
-            &media,
-            transform,
-            (width, height),
-            centre(region[2], region[3]),
-        ),
-    );
-    let source_region = [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)];
+    // The footage's framing at a timeline frame, its keyframes included (a
+    // push-in moves what's on screen; the static transform alone put a
+    // label in a zoomed-in shot off by the zoom's change).
+    let framing = |frame: i64| footage_framing(&footage, transform, frame);
+    let to_source_box = |frame: i64, region: [f64; 4]| {
+        let framing = framing(frame);
+        let (a, b) = (
+            to_source(
+                &media,
+                &framing,
+                (width, height),
+                centre(region[0], region[1]),
+            ),
+            to_source(
+                &media,
+                &framing,
+                (width, height),
+                centre(region[2], region[3]),
+            ),
+        );
+        [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
+    };
+    let source_region = to_source_box(frame, region);
     let to_source_time = |frame: i64| source_in + (frame - footage.start) as f64 / fps * speed;
+    let to_timeline =
+        |seconds: f64| (footage.start as f64 + (seconds - source_in) / speed * fps) / fps;
     let (from, to) = (
         to_source_time(target.start.max(footage.start)),
         to_source_time(target.end().min(footage.end())),
     );
-    let at = to_source_time(frame);
+    let mut anchors = vec![crate::track::Anchor {
+        at: to_source_time(frame),
+        region: source_region,
+    }];
+    for (seconds, region) in more {
+        let frame = (seconds * fps).floor() as i64;
+        if !footage.contains(frame) {
+            return Err(format!(
+                "the box at {seconds:.2}s isn't on the footage tracked ({} plays {:.2}–{:.2}s); give boxes on that clip",
+                footage.id,
+                footage.start as f64 / fps,
+                footage.end() as f64 / fps
+            ));
+        }
+        anchors.push(crate::track::Anchor {
+            at: to_source_time(frame),
+            region: to_source_box(frame, *region),
+        });
+    }
     let path = PathBuf::from(&media.path);
     let size = (media.width, media.height);
-    let samples = tokio::task::spawn_blocking(move || {
-        crate::track::track(&path, size, from, to, at, source_region)
+    let media_fps = media.fps;
+    let tracked = tokio::task::spawn_blocking(move || {
+        crate::track::track_anchors(&path, size, media_fps, from, to, &anchors)
     })
     .await
     .map_err(|error| error.to_string())??;
+    let samples = &tracked.samples;
     let (w, h) = (
         source_region[2] - source_region[0],
         source_region[3] - source_region[1],
@@ -1547,21 +1580,22 @@ pub async fn follow_region(
     let gap = 14.0 * height / 1080.0;
     let mut xs = Vec::new();
     let mut ys = Vec::new();
-    for sample in &samples {
+    for sample in samples {
         let local =
             footage.start as f64 + (sample.time - source_in) / speed * fps - target.start as f64;
         if local < 0.0 || local > target.duration as f64 {
             continue;
         }
+        let framing = framing(target.start + local.round() as i64);
         let (x0, y0) = to_project(
             &media,
-            transform,
+            &framing,
             (width, height),
             (sample.x - w / 2.0, sample.y - h / 2.0),
         );
         let (x1, y1) = to_project(
             &media,
-            transform,
+            &framing,
             (width, height),
             (sample.x + w / 2.0, sample.y + h / 2.0),
         );
@@ -1636,7 +1670,49 @@ pub async fn follow_region(
         clip.keyframes.insert(y.into(), ys);
         Ok(())
     })?;
-    Ok(format!("{follow} now follows the box ({place}) with {count} tracked positions from the footage of {}", footage.id))
+    let mut summary = format!(
+        "{follow} now follows the box ({place}) with {count} tracked positions from the footage of {}",
+        footage.id
+    );
+    if !tracked.cuts.is_empty() {
+        let cuts: Vec<String> = tracked
+            .cuts
+            .iter()
+            .map(|cut| format!("{:.2}s", to_timeline(*cut)))
+            .collect();
+        summary.push_str(&format!("; the footage cuts at {}", cuts.join(", ")));
+    }
+    if !tracked.lost.is_empty() {
+        let lost: Vec<String> = tracked
+            .lost
+            .iter()
+            .map(|(a, b)| format!("{:.2}–{:.2}s", to_timeline(*a), to_timeline(*b)))
+            .collect();
+        summary.push_str(&format!(
+            "; lost it {} (it rode with the camera from where it was last seen): look at those moments and, where it's off, track again with the box as it is there in `boxes`",
+            lost.join(", ")
+        ));
+    }
+    Ok(summary)
+}
+
+/// A footage clip's framing at timeline `frame`: its transform with its x, y
+/// and scale keyframes applied.
+fn footage_framing(footage: &Clip, transform: &Transform, frame: i64) -> Transform {
+    let local = (frame - footage.start) as f32;
+    let keyed = |name: &str, base: f32| {
+        footage
+            .keyframes
+            .get(name)
+            .and_then(|keys| edit_core::sample(keys, local))
+            .unwrap_or(base)
+    };
+    Transform {
+        x: keyed("x", transform.x),
+        y: keyed("y", transform.y),
+        scale: keyed("scale", transform.scale),
+        ..*transform
+    }
 }
 
 /// "#00e5c7" → a colour.

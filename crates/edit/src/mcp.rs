@@ -730,10 +730,11 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "track_region",
-            "Track a box in the footage (a face, a redaction block, an object) and make a clip follow it: bakes x/y keyframes onto `follow` so it stays above, below or on the box. Give the box as it appears at `time` in project pixels from the top-left of the frame (as render_frame shows it, scaled to the project size).",
+            "Track a box in the footage (a face, a redaction block, an object) and make a clip follow it: bakes x/y keyframes onto `follow` (one per footage frame for a short stretch) so it stays above, below or on the box. Give the box as it appears at `time` in project pixels from the top-left of the frame (as render_frame shows it, scaled to the project size). The camera's own move (a swinging bodycam, a whip) is followed, small faces in zoomed-in shots are tracked from the original footage, and drift is checked against the box as given. It answers with the cuts it saw in the footage and any stretch where it lost the box (it rides with the camera there): look at those moments and track again with `boxes` there. For a fast or long stretch, a cut inside the footage, or a person who turns, give the box at its start, middle and end (`time`/`box` plus `boxes`).",
             json!({
                 "time": { "type": "number", "description": "Timeline seconds where the box is as given." },
                 "box": { "type": "array", "items": { "type": "number" }, "description": "[x0, y0, x1, y1] in project pixels from the top-left." },
+                "boxes": { "type": "array", "items": { "type": "object", "properties": { "time": { "type": "number" }, "box": { "type": "array", "items": { "type": "number" } } } }, "description": "More sightings of the same thing on the same footage clip, [{time, box}] as `time`/`box`: tracked from each to the next and blended, so the path is held to each (after a cut, where it was lost, at a turn)." },
                 "follow": { "type": "string", "description": "Clip id to move with it (text or video; an adjustment for target vignette or blur)." },
                 "place": { "type": "string", "enum": ["above", "below", "on"], "description": "Where the clip sits relative to the box (default on). For a vignette or leader, the point: the box's centre, or the middle of its top or bottom edge (below a face's box = the chin)." },
                 "target": { "type": "string", "enum": ["position", "vignette", "leader", "blur"], "description": "What follows: the clip's position (default), an adjustment's vignette centre (vignette_x/y: light kept on a person), a text's callout line start (leader.x/y), or an adjustment's blur region (blur.x/y, place on; its width/height set to the box, radius 35 and feather 20 at 1080p unless already set: a face hidden as it moves)." },
@@ -2173,11 +2174,26 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 },
                 None => [0.0, 0.0],
             };
+            let mut more = Vec::new();
+            for extra in args["boxes"].as_array().into_iter().flatten() {
+                let at = extra["time"]
+                    .as_f64()
+                    .ok_or("each of boxes is {time, box}")?;
+                let values: Vec<f64> = extra["box"]
+                    .as_array()
+                    .map(|values| values.iter().filter_map(Value::as_f64).collect())
+                    .unwrap_or_default();
+                let [a, b, c, d] = values[..] else {
+                    return Err("each of boxes is {time, box: [x0, y0, x1, y1]}".into());
+                };
+                more.push((at, [a, b, c, d]));
+            }
             let summary = crate::captions::follow_region(
                 app,
                 &id,
                 time,
                 [x0, y0, x1, y1],
+                &more,
                 follow,
                 place,
                 target,

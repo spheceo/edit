@@ -18,11 +18,29 @@ pub(crate) fn url() -> String {
     std::env::var("EDIT_RELAY_URL").unwrap_or_else(|_| DEFAULT_RELAY.to_owned())
 }
 
-/// `EDIT_RELAY_TOKEN`, when set and not empty.
+/// The start of every error that means the relay couldn't be reached at all
+/// (offline), as opposed to one it answered.
+pub(crate) const UNREACHABLE: &str = "could not reach Edit's relay";
+
+/// The token saved in Settings → Cloud (`crate::cloud_projects`).
+static SAVED_TOKEN: parking_lot::RwLock<Option<String>> = parking_lot::RwLock::new(None);
+
+/// `EDIT_RELAY_TOKEN`, when set and not empty, else the token saved in
+/// Settings → Cloud.
 pub(crate) fn token() -> Option<String> {
+    env_token().or_else(|| SAVED_TOKEN.read().clone())
+}
+
+/// `EDIT_RELAY_TOKEN`, when set and not empty (it wins over the setting).
+pub(crate) fn env_token() -> Option<String> {
     std::env::var("EDIT_RELAY_TOKEN")
         .ok()
         .filter(|token| !token.is_empty())
+}
+
+/// The token to use when `EDIT_RELAY_TOKEN` isn't set (Settings → Cloud).
+pub(crate) fn set_saved_token(token: Option<String>) {
+    *SAVED_TOKEN.write() = token.filter(|token| !token.is_empty());
 }
 
 /// curl config lines that authenticate with `token` (none without one).
@@ -128,7 +146,7 @@ pub(crate) fn call(
     )?;
     if !output.status.success() {
         return Err(format!(
-            "could not reach Edit's relay: {}",
+            "{UNREACHABLE}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
@@ -169,7 +187,7 @@ pub(crate) fn json(
     )?;
     if !output.status.success() {
         return Err(format!(
-            "could not reach Edit's relay: {}",
+            "{UNREACHABLE}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }

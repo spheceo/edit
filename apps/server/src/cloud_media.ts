@@ -52,6 +52,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
+import * as endpoints from "./endpoints.ts";
 import { ioMessage, nextFileId, nowMs } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { mediaKey, Semaphore } from "./media.ts";
@@ -453,10 +454,9 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
 // ---------------------------------------------------------------------------
 // Google Drive footage (`script.start` in cloud mode).
 
-/** The protocols a Drive download may use (and be redirected to): HTTPS, plus http for a stand-in set over http. */
+/** The protocols a Drive download may use (and be redirected to): curl's `--proto` for Google calls. */
 function googleProtocols(): string[] {
-  const stand = (process.env.EDIT_GOOGLE_API_URL ?? "").trim().replace(/\/+$/, "");
-  return stand.startsWith("http://") ? ["http:", "https:"] : ["https:"];
+  return endpoints.googleProto() === "=http,https" ? ["http:", "https:"] : ["https:"];
 }
 
 /**
@@ -506,8 +506,8 @@ async function driveSource(url: string, stall: cloud.Stall): Promise<cloud.Sourc
   let target = url;
   let response: Response | null = null;
   const stopped = (why: string) => new Error(`the Drive download stopped (${scrub(why)})`);
-  for (let hop = 0; hop <= 10; hop++) {
-    if (!allowed.includes(new URL(target).protocol)) throw stopped(`Protocol "${new URL(target).protocol.slice(0, -1)}" disabled`);
+  for (let hop = 0; hop <= 50; hop++) {
+    if (!allowed.includes(new URL(target).protocol)) throw stopped(`Protocol "${new URL(target).protocol.slice(0, -1)}" not supported or disabled in libcurl`);
     try {
       response = await fetch(target, { redirect: "manual", signal: stall.signal });
     } catch (error) {
@@ -522,7 +522,7 @@ async function driveSource(url: string, stall: cloud.Stall): Promise<cloud.Sourc
     break;
   }
   stall.connected();
-  if (response === null || (response.status >= 300 && response.status < 400)) throw stopped("Maximum (10) redirects followed");
+  if (response === null || (response.status >= 300 && response.status < 400)) throw stopped("Maximum (50) redirects followed");
   if (response.status >= 400) {
     await response.body?.cancel().catch(() => {});
     throw stopped(`The requested URL returned error: ${response.status}`);

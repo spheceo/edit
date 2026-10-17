@@ -31,6 +31,9 @@ test("{} and {:?} write numbers and strings as Rust does", () => {
   expect(display(1e-7)).toBe("0.0000001");
   expect(display(1.5e21)).toBe("1500000000000000000000");
   expect(debugStr('say "hi"\n\t')).toBe('"say \\"hi\\"\\n\\t"');
+  // Unprintable characters (a no-break space, a zero-width space, DEL) and an opening combining mark are escaped; the rest stay.
+  expect(debugStr("a b​c\u007f")).toBe('"a\\u{a0}b\\u{200b}c\\u{7f}"');
+  expect(debugStr("́é’")).toBe('"\\u{301}é’"');
   expect(debugStrings(["m1", "m2"])).toBe('["m1", "m2"]');
   expect(debugStrings([])).toBe("[]");
 });

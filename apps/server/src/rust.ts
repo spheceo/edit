@@ -91,11 +91,27 @@ function plain(text: string): string {
   return `${sign}0.${"0".repeat(-exponent - 1)}${digits}`;
 }
 
+/**
+ * What Rust's `{:?}` writes as `\u{…}`: what core::unicode's `is_printable`
+ * calls unprintable (control, format, private-use, unassigned, line and
+ * paragraph separators, and spaces other than the plain one), and a
+ * combining mark opening the string.
+ */
+const UNPRINTABLE = /^(?:[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]|(?! )\p{Zs})$/u;
+const COMBINING = /^\p{Grapheme_Extend}$/u;
+
 /** Rust's `{:?}` of a string: quoted, with Rust's escapes. */
 export function debugStr(text: string): string {
   let out = '"';
+  let first = true;
   for (const char of text) {
     const code = char.codePointAt(0)!;
+    const opening = first;
+    first = false;
+    if (opening && COMBINING.test(char)) {
+      out += `\\u{${code.toString(16)}}`;
+      continue;
+    }
     switch (char) {
       case '"':
         out += '\\"';
@@ -116,7 +132,7 @@ export function debugStr(text: string): string {
         out += "\\0";
         break;
       default:
-        out += code < 0x20 || code === 0x7f ? `\\u{${code.toString(16)}}` : char;
+        out += UNPRINTABLE.test(char) ? `\\u{${code.toString(16)}}` : char;
     }
   }
   return `${out}"`;

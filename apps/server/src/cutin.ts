@@ -3,18 +3,15 @@
 // pushed in using native frame sampling, the B-roll look over them, the
 // vertical drop into the cut, and the placeholder card and words gone with
 // the voice-over moved onto A1. The agent picks the shots; this does the
-// rest, so a cut-in is one tool call instead of dozens.
+// rest, so a cut-in is one tool call instead of dozens. The tool itself (one
+// store update, then optical flow for the shots that asked) is edit_tools.ts's.
 
-import type { App } from "./app.ts";
 import { clipFrom } from "./clips.ts";
 import * as graphics from "./graphics.ts";
 import type { Project } from "./model.ts";
 import { addTrack, clipEnd, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import { display, fixed, round } from "./rust.ts";
-import * as seams from "./seams.ts";
 import { field, optional, readStruct, required, SerdeError, type Struct } from "./serde.ts";
-
-const ORIGIN = "agent";
 
 interface Shot {
   media: string;
@@ -147,14 +144,6 @@ function clipOfFields(fields: Record<string, unknown>) {
     if (error instanceof SerdeError) throw new Error(`clip: ${error.message}`);
     throw error;
   }
-}
-
-/** The cover_cut_in tool: one store update, then optical flow for the shots that asked for it. */
-export async function coverCutIn(app: App, projectId: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const [, [report, smooth]] = await app.store.update(projectId, ORIGIN, (project) => cover(project, args));
-  const started = seams.broll.smoothInBackground(app, projectId, smooth);
-  report.smoothing_started = started;
-  return report;
 }
 
 /**

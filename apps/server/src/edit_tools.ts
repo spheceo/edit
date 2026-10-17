@@ -46,10 +46,8 @@ import {
   debugInts,
   debugStr,
   debugStrings,
-  display,
   f32,
   fixed,
-  fixed32,
   isAlphanumeric,
   round,
   signed32,
@@ -79,8 +77,10 @@ export const hooks = {
   subtitleCoverage: (project: Project, transcripts: Map<string, Transcript>): Json =>
     seams.editReview.subtitleCoverage(project, transcripts),
   smoothingPending: (projectId: string): string[] => seams.broll.smoothingPending(projectId),
+  // Nothing to smooth starts nothing (as broll.rs's loop over no clips), so a
+  // plan or cover without slowed shots never reaches for WP8 after it saved.
   smoothInBackground: (app: App, projectId: string, clipIds: string[]): string[] =>
-    seams.broll.smoothInBackground(app, projectId, clipIds),
+    clipIds.length === 0 ? [] : seams.broll.smoothInBackground(app, projectId, clipIds),
   waitForSmoothing: (projectId: string, limitMs: number): Promise<boolean> =>
     seams.broll.waitForSmoothing(projectId, limitMs),
   waitForMaps: (app: App, projectId: string, limitMs: number): Promise<void> =>
@@ -1466,6 +1466,3 @@ export function closeGaps(project: Project, gone: Clip[]): number {
   }
   return closed;
 }
-
-// Kept for callers that print a float as Rust's `{}` does.
-export { display, fixed32 };

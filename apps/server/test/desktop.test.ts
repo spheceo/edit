@@ -33,16 +33,17 @@ test.skip("render_a_profile", () => {});
 // The window frames are the addon's drawing (edit-engine's desktop.rs): checked against the real one when it's built.
 test.skipIf(findAddon() === null)("a_window_frame_is_drawn_at_its_size", async () => {
   const { dir, cleanup } = scratch("desktop-frame");
-  const before = useNative(wrap(require(findAddon()!) as Native));
+  const real = wrap(require(findAddon()!) as Native);
+  const before = useNative(real);
   try {
+    real.init({ home: dir, cacheDir: `${dir}/cache`, ffmpeg: "ffmpeg", ffprobe: "ffprobe", mediaFolders: [], log: () => {} });
     expect(isReal()).toBe(true);
-    const [, , notepad] = await (await import("../src/native/index.ts")).native().desktopFiles(960, 540, "Photo Viewer", "Notepad");
+    const [, , notepad] = await real.desktopFiles(960, 540, "Photo Viewer", "Notepad");
     const png = fs.readFileSync(notepad);
     // PNG IHDR: width and height, big-endian, at bytes 16 and 20.
     expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([486, 329]);
   } finally {
     useNative(before);
     cleanup();
-    void dir;
   }
 });

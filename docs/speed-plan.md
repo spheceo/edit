@@ -10,11 +10,13 @@ Status: proposed; Workers Paid is now available (confirmed by the user). **Deskt
 
 ## Progress (Oct 18)
 
-Landed on `main` after the rewrite (each measured; the re-run of a whole subtitled video is in the morning report):
+Landed on `main` after the rewrite. **Measured end to end on Young Actress** (29 min, the same steps as the Oct 17 baseline, the file remuxed so nothing came from cache): link on Drive **2185 s → 1096 s** (36.4 → 18.3 min), correct subtitles 1229 s → 696 s. Download 174 → 161, import 466 → 265, transcription 73 → 40, watch 101 → 56 (+4 s for who is who), subtitles 219 + 196 (a second run to fix the cast by hand) → 170, export 864 → 306 (sound 211 → 34, picture 558 → 256, join 95 → 11), Drive 92 → 94. Numbers in `/tmp/subsrun/baseline.json` and `rerun.json`.
+
+
 
 - **0.1 done.** Media back on the internal disk: 53 files copied with their exact modification times (so every cache still matches), `edit media off`, the LaCie copies set aside as `media.moved-to-internal-2026-10-17` (not deleted). No file went missing that wasn't already.
 - **1.1, first part.** Background FFmpeg gives way to exports: previews and proxies (`media::run_background`) and smoothing are stopped while an export runs and continued after. Smoothing has its own lane, so imports never wait behind it. Not yet: priorities across lanes, RAM budgets.
-- **3.4 / 3.6, the proxy.** Cloud proxies and light previews in VideoToolbox from end to end (FFmpeg hardware decode, `scale_vt`, `h264_videotoolbox`): a 29-minute 1080p proxy 507 s → 263 s on an idle machine (102 → 198 fps, the M1 encoder's own rate).
+- **3.4 / 3.6, the proxy.** Cloud proxies and light previews in VideoToolbox from end to end (FFmpeg hardware decode, `scale_vt`, `h264_videotoolbox`): ~195 fps at 1080p, the M1 encoder's own rate, with little CPU. Against the native path in the optimised build (~171 fps) that's ~15% faster, not the 2× a debug-build benchmark first showed; the bigger win is the CPU it leaves free. The light preview of a 29-minute video: 7:33 → 3:06; thumbnails 2:47 → 0:59.
 - **4.1, partly.** An export reads a cloud original from the file it was imported from while that's here and unchanged (AVFoundation, local), instead of fetching the whole file from R2 for its sound and again for its picture. Drive-imported footage still reads from R2.
 - **4.7 done.** Only subtitled videos upload to Drive. Every project keeps its exports in a list that survives restarts, with download (Mac or Tailscale), show and delete.
 - **Subtitles** (`docs/subtitles-plan.md`, *Done*): the cast with person ids enforced by `Project::validate`, one colour rule (ΔE 28) for both subtitlers, and timing that never starts a line late.

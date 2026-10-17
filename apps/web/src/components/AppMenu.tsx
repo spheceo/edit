@@ -1,17 +1,18 @@
 import { writeSetting } from "../lib/storage";
 // The ⋯ menu at the top (shortcuts, settings) and the dialogs it opens.
 
-import { Bug, Check, Copy, Ellipsis, Keyboard, RotateCw, Settings } from "lucide-react";
+import { Bug, Check, Cloud, Copy, Ellipsis, Keyboard, RotateCw, Settings } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { chooseEffort, chooseModel, currentEffort, currentModel, EFFORT_LABELS, useAgent, type AgentModel, type AgentStatus } from "../lib/agent";
 import { api, fetchRetrying, useMachine, type MediaDrive } from "../lib/api";
+import { cloudApi, type CloudSettings } from "../lib/cloud";
 import { closeDialog, openDialog, SHORTCUTS, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { setPreviewQuality, usePreviewQuality } from "../lib/previewQuality";
 import { OpenAIMark } from "./AgentPanel";
 import { toggleMenu } from "./ContextMenu";
-import { cx, IconButton, Kbd, Modal, Select } from "./ui";
+import { cx, IconButton, Kbd, Modal, Select, Switch } from "./ui";
 
 export function AppMenu() {
   return (
@@ -23,6 +24,7 @@ export function AppMenu() {
           [
             { label: "Keyboard shortcuts", icon: <Keyboard size={14} />, shortcut: "?", onSelect: () => openDialog("shortcuts") },
             { label: "Settings", icon: <Settings size={14} />, shortcut: "⌘,", onSelect: () => openDialog("settings") },
+            { label: "Cloud…", icon: <Cloud size={14} />, onSelect: () => openDialog("settings") },
             { label: "Report a problem…", icon: <Bug size={14} />, onSelect: () => openReport() },
           ],
           { width: 210 },
@@ -268,6 +270,9 @@ function SettingsBody() {
         <PreviewQualityRow />
         <p className="mt-2 text-[12px] leading-relaxed text-muted">Light streams a 720p copy (a quarter of the data) so playback keeps up over the internet. Export always uses the originals.</p>
       </Group>
+      <Group title="Cloud">
+        <CloudSettingsPanel />
+      </Group>
       <Group title="Media drive">
         <MediaDriveSettings />
       </Group>
@@ -280,6 +285,104 @@ function SettingsBody() {
         </div>
       </Group>
     </div>
+  );
+}
+
+/** Cloud projects: the team's token (pasted once, kept on this Mac), on/off, and whether it connects. */
+function CloudSettingsPanel() {
+  const machine = useMachine();
+  const [settings, setSettings] = useState<CloudSettings | null>(null);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    cloudApi
+      .settings()
+      .then(setSettings)
+      .catch((reason) => setError((reason as Error).message));
+  }, []);
+
+  const apply = async (body: Parameters<typeof cloudApi.setSettings>[0]) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setSettings(await cloudApi.setSettings(body));
+      setToken("");
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!settings) return <div className="rounded-xl bg-black px-3 py-3 text-[12px] text-muted ring-1 ring-line">{error ?? "Checking…"}</div>;
+  const [label, tone] = !settings.token
+    ? ["Off · no token", "bg-hover text-muted"]
+    : settings.off
+      ? ["Off", "bg-hover text-muted"]
+      : settings.connected === false
+        ? ["Not connected", "bg-amber-500/15 text-amber-300"]
+        : ["On", "bg-green-500/15 text-green-300"];
+  return (
+    <>
+      <div className="rounded-xl bg-black ring-1 ring-line">
+        <Line label="Status">
+          <span className="flex items-center gap-2">
+            <span className={cx("rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>
+            {settings.token && (
+              <Switch checked={!settings.off} onChange={(on) => void apply({ off: !on })} />
+            )}
+          </span>
+        </Line>
+        <Line label="Token" last={!settings.token}>
+          {settings.token === "env" ? (
+            <span className="text-muted">Set by EDIT_RELAY_TOKEN</span>
+          ) : (
+            <form
+              className="flex min-w-0 items-center gap-1.5"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (token.trim()) void apply({ token: token.trim() });
+              }}
+            >
+              <input
+                type="password"
+                value={token}
+                disabled={busy}
+                onChange={(event) => setToken(event.target.value)}
+                placeholder={settings.token ? "Saved · paste a new one to replace it" : "Paste the team's cloud token"}
+                spellCheck={false}
+                autoComplete="off"
+                className="h-7 w-56 min-w-0 rounded-md border border-line bg-panel px-2 font-mono text-[11px] outline-none placeholder:font-sans placeholder:text-faint focus:border-line-strong disabled:opacity-60"
+              />
+              {token.trim() ? (
+                <button type="submit" disabled={busy} className="h-7 rounded-md bg-white px-2.5 text-[12px] font-medium text-black disabled:opacity-40">
+                  Save
+                </button>
+              ) : (
+                settings.token === "saved" && (
+                  <button type="button" disabled={busy} onClick={() => void apply({ token: null })} className="h-7 rounded-md px-2 text-[12px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40">
+                    Remove
+                  </button>
+                )
+              )}
+            </form>
+          )}
+        </Line>
+        {settings.token && (
+          <Line label="Teammates see" last>
+            <span className="truncate">{settings.holder}</span>
+          </Line>
+        )}
+      </div>
+      <p className="mt-2 text-[12px] leading-relaxed text-muted">
+        With cloud on, projects are kept in the team's cloud: close one here and a teammate opens it on their Mac where you left off. One Mac edits a project at a time; the others see it read-only. The token is kept in Edit's data folder on {machine}, readable only by you.
+      </p>
+      {(error || (settings.token && !settings.off && settings.problem)) && (
+        <p className="mt-2 text-[12px] leading-relaxed text-amber-300">{error ?? settings.problem}</p>
+      )}
+    </>
   );
 }
 

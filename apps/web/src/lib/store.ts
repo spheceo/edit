@@ -3,6 +3,7 @@ import { create } from "zustand";
 
 import { applyAgentEvent, openAgent } from "./agent";
 import { api, ApiError, useConnection } from "./api";
+import { readOnly, type CloudStatus } from "./cloud";
 import { addContext, note } from "./diagnostics";
 import { validateProject } from "./edit";
 import { shareProject } from "./project-sharing";
@@ -73,6 +74,8 @@ interface EditorState {
   timelineHeight: number;
   toasts: Toast[];
   agentActive: number;
+  /** The open project's cloud state (crates/edit/src/cloud_projects.rs); null for none. */
+  cloud: CloudStatus | null;
 
   load(rev: number, project: Project): void;
   close(): void;
@@ -98,6 +101,18 @@ interface EditorState {
 
 let toastId = 0;
 let editorSession = 0;
+let readOnlySaid = 0;
+
+/** A cloud project someone else is editing can't be changed here: says so (now and then) and refuses. */
+function refuseReadOnly() {
+  const cloud = useEditor.getState().cloud;
+  if (!readOnly(cloud)) return false;
+  if (Date.now() - readOnlySaid > 4000) {
+    readOnlySaid = Date.now();
+    useEditor.getState().toast(`${cloud?.holder ?? "Someone"} is editing this project. Take over to make changes here.`, "info");
+  }
+  return true;
+}
 
 export const useEditor = create<EditorState>((set, get) => ({
   project: null,
@@ -121,6 +136,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
   toasts: [],
   agentActive: 0,
+  cloud: null,
 
   load: (rev, project) => {
     editorSession++;
@@ -130,14 +146,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   close: () => {
     editorSession++;
     clearTimeout(saveTimer);
-    set({ project: null, rev: 0, past: [], future: [], gestureBase: null, dirty: false, saving: false, selection: [], media: {} });
+    set({ project: null, rev: 0, past: [], future: [], gestureBase: null, dirty: false, saving: false, selection: [], media: {}, cloud: null });
   },
 
   edit: (recipe) => {
     // A drag the browser cancelled must not hold back this edit or the saves.
     if (get().gestureBase) get().endGesture();
     const { project, past } = get();
-    if (!project) return;
+    if (!project || refuseReadOnly()) return;
     const next = produce(project, recipe);
     if (next === project) return;
     const problem = validateProject(next);
@@ -158,7 +174,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   gesture: (recipe) => {
     const { project, gestureBase } = get();
     const base = gestureBase ?? project;
-    if (!base) return;
+    if (!base || refuseReadOnly()) return;
     const next = produce(base, recipe);
     if (next !== project) set({ project: next });
   },
@@ -178,14 +194,14 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   undo: () => {
     const { past, project, future } = get();
-    if (!past.length || !project) return;
+    if (!past.length || !project || refuseReadOnly()) return;
     // The Drive link follows Drive, not the edit: undo keeps it.
     set({ project: { ...past[past.length - 1], drive: project.drive }, past: past.slice(0, -1), future: [project, ...future], dirty: true });
     scheduleSave(0);
   },
   redo: () => {
     const { past, project, future } = get();
-    if (!future.length || !project) return;
+    if (!future.length || !project || refuseReadOnly()) return;
     set({ project: { ...future[0], drive: project.drive }, past: [...past, project], future: future.slice(1), dirty: true });
     scheduleSave(0);
   },
@@ -282,6 +298,15 @@ async function saveProject(state: EditorState) {
       const current = useEditor.getState();
       useEditor.setState({ project: shareProject(current.project ?? project, body.project), rev: body.rev, dirty: false, gestureBase: null, past: [...current.past.slice(-HISTORY_LIMIT), current.project ?? project], future: [] });
       useEditor.getState().toast("The project changed elsewhere; showing the latest version.", "info");
+    } else if (error instanceof ApiError && error.status === 423) {
+      // A cloud project someone else is editing now (they took over): show theirs.
+      useEditor.getState().toast(error.message, "error");
+      try {
+        const live = await api.project(project.id);
+        if (session === editorSession) useEditor.setState({ project: live.project, rev: live.rev, dirty: false, gestureBase: null });
+      } catch {
+        // Offline: keep what's on screen.
+      }
     } else if (error instanceof ApiError && error.status === 400) {
       // The server refused the change: show what it has, never a version that can't be saved.
       useEditor.getState().toast(`That change couldn't be saved (${error.message}); restored the last saved version.`, "error");
@@ -404,6 +429,10 @@ export function connectEvents() {
       useEditor.setState({ driveState: event });
     } else if (event.type === "script" && project && event.id === project.id) {
       useEditor.setState({ scriptJob: event.job });
+    } else if (event.type === "cloud" && project && event.id === project.id) {
+      useEditor.setState({ cloud: event.status });
+    } else if (event.type === "cloud-conflict") {
+      useEditor.getState().toast(event.message, "error");
     } else if (event.type === "transcript") {
       // A transcript changed on disk (its voices were just named): panels reload it.
       window.dispatchEvent(new CustomEvent("edit:transcript", { detail: event.path }));

@@ -3,8 +3,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { addElement, addMarker, clipEnd, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
-import { api, useMachine } from "../lib/api";
-import { connectEvents, flushSave, syncScriptJob, useEditor } from "../lib/store";
+import { api, ApiError, useMachine } from "../lib/api";
+import { cloudApi } from "../lib/cloud";
+import { clientId, connectEvents, flushSave, syncScriptJob, useEditor } from "../lib/store";
 import { clearIn, clearInOut, clearOut, markIn, markOut } from "../lib/inOut";
 import { goToEnd, goToStart, useView } from "../lib/timelineView";
 import { uploadFiles } from "../lib/upload";
@@ -12,6 +13,7 @@ import { ExportDialog } from "./ExportDialog";
 import { FileBrowser } from "./FileBrowser";
 import { Research } from "./Research";
 import { AgentPanel } from "./AgentPanel";
+import { CloudBanner } from "./CloudBanner";
 import { MediaPanel } from "./MediaPanel";
 import { SidePanel } from "./SidePanel";
 import { Timeline } from "./Timeline";
@@ -90,8 +92,16 @@ export function Editor({ id }: { id: string }) {
   useEffect(() => {
     let alive = true;
     connectEvents();
-    api
-      .project(id)
+    // A cloud project: downloaded first if it's only in the cloud, and its
+    // lock asked for, so the editor knows whether it's read-only.
+    cloudApi
+      .open(id, clientId)
+      .then((cloud) => alive && useEditor.setState({ cloud }))
+      .catch((error) => {
+        // Unreachable server: the project request below says so.
+        if (error instanceof ApiError && error.status === 404) throw error;
+      })
+      .then(() => api.project(id))
       .then(({ rev, project }) => {
         if (!alive) return;
         useEditor.getState().load(rev, project);
@@ -99,9 +109,17 @@ export function Editor({ id }: { id: string }) {
         return api.mediaStatus(id).then(({ media }) => alive && useEditor.setState({ media }));
       })
       .catch((error) => alive && setError(error.message));
+    // Still open (an editor that stops saying so lets the lock go).
+    const heartbeat = setInterval(() => {
+      void cloudApi
+        .open(id, clientId, true)
+        .then((cloud) => alive && useEditor.setState({ cloud }))
+        .catch(() => {});
+    }, 30_000);
     return () => {
       alive = false;
-      void flushSave();
+      clearInterval(heartbeat);
+      void flushSave().finally(() => cloudApi.close(id, clientId).catch(() => {}));
       preview.pause();
       useEditor.getState().close();
     };
@@ -125,6 +143,7 @@ export function Editor({ id }: { id: string }) {
   return (
     <div className="flex h-full flex-col bg-black">
       <TopBar onExport={() => setExporting(true)} />
+      <CloudBanner />
       <div className="flex min-h-0 flex-1 px-2 pb-2">
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">

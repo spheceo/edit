@@ -253,8 +253,10 @@ impl Entry {
                     .is_none_or(|at| now.saturating_duration_since(at) >= RENEW_EVERY);
                 renew.then_some(Step::Renew)
             }
+            // A write asks for itself (`Cloud::may_write`); this is for
+            // changes waiting to go and an editor open on it.
             Lock::Unknown | Lock::Provisional => {
-                (self.saved.dirty || watched || recent).then_some(Step::Acquire)
+                (self.saved.dirty || watched).then_some(Step::Acquire)
             }
             Lock::Elsewhere { .. } => {
                 let due = self
@@ -1240,7 +1242,7 @@ async fn pull(app: &App, cloud: &Arc<Cloud>, id: &str) -> Result<(), String> {
     };
     // Changes made here since are kept, never overwritten.
     if cloud.dirty(id) {
-        keep_copy(app, cloud, id, "the cloud's version came in")?;
+        keep_copy(app, cloud, id, None)?;
     }
     let store = Arc::clone(&app.store);
     let (task_cloud, task_id) = (Arc::clone(cloud), id.to_owned());
@@ -1253,7 +1255,12 @@ async fn pull(app: &App, cloud: &Arc<Cloud>, id: &str) -> Result<(), String> {
 
 /// Keeps this machine's version of `id` as "<name> (conflicted copy)" (on
 /// this machine only) and says so.
-fn keep_copy(app: &App, cloud: &Arc<Cloud>, id: &str, why: &str) -> Result<(), String> {
+fn keep_copy(
+    app: &App,
+    cloud: &Arc<Cloud>,
+    id: &str,
+    took_over: Option<&str>,
+) -> Result<(), String> {
     let Some(live) = app.store.get(id) else {
         return Ok(());
     };
@@ -1262,21 +1269,33 @@ fn keep_copy(app: &App, cloud: &Arc<Cloud>, id: &str, why: &str) -> Result<(), S
     crate::diag::warn(
         "cloud",
         format!(
-            "{id}: {why}; this machine's changes kept as {} ({name})",
+            "{id}: {}; this machine's changes kept as {} ({name})",
+            took_over.map_or("a conflict".to_owned(), |holder| format!(
+                "{holder} took over"
+            )),
             copy.project.id
         ),
     );
-    let message = format!(
-        "“{}” was changed on another machine, so the cloud's version is open. Your changes here are kept as “{name}” on this Mac.",
-        live.project.name
-    );
+    let message = match took_over {
+        Some(holder) => format!(
+            "{holder} took over “{}” before your last changes reached the cloud. They're kept as “{name}” on this Mac.",
+            live.project.name
+        ),
+        None => format!(
+            "“{}” was changed on another machine meanwhile, so the cloud's version is open. Your changes here are kept as “{name}” on this Mac.",
+            live.project.name
+        ),
+    };
     cloud.with(id, |entry| {
         entry.saved.dirty = false;
-        entry.note = Some(Note::Conflict { message });
+        entry.note = Some(Note::Conflict {
+            message: message.clone(),
+        });
     });
     app.store.emit(json!({
         "type": "cloud-conflict",
         "id": id,
+        "message": message,
         "copy": { "id": copy.project.id, "name": name },
     }));
     Ok(())
@@ -1286,7 +1305,7 @@ fn keep_copy(app: &App, cloud: &Arc<Cloud>, id: &str, why: &str) -> Result<(), S
 /// take theirs.
 async fn conflict(app: &App, cloud: &Arc<Cloud>, id: &str) -> Result<(), String> {
     if cloud.dirty(id) {
-        keep_copy(app, cloud, id, "a conflict")?;
+        keep_copy(app, cloud, id, None)?;
     }
     pull(app, cloud, id).await
 }
@@ -1296,7 +1315,7 @@ async fn conflict(app: &App, cloud: &Arc<Cloud>, id: &str) -> Result<(), String>
 async fn lost(app: &App, cloud: &Arc<Cloud>, id: &str, holder: String) -> Result<(), String> {
     let had_changes = cloud.dirty(id);
     if had_changes {
-        keep_copy(app, cloud, id, &format!("{holder} took over"))?;
+        keep_copy(app, cloud, id, Some(&holder))?;
     }
     cloud.with(id, |entry| entry.elsewhere(holder, Instant::now()));
     let task_id = id.to_owned();
@@ -1412,6 +1431,8 @@ pub async fn open(app: &App, id: &str, client: &str) -> Result<Value, String> {
     }
     cloud.viewing(id, client);
     let step = cloud.with(id, |entry| {
+        // A new look: what was said last time has been seen.
+        entry.note = None;
         if entry.busy.is_some() {
             return None;
         }
@@ -1764,6 +1785,9 @@ async fn get_status(State(app): State<App>, UrlPath(id): UrlPath<String>) -> Jso
 struct Client {
     #[serde(default)]
     client: String,
+    /// Still open (every 30 s): nothing else is done.
+    #[serde(default)]
+    heartbeat: bool,
 }
 
 /// The editor opened `id` (and says so again every 30 s while it's open).
@@ -1772,6 +1796,12 @@ async fn post_open(
     UrlPath(id): UrlPath<String>,
     Json(body): Json<Client>,
 ) -> Reply {
+    if body.heartbeat {
+        if let Some(cloud) = app.store.cloud() {
+            cloud.viewing(&id, &body.client);
+            return Ok(Json(cloud.status(&id)));
+        }
+    }
     open(&app, &id, &body.client)
         .await
         .map(Json)
@@ -1893,6 +1923,11 @@ mod tests {
         assert_eq!(entry.step(t0), Some(Step::Push));
         entry.pushed(4, entry.edits);
         assert_eq!(entry.step(t0), Some(Step::Release));
+        // Let go, it stays let go (the recent change doesn't take it again).
+        let mut released = Entry::new(entry.saved.clone());
+        released.changed_at = entry.changed_at;
+        released.released();
+        assert_eq!(released.step(at(t0, 1)), None);
         // An agent still writing keeps it.
         entry.wrote(at(t0, 1));
         assert!(!entry.closing);

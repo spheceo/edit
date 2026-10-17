@@ -1,6 +1,6 @@
 // Where Edit's direct calls to Google (Drive, Docs, sign-in) and to the AI
 // Gateway go: the real services, or a stand-in for parity runs and tests
-// (crates/edit/src/endpoints.rs).
+// (endpoints.rs).
 //
 // - `EDIT_GOOGLE_API_URL=http://127.0.0.1:7900` sends `https://<host>/<path>`
 //   for every Google host to `http://127.0.0.1:7900/<host>/<path>` (one mock
@@ -11,15 +11,13 @@
 // Unset (always, outside tests and parity runs), nothing changes. A stand-in
 // over plain http is allowed only while one is set.
 
-import { trim } from "./rust.ts";
-
 /** The Vercel AI Gateway Edit asks models through (watch, seats). */
 const GATEWAY = "https://ai-gateway.vercel.sh";
 
 /** A stand-in's base URL, as given (no trailing slash), if one is set. */
 export function base(value: string | undefined | null): string | null {
   if (value === undefined || value === null) return null;
-  const trimmed = trim(value).replace(/\/+$/, "");
+  const trimmed = value.trim().replace(/\/+$/, "");
   return trimmed === "" ? null : trimmed;
 }
 
@@ -38,11 +36,6 @@ export function googleProto(): string {
   return protocols(base(process.env.EDIT_GOOGLE_API_URL));
 }
 
-/** Whether plain http may be followed for Google calls (a stand-in over http is set). */
-export function googleAllowsHttp(): boolean {
-  return googleProto() === "=http,https";
-}
-
 /** The AI Gateway's chat completions URL. */
 export function gateway(): string {
   return gatewayThrough(base(process.env.EDIT_AI_GATEWAY_URL));
@@ -57,6 +50,6 @@ export function gatewayProto(): string {
   return protocols(base(process.env.EDIT_AI_GATEWAY_URL));
 }
 
-export function protocols(standIn: string | null): string {
-  return standIn !== null && standIn.startsWith("http://") ? "=http,https" : "=https";
+export function protocols(stand: string | null): string {
+  return stand !== null && stand.startsWith("http://") ? "=http,https" : "=https";
 }

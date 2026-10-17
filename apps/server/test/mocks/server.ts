@@ -5,7 +5,7 @@
 // any route with `on`.
 //
 // `useEnv()` points the server at it: EDIT_RELAY_URL (the relay's base),
-// EDIT_AI_GATEWAY_URL (the gateway's chat completions URL) and
+// EDIT_AI_GATEWAY_URL (the gateway's base: chat completions go to <base>/v1/chat/completions) and
 // EDIT_GOOGLE_API_URL (standing in for https://www.googleapis.com, OAuth's
 // token endpoint included as /token), the overrides WP0 adds to the Rust server
 // too, so both run against the same mock in the parity harness.
@@ -114,7 +114,7 @@ export class MockServer {
   env(): Record<string, string> {
     return {
       EDIT_RELAY_URL: this.url,
-      EDIT_AI_GATEWAY_URL: `${this.url}/v1/chat/completions`,
+      EDIT_AI_GATEWAY_URL: this.url,
       EDIT_GOOGLE_API_URL: this.url,
     };
   }
@@ -166,5 +166,10 @@ export class MockServer {
     // Google.
     this.on("POST", "/token", () => Response.json({ access_token: "mock-access-token", expires_in: 3600, token_type: "Bearer" }));
     this.on("GET", "/drive/v3/files", () => Response.json({ files: [] }));
+    // As endpoints.ts (and endpoints.rs) send them: the Google host first in the path.
+    this.on("POST", "/oauth2.googleapis.com/token", () =>
+      Response.json({ access_token: "mock-access-token", expires_in: 3600, token_type: "Bearer" }),
+    );
+    this.on("GET", "/www.googleapis.com/drive/v3/files", () => Response.json({ files: [] }));
   }
 }

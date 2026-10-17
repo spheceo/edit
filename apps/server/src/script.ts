@@ -102,7 +102,7 @@ export function query(url: string, key: string): string | null {
  * the protocols curl's `--proto` / `--proto-redir` allowed.
  */
 async function googleFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const allowHttp = endpoints.googleAllowsHttp();
+  const allowHttp = endpoints.googleProto() === "=http,https";
   let current = url;
   for (let hops = 0; hops <= 50; hops++) {
     const scheme = current.slice(0, current.indexOf(":")).toLowerCase();
@@ -1395,7 +1395,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     const researched = seams.research.articles(home, id).length > 0 || seams.research.items(home, id).length > 0;
     if (laidOut && !recut && !researched) {
       try {
-        await app.agents.send(id, RESEARCH, null, null);
+        await seams.agentPanel(app).send(id, RESEARCH, null, null);
       } catch (error) {
         diag.warn("script", `research didn't start for ${id}: ${diag.messageOf(error)}`);
       }

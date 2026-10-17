@@ -182,15 +182,18 @@ test("mute_house_words mutes the sound and stars the subtitles already there, mo
 
 test("add_subtitles goes to the captions package; place_subtitles works with no faces found", async () => {
   const { app, dir, cleanup } = fixtureHome("add");
+  // No voice-overs in this edit (voiceover.voiceoverSound finds none).
   try {
     const id = await footage(app, dir);
-    // WP6 hasn't landed in this tree: its seam says so.
-    expect((await call(app, "add_subtitles", { project_id: id })).text).toBe("captions.intro is not ported yet");
     const placed = await call(app, "place_subtitles", { project_id: id });
     expect(placed).toEqual({
       text: '{"footage_not_analysed":[],"moved":0,"moved_by_hand_left_alone":0,"off_bottom_middle_now":0,"rev":3,"subtitles":0,"with_a_face_under_them":0}',
       isError: false,
     });
+    // WP6 (captions.ts) makes them.
+    const added = await call(app, "add_subtitles", { project_id: id });
+    expect(added.isError).toBe(false);
+    expect(added.text.startsWith("subtitled 0.00–30.00s: {")).toBe(true);
   } finally {
     cleanup();
   }

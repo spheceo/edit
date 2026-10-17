@@ -4,6 +4,8 @@
 
 import * as os from "node:os";
 
+import { Agents as CodexAgents } from "./agent.ts";
+import { Library as DriveLibrary } from "./library.ts";
 import { Processor } from "./media.ts";
 import { native, type Native } from "./native/index.ts";
 import {
@@ -45,7 +47,14 @@ export interface AppOptions {
 }
 
 export function createApp(options: AppOptions): App {
-  const services = { ...unportedServices(options.store.home), ...options.services };
+  // WP8's: the Codex bridge and the sound library (whose sign-in drive.ts shares).
+  const port = options.port ?? 7700;
+  const services = {
+    ...unportedServices(options.store.home),
+    agents: options.services?.agents ?? new CodexAgents(options.store, options.store.home, port),
+    library: options.services?.library ?? new DriveLibrary(),
+    ...options.services,
+  };
   return {
     store: options.store,
     media: new Processor(options.store),
@@ -53,7 +62,7 @@ export function createApp(options: AppOptions): App {
     exports: services.exports,
     allowedHosts: options.allowedHosts ?? ["localhost", "127.0.0.1", "::1"],
     machine: options.machine ?? hostname() ?? "this machine",
-    port: options.port ?? 7700,
+    port,
     agents: services.agents,
     scripts: services.scripts,
     library: services.library,

@@ -9,14 +9,14 @@ import type { App } from "./app.ts";
 import { parseTranscript } from "./captions_core.ts";
 import { clipFrom } from "./clips.ts";
 import * as diag from "./diag.ts";
-import { ioMessage } from "./files.ts";
+import { copyFile, ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { importPaths } from "./import.ts";
 import type { Clip, Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { addTrack, clipEnd, clipMedia, clipOf, fps as fpsOf, freshId, isSoundEffect, marksCut, mediaOf, trackOf } from "./project.ts";
 import { join } from "./paths.ts";
-import { debugStrings, f32Saved, isAlphanumeric, isWhitespace, round, splitWhitespace, toI64, trim } from "./rust.ts";
+import { debugStrings, f32Saved, isAlphanumeric, isWhitespace, jsonForSerde, round, splitWhitespace, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Word } from "./transcribe.ts";
 
@@ -224,7 +224,7 @@ export async function send(app: App, voiceId: string, id: string): Promise<Json>
     for (const [number, label, take] of takes) {
       const name = label ?? `Line ${number}`;
       const file = join(dir, `${voice.name.replaceAll("/", "-")} - ${name}.mp3`);
-      fs.copyFileSync(take, file);
+      copyFile(take, file);
       paths.push(file);
     }
   } catch (error) {
@@ -505,7 +505,7 @@ export function removePauses(project: Project, found: Pause[]): number {
     .filter((span, index, all) => index === 0 || span[0] !== all[index - 1]![0] || span[1] !== all[index - 1]![1]);
   let removed = 0;
   for (const [from, to] of spans.reverse()) {
-    const cut = native().removeTime({ json: JSON.stringify(project) }, from, to);
+    const cut = native().removeTime({ json: jsonForSerde(project) }, from, to);
     replaceContents(project, JSON.parse(cut.json) as Project);
     removed += cut.rippled.frames;
   }
@@ -593,7 +593,7 @@ export function speedUp(project: Project, from: number, to: number, speed: numbe
   // the picture laid over it) plays faster.
   const narration = new Set(voiceoversIn(project, start, end).map((clip) => clip.id));
   const hold = project.clips.filter((clip) => clip.type === "audio" && !narration.has(clip.id)).map((clip) => clip.id);
-  const done = native().speedSpanHolding({ json: JSON.stringify(project) }, start, end, speed, hold);
+  const done = native().speedSpanHolding({ json: jsonForSerde(project) }, start, end, speed, hold);
   replaceContents(project, JSON.parse(done.json) as Project);
   return [start, end, done.rippled.frames];
 }

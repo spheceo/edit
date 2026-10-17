@@ -49,7 +49,7 @@ import {
   sample,
   subtitlesTrack,
 } from "./project.ts";
-import { chars, f32, fixed, isAlphanumeric, round, serdeParse, toI64, trim } from "./rust.ts";
+import { chars, f32, fixed, isAlphanumeric, jsonForSerde, round, serdeParse, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Face, Found, Line as TimedLine, Suggestion } from "./seams.ts";
 import { compareKeys } from "./stable.ts";
@@ -552,7 +552,7 @@ async function still(media: string, time: number, out: string): Promise<void> {
 
 /** The intro (frames), when the project follows a script (edit_core::sections). */
 export function intro(project: Project): [number, number] | null {
-  return native().sections({ json: JSON.stringify(project) }).intro ?? null;
+  return native().sections({ json: jsonForSerde(project) }).intro ?? null;
 }
 
 /**

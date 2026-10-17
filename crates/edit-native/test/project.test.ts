@@ -36,6 +36,22 @@ describe("project JSON", () => {
     expect(native.projectLoad(JSON.stringify(project)).problem).toStartWith("it doesn't validate: ");
   });
 
+  test("a negative zero keeps its sign where it can", () => {
+    const project = solidProject("p-floats") as ReturnType<typeof solidProject> & { clips: Record<string, unknown>[] };
+    project.clips[0]!.keyframes = { opacity: [{ frame: 0, value: 1, ease: "linear", handle_in: { speed: 1, influence: 0.5 } }] };
+    let json = JSON.stringify(project).replace('"speed":1', '"speed":-0');
+    let saved = JSON.parse(native.projectCommit("p-floats", 1, json).pretty);
+    expect(saved.clips[0].keyframes.opacity[0].handle_in.speed).toBe(-0);
+    // A `-0` in an integer field (JS's Math.round(-0.2)) reads as 0, and then every -0 does.
+    json = json.replace('"start":0', '"start":-0');
+    saved = JSON.parse(native.projectCommit("p-floats", 2, json).pretty);
+    expect(Object.is(saved.clips[0].start, 0)).toBe(true);
+    expect(Object.is(saved.clips[0].keyframes.opacity[0].handle_in.speed, 0)).toBe(true);
+    // A "-0" in a string is left alone.
+    const named = { ...project, name: "-0" };
+    expect(JSON.parse(native.projectCommit("p-floats", 3, JSON.stringify(named).replace('"start":0', '"start":-0')).pretty).name).toBe("-0");
+  });
+
   test("refs reach the committed project; an old one is stale", () => {
     const json = JSON.stringify(solidProject("p-ref", 90));
     native.projectCommit("p-ref", 1, json);

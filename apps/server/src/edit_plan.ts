@@ -27,7 +27,7 @@ import {
   trackOf,
 } from "./project.ts";
 import { isBug } from "./guard.ts";
-import { asInt, compareStrings, f32Saved as f32, idiv, remEuclid, round, trim } from "./rust.ts";
+import { asInt, compareStrings, f32Saved as f32, idiv, jsonForSerde, remEuclid, round, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { HIT } from "./sfx.ts";
 import { readStruct, SerdeError, type Struct } from "./serde.ts";
@@ -137,7 +137,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   ) {
     hooks.oneColourPerPerson(project);
   }
-  const invalid = native().projectValidate(JSON.stringify(project));
+  const invalid = native().projectValidate(jsonForSerde(project));
   if (invalid !== null) throw new Error(`final plan is invalid: ${invalid}; nothing saved`);
   return { results, smooth };
 }

@@ -336,6 +336,9 @@ function eventsOf(side: Side, from: number, context: Context): { project: unknow
     // Codex failing to start ends a turn twice (the turn's error, the process's exit):
     // which lands first is a race, and the later one replaces the entry. The chat file says how it ended.
     else if (event.type === "agent" && (event.entry as { kind?: string } | undefined)?.kind === "error") continue;
+    // A cloud project's sync status follows the push loop's own clock (~2 s after the last
+    // change, retried, renewed): which states one step sees is timing. The routes say where it ends.
+    else if (event.type === "cloud") continue;
     else {
       // Progress is a matter of timing: only the states reached count.
       const { progress: _progress, bytes: _bytes, frames: _frames, fps: _fps, done: _done, ...rest } = normalized;
@@ -479,6 +482,16 @@ try {
   fs.writeFileSync(nodePath.join(dir, "recording.json"), JSON.stringify(recording));
 }
 
+/** Differences in the whole run's outside calls that are known, and why. */
+const WHOLE_RUN: { path: RegExp; why: string }[] = [
+  { path: /watch\/keys\.json|\/r2\/edit\/analysis\//, why: "WP3 shares the analysis carried to proxies (watch/keys.json, the watcher's answers under both keys)" },
+  { path: /v1\/transcribe|chat\/completions/, why: "the Rust server transcribes a proxy again (WP3 carries it); the TS seats cache is reused" },
+  {
+    path: /v1\/cloud\/convex edit:(acquireLock|commitProject|getProject|releaseLock|uploadUrl)|\/convex\/upload\/|v1\/cloud\/r2\/url|GET \/r2\/edit\/originals\//,
+    why: "how often the cloud's push loop ran (it pushes ~2 s after the last change, so a burst of saves is one push or several)",
+  },
+];
+
 /** Lease renewals and the like: how many depends on how long the run took. */
 const BACKGROUND = /renew|heartbeat|getLock|listProjects|edit:status/i;
 
@@ -488,9 +501,16 @@ const BACKGROUND = /renew|heartbeat|getLock|listProjects|edit:status/i;
   const all = (side: SideName) => callKeys(mocks[side].server.requests, context[side]).filter((key) => !BACKGROUND.test(key));
   const calls = multisetDifference(all("rust"), all("ts"), "all outside calls");
   if (calls.length > 0) {
-    const finding: Finding = { step: "(the whole run)", kind: "calls", differences: calls };
+    const known = WHOLE_RUN.map((rule) => ({ ...rule, path: rule.path }));
+    const why = calls.map((difference) => known.find((rule) => rule.path.test(difference.path))?.why);
+    const finding: Finding = {
+      step: "(the whole run)",
+      kind: "calls",
+      differences: calls,
+      expected: why.every((reason) => reason !== undefined) ? [...new Set(why)].join("; ") : undefined,
+    };
     findings.push(finding);
-    say("calls over the whole run differ:");
+    say(`calls over the whole run differ${finding.expected === undefined ? "" : ` (expected: ${finding.expected})`}:`);
     for (const difference of calls) say(`    ! ${difference.path}: rust ${JSON.stringify(difference.rust)} | ts ${JSON.stringify(difference.ts)}`);
   }
 }

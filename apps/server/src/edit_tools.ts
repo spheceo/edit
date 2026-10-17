@@ -40,7 +40,7 @@ import {
   trackLabel,
   trackOf,
 } from "./project.ts";
-import { asInt, byteLength, debugInts, debugStr, debugStrings, f32Saved as f32, fixed, isAlphanumeric, round, serdeParse, signed32, takeChars, trim } from "./rust.ts";
+import { asInt, byteLength, debugInts, debugStr, debugStrings, f32Saved as f32, fixed, isAlphanumeric, jsonForSerde, round, serdeParse, signed32, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { read, readStruct, SerdeError, type Field, type Struct } from "./serde.ts";
 import * as sfx from "./sfx.ts";
@@ -251,7 +251,7 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
     audit,
     smoothing_started: smoothing,
   };
-  const input: ProjectInput = dryRun ? { json: JSON.stringify(saved.project) } : { ref: { id: projectId, rev: saved.rev } };
+  const input: ProjectInput = dryRun ? { json: jsonForSerde(saved.project) } : { ref: { id: projectId, rev: saved.rev } };
   return withReview(saved.project, input, frames, report);
 }
 
@@ -557,7 +557,7 @@ async function removeTime({ app, args, projectId }: ToolCall): Promise<Content[]
   const [start, end] = [frame("start"), frame("end")];
   if (end <= start) throw new Error("end must come after start");
   const [, done] = await app.store.update(projectId, ORIGIN, (project) => {
-    const cut = native().removeTime({ json: JSON.stringify(project) }, start, end);
+    const cut = native().removeTime({ json: jsonForSerde(project) }, start, end);
     replaceContents(project, JSON.parse(cut.json) as Project);
     return cut.rippled;
   });
@@ -738,7 +738,7 @@ async function withReview(project: Project, input: ProjectInput, frames: number[
         });
       const sheet =
         "ref" in input
-          ? await withProjectAsync(input.ref.id, input.ref.rev, () => JSON.stringify(project), work)
+          ? await withProjectAsync(input.ref.id, input.ref.rev, () => jsonForSerde(project), work)
           : await work(input);
       const rendered = sheet[0];
       if (rendered === undefined) throw new Error("nothing was rendered");
@@ -764,8 +764,8 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   const censor = (input: ProjectInput) => native().censorIssues(input, true);
   const { issues: censored, pending } =
     rev === null
-      ? censor({ json: JSON.stringify(project) })
-      : withProject(project.id, rev, () => JSON.stringify(project), censor);
+      ? censor({ json: jsonForSerde(project) })
+      : withProject(project.id, rev, () => jsonForSerde(project), censor);
   audit.issues = editPlan.sortIssues([...audit.issues, ...extra, ...censored]);
   if (pending.length > 0) audit.censor_check_pending = pending;
   return audit;

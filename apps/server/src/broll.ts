@@ -12,7 +12,7 @@ import * as os from "node:os";
 import type { App } from "./app.ts";
 import { parseTranscript } from "./captions_core.ts";
 import * as diag from "./diag.ts";
-import { ioMessage } from "./files.ts";
+import { copyFile, ioMessage } from "./files.ts";
 import { debugModified, fingerprint } from "./hash.ts";
 import { importPaths } from "./import.ts";
 import { backgroundSlots, probe as probeFile, Semaphore } from "./media.ts";
@@ -1158,7 +1158,7 @@ async function renderMoving(app: App, job: MapShotJob, render: MapRender): Promi
       const standIn = (measured: Json) => {
         if (!isFile(firstFrame)) {
           try {
-            fs.copyFileSync(join(shots, frameName(0)), firstFrame);
+            copyFile(join(shots, frameName(0)), firstFrame);
           } catch (error) {
             throw new Error(`the map's first frame: ${ioMessage(error)}`);
           }

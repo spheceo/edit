@@ -121,6 +121,19 @@ async function live(side: Side, id: string): Promise<{ rev: number; project: Pro
   return reply.body as { rev: number; project: Project };
 }
 
+/** `value` with every object's keys in order (a body that's the same text on both sides). */
+function sorted(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sorted);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, sorted((value as Record<string, unknown>)[key])]),
+    );
+  }
+  return value;
+}
+
 const small = (world: World) => world.seed.small;
 const reference = (world: World) => world.seed.reference;
 const subtitled = (world: World) => world.seed.subtitled;
@@ -191,6 +204,14 @@ function framesOf(path: string): unknown {
 // The steps
 
 const SKILLS = ["edit-workflow", "research", "intro", "transitions", "cut-ins", "outro", "subtitles", "subtitle-video", "music-and-sound", "final-pass"];
+
+const MIX_FIX = { path: /frames\.audio|\.done\.event\.bytes$/, why: "the addon is main's engine, whose mix applies volume keyframes (fixed after parity-base)" };
+const SEATS = { path: /chat\/completions/, why: "the TS seats cache reads null as infinity, so the cached seats are used (docs/rewrite-handoff.md)" };
+const CARRY = {
+  path: /transcript|v1\/transcribe|chat\/completions|other events/,
+  why: "WP3 carries a media's analysis to its cloud proxy; the Rust server transcribes (and names) the proxy again",
+};
+const LIVE_WEB = { path: /./, why: "the live web (Bing images) answered each server on its own" };
 
 export const steps: Step[] = [
   // The server itself.
@@ -556,7 +577,7 @@ export const steps: Step[] = [
   },
   { name: "POST research clear (rejected)", run: post((world) => `/api/projects/${world.seed.reference}/research/clear?status=rejected`) },
   { name: "search_web (no query)", run: tool("search_web", reference, () => ({ query: "  " })) },
-  { name: "collect_images (no queries)", run: tool("collect_images", reference, () => ({ queries: [" "], per_query: 2 })) },
+  { name: "collect_images (a blank query: Bing is still asked)", run: tool("collect_images", reference, () => ({ queries: [" "], per_query: 2 })), expect: [LIVE_WEB], calls: false },
   // The two that read the live web through headless Chrome (DuckDuckGo, Bing): no
   // stand-in reaches them, so what the web answers is allowed to differ between the
   // two asks; how each server reads and reports it is still compared.
@@ -569,7 +590,7 @@ export const steps: Step[] = [
   {
     name: "collect_images (live web)",
     run: tool("collect_images", reference, () => ({ queries: ["Margate Florida police car"], per_query: 2 })),
-    expect: [{ path: /^\.result\.content|^history|^p1791811932480-23\.json/, why: "the live web (Bing images) answered each server on its own" }],
+    expect: [LIVE_WEB],
     calls: false,
     settle: 3000,
   },
@@ -596,7 +617,12 @@ export const steps: Step[] = [
   },
   { name: "repack_subtitles (overlap, faces)", run: tool("repack_subtitles", subtitled, () => ({ start: 30, end: 240, overlap: true, neglect: true })), settle: 2000 },
   { name: "repack_subtitles (no faces, hold)", run: tool("repack_subtitles", subtitled, () => ({ start: 240, end: 400, faces: false, hold_ms: 800 })), settle: 1500 },
-  { name: "POST repack-subtitles (REST)", run: post((world) => `/api/projects/${world.seed.subtitled}/repack-subtitles`, { start: 400, end: 480, overlap: true }), settle: 3000 },
+  {
+    name: "POST repack-subtitles (REST)",
+    run: post((world) => `/api/projects/${world.seed.subtitled}/repack-subtitles`, { start: 400, end: 480, overlap: true }),
+    settle: 3000,
+    expect: [SEATS],
+  },
   { name: "add_subtitles", run: tool("add_subtitles", subtitled, () => ({ start: 480, end: 600, neglect: true })), settle: 1500 },
   { name: "place_subtitles", run: tool("place_subtitles", subtitled, () => ({ start: 30, end: 200 })), settle: 1500 },
   { name: "mute_house_words (subtitled)", run: tool("mute_house_words", subtitled, () => ({ start: 0, end: 600 })) },
@@ -685,6 +711,7 @@ export const steps: Step[] = [
       return { answer, done: await exported(side, world.seed.small, from) };
     },
     settle: 1000,
+    expect: [MIX_FIX],
   },
   {
     name: "POST export (REST, wav)",
@@ -694,6 +721,7 @@ export const steps: Step[] = [
       const answer = shown(await side.http("POST", `/api/projects/${world.seed.small}/export`, { path, options: { format: "wav", range: [0, 120] } }));
       return { answer, done: await exported(side, world.seed.small, from) };
     },
+    expect: [MIX_FIX, { path: /frames\.video/, why: "a WAV's one stream is its sound (the same hash under both names)" }],
   },
   {
     name: "POST export (REST, png)",
@@ -748,6 +776,7 @@ export const steps: Step[] = [
       return { answer, settled: await mediaSettled(side, id) };
     },
     settle: 4000,
+    expect: [CARRY],
   },
   {
     name: "POST upload (a sound)",
@@ -778,8 +807,10 @@ export const steps: Step[] = [
       const renamed = { ...current.project, name: "Parity new (renamed)" };
       const first = shown(await side.http("PUT", `/api/projects/${id}`, { base_rev: current.rev, project: renamed, origin: "ui" }));
       const stale = shown(await side.http("PUT", `/api/projects/${id}`, { base_rev: current.rev, project: current.project, origin: "ui" }));
-      const invalid = shown(await side.http("PUT", `/api/projects/${id}`, { base_rev: current.rev + 1, project: { ...renamed, clips: [{ id: "x", track: "nope" }] }, origin: "ui" }));
-      return { first, stale, invalid };
+      // Keys sorted, so the place serde reports is the same in both bodies.
+      const invalid = shown(await side.http("PUT", `/api/projects/${id}`, sorted({ base_rev: current.rev + 1, project: { ...renamed, clips: [{ id: "x", track: "nope" }] }, origin: "ui" })));
+      const wrongType = shown(await side.http("PUT", `/api/projects/${id}`, sorted({ base_rev: current.rev + 1, project: { ...renamed, name: 3 }, origin: "ui" })));
+      return { first, stale, invalid, wrongType };
     },
     settle: 3000,
   },

@@ -75,8 +75,53 @@ fn kept(id: &str, rev: i64) -> Option<Arc<Project>> {
     Some(found)
 }
 
-fn parse(json: &str) -> Result<Project, String> {
-    serde_json::from_str(json).map_err(|error| error.to_string())
+pub(crate) fn parse(json: &str) -> Result<Project, String> {
+    match serde_json::from_str(json) {
+        Ok(project) => Ok(project),
+        // The TS server writes JS's negative zero as `-0` (JSON.stringify would
+        // drop the sign the Rust server's f32/f64 math keeps), which serde
+        // reads as a float: an integer field refuses it. Then all of them are 0.
+        Err(error) => match zero_negative_zeros(json) {
+            Some(zeroed) => serde_json::from_str(&zeroed).map_err(|_| error.to_string()),
+            None => Err(error.to_string()),
+        },
+    }
+}
+
+/// `json` with each `-0` number (outside strings) written as `0`, if it has any.
+fn zero_negative_zeros(json: &str) -> Option<String> {
+    let bytes = json.as_bytes();
+    let mut out = String::with_capacity(json.len());
+    let (mut last, mut at, mut changed) = (0, 0, false);
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            b'"' => {
+                at += 1;
+                while let Some(&inner) = bytes.get(at) {
+                    if inner == b'"' {
+                        break;
+                    }
+                    at += if inner == b'\\' { 2 } else { 1 };
+                }
+                at += 1;
+            }
+            b'-' if bytes.get(at + 1) == Some(&b'0')
+                && !matches!(bytes.get(at + 2), Some(b'0'..=b'9' | b'.' | b'e' | b'E')) =>
+            {
+                out.push_str(json.get(last..at)?);
+                out.push('0');
+                at += 2;
+                last = at;
+                changed = true;
+            }
+            _ => at += 1,
+        }
+    }
+    if !changed {
+        return None;
+    }
+    out.push_str(json.get(last..)?);
+    Some(out)
 }
 
 /// The project `input` names.

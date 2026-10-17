@@ -230,6 +230,93 @@ export function withPosition(error: ApiError, request: Request): ApiError {
   return new ApiError(error.status, `${error.message} at line ${line} column ${column}`, error.plain);
 }
 
+/** The text of the JSON body `readJson` read for `request`, if it did. */
+export function bodyText(request: Request): string | undefined {
+  return bodies.get(request);
+}
+
+/**
+ * The path (keys and indexes) of the innermost JSON value in `text` that ends
+ * (exclusive) at `end`: where serde stopped when it refused something, given
+ * its column on a one-line text. Null when no value ends there.
+ */
+export function pathEndingAt(text: string, end: number): (string | number)[] | null {
+  let at = 0;
+  let found: (string | number)[] | null = null;
+  const space = () => {
+    while (at < text.length && " \t\n\r".includes(text[at]!)) at++;
+  };
+  const string = (): string => {
+    const from = at;
+    at++;
+    while (at < text.length && text[at] !== '"') at += text[at] === "\\" ? 2 : 1;
+    at++;
+    try {
+      return JSON.parse(text.slice(from, at)) as string;
+    } catch {
+      return "";
+    }
+  };
+  // Reads the value at `at` (its path `path`); notes it when it ends at `end` (inner ones first).
+  const value = (path: (string | number)[]): void => {
+    space();
+    const first = text[at];
+    if (first === "{") {
+      at++;
+      space();
+      if (text[at] === "}") at++;
+      else {
+        for (;;) {
+          space();
+          const key = string();
+          space();
+          at++; // ':'
+          value([...path, key]);
+          space();
+          if (text[at] === ",") {
+            at++;
+            continue;
+          }
+          at++; // '}'
+          break;
+        }
+      }
+    } else if (first === "[") {
+      at++;
+      space();
+      if (text[at] === "]") at++;
+      else {
+        for (let index = 0; ; index++) {
+          value([...path, index]);
+          space();
+          if (text[at] === ",") {
+            at++;
+            continue;
+          }
+          at++; // ']'
+          break;
+        }
+      }
+    } else if (first === '"') {
+      string();
+    } else {
+      while (at < text.length && !",}] \t\n\r".includes(text[at]!)) at++;
+    }
+    if (at === end && found === null) found = path;
+  };
+  try {
+    value([]);
+  } catch {
+    return null;
+  }
+  return found;
+}
+
+/** A path as serde_path_to_error shows it: `project.clips[0].start`. */
+export function showPath(path: (string | number)[]): string {
+  return path.map((part, index) => (typeof part === "number" ? `[${part}]` : index === 0 ? part : `.${part}`)).join("");
+}
+
 /** Where the JSON value at `path` (keys and indexes) ends in `text` (exclusive), or null. */
 export function valueEnd(text: string, path: (string | number)[]): number | null {
   let at = 0;

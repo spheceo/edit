@@ -12,6 +12,7 @@ import {
   fixed,
   fixed32,
   idiv,
+  jsonForSerde,
   round,
   serdeNumber,
   serdeParse,
@@ -34,6 +35,11 @@ test("numbers are read as serde_json reads them without float_roundtrip", () => 
   // Only the numbers change; a number in a string is left alone.
   expect(asSerdeRead('{"s": "9.299999999999999", "n": 9.299999999999999}')).toBe('{"s": "9.299999999999999", "n": 9.3}');
   expect(asSerdeRead('{"n": 1.5}')).toBe('{"n": 1.5}');
+});
+
+test("JSON for the addon keeps a negative zero's sign", () => {
+  expect(jsonForSerde({ a: [-0, 0, 1], s: "-0" })).toBe('{"a":[-0,0,1],"s":"-0"}');
+  expect(jsonForSerde({ a: 0 })).toBe('{"a":0}');
 });
 
 test("{:.N} rounds the exact value, ties to even, and keeps a negative zero's sign", () => {

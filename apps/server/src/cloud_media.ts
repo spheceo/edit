@@ -53,7 +53,7 @@ import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import * as endpoints from "./endpoints.ts";
-import { ioMessage, nextFileId, nowMs } from "./files.ts";
+import { copyFile, ioMessage, nextFileId, nowMs } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { mediaKey, Semaphore } from "./media.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
@@ -908,7 +908,7 @@ export async function forExport(project: Project, start: number, end: number, ca
     const to = join(cache, mediaKey(media.path));
     try {
       fs.mkdirSync(to, { recursive: true });
-      fs.copyFileSync(from, join(to, "peaks.bin"));
+      copyFile(from, join(to, "peaks.bin"));
       originals.dirs.push(to);
     } catch {
       // Drawn without levels.

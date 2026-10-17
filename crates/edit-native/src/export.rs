@@ -133,8 +133,7 @@ impl ExportJob {
     )]
     pub fn start(job: ExportStart, on_progress: crate::Progress) -> napi::Result<ExportJob> {
         let (project, options, plan) = crate::sync("starting an export", || {
-            let project: Project =
-                serde_json::from_str(&job.project.json).map_err(|error| error.to_string())?;
+            let project: Project = crate::project::parse(&job.project.json)?;
             let options = options_of(job.options)?;
             let plan: Plan =
                 serde_json::from_value(job.plan).map_err(|error| format!("plan: {error}"))?;

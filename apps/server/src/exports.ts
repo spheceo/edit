@@ -11,7 +11,7 @@ import { catchBugsAsync } from "./guard.ts";
 import type { ExportOptions, Project } from "./model.ts";
 import { native, type ExportJob } from "./native/index.ts";
 import { canonical, fileName, join, parent } from "./paths.ts";
-import { fixed } from "./rust.ts";
+import { fixed, jsonForSerde } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Store } from "./store.ts";
 
@@ -59,7 +59,7 @@ export class ExportRegistry implements seams.Exports {
     output: string,
   ): Promise<string> {
     const addon = native();
-    const { plan } = addon.exportPlan({ json: JSON.stringify(project) }, options);
+    const { plan } = addon.exportPlan({ json: jsonForSerde(project) }, options);
     let path = addon.withExtension(output, options.format);
     // Never into an unplugged media drive's folder (or the empty mount point it leaves behind).
     store.layout().writable(path);
@@ -145,7 +145,7 @@ export class ExportRegistry implements seams.Exports {
           }
           if (running.cancelled) throw new Error("cancelled");
           const job = native().ExportJob.start(
-            { project: { json: JSON.stringify(exported) }, options, plan, output, cacheDir: store.cacheDir() },
+            { project: { json: jsonForSerde(exported) }, options, plan, output, cacheDir: store.cacheDir() },
             (progress) => {
               try {
                 emit("running", progress);

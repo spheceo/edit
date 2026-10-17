@@ -15,13 +15,13 @@
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
-import { ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
+import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import * as mediaDrive from "./media_drive/layout.ts";
 import type { Clip, DriveFile, Project, ProjectSummary, Settings, Style } from "./model.ts";
 import { native } from "./native/index.ts";
 import { extension, fileStem, join } from "./paths.ts";
 import { duration, mediaOf, newProject } from "./project.ts";
-import { asSerdeRead } from "./rust.ts";
+import { asSerdeRead, jsonForSerde } from "./rust.ts";
 
 export { nextFileId, nowMs, writeAtomic } from "./files.ts";
 
@@ -356,7 +356,7 @@ export class Store {
     const id = project.id;
     if (!validId(id)) throw new Error(`not a project id: ${JSON.stringify(id)}`);
     this.currentLayout.resolveProject(project);
-    const json = JSON.stringify(project);
+    const json = jsonForSerde(project);
     const invalid = native().projectValidate(json);
     if (invalid !== null) throw new Error(invalid);
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -452,7 +452,7 @@ export class Store {
    * machine change it (every write path ends here). Throws UpdateError.
    */
   async commit(id: string, rev: number, project: Project, origin: string): Promise<Live> {
-    const json = JSON.stringify(project);
+    const json = jsonForSerde(project);
     const cloud = this.cloudHook;
     if (cloud !== null) {
       // Invalid before refused, as the Rust store answered (it validated first).
@@ -494,7 +494,7 @@ export class Store {
 
   /** Validates and saves a project new to this store as `rev`; throws the reason. */
   private write(id: string, rev: number, project: Project): Live {
-    const prepared = native().projectCommit(id, rev, JSON.stringify(project));
+    const prepared = native().projectCommit(id, rev, jsonForSerde(project));
     try {
       this.writeFile(id, prepared.pretty);
     } catch (error) {
@@ -532,7 +532,7 @@ export class Store {
     const now = nowMs();
     const last = kept[kept.length - 1];
     if (last !== undefined && Math.max(now - last[0], 0) < HISTORY_EVERY_MS) return;
-    fs.copyFileSync(path, join(dir, `${now}.json`));
+    copyFile(path, join(dir, `${now}.json`));
     kept.push([now, ""]);
     for (const [, old] of kept.slice(0, Math.max(kept.length - HISTORY_KEEP, 0))) {
       fs.rmSync(old, { force: true });

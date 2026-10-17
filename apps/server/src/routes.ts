@@ -10,7 +10,7 @@ import * as diag from "./diag.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
-import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
+import { badShape, pathEndingAt, readJson, showPath, type RouteContext, type Router } from "./http/router.ts";
 import { baseRouter } from "./http/server.ts";
 import { importPaths } from "./import.ts";
 import { routes as mediaRoutes } from "./media_tools.ts";
@@ -25,6 +25,7 @@ import { defaultExportPath } from "./server_seam.ts";
 import { UpdateError } from "./store.ts";
 import * as tools from "./tools.ts";
 import { VERSION } from "./version.ts";
+import { jsonForSerde } from "./rust.ts";
 
 type Context = RouteContext<App>;
 
@@ -380,6 +381,9 @@ async function putProject(context: Context): Promise<Response> {
     return json({ rev: live.rev });
   } catch (error) {
     if (!(error instanceof UpdateError)) throw error;
+    // Read as a Project before anything else, as axum's extractor did (only looked at
+    // when the save fails, so a good save doesn't parse the project twice).
+    if (error.kind === "invalid" || error.kind === "conflict") projectShape(context.app, given.project);
     switch (error.kind) {
       case "not_found":
         throw notFound("no such project");
@@ -392,6 +396,25 @@ async function putProject(context: Context): Promise<Response> {
         return json({ error: "conflict", rev: error.live?.rev, project: error.live?.project }, 409);
     }
   }
+}
+
+/**
+ * A PUT's project that serde couldn't read as a Project, refused as axum's
+ * Json extractor refused it (before the revision is looked at): 422, the path
+ * serde_path_to_error gives ("project.clips[0].start"; inside a clip's
+ * flattened content, the clip) and the place in the body (withPosition).
+ */
+function projectShape(app: App, project: unknown): void {
+  const text = JSON.stringify(project);
+  const problem = app.native.projectLoad(text).problem;
+  const prefix = "it can't be read: ";
+  if (problem === undefined || !problem.startsWith(prefix)) return;
+  const placed = /^([\s\S]*) at line 1 column (\d+)$/.exec(problem.slice(prefix.length));
+  if (placed === null) return;
+  // serde's column counts bytes; the scan counts characters.
+  const end = new TextDecoder().decode(new TextEncoder().encode(text).slice(0, Number(placed[2]))).length;
+  const path = pathEndingAt(text, end) ?? [];
+  throw badShape(`${showPath(["project", ...path])}: ${placed[1]}`);
 }
 
 async function deleteProject({ app, params }: Context): Promise<Response> {
@@ -669,7 +692,7 @@ async function framePng(context: Context): Promise<Response> {
     images = await withProjectAsync(
       live.project.id,
       live.rev,
-      () => JSON.stringify(live.project),
+      () => jsonForSerde(live.project),
       (project) =>
         app.native.renderFrames({ project, frames: [frame], maxSide: max ?? 0, priority: "ui", encode: "png" }),
     );

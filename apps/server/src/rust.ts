@@ -428,3 +428,28 @@ export function asSerdeRead(text: string): string {
 }
 
 const NUMBER_CHAR = /[0-9.eE+-]/;
+
+/**
+ * JSON for the addon: JSON.stringify, except that a negative zero stays `-0`
+ * (JSON.stringify writes 0, losing the sign the Rust server's f32/f64 math
+ * keeps and writes as -0.0). The addon reads a `-0` an integer field can't
+ * take as 0.
+ */
+export function jsonForSerde(value: unknown): string {
+  if (!hasNegativeZero(value)) return JSON.stringify(value);
+  return JSON.stringify(value, (_key, item: unknown) => (Object.is(item, -0) ? NEGATIVE_ZERO : item)).replaceAll(NEGATIVE_ZERO_JSON, "-0");
+}
+
+const NEGATIVE_ZERO = "\u0000-0\u0000";
+const NEGATIVE_ZERO_JSON = JSON.stringify(NEGATIVE_ZERO);
+
+function hasNegativeZero(value: unknown): boolean {
+  if (typeof value === "number") return Object.is(value, -0);
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    for (const item of value) if (hasNegativeZero(item)) return true;
+    return false;
+  }
+  for (const key in value) if (hasNegativeZero((value as Record<string, unknown>)[key])) return true;
+  return false;
+}

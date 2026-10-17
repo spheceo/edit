@@ -73,14 +73,34 @@ pub fn protocols(path: &std::path::Path) -> &'static str {
 }
 
 /// FFmpeg's input options for reading `path` over HTTPS: the system's
-/// certificates. The shipped static FFmpeg's OpenSSL doesn't know where macOS
-/// keeps them, so without this every HTTPS read fails verification.
-pub fn tls_args(path: &std::path::Path) -> &'static [&'static str] {
+/// certificates (the shipped static FFmpeg's OpenSSL doesn't know where macOS
+/// keeps them, so without them every HTTPS read fails verification), and
+/// picking a long read from R2 back up when the connection drops.
+pub fn url_args(path: &std::path::Path) -> &'static [&'static str] {
     const SYSTEM: &str = "/etc/ssl/cert.pem";
     static FOUND: OnceLock<bool> = OnceLock::new();
-    if is_url(path) && *FOUND.get_or_init(|| std::path::Path::new(SYSTEM).is_file()) {
-        &["-ca_file", SYSTEM]
-    } else {
+    const RECONNECT: [&str; 6] = [
+        "-reconnect",
+        "1",
+        "-reconnect_on_network_error",
+        "1",
+        "-reconnect_delay_max",
+        "10",
+    ];
+    if !is_url(path) {
         &[]
+    } else if *FOUND.get_or_init(|| std::path::Path::new(SYSTEM).is_file()) {
+        &[
+            "-ca_file",
+            SYSTEM,
+            RECONNECT[0],
+            RECONNECT[1],
+            RECONNECT[2],
+            RECONNECT[3],
+            RECONNECT[4],
+            RECONNECT[5],
+        ]
+    } else {
+        &RECONNECT
     }
 }

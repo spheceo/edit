@@ -1143,7 +1143,7 @@ pub(crate) fn duration_of(path: &Path) -> Result<f64, String> {
             "-of",
             "csv=p=0",
         ])
-        .args(crate::tools::tls_args(path))
+        .args(crate::tools::url_args(path))
         .arg(path)
         .output()
         .map_err(|error| format!("ffprobe: {error}"))?;
@@ -1179,7 +1179,7 @@ pub(crate) fn keyframe_before(path: &Path, time: f64) -> f64 {
                 "csv=p=0",
             ])
             .args(["-read_intervals", &format!("{from}%{}", time + 0.001)])
-            .args(crate::tools::tls_args(path))
+            .args(crate::tools::url_args(path))
             .arg(path)
             .output();
         let best = output
@@ -1311,7 +1311,7 @@ pub(crate) fn cut(source: &Path, start: f64, to: f64, out: &Path) -> Result<(), 
             "-protocol_whitelist",
             crate::tools::protocols(source),
         ])
-        .args(crate::tools::tls_args(source))
+        .args(crate::tools::url_args(source))
         .arg("-i")
         .arg(source)
         .args([

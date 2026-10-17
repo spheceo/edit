@@ -166,7 +166,13 @@ impl VideoReader {
                 "-protocol_whitelist",
                 crate::tools::protocols(&self.source.key.path),
             ])
-            .args(crate::tools::tls_args(&self.source.key.path))
+            .args(crate::tools::url_args(&self.source.key.path))
+            // A cloud original read from R2: decoded on the Mac's media engine.
+            .args(if crate::tools::is_url(&self.source.key.path) {
+                &["-hwaccel", "videotoolbox"][..]
+            } else {
+                &[]
+            })
             .arg("-i")
             .arg(&self.source.key.path)
             .args([

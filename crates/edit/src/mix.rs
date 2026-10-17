@@ -196,7 +196,7 @@ impl FfmpegSource {
                 &format!("{:.6}", segment.duration * segment.speed + 0.05),
             ])
             .args(["-protocol_whitelist", crate::tools::protocols(path)])
-            .args(crate::tools::tls_args(path))
+            .args(crate::tools::url_args(path))
             .arg("-i")
             .arg(path)
             .args([

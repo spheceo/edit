@@ -54,7 +54,6 @@ use crate::server::App;
 const HOUR: Duration = Duration::from_secs(3600);
 /// Free space an export leaves on the disk when it downloads originals;
 /// past that it reads the rest straight from R2.
-const EXPORT_MARGIN: u64 = 4 * 1024 * 1024 * 1024;
 /// Proxies fetched at once.
 const PARALLEL: usize = 3;
 
@@ -973,7 +972,7 @@ pub async fn ensure_local(app: &App, id: &str) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // Exports read the originals.
 
-/// What an export downloaded; removed when dropped.
+/// What an export made on the side (waveform levels for its originals); removed when dropped.
 #[derive(Default)]
 pub struct Originals {
     dirs: Vec<PathBuf>,
@@ -985,15 +984,6 @@ impl Drop for Originals {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
-}
-
-/// Bytes free on the disk holding `path`.
-fn free_bytes(path: &Path) -> Option<u64> {
-    let output = Command::new("df").arg("-k").arg(path).output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let line = text.lines().nth(1)?;
-    let available: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
-    Some(available * 1024)
 }
 
 /// The media frames `start..end` of `project` use (pictures, sounds and the
@@ -1019,11 +1009,11 @@ fn used_media(project: &Project, start: i64, end: i64) -> Vec<String> {
 }
 
 /// `project` as an export of frames `start..end` reads it: every cloud media
-/// it uses points at its full-quality original instead of the proxy. Those fit
-/// on the disk (leaving 4 GB free) are downloaded into `<cache>/cloud/export-…`
-/// (AVFoundation's fast readers only read files; removed when the returned
-/// guard drops); the rest are read by FFmpeg straight from R2 through
-/// presigned URLs. Sounds and pictures whose own file is here are used as they are.
+/// it uses points at its full-quality original on R2 instead of the proxy, as
+/// a presigned URL. Nothing big is downloaded: FFmpeg reads just the byte
+/// ranges it needs (decoding on the Mac's media engine) and hands the frames to
+/// the native renderer and encoder. Sounds and pictures whose own file is here
+/// are used as they are.
 pub fn for_export(
     project: &Project,
     start: i64,
@@ -1060,59 +1050,10 @@ pub fn for_export(
                 .to_owned(),
         );
     }
-    let dir = cache.join("cloud").join(format!(
-        "export-{}-{}",
-        std::process::id(),
-        crate::store::now_ms()
-    ));
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    originals.dirs.push(dir.clone());
-    // EDIT_CLOUD_EXPORT_STREAM=1 reads every original from R2 (for diagnosis).
-    let mut budget = if std::env::var_os("EDIT_CLOUD_EXPORT_STREAM").is_some() {
-        0
-    } else {
-        free_bytes(&dir).unwrap_or(0).saturating_sub(EXPORT_MARGIN)
-    };
-    // Small ones first: as many files as possible get the fast path.
-    needed.sort_by_key(|(_, _, size)| *size);
-    let mut downloads = Vec::new();
-    let mut streamed = 0;
-    for (number, (media_id, key, size)) in needed.iter().enumerate() {
-        let size = match *size {
-            0 => cloud::head(key)?.map_or(0, |head| head.size),
-            size => size,
-        };
-        if size > 0 && size <= budget {
-            budget -= size;
-            let local = dir.join(format!("{number}.{}", extension_of(key)));
-            downloads.push((media_id.clone(), key.clone(), local, size));
-        } else {
-            // Long enough for any export.
-            let url = get_url(key, 24 * HOUR)?;
-            set_path(&mut out, media_id, url);
-            streamed += 1;
-        }
-    }
-    let bytes: u64 = downloads.iter().map(|(_, _, _, size)| size).sum();
-    for batch in downloads.chunks(PARALLEL) {
-        std::thread::scope(|scope| {
-            let running: Vec<_> = batch
-                .iter()
-                .map(|(_, key, local, _)| {
-                    scope.spawn(move || cloud::download(key, local, &|_, _| {}))
-                })
-                .collect();
-            running
-                .into_iter()
-                .map(|job| {
-                    job.join()
-                        .unwrap_or_else(|_| Err("a download crashed".to_owned()))
-                })
-                .collect::<Result<Vec<()>, String>>()
-        })?;
-    }
-    for (media_id, _, local, _) in &downloads {
-        set_path(&mut out, media_id, local.to_string_lossy().into_owned());
+    for (media_id, key, _) in &needed {
+        // Long enough for any export.
+        let url = get_url(key, 24 * HOUR)?;
+        set_path(&mut out, media_id, url);
     }
     // Waveforms read their levels from the proxy's cache: the originals share them.
     for (media, before) in out.media.iter().zip(&project.media) {
@@ -1134,11 +1075,9 @@ pub fn for_export(
     crate::diag::info(
         "export",
         format!(
-            "{}: reading {} cloud originals: {} downloaded ({:.1} MB), {streamed} straight from the cloud",
+            "{}: reading {} cloud originals straight from the cloud",
             project.id,
-            needed.len(),
-            downloads.len(),
-            bytes as f64 / 1e6
+            needed.len()
         ),
     );
     Ok((out, originals))
@@ -1402,8 +1341,8 @@ mod tests {
     /// Excerpts cut from R2 (only their bytes fetched), each a full-quality
     /// excerpt and a proxy on R2 and only the proxy here; a second import
     /// reuses them; another machine (paths pointing nowhere, no proxies)
-    /// gets them with `ensure_local`; exports read the originals (downloaded,
-    /// then streamed), with the proxies gone.
+    /// gets them with `ensure_local`; exports read the originals straight
+    /// from R2, with the proxies gone.
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
     async fn live_excerpts_ensure_local_and_export() {
@@ -1559,11 +1498,8 @@ mod tests {
         for media in &live.project.media {
             std::fs::remove_file(&media.path).unwrap();
         }
-        for stream in [false, true] {
-            if stream {
-                std::env::set_var("EDIT_CLOUD_EXPORT_STREAM", "1");
-            }
-            let out = home.join(format!("export-{stream}.mp4"));
+        {
+            let out = home.join("export.mp4");
             let options = crate::export::ExportOptions {
                 range: Some([0, 150]),
                 ..Default::default()
@@ -1579,14 +1515,13 @@ mod tests {
                 )
                 .unwrap();
             wait_for_export(&app).await;
-            std::env::remove_var("EDIT_CLOUD_EXPORT_STREAM");
-            let probed = crate::media::probe(&path)
-                .unwrap_or_else(|error| panic!("export (stream {stream}) failed: {error}"));
+            let probed =
+                crate::media::probe(&path).unwrap_or_else(|error| panic!("export failed: {error}"));
             assert!(
                 (probed.duration - 5.0).abs() < 0.2 && probed.has_audio,
                 "{probed:?}"
             );
-            // Its downloads are gone.
+            // Nothing was downloaded for it.
             let left: Vec<_> = std::fs::read_dir(cache.join("cloud"))
                 .unwrap()
                 .flatten()

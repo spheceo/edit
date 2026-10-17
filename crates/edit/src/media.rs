@@ -107,7 +107,7 @@ pub fn probe(path: &Path) -> Result<Probe, String> {
             "-show_streams",
             "-show_format",
         ])
-        .args(crate::tools::tls_args(path))
+        .args(crate::tools::url_args(path))
         .arg(path)
         .output()
         .map_err(|error| format!("ffprobe is not available ({error}); install FFmpeg"))?;
@@ -905,7 +905,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
             .args(["-protocol_whitelist", "file,pipe", "-i"])
             .arg(&picture)
             .args(["-protocol_whitelist", protocols])
-            .args(crate::tools::tls_args(source))
+            .args(crate::tools::url_args(source))
             .arg("-i")
             .arg(source)
             .args(["-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy"]);
@@ -916,7 +916,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
         let buffer = format!("{}k", bitrate * 2 / 1000);
         command
             .args(["-protocol_whitelist", protocols])
-            .args(crate::tools::tls_args(source))
+            .args(crate::tools::url_args(source))
             .arg("-i")
             .arg(source)
             .args([

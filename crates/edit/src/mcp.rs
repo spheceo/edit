@@ -758,6 +758,35 @@ fn image(png: &[u8], caption: String) -> Value {
     ])
 }
 
+/// Tools a scoped connection may point at another project: they only read it.
+const READ_ELSEWHERE: &[&str] = &["get_edit_context", "get_project"];
+
+/// The project a call works on. A scoped connection (an Edit chat) edits only
+/// its own project but may read another (a reference edit to match) with
+/// READ_ELSEWHERE; anything else naming another project is refused. It used
+/// to answer from its own project without a word, so an agent asked to read
+/// the reference edit read the edit it was fixing and took it for the reference.
+fn target_project<'a>(
+    scope: Option<&'a str>,
+    asked: Option<&'a str>,
+    tool: &str,
+) -> Result<Option<&'a str>, String> {
+    let asked = asked.filter(|id| !id.is_empty());
+    match (scope, asked) {
+        (Some(own), Some(other)) if other != own => {
+            if READ_ELSEWHERE.contains(&tool) {
+                Ok(Some(other))
+            } else {
+                Err(format!(
+                    "this chat works on project {own} only: {tool} can't touch {other} (get_edit_context and get_project can read it)"
+                ))
+            }
+        }
+        (Some(own), _) => Ok(Some(own)),
+        (None, asked) => Ok(asked),
+    }
+}
+
 async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Result<Value, String> {
     let store = &app.store;
     if name == "list_projects" {
@@ -765,11 +794,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             serde_json::to_string_pretty(&store.list()).unwrap_or_default(),
         ));
     }
-    // A scoped connection only ever touches its own project.
-    let id = match scope {
-        Some(project) => store.resolve(Some(project))?,
-        None => store.resolve(args["project_id"].as_str())?,
-    };
+    let id = store.resolve(target_project(scope, args["project_id"].as_str(), name)?)?;
     match name {
         "skill" => {
             let name = args["name"].as_str().ok_or("name is required")?;
@@ -3185,9 +3210,38 @@ fn close_gaps(project: &mut Project, gone: &[Clip]) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        added_clip, close_gaps, merge, resolve_refs, tidy_tracks, Clip, Project, TrackKind,
+        added_clip, close_gaps, merge, resolve_refs, target_project, tidy_tracks, Clip, Project,
+        TrackKind,
     };
     use serde_json::json;
+
+    #[test]
+    fn a_scoped_chat_reads_another_project_but_never_edits_it_or_answers_for_it() {
+        let own = Some("p1");
+        assert_eq!(target_project(own, None, "apply_edit_plan"), Ok(own));
+        assert_eq!(target_project(own, Some("p1"), "apply_edit_plan"), Ok(own));
+        assert_eq!(target_project(own, Some(""), "get_edit_context"), Ok(own));
+        // Reading the reference edit reads the reference, not its own project.
+        assert_eq!(
+            target_project(own, Some("p2"), "get_edit_context"),
+            Ok(Some("p2"))
+        );
+        assert_eq!(
+            target_project(own, Some("p2"), "get_project"),
+            Ok(Some("p2"))
+        );
+        let refused = target_project(own, Some("p2"), "apply_edit_plan").unwrap_err();
+        assert!(
+            refused.contains("p1") && refused.contains("p2"),
+            "{refused}"
+        );
+        // Unscoped (an outside MCP client): whatever it names.
+        assert_eq!(
+            target_project(None, Some("p2"), "delete_clips"),
+            Ok(Some("p2"))
+        );
+        assert_eq!(target_project(None, None, "delete_clips"), Ok(None));
+    }
 
     #[test]
     fn tidy_tracks_drops_layers_into_gaps_and_keeps_their_order() {

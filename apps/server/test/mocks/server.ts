@@ -51,6 +51,8 @@ export class MockServer {
   readonly cloud: CloudMock;
   /** What the gateway's model answers (the message content). */
   gatewayAnswer = "{}";
+  /** The answer to the watcher's who-is-who call (cast.ts), when set; else it gets `gatewayAnswer` like any call. */
+  castAnswer: string | null = null;
   private routes: Route[] = [];
   private server: Server<undefined>;
 
@@ -191,9 +193,11 @@ export class MockServer {
     // The cloud: /v1/cloud/*, R2 behind presigned URLs, Convex.
     this.cloud.install();
     // The AI gateway (OpenAI-style chat completions).
-    this.on("POST", "/v1/chat/completions", (_request, mock) =>
-      Response.json({ choices: [{ message: { role: "assistant", content: mock.gatewayAnswer } }] }),
-    );
+    this.on("POST", "/v1/chat/completions", async (request, mock) => {
+      const asked = await request.text();
+      const content = mock.castAnswer !== null && asked.includes('"name":"cast"') ? mock.castAnswer : mock.gatewayAnswer;
+      return Response.json({ choices: [{ message: { role: "assistant", content } }] });
+    });
     // Google.
     this.on("POST", "/token", () => Response.json({ access_token: "mock-access-token", expires_in: 3600, token_type: "Bearer" }));
     this.on("GET", "/drive/v3/files", () => Response.json({ files: [] }));

@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import * as castOf from "./cast.ts";
 import { parseTranscript, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import { ioMessage, writeAtomic } from "./files.ts";
@@ -1111,6 +1112,8 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   const disputes = new Map<string, [number, number]>();
   const seen: Segment[] = [];
   const people: unknown[] = [];
+  // Everyone each window saw, for who is who across them (cast.ts).
+  const sightings: castOf.Seen[] = [];
   // Lines the model only guessed at: the few worth a look.
   const doubtful: unknown[] = [];
   const ordered = [...answers.values()].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -1159,6 +1162,17 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
         look: person.look,
         where: person.place,
       });
+      sightings.push({
+        media: part.media,
+        from: window.start,
+        to: window.end,
+        letter: person.id,
+        voice,
+        name: person.name,
+        role: person.role,
+        look: person.look,
+        place: person.place,
+      });
     }
     for (const line of answer.lines) {
       if (line.sure !== "low") continue;
@@ -1192,6 +1206,14 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
       if (end > start) seen.push({ start, end, kind: kindOf(stretch.kind), note: stretch.note });
     }
   }
+  // Who is who across the windows: one person, one name, whatever voices
+  // diarisation gave them (cast.ts).
+  const cast = await castOf.reconcile(sightings, join(app.store.cacheDir(), "watch-cast"), post);
+  if (cast !== null) cost += cast.cost;
+  const castPlans =
+    cast === null
+      ? new Map<string, castOf.CastPlan>()
+      : castOf.planCast(sightings, cast.people, new Map([...transcripts].map(([id, transcript]) => [id, transcript.words])));
   // The corrections, into each file's transcript.
   const examples: unknown[] = [];
   let changed = 0;
@@ -1201,7 +1223,8 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
     .map(([key]) => key)
     .sort(compareKeys);
   const renamed: unknown[] = [];
-  const files = [...new Set([...changes.keys(), ...misnamed.map((key) => unpair(key)[0])])].sort(compareKeys);
+  const files = [...new Set([...changes.keys(), ...misnamed.map((key) => unpair(key)[0]), ...castPlans.keys()])].sort(compareKeys);
+  let moved = 0;
   const saidKeys = [...said.keys()].sort(compareKeys);
   for (const mediaId of files) {
     const list = changes.get(mediaId) ?? [];
@@ -1261,6 +1284,24 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
         speakers[voice] = label;
         renamed.push({ voice, was, now: label });
       }
+      // The cast last: it sees every window at once.
+      const plan = castPlans.get(mediaId);
+      if (plan !== undefined) {
+        for (const move of plan.moves) {
+          for (const word of transcript.words) {
+            if (word.speaker === move.voice && word.start >= move.from && word.start < move.to) {
+              word.speaker = move.to_voice;
+              moved += 1;
+            }
+          }
+        }
+        for (const [voice, [label, role]] of [...plan.names].sort((a, b) => compareKeys(a[0], b[0]))) {
+          const was = Object.hasOwn(speakers, voice) ? speakers[voice]! : undefined;
+          roles[voice] = role;
+          speakers[voice] = label;
+          if (was !== label) renamed.push({ voice, was: was ?? null, now: label });
+        }
+      }
     });
   }
   const segments = setSegments ? normalize(seen, duration, toI64(round(fps))) : [];
@@ -1290,6 +1331,17 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
     lines_changed: changed,
     examples,
     voices_renamed: renamed,
+    // Who is who across the windows: each person and their voices; words moved where a voice was two people.
+    cast:
+      cast === null
+        ? null
+        : cast.people.map((person) => ({
+            name: person.name,
+            title: person.title,
+            role: person.role,
+            voices: [...new Set(person.members.map((n) => sightings[n]!.voice))].sort(compareKeys),
+          })),
+    words_moved: moved,
     doubtful,
     people,
     segments_set: setSegments,

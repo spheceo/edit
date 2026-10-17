@@ -347,6 +347,13 @@ test("watch_footage asks the gateway once per window, corrects the transcript, s
       ],
       background: [],
     });
+    // Who is who across the windows: A is the detective, B is Tyler.
+    mock.castAnswer = JSON.stringify({
+      people: [
+        { name: null, title: "Detective", role: "leader", members: [0] },
+        { name: "Tyler", title: "Suspect", role: "suspect", members: [1] },
+      ],
+    });
     const calls = mock.calls("/v1/chat/completions").length;
     const reply = (await dispatch(app, { id: 1, method: "tools/call", params: { name: "watch_footage", arguments: { project_id: id } } }, null)) as {
       result: { content: { text: string }[]; isError: boolean };
@@ -356,8 +363,13 @@ test("watch_footage asks the gateway once per window, corrects the transcript, s
     expect(text.startsWith("watched: {")).toBe(true);
     const report = JSON.parse(text.slice("watched: ".length)) as Record<string, unknown>;
     expect(report).toMatchObject({ windows: 1, cached: 0, failed: [], lines_changed: 1, segments_set: true, examples: [{ time: 3, text: "At home.", from: "Detective (Leader)", to: "speaker_1" }] });
-    expect(mock.calls("/v1/chat/completions").length).toBe(calls + 1);
-    const request = mock.calls("/v1/chat/completions").at(-1)!;
+    // The window, then who is who across the windows.
+    expect(mock.calls("/v1/chat/completions").length).toBe(calls + 2);
+    expect(report.cast).toEqual([
+      { name: null, title: "Detective", role: "leader", voices: ["speaker_0"] },
+      { name: "Tyler", title: "Suspect", role: "suspect", voices: ["speaker_1"] },
+    ]);
+    const request = mock.calls("/v1/chat/completions").at(-2)!;
     expect(request.headers.get("authorization")).toBe("Bearer test-key");
     const body = request.json<{ model: string; reasoning: { effort: string }; messages: { content: unknown }[] }>();
     expect([body.model, body.reasoning.effort]).toEqual(["google/gemini-3.8-flash", "low"]);
@@ -376,9 +388,10 @@ test("watch_footage asks the gateway once per window, corrects the transcript, s
     };
     const second = JSON.parse(again.result.content[0]!.text.slice("watched: ".length)) as Record<string, unknown>;
     expect(second).toMatchObject({ windows: 1, cached: 1, cost: 0, lines_changed: 0, examples: [] });
-    expect(mock.calls("/v1/chat/completions").length).toBe(calls + 1);
+    expect(mock.calls("/v1/chat/completions").length).toBe(calls + 2);
     expect(fs.existsSync(`${app.store.cacheDir()}/watch-projects/${id}.json`)).toBe(true);
   } finally {
+    mock.castAnswer = null;
     if (before === undefined) delete process.env.EDIT_FFMPEG;
     else process.env.EDIT_FFMPEG = before;
     tools.forget();

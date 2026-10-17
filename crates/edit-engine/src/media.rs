@@ -875,14 +875,8 @@ fn hardware_video(
             &gop,
             "-bf",
             "0",
-            "-colorspace",
-            "bt709",
-            "-color_primaries",
-            "bt709",
-            "-color_trc",
-            "bt709",
-            "-color_range",
-            "tv",
+            // No colour tags here: scale_vt converts to BT.709 and tags the
+            // frames itself, and footage with none of its own fails with them.
         ])
         .args(if sound {
             &["-c:a", "aac", "-b:a", "160k", "-ac", "2"][..]

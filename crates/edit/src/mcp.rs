@@ -242,7 +242,7 @@ fn tools() -> Vec<Value> {
     vec![
         tool("list_projects", "List projects on this machine.", json!({}), &[]),
         tool("skill", "Load one part of the house style (the SKILLS list in the instructions): how the team does that part of an edit. Load it before working on that part, once per conversation. edit-workflow is the whole edit in one go, and also starts watching the footage in the background.", json!({
-            "name": {"type":"string", "enum": crate::skills::SKILLS.iter().map(|skill| skill.name).collect::<Vec<_>>()}
+            "name": {"type":"string", "enum": crate::styles::all_skill_names()}
         }), &["name"]),
         tool("get_edit_context", "Start here, once per stage: the revision (base_rev), sections, tracks, media, each cut-in's narration with its word timings (word@seconds) and the footage blocks with their notes, speaker line counts, mechanical issues, and the clips as one line each (id, track, type, [start,end) frames, media@source seconds, text, keyframed params). Subtitles are only counted. section (intro, story = between intro and outro, outro) or start/end (seconds) narrow everything to that span; clip_ids returns those clips in full (keyframes too). include_transcript adds the timeline's cached speech for the span. Never needs get_project.", json!({
             "section": {"type":"string", "enum":["intro","story","outro"]},
@@ -773,11 +773,9 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
     match name {
         "skill" => {
             let name = args["name"].as_str().ok_or("name is required")?;
-            let skill = crate::skills::get(name).ok_or_else(|| {
-                let names: Vec<&str> = crate::skills::SKILLS
-                    .iter()
-                    .map(|skill| skill.name)
-                    .collect();
+            let style = store.get(&id).ok_or("project vanished")?.project.style;
+            let skill = crate::styles::skill(style, name).ok_or_else(|| {
+                let names = crate::styles::skill_names(style);
                 format!("no skill {name}; there are {}", names.join(", "))
             })?;
             if skill.name == "edit-workflow" {
@@ -2477,7 +2475,7 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
             )
         })
         .collect();
-    let mut context = json!({"rev":live.rev, "id":p.id, "settings":p.settings, "duration_frames":p.duration(),
+    let mut context = json!({"rev":live.rev, "id":p.id, "style":p.style, "settings":p.settings, "duration_frames":p.duration(),
         "times": "clip rows are `id track type [start,end) frames …`; cut-in words are word@timeline-seconds",
         "tracks":tracks, "sections":sections, "media":media, "speaker_line_counts":speakers,
         "subtitles_in_span": subtitles, "footage_blocks":footage, "cut_ins":cut_ins,

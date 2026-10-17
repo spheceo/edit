@@ -44,6 +44,7 @@ function project(clips: Clip[]): Project {
     version: 1,
     id: "p",
     name: "t",
+    style: "bodycam",
     settings: { width: 1920, height: 1080, fps: 30 },
     media: [{ id: "m1", name: "a.mp4", path: "/a.mp4", kind: "video", duration: 100, width: 1920, height: 1080, fps: 30, has_audio: true }],
     tracks: [

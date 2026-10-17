@@ -4,7 +4,7 @@ import type { Project } from "./types";
 const api = vi.hoisted(() => ({ saveProject: vi.fn(() => new Promise(() => {})), project: vi.fn() }));
 vi.mock("./api", () => ({ api, ApiError: class extends Error {}, useConnection: { setState: vi.fn() } }));
 vi.mock("./agent", () => ({ applyAgentEvent: vi.fn(), openAgent: vi.fn() }));
-const project: Project = { version: 1, id: "p", name: "p", next_id: 1, settings: { width: 320, height: 180, fps: 30 }, clips: [], media: [], tracks: [] };
+const project: Project = { version: 1, id: "p", name: "p", style: "bodycam", next_id: 1, settings: { width: 320, height: 180, fps: 30 }, clips: [], media: [], tracks: [] };
 
 describe("in and out points", () => {
   beforeEach(() => {

@@ -27,6 +27,7 @@ mod sfx;
 mod skills;
 mod speakers;
 mod store;
+mod styles;
 mod subtitles;
 mod tools;
 mod track;

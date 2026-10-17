@@ -397,10 +397,20 @@ export type ClipType = Clip["type"];
 
 /** Writers must satisfy edit-core Project::validate: safe frame integers,
  * unique collection IDs, finite numeric parameters and ordered keyframes. */
+/** The kind of video: which teaching the agent gets. */
+export type Style = "bodycam" | "interrogation" | "courtroom";
+
+export const STYLES: { value: Style; label: string }[] = [
+  { value: "bodycam", label: "Bodycam" },
+  { value: "interrogation", label: "Interrogation" },
+  { value: "courtroom", label: "Courtroom" },
+];
+
 export interface Project {
   version: number;
   id: string;
   name: string;
+  style: Style;
   settings: Settings;
   media: Media[];
   tracks: Track[];
@@ -475,6 +485,7 @@ export interface ScriptJob {
 export interface ProjectSummary {
   id: string;
   name: string;
+  style: Style;
   modified_ms: number;
   width: number;
   height: number;

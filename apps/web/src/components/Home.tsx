@@ -7,13 +7,13 @@ import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { clientId, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
-import type { ProjectSummary } from "../lib/types";
+import { STYLES, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Mark } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { UpdateButton } from "./UpdateButton";
-import { Button, Modal, spring } from "./ui";
+import { Button, cx, Modal, spring } from "./ui";
 
 // Every project is 1080p at 30 fps.
 const FORMAT = { width: 1920, height: 1080, fps: 30 };
@@ -214,7 +214,7 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
           <div className="mt-0.5 truncate text-[12px] text-muted tabular" title={project.problem}>
             {project.problem
               ? `${project.problem} · ${ago(project.modified_ms)}`
-              : `${project.width}×${project.height} · ${project.fps}fps · ${shortDuration(seconds)} · ${ago(project.modified_ms)}`}
+              : `${STYLES.find((style) => style.value === project.style)?.label ?? "Bodycam"} · ${shortDuration(seconds)} · ${ago(project.modified_ms)}`}
           </div>
         </div>
       </motion.div>
@@ -246,9 +246,10 @@ type Preview = Awaited<ReturnType<typeof api.scriptPreview>>;
 
 const DOC = /docs\.google\.com\/document\/d\//;
 
-/** One field: a name for a blank project, or a Google Doc link to start from its script. */
+/** One field (a name for a blank project, or a Google Doc link to start from its script) and the kind of video. */
 function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [text, setText] = useState("");
+  const [style, setStyle] = useState<Style>("bodycam");
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ url: string; result?: Preview; error?: string } | null>(null);
   const toast = useEditor((state) => state.toast);
@@ -288,7 +289,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
     setBusy(true);
     try {
       const name = script ? preview?.result?.title || "Untitled" : url || "Untitled";
-      const { project } = await api.createProject({ name, ...FORMAT });
+      const { project } = await api.createProject({ name, style, ...FORMAT });
       if (script) {
         await api.attachScript(project.id, url);
         useEditor.getState().setSideTab("downloads");
@@ -318,11 +319,9 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
           onChange={(event) => setText(event.target.value)}
           className="h-11 w-full rounded-lg bg-transparent px-3 text-[14px] outline-none placeholder:text-faint"
         />
-        <div className="flex items-center gap-2 border-t border-line px-3 pt-2 pb-1 text-[12px]">
-          <span className="min-w-0 flex-1 truncate text-muted">
-            {!script ? (
-              "1080p · 30 fps"
-            ) : preview?.error ? (
+        {script && (
+          <div className="truncate px-3 pb-2 text-[12px] text-muted">
+            {preview?.error ? (
               <span className="text-red-300">{preview.error}</span>
             ) : preview?.result ? (
               <span className="tabular">
@@ -332,7 +331,24 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
             ) : (
               <span className="shimmer">Reading the Doc…</span>
             )}
-          </span>
+          </div>
+        )}
+        <div className="flex items-center gap-2 border-t border-line px-1 pt-2 pb-0.5">
+          <div className="mr-auto flex rounded-lg bg-black p-0.5 ring-1 ring-line">
+            {STYLES.map((option) => (
+              <button
+                type="button"
+                key={option.value}
+                onClick={() => setStyle(option.value)}
+                className={cx(
+                  "h-7 rounded-md px-3 text-[12px] font-medium transition-colors",
+                  style === option.value ? "bg-active text-fg" : "text-muted hover:text-fg",
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
           <Button type="submit" variant="primary" disabled={busy || !ready}>
             {busy ? "Creating…" : "Create"}
           </Button>

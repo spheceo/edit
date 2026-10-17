@@ -52,7 +52,7 @@ class AudioClock {
 }
 
 const fixture = (id = "p1"): Project => ({
-  version: 1, id, name: "Test", next_id: 3, settings: { width: 320, height: 180, fps: 30 },
+  version: 1, id, name: "Test", style: "bodycam", next_id: 3, settings: { width: 320, height: 180, fps: 30 },
   tracks: [{ id: "v1", kind: "video", hidden: false, muted: false, locked: false }],
   media: [{ id: "m1", name: "Video", path: "/video.mp4", kind: "video", duration: 10, width: 320, height: 180, fps: 30, has_audio: false }],
   clips: [{ id: "c1", track: "v1", start: 0, duration: 90, color: "blue", fade_in: 0, fade_out: 0, type: "video", media: "m1", source_in: 2, speed: 1, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1 }],

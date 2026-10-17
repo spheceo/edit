@@ -4,7 +4,7 @@ import { shareProject } from "./project-sharing";
 import type { Project } from "./types";
 
 const fixture = (): Project => ({
-  version: 1, id: "p", name: "test", settings: { width: 1920, height: 1080, fps: 30 }, next_id: 10,
+  version: 1, id: "p", name: "test", style: "bodycam", settings: { width: 1920, height: 1080, fps: 30 }, next_id: 10,
   media: [], tracks: [{ id: "v", kind: "video", hidden: false, muted: false, locked: false }],
   clips: ["first", "second"].map((id, i) => ({ id, track: "v", start: i * 30, duration: 30,
     color: "blue", fade_in: 0, fade_out: 0, keyframes: {}, type: "solid", fill: [0, 0, 0, 1], opacity: 1 })),

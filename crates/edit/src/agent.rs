@@ -494,10 +494,11 @@ impl Agents {
              Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. \
              When a tool is still running (watch_footage, map_view, export), wait for it in long blocks (yield_time_ms 30000 or more), never second by second. \
              When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. For other requests, load the skill for the part you're working on (see SKILLS). \
-             Keep replies short: say what you changed and where (timecodes).\n\n{}\n\nThe edit tools (in exec: tools.mcp__edit__<name>({{…}}); their full declarations are in ALL_TOOLS, but this list is usually enough):\n{}",
+             Keep replies short: say what you changed and where (timecodes).\n\n{}\n\n{}\n\nThe edit tools (in exec: tools.mcp__edit__<name>({{…}}); their full declarations are in ALL_TOOLS, but this list is usually enough):\n{}",
             live.project.name, live.project.settings.width, live.project.settings.height, live.project.settings.fps,
             // The model and house style, as every MCP client gets them.
             crate::mcp::INSTRUCTIONS,
+            crate::styles::instructions(live.project.style),
             crate::mcp::tool_reference()
         );
         let thread = match (thread, known) {

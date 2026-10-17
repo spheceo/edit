@@ -11,6 +11,9 @@ pub struct Project {
     pub version: u32,
     pub id: String,
     pub name: String,
+    /// The kind of video: which teaching the agent gets.
+    #[serde(default)]
+    pub style: Style,
     pub settings: Settings,
     #[serde(default)]
     pub media: Vec<Media>,
@@ -39,6 +42,29 @@ pub struct Project {
     /// "Subtitles" folder on Google Drive. Cleared when the file is gone from Drive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drive: Option<DriveFile>,
+}
+
+/// The kind of video a project is. Each gets its own teaching for the agent
+/// (`crates/edit/src/styles.rs`); projects from before styles are bodycam.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Style {
+    #[default]
+    Bodycam,
+    Interrogation,
+    Courtroom,
+}
+
+impl Style {
+    pub const ALL: [Style; 3] = [Style::Bodycam, Style::Interrogation, Style::Courtroom];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Style::Bodycam => "bodycam",
+            Style::Interrogation => "interrogation",
+            Style::Courtroom => "courtroom",
+        }
+    }
 }
 
 /// A file on Google Drive.
@@ -1381,6 +1407,7 @@ impl Project {
             version: PROJECT_VERSION,
             id,
             name,
+            style: Style::default(),
             settings,
             media: Vec::new(),
             tracks: Vec::new(),

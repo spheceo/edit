@@ -836,6 +836,8 @@ async fn list_projects(State(app): State<App>) -> Json<Value> {
 #[derive(Deserialize)]
 struct CreateProject {
     name: String,
+    #[serde(default)]
+    style: edit_core::Style,
     width: Option<u32>,
     height: Option<u32>,
     fps: Option<u32>,
@@ -848,7 +850,10 @@ async fn create_project(State(app): State<App>, Json(body): Json<CreateProject>)
         height: body.height.unwrap_or(defaults.height),
         fps: body.fps.unwrap_or(defaults.fps),
     };
-    let live = app.store.create(&body.name, settings).map_err(bad)?;
+    let live = app
+        .store
+        .create_as(&body.name, body.style, settings)
+        .map_err(bad)?;
     app.store.set_active(&live.project.id);
     Ok(Json(json!({ "rev": live.rev, "project": live.project })).into_response())
 }

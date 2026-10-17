@@ -38,6 +38,7 @@ pub struct Live {
 pub struct ProjectSummary {
     pub id: String,
     pub name: String,
+    pub style: edit_core::Style,
     pub modified_ms: u64,
     pub width: u32,
     pub height: u32,
@@ -197,6 +198,7 @@ impl Store {
                     out.push(ProjectSummary {
                         id: id.to_owned(),
                         name,
+                        style: edit_core::Style::default(),
                         modified_ms,
                         width: 0,
                         height: 0,
@@ -214,6 +216,7 @@ impl Store {
             out.push(ProjectSummary {
                 id: live.project.id.clone(),
                 name: live.project.name.clone(),
+                style: live.project.style,
                 modified_ms,
                 width: live.project.settings.width,
                 height: live.project.settings.height,
@@ -267,14 +270,26 @@ impl Store {
         Err(Some(problem))
     }
 
+    #[cfg(test)]
     pub fn create(&self, name: &str, settings: Settings) -> Result<Live, String> {
+        self.create_as(name, edit_core::Style::default(), settings)
+    }
+
+    /// A new project of a given style (the kind of video).
+    pub fn create_as(
+        &self,
+        name: &str,
+        style: edit_core::Style,
+        settings: Settings,
+    ) -> Result<Live, String> {
         let id = format!("p{}-{}", now_ms(), next_file_id());
         let name = if name.trim().is_empty() {
             "Untitled"
         } else {
             name.trim()
         };
-        let project = Project::new(id.clone(), name.to_owned(), settings);
+        let mut project = Project::new(id.clone(), name.to_owned(), settings);
+        project.style = style;
         project.validate()?;
         self.write(&project).map_err(|error| error.to_string())?;
         let live = Live { rev: 1, project };

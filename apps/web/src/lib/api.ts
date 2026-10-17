@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 import { note, recordTiming, routeOf } from "./diagnostics";
 import type { Encoders, ExportOptions } from "./exporting";
-import type { DriveFile, MediaStatus, Project, ProjectSummary, ScriptJob, Transcript } from "./types";
+import type { DriveFile, MediaStatus, Project, ProjectSummary, ScriptJob, Style, Transcript } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -133,7 +133,7 @@ export interface FoundArticle {
 
 export const api = {
   projects: () => request<{ projects: ProjectSummary[] }>("GET", "/api/projects"),
-  createProject: (body: { name: string; width: number; height: number; fps: number }) =>
+  createProject: (body: { name: string; style: Style; width: number; height: number; fps: number }) =>
     request<Live>("POST", "/api/projects", body),
   project: (id: string) => request<Live>("GET", `/api/projects/${id}`),
   saveProject: (id: string, baseRev: number, project: Project, origin: string) =>

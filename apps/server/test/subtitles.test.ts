@@ -11,6 +11,7 @@ import {
   hiddenRole,
   isFormOf,
   longestMs,
+  LEAD_MS,
   MIN_SHOWN_MS,
   narratorsInFootage,
   parseTerm,
@@ -73,6 +74,11 @@ test("a_narrator_in_the_footage_is_someone_in_the_room", () => {
   narratorsInFootage(project, voices, lines);
   expect(lines[0]!.speaker).toBe("m/0");
   expect(lines[1]!.speaker).toBe("m/2");
+  // A narration line starting in the footage's last frame is still narration.
+  const edge: Line = { start_ms: 29_990.0, end_ms: 32_000.0, text: "so", speaker: "m/0" };
+  project.segments.push({ start: 900, end: 1200, kind: "narration" });
+  narratorsInFootage(project, voices, [edge]);
+  expect(edge.speaker).toBe("m/0");
 });
 
 test("one_person_gets_one_colour", () => {
@@ -145,14 +151,35 @@ function times(lines: Line[]): [number, number, string][] {
   return lines.map((one) => [one.start_ms, one.end_ms, one.speaker]);
 }
 
-test("a_line_squeezed_by_a_quick_answer_still_stays_up_long_enough_to_read", () => {
+test("a_line_squeezed_by_a_quick_answer_comes_up_early_and_never_delays_the_answer", () => {
   const none = () => false;
-  // "No." said 40 ms before the next line starts.
-  const out = shown([line(0.0, 30.0, "a"), line(40.0, 1500.0, "b")], 1000.0, 0.0, 9000.0, false, none, none);
+  // "No." said 40 ms before someone else's line: up LEAD_MS early, and the
+  // answer still starts on its first word.
+  let out = shown([line(0.0, 500.0, "c"), line(2000.0, 2030.0, "a"), line(2040.0, 3500.0, "b")], 1000.0, 0.0, 9000.0, false, none, none);
   expect(times(out)).toEqual([
-    [0.0, 400.0, "a"],
-    [400.0, 2500.0, "b"],
+    [0.0, 1500.0, "c"],
+    [2000.0 - LEAD_MS, 2040.0, "a"],
+    [2040.0, 4500.0, "b"],
   ]);
+  // No time before it: shorter than MIN_SHOWN_MS rather than the answer late.
+  out = shown([line(0.0, 30.0, "a"), line(40.0, 1500.0, "b")], 1000.0, 0.0, 9000.0, false, none, none);
+  expect(times(out)).toEqual([
+    [0.0, 40.0, "a"],
+    [40.0, 2500.0, "b"],
+  ]);
+});
+
+test("a_short_line_joins_the_same_persons_next_instead_of_delaying_it", () => {
+  const none = () => false;
+  const said = (start_ms: number, end_ms: number, text: string, speaker: string): Line => ({ start_ms, end_ms, text, speaker });
+  for (const together of [false, true]) {
+    const out = shown([said(0.0, 200.0, "No.", "a"), said(250.0, 900.0, "I didn't.", "a")], 1000.0, 0.0, 9000.0, together, none, none);
+    expect(out.map((one) => [one.start_ms, one.end_ms, one.text])).toEqual([[0.0, 1900.0, "No. I didn't."]]);
+  }
+  // Two people are never joined.
+  const out = shown([said(0.0, 200.0, "No.", "a"), said(250.0, 900.0, "Yes.", "b")], 1000.0, 0.0, 9000.0, true, none, none);
+  expect(out.map((one) => one.text)).toEqual(["No.", "Yes."]);
+  expect(out[1]!.start_ms).toBe(250.0);
 });
 
 test("holds_a_second_one_at_a_time", () => {
@@ -243,16 +270,27 @@ test("segments_fill_gaps_with_footage_and_join_neighbours", () => {
 
 test("crammed_lines_get_time_to_be_read", () => {
   const make = (start_ms: number, end_ms: number, text: string): Line => ({ start_ms, end_ms, text, speaker: "a" });
-  // 24 characters said in 0.4 s after a gap: starts earlier, in the gap.
+  // 24 characters said in 0.4 s after a word stretched over the gap: the
+  // words were said in the gap, so it starts there.
   let lines = [
     make(234_750.0, 236_000.0, "All right."),
-    make(244_380.0, 244_790.0, "Anything in your pocket?"),
+    { ...make(244_380.0, 244_790.0, "Anything in your pocket?"), doubtful: true },
     make(244_790.0, 246_000.0, "Hair is ..."),
   ];
   uncram(lines);
   expect(lines[1]!.end_ms).toBe(244_790.0);
   expect(Math.abs(lines[1]!.start_ms - (244_790.0 - 21.0 * 60.0))).toBeLessThan(1e-6);
-  // No gap before it: it runs on, and the next waits for it in `shown`.
+  // The same words timed with nothing stretched before them: up at most
+  // LEAD_MS early, held longer instead.
+  lines = [make(234_750.0, 236_000.0, "All right."), make(244_380.0, 244_790.0, "Anything in your pocket?")];
+  uncram(lines);
+  expect(lines[1]!.start_ms).toBe(244_380.0 - LEAD_MS);
+  expect(Math.abs(lines[1]!.end_ms - (244_380.0 - LEAD_MS + 21.0 * 60.0))).toBeLessThan(1e-6);
+  // Quick talk timed right ("Now, you stay right here." in 0.74 s) isn't crammed.
+  lines = [make(65_060.0, 65_800.0, "Now, you stay right here.")];
+  uncram(lines);
+  expect([lines[0]!.start_ms, lines[0]!.end_ms]).toEqual([65_060.0, 65_800.0]);
+  // No gap before it: it runs on (`shown` never starts the next late for it).
   lines = [make(0.0, 1000.0, "One two three."), make(1000.0, 1300.0, "Four five six seven.")];
   uncram(lines);
   expect(lines[1]!.start_ms).toBe(1000.0);

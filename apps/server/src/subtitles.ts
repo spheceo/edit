@@ -492,6 +492,7 @@ export function shown(
     .filter((line) => trim(line.text) !== "" && !silent(line.speaker))
     .map((line) => ({ ...line, start_ms: Math.max(line.start_ms, fromMs), end_ms: Math.min(line.end_ms, untilMs) }));
   cues.sort((a, b) => a.start_ms - b.start_ms || a.end_ms - b.end_ms);
+  readable(cues, together, fromMs, (speaker) => hidden(speaker));
   const nextStart: (number | null)[] = new Array(cues.length).fill(null);
   for (let i = cues.length - 1; i >= 0; i--) {
     const cue = cues[i]!;
@@ -512,8 +513,10 @@ export function shown(
       let endMs = Math.min(cue.end_ms + (tied ? 0.0 : holdMs), untilMs, cutAt);
       const startMs = Math.max(cue.start_ms, speakerUntil.get(cue.speaker) ?? 0.0);
       // Readable however quick the reply after it: a line held into
-      // another speaker's stacks over it (overlap mode's way).
-      endMs = Math.max(endMs, Math.min(startMs + MIN_SHOWN_MS, untilMs));
+      // another speaker's stacks over it (overlap mode's way). Never into
+      // the same person's next line, which would then start late.
+      const own = cues.slice(i + 1).find((next) => next.speaker === cue.speaker && next.start_ms > cue.start_ms);
+      endMs = Math.max(endMs, Math.min(startMs + MIN_SHOWN_MS, untilMs, own?.start_ms ?? Number.POSITIVE_INFINITY));
       speakerUntil.set(cue.speaker, endMs);
       out.push({ ...cue, start_ms: startMs, end_ms: endMs });
       return;
@@ -538,16 +541,73 @@ export function shown(
 export const MIN_SHOWN_MS = 400.0;
 
 /**
- * Holds every line at least MIN_SHOWN_MS (not past `untilMs`), starting the
- * next one that much later: its own hold after its last word absorbs it.
+ * Holds every line at least MIN_SHOWN_MS (not past `untilMs`) where it can
+ * without starting the next one late: `readable` has already made room
+ * where there is any, and a next line never waits (a subtitle after its
+ * words reads as out of sync; 19 of a 29-minute interrogation's lines were).
  */
 function holdReadable(cues: Line[], untilMs: number): void {
-  let shownUntil = Number.NEGATIVE_INFINITY;
-  for (const cue of cues) {
-    cue.start_ms = Math.max(cue.start_ms, shownUntil);
-    const least = Math.min(cue.start_ms + MIN_SHOWN_MS, untilMs);
+  cues.forEach((cue, i) => {
+    const next = cues[i + 1];
+    const least = Math.min(cue.start_ms + MIN_SHOWN_MS, untilMs, next === undefined ? Number.POSITIVE_INFINITY : Math.max(next.start_ms, cue.start_ms));
     cue.end_ms = Math.max(cue.end_ms, least);
-    shownUntil = cue.end_ms;
+  });
+}
+
+/** How far before its first word a line may come up, to be read (ms): about six frames. */
+export const LEAD_MS = 250.0;
+/** A line joined with the same person's next stays this short (characters)… */
+const JOINED_CHARS = 70;
+/** …and up no longer than this (ms). */
+const JOINED_MS = 6000.0;
+
+/**
+ * Makes room for every line to be read (MIN_SHOWN_MS) before the line that
+ * cuts it short (the same person's next in `together`, anyone's next
+ * otherwise) without starting that one late: a line is first joined with the
+ * same person's next when they follow on ("No." "I didn't."), else it comes
+ * up earlier, at most LEAD_MS before its first word and never into the line
+ * before it while that one is still being said or read. What's left is
+ * shorter than MIN_SHOWN_MS rather than late. Never joins two people.
+ */
+export function readable(cues: Line[], together: boolean, fromMs: number, hidden: (speaker: string) => boolean = () => false): void {
+  const cutter = (i: number) => {
+    const cue = cues[i]!;
+    for (let j = i + 1; j < cues.length; j++) {
+      const next = cues[j]!;
+      if (next.start_ms <= cue.start_ms) continue;
+      if (!together || next.speaker === cue.speaker) return j;
+    }
+    return null;
+  };
+  let i = 0;
+  while (i < cues.length) {
+    const cue = cues[i]!;
+    const j = cutter(i);
+    const next = j === null ? undefined : cues[j];
+    if (next === undefined || hidden(cue.speaker) || next.start_ms - cue.start_ms >= MIN_SHOWN_MS) {
+      i += 1;
+      continue;
+    }
+    const text = `${cue.text} ${next.text}`;
+    if (next.speaker === cue.speaker && charCount(text) <= JOINED_CHARS && Math.max(cue.end_ms, next.end_ms) - cue.start_ms <= JOINED_MS) {
+      cue.text = text;
+      cue.end_ms = Math.max(cue.end_ms, next.end_ms);
+      cues.splice(j!, 1);
+      continue;
+    }
+    // Up earlier, into the time the line before can spare.
+    let earliest = Math.max(cue.start_ms - LEAD_MS, fromMs);
+    for (let k = i - 1; k >= 0; k--) {
+      const before = cues[k]!;
+      if (together && before.speaker !== cue.speaker) continue;
+      if (hidden(before.speaker)) continue;
+      earliest = Math.max(earliest, before.end_ms, before.start_ms + MIN_SHOWN_MS);
+      break;
+    }
+    const wanted = next.start_ms - MIN_SHOWN_MS;
+    if (wanted < cue.start_ms) cue.start_ms = Math.max(Math.min(cue.start_ms, Math.max(wanted, earliest)), 0.0);
+    i += 1;
   }
 }
 
@@ -631,8 +691,13 @@ export function fillSegments(given: Segment[], duration: number): Segment[] {
   return out;
 }
 
-/** Faster than anyone talks (characters a second): the words' times are wrong. */
-const CRAMMED_CPS = 25.0;
+/**
+ * Faster than anyone talks (characters a second, spaces aside): the words'
+ * times are wrong. Quick talk reaches ~28 ("Now, you stay right here." in
+ * 0.74 s, timed right): at 25 a 29-minute interrogation had 75 lines up
+ * over a quarter second before anyone spoke.
+ */
+const CRAMMED_CPS = 36.0;
 /** How long a line needs to be read at least: this many ms a character… */
 const READ_MS_PER_CHAR = 60.0;
 /** …and never less than this. */
@@ -653,7 +718,11 @@ export function uncram(lines: Line[]): void {
     const span = line.end_ms - line.start_ms;
     if (count >= 8.0 && span < (count / CRAMMED_CPS) * 1000.0) {
       const needed = Math.max(count * READ_MS_PER_CHAR, READ_MS);
-      line.start_ms = Math.max(Math.min(line.start_ms, Math.max(line.end_ms - needed, before)), 0.0);
+      // Back into the gap only when the word before was stretched over it
+      // (the words were said there); else at most LEAD_MS before them, and
+      // held longer instead.
+      const reach = line.doubtful === true ? Number.POSITIVE_INFINITY : LEAD_MS;
+      line.start_ms = Math.max(Math.min(line.start_ms, Math.max(line.end_ms - needed, before, line.start_ms - reach)), 0.0);
       if (line.end_ms - line.start_ms < needed) line.end_ms = line.start_ms + needed;
     }
     before = Math.max(before, line.end_ms);
@@ -780,7 +849,11 @@ export function narratorsInFootage(project: Project, voices: Map<string, Voice>,
   for (const line of lines) {
     const voice = voices.get(line.speaker);
     if (voice === undefined) continue;
-    if (voice.role !== "narrator" || !footage.some(([start, end]) => start <= line.start_ms && line.start_ms < end)) continue;
+    if (voice.role !== "narrator") continue;
+    // Mostly inside the footage: a narration line that only touches a
+    // footage stretch's edge (its last frame) stays the narrator's, hidden.
+    const inside = footage.reduce((sum, [start, end]) => sum + Math.max(0.0, Math.min(end, line.end_ms) - Math.max(start, line.start_ms)), 0.0);
+    if (inside * 2.0 < Math.max(line.end_ms - line.start_ms, 1.0)) continue;
     const words = names(voice.name);
     const mediaId = line.speaker.split("/")[0] ?? "";
     const matched = sortedKeys(voices).find((key) => {
@@ -933,12 +1006,14 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
       }
       // A cue of only a transcriber's mark ("...") says nothing: no subtitle.
       if (!chars(cue.text).some(isAlphanumeric)) continue;
-      lines.push({
+      const line: Line = {
         start_ms: onTimeline(cue.start_ms),
         end_ms: onTimeline(cue.end_ms),
         text: star(cue.text, mine),
         speaker: key,
-      });
+      };
+      if (words[cue.words[0] - 1]?.stretched === true) line.doubtful = true;
+      lines.push(line);
     }
     let entry = mutes.get(clip.id);
     if (entry === undefined) mutes.set(clip.id, (entry = [visibleFrom, visibleTo, []]));
@@ -1159,12 +1234,17 @@ export function writeMutes(project: Project, mutes: ClipMutes): void {
 export function timedWords(words: Word[], from: number, to: number): TimedWord[] {
   return words
     .filter((word) => word.start >= from && word.end <= to + 0.05)
-    .map((word) => ({
-      text: trim(word.text),
-      start_ms: word.start * 1000.0,
-      end_ms: Math.min(word.end * 1000.0, word.start * 1000.0 + longestMs(word.text)),
-      speaker: word.speaker ?? null,
-    }))
+    .map((word) => {
+      const longest = word.start * 1000.0 + longestMs(word.text);
+      const timed: TimedWord = {
+        text: trim(word.text),
+        start_ms: word.start * 1000.0,
+        end_ms: Math.min(word.end * 1000.0, longest),
+        speaker: word.speaker ?? null,
+      };
+      if (word.end * 1000.0 > longest) timed.stretched = true;
+      return timed;
+    })
     .filter((word) => word.text !== "");
 }
 

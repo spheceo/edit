@@ -400,6 +400,8 @@ export interface TimedWord {
   start_ms: number;
   end_ms: number;
   speaker: string | null;
+  /** Its end was cut back to when it could have been said (`longestMs`): the transcriber stretched it over a silence. */
+  stretched?: true;
 }
 
 /** A subtitle: words [from, to) of the clip's list (subtitles.rs Cue). */
@@ -417,6 +419,11 @@ export interface Line {
   text: string;
   /** Who says it (a key into the speakers). */
   speaker: string;
+  /**
+   * Its words' times are doubtful: the word before it was stretched over the
+   * silence where these were most likely said (`uncram` may move it back).
+   */
+  doubtful?: boolean;
 }
 
 /** A house word to mute (and maybe star) (subtitles.rs Suggestion). */
@@ -457,6 +464,8 @@ export interface SubtitleOptions {
 
 export interface SubtitlesSeam {
   readonly DEFAULT_HOLD_MS: number;
+  /** How far before its first word a line may come up to be read (ms). */
+  readonly LEAD_MS: number;
   /** A subtitle's rough box (project pixels) for `text` wrapped at `textWidth` (character counts, no font metrics). */
   boxSize(text: string, textWidth: number, k: number): [number, number];
   fillSegments(given: Segment[], duration: number): Segment[];

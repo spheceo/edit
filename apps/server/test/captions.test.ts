@@ -159,11 +159,14 @@ test("crammed_lines_get_time_to_be_read", () => {
     [234_750.0, 236_000.0],
     [244_380.0, 244_790.0],
   ];
-  const out = uncrammed(spans, ["All right.", "Anything in your pocket?"]);
+  // After a word stretched over the gap: read time taken from the gap; it still ends with its words.
+  let out = uncrammed(spans, ["All right.", "Anything in your pocket?"], [false, true]);
   expect(out[0]).toEqual(spans[0]!);
-  // Read time taken from the gap before it; it still ends with its words.
   expect(out[1]![1]).toBe(244_790.0);
   expect(Math.abs(out[1]![0] - (244_790.0 - 21.0 * 60.0))).toBeLessThan(1e-6);
+  // Nothing stretched before it: up at most LEAD_MS early and held longer.
+  out = uncrammed(spans, ["All right.", "Anything in your pocket?"]);
+  expect(out[1]![0]).toBe(244_380.0 - seams.subtitles.LEAD_MS);
 });
 
 test("narrator_radio_and_background_talk_are_not_subtitled", () => {

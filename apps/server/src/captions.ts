@@ -88,6 +88,8 @@ export interface Line {
   color: string | null;
   /** Their role in the transcript (officer, narrator, dispatch…; "other" when unknown). */
   role: string;
+  /** The word before it was stretched over a silence (`cap`): its words were most likely said there. */
+  doubtful?: boolean;
 }
 
 function lineStart(line: Line): number {
@@ -577,11 +579,20 @@ async function spokenLines(app: App, project: Project, clips: Clip[], from: numb
     }
     const visibleFrom = clip.source_in + ((Math.max(from, clip.start) - clip.start) / fps) * clip.speed;
     const visibleTo = clip.source_in + ((Math.min(to, clipEnd(clip)) - clip.start) / fps) * clip.speed;
-    const words = transcript.words
-      .filter((word) => word.start >= visibleFrom && word.end <= visibleTo + 0.05)
-      .map((word) => (capped ? cap(word) : { ...word }));
+    const seen = transcript.words.filter((word) => word.start >= visibleFrom && word.end <= visibleTo + 0.05);
+    const words = seen.map((word) => (capped ? cap(word) : { ...word }));
     const own = transcript;
-    lines.push(...linesOf(clip.id, words).map((line) => named(line, own)));
+    const made = linesOf(clip.id, words).map((line) => named(line, own));
+    if (capped) {
+      // Stretched words (cut back by `cap`) before a line: its times are doubtful.
+      let at = 0;
+      for (const line of made) {
+        const before = seen[at - 1];
+        if (before !== undefined && words[at - 1]!.end < before.end) line.doubtful = true;
+        at += line.words.length;
+      }
+    }
+    lines.push(...made);
   }
   return lines;
 }
@@ -725,11 +736,13 @@ export function carried(old: Adjusted[], start: number, end: number): Adjusted |
  * the lines), lines crammed faster than anyone talks given time to be read
  * from the gap before them (`subtitles.uncram`, which works in ms).
  */
-export function uncrammed(spans: [number, number][], texts: string[]): [number, number][] {
+export function uncrammed(spans: [number, number][], texts: string[], doubtful: boolean[] = []): [number, number][] {
   const timed: TimedLine[] = [];
   for (let index = 0; index < spans.length && index < texts.length; index++) {
     const [start_ms, end_ms] = spans[index]!;
-    timed.push({ start_ms, end_ms, text: texts[index]!, speaker: String(index) });
+    const line: TimedLine = { start_ms, end_ms, text: texts[index]!, speaker: String(index) };
+    if (doubtful[index] === true) line.doubtful = true;
+    timed.push(line);
   }
   seams.subtitles.uncram(timed);
   const out = spans.map(([a, b]) => [a, b] as [number, number]);
@@ -787,7 +800,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
     const at = (seconds: number) => ((clip.start + ((seconds - clip.source_in) / clip.speed) * fps) / fps) * 1000.0;
     return [at(lineStart(line)), at(lineEnd(line))];
   });
-  const spans = uncrammed(timed, texts).map(([start, end]) => [(start / 1000.0) * fps, (end / 1000.0) * fps] as [number, number]);
+  const spans = uncrammed(timed, texts, lines.map((line) => line.doubtful === true)).map(([start, end]) => [(start / 1000.0) * fps, (end / 1000.0) * fps] as [number, number]);
   const { width, height } = project.settings;
   const style = subtitleStyle(width, height);
   const transform: Transform = { x: 0, y: f32(f32(height) * f32(0.4)), scale: 1, rotation: 0 };
@@ -831,18 +844,23 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
       slots.push([index, line, start, end, natural]);
     }
     slots.reverse();
-    // Crosstalk: a line squeezed by the next one gets time to be read, and
-    // the next starts a moment later (keeping its own time to read).
+    // Crosstalk: a line squeezed by the next one gets time to be read from
+    // before its first word (at most LEAD_MS, never across the cut or into
+    // the line before), never by starting the next one late: a subtitle
+    // after its words reads as out of sync.
     const read = toI64(round(READ_SUBTITLE * fps));
+    const lead = toI64(Math.floor((seams.subtitles.LEAD_MS / 1000.0) * fps));
     for (let index = 0; index + 1 < slots.length; index++) {
       const current = slots[index]!;
       const next = slots[index + 1]!;
       const [, line, start, end, natural] = current;
       const need = Math.min(start + read, Math.max(natural, start + least));
-      const [, nextLine, nextStartAt, nextEnd] = next;
-      if (end < need && nextLine.clip === line.clip && nextStartAt < need && need <= nextEnd - least) {
-        current[3] = need;
-        next[2] = need;
+      const [, nextLine, nextStartAt] = next;
+      if (end < need && nextLine.clip === line.clip && nextStartAt < need) {
+        const clip = clipOf(project, line.clip);
+        const before = index > 0 ? slots[index - 1]![3] : Number.NEGATIVE_INFINITY;
+        const earliest = Math.max(start - lead, before, from, clip?.start ?? from);
+        current[2] = Math.max(Math.min(start, start - (need - end)), earliest);
       }
     }
     const kept = slots.filter(([, , start, end]) => end > start);

@@ -499,7 +499,7 @@ impl Voices {
             }
         }
         let listing = crate::diag::time_on("voice", "voice: list voices", "relay", || {
-            relay_json("GET", "/v1/voices", None)
+            crate::relay::json("GET", "/v1/voices", None, "voices", 300)
         })?;
         *self.listing.lock() = Some((Instant::now(), listing.clone()));
         Ok(listing)
@@ -583,7 +583,7 @@ pub fn narration_lines(project: &edit_core::Project) -> Vec<(String, Option<Stri
 /// Returns ElevenLabs' request id, for stitching the next line onto it.
 fn speak(body: &Value, path: &Path) -> Result<Option<String>, String> {
     let partial = path.with_extension("partial");
-    let result = relay_call("POST", "/v1/speech", Some(body), &partial);
+    let result = crate::relay::call("POST", "/v1/speech", Some(body), &partial, "voices");
     match result {
         Ok(request) => std::fs::rename(&partial, path)
             .map(|()| request)
@@ -593,94 +593,6 @@ fn speak(body: &Value, path: &Path) -> Result<Option<String>, String> {
             Err(error)
         }
     }
-}
-
-fn relay_json(method: &str, route: &str, body: Option<&Value>) -> Result<Value, String> {
-    let scratch = std::env::temp_dir().join(format!(
-        "edit-relay-{}-{}.json",
-        std::process::id(),
-        now_ms()
-    ));
-    let result = relay_call(method, route, body, &scratch).and_then(|_| {
-        let bytes = std::fs::read(&scratch).map_err(|error| error.to_string())?;
-        serde_json::from_slice(&bytes).map_err(|error| format!("the relay's answer: {error}"))
-    });
-    let _ = std::fs::remove_file(&scratch);
-    result
-}
-
-/// One relay request through curl (like transcription): the answer goes to
-/// `out`; a failure comes back with the relay's (or ElevenLabs') reason. On
-/// success, the request id the relay passed on, if any.
-fn relay_call(
-    method: &str,
-    route: &str,
-    body: Option<&Value>,
-    out: &Path,
-) -> Result<Option<String>, String> {
-    let mut config =
-        crate::transcribe::relay_config(std::env::var("EDIT_RELAY_TOKEN").ok().as_deref())?;
-    let mut command = Command::new("curl");
-    command
-        .args([
-            "-sS",
-            "-K",
-            "-",
-            "-X",
-            method,
-            "--max-time",
-            "300",
-            "-w",
-            "%{http_code} %header{x-request-id}",
-            "-o",
-        ])
-        .arg(out);
-    if let Some(body) = body {
-        command.args(["-H", "content-type: application/json", "--data-binary"]);
-        command.arg(body.to_string());
-    }
-    command
-        .arg(format!("{}{route}", crate::transcribe::relay()))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| format!("curl: {error}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        config.push('\n');
-        let _ = stdin.write_all(config.as_bytes());
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("curl: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "could not reach Edit's relay: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let written = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let (code, request) = written.split_once(' ').unwrap_or((&written, ""));
-    let request = request.trim();
-    if code == "200" {
-        return Ok((!request.is_empty()).then(|| request.to_owned()));
-    }
-    let answer = std::fs::read(out).unwrap_or_default();
-    let message = serde_json::from_slice::<Value>(&answer)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| String::from_utf8_lossy(&answer).chars().take(300).collect());
-    let _ = std::fs::remove_file(out);
-    Err(if code == "404" {
-        "Edit's relay doesn't do voices yet (it needs deploying).".to_owned()
-    } else {
-        format!("{message} ({code})")
-    })
 }
 
 #[cfg(test)]

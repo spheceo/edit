@@ -542,7 +542,7 @@ pub async fn wait_for_smoothing(project_id: &str, limit: Duration) -> bool {
 fn geocode(place: &str) -> Result<(f64, f64, String), String> {
     let url = format!(
         "{}/v1/geocode?address={}",
-        crate::transcribe::relay(),
+        crate::relay::url(),
         urlencode(place)
     );
     let found: Value = serde_json::from_str(&fetch(&url)?)
@@ -581,10 +581,7 @@ fn geocode(place: &str) -> Result<(f64, f64, String), String> {
 
 /// The outline (lon, lat ring) of the building at a point, from Google.
 fn building_outline(lat: f64, lon: f64) -> Option<Vec<[f64; 2]>> {
-    let url = format!(
-        "{}/v1/outline?lat={lat}&lon={lon}",
-        crate::transcribe::relay()
-    );
+    let url = format!("{}/v1/outline?lat={lat}&lon={lon}", crate::relay::url());
     let found: Value = serde_json::from_str(&fetch(&url).ok()?).ok()?;
     outline_in(&found)
 }
@@ -1028,7 +1025,7 @@ pub async fn map_view(app: &App, project_id: &str, args: &Value) -> Result<Value
         "highlight": mark, "ring": ring,
         "highlight_after": highlight_after, "highlight_fade": highlight_fade, "fps": fps,
         "width": width, "height": height,
-        "relay": crate::transcribe::relay(),
+        "relay": crate::relay::url(),
     });
     if let (true, Some(fields)) = (frames > 0, config.as_object_mut()) {
         fields.insert("frames".to_owned(), json!(frames));

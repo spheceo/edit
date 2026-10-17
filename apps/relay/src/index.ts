@@ -1,4 +1,6 @@
-declare const FixedLengthStream: { new(size: number): { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> } };
+import { cloud, type CloudEnv } from "./cloud";
+
+declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> } };
 
 /**
  * Edit's relay. Holds the ElevenLabs key so Edit installs never do.
@@ -12,6 +14,8 @@ declare const FixedLengthStream: { new(size: number): { readable: ReadableStream
  *   POST /v1/speech        JSON { voice_id, model_id, text, voice_settings?, previous_text?,
  *                          next_text?, previous_request_ids?, seed?, output_format? }
  *                          → audio (ElevenLabs text to speech; x-request-id for stitching)
+ *   POST /v1/cloud/…       Edit's cloud: R2 presigned URLs and `edit:` Convex functions,
+ *                          with the cloud token only (see cloud.ts)
  *   GET  /health
  *
  * Spend is bounded three ways: a burst limit per IP, a daily byte quota per
@@ -20,7 +24,7 @@ declare const FixedLengthStream: { new(size: number): { readable: ReadableStream
  * Worker never buffers or parses either (keeps CPU tiny on any plan).
  */
 
-export interface Env {
+export interface Env extends CloudEnv {
   ELEVENLABS_API_KEY?: string;
   /** A key for voice generation (text to speech, voices); else ELEVENLABS_API_KEY. */
   ELEVENLABS_SPEECH_KEY?: string;
@@ -47,7 +51,8 @@ const MODEL = "scribe_v2";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY), speech: Boolean(speechKey(env)), maps: Boolean(env.GOOGLE_MAPS_KEY) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY), speech: Boolean(speechKey(env)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.CLOUD_TOKEN && env.R2_BUCKET && env.CONVEX_URL) });
+    if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);
     if (url.pathname.startsWith("/v1/3dtiles/")) return withCors(await tiles(request, url, env));

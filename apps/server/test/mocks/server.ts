@@ -136,6 +136,41 @@ export class MockServer {
     };
   }
 
+  /**
+   * Shares a Google Doc with anyone who has the link: its HTML export at
+   * `/docs.google.com/document/d/<id>/export` (EDIT_GOOGLE_API_URL's layout).
+   */
+  doc(id: string, html: string, title?: string): this {
+    const headers: Record<string, string> = { "content-type": "text/html; charset=utf-8" };
+    if (title !== undefined) headers["content-disposition"] = `attachment; filename="${title}.html"`;
+    return this.on("GET", `/docs.google.com/document/d/${id}/export`, () => new Response(html, { headers }));
+  }
+
+  /**
+   * Shares a Drive file with anyone who has the link: Drive's download URL
+   * (`/drive.usercontent.google.com/download?id=<file>`) sends `bytes` as
+   * `name`, honouring byte ranges (a probe's first byte, a resumed download)
+   * as Drive does.
+   */
+  driveFile(file: string, bytes: Uint8Array, name: string, type = "video/mp4"): this {
+    return this.on("GET", "/drive.usercontent.google.com/download", (request) => {
+      if (request.query.get("id") !== file) {
+        // Another file: whatever answered before (or Drive's 404).
+        return new Response("", { status: 404 });
+      }
+      const headers = { "content-type": type, "content-disposition": `attachment; filename="${name}"` };
+      const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+      if (range === null) return new Response(bytes, { headers });
+      const from = Number(range[1]);
+      if (from >= bytes.length) return new Response("", { status: 416, headers: { "content-range": `bytes */${bytes.length}` } });
+      const to = range[2] === "" ? bytes.length - 1 : Math.min(Number(range[2]), bytes.length - 1);
+      return new Response(bytes.slice(from, to + 1), {
+        status: 206,
+        headers: { ...headers, "content-range": `bytes ${from}-${to}/${bytes.length}` },
+      });
+    });
+  }
+
   stop(): void {
     void this.server.stop(true);
   }

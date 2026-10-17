@@ -46,17 +46,7 @@ beforeAll(() => {
     "-c:v", "libx264", "-preset", "ultrafast", "-g", "5", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-f", "mp4",
   ]);
   tone = make(["-f", "lavfi", "-i", "sine=f=440:d=2", "-c:a", "libmp3lame", "-f", "mp3"]);
-  mock.on("GET", "/drive.usercontent.google.com/download", (request) => {
-    const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
-    const headers = { "content-type": "video/mp4", "content-disposition": 'attachment; filename="Bodycam.mp4"' };
-    if (range === null) return new Response(footage, { headers });
-    const from = Number(range[1]);
-    const to = range[2] === "" ? footage.length - 1 : Number(range[2]);
-    return new Response(footage.slice(from, to + 1), {
-      status: 206,
-      headers: { ...headers, "content-range": `bytes ${from}-${to}/${footage.length}` },
-    });
-  });
+  mock.driveFile(FILE, footage, "Bodycam.mp4");
   mock.on("POST", "/v1/speech", () => new Response(tone, { headers: { "content-type": "audio/mpeg" } }));
   mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer("On July 13 Kent police were called".split(" "))));
 }, 60_000);
@@ -116,9 +106,7 @@ test.skipIf(ffmpeg === null || ffprobe === null)(
   "a script is read from its Doc, its footage downloaded and cut, laid out, voiced, and its research started",
   async () => {
     const [{ app, cleanup, home }, sent] = withAgents("script-import");
-    mock.on("GET", /^\/docs\.google\.com\/document\/d\/DOCabcdefghijk\/export$/, () =>
-      new Response(DOC, { headers: { "content-type": "text/html" } }),
-    );
+    mock.doc("DOCabcdefghijk", DOC);
     try {
       const http = serve(app);
       const docUrl = "https://docs.google.com/document/d/DOCabcdefghijk/edit";

@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import * as nodePath from "node:path";
 
-import { nativeLog, scrub } from "../diag.ts";
+import { nativeLog, scrub, warn } from "../diag.ts";
 
 import type {
   Encoders,
@@ -243,6 +243,10 @@ export function native(): Native {
       // Required lazily: the stub only exists for development and tests.
       const { createStub } = require("./stub.ts") as typeof import("./stub.ts");
       current = wrap(createStub());
+      warn(
+        "native",
+        "the native addon wasn't found (EDIT_NATIVE, or crates/edit-native built with napi): running on the stub, which renders, exports and measures nothing",
+      );
     }
   }
   return current;
@@ -274,7 +278,9 @@ export function initNative(config: Omit<InitConfig, "log">): Native {
 export function findAddon(): string | null {
   const given = process.env.EDIT_NATIVE;
   if (given !== undefined && given !== "") return fs.existsSync(given) ? given : null;
-  const names = [`edit-native.${process.platform}-${process.arch}.node`, "edit-native.node"];
+  // napi's `--platform` names: darwin-arm64, darwin-x64, linux-x64-gnu (WSL).
+  const platform = `${process.platform}-${process.arch}`;
+  const names = [`edit-native.${platform}.node`, `edit-native.${platform}-gnu.node`, "edit-native.node"];
   const dirs = [
     nodePath.dirname(process.execPath),
     // apps/server/src/native → crates/edit-native (dev: `napi build --platform`).

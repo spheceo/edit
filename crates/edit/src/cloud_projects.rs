@@ -267,10 +267,18 @@ impl Entry {
         }
     }
 
-    /// Whether a write may go ahead (cloud on).
-    pub fn permission(&self) -> Permission {
+    /// Whether a write may go ahead (cloud on). Someone else's lock last
+    /// seen a while ago is asked about again: they may have let go.
+    pub fn permission(&self, now: Instant) -> Permission {
         match &self.lock {
             Lock::Held | Lock::Provisional => Permission::Allow,
+            Lock::Elsewhere { .. }
+                if self
+                    .checked_at
+                    .is_none_or(|at| now.saturating_duration_since(at) >= CHECK_EVERY) =>
+            {
+                Permission::Ask
+            }
             Lock::Elsewhere { holder } => Permission::Refuse(read_only(holder)),
             Lock::Unknown => Permission::Ask,
         }
@@ -513,7 +521,7 @@ impl Cloud {
             let Some(entry) = projects.get_mut(id) else {
                 return Ok(());
             };
-            match entry.permission() {
+            match entry.permission(Instant::now()) {
                 Permission::Allow => return Ok(()),
                 Permission::Refuse(why) => return Err(why),
                 Permission::Ask if entry.busy.is_none() => {
@@ -570,8 +578,21 @@ impl Cloud {
                 Err(message)
             }
             Err(ConvexFailure::Unreachable(_)) => {
-                self.with(id, |entry| entry.unreachable(now));
-                Ok(())
+                // Last seen in someone else's hands: still theirs.
+                let theirs = self
+                    .with(id, |entry| {
+                        entry.unreachable(now);
+                        entry.checked_at = Some(now);
+                        match &entry.lock {
+                            Lock::Elsewhere { holder } => Some(holder.clone()),
+                            _ => None,
+                        }
+                    })
+                    .flatten();
+                match theirs {
+                    Some(holder) => Err(read_only(&holder)),
+                    None => Ok(()),
+                }
             }
             Err(failure) => Err(format!("couldn't take the project's cloud lock: {failure}")),
         }
@@ -828,6 +849,18 @@ pub fn summary(project: &Project) -> Value {
     })
 }
 
+/// `value[name]`, Null when it isn't there.
+fn field<'a>(value: &'a Value, name: &str) -> &'a Value {
+    value.get(name).unwrap_or(&Value::Null)
+}
+
+/// Sets `value[name]` (an object's).
+fn set(value: &mut Value, name: &str, to: Value) {
+    if let Some(fields) = value.as_object_mut() {
+        fields.insert(name.to_owned(), to);
+    }
+}
+
 fn conflicted_name(name: &str) -> String {
     format!("{name} {CONFLICTED}")
 }
@@ -864,15 +897,21 @@ mod remote {
             json!({ "projectId": id, "holder": holder, "force": force }),
             QUICK,
         )?;
-        if answer["acquired"].as_bool() == Some(true) {
-            let token = answer["token"].as_str().unwrap_or_default().to_owned();
+        if field(&answer, "acquired").as_bool() == Some(true) {
+            let token = field(&answer, "token")
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
             if token.is_empty() {
                 return Err(ConvexFailure::Relay("acquireLock gave no token".to_owned()));
             }
             Ok(Acquired::Got(token))
         } else {
             Ok(Acquired::HeldBy(
-                answer["heldBy"].as_str().unwrap_or("Someone").to_owned(),
+                field(&answer, "heldBy")
+                    .as_str()
+                    .unwrap_or("Someone")
+                    .to_owned(),
             ))
         }
     }
@@ -883,14 +922,14 @@ mod remote {
             json!({ "projectId": id, "lockToken": token }),
             QUICK,
         )?;
-        if answer["renewed"].as_bool() == Some(true) {
+        if field(&answer, "renewed").as_bool() == Some(true) {
             return Ok(Renewed::Yes);
         }
-        let live = answer["until"]
+        let live = field(&answer, "until")
             .as_u64()
             .is_some_and(|until| until > crate::store::now_ms());
         Ok(Renewed::Lost(
-            answer["heldBy"]
+            field(&answer, "heldBy")
                 .as_str()
                 .filter(|_| live)
                 .map(str::to_owned),
@@ -916,19 +955,22 @@ mod remote {
         if answer.is_null() {
             return Ok(None);
         }
-        let body_url = answer["bodyUrl"].as_str().unwrap_or_default().to_owned();
+        let body_url = field(&answer, "bodyUrl")
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
         Ok(Some(Meta {
-            rev: answer["rev"].as_u64().unwrap_or(0),
+            rev: field(&answer, "rev").as_u64().unwrap_or(0),
             body_url,
-            holder: live_holder(&answer["lock"]),
+            holder: live_holder(field(&answer, "lock")),
         }))
     }
 
     /// The holder of a lease that hasn't run out by this machine's clock.
     pub fn live_holder(lock: &Value) -> Option<String> {
-        let until = lock["until"].as_u64()?;
+        let until = field(lock, "until").as_u64()?;
         (until > crate::store::now_ms())
-            .then(|| lock["holder"].as_str().map(str::to_owned))
+            .then(|| field(lock, "holder").as_str().map(str::to_owned))
             .flatten()
     }
 
@@ -944,7 +986,7 @@ mod remote {
             None => json!({ "projectId": id }),
         };
         mutation("edit:deleteProject", args, QUICK)
-            .map(|answer| answer["deleted"].as_bool().unwrap_or(false))
+            .map(|answer| field(&answer, "deleted").as_bool().unwrap_or(false))
     }
 
     /// Uploads `project` and commits it as the rev after `base`: the new rev.
@@ -963,7 +1005,7 @@ mod remote {
         let answer = http("POST", url, Some(&body), SLOW)?;
         let storage = serde_json::from_slice::<Value>(&answer)
             .ok()
-            .and_then(|answer| answer["storageId"].as_str().map(str::to_owned))
+            .and_then(|answer| field(&answer, "storageId").as_str().map(str::to_owned))
             .ok_or_else(|| ConvexFailure::Relay("the upload gave no storage id".to_owned()))?;
         let mut args = json!({
             "projectId": project.id,
@@ -975,10 +1017,10 @@ mod remote {
             "bodySize": body.len(),
         });
         if let Some(token) = token {
-            args["lockToken"] = json!(token);
+            set(&mut args, "lockToken", json!(token));
         }
         let answer = mutation("edit:commitProject", args, QUICK)?;
-        answer["rev"]
+        field(&answer, "rev")
             .as_u64()
             .ok_or_else(|| ConvexFailure::Relay("commitProject gave no rev".to_owned()))
     }
@@ -1161,7 +1203,7 @@ async fn failure(
     }
     match (failure.code(), &failure) {
         (Some("locked"), ConvexFailure::Function { data, .. }) => {
-            let holder = data["heldBy"].as_str().map(str::to_owned);
+            let holder = field(data, "heldBy").as_str().map(str::to_owned);
             match holder.filter(|holder| *holder != cloud.holder()) {
                 Some(holder) => Box::pin(lost(app, cloud, id, holder)).await,
                 // Expired, or this holder's under another token: take it again.
@@ -1608,15 +1650,18 @@ pub async fn list(app: &App) -> Value {
             let projects: Vec<Value> = items
                 .into_iter()
                 .map(|item| {
-                    let id = item["projectId"].as_str().unwrap_or_default().to_owned();
-                    let holder_now = remote::live_holder(&item["lock"]);
+                    let id = field(&item, "projectId")
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
+                    let holder_now = remote::live_holder(field(&item, "lock"));
                     json!({
                         "id": id,
-                        "name": item["name"],
-                        "rev": item["rev"],
-                        "updated_ms": item["updatedAt"],
-                        "updated_by": item["updatedBy"],
-                        "summary": item["summary"],
+                        "name": field(&item, "name"),
+                        "rev": field(&item, "rev"),
+                        "updated_ms": field(&item, "updatedAt"),
+                        "updated_by": field(&item, "updatedBy"),
+                        "summary": field(&item, "summary"),
                         "holder": holder_now,
                         "here": holder_now.as_deref() == Some(holder.as_str()),
                         "local": crate::store::valid_id(&id) && store.get(&id).is_some(),
@@ -1715,13 +1760,13 @@ async fn get_settings(State(app): State<App>, Query(query): Query<Check>) -> Rep
 
 async fn settings_reply(cloud: &Arc<Cloud>, check: bool) -> Value {
     let mut answer = cloud.settings_status();
-    if check && answer["token"].is_string() {
+    if check && field(&answer, "token").is_string() {
         let task_cloud = Arc::clone(cloud);
         let problem = off_thread(move || task_cloud.connection_problem())
             .await
             .unwrap_or_else(Some);
-        answer["connected"] = json!(problem.is_none());
-        answer["problem"] = json!(problem);
+        set(&mut answer, "connected", json!(problem.is_none()));
+        set(&mut answer, "problem", json!(problem));
     }
     answer
 }
@@ -1882,7 +1927,7 @@ mod tests {
         assert_eq!(entry.step(at(t0, 6)), Some(Step::Push));
         entry.pushed(2, entry.edits);
         assert!(!entry.saved.dirty);
-        assert_eq!(entry.status(true)["sync"], "synced");
+        assert_eq!(field(&entry.status(true), "sync"), "synced");
     }
 
     #[test]
@@ -1947,7 +1992,7 @@ mod tests {
         entry.unreachable(t0);
         // Unknown becomes provisional: edits go on, queued.
         assert_eq!(entry.lock, Lock::Provisional);
-        assert_eq!(entry.status(true)["sync"], "offline");
+        assert_eq!(field(&entry.status(true), "sync"), "offline");
         assert_eq!(entry.step(at(t0, 4)), None);
         assert_eq!(entry.step(at(t0, 5)), Some(Step::Acquire));
         entry.unreachable(at(t0, 5));
@@ -1968,8 +2013,8 @@ mod tests {
         let mut entry = Entry::new(Saved::default());
         entry.elsewhere("kenobi".into(), t0);
         let status = entry.status(true);
-        assert_eq!(status["sync"], "readonly");
-        assert_eq!(status["holder"], "kenobi");
+        assert_eq!(field(&status, "sync"), "readonly");
+        assert_eq!(field(&status, "holder"), "kenobi");
         // Nobody here looking: left alone.
         assert_eq!(entry.step(at(t0, 30)), None);
         entry.viewers.insert("ui".into(), at(t0, 30));
@@ -1988,17 +2033,17 @@ mod tests {
         let mut entry = Entry::fresh();
         entry.busy = Some(Step::Acquire);
         assert_eq!(entry.step(t0), None);
-        assert_eq!(entry.status(false)["sync"], "off");
+        assert_eq!(field(&entry.status(false), "sync"), "off");
         entry.busy = Some(Step::Push);
-        assert_eq!(entry.status(true)["sync"], "syncing");
+        assert_eq!(field(&entry.status(true), "sync"), "syncing");
         entry.busy = None;
         entry.note = Some(Note::Conflict {
             message: "kept".into(),
         });
-        assert_eq!(entry.status(true)["sync"], "conflict");
-        assert_eq!(entry.status(true)["message"], "kept");
+        assert_eq!(field(&entry.status(true), "sync"), "conflict");
+        assert_eq!(field(&entry.status(true), "message"), "kept");
         entry.pushed(1, entry.edits);
-        assert_eq!(entry.status(true)["sync"], "synced");
+        assert_eq!(field(&entry.status(true), "sync"), "synced");
     }
 
     #[test]
@@ -2043,15 +2088,18 @@ mod tests {
 
         // Writes follow the lock: someone else's is refused, saying who.
         let mut entry = Entry::new(Saved::default());
-        assert_eq!(entry.permission(), Permission::Ask);
-        entry.elsewhere("kenobi".into(), Instant::now());
-        match entry.permission() {
+        let now = Instant::now();
+        assert_eq!(entry.permission(now), Permission::Ask);
+        entry.elsewhere("kenobi".into(), now);
+        match entry.permission(now) {
             Permission::Refuse(why) => assert!(why.starts_with("kenobi is editing"), "{why}"),
             other => panic!("{other:?}"),
         }
-        entry.acquired("t".into(), Instant::now());
-        assert_eq!(entry.permission(), Permission::Allow);
-        assert_eq!(Entry::fresh().permission(), Permission::Allow);
+        // Old news is checked again: they may have let go.
+        assert_eq!(entry.permission(at(now, 11)), Permission::Ask);
+        entry.acquired("t".into(), now);
+        assert_eq!(entry.permission(now), Permission::Allow);
+        assert_eq!(Entry::fresh().permission(now), Permission::Allow);
 
         // What's kept per project survives a restart (no global settings
         // touched: `Cloud::open` isn't used here).
@@ -2094,8 +2142,8 @@ mod tests {
     fn summaries_and_copies_read_well() {
         let project = Project::new("p1-1".into(), "Case".into(), edit_core::Settings::default());
         let summary = summary(&project);
-        assert_eq!(summary["clips"], 0);
-        assert_eq!(summary["fps"], project.settings.fps);
+        assert_eq!(field(&summary, "clips"), 0);
+        assert_eq!(field(&summary, "fps"), project.settings.fps);
         assert!(summary.to_string().len() < 64 * 1024);
         assert_eq!(conflicted_name("Case"), "Case (conflicted copy)");
         assert_eq!(

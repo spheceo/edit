@@ -926,7 +926,7 @@ type Footage = (i64, i64, String, f64, f64, Transform, (u32, u32));
 
 /// About how big a house-style subtitle's box is (project pixels) with its
 /// text wrapped at `text_width`: Montserrat SemiBold averages ~0.58 em.
-fn box_size(text: &str, text_width: f32, k: f32) -> (f32, f32) {
+pub(crate) fn box_size(text: &str, text_width: f32, k: f32) -> (f32, f32) {
     let size = 48.0 * k;
     let text_width = text_width.max(size);
     let mut lines = 0.0_f32;

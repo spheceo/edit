@@ -3,6 +3,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
 #import <ImageIO/ImageIO.h>
+#import <Vision/Vision.h>
 
 static void fail(char *error, size_t capacity, NSString *message) {
     if (capacity) snprintf(error, capacity, "%s", message.UTF8String ?: "AVFoundation failed");
@@ -111,6 +112,40 @@ void *edit_image_encode(const uint8_t *rgba, uint32_t width, uint32_t height, si
 const uint8_t *edit_data_bytes(void *data) { return CFDataGetBytePtr((CFDataRef)data); }
 size_t edit_data_length(void *data) { return (size_t)CFDataGetLength((CFDataRef)data); }
 void edit_data_release(void *data) { CFRelease((CFDataRef)data); }
+
+// Faces in a BGRA picture (Vision's face rectangles, profiles included): up
+// to `max` of them into `out` as x0, y0, x1, y1 (0..1 from the top left) and
+// confidence, `count` set to how many. The pixels are only read during the call.
+int edit_faces(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stride,
+               float *out, size_t max, size_t *count) {
+    @autoreleasepool {
+        *count = 0;
+        if (!width || !height || stride < (size_t)width * 4) return 0;
+        CVPixelBufferRef pixel = NULL;
+        if (CVPixelBufferCreateWithBytes(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+                (void *)bgra, stride, NULL, NULL, NULL, &pixel) != kCVReturnSuccess || !pixel) {
+            return 0;
+        }
+        VNDetectFaceRectanglesRequest *request = [VNDetectFaceRectanglesRequest new];
+        VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCVPixelBuffer:pixel options:@{}];
+        NSError *problem = nil;
+        BOOL ok = [handler performRequests:@[request] error:&problem];
+        CVPixelBufferRelease(pixel);
+        if (!ok) return 0;
+        for (VNFaceObservation *face in request.results) {
+            if (*count >= max) break;
+            CGRect box = face.boundingBox;  // 0..1, origin at the bottom left
+            float *o = out + *count * 5;
+            o[0] = box.origin.x;
+            o[1] = 1.0 - (box.origin.y + box.size.height);
+            o[2] = box.origin.x + box.size.width;
+            o[3] = 1.0 - box.origin.y;
+            o[4] = face.confidence;
+            *count += 1;
+        }
+        return 1;
+    }
+}
 
 // High-quality resample of a 4-channel 8-bit picture (any channel order).
 int edit_scale(const uint8_t *source, uint32_t sw, uint32_t sh, size_t sstride,

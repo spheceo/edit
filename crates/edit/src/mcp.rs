@@ -52,7 +52,7 @@ House editing style (videos cut from a script of police footage):
 - SCOPE: do the part of the edit that's asked for, and nothing past it. "Edit the intro" = the intro section only (sections.intro): its teasers, the cut-ins between them and their B-roll, captions, transitions and their sound; not the date cut-in (it opens the story) or any later cut-in or B-roll. "Subtitles" = add_subtitles (everything after the intro). Music, the date cut-in's map and other cut-ins' B-roll wait until they're asked for. When it's unclear whether something is in (music under the intro, say), ask instead of doing it, and say at the end what you left for later.
 - When the user corrects something or tells you how they like it, apply it everywhere it fits in the project, not just the one spot they pointed at.
 - Every footage range must play from its first word to its last (the Doc's "first....last" note). If one stops or starts a word short (e.g. it cuts at "hit that" when the range ends on "priuses"), run realign_script, then re-caption the clips it changed. A range ends right on its last word: with a pause after it, a breath of room; when the speaker runs straight on, no room at all (the cut sits in the dip right after the word, so none of the next word is heard). realign_script cuts this way; if a cut still catches the start of the next word, realign it. A range also never cuts a sentence off: if its last word leaves the speaker mid-phrase (a teaser whose caption ends "She hit me in the…" before "head"), read the transcript's words around the out point (read_transcript) and extend the clip, picture and sound together, to the end of that phrase, even past the Doc's last word, shifting everything after it by the same amount so nothing overlaps or gaps; then re-caption it, and don't run realign_script over it again (it would cut back to the Doc's word). Intro teasers above all: each is a complete thought.
-- Redactions and blurs in the footage are deliberate; never cover or move them. Subtitles are the exception: they stay bottom middle even where that overlaps a blur, never moved aside to dodge it (AFTER THE INTRO).
+- Redactions and blurs in the footage are deliberate; never cover or move them. Subtitles are the exception: they stay bottom middle even where that overlaps a blur, never moved aside to dodge it (AFTER THE INTRO); only a face moves them, and Edit does that itself (add_subtitles, place_subtitles).
 - VOICE-OVERS GENERATED IN EDIT (ElevenLabs, made when the script import finishes) arrive as audio media named "<project> (voice-over) - Cut-in N" and are laid on their cut-ins already (place_voiceovers did it); treat them like recorded ones.
 - FACTS: when the editing needs a fact (how a name is spelled, the date or exact place for a title or map_view, who the victim was, the charges or outcome for an outro), check the saved articles with case_articles (find "<name>") rather than guessing; the transcript and script come first, the articles fill what they don't say. If none are saved, research the case first.
 - MINORS' FACES are never shown: a minor's face in a photo, a news image or footage that doesn't already redact it gets a blur that follows the face: an adjustment over the shot's span (above the picture, beneath any text) {blur {radius ~35 at 1080p, shape ellipse}}, then track_region target "blur" with a box around the whole head (hair included); include its start, middle and end in the stage's review frames to see the face can't be recognised. A name or other detail that must not be read gets the same with shape rect.
@@ -656,11 +656,20 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "add_subtitles",
-            "Plain subtitles for everything said (Repack's style): bottom middle, no animation, no tracking, each line in its speaker's colour. Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words (in their other forms too: punched, hitting) are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and in every other text on the timeline; some are muted but stay readable. Replaces subtitles and mutes it made before in that span; a new subtitle over one moved, resized or keyframed by hand keeps that position and size (subtitles stay bottom middle even over a blur: move one only when the user asks). Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, and every mute (term, timeline time, starred).",
+            "Plain subtitles for everything said (Repack's style): bottom middle unless a face is there, no animation, no tracking, each line under its person's label and colour (one colour per person across the video). Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words (in their other forms too: punched, hitting) are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and in every other text on the timeline; some are muted but stay readable. Replaces subtitles and mutes it made before in that span, keeping the label and colour each voice's subtitles had (your relabels survive a re-run); a new subtitle over one moved, resized or keyframed by hand keeps that position and size. Then it moves any subtitle that would cover a face (found in the footage under it, cached per file) to the first clear place: bottom left or right, else top middle, left or right (place_subtitles; off_faces in the result). Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, every mute (term, timeline time, starred) and each person's colour.",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default: the end of the intro)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
                 "neglect": { "type": "boolean", "description": "A child abuse or neglect case: also mutes and stars hit, kick, punch, beat, slap, blood, etc. (and their forms: hitting, punched, beaten). Default false." }
+            }),
+            &[],
+        ),
+        tool(
+            "place_subtitles",
+            "Moves the edit's subtitles off faces, changing nothing else (text, timing, labels and colours stay): each subtitle stays bottom middle unless a face in the footage under it while it's up would be covered, then goes to the first clear place (bottom left, bottom right, top middle, top left, top right; the least covered when none is clear), staying beside the previous line while the face is still near so a conversation doesn't jump about. Faces come from Apple's Vision on the footage (two frames a second, cached per file: the first run on a 30-minute edit takes a minute or two, later ones are instant). Subtitles moved or keyframed by hand are left alone. add_subtitles already does this; use it on subtitles made before, or after footage moves. Seconds; default the whole timeline.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
+                "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." }
             }),
             &[],
         ),
@@ -2027,6 +2036,20 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 serde_json::to_string(&summary).unwrap_or_default()
             )))
         }
+        "place_subtitles" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let from = args["start"]
+                .as_f64()
+                .map_or(0, |seconds| (seconds * fps).round() as i64);
+            let to = args["end"]
+                .as_f64()
+                .map_or(live.project.duration(), |seconds| {
+                    (seconds * fps).round() as i64
+                });
+            let report = crate::faces::place_subtitles(app, &id, from, to).await?;
+            Ok(text(serde_json::to_string(&report).unwrap_or_default()))
+        }
         "set_segments" => {
             let live = store.get(&id).ok_or("project vanished")?;
             let fps = live.project.fps();
@@ -2653,6 +2676,7 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
         "batch",
         "caption_speakers",
         "add_subtitles",
+        "place_subtitles",
         "repack_subtitles",
         "watch_footage",
         "map_view",

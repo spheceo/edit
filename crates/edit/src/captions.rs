@@ -612,9 +612,16 @@ struct Adjusted {
 }
 
 /// `clip`'s hand adjustments, when it's a subtitle whose transform, width or
-/// size isn't what add_subtitles gives (`style`, `transform`), or that has keyframes.
-fn adjusted(clip: &Clip, style: &TextStyle, transform: &Transform) -> Option<Adjusted> {
+/// size isn't what add_subtitles gives (`style`, `transform`, or a place
+/// Edit moved it to off a face: `faces::placed_by_edit`), or that has keyframes.
+fn adjusted(
+    clip: &Clip,
+    style: &TextStyle,
+    transform: &Transform,
+    frame: (u32, u32),
+) -> Option<Adjusted> {
     let ClipContent::Text {
+        text,
         style: own,
         transform: placed,
         ..
@@ -622,7 +629,7 @@ fn adjusted(clip: &Clip, style: &TextStyle, transform: &Transform) -> Option<Adj
     else {
         return None;
     };
-    let changed = placed != transform
+    let changed = (placed != transform && !crate::faces::placed_by_edit(text, own, placed, frame))
         || own.max_width != style.max_width
         || own.size != style.size
         || !clip.keyframes.is_empty();
@@ -776,7 +783,7 @@ pub async fn subtitles(
                 .clips
                 .iter()
                 .filter(|clip| old.contains(&clip.id))
-                .filter_map(|clip| adjusted(clip, &style, &transform))
+                .filter_map(|clip| adjusted(clip, &style, &transform, (width, height)))
                 .collect();
             project.clips.retain(|clip| !old.contains(&clip.id));
             crate::subtitles::write_mutes(project, &house.mutes);
@@ -919,8 +926,15 @@ pub async fn subtitles(
             let people = crate::people::one_colour_per_person(project);
             Ok((placed, kept, texts, people))
         })?;
+    // Then off the faces under them (bottom middle unless one is there).
+    let faces = match crate::faces::place_subtitles(app, project_id, from, to).await {
+        Ok(report) => report,
+        Err(error) => json!({"error": error}),
+    };
+    let rev = app.store.get(project_id).map_or(live.rev, |live| live.rev);
     Ok(json!({
-        "rev": live.rev,
+        "rev": rev,
+        "off_faces": faces,
         "lines": said,
         "hidden": hidden,
         "placed": placed,
@@ -2025,7 +2039,8 @@ mod tests {
             adjusted(
                 &subtitle_clip(0, 30, placed, style.clone()),
                 &style,
-                &placed
+                &placed,
+                (1920, 1080)
             ),
             None
         );
@@ -2039,7 +2054,12 @@ mod tests {
             ..style.clone()
         };
         assert_eq!(
-            adjusted(&subtitle_clip(0, 30, placed, labelled), &style, &placed),
+            adjusted(
+                &subtitle_clip(0, 30, placed, labelled),
+                &style,
+                &placed,
+                (1920, 1080)
+            ),
             None
         );
         // Moved up off a blur, and another narrowed.
@@ -2058,7 +2078,7 @@ mod tests {
             subtitle_clip(300, 50, placed, style.clone()),
         ]
         .iter()
-        .filter_map(|clip| adjusted(clip, &style, &placed))
+        .filter_map(|clip| adjusted(clip, &style, &placed, (1920, 1080)))
         .collect();
         assert_eq!(old.len(), 2);
         // A new line over most of the first takes its place; mostly over the second, its width and size.

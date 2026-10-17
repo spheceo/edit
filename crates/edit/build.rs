@@ -15,6 +15,7 @@ fn main() {
             "Accelerate",
             "ImageIO",
             "CoreGraphics",
+            "Vision",
         ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }

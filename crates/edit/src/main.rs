@@ -11,6 +11,7 @@ mod drive;
 mod edit_plan;
 mod edit_review;
 mod export;
+mod faces;
 mod footage_search;
 mod graphics;
 mod guard;

@@ -266,7 +266,7 @@ fn frames(
 /// What to decode: the media's light preview (720p, made in the background
 /// for every video) when it's there, which is a fraction of the work of a
 /// full-resolution original and plenty for a box looked at 32 px wide.
-fn decode_source(path: &Path) -> PathBuf {
+pub(crate) fn decode_source(path: &Path) -> PathBuf {
     crate::tools::media_cache(path)
         // `media::Processor::paths`' name for it.
         .map(|dir| dir.join("preview-light.mp4"))

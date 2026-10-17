@@ -63,6 +63,7 @@ unsafe extern "C" {
         error: *mut c_char,
         capacity: usize,
     ) -> i32;
+    fn edit_reader_span(handle: *mut c_void, end: *mut f64, step: *mut f64);
     fn edit_reader_close(handle: *mut c_void);
     fn edit_sound_open(path: *const c_char, error: *mut c_char, capacity: usize) -> *mut c_void;
     fn edit_sound_close(handle: *mut c_void);
@@ -346,6 +347,15 @@ impl Reader {
             2 => Ok(false),
             _ => Err(message(&error)),
         }
+    }
+
+    /// Where the pictures end (seconds into the source) and one frame's
+    /// length: [`Reader::frame`] holds the last picture for any later time.
+    pub fn span(&self) -> (f64, f64) {
+        let (mut end, mut step) = (0.0, 0.0);
+        // Reads two fields of the handle this reader owns.
+        unsafe { edit_reader_span(self.handle.as_ptr(), &mut end, &mut step) };
+        (end, step)
     }
 }
 

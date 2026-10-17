@@ -1,8 +1,12 @@
 # Speed plan
 
+Cloud functionality remains required for every project. [New cloud-first opportunities](cloud-first-opportunities.md) explores independent ways to reduce work, move cloud transfers off the Mac, share source-time artifacts, compact subtitles and overlap delivery with rendering.
+
+Implementation review: [speed and subtitles audit](speed-subtitles-audit.md) (Oct 17). Read its corrections and revised order alongside this proposal: some items already exist, and several performance explanations and targets still need controlled measurements.
+
 Changes to make Edit much faster from import to export, more reliable, lighter on RAM and disk, and good over Tailscale. Numbers come from `~/.edit/logs/edit.log` (Oct 15–17) unless noted.
 
-Status: proposed. **Starts after the TS rewrite (`apps/server`) is done.** Server items land in `apps/server`, engine items in `crates/edit-engine` (the Rust that stays); nothing new goes into `crates/edit`. Each item is tagged *server* or *engine*.
+Status: proposed; Workers Paid is now available (confirmed by the user). **Desktop/server changes start after the TS rewrite (`apps/server`) is done.** The cloud rollout in section 7 can establish its relay foundation and isolated transfer tests independently; desktop integration lands in `apps/server`. Engine items land in `crates/edit-engine` (the Rust that stays); nothing new goes into `crates/edit`. Cloud items land in `apps/relay`, reusing R2 and the existing Convex registry.
 
 ## 0. First: media back on the internal disk
 
@@ -26,7 +30,7 @@ The biggest finding: exports aren't slow because of the export pipeline; other w
 | # | Change | Why | Done when |
 |---|---|---|---|
 | 2.1 | *server* **Measure the agent's time first.** Log Codex's token usage per turn (input read, reasoning, output written) and the time between tool calls. If output dominates, make the plan format terser; if reasoning does, use lower effort for the mechanical stages. | Turns log only how long they took, so the ~3.5 h of model time is a guess. | Every turn's log line has its tokens. |
-| 2.2 | *engine + server* **Smoothing on Video Toolbox, automatic, at render time.** Replace FFmpeg `minterpolate` (`crates/edit/src/broll.rs:316`) with `VTFrameProcessor` frame rate conversion in `mac_media.m`. Smoothing becomes a render-time effect of a slowed clip, not a media file swapped in: cached by (media, source range plus a margin, speed), so a re-trim within the margin reuses it. Every slowed cut-in shot is smoothed by Edit itself in the background (lowest priority, 1.1). FFmpeg only as a fallback. The agent stops calling `smooth_slow_motion`. | 124 calls; 18 renders averaging 77 min; 23 CPU-hours. Today a re-trim throws away a finished render: three were discarded after minutes of work ("changed while smoothing"). Slowed footage is almost always wanted smooth, so it stays on. | Benchmark on a Mom & Teen shot first; a shot smooths in seconds; a re-trim doesn't smooth again. |
+| 2.2 | *engine + server* **Smoothing on Video Toolbox, automatic, at render time.** Replace FFmpeg `minterpolate` (`crates/edit/src/broll.rs:316`) with `VTFrameProcessor` frame rate conversion in `mac_media.m`. Smoothing becomes a render-time effect of a slowed clip, not a media file swapped in: cached by (media, source range plus a margin, speed), so a re-trim within the margin reuses it. Every slowed cut-in shot is smoothed by Edit itself in the background (lowest priority, 1.1). FFmpeg only as a fallback. The agent stops calling `smooth_slow_motion`. | 124 calls; 18 renders averaging 77 min; 23 CPU-hours. Today a re-trim throws away a finished render: three were discarded after minutes of work ("changed while smoothing"). Slowed footage is almost always wanted smooth, so it stays on: decided by the user (Oct 17), kept over the audit's "don't smooth every slowed shot". Shots with a cut inside are skipped. | Benchmark on a Mom & Teen shot first; a shot smooths in seconds; a re-trim doesn't smooth again. |
 | 2.3 | *server* **Seats cache reads back.** | `repack_subtitles` 13 min per call, paying Gemini every time. | In progress. |
 | 2.4 | *server* **Watch footage at import**, in the background. | `watch_footage` 6 min per call; 150 windows at ~94 s each. | The agent never waits on it. |
 | 2.5 | *server* **One look per stage, enforced.** The plan's `review_frames` is the look; mechanical checks come from the audit. | `contact_sheet` 96 calls, `render_frame` 72. | Under ~10 renders per edit. |
@@ -55,7 +59,7 @@ The biggest finding: exports aren't slow because of the export pipeline; other w
 | 4.4 | *engine* **Faster hand-off to the encoder.** Convert to NV12 on the GPU and write into IOSurface pixel buffers (skip the CPU copy, 8 MB → 3 MB per 1080p frame); replace the 1 ms sleep-poll in `edit_writer_frame` (`mac_media.m:682`). | 12.5 of 27 min of the 32-minute export waited on encoding (part of it contention, 1.1). | Wait on encoding near zero. |
 | 4.5 | *engine* **Skip footage hidden under full-frame B-roll.** | 20–40% of decode work. | In progress. |
 | 4.6 | *engine* **Prefetch cloud originals** ahead of the decoders. | 24 fps from R2 against 55 locally; 8 min waiting on decoding. | Within ~20% of local. |
-| 4.7 | *server* **Normal edits aren't uploaded to Drive; they're downloaded.** Drive only for subtitled videos (Repack's folder, for now). Every project gets an exports list that survives restarts, each with a download button (works on the Mac and over Tailscale), and old exports can be deleted from it. | Today every full-length export uploads (`crates/edit/src/drive.rs:73`): 19 uploads took 52 min. The download (`crates/edit/src/server.rs:1808`) only knows exports from the current session, so it's gone after a restart. | A normal export is ready to download the moment it finishes. |
+| 4.7 | *server + relay* **Normal edits aren't uploaded to Drive; they're downloaded.** Decided by the user (Oct 17), kept over the audit's "preserve Drive delivery". Only subtitled videos go to Drive (Repack's folder, for now; section 7.5 can move that upload to a cloud job once the export is in R2). Every project gets an exports list that survives restarts, each with a local and a cloud (R2) download link (on the Mac and over Tailscale), and old exports can be deleted from it. File-ready, cloud-ready and Drive-ready are tracked separately. | Today every whole video export uploads to Drive, not only subtitled ones (`apps/server/src/drive.ts:79` `wanted`), and a re-export replaces the Drive file (PATCH). Downloads only know the current session's exports (`apps/server/src/exports.ts:34`). | A normal export is ready to download the moment it finishes; export records survive restarts. |
 
 ## 5. Remote and browser (Tailscale)
 
@@ -72,13 +76,44 @@ The biggest finding: exports aren't slow because of the export pipeline; other w
 | 6.1 | *engine* **Compact project JSON** on disk and in history. | 2.1 MB pretty against ~1.2 MB compact; 127 MB of history. |
 | 6.2 | **Drop the Intel build** if no one uses an Intel Mac. | Halves release CI. |
 
-## Order (once the rewrite is done)
+## 7. Workers Paid rollout: move suitable work off the Mac
+
+**Decision:** use the now-available Workers Paid account for durable transfers and external-service orchestration. Cloud support stays on for every project. This is planned work, not a claim that the new services have been deployed or credentials configured.
+
+### Foundation and implementation order
+
+1. **7.1 — Shared cloud job foundation and Drive → R2.** Extend `apps/relay` with Cloudflare Workflows and authenticated start/status/cancel endpoints. Jobs carry a stable ID, source version, operation/settings fingerprint, progress, attempts and result manifest. Stream bounded Drive ranges into R2 multipart uploads; persist upload IDs and completed-part metadata, never media bytes in Workflow state. Reuse the current cloud registry for lookup/status, with one authoritative owner for each state. Configure cloud-side Google OAuth secrets and verify source-file permissions/scopes. Deduplicate repeated submissions, detect source changes, reconcile uncertain completion and clean up abandoned uploads. First prove completion with the Mac disconnected, interruption recovery and verified output on a representative large source; then replace `cloud_media.ts::streamDrive` in the Bun import path.
+2. **7.2 — Direct cloud playback and downloads.** Authorise access through the relay; remote browsers fetch uploaded immutable proxies/audio/exports from R2 using short-lived access. Editing commands stay on the Mac/Tailscale. Retain local desktop reads and host fallback for unpublished artifacts. Verify range seeks, CORS/WebGPU access, expired-access refresh and A/V sync while the Mac exports. Measure playback stalls and host outbound bandwidth.
+3. **7.3 — Durable voice generation and transcription.** Extend existing ElevenLabs relay routes into jobs that store generated takes/transcripts in R2 before reporting success. Reuse completed takes and schedule their transcription. The Mac prepares necessary audio inputs once and downloads results needed for playback/export. Persist provider operation IDs where available; reconcile retries to avoid duplicate paid work. Test reconnect, cancellation and interruption between provider completion and result publication.
+4. **7.4 — Footage-watch jobs and shared analysis.** Upload small analysis clips once; run external Gemini requests/retries from cloud jobs and publish versioned results directly to R2. Keep clip cutting, audio extraction and native visual analysis on the Mac initially. Use artifact keys covering source/version/range, model/prompt/settings and relevant evidence revision. Coordinate claims with leases/fencing so concurrent projects or machines reuse one result and stale workers cannot overwrite newer output. Preserve human corrections. Validate bounded request-payload memory, attribution quality, cache reuse and recovery with two consumers requesting the same artifact.
+5. **7.5 — R2 → Drive delivery.** Once the complete export is verified in R2, a job performs resumable Drive upload, permissions and delivery-status updates. Persist the session and destination file ID; retries must not create duplicate deliveries or let an older export replace a newer one. Keep required delivery destinations. Initially upload the finished local export to R2; overlapping upload with rendering remains a separate experiment requiring immutable output fragments/compatible packaging. Measure the complete path to Drive-ready so an extra staging hop does not masquerade as a speedup.
+6. **7.6 — Research and metadata preparation.** Fetch script documents, Drive metadata, ordinary article text and research assets as reusable project jobs. Bound payloads, concurrency and retries; cache by source/version where possible. Begin with ordinary HTTP retrieval. Browser automation is a separate later capability and budget decision.
+
+### Execution boundary
+
+Workers coordinate external AI calls; they do not run ElevenLabs/Gemini models themselves. Keep encoding, optical flow, GPU compositing, audio mixing, proxy generation and Apple's face detection in the native Mac engine. Standard Workers are not a replacement for native media hardware. Do not add a second database or a separately billed compute/browser service just to implement this rollout; reuse the existing infrastructure first.
+
+### Budget and observability
+
+Target the **US$5/month Workers base allowance**, shared with existing account workloads, rather than promising a fixed total bill. Pricing checked Oct 17: 10 million monthly requests, 30 million CPU milliseconds, 500,000 Workflow steps and 1 GB-month of Workflow state are included; network/API waiting does not count as CPU time. The subscription has overage billing, not a hard $5 cap. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [Workflows pricing](https://developers.cloudflare.com/workflows/reference/pricing/).
+
+R2 storage/operations, model providers, existing Convex/Drive plans and any later browser/compute service remain separate costs. Store media in R2, keep job state small, expire completed-job metadata appropriately, bound logs/retries/concurrency and expose account usage plus per-project transfer/model costs. Add usage alerts and configurable job admission limits before broad rollout; alerts alone are not a spending cap. Measure actual CPU, steps and retained state in the pilot before claiming the full rollout fits the allowance.
+
+### Acceptance across the rollout
+
+Measure time from import request to editable, correct subtitles, final file, cloud-ready and required Drive-ready; also measure Mac peak memory, temporary disk usage and bytes transferred. Cloud-ready work must survive a Mac disconnect, duplicate submissions and worker retries. Pin results to source/project revisions and publish only complete verified artifacts. Keep the existing path available during pilot rollout; compare identical inputs and required outputs, including provider charges and any extra R2 staging.
+
+## Order
+
+The cloud workstream starts with **7.1**, then **7.2 → 7.3 → 7.4 → 7.5 → 7.6**, measuring after each. Relay-only preparation can precede the TS switch; new desktop integration belongs in Bun. It complements the native performance work below rather than requiring the entire engine roadmap first.
+
+Desktop/engine sequence (after the rewrite):
 
 1. 0.1 media back on the internal disk (can happen any time: it's a move, not code)
 2. 1.1 the scheduler, 2.1 measure the agent's time
 3. 2.2 smoothing on Video Toolbox, at render time (benchmark first)
 4. 4.1 fast sound, 4.3 no join
-5. 4.7 downloads instead of Drive, 3.7 cache cleanup
+5. 4.7 downloads instead of Drive for normal edits, exports list, 3.7 cache cleanup
 6. 4.2 chunked exports, 1.2 jobs survive restarts
 7. 3.1 script import in parallel, 3.2 one decode per file, 3.3 free waveform, 3.4 preview copies
 8. 5.1 + 5.2 patches and compression

@@ -1,5 +1,7 @@
 # One subtitles system for edits and subtitle videos
 
+Implementation review: [speed and subtitles audit](speed-subtitles-audit.md) (Oct 17). It expands the timing fix to both subtitle modes and proposes versioned source evidence, project-pinned casts, and fixtures before migration; agreement and image similarity must not be treated as identity certainty.
+
 Status: proposed (Oct 17). Lands after the TS rewrite, in `apps/server` (with the model change in `edit-core`).
 
 ## What must never happen

@@ -858,6 +858,94 @@ type Seen = Segment & { note: string };
  * overlaps, gaps filled as footage, slivers under `shortest` frames given to
  * a neighbour, and neighbours of one kind joined. All footage is none.
  */
+/** A word said on the timeline (frames), and whether the narrator says it. */
+export interface Heard {
+  start: number;
+  end: number;
+  /** Its voice is the narrator's (the transcript's role). */
+  narrator: boolean;
+  /**
+   * And the watch saw that voice as the off-screen narrator in this very
+   * window: diarisation often gives a person in the room the narrator's voice
+   * (an undersheriff, a mother in cuffs), and only the picture tells them apart.
+   */
+  seen: boolean;
+}
+
+/**
+ * The watch's segments held to who is heard (the transcript's voices): the
+ * model's narration stretches are guesses and move between runs (one marked
+ * 18 s of an agent and the suspect talking as narration, so none of it was
+ * subtitled, and missed the narration just before it). A narration stretch
+ * where the room does almost all the talking is footage; a long narrator
+ * monologue in footage (6 s and 15 words or more, nobody else talking), by a
+ * voice the watch saw as the narrator in that window (`Heard.seen`), is
+ * narration, edge to edge with the words around it. Then `normalize` again.
+ */
+export function voicedSegments(given: Seen[], said: Heard[], duration: number, fps: number): Seen[] {
+  if (given.length === 0 || said.length === 0) return given;
+  const kinds: Seen["kind"][] = new Array(duration).fill("footage");
+  const notes: string[] = new Array(duration).fill("");
+  for (const segment of given) {
+    for (let f = Math.max(segment.start, 0); f < Math.min(segment.end, duration); f++) {
+      kinds[f] = segment.kind;
+      notes[f] = segment.note;
+    }
+  }
+  const words = [...said].sort((a, b) => a.start - b.start);
+  // Narration nobody narrates: footage.
+  for (const segment of given) {
+    if (segment.kind !== "narration") continue;
+    const inside = words.filter((word) => word.start >= segment.start && word.start < segment.end);
+    const narrated = inside.filter((word) => word.narrator).length;
+    const room = inside.length - narrated;
+    if (room >= 8 && room >= 4 * narrated) {
+      for (let f = Math.max(segment.start, 0); f < Math.min(segment.end, duration); f++) {
+        kinds[f] = "footage";
+        notes[f] = "";
+      }
+    }
+  }
+  // The narrator's monologues in footage: narration.
+  const gap = Math.round(1.5 * fps);
+  let i = 0;
+  while (i < words.length) {
+    if (!words[i]!.seen) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < words.length && words[j + 1]!.seen && words[j + 1]!.start - words[j]!.end <= gap) j += 1;
+    const run = words.slice(i, j + 1);
+    const start = run[0]!.start;
+    const end = run.reduce((last, word) => Math.max(last, word.end), start);
+    if (end - start >= 6 * fps && run.length >= 15) {
+      // Edge to edge with the room's words around it.
+      const before = words.slice(0, i).reduce((last, word) => (word.narrator ? last : Math.max(last, word.end)), 0);
+      const after = words.slice(j + 1).find((word) => !word.narrator)?.start ?? duration;
+      const from = Math.max(start - Math.round(0.25 * fps), before, 0);
+      const to = Math.min(end + Math.round(0.25 * fps), after, duration);
+      let inFootage = 0;
+      for (let f = from; f < to; f++) if (kinds[f] === "footage") inFootage += 1;
+      if (inFootage * 2 > to - from) {
+        for (let f = from; f < to; f++) {
+          if (kinds[f] !== "footage") continue;
+          kinds[f] = "narration";
+          notes[f] = "the narrator (heard)";
+        }
+      }
+    }
+    i = j + 1;
+  }
+  const out: Seen[] = [];
+  for (let f = 0; f < duration; f++) {
+    const last = out[out.length - 1];
+    if (last !== undefined && last.kind === kinds[f] && last.end === f) last.end = f + 1;
+    else out.push({ start: f, end: f + 1, kind: kinds[f]!, note: notes[f]! });
+  }
+  return normalize(out, duration, Math.round(fps));
+}
+
 export function normalize(given: Segment[], duration: number, shortest: number): Seen[] {
   const seen = given.map((segment) => ({ ...segment, note: segment.note ?? "" })).sort((a, b) => a.start - b.start);
   let out: Seen[] = [];
@@ -1304,7 +1392,38 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
       }
     });
   }
-  const segments = setSegments ? normalize(seen, duration, toI64(round(fps))) : [];
+  let segments = setSegments ? normalize(seen, duration, toI64(round(fps))) : [];
+  if (setSegments) {
+    // Held to who is heard, as the transcripts now say (corrections and cast in).
+    const heard: Heard[] = [];
+    for (const part of parts) {
+      const media = mediaOf(project, part.media);
+      if (media === undefined) continue;
+      let transcript: Transcript | undefined = transcripts.get(part.media);
+      try {
+        transcript = parseTranscript(fs.readFileSync(app.media.paths(media.path).transcript, "utf8"));
+      } catch {
+        // As read before the corrections.
+      }
+      if (transcript === undefined) continue;
+      const roles = transcript.roles ?? {};
+      // Where the watch saw each voice as the narrator: its windows (the file's seconds).
+      const narrated = sightings.filter((one) => one.media === part.media && one.role === "narrator");
+      for (const use of part.uses) {
+        const from = use.source_in;
+        const to = use.source_in + ((use.end - use.start) / fps) * use.speed;
+        for (const word of transcript.words) {
+          if (word.start < from || word.start >= to || word.speaker === undefined || word.speaker === null) continue;
+          const at = (t: number) => toI64(round((use.start / fps + (t - use.source_in) / use.speed) * fps));
+          const narrator = roles[word.speaker] === "narrator";
+          const voice = word.speaker;
+          const seenAs = narrator && narrated.some((one) => one.voice === voice && word.start >= one.from && word.start < one.to);
+          heard.push({ start: at(word.start), end: at(word.end), narrator, seen: seenAs });
+        }
+      }
+    }
+    segments = voicedSegments(segments, heard, duration, fps);
+  }
   let rev: number;
   if (setSegments) {
     const written = segments.map((segment) => {

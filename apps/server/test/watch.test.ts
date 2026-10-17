@@ -26,6 +26,7 @@ import {
   windows,
   LONGEST,
   type Answer,
+  voicedSegments,
 } from "../src/watch.ts";
 import { fixtureHome, scratch, write } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
@@ -419,4 +420,36 @@ test("a gateway that refuses says why, and the window's failure is the watch's e
     tools.forget();
     cleanup();
   }
+});
+
+test("segments are held to who is heard: talk marked narration is footage, a narrator's monologue in footage is narration", () => {
+  const fps = 30;
+  const s = (seconds: number) => Math.round(seconds * fps);
+  // 0–60 s: the room talks 0–20, the narrator 22–40 (marked footage), the room 42–60 (marked narration).
+  const heard = [
+    ...Array.from({ length: 30 }, (_, n) => ({ start: s(n * 0.6), end: s(n * 0.6 + 0.4), narrator: false, seen: false })),
+    ...Array.from({ length: 40 }, (_, n) => ({ start: s(22 + n * 0.45), end: s(22 + n * 0.45 + 0.35), narrator: true, seen: true })),
+    ...Array.from({ length: 25 }, (_, n) => ({ start: s(42 + n * 0.7), end: s(42 + n * 0.7 + 0.5), narrator: false, seen: false })),
+  ];
+  const given = [
+    { start: 0, end: s(41), kind: "footage" as const, note: "" },
+    { start: s(41), end: s(60), kind: "narration" as const, note: "narrator over B-roll" },
+  ];
+  const out = voicedSegments(given, heard, s(60), fps);
+  const narration = out.filter((segment) => segment.kind === "narration");
+  expect(narration.length).toBe(1);
+  // Edge to edge with the room: from the room's last word before to its first after.
+  expect(narration[0]!.start).toBeGreaterThanOrEqual(s(17.8));
+  expect(narration[0]!.start).toBeLessThanOrEqual(s(22));
+  expect(narration[0]!.end).toBeGreaterThanOrEqual(s(39.9));
+  expect(narration[0]!.end).toBeLessThanOrEqual(s(42));
+  // A short narrator line in the room's talk is left alone (narratorsInFootage decides it).
+  const short = voicedSegments(given.slice(0, 1).concat([{ start: s(41), end: s(60), kind: "footage", note: "" }]), [
+    ...heard.slice(0, 30),
+    ...Array.from({ length: 6 }, (_, n) => ({ start: s(22 + n * 0.4), end: s(22 + n * 0.4 + 0.3), narrator: true, seen: true })),
+  ], s(60), fps);
+  expect(short.filter((segment) => segment.kind === "narration")).toEqual([]);
+  // A narrator's voice the watch saw as someone in the room (diarisation lumped them in): left alone.
+  const lumped = heard.map((word) => ({ ...word, seen: false }));
+  expect(voicedSegments(given.slice(0, 1), lumped, s(41), fps).filter((segment) => segment.kind === "narration")).toEqual([]);
 });

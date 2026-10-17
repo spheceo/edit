@@ -150,7 +150,7 @@ export function start(home: string, host: string | null, port: number): { app: A
     port,
     allowedHosts: allowedHosts({ host, tailscale: [ip, tailscaleName()] }),
     machine: hostname() ?? "this machine",
-    services: { exports: new ExportRegistry(), updater: new update.Updater(home) },
+    services: { exports: new ExportRegistry(home), updater: new update.Updater(home) },
   });
   // Smoothing waits while an export runs (previews and proxies do in the addon).
   pauseForExports(() => app.exports.running());

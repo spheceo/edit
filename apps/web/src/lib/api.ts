@@ -131,6 +131,20 @@ export interface FoundArticle {
   text: string;
 }
 
+/** A finished export of a project (apps/server/src/exports.ts ExportRecord). */
+export interface ExportRecord {
+  path: string;
+  name: string;
+  finished_ms: number;
+  seconds: number;
+  bytes: number | null;
+  frames: number;
+  whole: boolean;
+  format: string;
+  /** Its file is gone from the machine. */
+  missing: boolean;
+}
+
 export const api = {
   projects: () => request<{ projects: ProjectSummary[] }>("GET", "/api/projects"),
   createProject: (body: { name: string; style: Style; width: number; height: number; fps: number }) =>
@@ -170,6 +184,10 @@ export const api = {
   /** Uploads a finished export of a subtitled video to Drive again. */
   driveUpload: (id: string, path: string) => request<{ ok: boolean }>("POST", `/api/projects/${id}/drive`, { path }),
   revealExport: (path: string) => request<{ ok: boolean }>("POST", "/api/exports/reveal", { path }),
+  /** The project's exports on the machine running Edit, newest first. */
+  exports: (id: string) => request<ExportRecord[]>("GET", `/api/projects/${id}/exports`),
+  /** Deletes one of them (its file too); the list after. */
+  deleteExport: (id: string, path: string) => request<ExportRecord[]>("POST", `/api/projects/${id}/exports/delete`, { path }),
   transcribe: (id: string, media: string) => request<{ status: MediaStatus }>("POST", `/api/projects/${id}/media/${media}/transcribe`),
   transcript: (id: string, media: string) => request<Transcript>("GET", `/api/projects/${id}/media/${media}/transcript`),
   cancelExport: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/export/cancel`),

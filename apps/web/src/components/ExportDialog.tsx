@@ -1,8 +1,8 @@
-import { Check, ChevronDown, CircleAlert, Cloud, CloudUpload, Copy, Download, ExternalLink, FolderOpen, ListOrdered, RotateCw } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, Cloud, CloudUpload, Copy, Download, ExternalLink, FolderOpen, ListOrdered, RotateCw, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { api, useMachine } from "../lib/api";
+import { api, useMachine, type ExportRecord } from "../lib/api";
 import { copyDriveLink, driveFolder, openDrive, uploadsToDrive, useDriveLink } from "../lib/drive";
 import { projectDuration } from "../lib/edit";
 import {
@@ -414,12 +414,13 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
             </Field>
             {toDrive && (
               <p className="-mt-2 flex items-center gap-1.5 text-[11px] text-faint">
-                <Cloud size={12} className="shrink-0" /> Then it uploads to the team's {project ? driveFolder(project) : "Render"} folder on Drive, viewable by anyone with the link.
+                <Cloud size={12} className="shrink-0" /> Then it uploads to the team's {driveFolder(project)} folder on Drive, viewable by anyone with the link.
               </p>
             )}
           </div>
         </div>
 
+        <ExportsList projectId={project.id} machine={machine} finished={exportState?.state === "done" ? exportState.path : null} />
         <DriveRow
           state={driveState}
           drive={drive}
@@ -480,6 +481,76 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
         </div>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * The project's exports on the machine running Edit, newest first (they
+ * survive a restart): each downloads to this device (the Mac, or another
+ * over Tailscale), shows in Finder there, or is deleted, after a second click.
+ */
+function ExportsList({ projectId, machine, finished }: { projectId: string; machine: string; finished: string | null }) {
+  const [list, setList] = useState<ExportRecord[] | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const toast = useEditor((state) => state.toast);
+  useEffect(() => {
+    let live = true;
+    void api
+      .exports(projectId)
+      .then((given) => live && setList(given))
+      .catch(() => live && setList([]));
+    return () => {
+      live = false;
+    };
+  }, [projectId, finished]);
+  const shown = (list ?? []).filter((one) => !one.missing);
+  if (shown.length === 0) return null;
+  return (
+    <div className="border-t border-line px-6 py-3">
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">Exports on {machine}</div>
+      <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+        {shown.map((one) => (
+          <li key={one.path} className="flex items-center gap-2 text-[12px]">
+            <span className="min-w-0 flex-1 truncate text-fg" title={one.path}>
+              {one.name}
+            </span>
+            <span className="shrink-0 tabular text-faint">
+              {new Date(one.finished_ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+              {one.bytes ? ` · ${formatBytes(one.bytes)}` : ""}
+            </span>
+            <a href={`/api/exports/file?path=${encodeURIComponent(one.path)}`} download title="Download to this device">
+              <Button size="sm" variant="ghost">
+                <Download size={13} />
+              </Button>
+            </a>
+            <Button size="sm" variant="ghost" title={`Show on ${machine}`} onClick={() => void api.revealExport(one.path).catch((error) => toast((error as Error).message, "error"))}>
+              <FolderOpen size={13} />
+            </Button>
+            {confirming === one.path ? (
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() =>
+                  void api
+                    .deleteExport(projectId, one.path)
+                    .then((after) => {
+                      setList(after);
+                      setConfirming(null);
+                    })
+                    .catch((error) => toast((error as Error).message, "error"))
+                }
+              >
+                Delete file
+              </Button>
+            ) : (
+              <Button size="sm" variant="ghost" title="Delete this export" onClick={() => setConfirming(one.path)}>
+                <Trash2 size={13} />
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
+import { deleteExport, listExports } from "./exports.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -63,7 +64,9 @@ export function buildRouter(): Router<App> {
     .get("/api/projects/{id}/media/{media}/{kind}", mediaFile)
     .get("/api/projects/{id}/frame/{frame}", framePng)
     .post("/api/projects/{id}/export", startExport)
-    .post("/api/projects/{id}/export/cancel", cancelExport);
+    .post("/api/projects/{id}/export/cancel", cancelExport)
+    .get("/api/projects/{id}/exports", projectExports)
+    .post("/api/projects/{id}/exports/delete", deleteProjectExport);
   router
     .get("/api/export/encoders", exportEncoders)
     .get("/api/exports/file", exportedFile)
@@ -755,6 +758,23 @@ async function exportEncoders({ app }: Context): Promise<Response> {
   } catch {
     return json({ videotoolbox: false, hevc: false, prores: false, mp3: false });
   }
+}
+
+/** The project's exports, newest first (this machine's: each downloads from Edit, on the Mac or over Tailscale). */
+function projectExports({ app, params }: Context): Response {
+  return json(listExports(app.store.home, params.id!));
+}
+
+/** Deletes one of the project's exports (its file and its place on the list). */
+async function deleteProjectExport(context: Context): Promise<Response> {
+  const given = await body(context);
+  const path = field<string>(given, "path", "string", true);
+  try {
+    deleteExport(context.app.store.home, context.params.id!, path);
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
+  return json(listExports(context.app.store.home, context.params.id!));
 }
 
 /** A finished export, downloaded to the device the editor is open on. */

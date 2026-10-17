@@ -6,11 +6,12 @@
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
-import { ioMessage } from "./files.ts";
+import { ioMessage, nowMs, writeAtomic } from "./files.ts";
 import { catchBugsAsync } from "./guard.ts";
 import type { ExportOptions, Project } from "./model.ts";
 import { native, type ExportJob } from "./native/index.ts";
 import { canonical, fileName, join, parent } from "./paths.ts";
+import { duration } from "./project.ts";
 import { fixed, jsonForSerde } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Store } from "./store.ts";
@@ -24,14 +25,94 @@ interface Running {
   job: ExportJob | null;
 }
 
+/**
+ * A finished export, kept per project in `<home>/exports.json` (this
+ * machine's files, never shared): the project's exports list, with a
+ * download (on the Mac or over Tailscale) and a delete each, survives a
+ * restart. A normal edit isn't uploaded anywhere; this is how it's handed out.
+ */
+export interface ExportRecord {
+  path: string;
+  name: string;
+  finished_ms: number;
+  /** How long it took (seconds). */
+  seconds: number;
+  bytes: number | null;
+  /** Frames exported, and whether that was the whole edit. */
+  frames: number;
+  whole: boolean;
+  format: string;
+}
+
+/** How many exports a project keeps listed (the oldest drop off the list; their files stay). */
+const KEEP_LISTED = 30;
+
+function recordsFile(home: string): string {
+  return join(home, "exports.json");
+}
+
+function readRecords(home: string): Record<string, ExportRecord[]> {
+  try {
+    const value = JSON.parse(fs.readFileSync(recordsFile(home), "utf8")) as unknown;
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, ExportRecord[]>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeRecords(home: string, records: Record<string, ExportRecord[]>): void {
+  writeAtomic(recordsFile(home), JSON.stringify(records, null, 1));
+}
+
+/** Project `id`'s exports, newest first, each saying whether its file is still there. */
+export function listExports(home: string, id: string): (ExportRecord & { missing: boolean })[] {
+  return [...(readRecords(home)[id] ?? [])]
+    .reverse()
+    .map((record) => ({ ...record, missing: !fs.existsSync(record.path) }));
+}
+
+function remember(home: string, id: string, record: ExportRecord): void {
+  const records = readRecords(home);
+  const own = (records[id] ?? []).filter((one) => one.path !== record.path);
+  own.push(record);
+  records[id] = own.slice(Math.max(own.length - KEEP_LISTED, 0));
+  writeRecords(home, records);
+}
+
+/** Whether `path` is one of the listed exports (of any project). */
+export function listed(home: string, path: string): boolean {
+  return Object.values(readRecords(home)).some((own) => own.some((record) => record.path === path));
+}
+
+/**
+ * Deletes one of project `id`'s listed exports: its file and its place on
+ * the list. Only a listed export's file is ever deleted.
+ */
+export function deleteExport(home: string, id: string, path: string): void {
+  const records = readRecords(home);
+  const own = records[id] ?? [];
+  if (!own.some((record) => record.path === path)) throw new Error("not one of this project's exports");
+  try {
+    fs.rmSync(path, { force: true });
+  } catch (error) {
+    throw new Error(`${path}: ${ioMessage(error)}`);
+  }
+  records[id] = own.filter((record) => record.path !== path);
+  writeRecords(home, records);
+  diag.info("export", `${id}: deleted the export ${path}`);
+}
+
 export class ExportRegistry implements seams.Exports {
   private jobs = new Map<string, Running>();
   /** Files exported since the server started, newest last: the only ones it hands out or reveals. */
   private finished: string[] = [];
 
-  /** Whether `path` is a file this server exported (and so may be downloaded or revealed). */
+  /** The data folder whose exports list this keeps (`<home>/exports.json`); none in some tests. */
+  constructor(private readonly home: string | null = null) {}
+
+  /** Whether `path` is a file this server exported, now or before a restart (and so may be downloaded or revealed). */
   exported(path: string): boolean {
-    return this.finished.includes(path);
+    return this.finished.includes(path) || (this.home !== null && listed(this.home, path));
   }
 
   running(): boolean {
@@ -184,6 +265,20 @@ export class ExportRegistry implements seams.Exports {
         bytes = null;
       }
       emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload });
+      try {
+        remember(this.home ?? store.home, id, {
+          path: output,
+          name: fileName(output) ?? output,
+          finished_ms: nowMs(),
+          seconds: took / 1000,
+          bytes,
+          frames,
+          whole: plan.start === 0 && plan.end >= duration(project),
+          format: options.format,
+        });
+      } catch (error) {
+        diag.warn("export", `couldn't list ${output}: ${diag.messageOf(error)}`);
+      }
     } else if (running.cancelled) {
       diag.info("export", `${project.name} export cancelled`);
       emit("cancelled", 0, { error: result.error });

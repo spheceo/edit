@@ -43,7 +43,11 @@ test.skipIf(!fs.existsSync(SERVER_RS))("every route in server.rs's router is ser
   const cloudRouter = cloud.slice(cloud.indexOf("pub fn routes()"));
   const expected = [...rustRoutes(router), ...rustRoutes(cloudRouter.slice(0, cloudRouter.indexOf("\n}\n") + 3))];
   expect(expected.length).toBeGreaterThan(70);
-  const served = buildRouter().list();
+  // Routes added after the switch-over to this server, which server.rs never had.
+  const sinceRust = ["GET /api/projects/{id}/exports", "POST /api/projects/{id}/exports/delete"];
+  const served = buildRouter()
+    .list()
+    .filter((route) => !sinceRust.includes(route));
   expect(served.filter((route) => !expected.includes(route))).toEqual([]);
   expect(expected.filter((route) => !served.includes(route))).toEqual([]);
 });

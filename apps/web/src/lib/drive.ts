@@ -1,4 +1,5 @@
-// An edit's export on the team's Drive (subtitled videos in Subtitles, the rest in Render) (crates/edit/src/drive.rs):
+// A subtitled video's export on the team's Drive (Repack's Subtitles folder) (apps/server/src/drive.ts);
+// a normal edit isn't uploaded: it's downloaded from the project's exports.
 // the link a project keeps, checked against Drive when it's shown.
 
 import { useEffect, useState } from "react";
@@ -16,13 +17,18 @@ export function isSubtitled(project: Project) {
   return project.clips.some(subtitle) && project.clips.every((clip) => subtitle(clip) || footage(clip));
 }
 
-/** Whether an export goes to Drive too: all of the edit, as MP4 or MOV (as drive::wanted). */
-export function uploadsToDrive(_project: Project, format: Format, range: [number, number], duration: number) {
-  return (format === "h264" || format === "hevc" || format === "prores") && range[0] === 0 && range[1] >= duration && duration > 0;
+/** A subtitled video: only footage and subtitles, or Repack-style subtitles (no label) in it (as drive.ts subtitleVideo). */
+export function subtitleVideo(project: Project) {
+  return isSubtitled(project) || project.clips.some((clip) => clip.type === "text" && (clip.name ?? "").startsWith("Subtitle · ") && !clip.style.label);
 }
 
-/** The Drive folder a project's exports go to (as drive::folder). */
-export const driveFolder = (project: Project) => (isSubtitled(project) ? "Subtitles" : "Render");
+/** Whether an export goes to Drive too: all of a subtitled video, as MP4 or MOV (as drive.ts wanted). */
+export function uploadsToDrive(project: Project, format: Format, range: [number, number], duration: number) {
+  return subtitleVideo(project) && (format === "h264" || format === "hevc" || format === "prores") && range[0] === 0 && range[1] >= duration && duration > 0;
+}
+
+/** The Drive folder a subtitled video's exports go to. */
+export const driveFolder = (_project: Project) => "Subtitles";
 
 /** Files asked about this session: the server checks Drive at most every few minutes anyway. */
 const asked = new Set<string>();

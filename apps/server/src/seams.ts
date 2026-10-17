@@ -370,6 +370,12 @@ export interface SubtitlesSeam {
   tokens(text: string): string[];
   uncram(lines: Line[]): void;
   writeMutes(project: Project, mutes: ClipMutes): void;
+  /**
+   * The subtitles package's routes (`/api/projects/{id}/repack-subtitles`,
+   * `/api/projects/{id}/media/{media}/speakers`), registered on the router.
+   * Its MCP tools register when the package loads (any use of this file).
+   */
+  routes(router: import("./http/router.ts").Router<App>): void;
 }
 
 /** One person on screen across the whole video, for `distinct` (speakers.rs Person). */
@@ -389,6 +395,8 @@ export interface SpeakersSeam {
   ensure(app: App, source: string): void;
   roleTitle(role: string): string;
   setRole(app: App, source: string, voice: string, role: string, label: string | null): Promise<Transcript>;
+  /** Names the voices of every transcript that comes in, from now on (the server starts it, main.rs); returns a way to stop. */
+  watch(app: App): () => void;
 }
 
 export interface PeopleSeam {

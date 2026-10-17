@@ -46,6 +46,8 @@ import type { Transcript, Word } from "./transcribe.ts";
 
 export type { ClipMutes, Cue, Found, HouseWords, Line, SubtitleOptions, Suggestion, TimedWord } from "./seams.ts";
 export { isSubtitled };
+// The package's tools register as it loads; the server adds its routes.
+export { routes } from "./subtitles_tools.ts";
 
 /**
  * The editors' word lists. Muted and starred out: "word = s**t" sets how

@@ -81,7 +81,7 @@ export interface RawImage {
   pixels: Buffer;
 }
 
-/** A face (or any box) as shares of the picture: [x, y, width, height]. */
+/** A face as shares of the picture: [x0, y0, x1, y1], its corners from the picture's top left (faces.rs). */
 export type Box = [number, number, number, number];
 
 export interface RenderRequest {

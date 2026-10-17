@@ -21,6 +21,11 @@
 // isn't here: call it directly.
 
 import type { App } from "./app.ts";
+import * as captionsCore from "./captions_core.ts";
+import * as facesModule from "./faces.ts";
+import * as peopleModule from "./people.ts";
+import * as speakersModule from "./speakers.ts";
+import * as subtitlesModule from "./subtitles.ts";
 import type {
   Clip,
   DriveFile,
@@ -393,7 +398,11 @@ export interface PeopleSeam {
   summary(project: Project): Record<string, string>;
 }
 
-/** Where a face is: [x, y, width, height] as shares of the picture (faces.rs). */
+/**
+ * Where a face is: [x0, y0, x1, y1], corners as shares of the picture from
+ * its top left (faces.rs), or, once `inFrame` has placed it, project pixels
+ * from the frame's centre.
+ */
 export type Face = Box;
 
 export interface FacesSeam {
@@ -416,13 +425,14 @@ export interface FacesSeam {
   textOnFaces(project: Project): Json[];
 }
 
-export const subtitles: SubtitlesSeam = stub<SubtitlesSeam>("subtitles", { DEFAULT_HOLD_MS: 1000 });
-export const speakers: SpeakersSeam = stub<SpeakersSeam>("speakers", {
-  BACKGROUND: "background",
-  ROLES: ["officer", "leader", "suspect", "victim", "witness", "medic", "bystander", "narrator", "dispatch", "other"],
-});
-export const people: PeopleSeam = stub<PeopleSeam>("people");
-export const faces: FacesSeam = stub<FacesSeam>("faces", { RATE: 2.0 });
+// WP5 has landed: subtitles.ts, speakers.ts, people.ts and faces.ts (seats.ts
+// is behind subtitles). They import this file too; a module namespace is
+// there (if not yet filled) whichever of the two loads first, and nothing
+// reads it before the first call.
+export const subtitles: SubtitlesSeam = subtitlesModule;
+export const speakers: SpeakersSeam = speakersModule;
+export const people: PeopleSeam = peopleModule;
+export const faces: FacesSeam = facesModule;
 
 // ---------------------------------------------------------------------------
 // WP6: captions, watching, review
@@ -481,7 +491,14 @@ export interface WatchSeam {
   watchInBackground(app: App, projectId: string): void;
 }
 
-export const captions: CaptionsSeam = stub<CaptionsSeam>("captions");
+// `hex`, `transcriptOf`, `subtitleName` and `captionSize` moved to WP5
+// (captions_core.ts) to break the cycle; the rest is WP6's.
+export const captions: CaptionsSeam = stub<CaptionsSeam>("captions", {
+  hex: (text) => captionsCore.hex(text),
+  transcriptOf: (app, media) => captionsCore.transcriptOf(app, media),
+  subtitleName: (name) => captionsCore.subtitleName(name),
+  captionSize: (text, style) => captionsCore.captionSize(text, style),
+});
 export const editReview: EditReviewSeam = stub<EditReviewSeam>("edit_review");
 export const footageSearch: FootageSearchSeam = stub<FootageSearchSeam>("footage_search");
 export const watch: WatchSeam = stub<WatchSeam>("watch", { MODEL: "google/gemini-3.8-flash" });
@@ -508,6 +525,14 @@ export const sfx: SfxSeam = { HIT: "hit" };
 /** The Codex bridge behind the agent panel (agent.rs Agents). */
 export interface Agents {
   status(): Promise<Json>;
+  /**
+   * One question to a model through the user's Codex (agent.rs `ask`): an
+   * ephemeral read-only thread with `instructions` as its developer
+   * instructions, `input` its user turn (Codex input items), the answer held
+   * to `schema` when given; the answer's text, or a thrown Error after
+   * `timeoutMs`. speakers.ts names voices with it.
+   */
+  ask(model: string, effort: string, instructions: string, input: Json[], schema: Json | null, timeoutMs: number): Promise<string>;
 }
 
 /** The team's sound library on Drive (library.rs Library). */

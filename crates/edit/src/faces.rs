@@ -195,10 +195,15 @@ pub fn subtitle_size(text: &str, style: &TextStyle, height: u32) -> (f32, f32) {
 /// middle (the house place), bottom left and right, then top middle, left
 /// and right (below the band at the top where bodycam stamps sit).
 pub fn spots(size: (f32, f32), label: f32, frame: (f32, f32)) -> [Spot; 6] {
+    spots_from(size, label, frame, 0.4 * frame.1)
+}
+
+/// `spots` with the bottom row's centre at `bottom` (project pixels below
+/// the frame's centre): intro captions sit a little higher than subtitles.
+fn spots_from(size: (f32, f32), label: f32, frame: (f32, f32), bottom: f32) -> [Spot; 6] {
     let (w, h) = size;
     let margin = 0.04 * frame.1;
     let side = (frame.0 / 2.0 - margin - w / 2.0).max(0.0);
-    let bottom = 0.4 * frame.1;
     // Up top, the label's top sits just under the band where bodycam stamps
     // are; the box (whose centre the transform is) under the label.
     let top = -frame.1 / 2.0 + 0.12 * frame.1 + label + (h - label) / 2.0;
@@ -227,14 +232,14 @@ fn rect(spot: Spot, (w, h): (f32, f32), label: f32) -> [f32; 4] {
     ]
 }
 
-fn overlap(a: [f32; 4], b: [f32; 4]) -> f32 {
+pub fn overlap(a: [f32; 4], b: [f32; 4]) -> f32 {
     let w = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
     let h = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
     w * h
 }
 
 /// A face grown to take in the hair, chin and a margin around it.
-fn grown(face: [f32; 4]) -> [f32; 4] {
+pub fn grown(face: [f32; 4]) -> [f32; 4] {
     let (w, h) = (face[2] - face[0], face[3] - face[1]);
     [
         face[0] - 0.25 * w,
@@ -254,7 +259,19 @@ pub fn place(
     faces: &[[f32; 4]],
     previous: Option<Spot>,
 ) -> Spot {
-    let spots = spots(size, label, frame);
+    place_from(size, frame, label, faces, previous, 0.4 * frame.1)
+}
+
+/// `place` with the house place's centre at `bottom` below the frame's centre.
+pub fn place_from(
+    size: (f32, f32),
+    frame: (f32, f32),
+    label: f32,
+    faces: &[[f32; 4]],
+    previous: Option<Spot>,
+    bottom: f32,
+) -> Spot {
+    let spots = spots_from(size, label, frame, bottom);
     let faces: Vec<[f32; 4]> = faces.iter().copied().map(grown).collect();
     let covered = |spot: Spot, slack: f32| -> f32 {
         let [x0, y0, x1, y1] = rect(spot, size, label);
@@ -329,7 +346,7 @@ struct Line {
 }
 
 /// The footage under frame `at`: the topmost visible video clip of a video file.
-fn picture_at(project: &Project, at: i64) -> Option<&edit_core::Clip> {
+pub(crate) fn picture_at(project: &Project, at: i64) -> Option<&edit_core::Clip> {
     let level = |track: &str| {
         project
             .tracks
@@ -546,11 +563,279 @@ pub async fn place_subtitles(
     }))
 }
 
+/// A face at least this tall (share of the picture's height) is clearly
+/// visible: smaller ones are people across the room, or not faces at all.
+pub const CLEAR: f32 = 0.07;
+
+/// The faces found in `source` so far, without looking at anything new (the audit).
+pub fn cached(source: &Path) -> Option<BTreeMap<i64, Vec<[f32; 4]>>> {
+    let file = crate::tools::media_cache(source)?.join(FILE);
+    let found: Found = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+    Some(found.samples)
+}
+
+/// The sample indexes seen between source seconds `a` and `b`.
+pub fn indexes_between(a: f64, b: f64) -> BTreeSet<i64> {
+    let (a, b) = (a.min(b), a.max(b));
+    ((a * RATE).floor() as i64..=(b * RATE).ceil() as i64).collect()
+}
+
+/// A face (shares of the picture) in project pixels from the frame's centre,
+/// through the footage clip's fit and `transform`.
+pub fn in_frame(
+    media: (u32, u32),
+    transform: &Transform,
+    frame: (u32, u32),
+    face: [f32; 4],
+) -> [f32; 4] {
+    let (mw, mh) = (f64::from(media.0.max(1)), f64::from(media.1.max(1)));
+    let fit = (f64::from(frame.0) / mw).min(f64::from(frame.1) / mh) * f64::from(transform.scale);
+    let x = |share: f32| ((f64::from(share) - 0.5) * mw * fit + f64::from(transform.x)) as f32;
+    let y = |share: f32| ((f64::from(share) - 0.5) * mh * fit + f64::from(transform.y)) as f32;
+    [x(face[0]), y(face[1]), x(face[2]), y(face[3])]
+}
+
+fn centre(face: [f32; 4]) -> (f32, f32) {
+    ((face[0] + face[2]) / 2.0, (face[1] + face[3]) / 2.0)
+}
+
+fn iou(a: [f32; 4], b: [f32; 4]) -> f32 {
+    let both = overlap(a, b);
+    let area = |r: [f32; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    both / (area(a) + area(b) - both).max(1e-9)
+}
+
+/// The face in `faces` that `target` (a box drawn around someone) means: the
+/// one it overlaps most, else the nearest whose centre is within a face's
+/// size of the box's. None when no face there: a hand, a car, an empty spot.
+pub fn pick(faces: &[[f32; 4]], target: [f32; 4]) -> Option<[f32; 4]> {
+    let overlapping = faces
+        .iter()
+        .copied()
+        .map(|face| (iou(face, target), face))
+        .filter(|(share, _)| *share > 0.0)
+        .max_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((_, face)) = overlapping {
+        return Some(face);
+    }
+    let (tx, ty) = centre(target);
+    faces
+        .iter()
+        .copied()
+        .filter_map(|face| {
+            let (x, y) = centre(face);
+            let distance = ((x - tx).powi(2) + (y - ty).powi(2)).sqrt();
+            let size = (face[2] - face[0]).max(face[3] - face[1]);
+            (distance <= size).then_some((distance, face))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, face)| face)
+}
+
+/// One face followed through `indexes` (sorted) from sample `at`, where it is
+/// `start`: at each sample, the face of a like size nearest where it last was
+/// (within about its own height); a sample where it isn't found is left out,
+/// and after two misses in a row (a second) it's lost that way. No template
+/// matching: nothing drifts onto a hand or a wall.
+pub fn follow(
+    found: &BTreeMap<i64, Vec<[f32; 4]>>,
+    indexes: &[i64],
+    at: i64,
+    start: [f32; 4],
+) -> Vec<(i64, [f32; 4])> {
+    let step = |from: [f32; 4], index: i64| -> Option<[f32; 4]> {
+        let (cx, cy) = centre(from);
+        let size = (from[3] - from[1]).max(1e-3);
+        found
+            .get(&index)?
+            .iter()
+            .copied()
+            .filter(|face| {
+                let ratio = (face[3] - face[1]) / size;
+                (0.6..=1.6).contains(&ratio)
+            })
+            .map(|face| {
+                let (x, y) = centre(face);
+                (((x - cx).powi(2) + (y - cy).powi(2)).sqrt(), face)
+            })
+            .filter(|(distance, _)| *distance <= 0.9 * size)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, face)| face)
+    };
+    let walk = |order: &mut dyn Iterator<Item = &i64>| {
+        let (mut last, mut misses, mut got) = (start, 0, Vec::new());
+        for &index in order {
+            match step(last, index) {
+                Some(face) => {
+                    last = face;
+                    misses = 0;
+                    got.push((index, face));
+                }
+                None => {
+                    misses += 1;
+                    if misses > 2 {
+                        break;
+                    }
+                }
+            }
+        }
+        got
+    };
+    let split = indexes.partition_point(|index| *index < at);
+    let mut out = walk(&mut indexes[..split].iter().rev());
+    out.extend(walk(&mut indexes[split..].iter()));
+    out.sort_by_key(|(index, _)| *index);
+    out
+}
+
+/// Whether a followed face is clearly visible through `samples` samples:
+/// found in at least three in four, and big enough to be someone close by.
+pub fn clearly_visible(track: &[(i64, [f32; 4])], samples: usize) -> bool {
+    if track.is_empty() || samples == 0 {
+        return false;
+    }
+    let mut heights: Vec<f32> = track.iter().map(|(_, face)| face[3] - face[1]).collect();
+    heights.sort_by(f32::total_cmp);
+    track.len() * 4 >= samples * 3 && heights[heights.len() / 2] >= CLEAR
+}
+
+/// Points smoothed (twice 1-2-1), so text pinned to a face glides rather than jitters.
+pub fn smooth(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut out = points.to_vec();
+    for _ in 0..2 {
+        let was = out.clone();
+        for (i, point) in out.iter_mut().enumerate() {
+            let before = was[i.saturating_sub(1)];
+            let after = was[(i + 1).min(was.len() - 1)];
+            *point = (
+                (before.0 + 2.0 * was[i].0 + after.0) / 4.0,
+                (before.1 + 2.0 * was[i].1 + after.1) / 4.0,
+            );
+        }
+    }
+    out
+}
+
+/// Subtitles and intro captions on someone's face (the audit): each at its
+/// middle frame against the faces found there, from the cache only (footage
+/// not analysed yet says nothing).
+pub fn text_on_faces(project: &Project) -> Vec<Value> {
+    let fps = project.fps();
+    let (width, height) = (project.settings.width, project.settings.height);
+    let k = height as f32 / 1080.0;
+    let mut cache: HashMap<PathBuf, Option<BTreeMap<i64, Vec<[f32; 4]>>>> = HashMap::new();
+    let mut out = Vec::new();
+    for clip in &project.clips {
+        let ClipContent::Text {
+            text,
+            style,
+            transform,
+            ..
+        } = &clip.content
+        else {
+            continue;
+        };
+        let name = clip.name.as_deref().unwrap_or_default();
+        let subtitle = name.starts_with(SUBTITLE) && style.label.is_some();
+        let caption = name.starts_with(crate::captions::CAPTION_PREFIX);
+        if !subtitle && !caption {
+            continue;
+        }
+        let middle = clip.start + clip.duration / 2;
+        let Some(picture) = picture_at(project, middle) else {
+            continue;
+        };
+        let ClipContent::Video {
+            media,
+            source_in,
+            speed,
+            transform: fit,
+            ..
+        } = &picture.content
+        else {
+            continue;
+        };
+        let Some(media) = project
+            .media(media)
+            .filter(|media| media.kind == MediaKind::Video)
+        else {
+            continue;
+        };
+        let path = PathBuf::from(&media.path);
+        let Some(found) = cache
+            .entry(path.clone())
+            .or_insert_with(|| cached(&path))
+            .as_ref()
+        else {
+            continue;
+        };
+        let time = source_in + (middle - picture.start) as f64 / fps * speed;
+        let Some(faces) = found.get(&((time * RATE).round() as i64)) else {
+            continue;
+        };
+        let local = (middle - clip.start) as f32;
+        let at = |param: &str, base: f32| {
+            clip.keyframes
+                .get(param)
+                .and_then(|keys| edit_core::sample(keys, local))
+                .unwrap_or(base)
+        };
+        let spot = Spot {
+            x: at("x", transform.x),
+            y: at("y", transform.y),
+        };
+        let area = if subtitle {
+            rect(spot, subtitle_size(text, style, height), LABEL * k)
+        } else {
+            let (w, h) = crate::captions::caption_size(text, style);
+            rect(spot, (w as f32, h as f32), 0.0)
+        };
+        let covered = faces.iter().any(|face| {
+            let face = in_frame((media.width, media.height), fit, (width, height), *face);
+            let size = (face[2] - face[0]) * (face[3] - face[1]);
+            overlap(area, face) > 0.1 * size
+        });
+        if covered {
+            out.push(
+                json!({"kind": "text_on_face", "clip": clip.id, "start": clip.start,
+                "fix": if caption { "place_captions" } else { "place_subtitles" }}),
+            );
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const FRAME: (f32, f32) = (1920.0, 1080.0);
+
+    #[test]
+    fn a_face_is_followed_not_a_hand() {
+        // A face walking right, a hand that pops up beside it at sample 3.
+        let mut found = BTreeMap::new();
+        for i in 0..8_i64 {
+            let x = 0.3 + 0.01 * i as f32;
+            let mut faces = vec![[x, 0.2, x + 0.08, 0.35]];
+            if i == 3 {
+                faces.push([0.0, 0.0, 0.2, 0.3]);
+            }
+            found.insert(i, faces);
+        }
+        found.insert(5, Vec::new());
+        let indexes: Vec<i64> = (0..8).collect();
+        let start = pick(&found[&4], [0.33, 0.18, 0.4, 0.36]).unwrap();
+        let track = follow(&found, &indexes, 4, start);
+        assert_eq!(track.len(), 7, "every sample but the missed one");
+        assert!(track.iter().all(|(_, face)| face[0] >= 0.3));
+        assert!(clearly_visible(&track, indexes.len()));
+        // A box around a hand, with no face there: nobody.
+        assert_eq!(pick(&found[&4], [0.8, 0.7, 0.95, 0.95]), None);
+        // A face far away is not clearly visible.
+        let far = vec![(0, [0.5, 0.5, 0.52, 0.53]); 8];
+        assert!(!clearly_visible(&far, 8));
+    }
 
     fn size() -> (f32, f32) {
         let style = crate::captions::subtitle_style(1920, 1080);

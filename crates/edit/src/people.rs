@@ -22,10 +22,12 @@ use serde_json::{json, Value};
 /// The house palette for people, light enough to read on black, each at
 /// least ~30 ΔE from every other. The first six are the editors' role
 /// colours (officer teal, leader blue, suspect yellow, victim and family
-/// orange, medic and social worker magenta, bystander white); the rest were
+/// orange, medic and social worker magenta, bystander sage); the rest were
 /// picked farthest-first, so the first ones used are the most different.
+/// Never white: a white label reads as nobody's (the subtitle's words are
+/// white).
 pub const PALETTE: [&str; 20] = [
-    "#00e5c7", "#0090e5", "#ffff00", "#e57e00", "#f33bff", "#ffffff", "#ff6694", "#1aff47",
+    "#00e5c7", "#0090e5", "#ffff00", "#e57e00", "#f33bff", "#66aa66", "#ff6694", "#1aff47",
     "#c7ff8f", "#f0b2ff", "#ffb08f", "#3dd8ff", "#e7ca55", "#3dff9e", "#b1ff3d", "#ff66d1",
     "#fff0b2", "#b2c9ff", "#9a8fff", "#ff7566",
 ];
@@ -210,8 +212,13 @@ pub fn one_colour_per_person(project: &mut Project) -> Value {
         .into_iter()
         .map(|(key, person)| {
             let label = most(&person.shown).cloned().unwrap_or_else(|| key.clone());
-            json!({"label": label, "colour": colours.get(key), "lines": person.lines,
-                "recoloured": changed.get(key).copied().unwrap_or(0)})
+            let merged = merged_into(key, person);
+            let mut entry = json!({"label": label, "colour": colours.get(key), "lines": person.lines,
+                "recoloured": changed.get(key).copied().unwrap_or(0)});
+            if !merged.is_empty() {
+                entry["other_voices_under_this_label"] = json!(merged);
+            }
+            entry
         })
         .collect::<Vec<_>>())
 }
@@ -254,7 +261,7 @@ fn assign(people: &BTreeMap<String, Person>) -> BTreeMap<String, String> {
         let kept = own
             .first()
             .map(|(colour, _)| colour.as_str())
-            .filter(|colour| free(colour));
+            .filter(|colour| free(colour) && !whitish(colour));
         let colour = kept
             .or_else(|| role_colour(role_of(key, person)).filter(|colour| free(colour)))
             .or_else(|| PALETTE.iter().copied().find(|colour| free(colour)))
@@ -264,6 +271,28 @@ fn assign(people: &BTreeMap<String, Person>) -> BTreeMap<String, String> {
         out.insert(key.clone(), colour);
     }
     out
+}
+
+/// The transcript voices under `key`'s label that are by their names someone
+/// else ("Kevin (Father)" or "Sister 3" under "Tabitha:"; a bare role like
+/// "Mother" or "Officer" may be anyone): never merged silently, the report
+/// lists them so the agent confirms who is who.
+fn merged_into(key: &str, person: &Person) -> Vec<String> {
+    person
+        .names
+        .keys()
+        .filter(|name| {
+            let named = name.contains(" (") || name.chars().any(|ch| ch.is_ascii_digit());
+            named && person_key(crate::captions::subtitle_name(name)) != key
+        })
+        .cloned()
+        .collect()
+}
+
+/// White or a near-white grey: never a person's colour (their words are white).
+fn whitish(hex: &str) -> bool {
+    let [l, a, b] = crate::speakers::lab(hex);
+    l > 85.0 && (a * a + b * b).sqrt() < 15.0
 }
 
 /// More people than colours: the palette colour whose people are on screen
@@ -459,6 +488,30 @@ mod tests {
         let before = project.clone();
         one_colour_per_person(&mut project);
         assert_eq!(project, before);
+    }
+
+    #[test]
+    fn never_white_and_merged_voices_are_named() {
+        let mut project = project(vec![
+            subtitle("s1", 0, "Sister 2", "Sister 2:", "#ffffff"),
+            subtitle("s2", 40, "Sister 2", "Sister 2:", "#ffffff"),
+            subtitle("m1", 80, "Mother", "Tabitha:", "#ff4d59"),
+            subtitle("m2", 120, "Tabitha (Mother)", "Tabitha:", "#ff4d59"),
+            subtitle("k1", 160, "Kevin (Father)", "Tabitha:", "#ff4d59"),
+        ]);
+        let report = one_colour_per_person(&mut project);
+        assert!(!whitish(&label_colour(&project, "s1")));
+        let tabitha = report
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|person| person["label"] == "Tabitha:")
+            .unwrap();
+        assert_eq!(
+            tabitha["other_voices_under_this_label"],
+            json!(["Kevin (Father)"])
+        );
+        assert!(PALETTE.iter().all(|colour| !whitish(colour)));
     }
 
     #[test]

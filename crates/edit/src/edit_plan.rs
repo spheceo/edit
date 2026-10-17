@@ -1314,6 +1314,8 @@ pub fn audit(project: &Project) -> Value {
     issues.extend(crate::graphics::bare_stills(project));
     // The date in a box or glowing: it's white with a drop shadow only.
     issues.extend(crate::graphics::date_drift(project));
+    // A subtitle or intro caption on someone's face (faces found so far).
+    issues.extend(crate::faces::text_on_faces(project));
     issues.sort_by_key(Value::to_string);
     json!({"issues":issues, "frames":project.duration(), "clips":project.clips.len()})
 }

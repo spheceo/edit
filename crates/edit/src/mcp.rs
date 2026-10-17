@@ -647,7 +647,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "caption_speakers",
-            "Speaker captions for intro footage: splits what's said into lines, asks a vision model (Luna) who says each line and where they are (stills + sound), then adds a word-by-word caption per line in the house box style beside its speaker, tracked to their face with a little shake. Replaces captions it made before in that span. Takes a few minutes. Defaults to the intro (start to the cut-in before the full footage).",
+            "Speaker captions for intro footage: splits what's said into lines, asks a vision model (Luna) who says each line and where they are (stills + sound), then adds a word-by-word caption per line in the house box style: under the speaker's face when the face detector sees it clearly through the line (followed smoothly), else bottom middle; never on a face. Replaces captions it made before in that span. Takes a few minutes. Defaults to the intro (start to the cut-in before the full footage).",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end of the intro)." }
@@ -670,6 +670,16 @@ fn tools() -> Vec<Value> {
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." }
+            }),
+            &[],
+        ),
+        tool(
+            "place_captions",
+            "Lays the intro's speaker captions (\"Caption · <who>\") out again the house way without retyping them: under the speaker's face only when the face detector sees it clearly through the line (followed by the detector, smoothed, never covering any face), else bottom middle (clear of faces). By default a caption keeps the face it already sits beside, if that face is clearly visible; one that sat on a face, or by none, goes bottom middle. Pass `under` for the lines where that isn't the speaker. Returns each caption's place and why. Seconds; default the whole timeline.",
+            json!({
+                "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
+                "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
+                "under": { "type": "object", "description": "Clip id → \"bottom\" (the speaker is off screen or unclear), \"auto\", or [x, y]: a point on the speaker's face at the caption's first frame, project pixels from the top-left." }
             }),
             &[],
         ),
@@ -720,7 +730,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "track_region",
-            "Track a box in the footage (a face, a redaction block, an object) and make a clip follow it: bakes x/y keyframes onto `follow` so it stays above, below or on the box. Give the box as it appears at `time` in project pixels from the top-left of the frame (as render_frame shows it, scaled to the project size).",
+            "Track a box in the footage (a face, a redaction block, an object) and make a clip follow it: bakes x/y keyframes onto `follow` so it stays above, below or on the box. Give the box as it appears at `time` in project pixels from the top-left of the frame (as render_frame shows it, scaled to the project size). Target leader (a callout's pointer) follows the face in the box with the face detector and refuses when there's no clearly visible face there (listing the faces it found): then drop the leader and keep a plain label.",
             json!({
                 "time": { "type": "number", "description": "Timeline seconds where the box is as given." },
                 "box": { "type": "array", "items": { "type": "number" }, "description": "[x0, y0, x1, y1] in project pixels from the top-left." },
@@ -2050,6 +2060,38 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             let report = crate::faces::place_subtitles(app, &id, from, to).await?;
             Ok(text(serde_json::to_string(&report).unwrap_or_default()))
         }
+        "place_captions" => {
+            let live = store.get(&id).ok_or("project vanished")?;
+            let fps = live.project.fps();
+            let from = args["start"]
+                .as_f64()
+                .map_or(0, |seconds| (seconds * fps).round() as i64);
+            let to = args["end"]
+                .as_f64()
+                .map_or(live.project.duration(), |seconds| {
+                    (seconds * fps).round() as i64
+                });
+            let mut under = std::collections::HashMap::new();
+            if let Some(given) = args["under"].as_object() {
+                for (clip, value) in given {
+                    let choice = match value {
+                        Value::String(word) if word == "bottom" => crate::captions::Under::Bottom,
+                        Value::String(word) if word == "auto" => crate::captions::Under::Auto,
+                        Value::Array(point) => match point[..] {
+                            [ref x, ref y] => crate::captions::Under::At(
+                                x.as_f64().ok_or("under points are [x, y] numbers")?,
+                                y.as_f64().ok_or("under points are [x, y] numbers")?,
+                            ),
+                            _ => return Err(format!("under.{clip}: a point is [x, y]")),
+                        },
+                        _ => return Err(format!("under.{clip}: \"bottom\", \"auto\" or [x, y]")),
+                    };
+                    under.insert(clip.clone(), choice);
+                }
+            }
+            let report = crate::captions::place_captions(app, &id, from, to, &under).await?;
+            Ok(text(serde_json::to_string(&report).unwrap_or_default()))
+        }
         "set_segments" => {
             let live = store.get(&id).ok_or("project vanished")?;
             let fps = live.project.fps();
@@ -2677,6 +2719,7 @@ async fn run_batch(app: &App, args: &Value, scope: Option<&str>) -> Result<Value
         "caption_speakers",
         "add_subtitles",
         "place_subtitles",
+        "place_captions",
         "repack_subtitles",
         "watch_footage",
         "map_view",

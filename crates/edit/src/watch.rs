@@ -1268,6 +1268,8 @@ async fn watch_now(app: &App, project_id: &str, options: Options) -> Result<Valu
     let mut changes: BTreeMap<String, Vec<Change>> = BTreeMap::new();
     // Per file and voice: the roles and names the model gave.
     let mut said: BTreeMap<(String, String), (Vec<String>, Vec<String>)> = BTreeMap::new();
+    // Per file and voice: windows where its name is someone else's, and its own.
+    let mut disputes: BTreeMap<(String, String), (usize, usize)> = BTreeMap::new();
     let mut seen: Vec<Segment> = Vec::new();
     let mut people: Vec<Value> = Vec::new();
     // Lines the model only guessed at: the few worth a look, so nobody
@@ -1289,6 +1291,37 @@ async fn watch_now(app: &App, project_id: &str, options: Options) -> Result<Valu
             known.entry(part.media.clone()).or_default(),
         );
         let on_timeline = |source: f64| part.on_timeline(source, fps);
+        // A voice named after someone the model sees as another person (the
+        // transcriber took "Kevin" from "I'm really worried, Kevin" for the
+        // one answering): a vote against its name; the same person, a vote
+        // for. Windows disagree, so only the majority across them counts.
+        let named_now = transcripts.get(&part.media).map(|t| &t.speakers);
+        for person in &answer.people {
+            let Some(heard) = person.name.split_whitespace().next() else {
+                continue;
+            };
+            for (letter, voice) in &voices {
+                let Some(label) = named_now.and_then(|speakers| speakers.get(voice)) else {
+                    continue;
+                };
+                let first = label.split(" (").next().unwrap_or_default();
+                if !first
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|first| first.eq_ignore_ascii_case(heard))
+                {
+                    continue;
+                }
+                let vote = disputes
+                    .entry((part.media.clone(), voice.clone()))
+                    .or_default();
+                if *letter == person.id {
+                    vote.1 += 1;
+                } else {
+                    vote.0 += 1;
+                }
+            }
+        }
         for person in &answer.people {
             let Some(voice) = voices.get(&person.id) else {
                 continue;
@@ -1358,7 +1391,21 @@ async fn watch_now(app: &App, project_id: &str, options: Options) -> Result<Valu
     // The corrections, into each file's transcript.
     let mut examples: Vec<Value> = Vec::new();
     let mut changed = 0;
-    for (media_id, list) in &changes {
+    // Voices whose name most windows give to someone else lose it.
+    let misnamed: BTreeSet<(String, String)> = disputes
+        .iter()
+        .filter(|(_, (against, support))| against > support)
+        .map(|(key, _)| key.clone())
+        .collect();
+    let mut renamed: Vec<Value> = Vec::new();
+    let no_changes = Vec::new();
+    let files: BTreeSet<String> = changes
+        .keys()
+        .cloned()
+        .chain(misnamed.iter().map(|(media, _)| media.clone()))
+        .collect();
+    for media_id in &files {
+        let list = changes.get(media_id).unwrap_or(&no_changes);
         let Some(media) = project.media(media_id) else {
             continue;
         };
@@ -1427,6 +1474,32 @@ async fn watch_now(app: &App, project_id: &str, options: Options) -> Result<Valu
                     }
                 }
             }
+            for (media, voice) in &misnamed {
+                if media != media_id {
+                    continue;
+                }
+                let Some(was) = transcript.speakers.get(voice).cloned() else {
+                    continue;
+                };
+                let wrong = was.split(" (").next().unwrap_or_default().to_lowercase();
+                let (roles, names) = said
+                    .get(&(media.clone(), voice.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                let names: Vec<String> = names
+                    .into_iter()
+                    .filter(|name| name.to_lowercase() != wrong)
+                    .collect();
+                let role = most(&roles).unwrap_or_else(|| "other".into());
+                let title = crate::speakers::role_title(&role);
+                let label = match most(&names) {
+                    Some(name) => format!("{name} ({title})"),
+                    None => title.to_owned(),
+                };
+                transcript.roles.insert(voice.clone(), role);
+                transcript.speakers.insert(voice.clone(), label.clone());
+                renamed.push(json!({"voice": voice, "was": was, "now": label}));
+            }
         })?;
     }
     let segments = if set_segments {
@@ -1458,6 +1531,7 @@ async fn watch_now(app: &App, project_id: &str, options: Options) -> Result<Valu
         "cost": (cost * 10_000.0).round() / 10_000.0,
         "lines_changed": changed,
         "examples": examples,
+        "voices_renamed": renamed,
         "doubtful": doubtful,
         "people": people,
         "segments_set": set_segments,
@@ -1526,7 +1600,8 @@ fn completed_key(
         .iter()
         .map(|(id, transcript)| (id, &transcript.words))
         .collect();
-    let data = json!({"model":MODEL,"system":WATCH_SYSTEM,"uses":watched_uses(project),"words":words,
+    // "names": how voices are named from the answers (2: a name most windows give to someone else is dropped).
+    let data = json!({"model":MODEL,"system":WATCH_SYSTEM,"names":2,"uses":watched_uses(project),"words":words,
         "set_segments":set_segments,"segments":if set_segments {Some(&project.segments)} else {None}});
     let mut hash = Sha256::new();
     hash.update(data.to_string().as_bytes());

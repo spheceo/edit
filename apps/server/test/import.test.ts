@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { hooks, houseMedia, importMade, importPaths, placeAtEnd } from "../src/import.ts";
+import { footageRate, hooks, houseMedia, importMade, importPaths, placeAtEnd } from "../src/import.ts";
 import type { Project } from "../src/model.ts";
 import { newProject } from "../src/project.ts";
 import * as tools from "../src/tools.ts";
@@ -70,6 +70,8 @@ test.skipIf(ffmpeg === null || ffprobe === null)("importing probes, adds once, p
     const project = store.get(id)!.project;
     expect(project.media[0]).toMatchObject({ id: "m6", name: "clip.mp4", path: footage, kind: "video", has_audio: true, width: 320 });
     expect(project.clips.map((clip) => clip.type)).toEqual(["video", "audio"]);
+    // The first footage into an empty project sets its rate.
+    expect(project.settings.fps).toBe(footageRate(project.media[0]!.fps));
     // Footage in a project with no script starts its transcript straight away.
     expect(["working", "ready"]).toContain(app.media.status(footage).transcript);
     // The same file again is the same media.
@@ -134,4 +136,10 @@ test("a ~/ path is in the user's home", () => {
   expect(expandHome("~/Movies/a.mp4")).toBe(`${process.env.HOME}/Movies/a.mp4`);
   expect(expandHome("/abs/a.mp4")).toBe("/abs/a.mp4");
   expect(expandHome("~user/a.mp4")).toBe("~user/a.mp4");
+});
+
+test("a subtitled video takes a rate its footage divides into evenly, at most 30", () => {
+  expect([23.976023976023978, 24, 25, 29.97002997, 30, 50, 59.94005994, 60, 15, 12.5, 0, Number.NaN].map(footageRate)).toEqual([
+    24, 24, 25, 30, 30, 25, 30, 30, 30, 30, 30, 30,
+  ]);
 });

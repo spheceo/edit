@@ -170,6 +170,14 @@ async function addMedia(
 ): Promise<Imported> {
   const [live, added] = await app.store.update(id, origin, (project) => {
     const added: string[] = [];
+    // A subtitled video in the making (footage into an empty project with no
+    // script): the project takes a rate the footage's divides into evenly, so
+    // its export doesn't judder (23.976 footage at 30 fps repeats every
+    // fourth frame; at 24, one frame in 1001).
+    const first = items.find((item) => item.probe.kind === "video");
+    if (place && project.clips.length === 0 && (project.script === undefined || project.script === null) && origin !== "voice" && origin !== "script" && first !== undefined) {
+      project.settings.fps = footageRate(first.probe.fps);
+    }
     for (const item of items) {
       const existing = project.media.find((other) => other.path === item.path);
       let mediaId: string;
@@ -216,6 +224,19 @@ async function addMedia(
     })();
   }
   return [live.rev, added, errors];
+}
+
+/**
+ * The project rate for footage at `fps`: one it divides into evenly, never
+ * more than 30 (twice the frames to render and export for no gain in a
+ * subtitled video): 23.976 and 24 → 24, 25 and 50 → 25, the rest → 30.
+ */
+export function footageRate(fps: number): number {
+  if (!Number.isFinite(fps) || fps <= 0) return 30;
+  const near = (rate: number) => Math.abs(fps - rate) < 0.05 || Math.abs(fps - rate * 1000 / 1001) < 0.05;
+  if (near(24)) return 24;
+  if (near(25) || near(50)) return 25;
+  return 30;
 }
 
 const COLORS: ClipColor[] = ["blue", "purple", "cyan", "green", "orange", "pink"];

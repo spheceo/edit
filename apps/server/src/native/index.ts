@@ -223,6 +223,13 @@ export interface Native {
   /** Camera angles from 64×36 grey frames; TS does the FFmpeg read that makes them (seats.rs:195-232). */
   seatsScenes(gray64x36: Buffer): { scenes: [number, number, number | null][]; angles: number }; // S
   desktopFiles(width: number, height: number, photoTitle: string, notepadTitle: string): Promise<[string, string, string]>; // A
+  /**
+   * The laid-out size [width, height] of `text` in the bundled Geist at `px`
+   * (left-aligned, still, 2 px pad), as the renderer lays it out: desktop.rs
+   * `text_block` (edit_render::text::rasterize's block). WP7 needs it for the
+   * desktop profile's notes; not in plan §1.3 (a contract addition).
+   */
+  textBlock(text: string, px: number, weight: number, lineHeight: number): [number, number]; // S
 }
 
 // ---------------------------------------------------------------------------

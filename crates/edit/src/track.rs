@@ -232,7 +232,8 @@ struct Spot {
 /// between a pair of starts blended by how near each start is.
 fn follow_all(frames: &Frames, steps: &[Step], starts: &[Start]) -> Vec<Spot> {
     let last = frames.count.saturating_sub(1);
-    let runs: Vec<(usize, Vec<(usize, Spot)>, Vec<(usize, Spot)>)> = std::thread::scope(|scope| {
+    type Run = Vec<(usize, Spot)>;
+    let runs: Vec<(usize, Run, Run)> = std::thread::scope(|scope| {
         let handles: Vec<_> = starts
             .iter()
             .enumerate()
@@ -1782,10 +1783,10 @@ mod tests {
             },
         ];
         let found = follow_all(&frames, steps, &two);
-        for index in CUT..frames.count {
-            assert!(!found[index].lost, "frame {index}");
-            let error = (found[index].at.0 - given.0).hypot(found[index].at.1 - given.1);
-            assert!(error < 1.0, "frame {index}: {:?}", found[index].at);
+        for (index, spot) in found.iter().enumerate().skip(CUT) {
+            assert!(!spot.lost, "frame {index}");
+            let error = (spot.at.0 - given.0).hypot(spot.at.1 - given.1);
+            assert!(error < 1.0, "frame {index}: {:?}", spot.at);
         }
         for index in 0..CUT {
             let error =

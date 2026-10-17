@@ -102,6 +102,24 @@ pub struct Agents {
     refreshing: AtomicBool,
     /// One-off questions (see `ask`) by Codex thread id.
     asks: Mutex<HashMap<String, Ask>>,
+    /// The last "ready" status and when it was found (see `status`).
+    ready: Mutex<Option<(std::time::Instant, Value)>>,
+}
+
+/// How long a "ready" status is answered from memory. Checking runs Codex
+/// twice (Node starting up: 2–8 s a call on this Mac), and the panel and the
+/// setup card ask on every project opened. Not-ready is never kept, so a
+/// fresh `codex login` shows at once.
+const READY_FOR: Duration = Duration::from_secs(300);
+
+/// `cached` when it's still fresh at `now`.
+fn still_ready(
+    cached: Option<&(std::time::Instant, Value)>,
+    now: std::time::Instant,
+) -> Option<Value> {
+    cached
+        .filter(|(at, _)| now.saturating_duration_since(*at) < READY_FOR)
+        .map(|(_, status)| status.clone())
 }
 
 /// A one-off question's answer as it streams in.
@@ -129,28 +147,47 @@ impl Agents {
             models: Mutex::new(models),
             refreshing: AtomicBool::new(false),
             asks: Mutex::new(HashMap::new()),
+            ready: Mutex::new(None),
         })
     }
 
     /// Whether Codex is installed and logged in (cheap; no app-server needed).
     /// `state` is "missing", "logged_out" or "ready".
     pub fn status(&self) -> Value {
+        let now = std::time::Instant::now();
+        if let Some(status) = still_ready(self.ready.lock().as_ref(), now) {
+            return status;
+        }
+        let status = Self::check_codex();
+        if status.get("ready").and_then(Value::as_bool) == Some(true) {
+            *self.ready.lock() = Some((now, status.clone()));
+        }
+        status
+    }
+
+    fn check_codex() -> Value {
         let Some(binary) = find_codex() else {
             return json!({ "provider": "codex", "ready": false, "state": "missing",
                 "error": "Codex isn't installed. Install it with `npm install -g @openai/codex`, then `codex login`." });
         };
-        let version = Command::new(&binary)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .output()
-            .ok()
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-            .filter(|version| !version.is_empty());
-        let logged_in = Command::new(&binary)
-            .args(["login", "status"])
-            .stdin(Stdio::null())
-            .output()
-            .is_ok_and(|output| output.status.success());
+        // Both at once: each is a Node start-up.
+        let (version, logged_in) = std::thread::scope(|scope| {
+            let version = scope.spawn(|| {
+                Command::new(&binary)
+                    .arg("--version")
+                    .stdin(Stdio::null())
+                    .output()
+                    .ok()
+                    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+                    .filter(|version| !version.is_empty())
+            });
+            let logged_in = Command::new(&binary)
+                .args(["login", "status"])
+                .stdin(Stdio::null())
+                .output()
+                .is_ok_and(|output| output.status.success());
+            (version.join().ok().flatten(), logged_in)
+        });
         let path = binary.to_string_lossy();
         if !logged_in {
             return json!({ "provider": "codex", "ready": false, "state": "logged_out", "path": path, "version": version,
@@ -1287,6 +1324,20 @@ fn with_configured_effort(mut models: Vec<Model>) -> Vec<Model> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ready_status_is_kept_for_a_while() {
+        let found = std::time::Instant::now();
+        let status = json!({ "ready": true, "state": "ready" });
+        let cached = (found, status.clone());
+        assert_eq!(still_ready(Some(&cached), found), Some(status.clone()));
+        assert_eq!(
+            still_ready(Some(&cached), found + READY_FOR - Duration::from_secs(1)),
+            Some(status)
+        );
+        assert_eq!(still_ready(Some(&cached), found + READY_FOR), None);
+        assert_eq!(still_ready(None, found), None);
+    }
 
     /// Echo the outgoing RPCs without starting Codex or editing real projects.
     struct Fixture {

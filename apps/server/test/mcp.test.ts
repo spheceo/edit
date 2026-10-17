@@ -48,6 +48,22 @@ test("the tools and instructions are the Rust server's", () => {
   expect(unported()).not.toContain("list_projects");
 });
 
+// While the Rust server is the parity reference, its mcp.rs is where tools are
+// written; tools.json and instructions.ts are dumped from it
+// (scripts/dump-tools.ts). This catches an edit there that wasn't dumped again.
+const MCP_RS = `${import.meta.dir}/../../../crates/edit/src/mcp.rs`;
+
+test.skipIf(!(await Bun.file(MCP_RS).exists()))("tools.json and the instructions match mcp.rs", async () => {
+  const source = await Bun.file(MCP_RS).text();
+  for (const tool of TOOLS) {
+    expect(source).toContain(`"${tool.name}"`);
+    // Rust string escapes are JSON's for what descriptions use (\" and \\).
+    expect(source).toContain(JSON.stringify(tool.description).slice(1, -1));
+  }
+  const start = source.indexOf('pub const INSTRUCTIONS: &str = r#"') + 'pub const INSTRUCTIONS: &str = r#"'.length;
+  expect(source.slice(start, source.indexOf('"#;', start))).toBe(INSTRUCTIONS);
+});
+
 test("JSON-RPC: initialize, ping, tools/list, notifications and unknown methods", async () => {
   const { app, cleanup } = fixtureHome("mcp-rpc");
   try {

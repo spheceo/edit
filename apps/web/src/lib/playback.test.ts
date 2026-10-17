@@ -35,13 +35,16 @@ class AudioClock {
   state = "running";
   destination = {};
   nodes: { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }[] = [];
+  gains: { gain: { setValueAtTime: ReturnType<typeof vi.fn>; linearRampToValueAtTime: ReturnType<typeof vi.fn> } }[] = [];
   resume() { return Promise.resolve(); }
   createBuffer(channels: number, length: number, sampleRate: number) {
     return { numberOfChannels: channels, length, sampleRate, copyToChannel: vi.fn() };
   }
   createGain() {
-    return { gain: { setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
+    const node = { gain: { setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
       connect: () => ({ connect: vi.fn() }), disconnect: vi.fn() };
+    this.gains.push(node);
+    return node;
   }
   createBufferSource() {
     const node = { buffer: null, playbackRate: { value: 1 }, start: vi.fn(), stop: vi.fn(),
@@ -240,14 +243,82 @@ describe("preview seeks and lifetime", () => {
   });
 
   it("keeps the last valid preview during a transient invalid drag", () => {
-    preview.setProject(fixture(), {});
+    preview.setProject(fixture(), {}); draw();
     const calls = engine.setProject.mock.calls.length;
     const p = fixture(); p.clips.push({ ...p.clips[0], id: "overlap" });
-    preview.setProject(p, {});
+    preview.setProject(p, {}); draw();
     expect(engine.setProject).toHaveBeenCalledTimes(calls);
     expect(preview.error).toBeNull();
-    preview.setProject(fixture(), {});
+    preview.setProject(fixture(), {}); draw();
     expect(engine.setProject).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it("sends a drag's changes to the engine once per frame, as the whole project", async () => {
+    const { produce } = await import("immer");
+    let p = fixture();
+    preview.setProject(p, {}); draw();
+    const calls = engine.setProject.mock.calls.length;
+    for (let start = 1; start <= 3; start++) {
+      p = produce(p, (draft) => { draft.clips[0].start = start; });
+      preview.setProject(p, {});
+    }
+    expect(engine.setProject).toHaveBeenCalledTimes(calls);
+    draw();
+    expect(engine.setProject).toHaveBeenCalledTimes(calls + 1);
+    expect(JSON.parse(engine.setProject.mock.calls.at(-1)![0])).toEqual(JSON.parse(JSON.stringify(p)));
+    draw();
+    expect(engine.setProject).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  const withSound = () => {
+    const p = fixture(); p.media[0].has_audio = true;
+    p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
+    p.clips.push({ id: "a", type: "audio", track: "a1", media: "m1", start: 0, duration: 90,
+      source_in: 2, speed: 1, volume_db: 0, fade_in: 3, fade_out: 0, color: "blue" });
+    for (let chunk = 4; chunk < 10; chunk++) decoding.sound.set(chunk,
+      { start: chunk * 0.5, sampleRate: 48000, channels: [new Float32Array(24000)] });
+    engine.sources.mockReturnValue("[]");
+    return p;
+  };
+
+  it("keeps sound playing through edits that don't touch it, and restarts it when its clip changes", async () => {
+    const { produce } = await import("immer");
+    let p = withSound();
+    preview.setProject(p, {}); draw(); preview.play(); draw();
+    const nodes = [...clock.nodes];
+    expect(nodes.length).toBeGreaterThan(0);
+    // The agent changes the picture and adds a title; the sound's clip is the same object.
+    p = produce(p, (draft) => {
+      const video = draft.clips[0];
+      if (video.type === "video") video.opacity = 0.5;
+      draft.clips.push({ id: "t", type: "solid", track: "v1", start: 90, duration: 30, color: "blue", fill: [1, 0, 0, 1], opacity: 1, fade_in: 0, fade_out: 0 });
+    });
+    preview.setProject(p, { m1: "source" });
+    clock.currentTime = 0.3; draw();
+    expect(playhead.frame).toBeCloseTo(7.5); // the clock ran on: no re-buffering
+    expect(nodes.every((node) => node.stop.mock.calls.length === 0)).toBe(true);
+    // Now the sound itself changes.
+    const playing = [...clock.nodes];
+    p = produce(p, (draft) => { const clip = draft.clips.find((candidate) => candidate.id === "a")!; if (clip.type === "audio") clip.volume_db = -6; });
+    preview.setProject(p, {});
+    expect(playing.every((node) => node.stop.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("restarts sound when its track is muted", async () => {
+    const { produce } = await import("immer");
+    let p = withSound();
+    preview.setProject(p, {}); draw(); preview.play(); draw();
+    const nodes = [...clock.nodes];
+    p = produce(p, (draft) => { draft.tracks[1].muted = true; });
+    preview.setProject(p, {});
+    expect(nodes.every((node) => node.stop.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("fades sound in from silence on the clip's first frame, as the export does", () => {
+    preview.setProject(withSound(), {}); draw(); preview.play(); draw();
+    const { gain } = clock.gains[0];
+    expect(gain.setValueAtTime.mock.calls[0][0]).toBeCloseTo(0);
+    expect(gain.linearRampToValueAtTime.mock.calls.slice(0, 3).map((call) => call[0])).toEqual([1 / 3, 2 / 3, 1].map((value) => expect.closeTo(value)));
   });
 
   it("keeps scrubbing responsive after playback reaches the end", () => {

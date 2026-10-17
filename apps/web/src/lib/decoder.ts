@@ -27,6 +27,8 @@ export class Decoder {
   private generation = 0;
   private images = new Map<string, Promise<void>>();
   private pictureSizes = new Map<string, number>();
+  /** The lanes the workers were last told to keep. */
+  private retained: string | undefined;
   readonly pictures = new DecodedCache<VideoFrame>(128 * MiB, (frame) => frame.close());
   readonly sound = new DecodedCache<PcmChunk>(32 * MiB, () => {});
   readonly stats = { videoRequests: 0, audioRequests: 0, decodedFrames: 0, cacheHits: 0 };
@@ -187,6 +189,10 @@ export class Decoder {
 
   retain(lanes: Set<string>) {
     for (const key of this.flights.keys()) if (!lanes.has(key)) this.flights.delete(key);
+    // Asked every frame; the workers only hear when the set changes.
+    const retained = [...lanes].sort().join("\n");
+    if (retained === this.retained) return;
+    this.retained = retained;
     const message: DecodeRequest = { type: "retain", lanes: [...lanes] };
     this.video?.postMessage(message);
     this.audio?.postMessage(message);
@@ -210,6 +216,7 @@ export class Decoder {
     this.video = null; this.audio = null;
     this.files.clear(); this.flights.clear();
     this.pictureSizes.clear();
+    this.retained = undefined;
     this.images.clear();
     this.pictures.clear(); this.sound.clear();
   }

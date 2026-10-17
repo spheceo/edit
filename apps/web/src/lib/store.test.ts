@@ -29,6 +29,28 @@ describe("save isolation", () => {
     expect(useEditor.getState().dirty).toBe(true);
   });
 
+  it("ignores undo and redo mid-drag, so the drag stays one step and redo survives", async () => {
+    const { useEditor } = await import("./store");
+    const name = () => useEditor.getState().project?.name;
+    const state = useEditor.getState;
+    state().load(1, project("p1"));
+    state().edit(draft => { draft.name = "first"; });
+    state().edit(draft => { draft.name = "second"; });
+    state().undo();
+    expect(name()).toBe("first");
+    state().beginGesture();
+    state().gesture(draft => { draft.name = "dragging"; });
+    state().undo(); state().redo();
+    expect(name()).toBe("dragging");
+    expect(state().future).toHaveLength(1);
+    state().gesture(draft => { draft.name = "dragged"; });
+    state().endGesture();
+    expect(name()).toBe("dragged");
+    state().undo(); expect(name()).toBe("first");
+    state().undo(); expect(name()).toBe("p1");
+    state().redo(); state().redo(); expect(name()).toBe("dragged");
+  });
+
   it("keeps edits made during a conflicting save recoverable with undo", async () => {
     const { useEditor, flushSave } = await import("./store");
     const { ApiError } = await import("./api");

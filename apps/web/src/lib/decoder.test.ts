@@ -128,4 +128,16 @@ describe("worker decoder client", () => {
     expect(decoder.nearbyPicture("file", 8.08, 0.12, 5, 6)).toBeUndefined();
     expect(decoder.nearbyPicture("file", 4, 0.12, 0, 10)).toBeUndefined();
   });
+
+  it("tells the workers which lanes to keep only when that changes", () => {
+    decoder.requestVideo("file", "/file", "v:c1", 2, 30, 10);
+    decoder.requestAudio("file", "/file", "a:c1", 2, 10);
+    const retains = () => WorkerStub.workers.map((worker) => worker.messages.filter((m) => m.type === "retain").length);
+    decoder.retain(new Set(["v:c1", "a:c1"]));
+    expect(retains()).toEqual([1, 1]);
+    decoder.retain(new Set(["a:c1", "v:c1"]));
+    expect(retains()).toEqual([1, 1]);
+    decoder.retain(new Set(["v:c1"]));
+    expect(retains()).toEqual([2, 2]);
+  });
 });

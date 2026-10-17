@@ -57,6 +57,7 @@ pub fn needs(operations: &[Value]) -> Needs {
     needs
 }
 
+#[cfg(test)]
 pub fn apply(project: &mut Project, operations: &[Value]) -> Result<Applied, String> {
     apply_with(project, operations, &Assets::default())
 }
@@ -998,18 +999,25 @@ fn evidence_board(
             .clips
             .iter()
             .filter_map(|clip| {
-                let ClipContent::Audio { media, .. } = &clip.content else {
+                let ClipContent::Audio {
+                    media,
+                    source_in,
+                    speed,
+                    ..
+                } = &clip.content
+                else {
                     return None;
                 };
                 let named = |name: &str| name.to_lowercase().contains("shutter");
                 let media = project.media(media)?;
+                // Where its click is heard: the hit, as trimmed and sped.
                 (clip.name.as_deref().is_some_and(named) || named(&media.name)).then(|| {
-                    clip.start
-                        + media
-                            .markers
-                            .iter()
-                            .find(|marker| marker.name == crate::sfx::HIT)
-                            .map_or(0, |marker| (marker.time * fps).round() as i64)
+                    let hit = media
+                        .markers
+                        .iter()
+                        .find(|marker| marker.name == crate::sfx::HIT)
+                        .map_or(*source_in, |marker| marker.time);
+                    clip.start + ((hit - source_in) / speed.max(0.05) * fps).round() as i64
                 })
             })
             .collect();
@@ -1729,7 +1737,7 @@ mod tests {
         let board = json!({"op":"evidence_board", "start":96, "end":250, "items":[
             {"media":"m1","label":"Stripped mattress","at":104},
             {"media":"m2","label":"Bagged bedding","at":138}]});
-        let result = apply_with(&mut p, &[board.clone()], &assets).unwrap();
+        let result = apply_with(&mut p, std::slice::from_ref(&board), &assets).unwrap();
         // The first photo's shutter is the cut's (8 frames or less away); the second gets its own.
         assert_eq!(result.results[0]["shutters"], json!([138]));
         let own: Vec<&Clip> = p

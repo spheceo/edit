@@ -194,8 +194,9 @@ impl Canvas {
         if out <= 0.0 {
             return;
         }
-        for channel in 0..3 {
-            pixel[channel] = (color[channel] * a + pixel[channel] * pixel[3] * (1.0 - a)) / out;
+        let below = pixel[3];
+        for (channel, new) in pixel.iter_mut().zip(color).take(3) {
+            *channel = (new * a + *channel * below * (1.0 - a)) / out;
         }
         pixel[3] = out;
     }
@@ -388,10 +389,10 @@ pub fn wallpaper(width: u32, height: u32) -> Result<Vec<u8>, String> {
             let white = smooth(0.8, 1.8, light);
             let tint = [0.08 + 0.85 * white, 0.42 + 0.55 * white, 0.70 + 0.3 * white];
             let pixel = canvas.pixels.get_mut(y * w + x).ok_or("wallpaper pixel")?;
-            for channel in 0..3 {
-                let lit = base[channel] + tint[channel] * light * 0.6;
+            for ((channel, base), tint) in pixel.iter_mut().zip(base).zip(tint) {
+                let lit = base + tint * light * 0.6;
                 // A soft shoulder so the brightest light rolls off to white.
-                pixel[channel] = (1.0 - (-lit * 1.3).exp()) as f32;
+                *channel = (1.0 - (-lit * 1.3).exp()) as f32;
             }
             pixel[3] = 1.0;
         }

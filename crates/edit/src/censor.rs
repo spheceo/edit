@@ -160,7 +160,9 @@ fn analyse(cache: &Path, source: &Path) -> Result<Vec<u8>, String> {
     }
     Ok(output
         .stdout
-        .chunks_exact(WIDE * HIGH)
+        .as_chunks::<{ WIDE * HIGH }>()
+        .0
+        .iter()
         .map(|frame| u8::from(censored(frame)))
         .collect())
 }

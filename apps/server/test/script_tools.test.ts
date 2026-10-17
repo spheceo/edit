@@ -8,7 +8,7 @@ import type { App } from "../src/app.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import type { ScriptBlock, ScriptJob } from "../src/model.ts";
-import { routes, start, timing as scriptTiming } from "../src/script_tools.ts";
+import { researchRoutes, routes, start, timing as scriptTiming, voiceRoutes } from "../src/script_tools.ts";
 import * as tools from "../src/tools.ts";
 import { timing as transcribeTiming } from "../src/transcribe.ts";
 import { timing as voiceoverTiming } from "../src/voiceover.ts";
@@ -68,6 +68,8 @@ const DOC = `<html><head><title>Kent crash</title></head><body>
 function serve(app: App) {
   const router = baseRouter();
   routes(router);
+  voiceRoutes(router);
+  researchRoutes(router);
   return async (method: string, path: string, body?: unknown): Promise<[number, unknown]> => {
     const init: RequestInit = { method, headers: { host: "localhost:7700" } };
     if (body !== undefined) {

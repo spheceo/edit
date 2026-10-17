@@ -21,6 +21,8 @@
 // isn't here: call it directly.
 
 import type { App } from "./app.ts";
+import type { Router } from "./http/router.ts";
+import * as appModule from "./app_seam.ts";
 import * as brollModule from "./broll.ts";
 import * as captionsModule from "./captions.ts";
 import * as driveModule from "./drive.ts";
@@ -28,6 +30,7 @@ import * as editReviewModule from "./edit_review.ts";
 import * as footageSearchModule from "./footage_search.ts";
 import * as facesModule from "./faces.ts";
 import * as peopleModule from "./people.ts";
+import * as serverModule from "./server_seam.ts";
 import * as speakersModule from "./speakers.ts";
 import * as subtitlesModule from "./subtitles.ts";
 import * as voiceModule from "./voice.ts";
@@ -82,6 +85,33 @@ function stub<T extends object>(module: string, known: Partial<T> = {}): T {
 
 type Json = unknown;
 
+/** A package's REST routes (its handlers from server.rs), registered on the router. */
+export type Routes = (router: Router<App>) => void;
+
+/** Whether `error` is a seam's "not ported yet" (callers with a sensible fallback use it meanwhile). */
+export function isNotPorted(error: unknown): boolean {
+  return error instanceof Error && error.message.endsWith(" is not ported yet");
+}
+
+/**
+ * Until a package lands, its routes are there and answer that they aren't
+ * ported (a 500 naming them), so the server has every path server.rs has (the
+ * route-coverage test) and none falls through to the UI's shell. The package's
+ * own `routes` registers the same paths when it fills its seam.
+ */
+function placeholders(module: string, routes: [method: string, pattern: string, bodyLimit?: number | null][]): Routes {
+  return (router) => {
+    for (const [method, pattern, bodyLimit] of routes) {
+      router.route(
+        method,
+        pattern,
+        () => notPorted(`${module} (${method} ${pattern})`),
+        bodyLimit === undefined ? {} : { bodyLimit },
+      );
+    }
+  };
+}
+
 // ---------------------------------------------------------------------------
 // WP2: shell, server core, shipping
 
@@ -106,7 +136,8 @@ export interface Updater {
 export interface ServerSeam {
   /** `<exports folder>/<name>.mp4`: the media drive's `Exports` when one is set, else ~/Movies/Edit. */
   defaultExportPath(store: Store, project: Project): string;
-  // server.rs `review_found` went to research (WP4): `research.reviewFound`.
+  /** Sets a found image's status; kept the first time, it goes into the media bin, named after its caption (research.reviewFound's). */
+  reviewFound(app: App, id: string, item: string, status: string, origin: string): Promise<ResearchItem>;
 }
 
 export interface AppSeam {
@@ -114,8 +145,9 @@ export interface AppSeam {
   originalExe(): string;
 }
 
-export const server: ServerSeam = stub<ServerSeam>("server");
-export const app: AppSeam = stub<AppSeam>("app");
+// WP2 has landed: server_seam.ts and app_seam.ts.
+export const server: ServerSeam = serverModule;
+export const app: AppSeam = appModule;
 
 // ---------------------------------------------------------------------------
 // WP3: cloud
@@ -164,10 +196,35 @@ export interface CloudProjectsSeam {
   routes(router: import("./http/router.ts").Router<App>): void;
   /** On the way out: pushes what's left and lets every lock go. */
   shutdown(): Promise<void>;
+  /**
+   * The server's cloud projects (main.rs: `Cloud::open(home, machine)` then
+   * `cloud_projects::start`): attaches the store's hook and starts the push loop.
+   */
+  start(app: App): void;
+  /** `edit cloud …` outside a server: the relay token saved in Settings → Cloud, unless the env sets one. */
+  useSavedToken(home: string): void;
+}
+
+export interface CloudSeam {
+  /** `edit cloud [url | put | get | head | ls | rm | convex] …` (cloud.rs run_cli); exits as it did. */
+  runCli(args: string[]): Promise<void>;
 }
 
 export const cloudMedia: CloudMediaSeam = stub<CloudMediaSeam>("cloud_media");
-export const cloudProjects: CloudProjectsSeam = stub<CloudProjectsSeam>("cloud_projects");
+export const cloudProjects: CloudProjectsSeam = stub<CloudProjectsSeam>("cloud_projects", {
+  routes: placeholders("cloud_projects", [
+    ["GET", "/api/cloud"],
+    ["POST", "/api/cloud"],
+    ["GET", "/api/cloud/projects"],
+    ["GET", "/api/projects/{id}/cloud"],
+    ["POST", "/api/projects/{id}/cloud/open"],
+    ["POST", "/api/projects/{id}/cloud/close"],
+    ["POST", "/api/projects/{id}/cloud/takeover"],
+    ["POST", "/api/projects/{id}/cloud/upload"],
+    ["POST", "/api/projects/{id}/cloud/backfill"],
+  ]),
+});
+export const cloud: CloudSeam = stub<CloudSeam>("cloud");
 
 // ---------------------------------------------------------------------------
 // WP4: script, voice, research (filled: script.ts, voice.ts, voiceover.ts,
@@ -236,12 +293,8 @@ export interface ScriptSeam {
   start(app: App, projectId: string, recut: boolean): Promise<void> | null;
   summary(parsed: Parsed): Json;
   unfinished(project: Project): boolean;
-  /**
-   * The package's routes, registered on the router: `/api/voice/*`,
-   * `/api/scripts/preview`, `/api/projects/{id}/script(/job)` and
-   * `/api/projects/{id}/research/*`. WP2 calls it when it wires the server.
-   */
-  routes(router: import("./http/router.ts").Router<App>): void;
+  /** `/api/scripts/preview`, `/api/projects/{id}/script`, `/api/projects/{id}/script/job`. */
+  routes: Routes;
 }
 
 /** Voice-over projects (voice.rs Voices), `<home>/voice/<id>/`. */
@@ -266,6 +319,8 @@ export type VoiceProject = import("./voice.ts").VoiceProject;
 export interface VoiceSeam {
   /** The lines of a video project's script narration (its cut-ins), in order, with their labels. */
   narrationLines(project: Project): [string, string | null][];
+  /** `/api/voice/*`. */
+  routes: Routes;
 }
 
 export interface VoiceoverSeam {
@@ -331,6 +386,8 @@ export interface ResearchSeam {
   /** A found image shrunk into a 320×240 cell (letterboxed) as RGBA, for contact sheets. */
   thumbnail(path: string): Promise<import("./native/index.ts").RawImage | null>;
   update(home: string, project: string, id: string, change: (item: ResearchItem) => void): ResearchItem;
+  /** `/api/projects/{id}/research/*`. */
+  routes: Routes;
 }
 
 // Filled. Their modules import this file too; a namespace is there (if not

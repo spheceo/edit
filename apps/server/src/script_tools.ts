@@ -490,8 +490,8 @@ async function scriptResume(context: RouteContext<App>): Promise<Response> {
   return sortedJson({ job: app.scripts.get(id) });
 }
 
-/** The package's routes (voice-overs, scripts, research). */
-export function routes(router: Router<App>): void {
+/** The voice-over routes (`/api/voice/*`): `voice.routes`. */
+export function voiceRoutes(router: Router<App>): void {
   router.get("/api/voice", ({ app }) => sortedJson({ projects: app.voices.list() }));
   router.post("/api/voice", voiceCreate);
   router.get("/api/voice/voices", async (context) => {
@@ -552,7 +552,10 @@ export function routes(router: Router<App>): void {
       throw badOf(error);
     }
   });
+}
 
+/** The research routes (`/api/projects/{id}/research/*`): `research.routes`. */
+export function researchRoutes(router: Router<App>): void {
   router.get("/api/projects/{id}/research", ({ app, params }) => {
     const id = params.id ?? "";
     projectOr404(app, id);
@@ -575,7 +578,10 @@ export function routes(router: Router<App>): void {
     if (found === undefined) throw notFound("no such found image");
     return serveFile(request, found.file);
   });
+}
 
+/** The script routes (`/api/scripts/preview`, `/api/projects/{id}/script(/job)`): the script seam's. */
+export function routes(router: Router<App>): void {
   router.post("/api/scripts/preview", async (context) => {
     const given = await body(context, SCRIPT_BODY);
     return sortedJson(script.summary(await readScript(given.url as string)));
@@ -588,4 +594,3 @@ export function routes(router: Router<App>): void {
   });
   router.post("/api/projects/{id}/script/job", scriptResume);
 }
-

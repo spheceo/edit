@@ -1,0 +1,19 @@
+[package]
+name = "edit-window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Edit's desktop window: a Tauri webview onto the server `edit` runs"
+
+[[bin]]
+name = "edit-window"
+path = "src/main.rs"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[lints]
+workspace = true

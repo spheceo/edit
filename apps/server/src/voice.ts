@@ -582,3 +582,6 @@ async function speak(body: unknown, path: string): Promise<string | null> {
 }
 
 export { SerdeError };
+
+// Its routes live beside the package's other routes (script_tools.ts).
+export { voiceRoutes as routes } from "./script_tools.ts";

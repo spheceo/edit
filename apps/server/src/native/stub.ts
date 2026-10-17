@@ -289,7 +289,8 @@ export function createStub(): Stub {
     },
     shutdown() {},
     holdLock(path) {
-      if (locks.has(path)) return false;
+      // As the addon: held already by this process is held.
+      if (locks.has(path)) return true;
       fs.closeSync(fs.openSync(path, "a"));
       locks.add(path);
       return true;
@@ -461,7 +462,7 @@ export function createStub(): Stub {
     censorIssues() {
       return { issues: [], pending: [] };
     },
-    seatsScenes() {
+    async seatsScenes() {
       notInStub("seatsScenes");
     },
     async desktopFiles() {

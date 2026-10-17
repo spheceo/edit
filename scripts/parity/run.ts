@@ -343,6 +343,9 @@ function eventsOf(side: Side, from: number, context: Context): { project: unknow
       // Progress is a matter of timing: only the states reached count.
       const { progress: _progress, bytes: _bytes, frames: _frames, fps: _fps, done: _done, ...rest } = normalized;
       if (event.type === "export") delete rest.seconds;
+      // A download's bytes so far come a few times a second: only its states count.
+      const files = (rest.job as { files?: Record<string, unknown>[] } | undefined)?.files;
+      if (event.type === "script" && Array.isArray(files)) for (const file of files) delete file.bytes;
       other.add(JSON.stringify(sortKeys(rest)));
     }
   }

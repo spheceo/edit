@@ -26,6 +26,10 @@ pub struct Store {
     /// The project the UI opened last; agent tools default to it.
     active: Mutex<Option<String>>,
     events: broadcast::Sender<Value>,
+    /// Cloud projects (`crate::cloud_projects`): asked before every write
+    /// (a cloud project someone else is editing is refused) and told of each.
+    /// The server's store has it; tests' stores don't.
+    cloud: std::sync::OnceLock<std::sync::Arc<crate::cloud_projects::Cloud>>,
 }
 
 #[derive(Clone)]
@@ -60,6 +64,9 @@ pub enum UpdateError {
     NotFound,
     Conflict(Box<Live>),
     Invalid(String),
+    /// This machine may not change it now (a cloud project someone else is
+    /// editing), and why.
+    Refused(String),
 }
 
 impl Store {
@@ -76,7 +83,27 @@ impl Store {
             projects: Mutex::new(HashMap::new()),
             active: Mutex::new(None),
             events,
+            cloud: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Makes this store's writes go through `cloud` (the server's store).
+    pub fn attach_cloud(&self, cloud: std::sync::Arc<crate::cloud_projects::Cloud>) {
+        let _ = self.cloud.set(cloud);
+    }
+
+    /// Cloud projects, when attached (the server's store).
+    pub fn cloud(&self) -> Option<&std::sync::Arc<crate::cloud_projects::Cloud>> {
+        self.cloud.get()
+    }
+
+    /// Whether project `id` may be changed here now: a cloud project only
+    /// while this machine holds its lock (`crate::cloud_projects`).
+    pub fn may_write(&self, id: &str) -> Result<(), String> {
+        match self.cloud() {
+            Some(cloud) => cloud.may_write(self, id),
+            None => Ok(()),
+        }
     }
 
     pub fn cache_dir(&self) -> PathBuf {
@@ -293,8 +320,64 @@ impl Store {
         project.validate()?;
         self.write(&project).map_err(|error| error.to_string())?;
         let live = Live { rev: 1, project };
-        self.projects.lock().insert(id, live.clone());
+        self.projects.lock().insert(id.clone(), live.clone());
+        if let Some(cloud) = self.cloud() {
+            cloud.created(&id);
+        }
         Ok(live)
+    }
+
+    /// A copy of `project` under a new id and `name`, kept on this machine
+    /// only (a cloud conflict's "conflicted copy"): cloud projects aren't told.
+    pub fn create_copy(&self, project: &Project, name: &str) -> Result<Live, String> {
+        let mut project = project.clone();
+        project.id = format!("p{}-{}", now_ms(), next_file_id());
+        project.name = name.to_owned();
+        project.drive = None;
+        project.validate()?;
+        self.write(&project).map_err(|error| error.to_string())?;
+        let live = Live { rev: 1, project };
+        self.projects
+            .lock()
+            .insert(live.project.id.clone(), live.clone());
+        Ok(live)
+    }
+
+    /// Takes `project` as it is in the cloud (`crate::cloud_projects`): saved
+    /// over this machine's copy, or as a new project, without asking the
+    /// cloud projects (it's not an edit made here). Clients see it as a `project`
+    /// event from `origin`.
+    pub fn put_from_cloud(&self, mut project: Project, origin: &str) -> Result<Live, String> {
+        let id = project.id.clone();
+        if !valid_id(&id) {
+            return Err(format!("not a project id: {id:?}"));
+        }
+        self.layout.read().resolve_project(&mut project);
+        project.validate()?;
+        for _ in 0..5 {
+            let current = match self.load(&id) {
+                Ok(current) => current,
+                Err(None) => {
+                    self.write(&project).map_err(|error| error.to_string())?;
+                    let live = Live { rev: 1, project };
+                    self.projects.lock().insert(id, live.clone());
+                    return Ok(live);
+                }
+                // Never written over (see `list`).
+                Err(Some(problem)) => {
+                    return Err(format!("this machine's copy of {id} won't load: {problem}"))
+                }
+            };
+            match self.commit_unguarded(&id, current.rev, project.clone(), origin) {
+                Ok(live) => return Ok(live),
+                Err(UpdateError::Conflict(_)) => continue,
+                Err(UpdateError::NotFound) => continue,
+                Err(UpdateError::Invalid(error) | UpdateError::Refused(error)) => {
+                    return Err(error)
+                }
+            }
+        }
+        Err(format!("{id} kept changing; try again"))
     }
 
     pub fn delete(&self, id: &str) -> bool {
@@ -352,12 +435,32 @@ impl Store {
             .map_err(|error| match error {
                 UpdateError::NotFound => "project was deleted while editing".to_owned(),
                 UpdateError::Conflict(_) => "project changed while editing; retry".to_owned(),
-                UpdateError::Invalid(error) => error,
+                UpdateError::Invalid(error) | UpdateError::Refused(error) => error,
             })?;
         Ok((live, value))
     }
 
+    /// Saves `project` as the next rev after `rev`, if cloud projects let this
+    /// machine change it (every write path ends here).
     fn commit(
+        &self,
+        id: &str,
+        rev: u64,
+        project: Project,
+        origin: &str,
+    ) -> Result<Live, UpdateError> {
+        let cloud = self.cloud();
+        if let Some(cloud) = cloud {
+            cloud.may_write(self, id).map_err(UpdateError::Refused)?;
+        }
+        let live = self.commit_unguarded(id, rev, project, origin)?;
+        if let Some(cloud) = cloud {
+            cloud.wrote(id);
+        }
+        Ok(live)
+    }
+
+    fn commit_unguarded(
         &self,
         id: &str,
         rev: u64,

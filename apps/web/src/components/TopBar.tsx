@@ -1,8 +1,9 @@
-import { ChevronLeft, Cloud, CloudUpload, Copy, ExternalLink, Redo2, Share, Undo2 } from "lucide-react";
+import { ChevronLeft, Cloud, CloudAlert, CloudCheck, CloudOff, CloudSync, CloudUpload, Copy, ExternalLink, Lock, Redo2, Share, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { useConnection } from "../lib/api";
+import { syncLabel } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
@@ -11,7 +12,7 @@ import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Mark } from "./Logo";
 import { UpdateButton } from "./UpdateButton";
-import { Button, IconButton } from "./ui";
+import { Button, cx, IconButton } from "./ui";
 
 export function TopBar({ onExport }: { onExport: () => void }) {
   const name = useEditor((state) => state.project?.name ?? "");
@@ -29,6 +30,7 @@ export function TopBar({ onExport }: { onExport: () => void }) {
       <Mark size={20} />
       <NameField value={name} />
       <History />
+      <SyncState />
       {/* Only worth a word when the server is away. */}
       <AnimatePresence>
         {down && (
@@ -62,6 +64,30 @@ export function TopBar({ onExport }: { onExport: () => void }) {
         </Button>
       </div>
     </header>
+  );
+}
+
+/** A cloud project's sync: saved to cloud, syncing, offline, conflict, read-only. */
+function SyncState() {
+  const cloud = useEditor((state) => state.cloud);
+  const label = syncLabel(cloud);
+  if (!label) return null;
+  const Icon = { ok: CloudCheck, busy: CloudSync, warn: label.text === "Read-only" ? Lock : CloudOff, bad: CloudAlert }[label.tone];
+  const title = cloud?.message ?? (cloud?.sync === "readonly" ? `${cloud.holder} is editing` : cloud?.sync === "offline" ? "Changes are saved on this Mac and go to the cloud when it's back" : label.text);
+  return (
+    <span
+      title={title}
+      className={cx(
+        "ml-1 flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[12px]",
+        label.tone === "ok" && "text-faint",
+        label.tone === "busy" && "text-muted",
+        label.tone === "warn" && "text-amber-300/80",
+        label.tone === "bad" && "text-red-300",
+      )}
+    >
+      <Icon size={14} className={label.tone === "busy" ? "animate-pulse" : undefined} />
+      {label.text}
+    </span>
   );
 }
 

@@ -50,9 +50,19 @@ const STALL: [&str; 6] = [
     "30",
 ];
 
-/// Whether cloud calls can work: `EDIT_RELAY_TOKEN` is set.
+/// Cloud switched off in Settings (`crate::cloud_projects`), whatever the token.
+static OFF: AtomicBool = AtomicBool::new(false);
+
+/// Whether cloud calls can work and are wanted: a relay token is set
+/// (`EDIT_RELAY_TOKEN`, else the one saved in Settings → Cloud) and cloud
+/// isn't switched off.
 pub fn enabled() -> bool {
-    crate::relay::token().is_some()
+    !OFF.load(Ordering::Relaxed) && crate::relay::token().is_some()
+}
+
+/// Switches cloud off (or back on) for this process (Settings → Cloud).
+pub fn set_off(off: bool) {
+    OFF.store(off, Ordering::Relaxed);
 }
 
 /// POSTs `body` to the relay's `/v1/cloud/<path>` and returns its JSON answer.
@@ -683,14 +693,78 @@ fn fetch(
 /// adds the service token). `kind` is "query", "mutation" or "action";
 /// `path` like "edit:getProject"; the function's value, or its error.
 pub fn convex(kind: &str, path: &str, args: Value) -> Result<Value, String> {
+    convex_call(kind, path, args, 120).map_err(|failure| failure.to_string())
+}
+
+/// Why a Convex call failed: the relay couldn't be reached (offline), the
+/// relay refused it (a bad token, a bad request), or the function threw;
+/// then `code` is its `errorData.code` (Edit's functions use `conflict`,
+/// `locked`, `missing_body` and `invalid`) and `data` the whole `errorData`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConvexFailure {
+    Unreachable(String),
+    Relay(String),
+    Function {
+        message: String,
+        code: Option<String>,
+        data: Value,
+    },
+}
+
+impl ConvexFailure {
+    /// The function's error code (`conflict`, `locked`, …), if it threw one.
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            ConvexFailure::Function { code, .. } => code.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ConvexFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConvexFailure::Unreachable(message) | ConvexFailure::Relay(message) => {
+                f.write_str(message)
+            }
+            ConvexFailure::Function { message, .. } => write!(f, "Convex: {message}"),
+        }
+    }
+}
+
+/// [`convex`] with its failure kept apart (see [`ConvexFailure`]) and a
+/// timeout in seconds.
+pub fn convex_call(
+    kind: &str,
+    path: &str,
+    args: Value,
+    timeout: u64,
+) -> Result<Value, ConvexFailure> {
     if !matches!(kind, "query" | "mutation" | "action") {
-        return Err(format!("not a Convex function kind: {kind}"));
+        return Err(ConvexFailure::Relay(format!(
+            "not a Convex function kind: {kind}"
+        )));
     }
     if !args.is_object() {
-        return Err("Convex args must be an object".to_owned());
+        return Err(ConvexFailure::Relay(
+            "Convex args must be an object".to_owned(),
+        ));
     }
     crate::diag::time_on("cloud", &format!("cloud: convex {kind}"), path, || {
-        let answer = relay_json("convex", &json!({"kind": kind, "path": path, "args": args}))?;
+        let answer = crate::relay::json(
+            "POST",
+            "/v1/cloud/convex",
+            Some(&json!({"kind": kind, "path": path, "args": args})),
+            "cloud storage",
+            timeout,
+        )
+        .map_err(|error| {
+            if error.starts_with(crate::relay::UNREACHABLE) {
+                ConvexFailure::Unreachable(error)
+            } else {
+                ConvexFailure::Relay(error)
+            }
+        })?;
         convex_value(answer)
     })
 }
@@ -705,22 +779,35 @@ pub fn mutation(path: &str, args: Value) -> Result<Value, String> {
     convex("mutation", path, args)
 }
 
-/// Convex's `{status: "success", value}` / `{status: "error", errorMessage}`.
-fn convex_value(mut answer: Value) -> Result<Value, String> {
+/// Convex's `{status: "success", value}` / `{status: "error", errorMessage,
+/// errorData}`. A ConvexError's own message (`errorData.message`) is
+/// preferred: `errorMessage` wraps it in Convex's "Uncaught ConvexError: …".
+fn convex_value(mut answer: Value) -> Result<Value, ConvexFailure> {
     let text = |name: &str| answer.get(name).and_then(Value::as_str);
     match text("status") {
         Some("success") => Ok(answer
             .get_mut("value")
             .map(Value::take)
             .unwrap_or(Value::Null)),
-        Some("error") => Err(format!(
-            "Convex: {}",
-            text("errorMessage").unwrap_or("unknown error")
-        )),
-        _ => Err(format!(
+        Some("error") => {
+            let data = answer.get("errorData").cloned().unwrap_or(Value::Null);
+            let message = data
+                .get("message")
+                .and_then(Value::as_str)
+                .or(text("errorMessage"))
+                .unwrap_or("unknown error")
+                .to_owned();
+            let code = data.get("code").and_then(Value::as_str).map(str::to_owned);
+            Err(ConvexFailure::Function {
+                message,
+                code,
+                data,
+            })
+        }
+        _ => Err(ConvexFailure::Relay(format!(
             "unexpected answer from Convex: {}",
             answer.to_string().chars().take(300).collect::<String>()
-        )),
+        ))),
     }
 }
 
@@ -880,10 +967,23 @@ mod tests {
             Ok(json!({"id": 1}))
         );
         assert_eq!(convex_value(json!({"status": "success"})), Ok(Value::Null));
-        assert_eq!(
-            convex_value(json!({"status": "error", "errorMessage": "Uncaught Error: no"})),
-            Err("Convex: Uncaught Error: no".to_owned())
-        );
+        let plain = convex_value(json!({"status": "error", "errorMessage": "Uncaught Error: no"}))
+            .unwrap_err();
+        assert_eq!(plain.to_string(), "Convex: Uncaught Error: no");
+        assert_eq!(plain.code(), None);
+        // A ConvexError keeps its code and data (Edit's `conflict`, `locked`, …).
+        let conflict = convex_value(json!({
+            "status": "error",
+            "errorMessage": "Uncaught ConvexError: {...}",
+            "errorData": {"code": "conflict", "message": "saved elsewhere", "rev": 7},
+        }))
+        .unwrap_err();
+        assert_eq!(conflict.code(), Some("conflict"));
+        assert_eq!(conflict.to_string(), "Convex: saved elsewhere");
+        match conflict {
+            ConvexFailure::Function { data, .. } => assert_eq!(data["rev"], 7),
+            other => panic!("{other:?}"),
+        }
         assert!(convex_value(json!({"what": 1})).is_err());
     }
 

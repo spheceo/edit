@@ -22,6 +22,8 @@ export interface Media {
   has_audio: boolean;
   /** Points marked in the source, carried by every clip of it (a sound's hit, a beat). */
   markers?: Marker[];
+  /** Footage kept in the cloud (R2): `path` is this machine's copy of its proxy. */
+  cloud?: { source: string; original: string; proxy?: string; size: number };
 }
 
 export interface Marker {

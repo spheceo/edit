@@ -2318,6 +2318,7 @@ mod tests {
             fps: 30.0,
             has_audio: true,
             markers: Vec::new(),
+            cloud: None,
         });
         let footage = |start: f64, end: f64| ScriptBlock::Footage {
             url: String::new(),

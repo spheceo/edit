@@ -217,6 +217,26 @@ pub struct Media {
     /// Points marked in the source, carried by every clip of it (a sound's hit, a beat).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<Marker>,
+    /// Footage kept in the cloud (R2): the original stays there and `path`
+    /// is this machine's copy of its small proxy (`crate::cloud_media` in edit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<CloudMedia>,
+}
+
+/// Where a cloud media's files are on R2 (keys under `edit/`).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct CloudMedia {
+    /// What it was made from, the key of Convex's footage registry (`edit:getMedia`):
+    /// `drive:<file id>`, or `sha256:<hex>` for a file from a disk.
+    pub source: String,
+    /// The full-quality file, read by export.
+    pub original: String,
+    /// The proxy every machine edits with, once it's made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
+    /// Bytes of the original.
+    #[serde(default)]
+    pub size: u64,
 }
 
 /// A point in a media file.

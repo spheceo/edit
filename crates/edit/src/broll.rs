@@ -397,6 +397,7 @@ async fn swap_in_smooth(
                     fps: probe.fps,
                     has_audio: probe.has_audio,
                     markers: Vec::new(),
+                    cloud: None,
                 });
                 id
             }

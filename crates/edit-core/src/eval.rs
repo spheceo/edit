@@ -736,6 +736,7 @@ mod tests {
             fps: 30.0,
             has_audio: true,
             markers: Vec::new(),
+            cloud: None,
         });
         let v1 = project.tracks[0].id.clone();
         let v2 = project.tracks[1].id.clone();

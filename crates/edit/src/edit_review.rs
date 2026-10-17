@@ -135,6 +135,7 @@ mod tests {
             fps: 30.0,
             has_audio: true,
             markers: vec![],
+            cloud: None,
         });
         let a = p
             .tracks

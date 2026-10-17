@@ -3,6 +3,7 @@ mod app;
 mod broll;
 mod captions;
 mod cloud;
+mod cloud_media;
 mod cutin;
 mod diag;
 mod drive;

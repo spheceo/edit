@@ -1020,6 +1020,7 @@ pub async fn import_paths(
                         fps: probe.fps,
                         has_audio: probe.has_audio,
                         markers: Vec::new(),
+                        cloud: None,
                     });
                     media_id
                 }

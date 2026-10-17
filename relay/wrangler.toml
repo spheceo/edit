@@ -6,6 +6,20 @@ compatibility_date = "2026-09-07"
 workers_dev = true
 preview_urls = false
 
+# Secrets (`bunx wrangler secret put NAME`; for `wrangler dev`, relay/.dev.vars,
+# gitignored). Never in this file:
+#   ELEVENLABS_API_KEY, ELEVENLABS_SPEECH_KEY, GOOGLE_MAPS_KEY, CLIENT_TOKEN
+# Edit's cloud (/v1/cloud/*, src/cloud.ts); without CLOUD_TOKEN every cloud
+# request is refused:
+#   CLOUD_TOKEN            the bearer token Edit sends (its EDIT_RELAY_TOKEN; if
+#                          CLIENT_TOKEN is set too, it must be the same value)
+#   R2_ACCOUNT_ID          Cloudflare account id (<id>.r2.cloudflarestorage.com)
+#   R2_ACCESS_KEY_ID       an R2 API token's S3 access key id
+#   R2_SECRET_ACCESS_KEY   and its secret
+#   R2_BUCKET              the bucket (shared with Repack; Edit only uses edit/…)
+#   CONVEX_URL             the Convex deployment, https://….convex.cloud
+#   CONVEX_SERVICE_TOKEN   added as args.token to every edit: function call
+
 [vars]
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.

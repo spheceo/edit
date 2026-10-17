@@ -23,27 +23,26 @@ export function toI64(value: number): number {
   return Math.trunc(value);
 }
 
-/**
- * `format!("{:.N}", value)`: the exact binary value rounded to `digits`
- * decimals, an exact tie to the even digit (JS's toFixed takes the larger).
- */
-export function fixed(value: number, digits: number): string {
-  if (Number.isNaN(value)) return "NaN";
-  if (!Number.isFinite(value)) return value > 0 ? "inf" : "-inf";
-  const negative = value < 0 || Object.is(value, -0);
-  const size = Math.abs(value);
-  if (size >= 1e21) return `${negative ? "-" : ""}${size.toFixed(digits)}`;
-  let out = size.toFixed(digits);
-  // A tie has at most digits+1 decimals, the last a 5: the exact expansion shows it.
-  const exact = size.toFixed(Math.min(digits + 30, 100));
-  const point = exact.indexOf(".");
-  const rest = point < 0 ? "" : exact.slice(point + 1 + digits);
-  if (/^50*$/.test(rest)) {
-    const truncated = point < 0 ? exact : exact.slice(0, digits === 0 ? point : point + 1 + digits);
-    const last = truncated.replace(".", "").slice(-1);
-    if (Number(last) % 2 === 0) out = truncated;
-  }
-  return `${negative ? "-" : ""}${out}`;
+/** Rust's `format!("{:.digits$}", x)`. */
+export function fixed(x: number, digits: number): string {
+  if (Number.isNaN(x)) return "NaN";
+  if (!Number.isFinite(x)) return x > 0 ? "inf" : "-inf";
+  const negative = x < 0 || Object.is(x, -0);
+  const magnitude = Math.abs(x);
+  // toFixed(100) is the exact decimal of every double we'll meet (and of
+  // every one where a tie could matter).
+  const exact = magnitude >= 1e21 ? BigInt(magnitude).toString() : magnitude.toFixed(100);
+  const [whole, fraction = ""] = exact.split(".");
+  let kept = (whole ?? "0") + fraction.slice(0, digits).padEnd(digits, "0");
+  const rest = fraction.slice(digits);
+  const first = rest.charCodeAt(0) - 48;
+  const tail = /[1-9]/.test(rest.slice(1));
+  const last = Number(kept.at(-1) ?? "0");
+  const up = first > 5 || (first === 5 && (tail || last % 2 === 1));
+  if (up) kept = increment(kept);
+  const intLength = kept.length - digits;
+  const text = digits === 0 ? kept : `${kept.slice(0, intLength)}.${kept.slice(intLength)}`;
+  return negative ? `-${text}` : text;
 }
 
 /** The characters (code points) of `text`, as `str::chars`. */
@@ -113,4 +112,175 @@ export function parseHex(text: string, max = 0xffff_ffff): number | null {
 /** The value of an own key of a map-like object (a BTreeMap<String, _> read from JSON). */
 export function get<T>(map: Record<string, T> | undefined | null, key: string): T | undefined {
   return map !== undefined && map !== null && Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+// Formatting helpers the editing tools (WP7) brought.
+function increment(digits: string): string {
+  const out = digits.split("");
+  for (let index = out.length - 1; index >= 0; index--) {
+    if (out[index] === "9") {
+      out[index] = "0";
+    } else {
+      out[index] = String(Number(out[index]) + 1);
+      return out.join("");
+    }
+  }
+  return `1${out.join("")}`;
+}
+
+/** Rust's `format!("{:+.digits$}", x)`. */
+export function signed(x: number, digits: number): string {
+  const text = fixed(x, digits);
+  return text.startsWith("-") || Number.isNaN(x) ? text : `+${text}`;
+}
+
+/** An f32 field's `{:.N}`: the f32's own exact value is what Rust rounded. */
+export function fixed32(x: number, digits: number): string {
+  return fixed(Math.fround(x), digits);
+}
+
+/** An f32 field's `{:+.N}`. */
+export function signed32(x: number, digits: number): string {
+  return signed(Math.fround(x), digits);
+}
+
+/** Rust's `{}` of an f64: the shortest decimal that round-trips, never in exponent form. */
+export function display(x: number): string {
+  if (Number.isNaN(x)) return "NaN";
+  if (!Number.isFinite(x)) return x > 0 ? "inf" : "-inf";
+  if (Object.is(x, -0)) return "-0";
+  return plain(String(x));
+}
+
+/** Rust's `{}` of an f32. */
+export function display32(x: number): string {
+  return display(f32(x));
+}
+
+/** A JS number's text without an exponent ("1e-7" → "0.0000001"). */
+function plain(text: string): string {
+  const match = /^(-?)(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(text);
+  if (match === null) return text;
+  const [, sign, lead, rest = "", power] = match;
+  const digits = `${lead}${rest}`;
+  const exponent = Number(power);
+  if (exponent >= 0) {
+    const whole = digits.padEnd(exponent + 1, "0");
+    const point = exponent + 1;
+    const fraction = whole.slice(point);
+    return `${sign}${whole.slice(0, point)}${fraction === "" ? "" : `.${fraction}`}`;
+  }
+  return `${sign}0.${"0".repeat(-exponent - 1)}${digits}`;
+}
+
+/**
+ * What Rust's `{:?}` writes as `\u{…}`: what core::unicode's `is_printable`
+ * calls unprintable (control, format, private-use, unassigned, line and
+ * paragraph separators, and spaces other than the plain one), and a
+ * combining mark opening the string.
+ */
+const UNPRINTABLE = /^(?:[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]|(?! )\p{Zs})$/u;
+const COMBINING = /^\p{Grapheme_Extend}$/u;
+
+/** Rust's `{:?}` of a string: quoted, with Rust's escapes. */
+export function debugStr(text: string): string {
+  let out = '"';
+  let first = true;
+  for (const char of text) {
+    const code = char.codePointAt(0)!;
+    const opening = first;
+    first = false;
+    if (opening && COMBINING.test(char)) {
+      out += `\\u{${code.toString(16)}}`;
+      continue;
+    }
+    switch (char) {
+      case '"':
+        out += '\\"';
+        break;
+      case "\\":
+        out += "\\\\";
+        break;
+      case "\n":
+        out += "\\n";
+        break;
+      case "\r":
+        out += "\\r";
+        break;
+      case "\t":
+        out += "\\t";
+        break;
+      case "\0":
+        out += "\\0";
+        break;
+      default:
+        out += UNPRINTABLE.test(char) ? `\\u{${code.toString(16)}}` : char;
+    }
+  }
+  return `${out}"`;
+}
+
+/** Rust's `{:?}` of a `Vec<String>`: `["a", "b"]`. */
+export function debugStrings(items: readonly string[]): string {
+  return `[${items.map(debugStr).join(", ")}]`;
+}
+
+/** Rust's `{:?}` of a `Vec<i64>`: `[1, 2]`. */
+export function debugInts(items: readonly number[]): string {
+  return `[${items.join(", ")}]`;
+}
+
+const I64_MAX = 9_223_372_036_854_775_807;
+
+/** `x as i64`: truncated toward zero, NaN as 0, saturating. */
+export function asInt(x: number): number {
+  if (Number.isNaN(x)) return 0;
+  if (x >= I64_MAX) return I64_MAX;
+  if (x <= -I64_MAX) return -I64_MAX;
+  return Math.trunc(x) + 0;
+}
+
+/** i64 division: truncates toward zero. */
+export function idiv(a: number, b: number): number {
+  return Math.trunc(a / b) + 0;
+}
+
+/** `i64::rem_euclid`. */
+export function remEuclid(a: number, b: number): number {
+  const r = a % b;
+  return r < 0 ? r + Math.abs(b) : r + 0;
+}
+
+/** The first `count` chars (Rust's `chars().take(count)`). */
+export function takeChars(text: string, count: number): string {
+  let out = "";
+  let taken = 0;
+  for (const char of text) {
+    if (taken === count) break;
+    out += char;
+    taken += 1;
+  }
+  return out;
+}
+
+/** Rust's String order (UTF-8 bytes) for sorting ids. */
+export function compareStrings(a: string, b: string): number {
+  if (a === b) return 0;
+  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
+/**
+ * An f32 as serde writes it (the shortest decimal that is that f32), as a JS
+ * number: what an f32 field holds once the addon has saved it. Not the same
+ * as `f32` (Math.fround), which is for f32 arithmetic.
+ */
+export function f32Saved(x: number): number {
+  if (!Number.isFinite(x)) return x;
+  const single = Math.fround(x);
+  if (single === 0) return Object.is(single, -0) ? -0 : 0;
+  for (let precision = 1; precision <= 9; precision++) {
+    const shortest = Number(single.toPrecision(precision));
+    if (Math.fround(shortest) === single) return shortest;
+  }
+  return single;
 }

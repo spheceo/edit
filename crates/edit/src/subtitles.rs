@@ -1148,6 +1148,35 @@ fn same_person_same_colour(voices: &mut BTreeMap<String, Voice>, lines: &mut [Li
     }
 }
 
+/// No two people alike across the files (each transcript picks its colours
+/// on its own), and no official in pink (`speakers::distinct`).
+fn spread_colours(voices: &mut BTreeMap<String, Voice>, lines: &[Line]) {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for line in lines {
+        *counts.entry(line.speaker.as_str()).or_default() += 1;
+    }
+    let keys: Vec<String> = voices.keys().cloned().collect();
+    let colors = {
+        let people: Vec<crate::speakers::Person> = keys
+            .iter()
+            .filter_map(|key| {
+                let voice = voices.get(key)?;
+                Some(crate::speakers::Person {
+                    role: &voice.role,
+                    lines: counts.get(key.as_str()).copied().unwrap_or(0),
+                    color: &voice.color,
+                })
+            })
+            .collect();
+        crate::speakers::distinct(&people)
+    };
+    for (key, color) in keys.iter().zip(colors) {
+        if let Some(voice) = voices.get_mut(key) {
+            voice.color = color;
+        }
+    }
+}
+
 /// Subtitles and mutes the Repack way for everything said in the footage
 /// between `from` and `to`: replaces subtitles made before in that span (by
 /// this or add_subtitles) and the mutes on the footage's sound there.
@@ -1255,6 +1284,7 @@ pub async fn repack_subtitles(
     }
     narrators_in_footage(&project, &mut voices, &mut lines);
     same_person_same_colour(&mut voices, &mut lines);
+    spread_colours(&mut voices, &lines);
     uncram(&mut lines);
     let role = |key: &str| voices.get(key).map_or("other", |voice| voice.role.as_str());
     let shown = shown(

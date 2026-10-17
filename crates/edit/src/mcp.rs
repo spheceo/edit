@@ -854,7 +854,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 crate::edit_plan::apply_with(&mut project, operations, &assets)
             })?;
             let dry_run = args["dry_run"].as_bool().unwrap_or(false);
-            let audit = crate::edit_plan::audit(&project);
+            let audit = audited(app, &project);
             let live = if dry_run {
                 crate::store::Live { rev: base, project }
             } else {
@@ -883,7 +883,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
         "review_edit" => {
             let frames = review_frames(args.get("frames"))?;
             let live = store.get(&id).ok_or("project vanished")?;
-            let report = json!({"rev":live.rev, "audit":crate::edit_plan::audit(&live.project), "subtitle_coverage":subtitle_coverage(app, &live.project), "smoothing":crate::broll::smoothing_pending(&id)});
+            let report = json!({"rev":live.rev, "audit":audited(app, &live.project), "subtitle_coverage":subtitle_coverage(app, &live.project), "smoothing":crate::broll::smoothing_pending(&id)});
             with_review(app, live.project, frames, report).await
         }
         "get_project" => {
@@ -2342,12 +2342,40 @@ async fn with_review(
 }
 
 fn subtitle_coverage(app: &App, project: &Project) -> Value {
+    crate::edit_review::subtitle_coverage(project, &cached_transcripts(app, project, true))
+}
+
+/// The plan's mechanical audit, plus what it needs the media cache for: B-roll
+/// that's mostly pixelated or blurred (files not read yet start reading and
+/// are listed as pending) and quote callouts away from the words that point
+/// to them.
+fn audited(app: &App, project: &Project) -> Value {
+    let mut audit = crate::edit_plan::audit(project);
+    let mut extra =
+        crate::edit_review::callout_timing(project, &cached_transcripts(app, project, false));
+    let (censored, pending) = crate::censor::issues(project, &app.store.cache_dir(), true);
+    extra.extend(censored);
+    if let Some(issues) = audit["issues"].as_array_mut() {
+        issues.extend(extra);
+        issues.sort_by_key(Value::to_string);
+    }
+    if !pending.is_empty() {
+        audit["censor_check_pending"] = json!(pending);
+    }
+    audit
+}
+
+/// The transcripts already made for the project's media (footage only, or
+/// every file with sound: voice-overs too).
+fn cached_transcripts(
+    app: &App,
+    project: &Project,
+    footage_only: bool,
+) -> std::collections::HashMap<String, crate::transcribe::Transcript> {
     let mut transcripts = std::collections::HashMap::new();
-    for media in project
-        .media
-        .iter()
-        .filter(|media| media.has_audio && media.kind == edit_core::MediaKind::Video)
-    {
+    for media in project.media.iter().filter(|media| {
+        media.has_audio && (!footage_only || media.kind == edit_core::MediaKind::Video)
+    }) {
         let path = app
             .media
             .paths(std::path::Path::new(&media.path))
@@ -2359,7 +2387,7 @@ fn subtitle_coverage(app: &App, project: &Project) -> Value {
             }
         }
     }
-    crate::edit_review::subtitle_coverage(project, &transcripts)
+    transcripts
 }
 
 fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
@@ -2493,7 +2521,7 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
     if ids.is_some() {
         // A revision's lookup: just those clips, and where things stand.
         return json!({"rev": live.rev, "duration_frames": p.duration(), "clips": clips,
-            "audit": crate::edit_plan::audit(p)});
+            "audit": audited(app, p)});
     }
     // Keep cut-in numbers stable when a span hides some.
     let cut_ins: Vec<Value> = cut_ins
@@ -2542,7 +2570,7 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
         "times": "clip rows are `id track type [start,end) frames …`; cut-in words are word@timeline-seconds",
         "tracks":tracks, "sections":sections, "media":media, "speaker_line_counts":speakers,
         "subtitles_in_span": subtitles, "footage_blocks":footage, "cut_ins":cut_ins,
-        "audit":crate::edit_plan::audit(p), "smoothing":crate::broll::smoothing_pending(&p.id)});
+        "audit":audited(app, p), "smoothing":crate::broll::smoothing_pending(&p.id)});
     let span =
         (from.is_some() || to.is_some()).then(|| (from.unwrap_or(0), to.unwrap_or(i64::MAX)));
     let markers = crate::markers::listing(p, span);

@@ -2,6 +2,7 @@ mod agent;
 mod app;
 mod broll;
 mod captions;
+mod censor;
 mod cloud;
 mod cloud_media;
 mod cloud_projects;

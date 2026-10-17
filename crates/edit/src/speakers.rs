@@ -470,6 +470,106 @@ fn apart(a: &str, b: &str) -> f64 {
     ((l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2)).sqrt()
 }
 
+/// Officers and other officials (sergeants, detectives, dispatch): never in
+/// pink or magenta, which go to civilians (an officer in hot pink was sent
+/// back: Mom & Teen, 2026-10-17). Medics keep Repack's magenta code.
+fn official(role: &str) -> bool {
+    matches!(role, "officer" | "leader" | "dispatch")
+}
+
+/// Whether a colour reads as pink or magenta (a light red too).
+pub fn pinkish(hex: &str) -> bool {
+    let channel = |at: usize| {
+        hex.get(at..at + 2)
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+            .map_or(0.0, |v| f64::from(v) / 255.0)
+    };
+    let (r, g, b) = (channel(1), channel(3), channel(5));
+    let (high, low) = (r.max(g).max(b), r.min(g).min(b));
+    let chroma = high - low;
+    if high <= 0.0 || chroma / high < 0.2 {
+        return false;
+    }
+    let hue = if high == r {
+        60.0 * (((g - b) / chroma).rem_euclid(6.0))
+    } else if high == g {
+        60.0 * ((b - r) / chroma + 2.0)
+    } else {
+        60.0 * ((r - g) / chroma + 4.0)
+    };
+    (285.0..=350.0).contains(&hue) || ((hue > 350.0 || hue < 8.0) && low > 0.45)
+}
+
+/// Whether `color` may go to someone in `role`.
+fn allowed(role: &str, color: &str) -> bool {
+    !(official(role) && pinkish(color))
+}
+
+/// One person on screen across the whole video, for `distinct`.
+pub struct Person<'a> {
+    pub role: &'a str,
+    /// Lines (or words) they say: who says most keeps their colour.
+    pub lines: usize,
+    pub color: &'a str,
+}
+
+/// Colours for people across a whole video (several files, each with its own
+/// transcript colours): who says most keeps their colour; anyone whose colour
+/// is too near one already taken (DISTINCT), or not allowed for their role
+/// (pink on an official), gets the next of their role's colours that stands
+/// apart. The narrator and background talk stay white.
+pub fn distinct(people: &[Person]) -> Vec<String> {
+    let victim = people.iter().any(|person| person.role == "victim");
+    let mut order: Vec<usize> = (0..people.len()).collect();
+    order.sort_by_key(|&index| {
+        std::cmp::Reverse(people.get(index).map_or(0, |person| person.lines))
+    });
+    let mut out: Vec<String> = people
+        .iter()
+        .map(|person| person.color.to_owned())
+        .collect();
+    let mut taken: Vec<String> = Vec::new();
+    for index in order {
+        let Some(person) = people.get(index) else {
+            continue;
+        };
+        if person.role == "narrator" || person.role == BACKGROUND {
+            continue;
+        }
+        let nearest = |color: &str| {
+            taken
+                .iter()
+                .map(|other| apart(color, other))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let color = if allowed(person.role, person.color) && nearest(person.color) >= DISTINCT {
+            person.color.to_owned()
+        } else {
+            let choices = || {
+                palette(person.role, victim)
+                    .iter()
+                    .chain(&OTHER)
+                    .chain(&SPARE)
+                    .filter(|color| allowed(person.role, color))
+            };
+            choices()
+                .find(|color| nearest(color) >= DISTINCT)
+                .or_else(|| {
+                    choices().fold(None, |best: Option<&&str>, color| match best {
+                        Some(best) if nearest(color) <= nearest(best) => Some(best),
+                        _ => Some(color),
+                    })
+                })
+                .map_or_else(|| person.color.to_owned(), |color| (*color).to_owned())
+        };
+        taken.push(color.clone());
+        if let Some(slot) = out.get_mut(index) {
+            *slot = color;
+        }
+    }
+    out
+}
+
 /// A role read from a label when none was given ("Raven (Officer)" → officer).
 pub fn role_from_label(label: &str) -> &'static str {
     let words: Vec<String> = label
@@ -597,7 +697,13 @@ pub fn colors(transcript: &Transcript) -> BTreeMap<String, String> {
                 .map(|other| apart(color, other))
                 .fold(f64::INFINITY, f64::min)
         };
-        let choices = || palette(role, victim).iter().chain(&OTHER).chain(&SPARE);
+        let choices = || {
+            palette(role, victim)
+                .iter()
+                .chain(&OTHER)
+                .chain(&SPARE)
+                .filter(|color| allowed(role, color))
+        };
         // More people than colours that stand apart: the least alike.
         let Some(color) = choices()
             .find(|color| nearest(color) >= DISTINCT)
@@ -750,6 +856,66 @@ mod tests {
         }
         // The old officer shades stood 12–17 apart.
         assert!(apart("#00e5c7", "#00c4aa") < DISTINCT);
+        // However many officers, none in pink or magenta.
+        for officer in &officers {
+            assert!(!pinkish(officer), "{officer}");
+        }
+    }
+
+    #[test]
+    fn officials_are_never_pink_and_people_across_files_stay_apart() {
+        for pink in ["#f33bff", "#ffb3d9", "#ffc2f0", "#ff9e9e", "#ff00aa"] {
+            assert!(pinkish(pink), "{pink}");
+        }
+        for not in [
+            "#00e5c7", "#0090e5", "#ffff00", "#e57e00", "#ffffff", "#c9a8ff", "#3ddc84",
+        ] {
+            assert!(!pinkish(not), "{not}");
+        }
+        // Mom & Teen: two officers in near teals from two files, an officer
+        // already given hot pink by hand, a mother and a narrator.
+        let people = [
+            Person {
+                role: "officer",
+                lines: 90,
+                color: "#00e5c7",
+            },
+            Person {
+                role: "officer",
+                lines: 40,
+                color: "#00c4aa",
+            },
+            Person {
+                role: "officer",
+                lines: 30,
+                color: "#ff3ec8",
+            },
+            Person {
+                role: "other",
+                lines: 60,
+                color: "#3ddc84",
+            },
+            Person {
+                role: "narrator",
+                lines: 99,
+                color: "#ffffff",
+            },
+        ];
+        let colors = distinct(&people);
+        // Who says most keeps their colour; the narrator stays white.
+        assert_eq!(colors[0], "#00e5c7");
+        assert_eq!(colors[3], "#3ddc84");
+        assert_eq!(colors[4], "#ffffff");
+        // The near teal and the pink officer get colours of their own, never pink.
+        for index in [1, 2] {
+            assert!(!pinkish(&colors[index]), "{}", colors[index]);
+        }
+        let shown = [&colors[0], &colors[1], &colors[2], &colors[3]];
+        for (i, a) in shown.iter().enumerate() {
+            for b in shown.iter().skip(i + 1) {
+                assert!(apart(a, b) >= DISTINCT, "{a} and {b}");
+            }
+        }
     }
 
     #[test]

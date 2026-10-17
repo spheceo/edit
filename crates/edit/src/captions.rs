@@ -526,6 +526,48 @@ fn cap(word: &Word) -> Word {
     }
 }
 
+/// One label, one colour, and no two labels alike across the files (each
+/// transcript picks its own colours) nor an official in pink
+/// (`speakers::distinct`).
+fn spread_colours(lines: &mut [Line]) {
+    let label = |line: &Line| {
+        let who = line
+            .name
+            .clone()
+            .or_else(|| line.voice.clone())
+            .unwrap_or_else(|| "Speaker".into());
+        subtitle_name(&who).to_owned()
+    };
+    let mut labels: Vec<(String, String, String, usize)> = Vec::new();
+    for line in lines.iter() {
+        let name = label(line);
+        match labels.iter_mut().find(|(own, ..)| *own == name) {
+            Some(found) => found.3 += 1,
+            None => labels.push((
+                name,
+                line.role.clone(),
+                line.color.clone().unwrap_or_else(|| "#ffffff".into()),
+                1,
+            )),
+        }
+    }
+    let people: Vec<crate::speakers::Person> = labels
+        .iter()
+        .map(|(_, role, color, count)| crate::speakers::Person {
+            role,
+            lines: *count,
+            color,
+        })
+        .collect();
+    let colors = crate::speakers::distinct(&people);
+    for line in lines.iter_mut() {
+        let name = label(line);
+        if let Some(index) = labels.iter().position(|(own, ..)| *own == name) {
+            line.color = colors.get(index).cloned();
+        }
+    }
+}
+
 /// A line with its speaker's name, colour and role from the transcript.
 fn named(mut line: Line, transcript: &crate::transcribe::Transcript) -> Line {
     let Some(voice) = line.voice.clone() else {
@@ -723,6 +765,7 @@ pub async fn subtitles(
     let before = lines.len();
     lines.retain(|line| !crate::subtitles::hidden_role(&line.role));
     let hidden = before - lines.len();
+    spread_colours(&mut lines);
     let house = crate::subtitles::house_words(app, &project, from, to, neglect).await?;
     let texts: Vec<String> = lines
         .iter()

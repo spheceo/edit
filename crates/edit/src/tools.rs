@@ -54,3 +54,33 @@ pub fn use_cache_dir(dir: PathBuf) {
 pub fn media_cache(source: &std::path::Path) -> Option<PathBuf> {
     Some(CACHE_DIR.get()?.join(crate::media::media_key(source)))
 }
+
+/// Whether `path` is an http(s) URL (a cloud original read through a
+/// presigned URL, `cloud_media`) rather than a file.
+pub fn is_url(path: &std::path::Path) -> bool {
+    path.to_str()
+        .is_some_and(|text| text.starts_with("https://") || text.starts_with("http://"))
+}
+
+/// The protocols FFmpeg may use to read `path`: files and pipes, plus HTTPS
+/// for a URL (never for a file, so a crafted playlist can't reach the network).
+pub fn protocols(path: &std::path::Path) -> &'static str {
+    if is_url(path) {
+        "file,pipe,http,https,tcp,tls,crypto"
+    } else {
+        "file,pipe"
+    }
+}
+
+/// FFmpeg's input options for reading `path` over HTTPS: the system's
+/// certificates. The shipped static FFmpeg's OpenSSL doesn't know where macOS
+/// keeps them, so without this every HTTPS read fails verification.
+pub fn tls_args(path: &std::path::Path) -> &'static [&'static str] {
+    const SYSTEM: &str = "/etc/ssl/cert.pem";
+    static FOUND: OnceLock<bool> = OnceLock::new();
+    if is_url(path) && *FOUND.get_or_init(|| std::path::Path::new(SYSTEM).is_file()) {
+        &["-ca_file", SYSTEM]
+    } else {
+        &[]
+    }
+}

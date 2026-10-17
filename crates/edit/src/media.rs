@@ -101,12 +101,13 @@ pub fn probe(path: &Path) -> Result<Probe, String> {
             "-v",
             "error",
             "-protocol_whitelist",
-            "file,pipe",
+            crate::tools::protocols(path),
             "-print_format",
             "json",
             "-show_streams",
             "-show_format",
         ])
+        .args(crate::tools::tls_args(path))
         .arg(path)
         .output()
         .map_err(|error| format!("ffprobe is not available ({error}); install FFmpeg"))?;
@@ -450,11 +451,17 @@ impl Processor {
                         status.proxy = Stage::Working;
                         status.error = None;
                     });
+                    // A cloud proxy already is a preview: linked, not encoded again.
+                    let cloud =
+                        crate::cloud_media::is_local_copy(&worker.store.cache_dir(), &source);
                     match crate::diag::time_on(
                         "media",
                         "media: preview copy",
                         &source.to_string_lossy(),
                         || {
+                            if cloud && probe.kind == MediaKind::Video {
+                                return preview_from_cloud_proxy(&source, &probe, &paths);
+                            }
                             make_proxy(&source, &probe, &paths, |progress| {
                                 worker.set(&source, |status| status.proxy_progress = progress)
                             })
@@ -825,6 +832,191 @@ fn make_proxy(
         let _ = std::fs::remove_file(dir.join("proxy.mp4"));
     }
     Ok(())
+}
+
+/// The cloud proxy's picture: ≤1080p H.264 (VideoToolbox) at 4 Mbit/s for
+/// 1080p (less for smaller pictures, down to 0.8), the preview's half-second
+/// keyframes, no B-frames and BT.709 tags, so it can be the preview as it is.
+/// A 1080p minute is ~31 MB.
+pub const CLOUD_PROXY_BITRATE: u64 = 4_000_000;
+
+/// The cloud proxy's bitrate for a picture `width`×`height` (before fitting in 1080p).
+pub fn cloud_proxy_bitrate(width: u32, height: u32) -> u64 {
+    // Bigger pictures are scaled to 1080p: the clamp holds them at the top rate.
+    let pixels = u64::from(width) * u64::from(height);
+    let full = u64::from(PROXY_MAX_WIDTH) * u64::from(PROXY_MAX_HEIGHT);
+    (CLOUD_PROXY_BITRATE * pixels / full).clamp(800_000, CLOUD_PROXY_BITRATE)
+}
+
+/// Makes the proxy every machine edits a cloud media with (`cloud_media`):
+/// the preview's picture at [`CLOUD_PROXY_BITRATE`] and the sound as 160
+/// kbit/s stereo AAC (what preview.m4a has; transcription and the agent's
+/// listening lose nothing to it), in one MP4 at `out`. `source` is a file or a
+/// presigned URL (FFmpeg reads that; AVFoundation's reader only reads files).
+/// Nothing is left at `out` (or beside it) on failure.
+pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), String> {
+    if probe.kind != MediaKind::Video {
+        return Err("only footage gets a cloud proxy".to_owned());
+    }
+    struct Scratch(Vec<PathBuf>);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    if let Some(dir) = out.parent() {
+        std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    }
+    let partial = out.with_extension("partial.mp4");
+    let picture = out.with_extension("picture.mp4");
+    let _scratch = Scratch(vec![partial.clone(), picture.clone()]);
+    let bitrate = cloud_proxy_bitrate(probe.width, probe.height);
+    #[cfg(target_os = "macos")]
+    let native = !crate::tools::is_url(source)
+        && native_proxy(
+            source,
+            &picture,
+            probe,
+            PROXY_MAX_WIDTH,
+            PROXY_MAX_HEIGHT,
+            bitrate,
+            |_| {},
+        );
+    #[cfg(not(target_os = "macos"))]
+    let native = false;
+    let mut command = Command::new(crate::tools::ffmpeg());
+    command.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-threads",
+        "2",
+        "-filter_threads",
+        "1",
+    ]);
+    let protocols = crate::tools::protocols(source);
+    if native {
+        // The picture as encoded; the sound from the source.
+        command
+            .args(["-protocol_whitelist", "file,pipe", "-i"])
+            .arg(&picture)
+            .args(["-protocol_whitelist", protocols])
+            .args(crate::tools::tls_args(source))
+            .arg("-i")
+            .arg(source)
+            .args(["-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy"]);
+    } else {
+        let gop = (probe.fps / 2.0).round().max(1.0).to_string();
+        let rate = format!("{}k", bitrate / 1000);
+        let ceiling = format!("{}k", bitrate * 5 / 4 / 1000);
+        let buffer = format!("{}k", bitrate * 2 / 1000);
+        command
+            .args(["-protocol_whitelist", protocols])
+            .args(crate::tools::tls_args(source))
+            .arg("-i")
+            .arg(source)
+            .args([
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0?",
+                "-vf",
+                &format!(
+                    "scale=w='min({PROXY_MAX_WIDTH},iw)':h='min({PROXY_MAX_HEIGHT},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2:out_color_matrix=bt709:out_range=tv,format=yuv420p"
+                ),
+                "-colorspace",
+                "bt709",
+                "-color_primaries",
+                "bt709",
+                "-color_trc",
+                "bt709",
+                "-color_range",
+                "tv",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-b:v",
+                &rate,
+                "-maxrate",
+                &ceiling,
+                "-bufsize",
+                &buffer,
+                "-g",
+                &gop,
+                "-bf",
+                "0",
+            ]);
+    }
+    command
+        .args([
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+        ])
+        .arg(&partial);
+    // Never the command line in an error: a URL in it is a credential.
+    run(&mut command).map_err(|error| format!("proxy: {}", crate::cloud_media::scrub(&error)))?;
+    std::fs::rename(&partial, out).map_err(|error| error.to_string())
+}
+
+/// A cloud proxy's preview files: the proxy itself as the picture (a hard
+/// link, so its bytes are on disk once) and its AAC sound copied out.
+fn preview_from_cloud_proxy(
+    source: &Path,
+    probe: &Probe,
+    paths: &CachePaths,
+) -> Result<(), String> {
+    let _ = std::fs::remove_file(&paths.proxy_done);
+    let video_tmp = paths.proxy.with_extension("partial.mp4");
+    let audio_tmp = paths.audio.with_extension("partial.m4a");
+    let _ = std::fs::remove_file(&video_tmp);
+    let result = (|| {
+        if std::fs::hard_link(source, &video_tmp).is_err() {
+            std::fs::copy(source, &video_tmp).map_err(|error| error.to_string())?;
+        }
+        if probe.has_audio {
+            run(Command::new(crate::tools::ffmpeg())
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-protocol_whitelist",
+                    "file,pipe",
+                    "-i",
+                ])
+                .arg(source)
+                .args([
+                    "-map",
+                    "0:a:0",
+                    "-vn",
+                    "-c:a",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                ])
+                .arg(&audio_tmp))
+            .map_err(|error| format!("preview sound: {error}"))?;
+            std::fs::rename(&audio_tmp, &paths.audio).map_err(|error| error.to_string())?;
+        }
+        std::fs::rename(&video_tmp, &paths.proxy).map_err(|error| error.to_string())?;
+        std::fs::write(&paths.proxy_done, b"").map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&video_tmp);
+        let _ = std::fs::remove_file(&audio_tmp);
+    }
+    result
 }
 
 /// AVFoundation/VideoToolbox transcodes the picture without a raw-video pipe

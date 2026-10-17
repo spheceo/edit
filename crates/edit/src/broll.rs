@@ -1417,6 +1417,8 @@ fn replace_media_path(
         media.height = probe.height;
         media.fps = probe.fps;
         media.has_audio = probe.has_audio;
+        // Another file now: whatever the stand-in had in the cloud isn't it.
+        media.cloud = None;
         replaced = true;
     }
     replaced

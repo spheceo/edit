@@ -125,6 +125,8 @@ pub(crate) struct VideoReader {
 impl VideoReader {
     fn open(source: Source) -> Self {
         let (width, height) = (source.key.width, source.key.height);
+        #[cfg(target_os = "macos")]
+        let url = crate::tools::is_url(&source.key.path);
         Self {
             source,
             width,
@@ -133,7 +135,8 @@ impl VideoReader {
             #[cfg(target_os = "macos")]
             native: None,
             #[cfg(target_os = "macos")]
-            native_failed: std::env::var_os("EDIT_FFMPEG_VIDEO").is_some(),
+            // AVAssetReader only reads local files: a cloud original's URL is FFmpeg's.
+            native_failed: std::env::var_os("EDIT_FFMPEG_VIDEO").is_some() || url,
             start: 0.0,
             next_index: 0,
             frame: Vec::new(),
@@ -161,9 +164,10 @@ impl VideoReader {
                 "-ss",
                 &format!("{time:.6}"),
                 "-protocol_whitelist",
-                "file,pipe",
-                "-i",
+                crate::tools::protocols(&self.source.key.path),
             ])
+            .args(crate::tools::tls_args(&self.source.key.path))
+            .arg("-i")
             .arg(&self.source.key.path)
             .args([
                 "-an",
@@ -1221,6 +1225,10 @@ impl Exports {
                     .open(&path)
                     .map_err(|error| error.to_string())?;
                 let temporary = ExportFile(path);
+                // Cloud footage: the originals, not the proxies (downloaded
+                // for the export and removed after it, or read from R2).
+                let (project, _originals) =
+                    crate::cloud_media::for_export(&project, plan.start, plan.end, &cache)?;
                 export(
                     &project,
                     &options,

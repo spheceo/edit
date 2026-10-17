@@ -482,6 +482,33 @@ pub fn checked(store: &Store, library: &Library, id: &str) -> Result<Option<Driv
     }
 }
 
+/// For other live tests (`cloud_media`): puts `path` in the Subtitles folder
+/// as `name`, viewable by anyone with the link; its id. [`test_delete`] removes it.
+#[cfg(test)]
+pub(crate) fn test_upload(path: &Path, name: &str) -> Result<String, String> {
+    upload(&Library::default(), path, name, &folder(true), None, |_| {}).map(|file| file.file_id)
+}
+
+/// Deletes a file [`test_upload`] made (only tests delete Drive files).
+#[cfg(test)]
+pub(crate) fn test_delete(file_id: &str) -> Result<(), String> {
+    let config = format!(
+        "header = {}\n",
+        quote(&format!(
+            "Authorization: Bearer {}",
+            Library::default().token()?
+        ))?
+    );
+    let url = format!("{API}/files/{file_id}?supportsAllDrives=true");
+    match curl(&config, &["--max-time", "20", "-X", "DELETE", &url])? {
+        (204, _) => Ok(()),
+        (code, body) => Err(format!(
+            "deleting {file_id}: {code} {}",
+            String::from_utf8_lossy(&body)
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

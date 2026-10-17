@@ -21,7 +21,9 @@
 // isn't here: call it directly.
 
 import type { App } from "./app.ts";
+import * as brollModule from "./broll.ts";
 import * as captionsCore from "./captions_core.ts";
+import * as driveModule from "./drive.ts";
 import * as facesModule from "./faces.ts";
 import * as peopleModule from "./people.ts";
 import * as speakersModule from "./speakers.ts";
@@ -44,6 +46,7 @@ import type {
   TextStyle,
   Transform,
 } from "./model.ts";
+import * as libraryModule from "./library.ts";
 import * as markersModule from "./markers.ts";
 import type { Box } from "./native/index.ts";
 import * as sfxModule from "./sfx.ts";
@@ -585,6 +588,16 @@ export interface Agents {
    * `timeoutMs`. speakers.ts names voices with it.
    */
   ask(model: string, effort: string, instructions: string, input: Json[], schema: Json | null, timeoutMs: number): Promise<string>;
+  /** The models the user's Codex offers (cached a day; `refresh` asks now). */
+  models(refresh: boolean): Promise<Json>;
+  /** A project's chat: its entries, whether a turn is running, its model and effort. */
+  chat(project: string): Json;
+  /** Sends the user's (or Edit's: script.rs's research) message to a project's chat, starting its turn. */
+  send(project: string, text: string, model: string | null, effort: string | null): Promise<void>;
+  /** Stops a project's running turn. */
+  stop(project: string): Promise<void>;
+  /** Forgets a project's chat (and its Codex thread). */
+  reset(project: string): void;
 }
 
 /** The team's sound library on Drive (library.rs Library). */
@@ -637,9 +650,11 @@ export interface LibrarySeam {
   loudness(path: string, from: number, seconds: number): Promise<number>;
 }
 
-export const broll: BrollSeam = stub<BrollSeam>("broll", { MAP_EXPORT_WAIT: 600_000 });
-export const drive: DriveSeam = stub<DriveSeam>("drive");
-export const library: LibrarySeam = stub<LibrarySeam>("library");
+// WP8 has landed: broll.ts, drive.ts and library.ts (and agent.ts, which
+// App carries as `agents`, with library.ts's Library as `library`).
+export const broll: BrollSeam = brollModule;
+export const drive: DriveSeam = driveModule;
+export const library: LibrarySeam = libraryModule;
 
 /** The services App carries that other packages make (stubs until they land). */
 export function unportedServices(): {

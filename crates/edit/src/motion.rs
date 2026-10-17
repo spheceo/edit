@@ -217,7 +217,7 @@ pub fn step(a: &Small, b: &Small) -> Step {
     // Patches: each found near where the rough shift puts it.
     let (ia, ib) = (a.image(), b.image());
     let shift = (rx as f32 * 4.0, ry as f32 * 4.0);
-    let mut pairs: Vec<((f64, f64), (f64, f64))> = Vec::new();
+    let mut pairs: Vec<Pair> = Vec::new();
     let mut patch = Vec::with_capacity(PATCH * PATCH);
     let mut centred = Vec::with_capacity(PATCH * PATCH);
     let (gx, gy) = GRID;
@@ -387,10 +387,13 @@ pub fn parabola(minus: f32, middle: f32, plus: f32) -> f32 {
     (0.5 * (minus - plus) / curve).clamp(-0.5, 0.5)
 }
 
+/// A point of one frame and where it is in the next (pixels).
+pub type Pair = ((f64, f64), (f64, f64));
+
 /// A shift, turn and zoom fitted to matched points (`(from, to)`, pixels),
 /// leaving out the ones that disagree, and how many agree. None when too few
 /// points agree on anything.
-pub fn fit(pairs: &[((f64, f64), (f64, f64))], centre: (f64, f64)) -> Option<(Motion, usize)> {
+pub fn fit(pairs: &[Pair], centre: (f64, f64)) -> Option<(Motion, usize)> {
     if pairs.len() < 4 {
         return None;
     }
@@ -426,7 +429,7 @@ pub fn fit(pairs: &[((f64, f64), (f64, f64))], centre: (f64, f64)) -> Option<(Mo
             *inlier = *residual <= limit;
         }
         residuals.clear();
-        let chosen: Vec<&((f64, f64), (f64, f64))> = pairs
+        let chosen: Vec<&Pair> = pairs
             .iter()
             .zip(&inliers)
             .filter(|(_, inlier)| **inlier)
@@ -448,7 +451,7 @@ pub fn fit(pairs: &[((f64, f64), (f64, f64))], centre: (f64, f64)) -> Option<(Mo
 }
 
 /// The least-squares shift, turn and zoom taking each `from` to its `to`.
-fn similarity(pairs: &[&((f64, f64), (f64, f64))], centre: (f64, f64)) -> Motion {
+fn similarity(pairs: &[&Pair], centre: (f64, f64)) -> Motion {
     let n = pairs.len() as f64;
     let rel = |p: (f64, f64)| (p.0 - centre.0, p.1 - centre.1);
     let (mut ax, mut ay, mut bx, mut by) = (0.0, 0.0, 0.0, 0.0);

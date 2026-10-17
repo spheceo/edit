@@ -22,6 +22,9 @@
 
 import type { App } from "./app.ts";
 import * as captionsModule from "./captions.ts";
+import * as cloudModule from "./cloud.ts";
+import * as cloudMediaModule from "./cloud_media.ts";
+import * as cloudProjectsModule from "./cloud_projects.ts";
 import * as editReviewModule from "./edit_review.ts";
 import * as footageSearchModule from "./footage_search.ts";
 import * as facesModule from "./faces.ts";
@@ -158,10 +161,45 @@ export interface CloudProjectsSeam {
   routes(router: import("./http/router.ts").Router<App>): void;
   /** On the way out: pushes what's left and lets every lock go. */
   shutdown(): Promise<void>;
+  /**
+   * The server's cloud projects (main.rs: `Cloud::open(home, machine)` then
+   * `cloud_projects::start`): attaches the store's hook and starts the push loop.
+   */
+  start(app: App): void;
+  /** `edit cloud …` outside a server: the relay token saved in Settings → Cloud, unless the env sets one. */
+  useSavedToken(home: string): void;
 }
 
-export const cloudMedia: CloudMediaSeam = stub<CloudMediaSeam>("cloud_media");
-export const cloudProjects: CloudProjectsSeam = stub<CloudProjectsSeam>("cloud_projects");
+export interface CloudSeam {
+  /**
+   * `edit cloud [url | put | get | head | ls | rm | convex] …` (cloud.rs
+   * run_cli): prints what the relay answered; a failure is thrown with the
+   * text `edit: <text>` shows (exit 2).
+   */
+  runCli(args: string[]): Promise<void>;
+  /**
+   * `edit cloud backfill <id> [--port N]` (main.rs cloud_backfill): asks the
+   * running Edit to backfill a cloud project and prints its answer; the exit
+   * code (1 when Edit refused); a failure to reach it is thrown (exit 2).
+   */
+  backfillCli(id: string | undefined, port: number): Promise<number>;
+}
+
+// WP3 has landed: cloud.ts, cloud_projects.ts and cloud_media.ts.
+export const cloudMedia: CloudMediaSeam = cloudMediaModule;
+export const cloudProjects: CloudProjectsSeam = {
+  delete: (app, id) => cloudProjectsModule.remove(app, id),
+  routes: (router) => cloudProjectsModule.routes(router),
+  shutdown: () => cloudProjectsModule.shutdown(),
+  start: (app) => {
+    cloudProjectsModule.start(app);
+  },
+  useSavedToken: (home) => cloudProjectsModule.useSavedToken(home),
+};
+export const cloud: CloudSeam = {
+  runCli: (args) => cloudModule.runCli(args),
+  backfillCli: (id, port) => cloudModule.backfillCli(id, port),
+};
 
 // ---------------------------------------------------------------------------
 // WP4: script, voice, research

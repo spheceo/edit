@@ -426,6 +426,21 @@ export function cacheKey(key: string, window: Window, lines: WatchLine[]): strin
 }
 
 /**
+ * The other media keys whose answers are in a watch folder (`keys.json`,
+ * written by cloud_media.ts when it carries a media's analysis to its cloud
+ * proxy or fetches another machine's): the answers are named by the key they
+ * were asked under.
+ */
+export function otherKeys(dir: string): string[] {
+  try {
+    const value = JSON.parse(fs.readFileSync(join(dir, "keys.json"), "utf8")) as { keys?: unknown };
+    return Array.isArray(value.keys) ? value.keys.filter((key): key is string => typeof key === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * A small MP4 of the window with its sound: 360p at 1 fps (Gemini samples
  * video at one frame a second, so more is only bytes to send). From the
  * media's light preview when it has one: 720p with a keyframe every half
@@ -660,11 +675,16 @@ export async function watchWindow(
   const key = cacheKey(mediaKey(source), window, lines);
   const cached = join(dir, `${key}.json`);
   if (!force) {
-    try {
-      const value = JSON.parse(fs.readFileSync(cached, "utf8")) as { answer?: unknown } | null;
-      if (value !== null && typeof value === "object" && value.answer !== undefined) return [readAnswer(value.answer), 0.0, true];
-    } catch {
-      // Not cached (or not readable): watched again.
+    // Answers asked under another media key (carried over to a cloud proxy,
+    // or shared by another machine: `keys.json`, cloud_media.ts) count too.
+    const others = otherKeys(dir).map((other) => join(dir, `${cacheKey(other, window, lines)}.json`));
+    for (const file of [cached, ...others]) {
+      try {
+        const value = JSON.parse(fs.readFileSync(file, "utf8")) as { answer?: unknown } | null;
+        if (value !== null && typeof value === "object" && value.answer !== undefined) return [readAnswer(value.answer), 0.0, true];
+      } catch {
+        // Not cached (or not readable): watched again.
+      }
     }
   }
   apiKey();

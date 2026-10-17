@@ -27,6 +27,7 @@ import { extension, parent } from "./paths.ts";
 import * as relay from "./relay.ts";
 import { byteLength, debugStr, takeChars } from "./rust.ts";
 import { stableStringify } from "./stable.ts";
+import { validId } from "./store.ts";
 
 const MIB = 1024 * 1024;
 /** A file's parts: 64 MiB, four in flight (≤ 320 MiB in memory). */
@@ -996,4 +997,25 @@ export async function runCli(args: string[], io: CliIo = TERMINAL): Promise<void
       return;
   }
   io.out(`${stableStringify(result, 2)}\n`);
+}
+
+/**
+ * `edit cloud backfill <project id> [--port N]` (main.rs cloud_backfill): asks
+ * the running Edit to put every media of a cloud project that isn't in the
+ * cloud yet there now, and prints its answer. The exit code: 0, or 1 when
+ * Edit refused; not reaching Edit is thrown (`edit: …`, exit 2).
+ */
+export async function backfillCli(id: string | undefined, port: number, io: Pick<CliIo, "out" | "err"> = TERMINAL): Promise<number> {
+  if (id === undefined || !validId(id)) throw new Error("usage: edit cloud backfill <project id> [--port N]");
+  io.err(`backfilling ${id} through the Edit on port ${port} (big files take a while)…\n`);
+  let response: Response;
+  let body: string;
+  try {
+    response = await fetch(`http://127.0.0.1:${port}/api/projects/${id}/cloud/backfill`, { method: "POST" });
+    body = await response.text();
+  } catch (error) {
+    throw new Error(`couldn't reach Edit on port ${port} (is it running?): ${diag.messageOf(error)}`);
+  }
+  io.out(`${body}\n`);
+  return response.status >= 200 && response.status < 300 ? 0 : 1;
 }

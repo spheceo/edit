@@ -29,7 +29,8 @@ Model (JSON):
   - type "adjustment": grade {exposure stops, contrast -1..1, saturation -1..1, temperature -1..1, vignette 0..1, vignette_x, vignette_y (px from frame centre, y down: where the light falls; default 0 = centred; follow a person with track_region target "vignette"), vignette_size (1 = the whole frame's vignette, 0.5 = the clear area half as far), vignette_aspect (clear area width / height: 1 round, ~0.6 tall for a standing person), focus_exposure (stops added inside the clear area only: lifts the person), vignette_saturation (-1..1, saturation change where the vignette falls only: grey surroundings, the person keeps their colour)}, glitch {amount (px at 1080p the bands slide, 0 = off), slices (bands across the height, 6: few and tall), rgb (colour split as a share of each band's slide, 0.08: barely any)} = a digital glitch transition: the picture beneath cut into horizontal bands of uneven height, some sliding sideways, a new pattern every frame, blur {radius (Gaussian spread in project px, as CSS blur(); 0 = off; ~35 at 1080p hides a face, scale by height/1080), x, y (the region's centre, px from frame centre, y down), width, height (the region in px; 0 = the whole frame), feather (px the blur fades out over beyond the region's edge; the region itself is always fully blurred), shape ellipse|rect (ellipse for a face, rect (slightly rounded) for a word, a plate, a screen)} = blurs the picture beneath in the region before the grade (follow a face with track_region target "blur"), shake {preset none|handheld|vertical|horizontal|impact|earthquake, and optionally any of motion wiggle|drop, amount (px at 1080p), frequency (wiggles/s), rotation (deg of tilt), direction both|vertical|horizontal, envelope steady|build|hit|swell (wiggle only), motion_blur (frames of movement smeared), edges mirror|zoom — each overrides the preset}, opacity — grades and moves everything below it, modelled on Sapphire S_Shake (heavy motion blur, picture mirrored past its edges). motion "wiggle" = random jolts; motion "drop" = a whip through a cut at the clip's middle: the picture accelerates away until the cut, then the next shot comes in from the other side and settles (amount px = a full move each side), down (vertical) or right (horizontal), negative amount for up/left. Presets: vertical = a whip straight down through the cut, 540px, blur 2 (the house slam into a cut: it only goes down, fast, heavily blurred, never up and down); horizontal = the same sideways; impact 160px wiggle 30/s, 3° tilt, hit; earthquake 60px wiggle 16/s; handheld 8px 1.2/s, sharp, zoomed (subtle).
   - type "solid": fill [r,g,b,a], opacity, optional gradient {from, to} = fades across the frame left to right: clear at `from`, full at `to` (shares of the frame width; `to` below `from` fades the other way) — flashes, dips to black, a black gradient over part of the picture
   - type "waveform": media? (only that media's sound; default everything heard), style {kind line|bars (line: tangled glowing strands that zigzag with the sound, the house look; bars: mirrored bars), color [r,g,b,a] (rich red [1,0.03,0.03,1] by default), strands (2, line), bars (48, bars), width (1400 px), height (360 px, the loudest swing), fill (0.5, bars' share of their slots), window (1.6 s of sound across the width, centred on now), gain (1), glow (the text glow: enabled, color?, radius, strength)}, transform, opacity — a glowing waveform of what's heard
-- media: {id, name, path, kind, duration, …, markers?: [{time (SECONDS into the media), name}]} — markers are points in the source that every clip of it carries (a sound effect's "hit"; the user adds them with M).
+- media: {id, name, path, kind, duration, …, markers?: [{time (SECONDS into the media), name, note?}]} — markers are points in the source that every clip of it carries (a sound effect's "hit"; a moment to put a sound on: "door slam"; the user adds them with M).
+- markers (optional): [{frame, name, note?}] = moments marked on the timeline itself ("board photo", "photo lands"); they move with ripples (remove_time, speed_voiceover). Set both kinds with the markers tool; place sounds on them by name (add_sound_effect / add_from_library markers).
 - script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?, voiceover? (the voice-over clip reading it)}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. The video opens on the Doc's first timestamp: anything before it (the title, a "FOIA <name> - <headline>" heading, "Assets:", durations) is the Doc's heading, never a cut-in; if an import made one, delete its card and words with delete_clips {close_gap: true, drop_from_script: true}, so the video starts on the first footage. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
 - segments (optional, subtitled videos): [{start, end (frames, end exclusive), kind footage|captioned|narration|other, note}], sorted, never overlapping = what each stretch is: only footage gets subtitles; captioned = the picture already has subtitles burned in (an intro made earlier), narration = the narrator, other = title cards, maps, music. Empty = all footage. Set with set_segments (which takes seconds); they show on the ruler.
 - drive (optional, subtitled videos): {file_id, url, name, uploaded_ms} = the last whole export, uploaded to the team's "Subtitles" folder on Google Drive; anyone with the url can watch it. Edit sets it when the upload finishes and clears it when the file is deleted or trashed on Drive; don't set it yourself.
@@ -46,7 +47,7 @@ House editing style (videos cut from a script of police footage):
 - AFTER THE INTRO the video is the full footage: keep it clean. No speaker captions, punch-ins or effects on footage there; only work on cut-ins and do what the Doc's notes ask (for example blur a face).
 - TEXT BY A PERSON FOLLOWS THEM: a quote, label or callout placed beside someone's face moves with them (track_region with follow), never left still while they move (the team sent back a quote beside a man in a patrol car that stayed put).
 - QUOTES ON SCREEN appear with an animation and read cleanly: when the spoken words are broken or ungrammatical ("This the second time she did it."), don't quote them word for word; write one short plain line in the narration's voice instead ("Her explanation: This had happened before.").
-- HOUSE WORDS ON SCREEN: every text on screen gets the house words starred ("f***", "a****"; never removed or reworded), not only subtitles: the intro's speaker captions, callouts, quotes, the outro's charges, dates and labels; and the footage's sound under them is muted, the intro's too, and so is the narration: the voice-overs' house words ("abuse", "killed", "hit" in a neglect case) are muted the same way, so a word starred on screen is never heard from the narrator either. When an edit's text is in, run mute_house_words over the whole timeline (no start/end; neglect: true in a child abuse or neglect case, or "hit" and "punched" stay readable and heard) and read its mutes back to the user; run it again last, after any text added later (quotes, callouts, labels) or any add_subtitles re-run. Words count in their other forms (punched, hitting, abused, choking). A house word written in the picture itself (a document, a phone screen) gets a rect blur (MINORS' FACES).
+- HOUSE WORDS ON SCREEN: every text on screen gets the house words starred ("f***", "a****"; never removed or reworded), not only subtitles: the intro's speaker captions, callouts, quotes, the outro's charges, dates and labels; and the footage's sound under them is muted, the intro's too, and so is the narration: the voice-overs' house words ("abuse", "killed", "hit" in a neglect case) are muted the same way, so a word starred on screen is never heard from the narrator either. When an edit's text is in, run mute_house_words over the whole timeline (no start/end; neglect: true in a child abuse or neglect case, or "hit" and "punched" stay readable and heard) and read its mutes back to the user; it's run once per turn, after the turn's last change to on-screen text (quotes, callouts, labels, an add_subtitles re-run), never after every plan. Words count in their other forms (punched, hitting, abused, choking). A house word written in the picture itself (a document, a phone screen) gets a rect blur (MINORS' FACES).
 - Be precise, and fill in the small gaps yourself: skip throwaway moments (a lone "like" or "um", a blip that adds nothing to the story) rather than captioning them; when something starts or ends within ~0.2 s of a cut or of the next caption, snap it to that edge so there are no slivers or hairline gaps.
 - Keep the layers tidy: a clip shouldn't float on a track with nothing under it. After adding or removing layers, run tidy_tracks; it moves clips down into empty space below them (keeping what's above what) and drops empty tracks.
 - SCOPE: do the part of the edit that's asked for, and nothing past it. "Edit the intro" = the intro section only (sections.intro): its teasers, the cut-ins between them and their B-roll, captions, transitions and their sound; not the date cut-in (it opens the story) or any later cut-in or B-roll. "Subtitles" = add_subtitles (everything after the intro). Music, the date cut-in's map and other cut-ins' B-roll wait until they're asked for. When it's unclear whether something is in (music under the intro, say), ask instead of doing it, and say at the end what you left for later.
@@ -250,11 +251,11 @@ fn tools() -> Vec<Value> {
             "start":{"type":"number"}, "end":{"type":"number"},
             "include_transcript":{"type":"boolean"}
         }), &[]),
-        tool("apply_edit_plan", "Apply a complete section or a revision in ONE atomic save. Requires base_rev from get_edit_context; a stale revision or invalid operation saves NOTHING. Operations run in memory; intermediate overlaps are allowed if the final project validates. ALL times in a plan are FRAMES (the model's own units; get_edit_context's cut-in words are seconds: multiply by fps). op add takes clip with start and duration (required; omit id and track to choose them; track \"new\" makes one, in update too); update/delete/keyframes use select {ids?,track?,label?,media?,type?,name_prefix?,start?,end?} (all filters intersect); update takes patch, and moving or trimming one half of a linked pair moves the other with it, as delete removes both (unlinked: true to touch only the selected); keyframes takes param,keyframes; cover_cut_in takes the same cut_in/shots/look/into as cover_cut_in; transition builds a house transition at a cut in one line: kind drop (the vertical slam, 6 frames straddling at), flash (white, 6 frames, fading; with a shutter), dip (to black and back, frames 12 centred on at) or open (the reverse dip that opens the video; no at); its sound goes in the batch; evidence_board builds a whole evidence board from start and end (frames: where the board begins and the next shot starts) and items [{media (an image's id), label (a short handwritten note, e.g. \"zip ties\"), at (the timeline frame of the word that names it: that photo is centred then)}] (1–8, at increasing; illustrative: true adds a small \"Illustrative images\" in the corner; older plans' frames/pan per item still work): framed photos on paper and ONE continuous camera glide down them, easing a little as it passes each photo (to ~70% of its average speed) and picking up between (never a hold or a stop), picking up from a slow drift before the first and settling into one after the last, each note writing itself on as its photo arrives; returns end and centred (EVIDENCE BOARD in the cut-ins skill); tidy_tracks needs no arguments. An operation's `as` names its result; later arguments use {\"$ref\":\"name\"} (added clip id) or {\"$ref\":\"name/shots/0/clip\"} (cover result). Examples: add as hero, then update select.ids [{\"$ref\":\"hero\"}]. dry_run validates without saving. Optional review_frames renders one contact sheet AFTER the commit; rendering failure is reported separately and never retries the edits. Returns revision, operation results, and mechanical issues. Prefer this over many batch/update calls.", json!({
+        tool("apply_edit_plan", "Apply a complete section or a revision in ONE atomic save. Requires base_rev from get_edit_context; a stale revision or invalid operation saves NOTHING. Operations run in memory; intermediate overlaps are allowed if the final project validates. ALL times in a plan are FRAMES (the model's own units; get_edit_context's cut-in words are seconds: multiply by fps). op add takes clip with start and duration (required; omit id and track to choose them; track \"new\" makes one, in update too); update/delete/keyframes use select {ids?,track?,label?,media?,type?,name_prefix?,start?,end?} (all filters intersect); update takes patch, and moving or trimming one half of a linked pair moves the other with it, as delete removes both (unlinked: true to touch only the selected); keyframes takes param,keyframes; cover_cut_in takes the same cut_in/shots/look/into as cover_cut_in; transition builds a house transition at a cut in one line: kind drop (the vertical slam, 6 frames straddling at), flash (white, 6 frames, fading; with a shutter), dip (to black and back, frames 12 centred on at) or open (the reverse dip that opens the video; no at); its sound goes in the batch; evidence_board builds a whole evidence board from start and end (frames: where the board begins and the next shot starts) and items [{media (an image's id), label (a short handwritten note, e.g. \"zip ties\"), at (the timeline frame of the word that names it: that photo is centred then)}] (1–8, at increasing; illustrative: true adds a small \"Illustrative images\" in the corner; older plans' frames/pan per item still work): framed photos on paper and ONE continuous camera glide down them, easing a little as it passes each photo (to ~70% of its average speed) and picking up between (never a hold or a stop), picking up from a slow drift before the first and settling into one after the last, each note writing itself on as its photo arrives; returns end, centred and shutters: each photo's moment gets a \"board photo\" timeline marker and a quiet camera shutter whose click lands on it (shutters: false for none; a shutter already within 8 frames, such as the cut's, stands in) (EVIDENCE BOARD in the cut-ins skill); desktop_profile builds the house profile screen for a person whose only picture is a still (never a lone still on black) from start, duration (or end), media (their photo) and lines (1–6 short lines: their age and role, charges only as a source states them; \"- \" is added), with title (the Notepad window's, default \"Notepad\") and line_at (a timeline frame per line) optional: a blue desktop, the photo in a Photo Viewer window and the lines typed into a Notepad window beside it, the windows scaling up from 96% one after the other, a slow push-in, the windows leaving over the last 8 frames (exit: false keeps them); returns lines_at and windows_open, marked \"desktop window opens\" and \"desktop line\" for their sounds (DESKTOP PROFILE in the cut-ins skill); markers takes add/remove as the markers tool; tidy_tracks needs no arguments. An operation's `as` names its result; later arguments use {\"$ref\":\"name\"} (added clip id) or {\"$ref\":\"name/shots/0/clip\"} (cover result). Examples: add as hero, then update select.ids [{\"$ref\":\"hero\"}]. dry_run validates without saving. Optional review_frames renders one contact sheet AFTER the commit; rendering failure is reported separately and never retries the edits. Returns revision, operation results, and mechanical issues. Prefer this over many batch/update calls.", json!({
             "base_rev":{"type":"integer"},
             "operations":{"type":"array", "minItems":1, "maxItems":2000, "items":{"type":"object", "properties":{
-                "op":{"type":"string", "enum":["add","update","delete","keyframes","cover_cut_in","transition","evidence_board","tidy_tracks"]},
-                "kind":{"type":"string", "enum":["drop","flash","dip","open"]}, "at":{"type":"integer"}, "frames":{"type":"integer"}, "start":{"type":"integer"}, "end":{"type":"integer"}, "pan":{"type":"integer"}, "illustrative":{"type":"boolean"}, "items":{"type":"array", "items":{"type":"object", "properties":{"media":{"type":"string"}, "label":{"type":"string"}, "at":{"type":"integer"}, "frames":{"type":"integer"}, "pan":{"type":"integer"}}, "required":["media"]}},
+                "op":{"type":"string", "enum":["add","update","delete","keyframes","cover_cut_in","transition","evidence_board","desktop_profile","markers","tidy_tracks"]},
+                "kind":{"type":"string", "enum":["drop","flash","dip","open"]}, "at":{"type":"integer"}, "frames":{"type":"integer"}, "start":{"type":"integer"}, "end":{"type":"integer"}, "pan":{"type":"integer"}, "illustrative":{"type":"boolean"}, "shutters":{"type":"boolean"}, "duration":{"type":"integer"}, "media":{"type":"string"}, "lines":{"type":"array", "items":{"type":"string"}}, "line_at":{"type":"array", "items":{"type":"integer"}}, "title":{"type":"string"}, "exit":{"type":"boolean"}, "add":{"type":"array", "items":{"type":"object"}}, "remove":{"type":"array", "items":{"type":"object"}}, "items":{"type":"array", "items":{"type":"object", "properties":{"media":{"type":"string"}, "label":{"type":"string"}, "at":{"type":"integer"}, "frames":{"type":"integer"}, "pan":{"type":"integer"}}, "required":["media"]}},
                 "as":{"type":"string"}, "clip":{"type":"object"}, "select":{"type":"object"}, "patch":{"type":"object"},
                 "param":{"type":"string"}, "keyframes":{"type":"array", "items":{"type":"object"}},
                 "cut_in":{"type":["integer","string"]}, "shots":{"type":"array", "items":{"type":"object"}},
@@ -375,7 +376,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "look_at_media",
-            "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. For finding B-roll moments that show what a cut-in says.",
+            "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. For finding B-roll moments that show what a cut-in says. Single moments in several files: one batch of them, not a call each.",
             json!({
                 "media_id": { "type": "string" },
                 "start": { "type": "number" }, "end": { "type": "number" },
@@ -396,7 +397,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "media_transcript",
-            "What's said in a media file (its own seconds, the whole source), as phrases with times and speakers; transcribes it first if needed. For finding moments to use as B-roll (someone confused, a witness reacting).",
+            "What's said in a media file (its own seconds, the whole source), as phrases with times and speakers; transcribes it first if needed. For finding moments to use as B-roll (someone confused, a witness reacting). Several files: one batch, not a call each.",
             json!({
                 "media_id": { "type": "string" },
                 "start": { "type": "number", "description": "Default 0." },
@@ -456,14 +457,33 @@ fn tools() -> Vec<Value> {
             &[],
         ),
         tool(
-            "add_sound_effect",
-            "Place a sound effect bundled with Edit at timeline times, on a free audio track. Only when the user asks for one. Each is lined up by its \"hit\" marker (see media markers): for a cut, give the cut's time (where the two clips meet) and the sound straddles it. The same sound already within 0.5 s of a time is replaced, so placing again (or after the sound is updated) never doubles up.",
+            "markers",
+            "Mark moments to plan sounds on (no arguments: list them). A moment in a source (add {name, note?, media, time: source seconds} or {name, note?, clip, frame: the timeline frame where that clip shows it}) stays on that moment however its clips move; a moment of the edit itself (add {name, note?, frame}) stays on the timeline. Then place sounds on them by name (add_sound_effect / add_from_library markers). remove [{name?, media?, frame?}] removes every match. Also an apply_edit_plan op. Evidence boards mark each photo themselves. Returns the markers now set (name@frame; name media@seconds → frames shown).",
             json!({
-                "sound": { "type": "string", "enum": crate::sfx::names(), "description": "shutter = a camera shutter. Not part of the house style: only when the user asks for it." },
+                "add": { "type": "array", "items": { "type": "object", "properties": {
+                    "name": { "type": "string", "description": "What happens: \"door slam\", \"camera flash\", \"photo lands\"." },
+                    "note": { "type": "string" },
+                    "frame": { "type": "integer", "description": "Timeline frame (alone: a timeline marker; with clip: the moment that clip shows there)." },
+                    "media": { "type": "string" },
+                    "time": { "type": "number", "description": "Seconds into media." },
+                    "clip": { "type": "string" }
+                }, "required": ["name"] } },
+                "remove": { "type": "array", "items": { "type": "object", "properties": {
+                    "name": { "type": "string" }, "media": { "type": "string" }, "frame": { "type": "integer" }
+                } } }
+            }),
+            &[],
+        ),
+        tool(
+            "add_sound_effect",
+            "Place a sound effect bundled with Edit at timeline times or on markers, on a free audio track. Each is lined up by its \"hit\" marker (see media markers): for a cut, give the cut's time (where the two clips meet) and the sound straddles it. The same sound already within 0.5 s of a time is replaced, so placing again (or after the sound is updated) never doubles up.",
+            json!({
+                "sound": { "type": "string", "enum": crate::sfx::names(), "description": "shutter = a camera shutter (evidence boards place their own)." },
                 "times": { "type": "array", "items": { "type": "number" }, "description": "Seconds on the timeline." },
+                "markers": { "type": "array", "items": { "type": "string" }, "description": "Marker names (markers tool): the hit lands on every place each is." },
                 "volume_db": { "type": "number", "description": "Default 0." }
             }),
-            &["sound", "times"],
+            &["sound"],
         ),
         tool(
             "list_library",
@@ -479,6 +499,7 @@ fn tools() -> Vec<Value> {
             json!({
                 "id": { "type": "string", "description": "The sound's id from list_library." },
                 "times": { "type": "array", "items": { "type": "number" }, "description": "Seconds on the timeline." },
+                "markers": { "type": "array", "items": { "type": "string" }, "description": "Marker names (markers tool) instead of or beside times: the hit (or the start) lands on every place each is." },
                 "loudness": { "type": "number", "description": "How loud it's heard, in LUFS (see the house style's levels): the tool measures the part that plays (a short sound by its loudest moment) and sets the volume to match. Prefer this to volume_db: library files differ in loudness by 20 dB or more." },
                 "under_speech": { "type": "number", "description": "LU under the edit's speech (the footage and voice-overs): music 14, low-volume notes 16, music with nothing said over it 6, risers 8, hits 0, whooshes and shutters 3, clicks 8. Use instead of loudness; nothing to measure first." },
                 "volume_db": { "type": "number", "description": "A raw gain instead of loudness. Default 0." },
@@ -486,7 +507,7 @@ fn tools() -> Vec<Value> {
                 "lead": { "type": "number", "description": "With seconds, on a sound effect: how much of it plays before the hit (default half of seconds; a riser wants most of it before)." },
                 "fade_out": { "type": "number", "description": "Seconds of fade at the end, e.g. 1.5 when music is cut short. Default 0." }
             }),
-            &["id", "times"],
+            &["id"],
         ),
         tool(
             "search_web",
@@ -538,7 +559,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "collect_images",
-            "Search images for each query (Bing, privately from this machine) and download the results into the project's Research review, where the user looks through them and keeps the ones they want (kept images land in the media bin). Skips duplicates and anything smaller than 360 px. Takes a minute or two. Make the queries specific, from what search_web and read_page found: names with the place, the street, \"<name> mugshot\", \"<place> crash scene\", the department.",
+            "Search images for each query (Bing, privately from this machine) and download the results into the project's Research review, where the user looks through them and keeps the ones they want (kept images land in the media bin). Skips duplicates and anything smaller than 360 px. Takes a minute or two a call, so put every query in one call. Make the queries specific, from what search_web and read_page found: names with the place, the street, \"<name> mugshot\", \"<place> crash scene\", the department.",
             json!({
                 "queries": { "type": "array", "items": { "type": "string" } },
                 "per_query": { "type": "integer", "description": "Results to try per query (default 40, up to 150)." }
@@ -664,7 +685,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "mute_house_words",
-            "Mutes the house words in the footage's sound (the intro's too) and in the voice-overs (the narration, from their takes' transcripts) and stars them out in every text on screen: subtitles, speaker captions, callouts, quotes, charges, labels; moving and re-timing nothing. Words count in their other forms (punched, hitting, abusive). Run it over the whole timeline (no start/end) once the captions and text are in. Replaces the mutes made before in that span. Returns how many subtitles and other texts changed and every mute (term, timeline time, starred, clip; voice_over: true for the narration's).",
+            "Mutes the house words in the footage's sound (the intro's too) and in the voice-overs (the narration, from their takes' transcripts) and stars them out in every text on screen: subtitles, speaker captions, callouts, quotes, charges, labels; moving and re-timing nothing. Words count in their other forms (punched, hitting, abusive). Run it over the whole timeline (no start/end) once the captions and text are in, once per turn (after the turn's last text change, not after each plan). Replaces the mutes made before in that span. Returns how many subtitles and other texts changed and every mute (term, timeline time, starred, clip; voice_over: true for the narration's).",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline (default 0)." },
                 "end": { "type": "number", "description": "Seconds on the timeline (default: the end)." },
@@ -828,8 +849,9 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 return Err(format!("revision conflict: expected {base}, current {}; nothing saved; refresh get_edit_context", current.rev));
             }
             let mut project = current.project;
+            let (assets, house) = plan_assets(app, &mut project, operations).await?;
             let applied = crate::diag::time_on("agent", "plan: apply and validate", &id, || {
-                crate::edit_plan::apply(&mut project, operations)
+                crate::edit_plan::apply_with(&mut project, operations, &assets)
             })?;
             let dry_run = args["dry_run"].as_bool().unwrap_or(false);
             let audit = crate::edit_plan::audit(&project);
@@ -852,6 +874,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
             let smoothing = if dry_run {
                 Vec::new()
             } else {
+                crate::server::house_media_saved(app, house);
                 crate::broll::smooth_in_background(app, &id, &applied.smooth)
             };
             let report = json!({"rev":live.rev, "saved":!dry_run, "results":applied.results, "audit":audit, "smoothing_started":smoothing});
@@ -1233,6 +1256,22 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                 None => Err(format!("couldn't import the frame: {errors:?}")),
             }
         }
+        "markers" => {
+            if args["add"].is_null() && args["remove"].is_null() {
+                let project = store.get(&id).ok_or("project vanished")?.project;
+                return Ok(text(
+                    serde_json::to_string(
+                        &json!({"markers": crate::markers::listing(&project, None)}),
+                    )
+                    .map_err(|error| error.to_string())?,
+                ));
+            }
+            let (_, report) =
+                store.update(&id, ORIGIN, |project| crate::markers::edit(project, args))?;
+            Ok(text(
+                serde_json::to_string(&report).map_err(|error| error.to_string())?,
+            ))
+        }
         "add_sound_effect" => {
             let name = args["sound"].as_str().ok_or("sound is required")?;
             let sound = crate::sfx::find(name).ok_or_else(|| {
@@ -1241,8 +1280,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     crate::sfx::names().join(", ")
                 )
             })?;
-            let times: Vec<f64> =
-                serde_json::from_value(args["times"].clone()).map_err(|error| error.to_string())?;
+            let times = sound_times(store, &id, args)?;
             let volume_db = args["volume_db"].as_f64().unwrap_or(0.0) as f32;
             let path = crate::sfx::path(store.home(), sound)?;
             let (_, added, errors) = crate::server::import_paths(
@@ -1316,8 +1354,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
         }
         "add_from_library" => {
             let sound_id = args["id"].as_str().ok_or("id is required")?;
-            let times: Vec<f64> =
-                serde_json::from_value(args["times"].clone()).map_err(|error| error.to_string())?;
+            let times = sound_times(store, &id, args)?;
             let (media_id, sound) = crate::library::import(app, &id, sound_id, ORIGIN).await?;
             let seconds = args["seconds"].as_f64().filter(|seconds| *seconds > 0.0);
             let mut volume_db = args["volume_db"].as_f64().unwrap_or(0.0);
@@ -2506,6 +2543,12 @@ fn edit_context(app: &App, live: &crate::store::Live, args: &Value) -> Value {
         "tracks":tracks, "sections":sections, "media":media, "speaker_line_counts":speakers,
         "subtitles_in_span": subtitles, "footage_blocks":footage, "cut_ins":cut_ins,
         "audit":crate::edit_plan::audit(p), "smoothing":crate::broll::smoothing_pending(&p.id)});
+    let span =
+        (from.is_some() || to.is_some()).then(|| (from.unwrap_or(0), to.unwrap_or(i64::MAX)));
+    let markers = crate::markers::listing(p, span);
+    if !markers.is_empty() {
+        context["markers"] = json!(markers);
+    }
     if args["include_transcript"].as_bool().unwrap_or(false) {
         let heard = timeline_transcript(app, p);
         let heard = match (from, to) {
@@ -3002,7 +3045,95 @@ pub(crate) fn free_track(project: &mut Project, kind: TrackKind, start: i64, end
     )
 }
 
-/// The lowest track of `kind` free for the span, after the first `skip` of them.
+/// Brings in the house pictures and sounds a plan's graphics use (evidence
+/// boards' shutter, desktop profiles' wallpaper and windows) as media of the
+/// plan's own copy of the project, so it all saves once or not at all.
+async fn plan_assets(
+    app: &App,
+    project: &mut Project,
+    operations: &[Value],
+) -> Result<(crate::edit_plan::Assets, Vec<crate::cloud_media::Made>), String> {
+    let needs = crate::edit_plan::needs(operations);
+    let mut assets = crate::edit_plan::Assets::default();
+    let mut made = Vec::new();
+    let home = app.store.home().to_path_buf();
+    if needs.shutter {
+        let sound = crate::sfx::find("shutter").ok_or("the shutter sound is missing")?;
+        let path = crate::sfx::path(&home, sound)?;
+        let (ids, new) =
+            crate::server::house_media(app, project, std::slice::from_ref(&path)).await?;
+        made.extend(new);
+        let media_id = ids.first().cloned().ok_or("shutter media")?;
+        if let Some(media) = project.media.iter_mut().find(|media| media.id == media_id) {
+            if media.markers.is_empty() {
+                media.markers = sound.markers();
+            }
+        }
+        let hit = sound.hit();
+        // About 8 LU under the speech: a texture on each photo, not a hit.
+        let speechless = project.clone();
+        let level = tokio::task::spawn_blocking(move || -> Result<f64, String> {
+            let speech = crate::library::footage_loudness(&speechless)?;
+            let own = crate::library::loudness(&path, 0.0, 1.0)?;
+            Ok(speech - 8.0 - own)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        assets.shutter = Some(crate::edit_plan::Shutter {
+            media: media_id,
+            hit,
+            // Nothing to measure yet (no speech): about where it sits on a typical edit.
+            volume_db: level.map_or(-14.0, |gain| gain.clamp(-40.0, 6.0)) as f32,
+        });
+    }
+    for (photo_title, notepad_title) in needs.desktops {
+        let (width, height) = (project.settings.width, project.settings.height);
+        let paths = {
+            let (home, photo_title, notepad_title) =
+                (home.clone(), photo_title.clone(), notepad_title.clone());
+            tokio::task::spawn_blocking(move || {
+                crate::diag::time_on("agent", "desktop profile: draw", "", || {
+                    crate::desktop::files(&home, width, height, &photo_title, &notepad_title)
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())??
+        };
+        let (ids, new) = crate::server::house_media(app, project, &paths).await?;
+        made.extend(new);
+        let [wallpaper, photo_viewer, notepad]: [String; 3] =
+            ids.try_into().map_err(|_| "desktop pictures".to_owned())?;
+        assets.desktops.push(crate::desktop::Art {
+            photo_title,
+            notepad_title,
+            wallpaper,
+            photo_viewer,
+            notepad,
+        });
+    }
+    Ok((assets, made))
+}
+
+/// Where a sound goes: its `times` (timeline seconds) and every place each
+/// of its `markers` (names) is.
+fn sound_times(store: &crate::store::Store, id: &str, args: &Value) -> Result<Vec<f64>, String> {
+    let mut times: Vec<f64> = if args["times"].is_null() {
+        Vec::new()
+    } else {
+        serde_json::from_value(args["times"].clone()).map_err(|error| format!("times: {error}"))?
+    };
+    if !args["markers"].is_null() {
+        let names: Vec<String> = serde_json::from_value(args["markers"].clone())
+            .map_err(|error| format!("markers: {error}"))?;
+        let project = store.get(id).ok_or("project vanished")?.project;
+        times.extend(crate::markers::times(&project, &names)?);
+    }
+    if times.is_empty() {
+        return Err("give times (timeline seconds) or markers (names)".to_owned());
+    }
+    Ok(times)
+}
+
 /// How a sound is placed.
 struct Sound {
     volume_db: f32,
@@ -3112,7 +3243,8 @@ fn place_sound(
     ))
 }
 
-fn free_track_from(
+/// The lowest track of `kind` free for the span, after the first `skip` of them.
+pub(crate) fn free_track_from(
     project: &mut Project,
     kind: TrackKind,
     skip: usize,

@@ -11,7 +11,61 @@ pub struct Applied {
     pub smooth: Vec<String>,
 }
 
+/// House pictures and sounds a plan's graphics use, already in the
+/// project's media (the caller brings them in before the plan runs, so the
+/// plan still saves once): see `needs`.
+#[derive(Default)]
+pub struct Assets {
+    /// The bundled camera shutter, for evidence boards.
+    pub shutter: Option<Shutter>,
+    /// The desktop profile's pictures, one set per pair of window titles.
+    pub desktops: Vec<crate::desktop::Art>,
+}
+
+pub struct Shutter {
+    pub media: String,
+    /// Seconds into the file of its click.
+    pub hit: f64,
+    /// Puts it ~8 LU under the edit's speech: a texture on each photo, not a hit.
+    pub volume_db: f32,
+}
+
+/// What a plan's operations need brought in first.
+#[derive(Default, Debug, PartialEq)]
+pub struct Needs {
+    pub shutter: bool,
+    /// (photo viewer title, notepad title) per desktop profile.
+    pub desktops: Vec<(String, String)>,
+}
+
+pub fn needs(operations: &[Value]) -> Needs {
+    let mut needs = Needs::default();
+    for operation in operations {
+        match operation["op"].as_str() {
+            Some("evidence_board") if operation["shutters"].as_bool() != Some(false) => {
+                needs.shutter = true;
+            }
+            Some("desktop_profile") => {
+                let titles = crate::desktop::titles(operation);
+                if !needs.desktops.contains(&titles) {
+                    needs.desktops.push(titles);
+                }
+            }
+            _ => {}
+        }
+    }
+    needs
+}
+
 pub fn apply(project: &mut Project, operations: &[Value]) -> Result<Applied, String> {
+    apply_with(project, operations, &Assets::default())
+}
+
+pub fn apply_with(
+    project: &mut Project,
+    operations: &[Value],
+    assets: &Assets,
+) -> Result<Applied, String> {
     if operations.is_empty() || operations.len() > 2000 {
         return Err("give 1 to 2000 operations".to_owned());
     }
@@ -24,7 +78,7 @@ pub fn apply(project: &mut Project, operations: &[Value]) -> Result<Applied, Str
             // Only operation arguments are references: literal caption text such
             // as "$100" is never interpreted as a reference. Use {"$ref":"hero"}.
             resolve(&mut operation, &refs)?;
-            let result = operation_on(project, &operation, &mut smooth)?;
+            let result = operation_on(project, &operation, &mut smooth, assets)?;
             if let Some(alias) = operation.get("as").and_then(Value::as_str) {
                 if alias.is_empty() || refs.insert(alias.to_owned(), result.clone()).is_some() {
                     return Err(format!("duplicate or empty alias {alias}"));
@@ -75,6 +129,7 @@ fn operation_on(
     project: &mut Project,
     args: &Value,
     smooth: &mut Vec<String>,
+    assets: &Assets,
 ) -> Result<Value, String> {
     match args["op"].as_str().ok_or("op is required")? {
         "add" => {
@@ -236,9 +291,19 @@ fn operation_on(
             Ok(json!({"moved": moved, "removed_tracks": removed}))
         }
         "transition" => transition(project, args),
-        "evidence_board" => evidence_board(project, args),
+        "evidence_board" => evidence_board(project, args, assets.shutter.as_ref()),
+        "desktop_profile" => {
+            let (photo_title, notepad_title) = crate::desktop::titles(args);
+            let art = assets
+                .desktops
+                .iter()
+                .find(|art| art.photo_title == photo_title && art.notepad_title == notepad_title)
+                .ok_or("desktop_profile's pictures weren't prepared (run it through apply_edit_plan)")?;
+            crate::desktop::profile(project, args, art)
+        }
+        "markers" => crate::markers::edit(project, args),
         other => Err(format!(
-            "unknown op {other}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, tidy_tracks"
+            "unknown op {other}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, desktop_profile, markers, tidy_tracks"
         )),
     }
 }
@@ -537,7 +602,15 @@ impl Stretch {
 /// around each photo (default 75), centred in its middle, and `pan` the
 /// frames between (for the board or per photo, default 30).
 /// `illustrative: true` adds a small "Illustrative images" in the corner.
-fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> {
+/// Each photo's moment is marked on the timeline ("board photo", its label
+/// as the note) and gets a quiet camera shutter whose click lands on it
+/// (`shutters: false` for none; a shutter already within 8 frames, a
+/// transition's on the cut into the board, stands in for it).
+fn evidence_board(
+    project: &mut Project,
+    args: &Value,
+    shutter: Option<&Shutter>,
+) -> Result<Value, String> {
     let start = args["start"]
         .as_i64()
         .ok_or("evidence_board needs start (frames)")?
@@ -899,8 +972,91 @@ fn evidence_board(project: &mut Project, args: &Value) -> Result<Value, String> 
         )?;
     }
     let centred: Vec<i64> = centred.iter().map(|at| start + at).collect();
-    Ok(json!({"clips": made, "end": start + total, "centred": centred}))
+    // Each photo's moment, marked: a rebuilt board replaces its old marks.
+    project.markers.retain(|marker| {
+        !(marker.name == BOARD_MARKER && (start..start + total).contains(&marker.frame))
+    });
+    for (item, at) in items.iter().zip(&centred) {
+        let label = item["label"].as_str().unwrap_or_default().trim();
+        crate::markers::add_timeline(project, *at, BOARD_MARKER, label);
+    }
+    let mut shutters = Vec::new();
+    if let Some(shutter) = shutter.filter(|_| args["shutters"].as_bool() != Some(false)) {
+        let fps = project.fps();
+        let hit = (shutter.hit * fps).round() as i64;
+        let length = project
+            .media(&shutter.media)
+            .map_or(6, |media| ((media.duration * fps).floor() as i64).max(1));
+        // A rebuilt board's own shutters go; anyone else's shutter near a
+        // photo (the cut's, with its flash) stands in for that photo's.
+        project.clips.retain(|clip| {
+            !(clip.name.as_deref() == Some(BOARD_SHUTTER)
+                && clip.start + hit >= start
+                && clip.start + hit < start + total)
+        });
+        let shutter_at: Vec<i64> = project
+            .clips
+            .iter()
+            .filter_map(|clip| {
+                let ClipContent::Audio { media, .. } = &clip.content else {
+                    return None;
+                };
+                let named = |name: &str| name.to_lowercase().contains("shutter");
+                let media = project.media(media)?;
+                (clip.name.as_deref().is_some_and(named) || named(&media.name)).then(|| {
+                    clip.start
+                        + media
+                            .markers
+                            .iter()
+                            .find(|marker| marker.name == crate::sfx::HIT)
+                            .map_or(0, |marker| (marker.time * fps).round() as i64)
+                })
+            })
+            .collect();
+        for &at in &centred {
+            if shutter_at.iter().any(|other| (other - at).abs() <= 8) {
+                continue;
+            }
+            let (from, duration, source_in) = if at - hit < 0 {
+                (0, length - (hit - at), (hit - at) as f64 / fps)
+            } else {
+                (at - hit, length, 0.0)
+            };
+            if duration < 1 {
+                continue;
+            }
+            let track =
+                crate::mcp::free_track_from(project, TrackKind::Audio, 1, from, from + duration);
+            let id = project.fresh_id("c");
+            project.clips.push(Clip {
+                id: id.clone(),
+                track,
+                start: from,
+                duration,
+                color: edit_core::ClipColor::Yellow,
+                name: Some(BOARD_SHUTTER.to_owned()),
+                link: None,
+                fade_in: 1.min(duration),
+                fade_out: 2.min(duration),
+                keyframes: Default::default(),
+                content: ClipContent::Audio {
+                    media: shutter.media.clone(),
+                    source_in,
+                    speed: 1.0,
+                    volume_db: shutter.volume_db,
+                    mutes: Vec::new(),
+                },
+            });
+            shutters.push(at);
+        }
+    }
+    Ok(json!({"clips": made, "end": start + total, "centred": centred, "shutters": shutters}))
 }
+
+/// The timeline marker an evidence board leaves on each photo's moment.
+pub const BOARD_MARKER: &str = "board photo";
+/// The name of an evidence board's own shutters.
+const BOARD_SHUTTER: &str = "Evidence board · shutter";
 
 /// Selects many clips without having to enumerate hundreds of subtitle IDs.
 /// Times are frames, as in the project model. All supplied filters intersect.
@@ -1554,6 +1710,135 @@ mod tests {
         assert_glides(photo, &[30.0, 120.0, 210.0], 240.0);
         assert_eq!(board_clip(&p, "Evidence board · note 2").start, 120 - 12);
         assert!(audit(&p)["issues"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_evidence_board_marks_each_photo_and_lands_a_shutter_on_it() {
+        let mut p = board_project(2);
+        p.media.push(serde_json::from_value(json!({"id":"s1","name":"shutter-1.wav","path":"/s.wav","kind":"audio","duration":0.17,"markers":[{"time":0.085,"name":"hit"}]})).unwrap());
+        // The cut's own shutter (with its flash) just before the first photo.
+        p.clips.push(serde_json::from_value(json!({"id":"cut","track":"a5","type":"audio","media":"s1","name":"Shutter","start":97,"duration":5})).unwrap());
+        let assets = Assets {
+            shutter: Some(Shutter {
+                media: "s1".into(),
+                hit: 0.085,
+                volume_db: -12.0,
+            }),
+            desktops: Vec::new(),
+        };
+        let board = json!({"op":"evidence_board", "start":96, "end":250, "items":[
+            {"media":"m1","label":"Stripped mattress","at":104},
+            {"media":"m2","label":"Bagged bedding","at":138}]});
+        let result = apply_with(&mut p, &[board.clone()], &assets).unwrap();
+        // The first photo's shutter is the cut's (8 frames or less away); the second gets its own.
+        assert_eq!(result.results[0]["shutters"], json!([138]));
+        let own: Vec<&Clip> = p
+            .clips
+            .iter()
+            .filter(|clip| clip.name.as_deref() == Some(BOARD_SHUTTER))
+            .collect();
+        assert_eq!(own.len(), 1);
+        // Its click (0.085 s = 3 frames in) lands on the photo's frame.
+        assert_eq!(own[0].start + 3, 138);
+        assert_ne!(own[0].track, "a4");
+        assert_eq!(crate::markers::frames(&p, BOARD_MARKER), vec![104, 138]);
+        assert_eq!(p.markers[1].note, "Bagged bedding");
+        // Rebuilt, it replaces its own shutters and marks rather than doubling them.
+        apply_with(&mut p, &[board], &assets).unwrap();
+        assert_eq!(
+            p.clips
+                .iter()
+                .filter(|clip| clip.name.as_deref() == Some(BOARD_SHUTTER))
+                .count(),
+            1
+        );
+        assert_eq!(p.markers.len(), 2);
+        // shutters: false places none.
+        let mut quiet = board_project(1);
+        let result = apply_with(&mut quiet, &[json!({"op":"evidence_board", "start":0, "shutters":false, "items":[{"media":"m1","at":20}]})], &assets).unwrap();
+        assert_eq!(result.results[0]["shutters"], json!([]));
+        assert_eq!(
+            needs(&[json!({"op":"evidence_board", "shutters":false})]),
+            Needs::default()
+        );
+    }
+
+    #[test]
+    fn a_desktop_profile_builds_a_valid_animated_screen() {
+        let mut p = project();
+        for (id, width, height) in [
+            ("wall", 1920, 1080),
+            ("pv", 575, 800),
+            ("np", 972, 658),
+            ("mug", 634, 730),
+        ] {
+            p.media.push(serde_json::from_value(json!({"id":id,"name":id,"path":format!("/{id}.png"),"kind":"image","duration":30.0,"width":width,"height":height})).unwrap());
+        }
+        let op = json!({"op":"desktop_profile", "start":300, "duration":180, "media":"mug",
+            "lines":["36-year-old mother", "- Charged with murder"]});
+        assert_eq!(
+            needs(std::slice::from_ref(&op)).desktops,
+            vec![("Photo Viewer".to_owned(), "Notepad".to_owned())]
+        );
+        // Without its pictures prepared it says so.
+        assert!(apply(&mut p.clone(), std::slice::from_ref(&op)).is_err());
+        let assets = Assets {
+            shutter: None,
+            desktops: vec![crate::desktop::Art {
+                photo_title: "Photo Viewer".into(),
+                notepad_title: "Notepad".into(),
+                wallpaper: "wall".into(),
+                photo_viewer: "pv".into(),
+                notepad: "np".into(),
+            }],
+        };
+        let result = apply_with(&mut p, &[op], &assets).unwrap();
+        p.validate().unwrap();
+        let report = &result.results[0];
+        assert_eq!(report["end"], 480);
+        assert_eq!(report["clips"].as_array().unwrap().len(), 6);
+        let named = |name: &str| board_clip(&p, &format!("Desktop profile · {name}"));
+        // The Photo Viewer comes in first, the Notepad a few frames later, each from 96%.
+        let (viewer, notepad) = (named("photo viewer"), named("notepad"));
+        assert!(viewer.start < notepad.start);
+        let scale =
+            |clip: &Clip, frame: f32| edit_core::sample(&clip.keyframes["scale"], frame).unwrap();
+        let opacity =
+            |clip: &Clip, frame: f32| edit_core::sample(&clip.keyframes["opacity"], frame).unwrap();
+        assert!((scale(viewer, 0.0) / scale(viewer, 12.0) - 0.96).abs() < 0.01);
+        assert!(opacity(viewer, 0.0) < 0.05 && opacity(viewer, 10.0) > 0.99);
+        // Gone by the end, the Notepad first.
+        let end = (480 - viewer.start - 1) as f32;
+        assert!(opacity(viewer, end) < 0.05);
+        let notepad_end = (480 - notepad.start - 1) as f32;
+        assert!(opacity(notepad, notepad_end - 3.0) < opacity(viewer, end - 3.0));
+        // The photo fills the content area: cropped to its shape, centred in it.
+        let photo = named("photo");
+        let ClipContent::Video { crop, .. } = &photo.content else {
+            panic!("photo");
+        };
+        // (634 × 730 is wider than the 555 × 714 content area: its sides go.)
+        assert!(crop.left > 0.0 && (crop.left - crop.right).abs() < 1e-6 && crop.top == 0.0);
+        // The lines type on word by word, the second after the first; one "- " each.
+        let notes = named("notes");
+        let ClipContent::Text {
+            text, word_times, ..
+        } = &notes.content
+        else {
+            panic!("notes");
+        };
+        assert_eq!(text, "- 36-year-old mother\n- Charged with murder");
+        assert_eq!(word_times.len(), 7);
+        assert!(word_times[2] < word_times[3] && word_times[0] == 0.0);
+        // The whole screen pushes in.
+        let wall = named("wallpaper");
+        assert!(scale(wall, 179.0) > scale(wall, 0.0) * 1.03);
+        assert_eq!(crate::markers::frames(&p, "desktop window opens").len(), 2);
+        assert!(audit(&p)["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|issue| issue["kind"] == "picture_gap"));
     }
 
     #[test]

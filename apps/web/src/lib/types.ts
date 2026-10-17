@@ -30,6 +30,15 @@ export interface Marker {
   /** Seconds into the source. */
   time: number;
   name: string;
+  /** What happens there ("the door slams"), for planning sounds on it. */
+  note?: string;
+}
+
+/** A moment marked on the timeline itself (edit_core TimelineMarker). */
+export interface TimelineMarker {
+  frame: number;
+  name: string;
+  note?: string;
 }
 
 export type TrackKind = "video" | "audio";
@@ -429,6 +438,8 @@ export interface Project {
   segments?: Segment[];
   /** Its last whole export, uploaded to the team's Subtitles folder on Drive (subtitled videos). Cleared when the file is gone from Drive. */
   drive?: DriveFile | null;
+  /** Moments marked on the timeline (frames) for lining sounds up on; a source's moments are its media's markers. */
+  markers?: TimelineMarker[];
 }
 
 /** A file on Google Drive (edit_core DriveFile). */

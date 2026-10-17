@@ -1076,6 +1076,78 @@ pub async fn import_made(
     add_media(app, id, items, Vec::new(), place, origin).await
 }
 
+/// Files Edit makes itself (a bundled sound, a house graphic) as media of a
+/// project being edited in memory (a plan, saved once with everything else):
+/// probed (and sent to the cloud in cloud mode, like any import), added
+/// unless the project has them already. Returns each one's media id, and
+/// the new ones to hand to `house_media_saved` once the project is saved.
+pub async fn house_media(
+    app: &App,
+    project: &mut Project,
+    paths: &[PathBuf],
+) -> Result<(Vec<String>, Vec<crate::cloud_media::Made>), String> {
+    let mut ids = Vec::new();
+    let mut made = Vec::new();
+    for path in paths {
+        let text = path.to_string_lossy().to_string();
+        if let Some(existing) = project.media.iter().find(|media| media.path == text) {
+            ids.push(existing.id.clone());
+            continue;
+        }
+        let probe = {
+            let path = path.clone();
+            tokio::task::spawn_blocking(move || media::probe(&path))
+                .await
+                .map_err(|error| error.to_string())??
+        };
+        let name = path
+            .file_name()
+            .map_or_else(|| text.clone(), |name| name.to_string_lossy().into_owned());
+        let item = if crate::cloud::enabled() {
+            let (cache, path) = (app.store.cache_dir(), path.clone());
+            tokio::task::spawn_blocking(move || {
+                crate::cloud_media::import_local(&cache, &path, &probe, &name)
+            })
+            .await
+            .map_err(|error| error.to_string())??
+        } else {
+            crate::cloud_media::Made {
+                path: path.clone(),
+                name,
+                probe,
+                cloud: None,
+            }
+        };
+        let media_id = project.fresh_id("m");
+        project.media.push(edit_core::Media {
+            id: media_id.clone(),
+            name: item.name.clone(),
+            path: item.path.to_string_lossy().to_string(),
+            kind: item.probe.kind,
+            duration: item.probe.duration,
+            width: item.probe.width,
+            height: item.probe.height,
+            fps: item.probe.fps,
+            has_audio: item.probe.has_audio,
+            markers: Vec::new(),
+            cloud: item.cloud.clone(),
+        });
+        ids.push(media_id);
+        made.push(item);
+    }
+    Ok((ids, made))
+}
+
+/// After a project with `house_media` in it is saved: their previews and analysis.
+pub fn house_media_saved(app: &App, made: Vec<crate::cloud_media::Made>) {
+    for crate::cloud_media::Made { path, probe, .. } in made {
+        if probe.has_audio {
+            crate::loudness::warm(path.clone());
+        }
+        app.media.ensure(path, probe);
+    }
+}
+
 async fn add_media(
     app: &App,
     id: &str,

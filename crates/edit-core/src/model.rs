@@ -42,6 +42,23 @@ pub struct Project {
     /// "Subtitles" folder on Google Drive. Cleared when the file is gone from Drive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drive: Option<DriveFile>,
+    /// Moments marked on the timeline itself (frames): what happens there
+    /// ("photo lands", "door slam"), for lining sounds up on. A moment of a
+    /// source goes on its media instead (`Media::markers`), so it moves with
+    /// every clip that shows it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<TimelineMarker>,
+}
+
+/// A marked moment on the timeline.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct TimelineMarker {
+    pub frame: i64,
+    #[serde(default)]
+    pub name: String,
+    /// What it's for, for people (and agents) reading it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 /// The kind of video a project is. Each gets its own teaching for the agent
@@ -246,6 +263,9 @@ pub struct Marker {
     pub time: f64,
     #[serde(default)]
     pub name: String,
+    /// What happens there ("the door slams"), for planning sounds on it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1438,6 +1458,7 @@ impl Project {
             mark_out: None,
             segments: Vec::new(),
             drive: None,
+            markers: Vec::new(),
         };
         for kind in [
             TrackKind::Video,
@@ -1606,6 +1627,9 @@ impl Project {
             return Err(
                 "segments must be sorted, from frame 0, non-empty and never overlap".to_owned(),
             );
+        }
+        if self.markers.iter().any(|marker| marker.frame < 0) {
+            return Err("timeline markers must be frames from 0".to_owned());
         }
         if self.mark_in.is_some_and(|frame| frame < 0)
             || self.mark_out.is_some_and(|frame| frame < 0)

@@ -724,7 +724,7 @@ export function Timeline() {
       ctx.stroke();
     }
 
-    drawRuler(ctx, width, fps, ppf, useView.getState().scrollX, preview.sections, marks);
+    drawRuler(ctx, width, fps, ppf, useView.getState().scrollX, preview.sections, marks, project.markers);
 
     // Playhead.
     const px = Math.round(frameToX(playhead.frame)) + 0.5;

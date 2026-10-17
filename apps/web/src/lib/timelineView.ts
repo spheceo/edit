@@ -7,7 +7,7 @@ import { projectDuration } from "./edit";
 import { inOutSpan, pointsOf } from "./inOut";
 import { playhead, preview } from "./playback";
 import { useEditor } from "./store";
-import type { Project, Section, Sections } from "./types";
+import type { Project, Section, Sections, TimelineMarker } from "./types";
 
 /** Height of the band of sections (intro, B-roll, story, outro) atop the ruler, in px. */
 const BAND = 18;
@@ -126,6 +126,7 @@ export function drawRuler(
   scrollX: number,
   sections?: Sections | null,
   marks?: Marks,
+  markers?: TimelineMarker[],
 ) {
   ctx.fillStyle = "#0a0a0a";
   ctx.fillRect(0, 0, width, RULER);
@@ -133,6 +134,7 @@ export function drawRuler(
   ctx.fillRect(0, RULER - 1, width, 1);
   drawSections(ctx, width, ppf, scrollX, sections?.parts ?? []);
   if (marks?.span) drawSpan(ctx, ppf, scrollX, marks);
+  drawTimelineMarkers(ctx, width, ppf, scrollX, markers ?? []);
   const pxPerSecond = ppf * fps;
   const steps = [1 / fps, 2 / fps, 5 / fps, 10 / fps, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600];
   const major = steps.find((step) => step * pxPerSecond >= 90) ?? 3600;
@@ -150,6 +152,21 @@ export function drawRuler(
       ctx.fillStyle = "#8f8f8f";
       ctx.fillText(rulerLabel(t, fps, major), x + 4, BAND + 5);
     }
+  }
+}
+
+/** Moments marked on the timeline (an agent planning its sounds): a small amber flag at the ruler's foot. */
+function drawTimelineMarkers(ctx: CanvasRenderingContext2D, width: number, ppf: number, scrollX: number, markers: TimelineMarker[]) {
+  ctx.fillStyle = "#fbbf24";
+  for (const marker of markers) {
+    const x = Math.round(marker.frame * ppf - scrollX) + 0.5;
+    if (x < -6 || x > width + 6) continue;
+    ctx.beginPath();
+    ctx.moveTo(x - 4, RULER - 9);
+    ctx.lineTo(x + 4, RULER - 9);
+    ctx.lineTo(x, RULER - 3);
+    ctx.closePath();
+    ctx.fill();
   }
 }
 

@@ -794,6 +794,7 @@ export function validateProject(project: Project): string | null {
   const marks = [project.mark_in, project.mark_out].filter((mark): mark is number => mark != null);
   if (!marks.every((mark) => Number.isSafeInteger(mark) && mark >= 0)) return `in and out points must be frames from 0`;
   if (project.mark_in != null && project.mark_out != null && project.mark_in > project.mark_out) return `the in point must not come after the out point`;
+  if (project.markers?.some((marker) => !Number.isSafeInteger(marker.frame) || marker.frame < 0)) return `timeline markers must be frames from 0`;
   const unique = (items: { id: string }[]) => items.every((item) => item.id.length > 0) && new Set(items.map((item) => item.id)).size === items.length;
   if (!unique(project.tracks) || !unique(project.media) || !unique(project.clips)) return `IDs must be nonempty and unique within each collection`;
   if (project.media.some((media) => media.duration < 0 || media.fps < 0 || media.markers?.some((marker) => marker.time < 0))) return `media timing must be nonnegative`;

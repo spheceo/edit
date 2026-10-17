@@ -23,11 +23,17 @@ pub const SOUNDS: &[Sound] = &[Sound {
 pub const HIT: &str = "hit";
 
 impl Sound {
+    /// Seconds into the file of its hit.
+    pub fn hit(&self) -> f64 {
+        self.hit
+    }
+
     /// The markers the sound comes with.
     pub fn markers(&self) -> Vec<edit_core::Marker> {
         vec![edit_core::Marker {
             time: self.hit,
             name: HIT.to_owned(),
+            note: String::new(),
         }]
     }
 }

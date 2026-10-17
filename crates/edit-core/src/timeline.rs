@@ -271,6 +271,10 @@ fn ripple(project: &mut Project, warp: Warp, hold: &HashSet<String>) -> Rippled 
     project
         .segments
         .retain(|segment| segment.end > segment.start);
+    // Marked moments stay on what they mark (one in a removed span goes to its cut).
+    for marker in &mut project.markers {
+        marker.frame = warp.frame(marker.frame);
+    }
     // A link to a clip that's gone is dropped.
     let alive: HashSet<&str> = project.clips.iter().map(|clip| clip.id.as_str()).collect();
     if let Some(script) = &mut project.script {

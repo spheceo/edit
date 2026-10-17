@@ -401,6 +401,7 @@ pub async fn import(
                         media.markers = vec![edit_core::Marker {
                             time: hit,
                             name: crate::sfx::HIT.to_owned(),
+                            note: String::new(),
                         }];
                     }
                 }

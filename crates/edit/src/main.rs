@@ -6,6 +6,7 @@ mod cloud;
 mod cloud_media;
 mod cloud_projects;
 mod cutin;
+mod desktop;
 mod diag;
 mod drive;
 mod edit_plan;
@@ -17,6 +18,7 @@ mod library;
 mod loudness;
 #[cfg(target_os = "macos")]
 mod mac_media;
+mod markers;
 mod mcp;
 mod media;
 mod media_drive;

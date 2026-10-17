@@ -1,0 +1,163 @@
+// The HTTP server (server.rs `router` and its layers): every request is timed
+// by its route and logged when it failed (outermost, so it also sees requests
+// the host check turned away or that crashed); the host check; a route that
+// has a bug answers with a JSON error and the server carries on; `/api/ws`
+// streams the store's events; `/fonts/{file}` serves the bundled fonts; and
+// everything else is the web UI.
+
+import type { Server, ServerWebSocket } from "bun";
+
+import type { App } from "../app.ts";
+import * as diag from "../diag.ts";
+import { isBug, panicResponse } from "../guard.ts";
+import * as mcp from "../mcp/index.ts";
+import { staticAsset } from "./assets.ts";
+import { ApiError, notFound, text } from "./errors.ts";
+import { checkHost, secure } from "./host.ts";
+import { Router, type RouteContext } from "./router.ts";
+
+interface Socket {
+  unsubscribe: (() => void) | null;
+  /** Events were dropped while it couldn't keep up: it's told to resync once it drains. */
+  lagged: boolean;
+}
+
+/** The routes every server has; packages add theirs to the same router. */
+export function baseRouter(): Router<App> {
+  return new Router<App>()
+    .get("/api/ws", websocket)
+    .get("/fonts/{file}", font)
+    .post("/mcp", mcp.handle)
+    .get("/mcp", mcp.rejectGet);
+}
+
+function websocket(context: RouteContext<App>): Response | undefined {
+  const socket: Socket = { unsubscribe: null, lagged: false };
+  if (context.upgrade(socket)) return undefined;
+  return text("Connection header did not include 'upgrade'", 400);
+}
+
+function font(context: RouteContext<App>): Response {
+  const bytes = context.app.native.bundledFont(context.params.file ?? "");
+  if (bytes === null) throw notFound("no such font");
+  return new Response(bytes, {
+    headers: { "content-type": "font/ttf", "cache-control": "public, max-age=31536000, immutable" },
+  });
+}
+
+/** Answers one request (exported for tests: `fetch` without a socket). */
+export async function respond(
+  app: App,
+  router: Router<App>,
+  request: Request,
+  server: Server<Socket> | null,
+): Promise<Response | undefined> {
+  const started = performance.now();
+  const url = new URL(request.url);
+  const method = request.method;
+  const match = router.match(method, url.pathname);
+  const route = match.kind === "route" ? match.route.pattern : match.kind === "method" ? match.pattern : "(static)";
+  let response: Response | undefined;
+  try {
+    const refused = checkHost(request, app.allowedHosts);
+    if (refused !== null) {
+      response = refused;
+    } else {
+      if (match.kind === "route") {
+        response = await match.route.handler({
+          app,
+          request,
+          url,
+          route,
+          params: match.params,
+          query: url.searchParams,
+          bodyLimit: match.route.bodyLimit,
+          upgrade: (data) => server?.upgrade(request, { data: data as Socket }) ?? false,
+        });
+      } else if (match.kind === "method") {
+        response = new Response(null, { status: 405, headers: { allow: match.allowed.join(",") } });
+      } else if (method === "GET" || method === "HEAD") {
+        response = staticAsset(url.pathname);
+      } else {
+        response = new Response(null, { status: 405, headers: { allow: "GET,HEAD" } });
+      }
+      if (response !== undefined) secure(response);
+    }
+  } catch (error) {
+    if (error instanceof ApiError) {
+      response = secure(error.response());
+    } else if (isBug(error)) {
+      response = panicResponse(error);
+    } else {
+      // Routes word their own failures; one that slipped through still answers.
+      response = secure(Response.json({ error: diag.messageOf(error) }, { status: 500 }));
+    }
+  }
+  if (response === undefined) {
+    // Upgraded to a websocket: the handshake is the request.
+    diag.record("http", `${method} ${route}`, performance.now() - started, null);
+    return undefined;
+  }
+  return logged(method, route, url.pathname, performance.now() - started, response);
+}
+
+/** Times a request (by route) and logs the ones that failed, with why. */
+async function logged(method: string, route: string, path: string, ms: number, response: Response): Promise<Response> {
+  const name = `${method} ${route}`;
+  const status = response.status;
+  if (status < 400) {
+    diag.record("http", name, ms, null);
+    return response;
+  }
+  // Errors answer with a small JSON body: read it for the log, then pass it on.
+  const body = await response.clone().text();
+  let why: string | null = null;
+  try {
+    const value = JSON.parse(body) as { error?: unknown };
+    if (typeof value.error === "string") why = value.error;
+  } catch {
+    why = null;
+  }
+  why ??= [...body].slice(0, 300).join("");
+  const failure = `${status} ${path}: ${why}`;
+  if (status >= 500) {
+    diag.record("http", name, ms, failure);
+  } else {
+    diag.record("http", name, ms, null);
+    // A missing thumbnail or frame is routine; other refusals are worth seeing.
+    if (status !== 404 || method !== "GET") diag.warn("http", `${method} ${failure}`);
+  }
+  return response;
+}
+
+/** Starts listening on `hostname:port` (one per address `bind_addresses` gives). */
+export function listen(app: App, router: Router<App>, hostname: string, port: number): Server<Socket> {
+  return Bun.serve<Socket>({
+    hostname,
+    port,
+    // Uploads stream to disk with their own limits; the routes enforce the rest.
+    maxRequestBodySize: Number.MAX_SAFE_INTEGER,
+    // Agent tool calls and exports can take minutes without a byte sent.
+    idleTimeout: 0,
+    fetch: (request, server) => respond(app, router, request, server),
+    websocket: {
+      open(ws: ServerWebSocket<Socket>) {
+        ws.data.unsubscribe = app.store.subscribe((_event, text) => {
+          if (ws.data.lagged) return;
+          if (ws.send(text()) === 0) ws.data.lagged = true;
+        });
+      },
+      drain(ws: ServerWebSocket<Socket>) {
+        if (ws.data.lagged && ws.send(JSON.stringify({ type: "resync" })) > 0) ws.data.lagged = false;
+      },
+      message() {
+        // Clients only listen.
+      },
+      close(ws: ServerWebSocket<Socket>) {
+        ws.data.unsubscribe?.();
+        ws.data.unsubscribe = null;
+      },
+    },
+  });
+}
+

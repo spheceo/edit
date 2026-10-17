@@ -19,5 +19,7 @@ describe("pitch-preserving preview audio", () => {
     const frequency = crossings * rate / (to - from);
     expect(frequency).toBeGreaterThan(425);
     expect(frequency).toBeLessThan(455);
-  });
+    // 0.125x makes 8 s of audio to analyse: well under a second alone, but
+    // past vitest's 5 s default on a machine busy with a build or export.
+  }, 30_000);
 });

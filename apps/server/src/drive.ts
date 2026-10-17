@@ -1,6 +1,7 @@
-// Exports on the team's Google Drive (drive.rs). A whole export is uploaded:
-// a subtitled video to the "Subtitles" folder (Repack's, where its own renders
-// go), any other edit to "Render". Anyone with the link may view it, and the
+// Exports on the team's Google Drive (drive.rs). A whole export of a
+// subtitled video is uploaded to the "Subtitles" folder (Repack's, where its
+// own renders go); a normal edit isn't (it's downloaded from Edit; "Render"
+// is only where one went before, Oct 17). Anyone with the link may view it, and the
 // project keeps the link (`project.drive`) for as long as the file is on
 // Drive: when the UI shows the link it asks the server, which checks the file
 // still exists and clears the link when it was deleted or trashed. Edit never
@@ -75,10 +76,27 @@ export function uploadName(project: string, ext: string): string {
   return `${name === "" ? "Edit" : name}.${ext}`;
 }
 
-/** Whether an export is uploaded: a video file (MP4 or MOV) of all of it. */
+/**
+ * Whether a subtitled video's Repack-style subtitles are in it (no label,
+ * named for their person), or it's only footage and subtitles.
+ */
+export function subtitleVideo(project: Project): boolean {
+  return (
+    isSubtitled(project) ||
+    project.clips.some((clip) => clip.type === "text" && (clip.name ?? "").startsWith("Subtitle · ") && clip.style.label == null)
+  );
+}
+
+/**
+ * Whether an export is uploaded: a video file (MP4 or MOV) of all of a
+ * subtitled video, for Repack's "Subtitles" folder. A normal edit isn't
+ * uploaded (decided Oct 17): it's downloaded from Edit, on the Mac or over
+ * Tailscale, from the project's exports.
+ */
 export function wanted(project: Project, options: ExportOptions, plan: Plan): boolean {
   const total = duration(project);
   return (
+    subtitleVideo(project) &&
     (options.format === "h264" || options.format === "hevc" || options.format === "prores") &&
     plan.start === 0 &&
     plan.end >= total &&
@@ -106,7 +124,7 @@ export function start(store: Store, library: Library, project: Project, path: st
   const name = uploadName(project.name, ext);
   // A re-export replaces the file it made before, so its link stays the same.
   const replacing = project.drive?.file_id ?? null;
-  const into = folder(isSubtitled(project));
+  const into = folder(subtitleVideo(project));
   nextUpload += 1;
   const number = nextUpload;
   uploads.set(id, number);

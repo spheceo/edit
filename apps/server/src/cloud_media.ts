@@ -53,7 +53,7 @@ import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import * as endpoints from "./endpoints.ts";
-import { copyFile, ioMessage, nextFileId, nowMs } from "./files.ts";
+import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { mediaKey, Semaphore } from "./media.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
@@ -316,6 +316,58 @@ export async function fetchKey(key: string, local: string): Promise<void> {
   }
 }
 
+/**
+ * Where this machine has a cloud original's very file (it was imported from
+ * here), so an export reads it from the disk with AVFoundation instead of
+ * fetching it from the cloud: a 29-minute subtitled video's sound alone took
+ * 3.5 minutes over the network. `<cache>/cloud/local-originals.json`, key →
+ * the file, its size and modification time; machine-local, never shared.
+ * The user's file is only ever read.
+ */
+interface LocalOriginal {
+  path: string;
+  size: number;
+  mtime_ms: number;
+}
+
+function localOriginalsFile(cache: string): string {
+  return join(cache, "cloud", "local-originals.json");
+}
+
+function readLocalOriginals(cache: string): Record<string, LocalOriginal> {
+  try {
+    const value = JSON.parse(fs.readFileSync(localOriginalsFile(cache), "utf8")) as unknown;
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, LocalOriginal>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Notes that `path` (on this machine) is the original stored at `key`. */
+export function rememberLocalOriginal(cache: string, key: string, path: string): void {
+  try {
+    const stat = fs.statSync(path);
+    const known = readLocalOriginals(cache);
+    known[key] = { path, size: stat.size, mtime_ms: stat.mtimeMs };
+    fs.mkdirSync(join(cache, "cloud"), { recursive: true });
+    writeAtomic(localOriginalsFile(cache), JSON.stringify(known, null, 1));
+  } catch (error) {
+    diag.warn("cloud", `couldn't note ${path} as the original of ${key}: ${diag.messageOf(error)}`);
+  }
+}
+
+/** The file on this machine that is still the original at `key` (same size and modification time), if any. */
+export function localOriginal(cache: string, key: string): string | null {
+  const entry = readLocalOriginals(cache)[key];
+  if (entry === undefined || typeof entry.path !== "string") return null;
+  try {
+    const stat = fs.statSync(entry.path);
+    return stat.isFile() && stat.size === entry.size && stat.mtimeMs === entry.mtime_ms ? entry.path : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The SHA-256 of a file, in lowercase hex. */
 export async function sha256File(path: string): Promise<string> {
   const hasher = new Bun.CryptoHasher("sha256");
@@ -433,6 +485,8 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
     }
     return { path, name, probe, cloud: { source, original: originalKey, proxy: originalKey, size } };
   }
+  // Exports read this very file while it's here.
+  rememberLocalOriginal(cache, originalKey, path);
   const ready = readyProxy(record);
   const proxy = ready ?? proxyKey(source);
   if (proxy === null) throw new Error("no proxy key");
@@ -870,6 +924,8 @@ export async function forExport(project: Project, start: number, end: number, ca
   const out = structuredClone(project) as Project;
   const originals = new ExportOriginals();
   const needed: [string, string][] = [];
+  // Originals imported from this machine and still here: read from the disk.
+  const onDisk = new Map<string, string>();
   // In an edit with cloud media, one that's neither here nor in the cloud was
   // made on another machine that hasn't uploaded it: say so.
   const cloudEdit = project.media.some((media) => media.cloud !== undefined && media.cloud !== null);
@@ -884,6 +940,11 @@ export async function forExport(project: Project, start: number, end: number, ca
     }
     const own = where.proxy === where.original;
     if (own && isFile(media.path)) continue;
+    const here = localOriginal(cache, where.original);
+    if (here !== null) {
+      onDisk.set(mediaId, here);
+      continue;
+    }
     needed.push([mediaId, where.original]);
   }
   if (strandedNames.length > 0) {
@@ -891,6 +952,11 @@ export async function forExport(project: Project, start: number, end: number, ca
       `the edit uses files that aren't on this machine or in the cloud (${strandedNames.join(", ")}): open the project on the machine that made them so they upload, then export again`,
     );
   }
+  for (const [mediaId, path] of onDisk) {
+    const media = out.media.find((item) => item.id === mediaId);
+    if (media !== undefined) media.path = path;
+  }
+  if (onDisk.size > 0) diag.info("export", `${project.id}: reading ${onDisk.size} cloud originals from this machine's copies`);
   if (needed.length === 0) return [out, originals];
   if (!cloud.enabled()) throw new Error("this edit's footage is in the cloud: exporting it needs the cloud (EDIT_RELAY_TOKEN)");
   for (const [mediaId, key] of needed) {
@@ -902,7 +968,7 @@ export async function forExport(project: Project, start: number, end: number, ca
   // Waveforms read their levels from the proxy's cache: the originals share them.
   out.media.forEach((media, index) => {
     const before = project.media[index];
-    if (before === undefined || media.path === before.path) return;
+    if (before === undefined || media.path === before.path || onDisk.has(media.id)) return;
     const from = join(cache, mediaKey(before.path), "peaks.bin");
     if (!isFile(from)) return;
     const to = join(cache, mediaKey(media.path));

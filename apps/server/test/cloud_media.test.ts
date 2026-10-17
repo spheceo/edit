@@ -419,3 +419,30 @@ test.skipIf(live)("live_script_import", () => {
 test.skipIf(live)("live_drive_streams_to_r2", () => {
   throw new Error("not ported: run cloud_media.rs's against the real relay");
 });
+
+test("an export reads a cloud original from the file it was imported from while that's unchanged", async () => {
+  const fixture = home("cloud-local-original");
+  const { dir, store, cleanup } = fixture;
+  try {
+    const cache = store.cacheDir();
+    const proxy = `${dir}/proxy.mp4`;
+    fs.writeFileSync(proxy, "proxy");
+    const original = `${dir}/interview.mov`;
+    fs.writeFileSync(original, "the original");
+    const key = "edit/originals/sha256/cc/interview.mov";
+    cloudMedia.rememberLocalOriginal(cache, key, original);
+    const project = projectWith([{ ...media("m1", proxy), cloud: { source: "sha256:cc", original: key, proxy: "edit/proxies/sha256/cc.mp4", size: 12 } }]);
+    project.clips.push({ id: "c1", track: "v1", start: 0, duration: 30, type: "video", media: "m1", source_in: 0, speed: 1 } as Project["clips"][number]);
+    let [out] = await cloudMedia.forExport(project, 0, 30, cache);
+    expect(out.media[0]!.path).toBe(original);
+    // Changed since (or gone): read from the cloud again.
+    fs.writeFileSync(original, "another file");
+    [out] = await cloudMedia.forExport(project, 0, 30, cache);
+    expect(out.media[0]!.path.startsWith(`${mock.url}/r2/${key}?`)).toBe(true);
+    fs.rmSync(original);
+    [out] = await cloudMedia.forExport(project, 0, 30, cache);
+    expect(out.media[0]!.path.startsWith(`${mock.url}/r2/${key}?`)).toBe(true);
+  } finally {
+    cleanup();
+  }
+});

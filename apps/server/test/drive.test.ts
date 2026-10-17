@@ -103,8 +103,9 @@ test("uploads_whole_videos_only", () => {
       opacity: 1,
     });
     const whole = plan(0, duration(project));
-    // Any whole edit, subtitled (to Subtitles) or not (to Render).
-    expect(wanted(project, OPTIONS, whole)).toBe(true);
+    // A normal edit stays off Drive (downloaded from Edit instead).
+    expect(wanted(project, OPTIONS, whole)).toBe(false);
+    // A subtitled video goes to Subtitles.
     project.clips.push({ id: "c2", track, start: 0, duration: 300, color: "blue", name: "Subtitle · Hands up", fade_in: 0, fade_out: 0, type: "solid", fill: [0, 0, 0, 1] } as never);
     expect(wanted(project, OPTIONS, whole)).toBe(true);
     // Part of it, or not a video file: no.

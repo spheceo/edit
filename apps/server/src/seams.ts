@@ -21,16 +21,23 @@
 // isn't here: call it directly.
 
 import type { App } from "./app.ts";
+import type { Router } from "./http/router.ts";
+import * as appModule from "./app_seam.ts";
+import * as brollModule from "./broll.ts";
 import * as captionsModule from "./captions.ts";
 import * as cloudModule from "./cloud.ts";
 import * as cloudMediaModule from "./cloud_media.ts";
 import * as cloudProjectsModule from "./cloud_projects.ts";
+import * as driveModule from "./drive.ts";
 import * as editReviewModule from "./edit_review.ts";
 import * as footageSearchModule from "./footage_search.ts";
 import * as facesModule from "./faces.ts";
 import * as peopleModule from "./people.ts";
+import * as serverModule from "./server_seam.ts";
 import * as speakersModule from "./speakers.ts";
 import * as subtitlesModule from "./subtitles.ts";
+import * as voiceModule from "./voice.ts";
+import * as voiceoverModule from "./voiceover.ts";
 import * as watchModule from "./watch.ts";
 import type {
   Clip,
@@ -50,8 +57,11 @@ import type {
   TextStyle,
   Transform,
 } from "./model.ts";
+import * as libraryModule from "./library.ts";
 import * as markersModule from "./markers.ts";
 import type { Box } from "./native/index.ts";
+import * as researchModule from "./research.ts";
+import * as scriptModule from "./script_tools.ts";
 import * as sfxModule from "./sfx.ts";
 import type { Store } from "./store.ts";
 import * as stylesModule from "./styles.ts";
@@ -78,6 +88,14 @@ function stub<T extends object>(module: string, known: Partial<T> = {}): T {
 
 type Json = unknown;
 
+/** A package's REST routes (its handlers from server.rs), registered on the router. */
+export type Routes = (router: Router<App>) => void;
+
+/** Whether `error` is a seam's "not ported yet" (callers with a sensible fallback use it meanwhile). */
+export function isNotPorted(error: unknown): boolean {
+  return error instanceof Error && error.message.endsWith(" is not ported yet");
+}
+
 // ---------------------------------------------------------------------------
 // WP2: shell, server core, shipping
 
@@ -102,7 +120,7 @@ export interface Updater {
 export interface ServerSeam {
   /** `<exports folder>/<name>.mp4`: the media drive's `Exports` when one is set, else ~/Movies/Edit. */
   defaultExportPath(store: Store, project: Project): string;
-  /** Sets a found image's status; kept the first time, it goes into the media bin, named after its caption. */
+  /** Sets a found image's status; kept the first time, it goes into the media bin, named after its caption (research.reviewFound's). */
   reviewFound(app: App, id: string, item: string, status: string, origin: string): Promise<ResearchItem>;
 }
 
@@ -111,8 +129,9 @@ export interface AppSeam {
   originalExe(): string;
 }
 
-export const server: ServerSeam = stub<ServerSeam>("server");
-export const app: AppSeam = stub<AppSeam>("app");
+// WP2 has landed: server_seam.ts and app_seam.ts.
+export const server: ServerSeam = serverModule;
+export const app: AppSeam = appModule;
 
 // ---------------------------------------------------------------------------
 // WP3: cloud
@@ -202,11 +221,15 @@ export const cloud: CloudSeam = {
 };
 
 // ---------------------------------------------------------------------------
-// WP4: script, voice, research
+// WP4: script, voice, research (filled: script.ts, voice.ts, voiceover.ts,
+// research.ts; their routes are `script.routes`, their tools register as
+// script_tools.ts loads, which this file does)
 
 /** A stretch of a Drive file a script plays, as a file here (script.rs Excerpt). */
 export interface Excerpt {
+  /** The file (in cloud mode, the local proxy). */
   path: string;
+  /** Seconds of the Drive file it covers: `from` is a keyframe. */
   from: number;
   to: number;
   /** In cloud mode: `path` is the local proxy, and this is the media to make. */
@@ -219,58 +242,90 @@ export interface Parsed {
   blocks: ScriptBlock[];
 }
 
-/** What Drive serves for a file (script.rs DriveHead). */
+/** What Drive serves for a file: the last response's headers after redirects (script.rs DriveHead). */
 export interface DriveHead {
-  name: string | null;
-  size: number | null;
+  /** HTTP status (0: no answer). */
+  status: number;
+  /** Drive sent a page (text/html) instead of the file. */
   html: boolean;
+  /** Its name (content-disposition). */
+  name: string | null;
+  /** Its size in bytes, when Drive says. */
+  total: number | null;
 }
 
 /** Script imports in progress, per project (script.rs Jobs). */
 export interface ScriptJobs {
   get(project: string): ScriptJob | null;
+  /** Starts a job for `project` unless one is running; whether it did (says so as a `script` event). */
+  claim(app: App, project: string, job: ScriptJob): boolean;
+  /** Changes `project`'s job and says so (a `script` event). */
+  set(app: App, project: string, edit: (job: ScriptJob) => void): void;
 }
 
 export interface ScriptSeam {
   attach(project: Project, source: string, parsed: Parsed): void;
-  /** "1h02m03s". */
+  /** "1h02m03s": a time in an excerpt's name (seconds rounded, half away from zero). */
   clock(seconds: number): string;
-  /** FFmpeg cut of `source` from `start` to `to` into `out` (picture copied, sound AAC 192k). */
+  /** FFmpeg cut of `source` (a file or a presigned URL) from `start` to `to` into `out` (picture copied, sound AAC 192k). */
   cut(source: string, start: number, to: number, out: string): Promise<void>;
   docId(url: string): string | null;
-  /** Seconds of a file (or a presigned URL's object). */
+  /** Seconds of a file (or a presigned URL's object): "couldn't read …" when ffprobe can't. */
   durationOf(path: string): Promise<number>;
   fetchDoc(id: string): Promise<[html: string, title: string]>;
-  /** The keyframe at or before `time` (seconds). */
+  /** The keyframe at or before `time` (seconds); 0 when none is found. */
   keyframeBefore(path: string, time: number): Promise<number>;
   parse(html: string): Parsed;
   realign(app: App, id: string): Promise<Json[]>;
-  /** The URL that downloads Drive file `file` and its headers. */
+  /** The URL that downloads Drive file `file` (past the virus-scan page) and its headers; `scratch` may be written and is removed. */
   resolve(file: string, scratch: string): Promise<[url: string, head: DriveHead]>;
-  /** A file name safe on every disk. */
+  /** A file name safe on every disk: no separators or leading dots ("footage.mp4" when nothing's left). */
   safeName(name: string): string;
-  /** The spans of a file that `ranges` need (joined, padded, whole when mostly used). */
+  /** The spans of a file that `ranges` need (10 s handles, joined under 120 s apart, inside the file). */
   spans(ranges: [number, number][], duration: number): [number, number][];
-  start(app: App, projectId: string, recut: boolean): void;
+  /** Downloads the script's footage and lays it out in the background; the work, or null when one runs already. */
+  start(app: App, projectId: string, recut: boolean): Promise<void> | null;
   summary(parsed: Parsed): Json;
   unfinished(project: Project): boolean;
+  /** `/api/scripts/preview`, `/api/projects/{id}/script`, `/api/projects/{id}/script/job`. */
+  routes: Routes;
 }
 
-/** Voice-over projects (voice.rs Voices). */
+/** Voice-over projects (voice.rs Voices), `<home>/voice/<id>/`. */
 export interface Voices {
-  list(): Json;
+  list(): Json[];
+  get(id: string): VoiceProject;
+  create(name: string, source: string | null, lines: [string, string | null][]): VoiceProject;
+  forProject(name: string, source: string, lines: [string, string | null][]): VoiceProject;
+  /** The UI's changes (voice.rs Changes, as JSON; refused in serde's words). */
+  update(id: string, changes: Json): VoiceProject;
+  delete(id: string): void;
+  deleteTake(id: string, line: string, take: string): VoiceProject;
+  generate(id: string, line: string): Promise<VoiceProject>;
+  takePath(id: string, take: string): string;
+  chosenTakes(id: string): [number, string | null, string][];
+  voices(refresh: boolean): Promise<Json>;
+  full(id: string): Promise<string>;
 }
+
+export type VoiceProject = import("./voice.ts").VoiceProject;
 
 export interface VoiceSeam {
   /** The lines of a video project's script narration (its cut-ins), in order, with their labels. */
   narrationLines(project: Project): [string, string | null][];
+  /** `/api/voice/*`. */
+  routes: Routes;
 }
 
 export interface VoiceoverSeam {
+  /** Whether any cut-in already plays a voice-over. */
+  anyPlaced(project: Project): boolean;
+  /** Speaks the script's cut-ins with the house voice and lays the takes on them. */
+  generate(app: App, id: string): Promise<Json>;
   isVoiceover(project: Project, clip: Clip): boolean;
   place(app: App, id: string, media: string[] | null): Promise<Json>;
   send(app: App, voiceId: string, id: string): Promise<Json>;
-  /** Plays the voice-overs between `from` and `to` `speed` times faster; (sped start, sped end, frames saved). */
+  /** Plays the voice-overs between `from` and `to` `speed` times faster (changes `project`); (sped start, sped end, frames saved). */
   speedUp(project: Project, from: number, to: number, speed: number): [number, number, number];
   tighten(app: App, id: string, span: [number, number], maxPause: number, keep: number, dryRun: boolean): Promise<Json>;
   /** The voice-overs heard in frames [from, to). */
@@ -279,6 +334,7 @@ export interface VoiceoverSeam {
 
 /** A found image awaiting review (research.rs Item). */
 export interface ResearchItem {
+  /** The first 16 hex digits of the file's SHA-256. */
   id: string;
   file: string;
   width: number;
@@ -287,8 +343,10 @@ export interface ResearchItem {
   page: string;
   image: string;
   query: string;
+  /** new | kept | rejected. */
   status: string;
-  [field: string]: unknown;
+  /** The media it became once kept. */
+  media?: string;
 }
 
 export interface Article {
@@ -316,16 +374,22 @@ export interface ResearchSeam {
   items(home: string, project: string): ResearchItem[];
   readPage(url: string, limit: number): Promise<string>;
   reject(home: string, project: string, ids: string[]): number;
+  /** Sets a found image's status; kept the first time, it goes into the media bin, named after its caption (server.rs review_found). */
+  reviewFound(app: App, id: string, item: string, status: string, origin: string): Promise<ResearchItem>;
   searchWeb(query: string): Promise<WebResult[]>;
   /** A found image shrunk into a 320×240 cell (letterboxed) as RGBA, for contact sheets. */
   thumbnail(path: string): Promise<import("./native/index.ts").RawImage | null>;
   update(home: string, project: string, id: string, change: (item: ResearchItem) => void): ResearchItem;
+  /** `/api/projects/{id}/research/*`. */
+  routes: Routes;
 }
 
-export const script: ScriptSeam = stub<ScriptSeam>("script");
-export const voice: VoiceSeam = stub<VoiceSeam>("voice");
-export const voiceover: VoiceoverSeam = stub<VoiceoverSeam>("voiceover");
-export const research: ResearchSeam = stub<ResearchSeam>("research");
+// Filled. Their modules import this file too; a namespace is there (if not
+// yet filled) whichever loads first, and nothing reads it before the first call.
+export const script: ScriptSeam = scriptModule;
+export const voice: VoiceSeam = voiceModule;
+export const voiceover: VoiceoverSeam = voiceoverModule;
+export const research: ResearchSeam = researchModule;
 
 // ---------------------------------------------------------------------------
 // WP5: subtitles, speakers, people, seats, faces
@@ -648,6 +712,29 @@ export interface Agents {
   ask(model: string, effort: string, instructions: string, input: Json[], schema: Json | null, timeoutMs: number): Promise<string>;
 }
 
+/**
+ * The agent panel's side of the bridge (agent.rs Agents), which `App.agents`
+ * is in the server (agent.ts): `agentPanel(app)` for it. Tests' agents may
+ * answer only `status` and `ask`.
+ */
+export interface AgentPanel extends Agents {
+  /** The models the user's Codex offers (cached a day; `refresh` asks now). */
+  models(refresh: boolean): Promise<Json>;
+  /** A project's chat: its entries, whether a turn is running, its model and effort. */
+  chat(project: string): Json;
+  /** Sends the user's (or Edit's: script.rs's research) message to a project's chat, starting its turn. */
+  send(project: string, text: string, model: string | null, effort: string | null): Promise<void>;
+  /** Stops a project's running turn. */
+  stop(project: string): Promise<void>;
+  /** Forgets a project's chat (and its Codex thread). */
+  reset(project: string): void;
+}
+
+/** The app's agents as the panel (and script.rs's research turn) use them. */
+export function agentPanel(app: App): AgentPanel {
+  return app.agents as AgentPanel;
+}
+
 /** The team's sound library on Drive (library.rs Library). */
 export interface Library {
   /** A Google access token for Drive calls (the library's sign-in, shared by drive.rs). */
@@ -698,12 +785,14 @@ export interface LibrarySeam {
   loudness(path: string, from: number, seconds: number): Promise<number>;
 }
 
-export const broll: BrollSeam = stub<BrollSeam>("broll", { MAP_EXPORT_WAIT: 600_000 });
-export const drive: DriveSeam = stub<DriveSeam>("drive");
-export const library: LibrarySeam = stub<LibrarySeam>("library");
+// WP8 has landed: broll.ts, drive.ts and library.ts (and agent.ts, which
+// App carries as `agents`, with library.ts's Library as `library`).
+export const broll: BrollSeam = brollModule;
+export const drive: DriveSeam = driveModule;
+export const library: LibrarySeam = libraryModule;
 
-/** The services App carries that other packages make (stubs until they land). */
-export function unportedServices(): {
+/** The services App carries that other packages make (stubs until they land; WP4's are in). */
+export function unportedServices(home: string): {
   exports: Exports;
   updater: Updater;
   agents: Agents;
@@ -715,8 +804,8 @@ export function unportedServices(): {
     exports: stub("exports"),
     updater: stub("updater"),
     agents: stub("agents"),
-    scripts: stub("scripts"),
+    scripts: new scriptModule.Jobs(),
     library: stub("library"),
-    voices: stub("voices"),
+    voices: new voiceModule.Voices(home),
   };
 }

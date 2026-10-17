@@ -18,6 +18,10 @@ node_modules/
 
 # Tauri build output
 /crates/edit/gen/
+/crates/edit-window/gen/
+
+# The release binary's entry (apps/server/scripts/embed.ts writes it)
+/apps/server/src/embedded.gen.ts
 
 # Mood-board stills from other channels: kept locally, not published
 /docs/moodboard/shots/

@@ -11,6 +11,12 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      server:
+        description: "Which server the test build ships (ts: apps/server on Bun; rust: crates/edit)"
+        type: choice
+        options: [ts, rust]
+        default: ts
 
 permissions:
   contents: write
@@ -20,6 +26,10 @@ env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   GH_REPO: ${{ github.repository }}
   RELEASE: ${{ github.event_name == 'push' }}
+  # What a tagged release ships: `rust` (crates/edit) until the switch-over
+  # (docs/rewrite-plan.md §5.7), then `ts` (apps/server compiled with Bun, the
+  # addon, the window helper and the UI inside). Test builds pick it by hand.
+  SERVER: ${{ github.event.inputs.server || 'rust' }}
 
 jobs:
   prepare:
@@ -85,15 +95,58 @@ jobs:
           name: web-dist
           path: apps/web/dist
       # EDIT_RELEASE turns on self-update (crates/edit/src/update.rs).
-      - name: Build
-        run: EDIT_RELEASE=1 cargo build --release --locked -p edit --target ${{ matrix.target }}
-      # FFmpeg ships beside `edit` (crates/edit/src/tools.rs), pinned in scripts/ffmpeg.sh.
+      - name: Build (Rust server)
+        if: env.SERVER == 'rust'
+        run: |
+          EDIT_RELEASE=1 cargo build --release --locked -p edit --target ${{ matrix.target }}
+          mkdir package
+          cp "target/${{ matrix.target }}/release/edit" package/
+      - uses: oven-sh/setup-bun@v2
+        if: env.SERVER == 'ts'
+      # The addon and the window helper, then everything embedded in one `edit`
+      # (apps/server/scripts/embed.ts); `bun build --compile` leaves the
+      # signature invalid, so every binary is signed again (ad hoc).
+      - name: Build (Bun server)
+        if: env.SERVER == 'ts'
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) bun_target=bun-darwin-arm64 ;;
+            x86_64-apple-darwin) bun_target=bun-darwin-x64 ;;
+          esac
+          bun install --frozen-lockfile
+          (cd crates/edit-native && bun install --frozen-lockfile \
+            && bunx napi build --release --target ${{ matrix.target }} --dts index.d.ts \
+            && codesign -s - -f edit-native.node)
+          cargo build --release --locked -p edit-window --target ${{ matrix.target }}
+          codesign -s - -f "target/${{ matrix.target }}/release/edit-window"
+          bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node \
+            --window "target/${{ matrix.target }}/release/edit-window"
+          mkdir package
+          bun build apps/server/src/embedded.gen.ts --compile --target="$bun_target" \
+            --define EDIT_VERSION="\"$version\"" --define EDIT_RELEASE=true --outfile package/edit
+          codesign -s - -f package/edit
+      # The runner is Apple Silicon: the arm64 build runs here (no GPU renders: no Metal on hosted runners).
+      - name: Smoke test (Bun server)
+        if: env.SERVER == 'ts' && matrix.target == 'aarch64-apple-darwin'
+        run: |
+          set -euo pipefail
+          package/edit --version
+          home="$(mktemp -d)"
+          package/edit serve --home "$home" --port 7799 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do curl -fsS http://127.0.0.1:7799/api/health && break; sleep 0.2; done
+          curl -fsS http://127.0.0.1:7799/api/health | grep -q '"name":"edit"'
+          curl -fsS -X POST http://127.0.0.1:7799/mcp -H 'content-type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q '"serverInfo"'
+      # FFmpeg ships beside `edit` (apps/server/src/tools.ts), pinned in scripts/ffmpeg.sh.
       - name: Package
         run: |
           set -euo pipefail
           name="edit-${{ matrix.target }}.tar.gz"
-          mkdir dist package
-          cp "target/${{ matrix.target }}/release/edit" package/
+          mkdir dist
           scripts/ffmpeg.sh "${{ matrix.target }}" ffmpeg
           cp ffmpeg/ffmpeg package/edit-ffmpeg
           cp ffmpeg/ffprobe package/edit-ffprobe

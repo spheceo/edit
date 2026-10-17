@@ -481,9 +481,9 @@ export async function driveOriginal(
   const [url, head] = await scriptParts.resolve(file, join(scratch, `.probe-${file}`));
   const name = scriptParts.safeName(head.name ?? `${file}.mp4`);
   const key = record !== null && cloud.validKey(record.originalKey) ? record.originalKey : `edit/originals/drive/${file}/${segment(name)}`;
-  if (record === null) await putRecord({ source, name, originalKey: key, size: head.size ?? 0 });
-  progress(0, head.size, name);
-  const size = await streamDrive(url, key, head.size, (sent) => progress(sent, head.size, name));
+  if (record === null) await putRecord({ source, name, originalKey: key, size: head.total ?? 0 });
+  progress(0, head.total, name);
+  const size = await streamDrive(url, key, head.total, (sent) => progress(sent, head.total, name));
   let duration: number | null = null;
   try {
     duration = await scriptParts.durationOf(await getUrl(key, HOUR));

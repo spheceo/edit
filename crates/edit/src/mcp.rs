@@ -601,7 +601,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "speed_voiceover",
-            "Plays the voice-over in a span faster (pitch kept, as audio speed always is), and everything laid over it with it: the B-roll plays faster to fit, graphics and keyframes in the span squeeze to the new length, so all still lines up with the words; the timeline after it moves up by the time saved. The span is trimmed to the voice-over clips in it; refused where the footage's own sound plays (it would speed up what people say). Returns the span sped and the seconds saved.",
+            "Plays the voice-over in a span faster (pitch kept, as audio speed always is), and everything laid over it with it: the B-roll plays faster to fit, graphics and keyframes in the span squeeze to the new length, so all still lines up with the words (music and sound effects keep their own speed: a bed plays on unbroken, a sound moves with its word); the timeline after it moves up by the time saved. The span is trimmed to the voice-over clips in it; refused where the footage's own sound plays (it would speed up what people say). Returns the span sped and the seconds saved.",
             json!({
                 "start": { "type": "number", "description": "Seconds on the timeline." },
                 "end": { "type": "number", "description": "Seconds on the timeline." },

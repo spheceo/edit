@@ -8,6 +8,7 @@ import * as nodePath from "node:path";
 
 import { createApp } from "../src/app.ts";
 import * as diag from "../src/diag.ts";
+import { registerEditingTools } from "../src/edit_tools.ts";
 import { allowedHosts } from "../src/http/host.ts";
 import { baseRouter, listen } from "../src/http/server.ts";
 import { holdLock } from "../src/media_drive/layout.ts";
@@ -33,6 +34,7 @@ initNative({
 });
 store.publishLayout();
 holdLock(home);
+registerEditingTools();
 const app = createApp({ store, port, allowedHosts: allowedHosts() });
 listen(app, baseRouter(), "127.0.0.1", port);
 console.log(`edit (ts foundation): http://127.0.0.1:${port} — data in ${home}; addon: ${isReal() ? "native" : "stub"}`);

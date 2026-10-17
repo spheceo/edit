@@ -25,6 +25,7 @@ import type {
   Clip,
   DriveFile,
   ExportOptions,
+  Marker,
   Media,
   Mute,
   Plan,
@@ -38,8 +39,11 @@ import type {
   TextStyle,
   Transform,
 } from "./model.ts";
+import * as markersModule from "./markers.ts";
 import type { Box } from "./native/index.ts";
+import * as sfxModule from "./sfx.ts";
 import type { Store } from "./store.ts";
+import * as stylesModule from "./styles.ts";
 import type { Transcript, Word } from "./transcribe.ts";
 
 /** What a seam does until its package lands. */
@@ -499,8 +503,48 @@ export interface SfxSeam {
   readonly HIT: string;
 }
 
-export const styles: StylesSeam = stub<StylesSeam>("styles");
-export const sfx: SfxSeam = { HIT: "hit" };
+/** How a sound is placed (mcp.rs Sound). */
+export interface PlacedSound {
+  volume_db: number;
+  /** Plays at most this long: for a sound with a hit, the stretch around it, `lead` seconds before it (default half). */
+  seconds: number | null;
+  lead: number | null;
+  /** Seconds of fade at the end. */
+  fade_out: number;
+  color: Clip["color"];
+}
+
+/** mcp.rs's helpers other packages' tools use (WP8's add_from_library places its sounds with them). */
+export interface EditingSeam {
+  /** Where a sound goes: its `times` (timeline seconds) and every place each of its `markers` (names) is. */
+  soundTimes(store: Store, id: string, args: Record<string, unknown>): number[];
+  /**
+   * Places a sound already in the project's media at timeline times on a free
+   * audio track (never A1), its "hit" marker (else its start) on each time; the
+   * same sound within 0.5 s of a time gives way. `markers` go to the media if it
+   * has none. Says what it placed ("placed … at 1.00s (replacing 0 …)").
+   */
+  placeSound(
+    store: Store,
+    id: string,
+    mediaId: string,
+    name: string,
+    markers: Marker[],
+    times: number[],
+    sound: PlacedSound,
+  ): Promise<string>;
+  /** Timeline seconds for each marker name; an unknown name is an error listing the names there are (markers.rs times). */
+  markerTimes(project: Project, names: string[]): number[];
+}
+
+export const styles: StylesSeam = stylesModule;
+export const sfx: SfxSeam = sfxModule;
+// Required when first called: edit_tools.ts reaches the other seams itself.
+export const editing: EditingSeam = {
+  soundTimes: (...args) => (require("./edit_tools.ts") as typeof import("./edit_tools.ts")).soundTimes(...args),
+  placeSound: (...args) => (require("./edit_tools.ts") as typeof import("./edit_tools.ts")).placeSound(...args),
+  markerTimes: (...args) => markersModule.times(...args),
+};
 
 // ---------------------------------------------------------------------------
 // WP8: media sources, sound, agent

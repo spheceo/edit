@@ -8,6 +8,17 @@ Changes to make Edit much faster from import to export, more reliable, lighter o
 
 Status: proposed; Workers Paid is now available (confirmed by the user). **Desktop/server changes start after the TS rewrite (`apps/server`) is done.** The cloud rollout in section 7 can establish its relay foundation and isolated transfer tests independently; desktop integration lands in `apps/server`. Engine items land in `crates/edit-engine` (the Rust that stays); nothing new goes into `crates/edit`. Cloud items land in `apps/relay`, reusing R2 and the existing Convex registry.
 
+## Progress (Oct 18)
+
+Landed on `main` after the rewrite (each measured; the re-run of a whole subtitled video is in the morning report):
+
+- **0.1 done.** Media back on the internal disk: 53 files copied with their exact modification times (so every cache still matches), `edit media off`, the LaCie copies set aside as `media.moved-to-internal-2026-10-17` (not deleted). No file went missing that wasn't already.
+- **1.1, first part.** Background FFmpeg gives way to exports: previews and proxies (`media::run_background`) and smoothing are stopped while an export runs and continued after. Smoothing has its own lane, so imports never wait behind it. Not yet: priorities across lanes, RAM budgets.
+- **3.4 / 3.6, the proxy.** Cloud proxies and light previews in VideoToolbox from end to end (FFmpeg hardware decode, `scale_vt`, `h264_videotoolbox`): a 29-minute 1080p proxy 507 s → 263 s on an idle machine (102 → 198 fps, the M1 encoder's own rate).
+- **4.1, partly.** An export reads a cloud original from the file it was imported from while that's here and unchanged (AVFoundation, local), instead of fetching the whole file from R2 for its sound and again for its picture. Drive-imported footage still reads from R2.
+- **4.7 done.** Only subtitled videos upload to Drive. Every project keeps its exports in a list that survives restarts, with download (Mac or Tailscale), show and delete.
+- **Subtitles** (`docs/subtitles-plan.md`, *Done*): the cast with person ids enforced by `Project::validate`, one colour rule (ΔE 28) for both subtitlers, and timing that never starts a line late.
+
 ## 0. First: media back on the internal disk
 
 | # | Change | Why | Done when |

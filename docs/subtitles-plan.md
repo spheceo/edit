@@ -2,7 +2,7 @@
 
 Implementation review: [speed and subtitles audit](speed-subtitles-audit.md) (Oct 17). It expands the timing fix to both subtitle modes and proposes versioned source evidence, project-pinned casts, and fixtures before migration; agreement and image similarity must not be treated as identity certainty.
 
-Status: proposed (Oct 17). Lands after the TS rewrite, in `apps/server` (with the model change in `edit-core`).
+Status: steps 1–3 and the timing fixes are in (Oct 18, `apps/server`, `edit-core`); see *Done* below. Steps 4–6 are still to do.
 
 ## What must never happen
 
@@ -38,7 +38,7 @@ What follows from that:
 - The green-shirt agent (`speaker_0`) was named "Travis Lawson (Agent)" by the voice namer while the watcher called him "Jeremy": **310 of his lines were labelled as the other agent**. The roles differed (Agent vs Officer), so the name matcher kept the two "Travis Lawson"s apart as well.
 - Lauren's two voices were merged correctly (same name and role).
 - Fixed by naming the voices by appearance (the watcher's descriptions are consistent across windows even when its names aren't) and running again: five people, five colours.
-- **Timing**: 129 of 926 lines (14%) start late, median 343 ms, 32 over half a second, at most ~1 s. Cause: in overlap mode a speaker's next line waits until their previous line has had its 400 ms (`shown`, `subtitles.rs:617`), and in quick speech the waits chain. Fix: join a too-short line with the speaker's next line instead of delaying the next.
+- **Timing** (corrected Oct 18: the first count had its sign backwards): 19 lines start late (a frame or more after the first word, up to 0.3 s), from the 400 ms floor delaying the same speaker's next line, and **75 start over a quarter second early** (up to ~1 s), from `uncram` treating ordinary quick talk (over 25 characters a second, "Now, you stay right here." in 0.74 s) as wrongly timed words and moving the line back into the gap before it.
 - **A one-frame line**: a narrator line starting in the last frame of a footage stretch became an "Other" subtitle in white for 0.03 s.
 
 **The six subtitle videos delivered before** (`/tmp/subsrun/check.py`):
@@ -52,7 +52,7 @@ What follows from that:
 | 12-Year-Old Killer | 3 | | | 81 | 54 |
 | Teen Scammer | 4 | | | 51 | 70 |
 
-No line in any of them mixes two voices' words. The flashes under 400 ms are probably from before `MIN_SHOWN_MS` was added; the late lines are probably the chaining above (not yet confirmed for each video). Colour violations need eyes, not just ΔE: Traffic Stop's Heather in white next to a pale cyan reads as one person.
+No line in any of them mixes two voices' words. The flashes under 400 ms are probably from before `MIN_SHOWN_MS` was added. (The "late lines" column counted early ones too; see the corrected timing above.) Colour violations need eyes, not just ΔE: Traffic Stop's Heather in white next to a pale cyan reads as one person.
 
 ## The design
 
@@ -112,6 +112,24 @@ The watcher's descriptions ("bald, orange polo, right chair") stayed consistent 
 
 - **Fixtures from real projects**: the subtitle videos already delivered (Teen Scammer, 12-Year-Old, Trench Coat, Traffic Stop, Neglected 8-Year-Old, Young Actress), with their hand-checked speakers frozen as expected results. Every change to the watcher, the cast or the colours runs against them and reports attribution accuracy, colour violations and timing errors.
 - **Property tests** on the colour assigner: any cast, any order, the invariants hold or a named exception is reported.
+
+## Done (Oct 18)
+
+Measured on the six delivered subtitled videos' saved transcripts (`/tmp/subsrun/harness`: the pipeline offline, old code against new):
+
+| | Late starts | Over 250 ms early | Pairs under ΔE 28 | Someone in white |
+|---|---|---|---|---|
+| Young Actress | 20 → 0 | 76 → 0 | 0 → 0 | 0 → 0 |
+| INTERRO Comp (18 people) | 18 → 0 | 86 → 0 | 10 → 1 | 1 → 0 |
+| Trench Coat Teen | 21 → 0 | 30 → 0 | 0 → 0 | 0 → 0 |
+| Neglected 8-Year-Old | 26 → 0 | 74 → 2 | 7 → 0 | 1 → 0 |
+| 12-Year-Old Killer | 16 → 0 | 55 → 0 | 0 → 0 | 0 → 0 |
+| Teen Scammer | 13 → 0 | 23 → 1 | 0 → 0 | 0 → 0 |
+
+- **The cast**: `project.people` and `Clip::person`, enforced by `Project::validate` (a person's clips all in their colour, no clip naming nobody, nobody white). One assigner (`people.ts`, ΔE 28) for both subtitlers; Repack subtitles are people too; ids and colours stay put across re-runs. Shared between a subtitled video and the edits from the same footage through the transcript: its colours are per person (voices named alike share one) at ΔE 28, so both start from the same colours. Not yet: a separate per-source `people-v1.json`, `same_as` across files (names are still matched across files by `same_person`), colour drawn at render time (it's still stored per clip, but can't differ within a person).
+- **Timing**: a line too short to read joins the same person's next line (same moment included) or comes up at most 250 ms early; the next line never starts late. Only words faster than anyone talks (36 characters a second) count as crammed, and they move back into the gap only after a stretched word (the evidence they were said there). Both subtitlers. One-at-a-time mode keeps sync over the 400 ms floor where two people answer within a fraction of a second (~20 lines of 900 under 400 ms; overlap mode has none).
+- **A narration line touching a footage edge** stays the narrator's (hidden), never a one-frame "Other".
+- Remaining from the audit: the 400 ms floor rounds to 375 ms at 24 fps; INTERRO Comp's 18 people leave one pair under ΔE 28 (shared by people furthest apart in time).
 
 ## Order
 

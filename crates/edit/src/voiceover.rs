@@ -680,7 +680,22 @@ pub fn speed_up(
             footage.join(", ")
         ));
     }
-    let done = edit_core::speed_span(project, start, end, speed);
+    // Music and sound effects over it keep their speed: only the narration
+    // (and the picture laid over it) plays faster.
+    let narration: std::collections::HashSet<&str> = voiceovers_in(project, start, end)
+        .iter()
+        .map(|clip| clip.id.as_str())
+        .collect();
+    let hold: std::collections::HashSet<String> = project
+        .clips
+        .iter()
+        .filter(|clip| {
+            matches!(clip.content, ClipContent::Audio { .. })
+                && !narration.contains(clip.id.as_str())
+        })
+        .map(|clip| clip.id.clone())
+        .collect();
+    let done = edit_core::speed_span_holding(project, start, end, speed, &hold);
     Ok((start, end, done.frames))
 }
 
@@ -860,6 +875,55 @@ mod tests {
             .tracks
             .push(serde_json::from_value(json!({ "id": "a2", "kind": "audio" })).unwrap());
         assert!(speed_up(&mut over_footage, 0, 300, 1.1).is_err());
+    }
+
+    #[test]
+    fn speeding_a_voiceover_leaves_the_music_and_sound_effects_at_their_speed() {
+        let mut project = cut_in();
+        project.media.push(
+            serde_json::from_value(
+                json!({ "id": "bed", "name": "Nothing Much", "path": "/tmp/bed.wav",
+                "kind": "audio", "duration": 120.0, "has_audio": true }),
+            )
+            .unwrap(),
+        );
+        project
+            .tracks
+            .push(serde_json::from_value(json!({ "id": "a2", "kind": "audio" })).unwrap());
+        project
+            .tracks
+            .push(serde_json::from_value(json!({ "id": "a3", "kind": "audio" })).unwrap());
+        for clip in [
+            // A bed from the cut-in's start on past it, and a hit inside it.
+            json!({ "id": "music", "track": "a2", "start": 0, "duration": 390, "type": "audio", "media": "bed", "source_in": 0.0 }),
+            json!({ "id": "hit", "track": "a3", "start": 120, "duration": 15, "type": "audio", "media": "bed", "source_in": 30.0 }),
+        ] {
+            project.clips.push(serde_json::from_value(clip).unwrap());
+        }
+        let (_, _, saved) = speed_up(&mut project, 0, 300, 1.2).unwrap();
+        assert_eq!(saved, 50);
+        project.validate().unwrap();
+        let speed = |id: &str| match project.clip(id).unwrap().content {
+            ClipContent::Audio { speed, .. } => speed,
+            _ => panic!(),
+        };
+        // The bed plays on unbroken at its own speed and ends as the timeline does.
+        let beds: Vec<&Clip> = project
+            .clips
+            .iter()
+            .filter(|clip| {
+                matches!(&clip.content, ClipContent::Audio { media, .. } if media == "bed")
+                    && clip.track == "a2"
+            })
+            .collect();
+        assert_eq!(beds.len(), 1);
+        assert_eq!((beds[0].start, beds[0].end()), (0, 340));
+        assert!((speed("music") - 1.0).abs() < 1e-9);
+        // The hit moves with the words it was on, at its own speed.
+        assert_eq!(project.clip("hit").unwrap().start, 100);
+        assert!((speed("hit") - 1.0).abs() < 1e-9);
+        // The narration itself is sped.
+        assert!((speed("voice") - 1.2).abs() < 1e-9);
     }
 
     fn heard(text: &str) -> Vec<String> {

@@ -84,13 +84,15 @@ fn keys_within(keys: &[Keyframe], from: f32, to: f32) -> Vec<Keyframe> {
 /// into a piece before it and one from it, the later one's source moved on.
 /// Clips linked together split into pieces linked together. Returns how many
 /// were split.
-fn split_media(project: &mut Project, frame: i64, keep: Keep) -> usize {
+fn split_media(project: &mut Project, frame: i64, keep: Keep, hold: &HashSet<String>) -> usize {
     let fps = project.fps();
     let crossing: Vec<usize> = project
         .clips
         .iter()
         .enumerate()
-        .filter(|(_, clip)| is_media(clip) && clip.start < frame && clip.end() > frame)
+        .filter(|(_, clip)| {
+            is_media(clip) && !hold.contains(&clip.id) && clip.start < frame && clip.end() > frame
+        })
         .map(|(index, _)| index)
         .collect();
     let mut links: HashMap<String, String> = HashMap::new();
@@ -166,8 +168,10 @@ fn split_media(project: &mut Project, frame: i64, keep: Keep) -> usize {
 /// Moves a clip that isn't split by the warp (anything outside it, media
 /// wholly inside it, graphics anywhere): its start and end go where the warp
 /// takes them and its keys and word times with them. Media wholly inside a
-/// sped-up span plays faster to fit. False when nothing of it is left.
-fn warp_clip(clip: &mut Clip, warp: &Warp) -> bool {
+/// sped-up span plays faster to fit, unless `keep_speed` (music and sound
+/// effects: they play on at their own speed, only shorter where the span
+/// squeezes them). False when nothing of it is left.
+fn warp_clip(clip: &mut Clip, warp: &Warp, keep_speed: bool) -> bool {
     let (old_start, old_duration) = (clip.start, clip.duration);
     let start = warp.frame(clip.start);
     let end = warp.frame(clip.end());
@@ -211,7 +215,7 @@ fn warp_clip(clip: &mut Clip, warp: &Warp) -> bool {
         }
     }
     if let ClipContent::Video { speed, .. } | ClipContent::Audio { speed, .. } = &mut clip.content {
-        if clip.duration != old_duration {
+        if clip.duration != old_duration && !keep_speed {
             *speed = (*speed * old_duration as f64 / clip.duration as f64).clamp(0.05, 20.0);
         }
     }
@@ -221,14 +225,15 @@ fn warp_clip(clip: &mut Clip, warp: &Warp) -> bool {
 }
 
 /// Applies `warp` to the whole project; media crossing its edges is split
-/// there first, so only what's inside the span changes.
-fn ripple(project: &mut Project, warp: Warp) -> Rippled {
+/// there first, so only what's inside the span changes. Clips in `hold` are
+/// never split or sped: they move and shorten with the span.
+fn ripple(project: &mut Project, warp: Warp, hold: &HashSet<String>) -> Rippled {
     if warp.end <= warp.start || warp.length < 0 || warp.length >= warp.end - warp.start {
         return Rippled::default();
     }
     let before: HashSet<String> = project.clips.iter().map(|clip| clip.id.clone()).collect();
-    let mut cut = split_media(project, warp.start, Keep::Left);
-    cut += split_media(project, warp.end, Keep::Right);
+    let mut cut = split_media(project, warp.start, Keep::Left, hold);
+    cut += split_media(project, warp.end, Keep::Right, hold);
     let mut out = Rippled {
         frames: warp.end - warp.start - warp.length,
         cut,
@@ -240,7 +245,8 @@ fn ripple(project: &mut Project, warp: Warp) -> Rippled {
         let original = before.contains(&clip.id);
         let inside_media = is_media(&clip) && clip.start >= warp.start && clip.end() <= warp.end;
         // Pieces of a split clip that are dropped count as its cut, not as deletions.
-        if (inside_media && warp.removes()) || !warp_clip(&mut clip, &warp) {
+        let keep_speed = hold.contains(&clip.id);
+        if (inside_media && warp.removes()) || !warp_clip(&mut clip, &warp, keep_speed) {
             out.deleted += usize::from(original);
             continue;
         }
@@ -297,6 +303,7 @@ pub fn remove_time(project: &mut Project, start: i64, end: i64) -> Rippled {
             end,
             length: 0,
         },
+        &HashSet::new(),
     )
 }
 
@@ -304,6 +311,20 @@ pub fn remove_time(project: &mut Project, start: i64, end: i64) -> Rippled {
 /// (split at its edges) speeds up, graphics and keyframes in it squeeze to
 /// match, and everything after moves left by the frames saved.
 pub fn speed_span(project: &mut Project, start: i64, end: i64, speed: f64) -> Rippled {
+    speed_span_holding(project, start, end, speed, &HashSet::new())
+}
+
+/// `speed_span`, except that the clips in `hold` (the music and sound
+/// effects over a sped voice-over) keep their speed: a bed plays on unbroken
+/// and ends where the timeline now ends it, a sound effect moves with the
+/// words. Sped with the rest, a bed jumped 10% in tempo for every cut-in.
+pub fn speed_span_holding(
+    project: &mut Project,
+    start: i64,
+    end: i64,
+    speed: f64,
+    hold: &HashSet<String>,
+) -> Rippled {
     if !(speed.is_finite() && speed > 1.0) || end <= start {
         return Rippled::default();
     }
@@ -315,6 +336,7 @@ pub fn speed_span(project: &mut Project, start: i64, end: i64, speed: f64) -> Ri
             end,
             length: length.max(1),
         },
+        hold,
     )
 }
 

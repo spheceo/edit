@@ -482,7 +482,7 @@ export class Store {
       throw new UpdateError("invalid", diag.messageOf(error));
     }
     try {
-      this.writeFile(id, prepared.pretty);
+      this.writeFile(id, prepared.json);
     } catch (error) {
       throw new UpdateError("invalid", ioMessage(error));
     }
@@ -496,14 +496,18 @@ export class Store {
   private write(id: string, rev: number, project: Project): Live {
     const prepared = native().projectCommit(id, rev, jsonForSerde(project));
     try {
-      this.writeFile(id, prepared.pretty);
+      this.writeFile(id, prepared.json);
     } catch (error) {
       throw new Error(ioMessage(error));
     }
     return { rev, project: deepFreeze(JSON.parse(prepared.json) as Project) };
   }
 
-  private writeFile(id: string, pretty: string): void {
+  /**
+   * Writes a project file: compact JSON (speed-plan 6.1: 40% smaller than the
+   * pretty-printed files were, on disk and in every history copy).
+   */
+  private writeFile(id: string, text: string): void {
     const path = this.path(id);
     // A bad save (a bug, an agent gone wrong) can always be walked back.
     try {
@@ -511,7 +515,7 @@ export class Store {
     } catch (error) {
       diag.warn("store", `keeping history for ${id}: ${ioMessage(error)}`);
     }
-    writeAtomic(path, pretty);
+    writeAtomic(path, text);
   }
 
   /**

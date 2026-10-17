@@ -1,0 +1,435 @@
+// Self-update from the repo's GitHub Releases (built by the release workflow;
+// update.rs). `GET /api/update` says whether a newer version is out;
+// `POST /api/update` downloads it, checks its SHA-256, swaps it in for the
+// running binary and restarts in place. On Unix that's an exec
+// (`native.reexec`), so `edit serve` keeps its terminal, PID and flags, and the
+// open editor reloads once the new version answers.
+//
+// Only release builds update themselves (the workflow builds with
+// `--define EDIT_RELEASE=true`); a dev build would otherwise swap out bun.
+
+import * as fs from "node:fs";
+
+import * as diag from "./diag.ts";
+import { ioMessage } from "./files.ts";
+import { catchBugsAsync } from "./guard.ts";
+import { native } from "./native/index.ts";
+import { join, parent } from "./paths.ts";
+import type { Updater as UpdaterSeam } from "./seams.ts";
+import { RELEASE, VERSION } from "./version.ts";
+
+export { VERSION } from "./version.ts";
+
+const REPO = "spheceo/edit";
+
+/** A new release shows up within this long of the editor asking. */
+const CHECK_EVERY_MS = 10 * 60 * 1000;
+
+/** Whether this build installs updates itself. */
+export function enabled(): boolean {
+  return process.platform !== "win32" && RELEASE;
+}
+
+/** The release archive for this machine, as the release workflow names it. */
+export function assetTarget(): string {
+  if (process.platform === "darwin" && process.arch === "arm64") return "aarch64-apple-darwin";
+  if (process.platform === "darwin") return "x86_64-apple-darwin";
+  if (process.platform === "linux" && process.arch === "arm64") return "aarch64-unknown-linux-gnu";
+  return "x86_64-unknown-linux-gnu";
+}
+
+/** The newest release with a build for this machine. */
+export interface Release {
+  tag: string;
+  url: string;
+  size: number;
+  sha256: string;
+}
+
+export type Phase = "idle" | "downloading" | "restarting";
+
+export interface Status {
+  current: string;
+  /** A newer version's tag ("v0.2.0"), if there is one. */
+  latest: string | null;
+  phase: Phase;
+  /** 0–1 while downloading. */
+  progress: number;
+  error: string | null;
+  /** False for builds that don't update themselves (dev builds). */
+  enabled: boolean;
+}
+
+/** What runs just before the restart (app mode closes its window: the new `edit app` opens a fresh one). */
+const beforeRestart: (() => void)[] = [];
+
+export function onRestart(hook: () => void): void {
+  beforeRestart.push(hook);
+}
+
+export class Updater implements UpdaterSeam {
+  private latest: Release | null = null;
+  private checked: number | null = null;
+  private checking = false;
+  private phase: Phase = "idle";
+  private progress = 0;
+  private error: string | null = null;
+
+  /** Downloads are staged in `<home>/updates`. */
+  constructor(private home: string) {}
+
+  /** The current state, asking GitHub first if it's been a while. */
+  async status(): Promise<Status> {
+    const due =
+      enabled() &&
+      !this.checking &&
+      this.phase === "idle" &&
+      (this.checked === null || performance.now() - this.checked >= CHECK_EVERY_MS);
+    if (due) {
+      this.checking = true;
+      // Offline or a GitHub hiccup just means no update to offer; retry next time.
+      let found: Release | null | undefined;
+      try {
+        found = await check();
+      } catch {
+        found = undefined;
+      }
+      this.checking = false;
+      if (found !== undefined) {
+        this.latest = found;
+        this.checked = performance.now();
+      }
+    }
+    return this.snapshot();
+  }
+
+  private snapshot(): Status {
+    return {
+      current: VERSION,
+      latest: this.latest?.tag ?? null,
+      phase: this.phase,
+      progress: this.progress,
+      error: this.error,
+      enabled: enabled(),
+    };
+  }
+
+  /** Starts installing the newest release; the server restarts into it when done. */
+  async install(): Promise<Status> {
+    return this.start();
+  }
+
+  start(): Status {
+    if (!enabled()) throw new Error("this build doesn't update itself; pull and rebuild");
+    if (this.phase !== "idle") return this.snapshot();
+    const release = this.latest;
+    if (release === null) throw new Error("Edit is up to date");
+    this.phase = "downloading";
+    this.progress = 0;
+    this.error = null;
+    void (async () => {
+      try {
+        const exe = await catchBugsAsync("the update", () =>
+          install(release, join(this.home, "updates"), (progress) => {
+            this.progress = progress;
+          }),
+        );
+        this.phase = "restarting";
+        console.log(`edit: updated to ${release.tag}; restarting`);
+        // Let the request that started this (and a status poll) answer first.
+        await Bun.sleep(500);
+        restart(exe);
+      } catch (error) {
+        const said = diag.messageOf(error);
+        diag.error("update", `update to ${release.tag} failed: ${said}`);
+        this.phase = "idle";
+        this.progress = 0;
+        this.error = said;
+      }
+    })();
+    return this.snapshot();
+  }
+}
+
+/**
+ * Asks GitHub for the newest release; null when this one is current (or the
+ * newest has no build for this machine).
+ */
+export async function check(api = `https://api.github.com/repos/${REPO}/releases/latest`): Promise<Release | null> {
+  const [code, body] = await fetchText(api);
+  if (code === 404) return null; // nothing released yet
+  if (code !== 200) throw new Error(`GitHub answered ${code}: ${body.trim()}`);
+  let value: Record<string, unknown>;
+  try {
+    value = JSON.parse(body) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`unexpected answer: ${diag.messageOf(error)}`);
+  }
+  const tag = value.tag_name;
+  if (typeof tag !== "string") throw new Error("a release without a tag");
+  if (!newer(tag, VERSION)) return null;
+  const name = `edit-${assetTarget()}.tar.gz`;
+  const assets = Array.isArray(value.assets) ? (value.assets as Record<string, unknown>[]) : [];
+  const asset = assets.find((candidate) => candidate?.name === name);
+  if (asset === undefined) return null;
+  const url = asset.browser_download_url;
+  if (typeof url !== "string") throw new Error("an asset without a download link");
+  // GitHub hashes uploads itself; the .sha256 beside the archive is the fallback.
+  let sha256: string;
+  const digest = typeof asset.digest === "string" && asset.digest.startsWith("sha256:") ? asset.digest.slice(7) : null;
+  if (digest !== null) {
+    sha256 = digest;
+  } else {
+    const [sumCode, sumBody] = await fetchText(`${url}.sha256`);
+    const first = sumBody.split(/\s+/).find((part) => part !== "") ?? "";
+    if (sumCode !== 200 || first === "") throw new Error(`${tag} has no checksum for ${name}`);
+    sha256 = first;
+  }
+  const size = typeof asset.size === "number" && asset.size >= 0 ? Math.floor(asset.size) : 0;
+  return { tag, url, size, sha256 };
+}
+
+/** GETs `url` with curl (following redirects): the status code and body. */
+async function fetchText(url: string): Promise<[number, string]> {
+  let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  try {
+    child = Bun.spawn(["curl", "-sSL", "--max-time", "10", "-w", "\n%{http_code}", url], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (error) {
+    throw new Error(`curl: ${diag.messageOf(error)}`);
+  }
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (code !== 0) throw new Error(`could not reach GitHub: ${stderr.trim()}`);
+  const at = stdout.lastIndexOf("\n");
+  const body = at < 0 ? stdout : stdout.slice(0, at);
+  const status = at < 0 ? "0" : stdout.slice(at + 1);
+  const parsed = Number.parseInt(status.trim(), 10);
+  return [Number.isFinite(parsed) && /^\d+$/.test(status.trim()) ? parsed : 0, body];
+}
+
+/** Whether `version` ("0.2.0") is newer than `current`. */
+export function newer(version: string, current: string): boolean {
+  const parse = (text: string): [bigint, bigint, bigint] | null => {
+    const parts = text.replace(/^v+/, "").split(".");
+    if (parts.length !== 3 || !parts.every((part) => /^\+?\d+$/.test(part))) return null;
+    return parts.map((part) => BigInt(part.replace(/^\+/, ""))) as [bigint, bigint, bigint];
+  };
+  const a = parse(version);
+  const b = parse(current);
+  if (a === null || b === null) return false;
+  for (let index = 0; index < 3; index++) {
+    if (a[index]! !== b[index]!) return a[index]! > b[index]!;
+  }
+  return false;
+}
+
+/** Downloads, verifies and swaps in `release`; returns the binary to restart into. */
+export async function install(release: Release, staged: string, progress: (progress: number) => void): Promise<string> {
+  fs.rmSync(staged, { recursive: true, force: true });
+  try {
+    fs.mkdirSync(staged, { recursive: true });
+  } catch (error) {
+    throw new Error(`${staged}: ${ioMessage(error)}`);
+  }
+  const archive = join(staged, "edit.tar.gz");
+  await download(release.url, archive, release.size, progress);
+  const digest = await sha256(archive);
+  if (digest.toLowerCase() !== release.sha256.toLowerCase()) {
+    throw new Error(`the download is corrupt (SHA-256 ${digest}, expected ${release.sha256})`);
+  }
+  const unpacked = join(staged, "unpacked");
+  try {
+    fs.mkdirSync(unpacked, { recursive: true });
+  } catch (error) {
+    throw new Error(ioMessage(error));
+  }
+  let tar: Bun.SyncSubprocess<"pipe", "pipe">;
+  try {
+    tar = Bun.spawnSync(["tar", "-xzf", archive, "-C", unpacked], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  } catch (error) {
+    throw new Error(`tar: ${diag.messageOf(error)}`);
+  }
+  if (tar.exitCode !== 0) throw new Error(`could not unpack the update: ${tar.stderr.toString().trim()}`);
+  let running: string;
+  try {
+    running = fs.realpathSync(process.execPath);
+  } catch (error) {
+    throw new Error(`could not find the running binary: ${ioMessage(error)}`);
+  }
+  const exe = swapAll(unpacked, running);
+  fs.rmSync(staged, { recursive: true, force: true });
+  progress(1);
+  return exe;
+}
+
+/**
+ * The programs in an unpacked release besides `edit`: every executable file at
+ * its top (and the FFmpeg it ships, whatever its mode), sorted. Whatever a
+ * later release adds is swapped in with the rest, so the archive's layout can change.
+ */
+export function programs(unpacked: string): string[] {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(unpacked);
+  } catch (error) {
+    throw new Error(ioMessage(error));
+  }
+  const names: string[] = [];
+  for (const name of entries) {
+    let meta: fs.Stats;
+    try {
+      meta = fs.lstatSync(join(unpacked, name));
+    } catch {
+      continue;
+    }
+    if (name === "edit" || name.startsWith(".") || !meta.isFile()) continue;
+    const executable = (meta.mode & 0o111) !== 0;
+    if (executable || name === "edit-ffmpeg" || name === "edit-ffprobe") names.push(name);
+  }
+  return names.sort();
+}
+
+/**
+ * Swaps every program in `unpacked` in beside `running`: the others first, so
+ * the new `edit` finds its own FFmpeg and helpers, then `edit` itself over
+ * `running`. Returns the binary to restart into.
+ */
+export function swapAll(unpacked: string, running: string): string {
+  const binary = join(unpacked, "edit");
+  let isBinary = false;
+  try {
+    isBinary = fs.statSync(binary).isFile();
+  } catch {
+    isBinary = false;
+  }
+  if (!isBinary) throw new Error("the update has no edit binary");
+  const dir = parent(running);
+  if (dir === null || dir === "") throw new Error("the running binary has no folder");
+  for (const name of programs(unpacked)) swapIn(join(unpacked, name), dir, join(dir, name), name);
+  swapIn(binary, dir, running, "edit");
+  return running;
+}
+
+/** Fetches `url` into `path` with curl, reporting 0–1 as the file grows. */
+async function download(url: string, path: string, size: number, progress: (progress: number) => void): Promise<void> {
+  let curl: Bun.Subprocess<"ignore", "ignore", "pipe">;
+  try {
+    curl = Bun.spawn(
+      ["curl", "-fsSL", "--retry", "2", "--connect-timeout", "15", "--max-time", "1800", "-o", path, url],
+      { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+    );
+  } catch (error) {
+    throw new Error(`curl: ${diag.messageOf(error)}`);
+  }
+  const stderr = new Response(curl.stderr).text();
+  const timer = setInterval(() => {
+    let have = 0;
+    try {
+      have = fs.statSync(path).size;
+    } catch {
+      have = 0;
+    }
+    progress(Math.min(have / Math.max(size, 1), 0.99));
+  }, 200);
+  try {
+    const code = await curl.exited;
+    if (code !== 0) throw new Error(`download failed: ${(await stderr).trim()}`);
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+async function sha256(path: string): Promise<string> {
+  const hasher = new Bun.CryptoHasher("sha256");
+  try {
+    for await (const chunk of Bun.file(path).stream() as unknown as AsyncIterable<Uint8Array>) hasher.update(chunk);
+  } catch (error) {
+    throw new Error(ioMessage(error));
+  }
+  return hasher.digest("hex");
+}
+
+/**
+ * Replaces `exe` (in `dir`) with `fresh`. The copy lands beside it first so the
+ * final rename is atomic (and works when ~/.edit is on another disk); a fresh
+ * file rather than an overwrite also keeps macOS's signature check happy.
+ */
+function swapIn(fresh: string, dir: string, exe: string, name: string): void {
+  const temp = join(dir, `.${name}-update`);
+  const unwritable = (error: unknown) =>
+    new Error(`can't write to ${dir} (${ioMessage(error)}); reinstall with the install script`);
+  try {
+    fs.copyFileSync(fresh, temp);
+    fs.chmodSync(temp, 0o755);
+  } catch (error) {
+    throw unwritable(error);
+  }
+  try {
+    fs.renameSync(temp, exe);
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    throw unwritable(error);
+  }
+}
+
+/** The arguments this process was started with (after the program). */
+export function startArgs(): string[] {
+  // Compiled, argv is ["bun", "/$bunfs/root/…", …]; run by bun, ["bun", "<script>", …].
+  return compiled() ? process.argv.slice(2) : process.argv.slice(1);
+}
+
+/** Whether this is the compiled `edit` (its code inside the binary). */
+export function compiled(): boolean {
+  return Bun.main.startsWith("/$bunfs/") || Bun.main.startsWith("B:\\~BUN\\");
+}
+
+/** Becomes `exe`, with the same arguments; every descriptor above stderr closes on exec, so the new server binds the same ports. */
+function restart(exe: string): never {
+  for (const hook of beforeRestart) {
+    try {
+      hook();
+    } catch (error) {
+      diag.warn("update", `before restarting: ${diag.messageOf(error)}`);
+    }
+  }
+  try {
+    native().reexec(exe, startArgs());
+  } catch (error) {
+    console.error(`edit: could not restart (${diag.messageOf(error)}); start \`edit serve\` again`);
+  }
+  process.exit(1);
+}
+
+/** `edit update`. */
+export async function runCli(home: string): Promise<void> {
+  if (!enabled()) {
+    console.log(`This build of Edit (${VERSION}) doesn't update itself; pull and rebuild.`);
+    return;
+  }
+  let release: Release | null;
+  try {
+    release = await check();
+  } catch (error) {
+    console.error(`edit: could not check for updates: ${diag.messageOf(error)}`);
+    process.exit(1);
+  }
+  if (release === null) {
+    console.log(`Edit is up to date (${VERSION}).`);
+    return;
+  }
+  console.log(`Updating Edit ${VERSION} → ${release.tag}…`);
+  try {
+    await install(release, join(home, "updates"), () => {});
+    console.log("Done. Restart `edit serve` if it's running.");
+  } catch (error) {
+    console.error(`edit: ${diag.messageOf(error)}`);
+    process.exit(1);
+  }
+}

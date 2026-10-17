@@ -324,6 +324,66 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
     }
 }
 
+/// The scene at `frame` as it's seen: [`evaluate`]'s, less the layers wholly
+/// hidden under an opaque full-frame video above them ([`covers_frame`]:
+/// footage under full-frame B-roll). What the preview and the export both
+/// draw, so neither decodes a picture nobody sees, and they draw alike.
+pub fn evaluate_seen(project: &Project, frame: i64) -> Scene {
+    let mut scene = evaluate(project, frame);
+    scene.drop_hidden(project);
+    scene
+}
+
+impl Scene {
+    /// Removes the layers beneath the topmost one that covers the frame.
+    pub fn drop_hidden(&mut self, project: &Project) {
+        let hidden = self
+            .layers
+            .iter()
+            .rposition(|layer| covers_frame(project, self, layer))
+            .unwrap_or(0);
+        self.layers.drain(..hidden);
+    }
+}
+
+/// Whether `layer` hides everything beneath it: an opaque video (not an image,
+/// which may have see-through parts), uncropped and unturned, filling the frame.
+pub fn covers_frame(project: &Project, scene: &Scene, layer: &Layer) -> bool {
+    let Layer::Video {
+        media,
+        transform,
+        opacity,
+        crop,
+        ..
+    } = layer
+    else {
+        return false;
+    };
+    let Some(media) = project.media(media) else {
+        return false;
+    };
+    if media.kind != MediaKind::Video
+        || *opacity < 0.999
+        || !crop.is_none()
+        || transform.rotation.abs() > 1e-3
+        || media.width == 0
+        || media.height == 0
+    {
+        return false;
+    }
+    let (width, height) = (scene.width as f32, scene.height as f32);
+    let fit = (width / media.width as f32).min(height / media.height as f32) * transform.scale;
+    let (half_w, half_h) = (
+        media.width as f32 * fit / 2.0,
+        media.height as f32 * fit / 2.0,
+    );
+    // A pixel's slack: a fitted 16:9 shot is exactly the frame.
+    transform.x - half_w <= -width / 2.0 + 0.5
+        && transform.x + half_w >= width / 2.0 - 0.5
+        && transform.y - half_h <= -height / 2.0 + 0.5
+        && transform.y + half_h >= height / 2.0 - 0.5
+}
+
 /// The text up to the last word that has appeared by `local` (frames into the
 /// clip): at `times` when given, else one word every `stagger` frames.
 /// Whitespace and line breaks are kept as written.
@@ -480,6 +540,11 @@ pub fn shake_offset(
     }
 }
 
+/// A picture's fade at `local` frames into its clip: whole frames
+/// (`(local + 1) / (fade + 1)`), and the lower of the fade in and out where
+/// they overlap. Sound fades are the export mixer's (`edit_engine::mix`'s
+/// `fade_gain`, which the preview matches): seconds, `time / fade`, and the two
+/// multiplied. (`heard` uses this one only for the waveform's drawing.)
 fn fade_factor(clip: &Clip, local: f32) -> f32 {
     let mut factor = 1.0_f32;
     if clip.fade_in > 0 {
@@ -606,10 +671,38 @@ pub struct AudioSegment {
     pub source_in: f64,
     pub speed: f64,
     pub volume_db: f32,
+    /// The clip's `volume_db` keyframes (frames into the clip; empty: the
+    /// volume holds at `volume_db`), and the project's rate to read them.
+    /// The mix samples them once a frame and ramps linearly between, as the
+    /// preview's gain automation does ([`AudioSegment::volume_at`]).
+    pub volume_keys: Vec<Keyframe>,
+    pub fps: f64,
     pub fade_in: f64,
     pub fade_out: f64,
     /// Stretches silenced, in seconds of the source (see `Mute`).
     pub mutes: Vec<Mute>,
+}
+
+impl AudioSegment {
+    /// The volume (dB) at `frame` frames into the clip: its keyframes, else `volume_db`.
+    pub fn volume_db_at(&self, frame: f32) -> f32 {
+        sample(&self.volume_keys, frame).unwrap_or(self.volume_db)
+    }
+
+    /// The volume (linear) `seconds` into the clip: the keyed volume sampled
+    /// on the frames either side and interpolated linearly in gain, the
+    /// preview's `linearRampToValueAtTime` between one frame's value and the next.
+    pub fn volume_at(&self, seconds: f64) -> f32 {
+        let gain = |frame: f32| 10_f32.powf(self.volume_db_at(frame) / 20.0);
+        if self.volume_keys.is_empty() {
+            return gain(0.0);
+        }
+        let frame = seconds * self.fps;
+        let below = frame.floor();
+        let t = (frame - below) as f32;
+        let (from, to) = (gain(below as f32), gain(below as f32 + 1.0));
+        from + (to - from) * t
+    }
 }
 
 /// What's heard at `frame` (audio clips on unmuted tracks), only `media`'s if given.
@@ -677,6 +770,8 @@ pub fn audio_segments(project: &Project) -> Vec<AudioSegment> {
                 source_in: *source_in,
                 speed: *speed,
                 volume_db: *volume_db,
+                volume_keys: clip.keyframes.get("volume_db").cloned().unwrap_or_default(),
+                fps,
                 fade_in: clip.fade_in as f64 / fps,
                 fade_out: clip.fade_out as f64 / fps,
                 mutes: mutes.clone(),
@@ -865,6 +960,160 @@ mod tests {
             layer,
             Layer::Adjustment { blur, .. } if blur.radius == 0.0 && (blur.x + 100.0).abs() < 1e-4
         )));
+    }
+
+    #[test]
+    fn layers_under_full_frame_footage_are_not_seen() {
+        let mut project = project();
+        let v2 = project.tracks[1].id.clone();
+        let Some(over) = project.clips.get_mut(1) else {
+            panic!("no clip");
+        };
+        // Full-frame footage over the footage on V1.
+        over.track = v2;
+        over.keyframes = Default::default();
+        over.content = ClipContent::Video {
+            media: "m1".into(),
+            source_in: 0.0,
+            speed: 1.0,
+            transform: Transform::default(),
+            opacity: 1.0,
+            crop: Default::default(),
+            frame: None,
+        };
+        let seen = evaluate_seen(&project, 40);
+        assert_eq!(evaluate(&project, 40).layers.len(), 2);
+        assert_eq!(seen.layers.len(), 1);
+        assert!(matches!(&seen.layers[0], Layer::Video { clip, .. } if clip == "c2"));
+        // Not quite covering: smaller, see-through, or cropped.
+        let changed = |change: &dyn Fn(&mut Clip)| {
+            let mut project = project.clone();
+            if let Some(clip) = project.clips.get_mut(1) {
+                change(clip);
+            }
+            evaluate_seen(&project, 40).layers.len()
+        };
+        fn content(clip: &mut Clip) -> Option<(&mut Transform, &mut f32, &mut Crop)> {
+            match &mut clip.content {
+                ClipContent::Video {
+                    transform,
+                    opacity,
+                    crop,
+                    ..
+                } => Some((transform, opacity, crop)),
+                _ => None,
+            }
+        }
+        assert_eq!(
+            changed(&|clip| {
+                if let Some((transform, _, _)) = content(clip) {
+                    transform.scale = 0.9;
+                }
+            }),
+            2
+        );
+        assert_eq!(
+            changed(&|clip| {
+                if let Some((_, opacity, _)) = content(clip) {
+                    *opacity = 0.5;
+                }
+            }),
+            2
+        );
+        assert_eq!(
+            changed(&|clip| {
+                if let Some((_, _, crop)) = content(clip) {
+                    crop.left = 0.1;
+                }
+            }),
+            2
+        );
+        // Pushed in it still covers.
+        assert_eq!(
+            changed(&|clip| {
+                if let Some((transform, _, _)) = content(clip) {
+                    transform.scale = 1.2;
+                    transform.x = 50.0;
+                }
+            }),
+            1
+        );
+        // An image may be see-through.
+        let mut still = project.clone();
+        if let Some(media) = still.media.get_mut(0) {
+            media.kind = MediaKind::Image;
+        }
+        assert_eq!(evaluate_seen(&still, 40).layers.len(), 2);
+    }
+
+    #[test]
+    fn audio_segments_carry_the_volume_keys_the_preview_hears() {
+        let mut project = project();
+        let a1 = project
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Audio)
+            .map(|track| track.id.clone())
+            .unwrap_or_default();
+        let key = |frame: f32, value: f32| Keyframe {
+            frame,
+            value,
+            ease: Ease::Linear,
+            handle_in: None,
+            handle_out: None,
+        };
+        project.clips.push(Clip {
+            id: "s1".into(),
+            track: a1,
+            start: 60,
+            duration: 90,
+            color: ClipColor::Green,
+            name: None,
+            link: None,
+            fade_in: 0,
+            fade_out: 0,
+            keyframes: [(
+                "volume_db".to_owned(),
+                vec![key(0.0, -20.0), key(30.0, 0.0)],
+            )]
+            .into(),
+            content: ClipContent::Audio {
+                media: "m1".into(),
+                source_in: 1.0,
+                speed: 1.0,
+                volume_db: -3.0,
+                mutes: Vec::new(),
+            },
+        });
+        let segments = audio_segments(&project);
+        let [segment] = segments.as_slice() else {
+            panic!("one segment: {segments:?}");
+        };
+        assert_eq!(segment.volume_keys.len(), 2);
+        assert!((segment.fps - 30.0).abs() < 1e-9);
+        // On each frame, what the waveform (and the preview) hears.
+        for frame in [60, 65, 75, 89, 90, 120] {
+            let heard = heard(&project, frame, Some("m1"));
+            let local = (frame - 60) as f64 / 30.0;
+            let gain = segment.volume_at(local);
+            assert!(
+                (heard.first().map_or(0.0, |source| source.gain) - gain).abs() < 1e-5,
+                "frame {frame}: {gain}"
+            );
+        }
+        // Between frames the gain ramps linearly, as the preview's automation does.
+        let half = segment.volume_at(15.5 / 30.0);
+        let (from, to) = (
+            segment.volume_at(15.0 / 30.0),
+            segment.volume_at(16.0 / 30.0),
+        );
+        assert!((half - (from + to) / 2.0).abs() < 1e-6);
+        // Halfway up the ramp: -10 dB.
+        assert!((segment.volume_at(0.5) - 10_f32.powf(-0.5)).abs() < 1e-4);
+        // Unkeyed: the static volume.
+        let mut still = segment.clone();
+        still.volume_keys.clear();
+        assert!((still.volume_at(0.5) - 10_f32.powf(-3.0 / 20.0)).abs() < 1e-6);
     }
 
     #[test]

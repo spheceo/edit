@@ -35,14 +35,37 @@ pub struct Dot {
     pub h: f64,
 }
 
+/// A scene: (start, end) source seconds and its camera angle (none: a cutaway).
+pub type Scene = (f64, f64, Option<usize>);
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Seats {
     /// Scenes as (start, end) source seconds and their camera angle (none: a cutaway).
-    pub scenes: Vec<(f64, f64, Option<usize>)>,
+    /// The last runs on to infinity, which serde_json writes as null: read back as infinity.
+    #[serde(deserialize_with = "open_ended")]
+    pub scenes: Vec<Scene>,
     /// For each angle, where each speaker's face is (by transcript name).
     pub angles: Vec<BTreeMap<String, Dot>>,
     /// The speaker names it was worked out for (new names: worked out again).
     pub names: Vec<String>,
+}
+
+/// Scenes as written: a time of null is the infinite end serde_json can't
+/// write as a number (before this, every cached file failed to read and the
+/// seats were paid for again each time).
+fn open_ended<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Scene>, D::Error> {
+    let written: Vec<(Option<f64>, Option<f64>, Option<usize>)> =
+        Deserialize::deserialize(deserializer)?;
+    Ok(written
+        .into_iter()
+        .map(|(start, end, angle)| {
+            (
+                start.unwrap_or(f64::INFINITY),
+                end.unwrap_or(f64::INFINITY),
+                angle,
+            )
+        })
+        .collect())
 }
 
 impl Seats {
@@ -427,7 +450,38 @@ async fn look(
 
 #[cfg(test)]
 mod tests {
-    use super::{faces, Dot};
+    use super::{faces, Dot, Seats};
+
+    /// The cache file reads back: the last scene's infinite end, written as
+    /// null, is infinite again, and a face found late in it is still found.
+    #[test]
+    fn seats_round_trip_through_their_file() {
+        let seats = Seats {
+            scenes: vec![
+                (0.0, 25.0, Some(0)),
+                (25.0, 30.0, None),
+                (30.0, f64::INFINITY, Some(0)),
+            ],
+            angles: vec![[(
+                "Officer".to_owned(),
+                Dot {
+                    x: 30.0,
+                    y: 40.0,
+                    h: 20.0,
+                },
+            )]
+            .into()],
+            names: vec!["Officer".to_owned()],
+        };
+        let bytes = serde_json::to_vec(&seats).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("null"));
+        let read: Seats = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(read.scenes, seats.scenes);
+        assert_eq!(read.angles, seats.angles);
+        assert_eq!(read.names, seats.names);
+        assert_eq!(read.dot("Officer", 5000.0).map(|dot| dot.x), Some(30.0));
+        assert_eq!(read.dot("Officer", 27.0), None);
+    }
 
     #[test]
     fn faces_are_each_angles_medians_in_any_order() {

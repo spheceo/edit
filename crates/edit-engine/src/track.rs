@@ -920,20 +920,40 @@ fn decode_native(
     let parts = (count / 150).clamp(1, 3);
     let read_part = |part: usize| -> Result<Vec<u8>, String> {
         let (first, last) = (count * part / parts, count * (part + 1) / parts);
-        let mut reader = crate::mac_media::Reader::open(path, width as u32, height as u32)?;
+        let open = || crate::mac_media::Reader::open(path, width as u32, height as u32);
+        let mut reader = open()?;
+        // The reader holds its last picture for any later time, so the span
+        // stops where the pictures do (as FFmpeg's does), and a failure
+        // before then is a real one.
+        let (end, _) = reader.span();
         let mut bgra = vec![0_u8; width * height * 4];
         let mut pixels = Vec::with_capacity((last - first) * width * height);
         for index in first..last {
             let time = from + index as f64 / rate;
-            if reader
-                .frame(time, &mut bgra, crate::render::Order::Bgra, false)
-                .is_err()
-            {
-                // Past the end of the file: what was decoded is all there is.
+            if time >= end {
                 if index > 0 {
                     break;
                 }
-                return Err("no frame at the start of the span".into());
+                return Err(format!(
+                    "the span starts at {from:.2}s, past the footage's end ({end:.2}s)"
+                ));
+            }
+            if let Err(error) = reader.frame(time, &mut bgra, crate::render::Order::Bgra, false) {
+                // Once more on a fresh reader; a second failure fails the
+                // decode rather than cutting the track short unsaid.
+                crate::log::warn(
+                    "agent",
+                    format!(
+                        "track: reading {} at {time:.2}s: {error}; opening it again",
+                        path.display()
+                    ),
+                );
+                reader = open()?;
+                reader
+                    .frame(time, &mut bgra, crate::render::Order::Bgra, false)
+                    .map_err(|error| {
+                        format!("reading {} at {time:.2}s: {error}", path.display())
+                    })?;
             }
             // BT.601 luma, as FFmpeg's gray.
             pixels.extend(bgra.as_chunks::<4>().0.iter().map(|[b, g, r, _]| {
@@ -1002,14 +1022,34 @@ fn decode_ffmpeg(
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("ffmpeg: {error}"))?;
     let mut stdout = child.stdout.take().ok_or("ffmpeg stdout")?;
+    // Drained beside the frames so a talkative decoder can't stall the pipe.
+    let stderr = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            text
+        })
+    });
     let mut pixels = Vec::new();
     let read = stdout.read_to_end(&mut pixels);
-    let _ = child.wait();
+    let status = child.wait().map_err(|error| format!("ffmpeg: {error}"))?;
+    let errors = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
     read.map_err(|error| error.to_string())?;
+    // A decode that stopped short is a failure, not the footage's end: the
+    // track would end there without saying so.
+    if !status.success() {
+        let last = errors.lines().last().unwrap_or("").trim();
+        return Err(format!(
+            "decoding {} from {from:.2}s failed ({status}): {last}",
+            path.display()
+        ));
+    }
     Ok(Frames::new(width, height, pixels))
 }
 
@@ -1900,6 +1940,27 @@ mod tests {
             .unwrap();
         assert!(made.success());
         path
+    }
+
+    /// A span running past the footage's end stops with it (no copies of the
+    /// last picture standing in for frames that aren't there), with either
+    /// decoder; one starting past the end is an error, not an empty track.
+    #[test]
+    fn spans_past_the_end_stop_with_the_footage() {
+        let dir = std::env::temp_dir().join(format!("edit-track-end-{}", std::process::id()));
+        let path = square_video(&dir);
+        let ffmpeg = decode_ffmpeg(&path, 3.0, 6.0, 340, 192, 15.0).unwrap();
+        assert!((14..=16).contains(&ffmpeg.count), "{}", ffmpeg.count);
+        #[cfg(target_os = "macos")]
+        {
+            let native = decode_native(&path, 3.0, 6.0, 340, 192, 15.0).unwrap();
+            assert_eq!(native.count, 15);
+            // And several stretches side by side (a long span) stop there too.
+            let long = decode_native(&path, 0.0, 40.0, 340, 192, 15.0).unwrap();
+            assert_eq!(long.count, 60);
+            assert!(decode_native(&path, 5.0, 6.0, 340, 192, 15.0).is_err());
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The whole tool path on a synthetic clip: decoded, tracked, and kept

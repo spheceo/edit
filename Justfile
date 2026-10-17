@@ -44,6 +44,26 @@ ffmpeg:
 release: web
     cargo build -p edit --release
 
+# The dev server's binary: `[profile.serve]` (release speed, no LTO,
+# incremental), without the desktop window, built on the internal disk
+# (EDIT_BUILD_DIR, default ~/edit-build) and swapped into EDIT_SERVE_BIN
+# (default /tmp/run/edit) by rename, so a running server isn't disturbed.
+# Restart the server yourself. `just serve-build-rust` skips the UI rebuild.
+serve-build: web serve-build-rust
+
+serve-build-rust:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="${EDIT_BUILD_DIR:-$HOME/edit-build}"
+    export CARGO_TARGET_DIR="$dir/target" CARGO_BUILD_BUILD_DIR="$dir/build"
+    start=$SECONDS
+    cargo build --profile serve -p edit --no-default-features
+    dest="${EDIT_SERVE_BIN:-/tmp/run/edit}"
+    mkdir -p "$(dirname "$dest")"
+    cp "$CARGO_TARGET_DIR/serve/edit" "$dest.new"
+    mv -f "$dest.new" "$dest"
+    echo "built $dest in $((SECONDS - start)) s; restart the server to run it"
+
 # Releases go up a patch at a time (v0.0.1, v0.0.2, …). GitHub Actions
 # (.github/workflows/release.yml) builds the Apple Silicon and Intel Mac
 # archives from the tag and publishes the release.

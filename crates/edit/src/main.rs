@@ -167,6 +167,9 @@ fn serve(home: PathBuf, host: Option<String>, port: u16) {
 
 /// The desktop app: the same server, in this process, with a window onto it.
 fn app(home: PathBuf, port: u16) {
+    if !cfg!(feature = "app") {
+        fail("this build has no window (built without the `app` feature); run `edit serve` and open it in a browser");
+    }
     app::run_as_edit(&home);
     app::adopt_shell_env();
     let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|error| fail(&error.to_string()));
@@ -177,10 +180,7 @@ fn app(home: PathBuf, port: u16) {
     if !taken {
         runtime.block_on(start(home, None, port));
     }
-    let url = format!("http://127.0.0.1:{port}/")
-        .parse()
-        .unwrap_or_else(|_| fail("bad URL"));
-    app::run(url);
+    app::run(&format!("http://127.0.0.1:{port}/"));
 }
 
 /// Opens the store and starts listening; the server runs on the handles.

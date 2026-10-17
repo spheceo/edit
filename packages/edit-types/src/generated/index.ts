@@ -25,6 +25,7 @@ export type * from "./Marker";
 export type * from "./Media";
 export type * from "./MediaKind";
 export type * from "./Mute";
+export type * from "./Person";
 export type * from "./PhotoFrame";
 export type * from "./Plan";
 export type * from "./Probe";

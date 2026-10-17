@@ -1066,6 +1066,7 @@ pub async fn subtitles(
                     fade_in: 0,
                     fade_out: 0,
                     keyframes,
+                    person: None,
                     content: ClipContent::Text {
                         // White words; who says them above, in their colour.
                         text: texts.get(index).cloned().unwrap_or_else(|| line.text()),
@@ -1511,6 +1512,7 @@ pub async fn caption_speakers(
                 fade_in: 0,
                 fade_out: 0,
                 keyframes,
+                person: None,
                 content: ClipContent::Text {
                     text,
                     // The speaker's colour (their glow follows it), white when unnamed.
@@ -2582,6 +2584,7 @@ mod tests {
             fade_in: 0,
             fade_out: 0,
             keyframes: Default::default(),
+            person: None,
             content: ClipContent::Text {
                 text: "Hands up.".into(),
                 style,

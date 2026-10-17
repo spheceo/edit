@@ -13,9 +13,16 @@
 // near shade while the palette lasts. A person keeps the colour they have
 // when it still stands apart (re-runs, and a colour chosen on purpose, stay
 // put); the agent's part is only who is who (one label per person).
+//
+// A subtitled (Repack-style) video's subtitles carry no label: each is the
+// person its clip name says ("Subtitle · Lauren Wambles (Suspect)") and
+// its text is in their colour. Both kinds end up in `project.people` with a
+// stable id that every clip of theirs names (`person`), and edit-core's
+// `Project::validate` refuses any save where one of a person's clips isn't
+// in their colour, so no writer (UI, MCP, plan) can split a person again.
 
 import { hex, subtitleName } from "./captions_core.ts";
-import type { Clip, Project, Rgba } from "./model.ts";
+import type { Clip, Person as CastPerson, Project, Rgba } from "./model.ts";
 import { CAPTION_PREFIX, clipEnd } from "./project.ts";
 import { f32, round, trim } from "./rust.ts";
 import * as speakers from "./speakers.ts";
@@ -121,7 +128,7 @@ interface Person {
 
 /** What a clip says of whose words it is. */
 type Words =
-  /** A subtitle: its person and the transcript name it came from. */
+  /** A subtitle: its person and the transcript name it came from (labelled, or a Repack one named for its person). */
   | { kind: "subtitle"; key: string; from: string | null }
   /** An intro caption, by the transcript name of its speaker. */
   | { kind: "caption"; who: string }
@@ -135,6 +142,12 @@ function wordsOf(clip: Clip): Words | null {
   if (style.label != null) {
     const from = name.startsWith(SUBTITLE_PREFIX) ? name.slice(SUBTITLE_PREFIX.length) : null;
     return { kind: "subtitle", key: personKey(style.label.text), from };
+  }
+  // A Repack subtitle: no label, its person in its name, its text in their colour.
+  if (name.startsWith(SUBTITLE_PREFIX)) {
+    const who = trim(name.slice(SUBTITLE_PREFIX.length));
+    const key = personKey(who);
+    return key === "" ? null : { kind: "subtitle", key, from: who };
   }
   if (name.startsWith(CAPTION_PREFIX)) return { kind: "caption", who: trim(name.slice(CAPTION_PREFIX.length)) };
   if (name.startsWith(QUOTE_PREFIX)) {
@@ -177,10 +190,9 @@ function emptyPerson(): Person {
 }
 
 /**
- * Gives every person one colour across the video (see the module notes).
- * Returns each person with their colour and how many clips changed. A
- * subtitled (Repack-style) video's subtitles carry no labels, so it has
- * nobody here and is left alone.
+ * Gives every person one colour across the video (see the module notes),
+ * and keeps `project.people` and every clip's `person` to match. Returns
+ * each person with their colour and how many clips changed.
  */
 export function oneColourPerPerson(project: Project): unknown {
   // Which person each transcript name's subtitles are under.
@@ -221,7 +233,11 @@ export function oneColourPerPerson(project: Project): unknown {
     if (from !== null) add(person.names, from);
     person.spans.push([clip.start, clipEnd(clip)]);
   }
-  if (people.size === 0) return [];
+  if (people.size === 0) {
+    for (const clip of project.clips) delete clip.person;
+    delete project.people;
+    return [];
+  }
   const colours = assign(people);
   // Every line of theirs in it.
   const changed = new Map<string, number>();
@@ -233,7 +249,7 @@ export function oneColourPerPerson(project: Project): unknown {
     let onLabel: boolean;
     switch (words.kind) {
       case "subtitle":
-        [key, onLabel] = [words.key, true];
+        [key, onLabel] = [words.key, style.label != null];
         break;
       case "caption":
         [key, onLabel] = [captionPerson(words.who, subtitled), false];
@@ -256,6 +272,16 @@ export function oneColourPerPerson(project: Project): unknown {
     }
   }
   const order = sorted(people).sort((a, b) => b[1].lines - a[1].lines);
+  const ids = cast(project, order, colours);
+  for (const clip of project.clips) {
+    const words = wordsOf(clip);
+    let key: string | undefined;
+    if (words?.kind === "subtitle" || words?.kind === "quote") key = words.key;
+    else if (words?.kind === "caption") key = captionPerson(words.who, subtitled);
+    const id = key === undefined ? undefined : ids.get(key);
+    if (id !== undefined) clip.person = id;
+    else delete clip.person;
+  }
   return order.map(([key, person]) => {
     const label = most(person.shown) ?? key;
     const merged = mergedInto(key, person);
@@ -268,6 +294,45 @@ export function oneColourPerPerson(project: Project): unknown {
     if (merged.length > 0) entry.other_voices_under_this_label = merged;
     return entry;
   });
+}
+
+/** Who a cast entry is, as `oneColourPerPerson` keys people. */
+function castKey(person: CastPerson): string {
+  return personKey(person.label !== undefined && person.label !== "" ? person.label : person.name);
+}
+
+/**
+ * `project.people` for `order` (most lines first) in their `colours`: each
+ * keeps the id they had (matched by label, or name when unlabelled), a
+ * newcomer gets the next free "p<n>". Returns each key's id.
+ */
+function cast(project: Project, order: [string, Person][], colours: Map<string, string>): Map<string, string> {
+  const before = new Map<string, string>();
+  let next = 1;
+  for (const person of project.people ?? []) {
+    before.set(castKey(person), person.id);
+    const n = /^p(\d+)$/.exec(person.id);
+    if (n !== null) next = Math.max(next, Number(n[1]) + 1);
+  }
+  const ids = new Map<string, string>();
+  const people: CastPerson[] = [];
+  for (const [key, person] of order) {
+    const colour = colours.get(key);
+    if (colour === undefined) continue;
+    let id = before.get(key);
+    if (id === undefined || [...ids.values()].includes(id)) id = `p${next++}`;
+    ids.set(key, id);
+    const label = most(person.shown);
+    const names = sorted(person.names).map(([name]) => name);
+    const entry: CastPerson = { id, name: most(person.names) ?? (label === undefined ? key : subtitleName(label.replace(/:+$/, ""))), color: colour };
+    if (label !== undefined) entry.label = label;
+    const role = roleOf(key, person);
+    if (role !== "other") entry.role = role;
+    if (names.length > 0) entry.names = names;
+    people.push(entry);
+  }
+  project.people = people;
+  return ids;
 }
 
 /**
@@ -295,19 +360,25 @@ function assign(people: Map<string, Person>): Map<string, string> {
   const order = sorted(people).sort((a, b) => b[1].lines - a[1].lines);
   const taken: [string, Person][] = [];
   const out = new Map<string, string>();
+  // Apart from everyone's, and never pink for an official.
+  const free = (role: string, colour: string) =>
+    speakers.allowed(role, colour) && taken.every(([other]) => speakers.apart(colour, other) >= APART);
+  // First everyone who keeps their own colour (most lines first), so a
+  // newcomer never takes the colour someone already has and moves them on.
   for (const [key, person] of order) {
+    const own = sorted(person.colours).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (own !== undefined && !whitish(own) && free(roleOf(key, person), own)) {
+      taken.push([own, person]);
+      out.set(key, own);
+    }
+  }
+  for (const [key, person] of order) {
+    if (out.has(key)) continue;
     const role = roleOf(key, person);
-    // Apart from everyone's, and never pink for an official.
-    const free = (colour: string) =>
-      speakers.allowed(role, colour) && taken.every(([other]) => speakers.apart(colour, other) >= APART);
-    const own = sorted(person.colours).sort((a, b) => b[1] - a[1]);
-    const first = own[0]?.[0];
-    const kept = first !== undefined && free(first) && !whitish(first) ? first : undefined;
     const fromRole = roleColour(role);
     const colour =
-      kept ??
-      (fromRole !== null && free(fromRole) ? fromRole : undefined) ??
-      PALETTE.find((candidate) => free(candidate)) ??
+      (fromRole !== null && free(role, fromRole) ? fromRole : undefined) ??
+      PALETTE.find((candidate) => free(role, candidate)) ??
       furthestInTime(person, taken);
     taken.push([colour, person]);
     out.set(key, colour);

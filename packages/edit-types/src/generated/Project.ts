@@ -2,6 +2,7 @@
 import type { Clip } from "./Clip";
 import type { DriveFile } from "./DriveFile";
 import type { Media } from "./Media";
+import type { Person } from "./Person";
 import type { Script } from "./Script";
 import type { Segment } from "./Segment";
 import type { Settings } from "./Settings";
@@ -51,4 +52,12 @@ drive?: DriveFile,
  * source goes on its media instead (`Media::markers`), so it moves with
  * every clip that shows it.
  */
-markers?: Array<TimelineMarker>, };
+markers?: Array<TimelineMarker>, 
+/**
+ * Who speaks in it: each person's words on screen (subtitles, their
+ * label, intro captions, quotes) are text clips naming them by
+ * `Clip::person`, all in the person's one colour (`validate` holds every
+ * writer to it). Made by the subtitlers and kept by `people` in the
+ * server; empty for projects from before.
+ */
+people?: Array<Person>, };

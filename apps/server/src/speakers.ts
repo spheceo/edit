@@ -408,9 +408,11 @@ const SPARE = ["#c9a8ff", "#ff9e9e", "#e0ff8a", "#ffc2f0"] as const;
 /**
  * How far apart (CIE76 ΔE) two people's colours must be. Officer shades
  * 12–17 apart read as one teal under the glow: producers couldn't tell
- * officers apart (Repack, Grandmother, 2026-10-13).
+ * officers apart (Repack, Grandmother, 2026-10-13); 20 apart still read as
+ * one person on a label, so it's people.ts's APART, one rule for both
+ * subtitlers.
  */
-export const DISTINCT = 20.0;
+export const DISTINCT = 28.0;
 
 /** A pair of hex digits of "#rrggbb" at `at` as 0..1 (0 when it isn't one). */
 function channelOf(hex: string, at: number): number {
@@ -622,11 +624,15 @@ export function roleFromLabel(label: string): string {
 }
 
 /**
- * Colours for a transcript's voices by role (Repack's speakerColors):
- * whoever says most in a role gets its own colour, the next the next shade
- * that stands apart (DISTINCT) from every colour taken, and once the role
- * has none left, a spare colour: two people never look alike. The narrator
- * and background talk are white and take no colour from anyone.
+ * Colours for a transcript's people by role (Repack's speakerColors, per
+ * person): the voices named alike are one person (diarisation splits people:
+ * one agent was three voices, and came out in three teals) and share one
+ * colour; whoever says most in a role gets its own colour, the next the next
+ * shade that stands apart (DISTINCT) from every colour taken, and once the
+ * role has none left, a spare colour: two people never look alike. The
+ * narrator and background talk are white and take no colour from anyone.
+ * Only the transcript decides it, so every project using the file (its
+ * subtitled video and the edits made from it) starts from the same colours.
  */
 export function colors(transcript: Transcript): Record<string, string> {
   const words = new Map<string, number>();
@@ -639,15 +645,30 @@ export function colors(transcript: Transcript): Record<string, string> {
     const label = get(transcript.speakers, voice);
     return label === undefined ? "other" : roleFromLabel(label);
   };
-  const voices = [...words].sort((a, b) => b[1] - a[1] || compareKeys(a[0], b[0]));
-  const victim = voices.some(([voice]) => role(voice) === "victim");
+  // One person per name (an unnamed voice is its own).
+  const person = (voice: string) => {
+    const name = get(transcript.speakers, voice);
+    return name === undefined || trim(name) === "" ? `voice:${voice}` : `name:${trim(name).toLowerCase()}`;
+  };
+  const people = new Map<string, [voices: string[], words: number]>();
+  for (const [voice, count] of [...words].sort((a, b) => b[1] - a[1] || compareKeys(a[0], b[0]))) {
+    const entry = people.get(person(voice));
+    if (entry === undefined) people.set(person(voice), [[voice], count]);
+    else {
+      entry[0].push(voice);
+      entry[1] += count;
+    }
+  }
+  const order = [...people].sort((a, b) => b[1][1] - a[1][1] || compareKeys(a[0], b[0]));
+  const victim = [...words.keys()].some((voice) => role(voice) === "victim");
   const taken = new Set<string>();
   const out: Record<string, string> = {};
-  for (const [voice] of voices) {
-    const own = role(voice);
+  for (const [, [voices]] of order) {
+    // Their role is the one of the voice that says most.
+    const own = role(voices[0]!);
     // Off screen unless turned on: white, never in the way.
     if (own === "narrator" || own === BACKGROUND) {
-      out[voice] = "#ffffff";
+      for (const voice of voices) out[voice] = "#ffffff";
       continue;
     }
     // More people than colours that stand apart: the least alike.
@@ -657,7 +678,7 @@ export function colors(transcript: Transcript): Record<string, string> {
     );
     if (color === undefined) continue;
     taken.add(color);
-    out[voice] = color;
+    for (const voice of voices) out[voice] = color;
   }
   return out;
 }

@@ -77,9 +77,12 @@ test("no_two_people_look_alike", () => {
     colors: {},
   };
   const out = colors(transcript);
-  // Officers go teal, pale teal, deep teal, then spare colours.
+  // Officers go teal, pale teal, then (deep teal reads as teal at ΔE 28)
+  // the next colours that stand apart.
   const officers = [0, 1, 2, 3, 4, 5].map((i) => out[voice(i)]!);
-  expect(officers.slice(0, 3)).toEqual(["#00e5c7", "#b5f8ee", "#009e8c"]);
+  expect(officers.slice(0, 2)).toEqual(["#00e5c7", "#b5f8ee"]);
+  expect(apart("#00e5c7", "#009e8c")).toBeLessThan(DISTINCT);
+  expect(officers).not.toContain("#009e8c");
   expect(out.speaker_06).toBe("#0090e5");
   expect(out.speaker_08).toBe("#ffff00");
   expect(out.speaker_09).toBe("#e57e00");
@@ -94,6 +97,10 @@ test("no_two_people_look_alike", () => {
   });
   // The old officer shades stood 12–17 apart.
   expect(apart("#00e5c7", "#00c4aa")).toBeLessThan(DISTINCT);
+  // Voices named as one person share their colour; another name is someone else.
+  const split = colors({ ...transcript, speakers: { speaker_00: "Travis (Agent)", speaker_03: "Travis (Agent)", speaker_04: "Travis (agent) " } });
+  expect(new Set([split.speaker_00, split.speaker_03, split.speaker_04]).size).toBe(1);
+  expect(split.speaker_01).not.toBe(split.speaker_00);
   // However many officers, none in pink or magenta.
   for (const officer of officers) expect(pinkish(officer), officer).toBe(false);
 });

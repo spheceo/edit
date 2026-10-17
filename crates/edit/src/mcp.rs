@@ -33,6 +33,7 @@ Model (JSON):
 - markers (optional): [{frame, name, note?}] = moments marked on the timeline itself ("board photo", "photo lands"); they move with ripples (remove_time, speed_voiceover). Set both kinds with the markers tool; place sounds on them by name (add_sound_effect / add_from_library markers).
 - script (optional): the script the edit follows, imported from a Google Doc: {source, blocks: [{kind "footage", url, file (Drive id), start, end (SECONDS of that file), label, notes, media?, clip?} | {kind "narration", text, notes, clip?, voiceover? (the voice-over clip reading it)}]}. Each block's clip is the timeline clip it became. Narration plays as a cut-in: a black solid on one video track with the text on the track above, linked, until a voice-over replaces it. The video opens on the Doc's first timestamp: anything before it (the title, a "FOIA <name> - <headline>" heading, "Assets:", durations) is the Doc's heading, never a cut-in; if an import made one, delete its card and words with delete_clips {close_gap: true, drop_from_script: true}, so the video starts on the first footage. Notes are the Doc's comments (editor notes such as "blur the victim", and first....last words of a range).
 - segments (optional, subtitled videos): [{start, end (frames, end exclusive), kind footage|captioned|narration|other, note}], sorted, never overlapping = what each stretch is: only footage gets subtitles; captioned = the picture already has subtitles burned in (an intro made earlier), narration = the narrator, other = title cards, maps, music. Empty = all footage. Set with set_segments (which takes seconds); they show on the ruler.
+- people (made by add_subtitles, repack_subtitles and caption_speakers): [{id, name, label, role, color as #rrggbb, names}] = who speaks; each of their subtitles, labels, intro captions and quotes names them (`person`: id) and is in their one colour, so a save with one of their clips in another colour is refused. Never recolour one person's line: say who is who (the labels) and the colour pass keeps everyone apart.
 - drive (optional, subtitled videos): {file_id, url, name, uploaded_ms} = the last whole export, uploaded to the team's "Subtitles" folder on Google Drive; anyone with the url can watch it. Edit sets it when the upload finishes and clears it when the file is deleted or trashed on Drive; don't set it yourself.
 - mark_in, mark_out (optional): the in and out points (I / O), frames; mark_out is the last frame in (inclusive). Playback stops at the out point and export renders just that span when no range is given. They're part of the project (set_in_out), so setting them is an undo step like any edit.
 - keyframes: {param: [{frame (relative to clip start), value, ease linear|in_out|in|out|hold (preset for the segment to the next key), optional handle_in / handle_out {speed = value units per frame at the key, influence 0..1 of the segment} = After Effects-style bezier handles that override the preset at that end}]}. Animatable params: video x,y,scale,rotation,shake,opacity; text also size,tracking,glow.radius,glow.strength; waveform x,y,scale,rotation,opacity,gain,glow.radius,glow.strength; adjustment shake (amount),glitch (amount),exposure,contrast,saturation,temperature,vignette,vignette_x,vignette_y,vignette_size,blur (radius),blur.x,blur.y,blur.width,blur.height,opacity; text leader.x,leader.y; solid opacity; audio volume_db.
@@ -972,6 +973,7 @@ async fn call(app: &App, name: &str, args: &Value, scope: Option<&str>) -> Resul
                     fade_in: 0,
                     fade_out: 0,
                     keyframes: Default::default(),
+                    person: None,
                     content: ClipContent::Text {
                         text: text_value,
                         style,
@@ -3348,6 +3350,7 @@ fn place_sound(
                 fade_in: 0,
                 fade_out: ((sound.fade_out * fps).round() as i64).min(duration),
                 keyframes: Default::default(),
+                person: None,
                 content: ClipContent::Audio {
                     media: media_id.to_owned(),
                     source_in,

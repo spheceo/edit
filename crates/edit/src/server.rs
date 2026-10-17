@@ -1272,6 +1272,7 @@ pub fn place_at_end(project: &mut Project, media_id: &str) {
                 fade_in: 0,
                 fade_out: 0,
                 keyframes: Default::default(),
+                person: None,
                 content: ClipContent::Video {
                     media: media.id.clone(),
                     source_in: 0.0,
@@ -1302,6 +1303,7 @@ pub fn place_at_end(project: &mut Project, media_id: &str) {
                 fade_in: 0,
                 fade_out: 0,
                 keyframes: Default::default(),
+                person: None,
                 content: ClipContent::Audio {
                     media: media.id.clone(),
                     source_in: 0.0,

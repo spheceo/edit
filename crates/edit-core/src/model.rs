@@ -53,6 +53,79 @@ pub struct Project {
     /// every clip that shows it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<TimelineMarker>,
+    /// Who speaks in it: each person's words on screen (subtitles, their
+    /// label, intro captions, quotes) are text clips naming them by
+    /// `Clip::person`, all in the person's one colour (`validate` holds every
+    /// writer to it). Made by the subtitlers and kept by `people` in the
+    /// server; empty for projects from before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub people: Vec<Person>,
+}
+
+/// Someone whose words are on screen.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Person {
+    /// Stable within the project ("p1"): clips name them by it.
+    pub id: String,
+    /// Who they are, as the footage's transcripts name them ("Lauren Wambles (Suspect)").
+    pub name: String,
+    /// Their subtitles' label as shown ("Lauren:"); empty when their subtitles carry none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// officer, leader, suspect, victim, witness…; "other" when unknown.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
+    /// Their one colour, "#rrggbb": never white or a near-white grey (their words are white).
+    pub color: String,
+    /// The transcripts' names their words came from ("Agent", "Travis Lawson (Agent)").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+}
+
+/// "#rrggbb" as bytes.
+pub fn parse_hex(color: &str) -> Option<[u8; 3]> {
+    let digits = color.strip_prefix('#')?.as_bytes();
+    if digits.len() != 6 {
+        return None;
+    }
+    let nibble = |c: u8| (c as char).to_digit(16).map(|v| v as u8);
+    let byte = |at: usize| Some(nibble(*digits.get(at)?)? * 16 + nibble(*digits.get(at + 1)?)?);
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
+
+impl Rgba {
+    /// Its colour as "#rrggbb" bytes (alpha aside): channels clamped and rounded.
+    pub fn bytes(&self) -> [u8; 3] {
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        [byte(self.0[0]), byte(self.0[1]), byte(self.0[2])]
+    }
+}
+
+/// White or a near-white grey (CIELAB lightness over 85, chroma under 15):
+/// never a person's colour, since the words they say are white.
+pub fn whitish(color: [u8; 3]) -> bool {
+    let channel = |v: u8| {
+        let v = f64::from(v) / 255.0;
+        if v > 0.04045 {
+            ((v + 0.055) / 1.055).powf(2.4)
+        } else {
+            v / 12.92
+        }
+    };
+    let [r, g, b] = color.map(channel);
+    let f = |t: f64| {
+        if t > 0.008856 {
+            t.cbrt()
+        } else {
+            7.787 * t + 16.0 / 116.0
+        }
+    };
+    let x = f((r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047);
+    let y = f(r * 0.2126 + g * 0.7152 + b * 0.0722);
+    let z = f((r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883);
+    let (l, a, bb) = (116.0 * y - 16.0, 500.0 * (x - y), 200.0 * (y - z));
+    l > 85.0 && (a * a + bb * bb).sqrt() < 15.0
 }
 
 /// A marked moment on the timeline.
@@ -363,6 +436,11 @@ pub struct Clip {
     /// relative to the clip start.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub keyframes: BTreeMap<String, Vec<Keyframe>>,
+    /// Whose words a text clip shows (a `Project::people` id): it's in their
+    /// colour, its label's when it has one, else its text's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub person: Option<String>,
     #[serde(flatten)]
     pub content: ClipContent,
 }
@@ -1542,6 +1620,7 @@ impl Project {
             segments: Vec::new(),
             drive: None,
             markers: Vec::new(),
+            people: Vec::new(),
         };
         for kind in [
             TrackKind::Video,
@@ -1966,6 +2045,7 @@ impl Project {
                 }
             }
         }
+        self.validate_people()?;
         let mut ordered: Vec<_> = self.clips.iter().collect();
         ordered.sort_unstable_by(|a, b| (&a.track, a.start).cmp(&(&b.track, b.start)));
         for pair in ordered.windows(2) {
@@ -1976,6 +2056,52 @@ impl Project {
                     clip.id,
                     other.id,
                     self.track_label(&clip.track).unwrap_or_default()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// One colour per person: every clip naming a person is a text clip in
+    /// their colour, and nobody is white.
+    fn validate_people(&self) -> Result<(), String> {
+        let mut people = std::collections::HashMap::new();
+        for person in &self.people {
+            if person.id.is_empty() || people.contains_key(person.id.as_str()) {
+                return Err(format!("empty or duplicate person id {}", person.id));
+            }
+            let color = parse_hex(&person.color).ok_or_else(|| {
+                format!(
+                    "person {} needs a colour as #rrggbb, not {:?}",
+                    person.id, person.color
+                )
+            })?;
+            if whitish(color) {
+                return Err(format!(
+                    "{} ({}) can't be white or a near-white grey: their words are white",
+                    person.name, person.id
+                ));
+            }
+            people.insert(person.id.as_str(), (person, color));
+        }
+        for clip in &self.clips {
+            let Some(id) = &clip.person else { continue };
+            let (person, color) = people.get(id.as_str()).ok_or_else(|| {
+                format!("clip {} names person {id}, who isn't in people", clip.id)
+            })?;
+            let ClipContent::Text { style, .. } = &clip.content else {
+                return Err(format!("clip {} names a person but isn't text", clip.id));
+            };
+            let shown = style
+                .label
+                .as_ref()
+                .map_or(style.color, |label| label.color)
+                .bytes();
+            if shown != *color {
+                let [r, g, b] = shown;
+                return Err(format!(
+                    "clip {} is {}'s ({}), so it must be in their colour {}, not #{r:02x}{g:02x}{b:02x}: recolour the person, not one of their clips",
+                    clip.id, person.name, person.id, person.color
                 ));
             }
         }
@@ -2148,6 +2274,7 @@ mod validation_tests {
             fade_in: 0,
             fade_out: 0,
             keyframes: Default::default(),
+            person: None,
             content: ClipContent::Solid {
                 fill: Rgba::BLACK,
                 opacity: 1.0,
@@ -2156,6 +2283,71 @@ mod validation_tests {
         });
         project
     }
+    #[test]
+    fn a_persons_clips_are_all_in_their_colour_and_nobody_is_white() {
+        let mut p = project();
+        let track = p.tracks[0].id.clone();
+        let line = |id: &str, start: i64, color: Rgba, label: bool| Clip {
+            id: id.into(),
+            track: track.clone(),
+            start,
+            duration: 10,
+            color: ClipColor::Cyan,
+            name: Some("Subtitle · Lauren (Suspect)".into()),
+            link: None,
+            fade_in: 0,
+            fade_out: 0,
+            keyframes: Default::default(),
+            person: Some("p1".into()),
+            content: ClipContent::Text {
+                text: "No.".into(),
+                style: TextStyle {
+                    color: if label { Rgba::WHITE } else { color },
+                    label: label.then(|| TextLabel {
+                        text: "Lauren:".into(),
+                        color,
+                        size: 26.0,
+                    }),
+                    ..Default::default()
+                },
+                transform: Default::default(),
+                animation: Default::default(),
+                opacity: 1.0,
+                word_times: Vec::new(),
+            },
+        };
+        let yellow = Rgba([1.0, 1.0, 0.0, 1.0]);
+        p.clips = vec![line("a", 0, yellow, false), line("b", 10, yellow, true)];
+        // Nobody by that id yet.
+        assert!(p.validate().unwrap_err().contains("isn't in people"));
+        p.people.push(Person {
+            id: "p1".into(),
+            name: "Lauren (Suspect)".into(),
+            color: "#ffff00".into(),
+            ..Default::default()
+        });
+        assert!(p.validate().is_ok(), "{:?}", p.validate());
+        // One of her lines in another colour: refused, naming her.
+        p.clips[1] = line("b", 10, Rgba([0.0, 0.9, 0.78, 1.0]), true);
+        let error = p.validate().unwrap_err();
+        assert!(
+            error.contains("Lauren (Suspect)") && error.contains("#ffff00"),
+            "{error}"
+        );
+        p.clips[1] = line("b", 10, yellow, true);
+        // White isn't anyone's colour.
+        p.people[0].color = "#f4f4f4".into();
+        p.clips = vec![line("a", 0, Rgba([0.957, 0.957, 0.957, 1.0]), false)];
+        assert!(p.validate().unwrap_err().contains("white"));
+        p.people[0].color = "yellow".into();
+        assert!(p.validate().unwrap_err().contains("#rrggbb"));
+        // Two people under one id.
+        p.people[0].color = "#ffff00".into();
+        p.clips = vec![line("a", 0, yellow, false)];
+        p.people.push(p.people[0].clone());
+        assert!(p.validate().unwrap_err().contains("duplicate person id"));
+    }
+
     #[test]
     fn fresh_ids_skip_existing_clips_and_links_and_wrap_safely() {
         let mut p = project();

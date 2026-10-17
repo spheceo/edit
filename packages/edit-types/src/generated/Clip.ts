@@ -40,7 +40,12 @@ fade_out: number,
  * Animated parameters keyed by path (see [`Clip::param`]); frames are
  * relative to the clip start.
  */
-keyframes?: { [key in string]: Array<Keyframe> }, } & ({ "type": "video", media: string, 
+keyframes?: { [key in string]: Array<Keyframe> }, 
+/**
+ * Whose words a text clip shows (a `Project::people` id): it's in their
+ * colour, its label's when it has one, else its text's.
+ */
+person?: string, } & ({ "type": "video", media: string, 
 /**
  * Seconds into the source at the clip's first frame.
  */

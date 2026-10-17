@@ -846,6 +846,7 @@ mod tests {
             fade_in: 0,
             fade_out: 0,
             keyframes: Default::default(),
+            person: None,
             content: ClipContent::Video {
                 media: "m1".into(),
                 source_in: 2.0,
@@ -886,6 +887,7 @@ mod tests {
                 ],
             )]
             .into(),
+            person: None,
             content: ClipContent::Solid {
                 fill: Rgba::WHITE,
                 opacity: 1.0,
@@ -1077,6 +1079,7 @@ mod tests {
                 vec![key(0.0, -20.0), key(30.0, 0.0)],
             )]
             .into(),
+            person: None,
             content: ClipContent::Audio {
                 media: "m1".into(),
                 source_in: 1.0,

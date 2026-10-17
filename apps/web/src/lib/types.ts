@@ -297,6 +297,8 @@ interface ClipBase {
   fade_in: number;
   fade_out: number;
   keyframes?: Record<string, Keyframe[]>;
+  /** Whose words a text clip shows (a `Project.people` id): it's in their colour, its label's when it has one, else its text's. */
+  person?: string;
 }
 
 export interface VideoClip extends ClipBase {
@@ -440,6 +442,23 @@ export interface Project {
   drive?: DriveFile | null;
   /** Moments marked on the timeline (frames) for lining sounds up on; a source's moments are its media's markers. */
   markers?: TimelineMarker[];
+  /** Who speaks in it: one colour each, on every clip that names them (`Clip.person`). */
+  people?: Person[];
+}
+
+/** Someone whose words are on screen. */
+export interface Person {
+  /** Stable within the project ("p1"). */
+  id: string;
+  /** Who they are, as the transcripts name them ("Lauren Wambles (Suspect)"). */
+  name: string;
+  /** Their subtitles' label as shown ("Lauren:"); none when their subtitles carry no label. */
+  label?: string;
+  role?: string;
+  /** Their one colour, "#rrggbb"; never white. */
+  color: string;
+  /** The transcripts' names their words came from. */
+  names?: string[];
 }
 
 /** A file on Google Drive (edit_core DriveFile). */

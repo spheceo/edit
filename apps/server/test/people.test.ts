@@ -169,3 +169,59 @@ test("the summary lists each label's lines, colours and voices", () => {
     "Tabitha:": "2 lines #ff4d59 (from Mother, Tabitha (Mother))",
   });
 });
+
+test("repack_subtitles_people_get_one_colour_and_an_id_each", () => {
+  // Repack-style lines (no label): the person is in the clip name, the colour is the text's.
+  const repack = (id: string, start: number, who: string, colour: string) => {
+    const clip = text(id, `${SUBTITLE_PREFIX}${who}`, colour);
+    clip.start = start;
+    return clip;
+  };
+  const p = project([
+    repack("a", 0, "Travis Lawson (Agent)", "#00e5c7"),
+    repack("b", 30, "Travis Lawson (Agent)", "#009e8c"),
+    repack("c", 60, "Agent (green shirt)", "#0090e5"),
+    repack("d", 90, "Officer (door)", "#3ddc84"),
+    repack("e", 120, "Lauren Wambles (Suspect)", "#ffffff"),
+  ]);
+  oneColourPerPerson(p);
+  const people = p.people ?? [];
+  expect(people.map((person) => person.name).sort()).toEqual(["Agent (green shirt)", "Lauren Wambles (Suspect)", "Officer (door)", "Travis Lawson (Agent)"]);
+  // Every line names its person and is in their colour; nobody white; all apart.
+  for (const clip of p.clips) {
+    const person = people.find((one) => one.id === clip.person);
+    expect(person).toBeDefined();
+    expect(labelColour(p, clip.id)).toBe(person!.color);
+  }
+  expect(people.some((person) => whitish(person.color))).toBe(false);
+  for (const a of people) for (const b of people) if (a !== b) expect(apart(a.color, b.color)).toBeGreaterThanOrEqual(APART);
+  // A re-run keeps everyone's id and colour; a newcomer gets a new id.
+  const before = structuredClone(people);
+  p.clips.push(repack("f", 150, "Dispatcher", "#00e5c7"));
+  oneColourPerPerson(p);
+  for (const person of before) expect(p.people!.find((one) => one.id === person.id)).toEqual(person);
+  const fresh = p.people!.find((one) => one.name === "Dispatcher")!;
+  expect(before.map((one) => one.id)).not.toContain(fresh.id);
+  // Gone from the video: gone from the cast, and a clip that isn't anyone's names nobody.
+  p.clips = p.clips.filter((clip) => clip.id !== "f");
+  oneColourPerPerson(p);
+  expect(p.people!.some((one) => one.id === fresh.id)).toBe(false);
+});
+
+test("a_relabelled_line_moves_to_the_person_its_label_names", () => {
+  const p = project([
+    subtitle("a", 0, "Officer", "Officer:", "#00e5c7"),
+    subtitle("b", 30, "Mother", "Tabitha:", "#e57e00"),
+    subtitle("c", 60, "Mother", "Tabitha:", "#e57e00"),
+  ]);
+  oneColourPerPerson(p);
+  const tabitha = p.people!.find((one) => one.label === "Tabitha:")!;
+  // The agent says line c was the officer's after all.
+  const c = p.clips.find((clip) => clip.id === "c")! as TextClip;
+  c.style.label!.text = "Officer:";
+  oneColourPerPerson(p);
+  const officer = p.people!.find((one) => one.label === "Officer:")!;
+  expect(c.person).toBe(officer.id);
+  expect(labelColour(p, "c")).toBe(officer.color);
+  expect(p.people!.find((one) => one.label === "Tabitha:")!.id).toBe(tabitha.id);
+});

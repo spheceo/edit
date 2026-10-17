@@ -1059,6 +1059,7 @@ fn evidence_board(
                 fade_in: 1.min(duration),
                 fade_out: 2.min(duration),
                 keyframes: Default::default(),
+                person: None,
                 content: ClipContent::Audio {
                     media: shutter.media.clone(),
                     source_in,

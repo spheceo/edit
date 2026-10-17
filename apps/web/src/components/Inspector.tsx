@@ -17,11 +17,12 @@ import {
   toggleAnimated,
   toggleKeyframe,
 } from "../lib/edit";
+import { recolourPerson } from "../lib/people";
 import { FONTS, playhead } from "../lib/playback";
 import { openDialog } from "../lib/dialogs";
 import { useEditor } from "../lib/store";
 import { shortDuration, timecode } from "../lib/time";
-import { HOUSE_BOX, HOUSE_SHADOW, resolvedShake, SHAKE_PRESETS, type Clip, type Project, type ShakeDirection, type ShakeEdges, type ShakeEnvelope, type ShakeMotion, type ShakePreset, type TextPreset } from "../lib/types";
+import { HOUSE_BOX, HOUSE_SHADOW, resolvedShake, SHAKE_PRESETS, type Clip, type Project, type Rgba, type ShakeDirection, type ShakeEdges, type ShakeEnvelope, type ShakeMotion, type ShakePreset, type TextPreset } from "../lib/types";
 import { Button, ColorField, cx, Kbd, Scrub, Select, Switch } from "./ui";
 
 const useInspectorFrame = () =>
@@ -133,18 +134,25 @@ function useClipEditor(clip: Clip) {
       const live = draft.clips.find((candidate) => candidate.id === clip.id);
       if (live) recipe(live as Clip);
     });
+  // A person's subtitle: its colour is theirs, so all of their clips change with it.
+  const recolour = (color: Rgba, own: (clip: Clip) => void) =>
+    state().edit((draft) => {
+      const live = draft.clips.find((candidate) => candidate.id === clip.id);
+      if (live && !recolourPerson(draft, live as Clip, color)) own(live as Clip);
+    });
   return {
     begin: () => state().beginGesture(),
     end: () => state().endGesture(),
     update,
     once,
+    recolour,
   };
 }
 
 function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
   const frame = useInspectorFrame();
   const fps = project.settings.fps;
-  const { begin, end, update, once } = useClipEditor(clip);
+  const { begin, end, update, once, recolour } = useClipEditor(clip);
   const inside = frame >= clip.start && frame < clip.start + clip.duration;
 
   const param = (
@@ -292,7 +300,14 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
               )}
               {param("Size", "size", { min: 4, suffix: "px" })}
               <Row label="Color">
-                <ColorField value={clip.style.color} onChange={(color) => once((live) => live.type === "text" && (live.style.color = color))} />
+                <ColorField
+                  value={clip.style.color}
+                  onChange={(color) =>
+                    clip.style.label
+                      ? once((live) => live.type === "text" && (live.style.color = color))
+                      : recolour(color, (live) => live.type === "text" && (live.style.color = color))
+                  }
+                />
               </Row>
               {param("Tracking", "tracking", { step: 0.25, precision: 1 })}
               <Row label="Wrap">
@@ -484,6 +499,9 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   onChange={(on) =>
                     once((live) => {
                       if (live.type !== "text") return;
+                      // A label on or off changes which colour shows (the label's or the
+                      // text's): the clip stops being a person's until the next subtitle run.
+                      delete live.person;
                       if (!on) delete live.style.label;
                       else live.style.label = { text: "Speaker:", color: [1, 0.86, 0.2, 1], size: Math.round((live.style.size * 26) / 48) };
                     })
@@ -504,7 +522,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   <Row label="Color">
                     <ColorField
                       value={clip.style.label.color}
-                      onChange={(color) => once((live) => live.type === "text" && live.style.label && (live.style.label.color = color))}
+                      onChange={(color) => recolour(color, (live) => live.type === "text" && live.style.label && (live.style.label.color = color))}
                     />
                   </Row>
                   {field("Size", clip.style.label.size, (live, value) => live.type === "text" && live.style.label && (live.style.label.size = value), {

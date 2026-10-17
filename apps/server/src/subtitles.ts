@@ -515,7 +515,7 @@ export function shown(
       // Readable however quick the reply after it: a line held into
       // another speaker's stacks over it (overlap mode's way). Never into
       // the same person's next line, which would then start late.
-      const own = cues.slice(i + 1).find((next) => next.speaker === cue.speaker && next.start_ms > cue.start_ms);
+      const own = cues.slice(i + 1).find((next) => next.speaker === cue.speaker && next.start_ms >= cue.start_ms);
       endMs = Math.max(endMs, Math.min(startMs + MIN_SHOWN_MS, untilMs, own?.start_ms ?? Number.POSITIVE_INFINITY));
       speakerUntil.set(cue.speaker, endMs);
       out.push({ ...cue, start_ms: startMs, end_ms: endMs });
@@ -575,7 +575,9 @@ export function readable(cues: Line[], together: boolean, fromMs: number, hidden
     const cue = cues[i]!;
     for (let j = i + 1; j < cues.length; j++) {
       const next = cues[j]!;
-      if (next.start_ms <= cue.start_ms) continue;
+      // The same person's line starting at the same moment cuts it too
+      // (a collapsed "Okay." on their next line's first word).
+      if (next.start_ms < cue.start_ms || (next.start_ms === cue.start_ms && next.speaker !== cue.speaker)) continue;
       if (!together || next.speaker === cue.speaker) return j;
     }
     return null;
@@ -930,27 +932,6 @@ export function samePersonSameColour(voices: Map<string, Voice>, lines: Line[]):
   }
 }
 
-/**
- * No two people alike across the files (each transcript picks its colours
- * on its own), and no official in pink (`speakers.distinct`).
- */
-function spreadColours(voices: Map<string, Voice>, lines: Line[]): void {
-  const counts = new Map<string, number>();
-  for (const line of lines) counts.set(line.speaker, (counts.get(line.speaker) ?? 0) + 1);
-  const keys = sortedKeys(voices);
-  const colours = speakers.distinct(
-    keys.map((key) => {
-      const voice = voices.get(key)!;
-      return { role: voice.role, lines: counts.get(key) ?? 0, color: voice.color };
-    }),
-  );
-  keys.forEach((key, index) => {
-    const voice = voices.get(key);
-    const colour = colours[index];
-    if (voice !== undefined && colour !== undefined) voice.color = colour;
-  });
-}
-
 /** `(source_ms) → timeline ms` for an audio clip. */
 function onTimelineOf(clip: Clip & { type: "audio" }, fps: number): (sourceMs: number) => number {
   return (sourceMs) => (clip.start / fps + (sourceMs / 1000.0 - clip.source_in) / clip.speed) * 1000.0;
@@ -1029,7 +1010,6 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
   }
   narratorsInFootage(project, voices, lines);
   samePersonSameColour(voices, lines);
-  spreadColours(voices, lines);
   uncram(lines);
   const role = (key: string) => voices.get(key)?.role ?? "other";
   const shownLines = shown(
@@ -1174,8 +1154,17 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
     }
     // Every other text on screen too (captions, callouts, charges), all of the video.
     const starredTexts = starOnScreen(edited, 0, Number.POSITIVE_INFINITY, neglect);
+    // One colour per person, ΔE 28 apart, the same rule as add_subtitles';
+    // each person and their lines named by id (`project.people`).
+    seams.people.oneColourPerPerson(edited);
     return [placedCount, skippedCount, outsideCount, starredTexts] as const;
   });
+  // The colours as given (a voice's person's).
+  for (const voice of voices.values()) {
+    const name = trim(voice.name).toLowerCase();
+    const person = (after.project.people ?? []).find((one) => one.names?.some((own) => trim(own).toLowerCase() === name));
+    if (person !== undefined) voice.color = person.color;
+  }
   const counts = new Map<string, number>();
   for (const line of shownLines) counts.set(line.speaker, (counts.get(line.speaker) ?? 0) + 1);
   const listedSpeakers = sortedKeys(voices).map((key) => {

@@ -2114,6 +2114,7 @@ fn lay_out(project: &mut Project) {
                     fade_in: 0,
                     fade_out: 0,
                     keyframes: Default::default(),
+                    person: None,
                     content: ClipContent::Video {
                         media: media.id.clone(),
                         source_in: from,
@@ -2137,6 +2138,7 @@ fn lay_out(project: &mut Project) {
                         fade_in: 0,
                         fade_out: 0,
                         keyframes: Default::default(),
+                        person: None,
                         content: ClipContent::Audio {
                             media: media.id.clone(),
                             source_in: from,
@@ -2170,6 +2172,7 @@ fn lay_out(project: &mut Project) {
                     fade_in: 0,
                     fade_out: 0,
                     keyframes: Default::default(),
+                    person: None,
                     content: ClipContent::Solid {
                         fill: Rgba::BLACK,
                         opacity: 1.0,
@@ -2188,6 +2191,7 @@ fn lay_out(project: &mut Project) {
                     fade_in: 0,
                     fade_out: 0,
                     keyframes: Default::default(),
+                    person: None,
                     content: ClipContent::Text {
                         text: text.clone(),
                         style: cut_in_style(width, height, text),

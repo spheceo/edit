@@ -1483,6 +1483,7 @@ pub async fn repack_subtitles(
                     fade_in: 0,
                     fade_out: 0,
                     keyframes: Default::default(),
+                    person: None,
                     content: ClipContent::Text {
                         text: line.text.clone(),
                         style: TextStyle {

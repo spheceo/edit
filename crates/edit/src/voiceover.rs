@@ -139,6 +139,7 @@ pub async fn place(app: &App, id: &str, media: Option<Vec<String>>) -> Result<Va
                 fade_in: 0,
                 fade_out: 0,
                 keyframes: Default::default(),
+                person: None,
                 content: ClipContent::Audio {
                     media: (*media).clone(),
                     source_in: from,

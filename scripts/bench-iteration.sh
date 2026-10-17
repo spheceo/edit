@@ -34,7 +34,7 @@ if [ -d apps/server ]; then
     time_step "server start to /api/health" scripts/bench-start.sh
     # The native addon only rebuilds when Rust changes.
     touch crates/edit-native/src/lib.rs
-    time_step "native addon rebuild (1 file)" just native
+    time_step "native addon rebuild (1 file)" env CARGO_TARGET_DIR="$PWD/target/check" CARGO_BUILD_BUILD_DIR="$PWD/target/check-build" just native debug
 fi
 
 if [ -d crates/edit ]; then

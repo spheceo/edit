@@ -812,7 +812,6 @@ fn excerpt_media(
 /// cloud project is opened (it may have been edited on another machine).
 /// Media whose file is here, or that aren't in the cloud, are left alone; a
 /// proxy already in this machine's cache isn't fetched again.
-#[allow(dead_code)] // The cloud project sync calls it as it opens a project.
 pub async fn ensure_local(app: &App, id: &str) -> Result<(), String> {
     let live = app.store.get(id).ok_or("no such project")?;
     let cache = app.store.cache_dir();
@@ -906,28 +905,41 @@ pub async fn ensure_local(app: &App, id: &str) -> Result<(), String> {
         }
     }
     if !found.is_empty() {
+        let repoint = |project: &mut Project| {
+            for (media_id, key, local) in &found {
+                if let Some(media) = project.media.iter_mut().find(|media| media.id == *media_id) {
+                    if let Some(cloud) = media.cloud.as_mut() {
+                        media.path = local.to_string_lossy().into_owned();
+                        cloud.proxy = Some(key.clone());
+                    }
+                }
+            }
+        };
         // One change (one undo step, one event), retried if another writer
         // lands in between.
         let mut tries = 0;
         let live = loop {
             tries += 1;
             let result = app.store.update(id, "cloud", |project| {
-                for (media_id, key, local) in &found {
-                    if let Some(media) =
-                        project.media.iter_mut().find(|media| media.id == *media_id)
-                    {
-                        if let Some(cloud) = media.cloud.as_mut() {
-                            media.path = local.to_string_lossy().into_owned();
-                            cloud.proxy = Some(key.clone());
-                        }
-                    }
-                }
+                repoint(project);
                 Ok(())
             });
             match result {
                 Ok((live, ())) => break live,
                 Err(error) if tries < 3 && error.contains("retry") => continue,
-                Err(error) => return Err(error),
+                Err(error) => {
+                    // A cloud project another machine is editing is read-only
+                    // here, but where its files are on this machine is this
+                    // machine's business: saved here only, as a pull is (the
+                    // next pull brings the other machine's paths, and this
+                    // runs again).
+                    let mut project = app.store.get(id).ok_or("no such project")?.project;
+                    repoint(&mut project);
+                    match app.store.put_from_cloud(project, "cloud") {
+                        Ok(live) => break live,
+                        Err(local) => return Err(format!("{error}; {local}")),
+                    }
+                }
             }
         };
         // Previews, thumbnails and waveforms for the files now here.
@@ -1686,6 +1698,72 @@ mod tests {
         assert_eq!(other_media.path, footage_media.path);
         assert_eq!(get_record(&cloud_footage.source).unwrap().unwrap(), record);
         drop(cleanup);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// `ensure_local` on a cloud project this machine holds (an ordinary
+    /// write) and on one someone else holds (read-only here: the paths are
+    /// saved on this machine only, as a pull is). No R2 traffic: the proxies
+    /// are in this machine's cache already.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_ensure_local_follows_the_lock() {
+        assert!(cloud::enabled(), "set EDIT_RELAY_URL / EDIT_RELAY_TOKEN");
+        let home = std::env::temp_dir().join(format!("edit-cloud-lock-{}", std::process::id()));
+        let app = test_app(&home);
+        let cache = app.store.cache_dir();
+        let mut ids = Vec::new();
+        for name in ["mine", "theirs"] {
+            let id = app
+                .store
+                .create(name, edit_core::Settings::default())
+                .unwrap()
+                .project
+                .id;
+            let key = format!("edit/proxies/sha256/{name}.mp4");
+            let local = local_path(&cache, &key);
+            std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+            footage(&local, "320x180", 2, "200k");
+            app.store
+                .update(&id, "test", |project| {
+                    project.media.push(edit_core::Media {
+                        id: "m1".into(),
+                        name: "clip.mov".into(),
+                        path: "/Users/someone-else/.edit/cache/cloud/x.mp4".into(),
+                        kind: MediaKind::Video,
+                        duration: 2.0,
+                        width: 320,
+                        height: 180,
+                        fps: 30.0,
+                        has_audio: true,
+                        markers: Vec::new(),
+                        cloud: Some(CloudMedia {
+                            source: format!("sha256:{name}"),
+                            original: format!("edit/originals/sha256/{name}/clip.mov"),
+                            proxy: Some(key),
+                            size: 1,
+                        }),
+                    });
+                    Ok(())
+                })
+                .unwrap();
+            ids.push(id);
+        }
+        app.store.attach_cloud(crate::cloud_projects::test_cloud(
+            &home,
+            &[(&ids[0], None), (&ids[1], Some("kenobi"))],
+        ));
+        // Someone else's is refused as an edit…
+        assert!(app.store.update(&ids[1], "test", |_| Ok(())).is_err());
+        for id in &ids {
+            ensure_local(&app, id).await.unwrap();
+            let project = app.store.get(id).unwrap().project;
+            let path = &project.media[0].path;
+            assert!(
+                is_local_copy(&cache, Path::new(path)) && Path::new(path).is_file(),
+                "{path}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 

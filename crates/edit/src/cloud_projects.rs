@@ -1896,6 +1896,35 @@ pub async fn release_all(app: &App) {
     cloud.persist();
 }
 
+/// For tests elsewhere (`cloud_media`): cloud projects as this machine sees
+/// them, each held here (`None`) or by someone else; nothing global touched.
+#[cfg(test)]
+pub(crate) fn test_cloud(home: &Path, projects: &[(&str, Option<&str>)]) -> Arc<Cloud> {
+    let cloud = Cloud {
+        home: home.to_path_buf(),
+        machine: "test".into(),
+        settings: Mutex::new(Settings::default()),
+        projects: Mutex::new(HashMap::new()),
+        wake: tokio::sync::Notify::new(),
+    };
+    for (id, holder) in projects {
+        let entry = match holder {
+            None => Entry::new(Saved {
+                rev: 1,
+                dirty: false,
+                token: Some("lock".into()),
+            }),
+            Some(holder) => {
+                let mut entry = Entry::new(Saved::default());
+                entry.elsewhere((*holder).to_owned(), Instant::now());
+                entry
+            }
+        };
+        cloud.projects.lock().insert((*id).to_owned(), entry);
+    }
+    Arc::new(cloud)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

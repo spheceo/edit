@@ -11,7 +11,7 @@ import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Mark } from "./Logo";
 import { UpdateButton } from "./UpdateButton";
-import { Button, cx, IconButton, spring } from "./ui";
+import { Button, IconButton } from "./ui";
 
 export function TopBar({ onExport }: { onExport: () => void }) {
   const name = useEditor((state) => state.project?.name ?? "");
@@ -20,8 +20,6 @@ export function TopBar({ onExport }: { onExport: () => void }) {
   const showAgent = useEditor((state) => state.showAgent);
   const exportState = useEditor((state) => state.exportState);
   const toggle = useEditor((state) => state.toggle);
-  const workspace = useEditor((state) => state.workspace);
-  const setWorkspace = useEditor((state) => state.setWorkspace);
 
   return (
     <header className="relative flex h-12 shrink-0 items-center gap-2 px-3">
@@ -45,23 +43,6 @@ export function TopBar({ onExport }: { onExport: () => void }) {
           </motion.span>
         )}
       </AnimatePresence>
-
-      {/* Edit and Script views, centred like a document tab bar. */}
-      <div className="absolute left-1/2 flex -translate-x-1/2 rounded-lg bg-panel p-0.5 ring-1 ring-line">
-        {(["edit", "script"] as const).map((value) => (
-          <button
-            key={value}
-            onClick={() => setWorkspace(value)}
-            className={cx(
-              "relative h-7 rounded-md px-3 text-[12px] font-medium transition-colors",
-              workspace === value ? "text-fg" : "text-muted hover:text-fg",
-            )}
-          >
-            {workspace === value && <motion.span layoutId="workspace" className="absolute inset-0 rounded-md bg-active" transition={spring} />}
-            <span className="relative">{value === "edit" ? "Edit" : "Script"}</span>
-          </button>
-        ))}
-      </div>
 
       <div className="ml-auto flex items-center gap-1.5">
         <UpdateButton />

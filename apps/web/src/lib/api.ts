@@ -213,6 +213,9 @@ export const mediaUrl = (project: string, media: string, kind: "proxy" | "light"
 
 let machine: Promise<string> | null = null;
 
+/** The page is open on the machine running Edit (the desktop app, or a browser there). */
+export const isLocal = typeof location !== "undefined" && ["localhost", "127.0.0.1", "[::1]", "::1"].includes(location.hostname);
+
 /** Name of the computer running Edit (e.g. "kenobi"), for labels like "Files on kenobi". */
 export function useMachine() {
   const [name, setName] = useState("server");

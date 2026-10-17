@@ -17,8 +17,8 @@ crates/edit-core     project model + frame evaluation (shared, compiles to WASM)
 crates/edit-render   wgpu compositor: video, text, glow, grade, solids
 crates/edit-wasm     the compositor in the browser (WebGPU)
 crates/edit          `edit` (the window) / `edit serve`: API, media jobs, native render + export, MCP
-web/                 React UI (Vite, Tailwind, motion)
-relay/               Cloudflare Worker holding API keys (transcription)
+apps/web             React UI (Vite, Tailwind, motion)
+apps/relay           Cloudflare Worker holding API keys (transcription)
 ```
 
 - **Exact effects.** The preview runs `edit-render` as WASM on WebGPU; export and agent frame grabs run the same crate natively. Text is rasterized on the CPU by shared code, so a frame renders to identical pixels in both.
@@ -30,7 +30,7 @@ relay/               Cloudflare Worker holding API keys (transcription)
 ## Transcription
 
 Edit never holds API keys. It extracts mono 32 kbps Opus (~14 MB/hour) and
-posts it to `relay/`, a Cloudflare Worker that forwards to ElevenLabs Scribe v2
+posts it to `apps/relay/`, a Cloudflare Worker that forwards to ElevenLabs Scribe v2
 (word timings + voice numbers) and streams the answer back. The relay caps
 requests with a burst limit and atomic daily byte reservations per IP and across
 everyone. Byte quotas are a proxy for duration; they are not a guaranteed monetary

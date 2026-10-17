@@ -3,12 +3,10 @@
 
 import { create } from "zustand";
 
+import { isLocal as local } from "./api";
 import { readSetting, writeSetting } from "./storage";
 
 export type PreviewQuality = "auto" | "full" | "light";
-
-/** On the machine running Edit the full preview costs nothing to stream. */
-const local = ["localhost", "127.0.0.1", "[::1]", "::1"].includes(location.hostname);
 
 export const usePreviewQuality = create<{ quality: PreviewQuality }>(() => ({
   quality: (readSetting("edit.previewQuality") as PreviewQuality | null) ?? "auto",

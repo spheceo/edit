@@ -75,7 +75,7 @@
     "web_tests_passed": 69,
     "rust_tests_ignored_existing_paid_or_external": 3,
     "check_command": "CARGO_INCREMENTAL=0 just check",
-    "web_build": "bun run --cwd web build",
+    "web_build": "bun run --cwd apps/web build",
     "integration": {
       "image_import_seconds": 0.01591879199258983,
       "native_image_thumbnail_ready": true,

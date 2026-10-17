@@ -13,7 +13,6 @@ import { FileBrowser } from "./FileBrowser";
 import { Research } from "./Research";
 import { AgentPanel } from "./AgentPanel";
 import { MediaPanel } from "./MediaPanel";
-import { ScriptPanel } from "./ScriptPanel";
 import { SidePanel } from "./SidePanel";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
@@ -79,7 +78,8 @@ export function Editor({ id }: { id: string }) {
   const showMedia = useEditor((state) => state.showMedia);
   const showInspector = useEditor((state) => state.showInspector);
   const showAgent = useEditor((state) => state.showAgent);
-  const workspace = useEditor((state) => state.workspace);
+  // The script reads better wider than the other side tabs.
+  const wide = useEditor((state) => state.sideTab === "script" || state.sideTab === "downloads");
   const timelineHeight = useEditor((state) => state.timelineHeight);
   const [resizing, setResizing] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -128,16 +128,13 @@ export function Editor({ id }: { id: string }) {
       <div className="flex min-h-0 flex-1 px-2 pb-2">
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">
-            <SlideIn show={workspace === "edit" && showMedia} width={MEDIA_WIDTH} side="left">
+            <SlideIn show={showMedia} width={MEDIA_WIDTH} side="left">
               <MediaPanel onImport={() => setImporting(true)} onResearch={() => setResearching(true)} />
             </SlideIn>
-            <SlideIn show={workspace === "edit" && showInspector} width={SIDE_WIDTH} side="left">
+            <SlideIn show={showInspector} width={wide ? SCRIPT_WIDTH : SIDE_WIDTH} side="left">
               <SidePanel />
             </SlideIn>
             <Viewer />
-            <SlideIn show={workspace === "script"} width={SCRIPT_WIDTH} side="right">
-              <ScriptPanel />
-            </SlideIn>
           </div>
           <ResizeBar resizing={resizing} setResizing={setResizing} />
           <div
@@ -246,7 +243,10 @@ function ResizeBar({ resizing, setResizing }: { resizing: boolean; setResizing: 
       )}
       onPointerDown={(event) => {
         (event.target as HTMLElement).setPointerCapture(event.pointerId);
-        drag.current = { y: event.clientY, height: useEditor.getState().timelineHeight };
+        drag.current = {
+          y: event.clientY,
+          height: useEditor.getState().timelineHeight,
+        };
         setResizing(true);
       }}
       onPointerMove={(event) => {

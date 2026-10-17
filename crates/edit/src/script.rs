@@ -764,10 +764,12 @@ impl Jobs {
 
     fn claim(&self, app: &App, project: &str, job: Job) -> bool {
         let mut jobs = self.0.lock();
-        if jobs
-            .get(project)
-            .is_some_and(|job| matches!(job.state, "downloading" | "transcribing" | "placing"))
-        {
+        if jobs.get(project).is_some_and(|job| {
+            matches!(
+                job.state,
+                "downloading" | "transcribing" | "placing" | "voicing"
+            )
+        }) {
             return false;
         }
         jobs.insert(project.to_owned(), job.clone());
@@ -1506,6 +1508,25 @@ pub fn start(app: &App, project_id: &str, recut: bool) {
                 crate::diag::time_async("script", "script: lay out", place(&app, &id, done, recut))
                     .await;
             let placed = result.is_ok();
+            // Laid out: the cut-ins get their voice-over, spoken and split across them.
+            let unvoiced = app
+                .store
+                .get(&id)
+                .is_some_and(|live| !crate::voiceover::any_placed(&live.project));
+            let result = match result {
+                Ok(()) if unvoiced => {
+                    app.scripts.set(&app, &id, |job| job.state = "voicing");
+                    crate::diag::time_async(
+                        "script",
+                        "script: voice-over",
+                        crate::voiceover::generate(&app, &id),
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| format!("The voice-over couldn't be made: {error}"))
+                }
+                result => result,
+            };
             app.scripts.set(&app, &id, |job| {
                 let failed = job
                     .files

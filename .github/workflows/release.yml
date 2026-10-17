@@ -56,13 +56,13 @@ jobs:
       - name: Build the UI
         run: |
           cargo build -p edit-wasm --target wasm32-unknown-unknown --release
-          wasm-bindgen --target web --out-dir web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
-          bun install --cwd web --frozen-lockfile
-          bun run --cwd web build
+          wasm-bindgen --target web --out-dir apps/web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
+          bun install --cwd apps/web --frozen-lockfile
+          bun run --cwd apps/web build
       - uses: actions/upload-artifact@v7
         with:
           name: web-dist
-          path: web/dist
+          path: apps/web/dist
 
   build:
     needs: web
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: web-dist
-          path: web/dist
+          path: apps/web/dist
       # EDIT_RELEASE turns on self-update (crates/edit/src/update.rs).
       - name: Build
         run: EDIT_RELEASE=1 cargo build --release --locked -p edit --target ${{ matrix.target }}

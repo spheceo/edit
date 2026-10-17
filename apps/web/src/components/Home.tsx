@@ -1,6 +1,6 @@
-import { AudioLines, Captions, Cloud, Copy, Ellipsis, ExternalLink, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { Captions, Cloud, Copy, Ellipsis, ExternalLink, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
@@ -12,22 +12,15 @@ import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Mark } from "./Logo";
 import { SetupCard } from "./SetupCard";
-import { VoiceOvers } from "./VoiceOvers";
 import { UpdateButton } from "./UpdateButton";
-import { Button, cx, Modal, spring } from "./ui";
+import { Button, Modal, spring } from "./ui";
 
-const PRESETS = [
-  { label: "Landscape", detail: "1920 × 1080", width: 1920, height: 1080 },
-  { label: "4K", detail: "3840 × 2160", width: 3840, height: 2160 },
-  { label: "Vertical", detail: "1080 × 1920", width: 1080, height: 1920 },
-  { label: "Square", detail: "1080 × 1080", width: 1080, height: 1080 },
-];
-const RATES = [24, 25, 30, 60];
+// Every project is 1080p at 30 fps.
+const FORMAT = { width: 1920, height: 1080, fps: 30 };
 
 export function Home() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [creating, setCreating] = useState(false);
-  const [creatingVoice, setCreatingVoice] = useState(false);
   const toast = useEditor((state) => state.toast);
 
   const refresh = () =>
@@ -49,9 +42,6 @@ export function Home() {
           <div className="flex items-center gap-1.5">
             <UpdateButton />
             <AppMenu />
-            <Button onClick={() => setCreatingVoice(true)}>
-              <AudioLines size={15} /> New voice-over
-            </Button>
             <Button variant="primary" onClick={() => setCreating(true)}>
               <Plus size={15} strokeWidth={2.2} /> New project
             </Button>
@@ -86,9 +76,6 @@ export function Home() {
             </div>
           </>
         )}
-      </div>
-      <div className="mx-auto max-w-[1040px] px-8 pb-16">
-        <VoiceOvers projects={projects ?? []} creating={creatingVoice} onCloseCreate={() => setCreatingVoice(false)} />
       </div>
       <NewProject open={creating} onClose={() => setCreating(false)} />
     </div>
@@ -255,31 +242,29 @@ function ProjectCard({ project, index, onChanged }: { project: ProjectSummary; i
   );
 }
 
-type Source = "blank" | "script";
 type Preview = Awaited<ReturnType<typeof api.scriptPreview>>;
 
+const DOC = /docs\.google\.com\/document\/d\//;
+
+/** One field: a name for a blank project, or a Google Doc link to start from its script. */
 function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [source, setSource] = useState<Source>("blank");
-  const [name, setName] = useState("");
-  const [preset, setPreset] = useState(0);
-  const [fps, setFps] = useState(30);
+  const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [doc, setDoc] = useState("");
   const [preview, setPreview] = useState<{ url: string; result?: Preview; error?: string } | null>(null);
   const toast = useEditor((state) => state.toast);
+  const url = text.trim();
+  const script = DOC.test(url);
 
   // A fresh dialog each time.
   useEffect(() => {
     if (!open) return;
-    setName("");
-    setDoc("");
+    setText("");
     setPreview(null);
   }, [open]);
 
   // Read the Doc as soon as a link is pasted: its title names the project.
   useEffect(() => {
-    const url = doc.trim();
-    if (source !== "script" || !/docs\.google\.com\/document\/d\//.test(url)) {
+    if (!script) {
       setPreview(null);
       return;
     }
@@ -288,29 +273,25 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
     const timer = setTimeout(() => {
       api
         .scriptPreview(url)
-        .then((result) => {
-          if (!alive) return;
-          setPreview({ url, result });
-          setName((current) => current || result.title);
-        })
+        .then((result) => alive && setPreview({ url, result }))
         .catch((error) => alive && setPreview({ url, error: (error as Error).message }));
     }, 250);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
-  }, [doc, source]);
+  }, [url, script]);
 
-  const ready = source === "blank" || Boolean(preview?.result);
+  const ready = !script || Boolean(preview?.result);
   const create = async () => {
     if (!ready) return;
     setBusy(true);
     try {
-      const { width, height } = PRESETS[preset];
-      const { project } = await api.createProject({ name: name.trim() || preview?.result?.title || "Untitled", width, height, fps });
-      if (source === "script") {
-        await api.attachScript(project.id, doc.trim());
-        useEditor.getState().setWorkspace("script");
+      const name = script ? preview?.result?.title || "Untitled" : url || "Untitled";
+      const { project } = await api.createProject({ name, ...FORMAT });
+      if (script) {
+        await api.attachScript(project.id, url);
+        useEditor.getState().setSideTab("downloads");
       }
       onClose();
       navigate(`/p/${project.id}`);
@@ -322,138 +303,41 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} width={480}>
+    <Modal open={open} onClose={onClose} width={440}>
       <form
-        className="p-6"
+        className="p-2"
         onSubmit={(event) => {
           event.preventDefault();
           void create();
         }}
       >
-        <div className="flex items-center justify-between">
-          <h2 className="text-[16px] font-semibold tracking-[-0.01em]">New project</h2>
-          <div className="flex rounded-lg bg-black p-0.5 ring-1 ring-line">
-            {(["blank", "script"] as const).map((value) => (
-              <button
-                type="button"
-                key={value}
-                onClick={() => setSource(value)}
-                className={cx(
-                  "h-7 rounded-md px-3 text-[12px] font-medium transition-colors",
-                  source === value ? "bg-active text-fg" : "text-muted hover:text-fg",
-                )}
-              >
-                {value === "blank" ? "Blank" : "From a script"}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {source === "script" && (
-          <Field label="Google Doc">
-            <input
-              autoFocus
-              value={doc}
-              placeholder="https://docs.google.com/document/d/…"
-              onChange={(event) => setDoc(event.target.value)}
-              className="h-10 w-full rounded-lg border border-line bg-black px-3 text-[13px] outline-none placeholder:text-faint focus:border-line-strong"
-            />
-            {preview && (
-              <div className="mt-2 rounded-lg bg-black px-3 py-2.5 text-[12px] ring-1 ring-line">
-                {preview.error ? (
-                  <span className="text-red-300">{preview.error}</span>
-                ) : preview.result ? (
-                  <>
-                    <div className="truncate font-medium text-fg">{preview.result.title || "Untitled script"}</div>
-                    <div className="mt-0.5 text-muted tabular">
-                      {preview.result.footage} ranges from {preview.result.files} Drive {preview.result.files === 1 ? "file" : "files"} ·{" "}
-                      {preview.result.narration} cut-ins · about {shortDuration(preview.result.seconds)}
-                    </div>
-                  </>
-                ) : (
-                  <span className="shimmer text-muted">Reading the Doc…</span>
-                )}
-              </div>
+        <input
+          autoFocus
+          value={text}
+          placeholder="Project name, or paste a Google Doc script"
+          onChange={(event) => setText(event.target.value)}
+          className="h-11 w-full rounded-lg bg-transparent px-3 text-[14px] outline-none placeholder:text-faint"
+        />
+        <div className="flex items-center gap-2 border-t border-line px-3 pt-2 pb-1 text-[12px]">
+          <span className="min-w-0 flex-1 truncate text-muted">
+            {!script ? (
+              "1080p · 30 fps"
+            ) : preview?.error ? (
+              <span className="text-red-300">{preview.error}</span>
+            ) : preview?.result ? (
+              <span className="tabular">
+                <span className="text-fg">{preview.result.title || "Untitled script"}</span> · {preview.result.files} Drive{" "}
+                {preview.result.files === 1 ? "file" : "files"} · {preview.result.narration} cut-ins · {shortDuration(preview.result.seconds)}
+              </span>
+            ) : (
+              <span className="shimmer">Reading the Doc…</span>
             )}
-          </Field>
-        )}
-
-        <Field label="Name">
-          <input
-            autoFocus={source === "blank"}
-            value={name}
-            placeholder={preview?.result?.title || "Untitled"}
-            onChange={(event) => setName(event.target.value)}
-            className="h-10 w-full rounded-lg border border-line bg-black px-3 text-[14px] outline-none placeholder:text-faint focus:border-line-strong"
-          />
-        </Field>
-
-        <Field label="Format">
-          <div className="grid grid-cols-4 gap-1.5">
-            {PRESETS.map((option, index) => (
-              <button
-                type="button"
-                key={option.label}
-                onClick={() => setPreset(index)}
-                className={cx(
-                  "flex flex-col items-center gap-1.5 rounded-lg px-2 pt-2.5 pb-2 ring-1 transition-colors",
-                  preset === index ? "bg-raised ring-white/35" : "ring-line hover:bg-hover",
-                )}
-              >
-                <span className="flex h-7 items-center">
-                  <span
-                    className={cx("rounded-[3px] border-[1.5px]", preset === index ? "border-white" : "border-faint")}
-                    style={{
-                      width: (option.width / Math.max(option.width, option.height)) * 26,
-                      height: (option.height / Math.max(option.width, option.height)) * 26,
-                    }}
-                  />
-                </span>
-                <span className="text-[12px] font-medium">{option.label}</span>
-                <span className="text-[10px] text-faint tabular">{option.detail}</span>
-              </button>
-            ))}
-          </div>
-        </Field>
-
-        <div className="mt-4 flex items-center justify-between">
-          <span className="text-[12px] text-muted">Frame rate</span>
-          <div className="flex rounded-lg bg-black p-0.5 ring-1 ring-line">
-            {RATES.map((rate) => (
-              <button
-                type="button"
-                key={rate}
-                onClick={() => setFps(rate)}
-                className={cx(
-                  "h-7 rounded-md px-3 text-[12px] font-medium tabular transition-colors",
-                  fps === rate ? "bg-active text-fg" : "text-muted hover:text-fg",
-                )}
-              >
-                {rate}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-6 flex items-center justify-end gap-2">
-          {source === "script" && <span className="mr-auto text-[11px] text-faint">Footage downloads after you create it.</span>}
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
+          </span>
           <Button type="submit" variant="primary" disabled={busy || !ready}>
             {busy ? "Creating…" : "Create"}
           </Button>
         </div>
       </form>
     </Modal>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="mt-4">
-      <div className="mb-1.5 text-[12px] text-muted">{label}</div>
-      {children}
-    </div>
   );
 }

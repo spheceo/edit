@@ -1,4 +1,4 @@
-//! Transcription through Edit's relay (relay/), which holds the ElevenLabs
+//! Transcription through Edit's relay (apps/relay/), which holds the ElevenLabs
 //! key. Edit sends small mono Opus audio and keeps Scribe's words, cached per
 //! source file so the same footage is never paid for twice.
 

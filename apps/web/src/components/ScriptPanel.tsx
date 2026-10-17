@@ -1,6 +1,6 @@
-// The script beside the picture (Repack's split view): footage ranges and the
+// The script, a side tab next to Info and Transcript: footage ranges and the
 // narration between them, in order. The block under the playhead lights up;
-// click one to jump there. Also attaches a Google Doc and shows its downloads.
+// click one to jump there. Also attaches a Google Doc; its downloads have their own tab.
 
 import { ArrowUpRight, CircleAlert, FileText, RotateCw, Scissors } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -20,41 +20,46 @@ export function ScriptPanel() {
   const job = useEditor((state) => state.scriptJob);
   const script = project.script;
   return (
-    <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-2 pl-3.5">
-        <FileText size={14} className="text-muted" />
-        <span className="font-medium">Script</span>
-        {script && (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {script && (
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line pr-2 pl-3.5">
+          <FileText size={14} className="text-muted" />
+          <span className="min-w-0 flex-1 truncate text-[12px] text-muted">{script.blocks.length} blocks</span>
           <button
             title="Lay the script out again, cutting each range at its first and last words in the transcript"
-            disabled={job?.state === "downloading" || job?.state === "transcribing" || job?.state === "placing"}
+            disabled={job?.state === "downloading" || job?.state === "transcribing" || job?.state === "placing" || job?.state === "voicing"}
             onClick={() => void api.resumeScript(project.id, true).then(({ job }) => useEditor.setState({ scriptJob: job }))}
-            className="ml-auto flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
+            className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
           >
             <Scissors size={12} /> Re-cut
           </button>
-        )}
-        {script?.source && (
-          <a
-            href={script.source}
-            target="_blank"
-            rel="noreferrer"
-            title="Open the Google Doc"
-            className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg"
-          >
-            Doc <ArrowUpRight size={12} />
-          </a>
-        )}
-      </div>
-      {script ? (
-        <>
-          {job && job.state !== "done" && <Downloads project={project} job={job} />}
-          <Blocks project={project} />
-        </>
-      ) : (
-        <AttachScript project={project} />
+          {script.source && (
+            <a
+              href={script.source}
+              target="_blank"
+              rel="noreferrer"
+              title="Open the Google Doc"
+              className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg"
+            >
+              Doc <ArrowUpRight size={12} />
+            </a>
+          )}
+        </div>
       )}
-    </section>
+      {script ? <Blocks project={project} /> : <AttachScript project={project} />}
+    </div>
+  );
+}
+
+/** The script import's downloads and progress, as their own tab. */
+export function ScriptDownloads() {
+  const project = useEditor((state) => state.project)!;
+  const job = useEditor((state) => state.scriptJob);
+  if (!job) return <div className="p-4 text-[12px] text-muted">Nothing downloading.</div>;
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <Downloads project={project} job={job} />
+    </div>
   );
 }
 
@@ -204,16 +209,20 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
   const labels = fileLabels(project);
   const [retrying, setRetrying] = useState(false);
   return (
-    <div className="shrink-0 border-b border-line px-3.5 py-3">
+    <div className="px-3.5 py-3">
       <div className="mb-2 flex items-center justify-between text-[12px]">
         <span className="font-medium">
-          {job.state === "placing"
-            ? "Laying out the edit…"
-            : job.state === "transcribing"
-              ? "Transcribing to find exact cuts…"
-              : job.state === "failed"
-                ? "Some footage didn't download"
-                : "Downloading footage from Drive"}
+          {job.state === "voicing"
+            ? "Making the voice-over and splitting it across the cut-ins…"
+            : job.state === "placing"
+              ? "Laying out the edit…"
+              : job.state === "transcribing"
+                ? "Transcribing to find exact cuts…"
+                : job.state === "failed"
+                  ? job.files.some((file) => file.state === "failed")
+                    ? "Some footage didn't download"
+                    : (job.error ?? "The import stopped")
+                  : "Downloading footage from Drive"}
         </span>
         {job.state === "failed" && (
           <button

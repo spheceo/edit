@@ -39,7 +39,7 @@ pub struct App {
 }
 
 #[derive(rust_embed::Embed)]
-#[folder = "../../web/dist"]
+#[folder = "../../apps/web/dist"]
 struct WebAssets;
 
 type ApiResult = Result<Response, ApiError>;
@@ -447,41 +447,14 @@ async fn voice_send(
     UrlPath(id): UrlPath<String>,
     Json(body): Json<VoiceSend>,
 ) -> ApiResult {
-    let voice = app.voices.get(&id).map_err(not_found)?;
-    let takes = app.voices.chosen_takes(&id).map_err(bad)?;
-    if takes.is_empty() {
-        return Err(bad("No lines have a chosen take yet."));
-    }
+    app.voices.get(&id).map_err(not_found)?;
     app.store
         .get(&body.project)
         .ok_or_else(|| not_found("no such project"))?;
-    let dir = app
-        .store
-        .uploads_dir(&body.project)
-        .map_err(bad)?
-        .join("voice-over");
-    std::fs::create_dir_all(&dir).map_err(|error| bad(error.to_string()))?;
-    let mut paths = Vec::new();
-    for (number, label, take) in takes {
-        let name = label.unwrap_or_else(|| format!("Line {number}"));
-        let file = dir.join(format!("{} - {name}.mp3", voice.name.replace('/', "-")));
-        std::fs::copy(&take, &file).map_err(|error| bad(error.to_string()))?;
-        paths.push(file.to_string_lossy().into_owned());
-    }
-    let (_, added, errors) = import_paths(&app, &body.project, paths, false, "voice")
+    let sent = crate::voiceover::send(&app, &id, &body.project)
         .await
         .map_err(bad)?;
-    if added.is_empty() {
-        return Err(bad(format!("Couldn't import the takes: {errors:?}")));
-    }
-    let report = crate::diag::time_async(
-        "voice",
-        "voice: place in a project",
-        crate::voiceover::place(&app, &body.project, Some(added.clone())),
-    )
-    .await
-    .map_err(bad)?;
-    Ok(Json(json!({ "media": added, "report": report })).into_response())
+    Ok(Json(sent).into_response())
 }
 
 #[derive(Deserialize)]
@@ -1891,7 +1864,7 @@ async fn static_asset(request: Request) -> Response {
             None => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "Edit's web UI is not built. Run `just web` (or `bun run --cwd web build`) and restart.",
+                    "Edit's web UI is not built. Run `just web` (or `bun run --cwd apps/web build`) and restart.",
                 )
                     .into_response()
             }

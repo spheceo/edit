@@ -209,6 +209,69 @@ pub async fn place(app: &App, id: &str, media: Option<Vec<String>>) -> Result<Va
     Ok(json!(report))
 }
 
+/// Speaks the script's cut-ins with the house voice (ElevenLabs) and lays the
+/// takes on them: the last step of a script import. A voice-over an earlier
+/// run left half spoken carries on instead of starting again.
+pub async fn generate(app: &App, id: &str) -> Result<Value, String> {
+    let live = app.store.get(id).ok_or("no such project")?;
+    let lines = crate::voice::narration_lines(&live.project);
+    if lines.is_empty() {
+        return Ok(json!({ "media": [] }));
+    }
+    let name = format!("{} (voice-over)", live.project.name);
+    let voices = std::sync::Arc::clone(&app.voices);
+    let source = id.to_owned();
+    let voice = tokio::task::spawn_blocking(move || {
+        let project = voices.for_project(&name, &source, lines)?;
+        // One at a time, in order: each line carries on from the one before.
+        for line in &project.lines {
+            if line.chosen.is_none() {
+                voices.generate(&project.id, &line.id)?;
+            }
+        }
+        Ok::<_, String>(project.id)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    send(app, &voice, id).await
+}
+
+/// Puts a voice-over's chosen takes into video project `id` and lays them on
+/// its cut-ins (matched by their words, as with any recorded voice-over).
+pub async fn send(app: &App, voice_id: &str, id: &str) -> Result<Value, String> {
+    let voice = app.voices.get(voice_id)?;
+    let takes = app.voices.chosen_takes(voice_id)?;
+    if takes.is_empty() {
+        return Err("No lines have a chosen take yet.".to_owned());
+    }
+    app.store.get(id).ok_or("no such project")?;
+    let dir = app.store.uploads_dir(id)?.join("voice-over");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let mut paths = Vec::new();
+    for (number, label, take) in takes {
+        let name = label.unwrap_or_else(|| format!("Line {number}"));
+        let file = dir.join(format!("{} - {name}.mp3", voice.name.replace('/', "-")));
+        std::fs::copy(&take, &file).map_err(|error| error.to_string())?;
+        paths.push(file.to_string_lossy().into_owned());
+    }
+    let (_, added, errors) = crate::server::import_paths(app, id, paths, false, "voice").await?;
+    if added.is_empty() {
+        return Err(format!("Couldn't import the takes: {errors:?}"));
+    }
+    let report = crate::diag::time_async(
+        "voice",
+        "voice: place in a project",
+        place(app, id, Some(added.clone())),
+    )
+    .await?;
+    Ok(json!({ "media": added, "report": report }))
+}
+
+/// Whether any cut-in already plays a voice-over.
+pub fn any_placed(project: &Project) -> bool {
+    !placed_voiceovers(project).is_empty()
+}
+
 /// Media the script's narration already plays as voice-overs.
 fn placed_voiceovers(project: &Project) -> Vec<String> {
     project

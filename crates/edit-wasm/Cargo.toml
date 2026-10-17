@@ -3,7 +3,7 @@ name = "edit-wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Browser bindings for Edit's renderer (built with wasm-bindgen into web/src/engine)"
+description = "Browser bindings for Edit's renderer (built with wasm-bindgen into apps/web/src/engine)"
 publish = false
 
 [lib]

@@ -1,6 +1,6 @@
 # Preview decoding
 
-`web/src/lib/playback.ts` owns the playhead, Web Audio clock and complete-scene
+`apps/web/src/lib/playback.ts` owns the playhead, Web Audio clock and complete-scene
 presentation. The WASM engine still evaluates and draws through the same renderer
 as native export. No project model or exported media is changed by preview decoding.
 
@@ -80,7 +80,7 @@ the decoder workers) and compare shown scrub positions, settle time, start time 
 `videoMisses`/`audioUnderruns`. At 100 Mbit/s with 10 ms RTT the teen hit-and-run
 edit starts playback in 0.1–0.4 s with no misses or underruns.
 
-Run `just check` and `bun run --cwd web build`. Browser verification should include
+Run `just check` and `bun run --cwd apps/web build`. Browser verification should include
 the teen hit-and-run map/date reveal, rapid scrubbing, cold seeks across bodycam
 sources, playback across cuts, slow/fast audio, pause/resume, mute/fades, source-to-
 proxy replacement, project switches and GPU recovery.

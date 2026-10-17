@@ -1,5 +1,5 @@
 # Edit's relay: the only place API keys live. Edit installs send audio here;
-# keys never ship in the binary. Deploy with `bunx wrangler deploy` from relay/.
+# keys never ship in the binary. Deploy with `bunx wrangler deploy` from apps/relay/.
 name = "edit-relay"
 main = "src/index.ts"
 compatibility_date = "2026-09-07"

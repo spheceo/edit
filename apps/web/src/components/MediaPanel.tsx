@@ -2,7 +2,7 @@ import { AudioLines, Check, ChevronLeft, CircleAlert, Ellipsis, Folder, HardDriv
 import { motion } from "motion/react";
 import { useMemo, useRef, useState } from "react";
 
-import { mediaUrl, useMachine } from "../lib/api";
+import { isLocal, mediaUrl, useMachine } from "../lib/api";
 import { folderOf, isUsed, MEDIA_FOLDERS, mediaUses, placeMedia, removeUnusedMedia, type MediaFolder, type MediaUse } from "../lib/edit";
 import { mediaMenu } from "../lib/menus";
 import { openMenu, toggleMenu } from "./ContextMenu";
@@ -54,10 +54,19 @@ export function MediaPanel({ onImport, onResearch }: { onImport: () => void; onR
           )}
         </div>
         <div className="flex shrink-0 items-center">
-          <UploadButton />
-          <Button size="sm" variant="ghost" onClick={onImport} title={`Add files already on ${machine} (⌘I)`}>
-            <HardDrive size={13} /> {machine}
-          </Button>
+          {isLocal ? (
+            // Upload and "files on" are the same disk here: add them in place.
+            <Button size="sm" variant="ghost" onClick={onImport} title="Add files (⌘I)">
+              <UploadIcon size={13} /> Add files
+            </Button>
+          ) : (
+            <>
+              <UploadButton />
+              <Button size="sm" variant="ghost" onClick={onImport} title={`Add files already on ${machine} (⌘I)`}>
+                <HardDrive size={13} /> {machine}
+              </Button>
+            </>
+          )}
           <MediaOptions show={show} setShow={setShow} uses={uses} />
         </div>
       </div>
@@ -156,11 +165,11 @@ function MediaGrid({
       <div className="flex h-44 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-line-strong text-center text-muted">
         <UploadIcon size={18} />
         <span className="px-6 text-[12px] leading-relaxed">
-          Drop footage here from this device,
+          Drop footage here{isLocal ? "" : " from this device"},
           <br />
           or{" "}
           <button onClick={onImport} className="text-fg underline decoration-white/30 underline-offset-2 hover:decoration-white">
-            add files on {machine}
+            {isLocal ? "add files" : `add files on ${machine}`}
           </button>
         </span>
       </div>

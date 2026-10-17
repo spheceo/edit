@@ -3,8 +3,8 @@
  * bun scripts/benchmark-history.ts /path/to/project.json shared
  * Measures retained JavaScriptCore heap after GC, not whole-browser/GPU memory. */
 import { heapStats } from "bun:jsc";
-import { shareProject } from "../web/src/lib/project-sharing";
-import type { Project } from "../web/src/lib/types";
+import { shareProject } from "../apps/web/src/lib/project-sharing";
+import type { Project } from "../apps/web/src/lib/types";
 
 const [file, mode] = process.argv.slice(2);
 if (!file || (mode !== "baseline" && mode !== "shared")) {

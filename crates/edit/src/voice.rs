@@ -288,6 +288,34 @@ impl Voices {
         Ok(project)
     }
 
+    /// Video project `source`'s voice-over of these lines: the latest one made
+    /// from the same words, or a new one.
+    pub fn for_project(
+        &self,
+        name: &str,
+        source: &str,
+        lines: Vec<(String, Option<String>)>,
+    ) -> Result<VoiceProject, String> {
+        let same = |project: &VoiceProject| {
+            project.source.as_deref() == Some(source)
+                && project.lines.len() == lines.len()
+                && project
+                    .lines
+                    .iter()
+                    .zip(&lines)
+                    .all(|(line, (text, _))| line.text == *text)
+        };
+        let existing = self
+            .list()
+            .into_iter()
+            .filter_map(|summary| self.get(&summary.id).ok())
+            .find(same);
+        match existing {
+            Some(project) => Ok(project),
+            None => self.create(name, Some(source.to_owned()), lines),
+        }
+    }
+
     pub fn update(&self, id: &str, changes: Changes) -> Result<VoiceProject, String> {
         let _guard = self.lock.lock();
         let mut project = self.get(id)?;

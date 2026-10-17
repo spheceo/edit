@@ -46,9 +46,7 @@ export interface Toast {
 }
 
 export type Tool = "select" | "razor";
-export type SideTab = "info" | "presets" | "library" | "transcript";
-/** Edit: bin, panels and viewer. Script: viewer beside the script, as Repack's split view. */
-export type Workspace = "edit" | "script";
+export type SideTab = "info" | "presets" | "library" | "transcript" | "script" | "downloads";
 
 interface EditorState {
   project: Project | null;
@@ -70,7 +68,6 @@ interface EditorState {
   showInspector: boolean;
   showAgent: boolean;
   sideTab: SideTab;
-  workspace: Workspace;
   /** The project's script import (footage downloads), while one exists. */
   scriptJob: ScriptJob | null;
   timelineHeight: number;
@@ -92,7 +89,6 @@ interface EditorState {
   setTool(tool: Tool): void;
   toggle(key: "snapping" | "showMedia" | "showInspector" | "showAgent"): void;
   setSideTab(tab: SideTab): void;
-  setWorkspace(workspace: Workspace): void;
   setTimelineHeight(height: number): void;
   /** Back to the default height (the divider's double-click). */
   resetTimelineHeight(): void;
@@ -120,8 +116,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   showMedia: true,
   showInspector: true,
   showAgent: readSetting("edit.showAgent") !== "false",
-  sideTab: (["info", "presets", "library", "transcript"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
-  workspace: readSetting("edit.workspace") === "script" ? "script" : "edit",
+  sideTab: (["info", "presets", "library", "transcript", "script"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
   scriptJob: null,
   timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
   toasts: [],
@@ -225,10 +220,6 @@ export const useEditor = create<EditorState>((set, get) => ({
     writeSetting("edit.sideTab", sideTab);
     set({ sideTab, showInspector: true });
   },
-  setWorkspace: (workspace) => {
-    writeSetting("edit.workspace", workspace);
-    set({ workspace });
-  },
   setTimelineHeight: (height) => {
     writeSetting("edit.timelineHeight", String(Math.round(height)));
     set({ timelineHeight: height });
@@ -330,7 +321,7 @@ export async function syncScriptJob(id: string) {
     const { job, unfinished } = await api.scriptJob(id);
     if (useEditor.getState().project?.id !== id) return;
     useEditor.setState({ scriptJob: job });
-    const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing");
+    const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing" || job.state === "voicing");
     // A failed run waits for Retry; an import that stopped part-way (blocks never
     // placed) carries on by itself. A placed block whose clip is gone was removed
     // on purpose (a cut-in card replaced by B-roll): never put it back.

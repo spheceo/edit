@@ -467,7 +467,7 @@ export type ScriptBlock =
 
 /** A script import's footage downloads (crates/edit/src/script.rs `Job`). */
 export interface ScriptJob {
-  state: "downloading" | "transcribing" | "placing" | "done" | "failed";
+  state: "downloading" | "transcribing" | "placing" | "voicing" | "done" | "failed";
   error?: string;
   files: { file: string; name?: string; bytes: number; total?: number; state: "queued" | "downloading" | "cutting" | "done" | "failed"; error?: string }[];
 }

@@ -2,16 +2,16 @@
 /target/
 
 # Web build output and the generated WASM engine
-/web/node_modules/
-/web/dist/
-/web/src/engine/pkg
+/apps/web/node_modules/
+/apps/web/dist/
+/apps/web/src/engine/pkg
 
 # macOS metadata
 .DS_Store
 
 # Local caches (Wrangler's holds Cloudflare account details)
-/relay/.wrangler/
-/relay/.dev.vars
+/apps/relay/.wrangler/
+/apps/relay/.dev.vars
 *.tsbuildinfo
 
 # Tauri build output

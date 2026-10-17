@@ -16,13 +16,13 @@ cargo run -p edit -- serve --host 127.0.0.1 --port 7711 --home /tmp/edit-preview
 In another terminal:
 
 ```sh
-EDIT_HTTPS=0 EDIT_SERVER=http://127.0.0.1:7711 bun run --cwd web dev --host 127.0.0.1 --port 5174
+EDIT_HTTPS=0 EDIT_SERVER=http://127.0.0.1:7711 bun run --cwd apps/web dev --host 127.0.0.1 --port 5174
 ```
 
 Then prepare a project and open the printed URL in a WebGPU browser:
 
 ```sh
-python3 web/tests/prepare_preview.py
+python3 apps/web/tests/prepare_preview.py
 ```
 
 Wait for the initial picture, click **Run playback checks**, and expect `PASS`.

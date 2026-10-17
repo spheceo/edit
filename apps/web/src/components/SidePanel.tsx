@@ -5,14 +5,17 @@ import { useEditor, type SideTab } from "../lib/store";
 import { Inspector } from "./Inspector";
 import { Library } from "./Library";
 import { Presets } from "./Presets";
+import { ScriptDownloads, ScriptPanel } from "./ScriptPanel";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { Tabs } from "./ui";
 
-/** Info (inspector), Presets, Library and Transcript, next to the media bin. */
+/** Info (inspector), Presets, Library, Transcript, Script and (while a script imports) Downloads, next to the media bin. */
 export function SidePanel() {
   const tab = useEditor((state) => state.sideTab);
   const setTab = useEditor((state) => state.setSideTab);
   const selection = useEditor((state) => state.selection);
+  const job = useEditor((state) => state.scriptJob);
+  const downloading = Boolean(job && job.state !== "done");
 
   // Picking something on the timeline while browsing presets shows its settings.
   const previous = useRef(selection);
@@ -21,6 +24,11 @@ export function SidePanel() {
     previous.current = selection;
     if (picked && useEditor.getState().sideTab === "presets") setTab("info");
   }, [selection, setTab]);
+
+  // Downloads finished: back to the script they were for.
+  useEffect(() => {
+    if (!downloading && useEditor.getState().sideTab === "downloads") setTab("script");
+  }, [downloading, setTab]);
 
   return (
     <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
@@ -34,6 +42,8 @@ export function SidePanel() {
             { value: "presets", label: "Presets" },
             { value: "library", label: "Library" },
             { value: "transcript", label: "Transcript" },
+            { value: "script", label: "Script" },
+            ...(downloading ? [{ value: "downloads" as const, label: "Downloads" }] : []),
           ]}
         />
       </div>
@@ -46,7 +56,15 @@ export function SidePanel() {
           transition={{ duration: 0.12 }}
           className="flex min-h-0 flex-1 flex-col"
         >
-          {tab === "info" ? <Inspector /> : <div className="min-h-0 flex-1 overflow-y-auto p-2">{tab === "presets" ? <Presets /> : tab === "library" ? <Library /> : <TranscriptPanel />}</div>}
+          {tab === "info" ? (
+            <Inspector />
+          ) : tab === "script" ? (
+            <ScriptPanel />
+          ) : tab === "downloads" ? (
+            <ScriptDownloads />
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">{tab === "presets" ? <Presets /> : tab === "library" ? <Library /> : <TranscriptPanel />}</div>
+          )}
         </motion.div>
       </AnimatePresence>
     </section>

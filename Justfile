@@ -3,18 +3,18 @@
 _default:
     @just --list
 
-# Build the WASM preview engine into web/src/engine/pkg
+# Build the WASM preview engine into apps/web/src/engine/pkg
 wasm:
     cargo build -p edit-wasm --target wasm32-unknown-unknown --release
-    wasm-bindgen --target web --out-dir web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
+    wasm-bindgen --target web --out-dir apps/web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
 
 # Install web dependencies (first run only)
 web-install:
-    @if [ ! -d web/node_modules ]; then bun install --cwd web; fi
+    @if [ ! -d apps/web/node_modules ]; then bun install --cwd apps/web; fi
 
-# Build the UI into web/dist (embedded into the binary)
+# Build the UI into apps/web/dist (embedded into the binary)
 web: wasm web-install
-    bun run --cwd web build
+    bun run --cwd apps/web build
 
 # Build everything and serve on :7700
 serve: web
@@ -62,11 +62,11 @@ publish: check
         exit 1
     fi
     # Put the version back if anything fails before the release commit.
-    trap 'git checkout -- Cargo.toml Cargo.lock web/package.json' ERR
+    trap 'git checkout -- Cargo.toml Cargo.lock apps/web/package.json' ERR
     sed -i '' "s/^version = \"$current\"/version = \"$version\"/" Cargo.toml
-    sed -i '' "s/\"version\": \"$current\"/\"version\": \"$version\"/" web/package.json
+    sed -i '' "s/\"version\": \"$current\"/\"version\": \"$version\"/" apps/web/package.json
     cargo update --workspace -q
-    git commit -q -m "Release $tag" Cargo.toml Cargo.lock web/package.json
+    git commit -q -m "Release $tag" Cargo.toml Cargo.lock apps/web/package.json
     trap - ERR
     git tag "$tag"
     git push origin main "$tag"
@@ -78,7 +78,7 @@ publish: check
 dev: wasm web-install
     #!/usr/bin/env bash
     set -euo pipefail
-    mkdir -p web/dist
+    mkdir -p apps/web/dist
     # The sound library reads Google Drive and the watcher calls the AI
     # Gateway; while testing they borrow Repack's keys from Infisical (just
     # these four, not the rest of Repack's secrets).
@@ -95,7 +95,7 @@ dev: wasm web-install
     cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-wasm -s 'just wasm' &
     ENGINE=$!
     trap 'kill $SERVER $ENGINE 2>/dev/null || true; pkill -f "target/debug/edit serve" 2>/dev/null || true' EXIT INT TERM
-    bun run --cwd web dev
+    bun run --cwd apps/web dev
 
 # Format, lint and test
 check:
@@ -103,5 +103,5 @@ check:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
-    bun run --cwd web typecheck
-    bun run --cwd web test
+    bun run --cwd apps/web typecheck
+    bun run --cwd apps/web test

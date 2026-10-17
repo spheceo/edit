@@ -431,7 +431,7 @@ fn tools() -> Vec<Value> {
                     "push": { "type": "array", "items": { "type": "number" }, "description": "[from, to] scale across the shot, default [1, 1.08]; continue a run of the same moment with e.g. [1.04, 1.08]." },
                     "x": { "type": "number" }, "y": { "type": "number" },
                     "scale": { "type": "number", "description": "Base scale the push multiplies (default 1)." },
-                    "smooth": { "type": "boolean", "description": "Expensive optional optical-flow render, limited to 120 s per shot; default false. Leave false for normal edits." },
+                    "smooth": { "type": "boolean", "description": "Smooth the slowed shot (new frames made between the real ones), in the background: on by default where the Mac smooths with VideoToolbox (seconds a shot), else off (FFmpeg's optical flow, minutes). false keeps repeated frames." },
                     "label": { "type": "string", "description": "A picture's short label under it on its evidence card (\"The building on Capitol Avenue\")." }
                 }, "required": ["media", "source_in"] } },
                 "look": { "type": "boolean", "description": "The B-roll look adjustment (default true)." },

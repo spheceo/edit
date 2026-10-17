@@ -191,6 +191,10 @@ export interface Native {
   makeImageThumbs(source: string, paths: CachePaths): Promise<number>; // A
   makePeaks(source: string, out: string): Promise<void>; // A
   makeCloudProxy(source: string, probe: Probe, out: string): Promise<void>; // A
+  /** Whether this Mac smooths slow motion with VideoToolbox (macOS 15.4+). */
+  smoothSupported(): boolean; // S
+  /** Smooth slow motion with VideoToolbox's frame rate conversion (mac_media `smooth`); waits while an export runs. */
+  smoothSlowMotion(source: string, start: number, length: number, speed: number, fps: number, maxWidth: number, maxHeight: number, bitrate: number, out: string): Promise<void>; // A
   cloudProxyBitrate(width: number, height: number): number; // S
 
   // Rendering and images

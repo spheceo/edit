@@ -13,6 +13,7 @@ import type { App } from "./app.ts";
 import { parseTranscript } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import { copyFile, ioMessage } from "./files.ts";
+import { isBug } from "./guard.ts";
 import { debugModified, fingerprint } from "./hash.ts";
 import { importPaths } from "./import.ts";
 import { probe as probeFile, Semaphore } from "./media.ts";
@@ -293,7 +294,8 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
   }
   const stem = fileStem(source.name) ?? "clip";
   const key = fingerprint([
-    "bounded-optical-flow-v2",
+    // VideoToolbox's frame rate conversion where the Mac has it: another render than FFmpeg's.
+    app.native.smoothSupported() ? "vt-frame-rate-conversion-v1" : "bounded-optical-flow-v2",
     app.native.mediaKey(source.path),
     `${project.settings.width}x${project.settings.height}`,
     // Named as its cache key names it, so a move to the media drive keeps it.
@@ -321,6 +323,23 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
           throw new Error(`${clipId} changed before smoothing started; skipped`);
         }
         const { width, height } = project.settings;
+        // VideoToolbox's frame rate conversion first (the GPU and Neural
+        // Engine: 6 s of slowed bodycam in 8 s, FFmpeg's minterpolate 54 s),
+        // FFmpeg's when it can't (an older macOS, a rotated phone video).
+        if (app.native.smoothSupported()) {
+          try {
+            const bitrate = Math.max(4_000_000, Math.round((20_000_000 * width * height) / (1920 * 1080) * (fps / 30)));
+            await diag.timeOnAsync("broll", "smooth: VideoToolbox", source.name, () =>
+              app.native.smoothSlowMotion(source.path, clip.source_in, length, speed, fps, width, height, bitrate, partial),
+            );
+            fs.renameSync(partial, out);
+            return await swapInSmooth(app, projectId, clip, out, fps);
+          } catch (error) {
+            if (isBug(error)) throw error;
+            fs.rmSync(partial, { force: true });
+            diag.warn("broll", `smoothing ${source.name} on VideoToolbox: ${diag.messageOf(error)}; FFmpeg's optical flow instead`);
+          }
+        }
         const filter = `scale=w='min(${width},iw)':h='min(${height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setpts=PTS/${fixed(speed, 6)},minterpolate=fps=${display(fps)}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,format=yuv420p`;
         const made = await ffmpeg(
           [

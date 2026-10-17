@@ -16,6 +16,7 @@ fn main() {
             "ImageIO",
             "CoreGraphics",
             "Vision",
+            "VideoToolbox",
         ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }

@@ -4,6 +4,7 @@
 #import <Accelerate/Accelerate.h>
 #import <ImageIO/ImageIO.h>
 #import <Vision/Vision.h>
+#import <VideoToolbox/VideoToolbox.h>
 
 static void fail(char *error, size_t capacity, NSString *message) {
     if (capacity) snprintf(error, capacity, "%s", message.UTF8String ?: "AVFoundation failed");
@@ -738,4 +739,222 @@ int edit_writer_finish(void *handle, int64_t frames, char *error, size_t capacit
 
 void edit_writer_close(void *handle) {
     @autoreleasepool { EditWriter *w = (__bridge_transfer EditWriter *)handle; (void)w; }
+}
+
+// ---------------------------------------------------------------------------
+// Smooth slow motion: VideoToolbox's frame rate conversion (macOS 15.4+).
+//
+// `length` seconds of `path` from `start`, played at `speed` (below 1), as
+// frames at `fps`: each output frame's moment in the source falls between two
+// real frames, and the frame processor makes the picture there (motion
+// interpolation, on the GPU and the Neural Engine). A pair either side of a
+// cut isn't blended: the nearer real frame is used. Fitted within
+// `max_w`×`max_h`, H.264 at `bitrate`, no sound. `pause` is called between
+// frames and waits while foreground work runs. 1 on success.
+
+static double edit_luma_difference(CVPixelBufferRef a, CVPixelBufferRef b) {
+    // Mean absolute difference of a 32×18 grid of luma samples (0–255).
+    if (CVPixelBufferGetPlaneCount(a) < 1 || CVPixelBufferGetPlaneCount(b) < 1) return 0;
+    CVPixelBufferLockBaseAddress(a, kCVPixelBufferLock_ReadOnly);
+    CVPixelBufferLockBaseAddress(b, kCVPixelBufferLock_ReadOnly);
+    const uint8_t *ya = CVPixelBufferGetBaseAddressOfPlane(a, 0), *yb = CVPixelBufferGetBaseAddressOfPlane(b, 0);
+    size_t sa = CVPixelBufferGetBytesPerRowOfPlane(a, 0), sb = CVPixelBufferGetBytesPerRowOfPlane(b, 0);
+    size_t w = MIN(CVPixelBufferGetWidthOfPlane(a, 0), CVPixelBufferGetWidthOfPlane(b, 0));
+    size_t h = MIN(CVPixelBufferGetHeightOfPlane(a, 0), CVPixelBufferGetHeightOfPlane(b, 0));
+    double sum = 0; int count = 0;
+    if (ya && yb && w > 32 && h > 18) {
+        for (int gy = 0; gy < 18; gy++) for (int gx = 0; gx < 32; gx++) {
+            size_t x = (gx * 2 + 1) * w / 64, y = (gy * 2 + 1) * h / 36;
+            sum += abs((int)ya[y * sa + x] - (int)yb[y * sb + x]); count++;
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(b, kCVPixelBufferLock_ReadOnly);
+    CVPixelBufferUnlockBaseAddress(a, kCVPixelBufferLock_ReadOnly);
+    return count ? sum / count : 0;
+}
+
+int edit_smooth_supported(void) {
+    if (@available(macOS 15.4, *)) return VTFrameRateConversionConfiguration.isSupported ? 1 : 0;
+    return 0;
+}
+
+int edit_smooth(const char *path, double start, double length, double speed, double fps,
+                uint32_t max_w, uint32_t max_h, uint64_t bitrate, const char *output,
+                void (*pause)(void), char *error, size_t capacity) {
+    if (@available(macOS 15.4, *)) {
+    @autoreleasepool {
+        if (!(speed > 0 && speed < 1) || !(fps > 0) || !(length > 0)) { fail(error, capacity, @"Smoothing needs a speed below 1, a rate and a length"); return 0; }
+        if (!VTFrameRateConversionConfiguration.isSupported) { fail(error, capacity, @"This Mac's VideoToolbox has no frame rate conversion"); return 0; }
+        AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:@(path)] options:@{AVURLAssetPreferPreciseDurationAndTimingKey: @YES}];
+        AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+        if (!track) { fail(error, capacity, @"No video track"); return 0; }
+        if (!CGAffineTransformIsIdentity(track.preferredTransform)) { fail(error, capacity, @"A rotated video is smoothed by FFmpeg"); return 0; }
+        CGSize natural = track.naturalSize;
+        double fit = MIN(1.0, MIN(max_w / MAX(natural.width, 2.0), max_h / MAX(natural.height, 2.0)));
+        uint32_t width = MAX(2, ((uint32_t)lround(natural.width * fit)) / 2 * 2);
+        uint32_t height = MAX(2, ((uint32_t)lround(natural.height * fit)) / 2 * 2);
+        VTFrameRateConversionConfiguration *config = [[VTFrameRateConversionConfiguration alloc]
+            initWithFrameWidth:width frameHeight:height usePrecomputedFlow:NO
+            qualityPrioritization:(getenv("EDIT_SMOOTH_QUALITY") ? VTFrameRateConversionConfigurationQualityPrioritizationQuality : VTFrameRateConversionConfigurationQualityPrioritizationNormal)
+            revision:VTFrameRateConversionConfiguration.defaultRevision];
+        if (!config) { fail(error, capacity, @"Frame rate conversion won't take this size"); return 0; }
+        NSNumber *format = config.frameSupportedPixelFormats.firstObject;
+        if (!format) { fail(error, capacity, @"Frame rate conversion has no pixel format"); return 0; }
+        VTFrameProcessor *processor = [[VTFrameProcessor alloc] init];
+        NSError *problem = nil;
+        if (![processor startSessionWithConfiguration:config error:&problem]) {
+            fail(error, capacity, problem.localizedDescription ?: @"Frame rate conversion wouldn't start"); return 0;
+        }
+        // Source frames as decoded, then fitted into the processor's own buffers.
+        NSError *readProblem = nil;
+        AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&readProblem];
+        AVAssetReaderTrackOutput *out = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:@{
+            (id)kCVPixelBufferPixelFormatTypeKey: format, (id)kCVPixelBufferIOSurfacePropertiesKey: @{}}];
+        out.alwaysCopiesSampleData = NO;
+        if (!reader || ![reader canAddOutput:out]) { [processor endSession]; fail(error, capacity, readProblem.localizedDescription ?: @"No reader"); return 0; }
+        [reader addOutput:out];
+        double margin = 2.0 / MAX(track.nominalFrameRate, 1.0f);
+        reader.timeRange = CMTimeRangeMake(CMTimeMakeWithSeconds(MAX(start - margin, 0), 600000), CMTimeMakeWithSeconds(length + 2 * margin, 600000));
+        if (![reader startReading]) { [processor endSession]; fail(error, capacity, reader.error.localizedDescription ?: @"Reader wouldn't start"); return 0; }
+        VTPixelTransferSessionRef transfer = NULL;
+        VTPixelTransferSessionCreate(kCFAllocatorDefault, &transfer);
+        NSMutableDictionary *sourceAttributes = [config.sourcePixelBufferAttributes mutableCopy];
+        sourceAttributes[(id)kCVPixelBufferWidthKey] = @(width); sourceAttributes[(id)kCVPixelBufferHeightKey] = @(height);
+        NSMutableDictionary *destinationAttributes = [config.destinationPixelBufferAttributes mutableCopy];
+        destinationAttributes[(id)kCVPixelBufferWidthKey] = @(width); destinationAttributes[(id)kCVPixelBufferHeightKey] = @(height);
+        CVPixelBufferPoolRef sourcePool = NULL, destinationPool = NULL;
+        CVPixelBufferPoolCreate(kCFAllocatorDefault, NULL, (__bridge CFDictionaryRef)sourceAttributes, &sourcePool);
+        CVPixelBufferPoolCreate(kCFAllocatorDefault, NULL, (__bridge CFDictionaryRef)destinationAttributes, &destinationPool);
+        // The encoder takes the processor's buffers as they are.
+        NSURL *url = [NSURL fileURLWithPath:@(output)];
+        [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+        NSError *writeProblem = nil;
+        AVAssetWriter *writer = [[AVAssetWriter alloc] initWithURL:url fileType:AVFileTypeMPEG4 error:&writeProblem];
+        AVAssetWriterInput *input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:@{
+            AVVideoCodecKey: AVVideoCodecTypeH264, AVVideoWidthKey: @(width), AVVideoHeightKey: @(height),
+            AVVideoColorPropertiesKey: @{
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2},
+            AVVideoCompressionPropertiesKey: @{AVVideoAverageBitRateKey: @(bitrate), AVVideoExpectedSourceFrameRateKey: @(fps),
+                AVVideoMaxKeyFrameIntervalKey: @((int)MAX(1, lround(fps / 2))), AVVideoAllowFrameReorderingKey: @NO,
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel}}];
+        input.expectsMediaDataInRealTime = NO;
+        AVAssetWriterInputPixelBufferAdaptor *adaptor = [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:input sourcePixelBufferAttributes:nil];
+        BOOL ok = writer && [writer canAddInput:input];
+        if (ok) { [writer addInput:input]; writer.shouldOptimizeForNetworkUse = YES; ok = [writer startWriting]; }
+        if (ok) [writer startSessionAtSourceTime:kCMTimeZero];
+        NSString *why = ok ? nil : (writeProblem.localizedDescription ?: writer.error.localizedDescription ?: @"Encoder unavailable");
+        // Two real frames either side of the moment: `before` at t0, `after` at t1.
+        CVPixelBufferRef before = NULL, after = NULL;
+        double t0 = NAN, t1 = NAN;
+        BOOL ended = NO, cut = NO;
+        CVPixelBufferRef (^next)(double *) = ^CVPixelBufferRef(double *at) {
+            for (;;) {
+                CMSampleBufferRef sample = [out copyNextSampleBuffer];
+                if (!sample) return NULL;
+                CVImageBufferRef image = CMSampleBufferGetImageBuffer(sample);
+                if (!image) { CFRelease(sample); continue; }
+                *at = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample));
+                CVPixelBufferRef fitted = NULL;
+                CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, sourcePool, &fitted);
+                if (fitted && VTPixelTransferSessionTransferImage(transfer, image, fitted) != noErr) { CVPixelBufferRelease(fitted); fitted = NULL; }
+                CFRelease(sample);
+                return fitted;
+            }
+        };
+        if (ok) {
+            before = next(&t0);
+            if (before) after = next(&t1);
+            if (!after) ended = YES;
+            if (before && after) cut = edit_luma_difference(before, after) > 28;
+        }
+        if (ok && !before) { ok = NO; why = reader.error.localizedDescription ?: @"No frames in that stretch"; }
+        int64_t frames = (int64_t)ceil(length / speed * fps);
+        for (int64_t k = 0; ok && k < frames; ) {
+            if (pause) pause();
+            double t = start + (double)k / fps * speed;
+            // Move the pair up to the moment.
+            while (!ended && t >= t1) {
+                CVPixelBufferRelease(before); before = after; t0 = t1;
+                after = next(&t1);
+                if (!after) { ended = YES; break; }
+                cut = edit_luma_difference(before, after) > 28;
+            }
+            // Every output moment inside this pair, in one request.
+            NSMutableArray<NSNumber *> *phases = [NSMutableArray array];
+            NSMutableArray<NSNumber *> *slots = [NSMutableArray array];
+            int64_t first = k;
+            while (k < frames) {
+                double at = start + (double)k / fps * speed;
+                if (!ended && at >= t1) break;
+                double phase = ended ? 0 : (at - t0) / MAX(t1 - t0, 1e-6);
+                [slots addObject:@(phase)];
+                if (!ended && !cut && phase > 0.02 && phase < 0.98) [phases addObject:@(phase)];
+                k++;
+                if (ended) break;
+            }
+            NSMutableArray<VTFrameProcessorFrame *> *made = [NSMutableArray array];
+            // Our own hold on each interpolated buffer until it's encoded.
+            NSMutableArray *kept = [NSMutableArray array];
+            if (phases.count > 0) {
+                NSMutableArray<VTFrameProcessorFrame *> *destinations = [NSMutableArray array];
+                for (NSUInteger i = 0; i < phases.count; i++) {
+                    CVPixelBufferRef buffer = NULL;
+                    CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, destinationPool, &buffer);
+                    if (!buffer) { ok = NO; why = @"Cannot allocate interpolated frames"; break; }
+                    double at = t0 + phases[i].doubleValue * (t1 - t0);
+                    [kept addObject:(__bridge id)buffer];
+                    [destinations addObject:[[VTFrameProcessorFrame alloc] initWithBuffer:buffer presentationTimeStamp:CMTimeMakeWithSeconds(at, 600000)]];
+                    CVPixelBufferRelease(buffer);
+                }
+                if (!ok) break;
+                VTFrameProcessorFrame *source = [[VTFrameProcessorFrame alloc] initWithBuffer:before presentationTimeStamp:CMTimeMakeWithSeconds(t0, 600000)];
+                VTFrameProcessorFrame *target = [[VTFrameProcessorFrame alloc] initWithBuffer:after presentationTimeStamp:CMTimeMakeWithSeconds(t1, 600000)];
+                VTFrameRateConversionParameters *parameters = [[VTFrameRateConversionParameters alloc] initWithSourceFrame:source nextFrame:target
+                    opticalFlow:nil interpolationPhase:phases submissionMode:VTFrameRateConversionParametersSubmissionModeSequential destinationFrames:destinations];
+                NSError *processProblem = nil;
+                if (!parameters || ![processor processWithParameters:parameters error:&processProblem]) {
+                    ok = NO; why = processProblem.localizedDescription ?: @"Frame rate conversion failed"; break;
+                }
+                [made addObjectsFromArray:destinations];
+            }
+            NSUInteger used = 0;
+            for (NSUInteger i = 0; ok && i < slots.count; i++) {
+                double phase = slots[i].doubleValue;
+                CVPixelBufferRef picture;
+                if (!ended && !cut && phase > 0.02 && phase < 0.98) picture = made[used++].buffer;
+                else picture = (ended || phase < 0.5) ? before : after;
+                NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:30];
+                while (!input.readyForMoreMediaData && writer.status == AVAssetWriterStatusWriting && deadline.timeIntervalSinceNow > 0) usleep(1000);
+                if (writer.status != AVAssetWriterStatusWriting || ![adaptor appendPixelBuffer:picture withPresentationTime:CMTimeMakeWithSeconds((double)(first + (int64_t)i) / fps, 600000)]) {
+                    ok = NO; why = writer.error.localizedDescription ?: @"Encoder stalled";
+                }
+            }
+        }
+        CVPixelBufferRelease(before); CVPixelBufferRelease(after);
+        [reader cancelReading];
+        [processor endSession];
+        if (transfer) { VTPixelTransferSessionInvalidate(transfer); CFRelease(transfer); }
+        if (sourcePool) CVPixelBufferPoolRelease(sourcePool);
+        if (destinationPool) CVPixelBufferPoolRelease(destinationPool);
+        if (ok) {
+            [input markAsFinished];
+            dispatch_semaphore_t done = dispatch_semaphore_create(0);
+            [writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(done); }];
+            if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC)) || writer.status != AVAssetWriterStatusCompleted) {
+                ok = NO; why = writer.error.localizedDescription ?: @"Encoder wouldn't finish";
+            }
+        }
+        if (!ok) {
+            if (writer.status == AVAssetWriterStatusWriting) [writer cancelWriting];
+            [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+            fail(error, capacity, why ?: @"Smoothing failed");
+            return 0;
+        }
+        return 1;
+    }
+    }
+    fail(error, capacity, @"Smoothing on VideoToolbox needs macOS 15.4");
+    return 0;
 }

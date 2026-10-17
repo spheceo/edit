@@ -150,6 +150,16 @@ function clipOfFields(fields: Record<string, unknown>) {
  * Pure plan operation: the caller validates and commits the whole section
  * once. Expensive optical flow is an explicit shot option, never automatic work.
  */
+/**
+ * Whether a slowed shot is smoothed unless it says otherwise: the server
+ * turns it on where VideoToolbox smooths a shot in seconds (the user wants
+ * slowed footage smooth almost always); FFmpeg's minutes a shot kept it opt-in.
+ */
+let smoothByDefault = false;
+export function setSmoothByDefault(on: boolean): void {
+  smoothByDefault = on;
+}
+
 export function cover(project: Project, given: Record<string, unknown>): [Record<string, unknown>, string[]] {
   let args: Args;
   try {
@@ -321,7 +331,7 @@ export function cover(project: Project, given: Record<string, unknown>): [Record
         },
       }),
     );
-    if (!still && speed < 0.999 && (shot.smooth ?? false)) smooth.push(id);
+    if (!still && speed < 0.999 && (shot.smooth ?? smoothByDefault)) smooth.push(id);
     placed.push({
       clip: id,
       name: label,

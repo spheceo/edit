@@ -6,6 +6,22 @@ use std::path::Path;
 use std::ptr::NonNull;
 
 unsafe extern "C" {
+    fn edit_smooth_supported() -> i32;
+    #[allow(clippy::too_many_arguments)]
+    fn edit_smooth(
+        path: *const c_char,
+        start: f64,
+        length: f64,
+        speed: f64,
+        fps: f64,
+        max_w: u32,
+        max_h: u32,
+        bitrate: u64,
+        output: *const c_char,
+        pause: Option<extern "C" fn()>,
+        error: *mut c_char,
+        capacity: usize,
+    ) -> i32;
     fn edit_image_info(path: *const c_char, width: *mut u32, height: *mut u32) -> i32;
     fn edit_image_thumbnail(path: *const c_char, output: *const c_char) -> i32;
     fn edit_image_frame(
@@ -275,6 +291,59 @@ pub fn scale(
         Ok(())
     } else {
         Err("vImage couldn't scale the picture".to_owned())
+    }
+}
+
+/// Whether this Mac's VideoToolbox does frame rate conversion (macOS 15.4+).
+pub fn smooth_supported() -> bool {
+    // SAFETY: no arguments; it only asks the framework.
+    unsafe { edit_smooth_supported() == 1 }
+}
+
+extern "C" fn give_way() {
+    crate::media::yield_to_foreground();
+}
+
+/// Smooth slow motion with VideoToolbox's frame rate conversion: `length`
+/// seconds of `path` from `start`, played at `speed`, as frames at `fps`
+/// with the in-between pictures made by the frame processor (`edit_smooth`
+/// in mac_media.m), fitted within `max_w`×`max_h`, H.264 at `bitrate`, no
+/// sound. It waits while an export runs.
+#[allow(clippy::too_many_arguments)]
+pub fn smooth(
+    path: &Path,
+    start: f64,
+    length: f64,
+    speed: f64,
+    fps: f64,
+    max: (u32, u32),
+    bitrate: u64,
+    output: &Path,
+) -> Result<(), String> {
+    let path = path_string(path)?;
+    let output = path_string(output)?;
+    let mut error = [0; 1024];
+    // SAFETY: the strings and the error buffer outlive the call; `give_way` only sleeps.
+    let done = unsafe {
+        edit_smooth(
+            path.as_ptr(),
+            start,
+            length,
+            speed,
+            fps,
+            max.0,
+            max.1,
+            bitrate,
+            output.as_ptr(),
+            Some(give_way),
+            error.as_mut_ptr(),
+            error.len(),
+        )
+    };
+    if done == 1 {
+        Ok(())
+    } else {
+        Err(message(&error))
     }
 }
 

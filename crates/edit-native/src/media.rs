@@ -169,6 +169,52 @@ pub async fn make_cloud_proxy(
     .await
 }
 
+/// Whether this Mac smooths slow motion with VideoToolbox (macOS 15.4+).
+#[napi]
+pub fn smooth_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    return edit_engine::mac_media::smooth_supported();
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
+/// Smooth slow motion with VideoToolbox: `length` seconds of `source` from
+/// `start` at `speed`, as frames at `fps` with new ones made between the real
+/// ones, fitted within `maxWidth`×`maxHeight`, H.264 at `bitrate`, no sound,
+/// into `out`. Waits while an export runs.
+#[napi(
+    ts_args_type = "source: string, start: number, length: number, speed: number, fps: number, maxWidth: number, maxHeight: number, bitrate: number, out: string"
+)]
+#[allow(clippy::too_many_arguments)]
+pub async fn smooth_slow_motion(
+    source: String,
+    start: f64,
+    length: f64,
+    speed: f64,
+    fps: f64,
+    max_width: u32,
+    max_height: u32,
+    bitrate: f64,
+    out: String,
+) -> napi::Result<()> {
+    crate::blocking("smoothing slow motion", move || {
+        #[cfg(target_os = "macos")]
+        return edit_engine::mac_media::smooth(
+            Path::new(&source),
+            start,
+            length,
+            speed,
+            fps,
+            (max_width, max_height),
+            bitrate.max(0.0) as u64,
+            Path::new(&out),
+        );
+        #[cfg(not(target_os = "macos"))]
+        Err("smoothing on VideoToolbox needs a Mac".to_owned())
+    })
+    .await
+}
+
 /// The cloud proxy's bitrate (bits/s) for a `width` × `height` picture.
 #[napi]
 pub fn cloud_proxy_bitrate(width: u32, height: u32) -> f64 {

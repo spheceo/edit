@@ -892,7 +892,7 @@
                 "type": "number"
               },
               "smooth": {
-                "description": "Expensive optional optical-flow render, limited to 120 s per shot; default false. Leave false for normal edits.",
+                "description": "Smooth the slowed shot (new frames made between the real ones), in the background: on by default where the Mac smooths with VideoToolbox (seconds a shot), else off (FFmpeg's optical flow, minutes). false keeps repeated frames.",
                 "type": "boolean"
               },
               "source_in": {

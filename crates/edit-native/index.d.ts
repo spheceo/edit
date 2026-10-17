@@ -434,6 +434,17 @@ export declare const SHEET_CELL: number
 export declare function shutdown(): void
 
 /**
+ * Smooth slow motion with VideoToolbox: `length` seconds of `source` from
+ * `start` at `speed`, as frames at `fps` with new ones made between the real
+ * ones, fitted within `maxWidth`×`maxHeight`, H.264 at `bitrate`, no sound,
+ * into `out`. Waits while an export runs.
+ */
+export declare function smoothSlowMotion(source: string, start: number, length: number, speed: number, fps: number, maxWidth: number, maxHeight: number, bitrate: number, out: string): Promise<void>
+
+/** Whether this Mac smooths slow motion with VideoToolbox (macOS 15.4+). */
+export declare function smoothSupported(): boolean
+
+/**
  * Plays frames `[start, end)` `speed` times faster, the clips in `hold`
  * keeping their speed (`edit_core::speed_span_holding`).
  */

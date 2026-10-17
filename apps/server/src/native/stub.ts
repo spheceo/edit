@@ -396,6 +396,12 @@ export function createStub(): Stub {
     async makeCloudProxy() {
       notInStub("makeCloudProxy");
     },
+    smoothSupported() {
+      return false;
+    },
+    async smoothSlowMotion() {
+      notInStub("smoothSlowMotion");
+    },
     cloudProxyBitrate(width, height) {
       // media.rs cloud_proxy_bitrate: 4 Mbit/s at 1080p, down to 0.8.
       const rate = Math.floor((4_000_000 * width * height) / (1920 * 1080));

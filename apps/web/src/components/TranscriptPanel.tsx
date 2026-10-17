@@ -1,8 +1,8 @@
 import { AudioLines, CircleAlert, RotateCcw } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import { isSoundEffect, trackOf } from "../lib/edit";
+import { isSoundEffect } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import type { Project, Transcript } from "../lib/types";
@@ -24,17 +24,39 @@ interface TimelineWord {
   media: string;
 }
 
+type Word = Transcript["words"][number];
+/** Each transcript's words in order of their start, for binary search. */
+const ordered = new WeakMap<Transcript, Word[]>();
+function wordsOf(transcript: Transcript) {
+  let words = ordered.get(transcript);
+  if (!words) {
+    const sorted = transcript.words.every((word, index) => !index || transcript.words[index - 1].start <= word.start);
+    words = sorted ? transcript.words : [...transcript.words].sort((a, b) => a.start - b.start);
+    ordered.set(transcript, words);
+  }
+  return words;
+}
+
 /** Words heard on the timeline: audio clips on unmuted tracks, mapped through trims and speed. */
-function timelineWords(project: Project, transcripts: Map<string, Transcript>): TimelineWord[] {
-  const fps = project.settings.fps;
+function timelineWords(clips: Project["clips"], tracks: Project["tracks"], fps: number, transcripts: Map<string, Transcript>): TimelineWord[] {
+  const muted = new Set(tracks.filter((track) => track.muted).map((track) => track.id));
   const words: TimelineWord[] = [];
-  for (const clip of project.clips) {
-    if (clip.type !== "audio" || trackOf(project, clip.track)?.muted) continue;
+  for (const clip of clips) {
+    if (clip.type !== "audio" || muted.has(clip.track)) continue;
     const transcript = transcripts.get(clip.media);
     if (!transcript) continue;
     const to = clip.source_in + (clip.duration / fps) * clip.speed;
-    for (const word of transcript.words) {
-      if (word.start < clip.source_in || word.start >= to) continue;
+    const all = wordsOf(transcript);
+    // The clip's first word, by binary search: only its own words are visited.
+    let low = 0;
+    let high = all.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (all[mid].start < clip.source_in) low = mid + 1;
+      else high = mid;
+    }
+    for (let index = low; index < all.length && all[index].start < to; index++) {
+      const word = all[index];
       words.push({
         frame: clip.start + ((word.start - clip.source_in) / clip.speed) * fps,
         text: word.text,
@@ -86,6 +108,16 @@ function phrases(words: TimelineWord[], fps: number) {
   return out;
 }
 
+/** White words, the one being said (`active`) highlighted yellow; still to come is dimmed. */
+function markWord(span: HTMLElement, index: number, active: number) {
+  const on = index === active;
+  span.classList.toggle("bg-[#ffff00]", on);
+  span.classList.toggle("text-black", on);
+  span.classList.toggle("text-white", !on);
+  span.classList.toggle("hover:bg-hover", !on);
+  span.classList.toggle("opacity-55", index > active);
+}
+
 const clock = (frame: number, fps: number) => {
   const seconds = Math.floor(frame / fps);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -95,20 +127,20 @@ export function TranscriptPanel() {
   const project = useEditor((state) => state.project)!;
   const statuses = useEditor((state) => state.media);
   const toast = useEditor((state) => state.toast);
-  const [, setVersion] = useState(0);
-  const [active, setActive] = useState(-1);
+  const [version, setVersion] = useState(0);
   const list = useRef<HTMLDivElement>(null);
   const fps = project.settings.fps;
+  const { clips, tracks } = project;
 
   // Media heard on the timeline, in order of first use.
   const heard = useMemo(() => {
     const ids: string[] = [];
-    for (const clip of [...project.clips].sort((a, b) => a.start - b.start)) {
+    for (const clip of [...clips].sort((a, b) => a.start - b.start)) {
       if (clip.type === "audio" && !ids.includes(clip.media)) ids.push(clip.media);
     }
     // Sound effects (the shutter on the cuts) have nothing said in them.
     return ids.map((id) => project.media.find((media) => media.id === id)!).filter((media) => media && !isSoundEffect(media));
-  }, [project]);
+  }, [clips, project.media]);
 
   // Voices get named after a transcript arrives: reload it when that lands.
   const [named, setNamed] = useState(0);
@@ -134,21 +166,27 @@ export function TranscriptPanel() {
     }
   }, [heard, statuses, project.id, named]);
 
-  const transcripts = new Map<string, Transcript>();
-  for (const media of heard) {
-    const transcript = loaded.get(`${project.id}/${media.id}`);
-    if (transcript) transcripts.set(media.id, transcript);
-  }
-  const words = timelineWords(project, transcripts);
-  const grouped = phrases(words, fps);
+  const transcripts = useMemo(() => {
+    const transcripts = new Map<string, Transcript>();
+    for (const media of heard) {
+      const transcript = loaded.get(`${project.id}/${media.id}`);
+      if (transcript) transcripts.set(media.id, transcript);
+    }
+    return transcripts;
+    // `version` and `named` say a transcript was (re)loaded into `loaded`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heard, project.id, version, named]);
+  const words = useMemo(() => timelineWords(clips, tracks, fps, transcripts), [clips, tracks, fps, transcripts]);
+  const grouped = useMemo(() => phrases(words, fps), [words, fps]);
 
-  // Highlight the word under the playhead without re-rendering per frame.
-  const wordsRef = useRef(words);
-  wordsRef.current = words;
-  useEffect(() => {
-    let current = -1;
+  // Highlight the word under the playhead on the words themselves (classes, not
+  // state), so nothing re-renders as it moves: only the words it passed change.
+  const highlight = useRef({ words, active: -1, update: () => {} });
+  useLayoutEffect(() => {
+    const spans: HTMLElement[] = [];
+    for (const span of list.current?.querySelectorAll<HTMLElement>("[data-word]") ?? []) spans[Number(span.dataset.word)] = span;
     const update = () => {
-      const all = wordsRef.current;
+      const all = highlight.current.words;
       let low = 0;
       let high = all.length - 1;
       let found = -1;
@@ -160,21 +198,27 @@ export function TranscriptPanel() {
           low = mid + 1;
         } else high = mid - 1;
       }
-      if (found !== current) {
-        current = found;
-        setActive(found);
+      const current = highlight.current.active;
+      if (found === current) return;
+      highlight.current.active = found;
+      // The words between the old and new place change: the one said, and those now said or still to come.
+      for (let index = Math.max(0, Math.min(found, current)); index <= Math.max(found, current); index++) {
+        if (spans[index]) markWord(spans[index], index, found);
       }
+      // Keep the spoken word in view while playing.
+      if (playhead.playing && found >= 0) spans[found]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     };
+    // New words (or new spans for them): mark them all for where the playhead is.
+    highlight.current.words = words;
+    highlight.current.active = -1;
+    spans.forEach((span, index) => markWord(span, index, -1));
+    highlight.current.update = update;
     update();
-    const unsubscribe = playhead.subscribe(update);
+  }, [grouped]);
+  useEffect(() => {
+    const unsubscribe = playhead.subscribe(() => highlight.current.update());
     return () => void unsubscribe();
   }, []);
-
-  // Keep the spoken word in view while playing.
-  useEffect(() => {
-    if (!playhead.playing || active < 0) return;
-    list.current?.querySelector(`[data-word="${active}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [active]);
 
   const start = (mediaId: string) =>
     api
@@ -298,12 +342,8 @@ export function TranscriptPanel() {
                         preview.pause();
                         preview.seek(Math.ceil(word.frame - 0.5));
                       }}
-                      // White words, the one being said highlighted yellow; still to come is dimmed.
-                      className={cx(
-                        "cursor-pointer rounded-[4px] px-[1px] transition-[color,background,opacity] duration-100",
-                        index === active ? "bg-[#ffff00] text-black" : "text-white hover:bg-hover",
-                        index > active && "opacity-55",
-                      )}
+                      // As if nothing's said yet; markWord sets the highlight.
+                      className="cursor-pointer rounded-[4px] px-[1px] text-white opacity-55 transition-[color,background,opacity] duration-100 hover:bg-hover"
                     >
                       {word.text}
                     </span>{" "}

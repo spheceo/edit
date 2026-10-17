@@ -40,7 +40,8 @@ let fontBytes: Promise<[string, number, Uint8Array][]> | null = null;
 
 type AudioClip = Extract<Clip, { type: "audio" }>;
 interface PictureSource { clip: string; media: string; time: number }
-interface ScheduledSound { source: AudioBufferSourceNode; gain: GainNode; mute?: GainNode }
+/** A stretch of a clip's sound queued on the audio clock, and what it was cut from. */
+interface ScheduledSound { source: AudioBufferSourceNode; gain: GainNode; mute?: GainNode; clip: string; url: string }
 const BUFFERING_BADGE_MS = 600;
 /** Waiting this long for a frame is noted for problem reports, and the viewer offers one. */
 const STUCK_MS = 10_000;
@@ -70,6 +71,8 @@ class Preview {
   private canvas: HTMLCanvasElement | null = null;
   private restarts = 0;
   private project: Project | null = null;
+  /** The engine hasn't seen the latest project yet: it's sent once per frame, before drawing. */
+  private engineStale = false;
   private clips: Clip[] = [];
   private clipsByTrack = new Map<string, Clip[]>();
   private clipsById = new Map<string, Clip>();
@@ -165,7 +168,8 @@ class Preview {
       }
       this.retire();
       this.engine = engine;
-      if (this.project) engine.setProject(JSON.stringify(this.project));
+      if (this.project) engine.setProject(projectJson(this.project));
+      this.engineStale = false;
       for (const [media, levels] of this.peaks) if (levels instanceof Uint8Array) engine.setPeaks(media, levels);
       this.readSections();
       this.setBuffering(false);
@@ -261,7 +265,8 @@ class Preview {
 
   setProject(project: Project, proxyVersions: Record<string, string>) {
     if (validateProject(project)) return;
-    const changedSource = this.project?.id !== project.id;
+    const previous = this.project;
+    const changedSource = previous?.id !== project.id;
     if (changedSource) {
       this.remember();
       this.pause();
@@ -274,11 +279,17 @@ class Preview {
       playhead.frame = savedFrame(project.id);
       playhead.emit();
     }
+    // Clips are shared between snapshots (shareProject, Immer), so a changed clip is a new object.
+    const before = changedSource ? new Map<string, Clip>() : this.clipsById;
+    const changed = new Set<string>();
     const ids = new Set(project.clips.map((clip) => clip.id));
-    for (const clip of this.project?.clips ?? []) if (!ids.has(clip.id)) {
+    for (const clip of previous?.clips ?? []) if (!ids.has(clip.id)) {
       this.use((engine) => engine.forgetVideo(clip.id));
-      this.copied.delete(clip.id);
+      changed.add(clip.id);
     }
+    for (const clip of project.clips) if (before.get(clip.id) !== clip) changed.add(clip.id);
+    // Pictures already on the GPU stay for the clips that didn't change.
+    for (const id of changed) this.copied.delete(id);
     this.project = project;
     this.error = null;
     this.renderedFrame = null;
@@ -313,13 +324,33 @@ class Preview {
     for (const [id, url] of this.sounds) if (nextSounds.get(id) !== url) this.decoder.forget(url);
     this.sources = nextSources;
     this.sounds = nextSounds;
-    this.copied.clear();
     this.loadPeaks(project);
-    this.resetClock();
-    this.use((engine) => engine.setProject(JSON.stringify(project)));
-    this.readSections();
+    // Sound already queued keeps playing (nothing re-buffers) unless what it was cut from changed.
+    if (previous?.settings.fps !== project.settings.fps || [...this.scheduled.values()].some((sound) => this.outdated(sound, changed))) {
+      this.resetClock();
+    }
+    this.engineStale = true;
     this.notify();
     this.invalidate();
+  }
+
+  /** A queued sound whose clip changed, went quiet or now reads another file. */
+  private outdated(sound: ScheduledSound, changed: Set<string>) {
+    const clip = this.clipsById.get(sound.clip);
+    return changed.has(sound.clip) || !clip || !this.audible(clip) || this.sounds.get(clip.media) !== sound.url;
+  }
+
+  /**
+   * Sends the project to the engine. A change (each move of a drag) only marks
+   * it stale; this runs at most once per frame, before anything reads the engine.
+   */
+  private syncEngine() {
+    if (!this.engineStale || !this.engine || !this.project) return;
+    this.engineStale = false;
+    const project = this.project;
+    this.use((engine) => engine.setProject(projectJson(project)));
+    this.readSections();
+    this.notify();
   }
 
   private loadPeaks(project: Project) {
@@ -439,8 +470,10 @@ class Preview {
     if (frame >= this.duration) {
       playhead.frame = Math.max(0, this.duration - 1); this.pause(); return;
     }
-    const sources = this.sceneSources(Math.floor(frame));
-    this.warm(Math.floor(frame), sources);
+    this.syncEngine();
+    const scene = { frame: Math.floor(frame), sources: this.sceneSources(Math.floor(frame)) };
+    const { sources } = scene;
+    this.warm(scene.frame, sources);
     if (!this.runningClock && (!this.picturesReady(sources) || !this.audioReady(frame, 0.5))) {
       this.setBuffering(true);
       return;
@@ -454,7 +487,7 @@ class Preview {
     playhead.frame = frame;
     if (!this.audioReady(frame, 0)) this.playbackStats.audioUnderruns++;
     this.scheduleAudio(frame);
-    this.draw();
+    this.draw(scene);
     if (performance.now() - this.persistedAt >= 1000) this.remember();
     playhead.emit();
   }
@@ -471,6 +504,21 @@ class Preview {
       if (lo && frame < clipEnd(clips[lo - 1])) active.push(clips[lo - 1]);
     }
     return active;
+  }
+
+  /**
+   * Clips playing at `frame` or starting by `until`: the active one on each
+   * track (a track's clips never overlap) and those just ahead, by binary search.
+   */
+  private clipsAround(frame: number, until: number) {
+    const clips = this.activeClips(frame);
+    let lo = 0, hi = this.clips.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.clips[mid].start <= frame) lo = mid + 1; else hi = mid;
+    }
+    for (let i = lo; i < this.clips.length && this.clips[i].start <= until; i++) clips.push(this.clips[i]);
+    return clips;
   }
 
   private audible(clip: Clip): clip is AudioClip {
@@ -571,8 +619,7 @@ class Preview {
     if (!this.project) return true;
     const fps = this.project.settings.fps;
     const until = frame + ahead * fps;
-    return this.clips.every((clip) => {
-      if (clip.start > until || clipEnd(clip) <= frame) return true;
+    return this.clipsAround(frame, until).every((clip) => {
       if (!this.audible(clip)) return true;
       const media = this.media.get(clip.media)!;
       const time = clip.source_in + Math.max(0, frame - clip.start) / fps * clip.speed;
@@ -591,9 +638,8 @@ class Preview {
     if (!project || !audio) return;
     const fps = project.settings.fps;
     const until = frame + fps * AUDIO_AHEAD;
-    for (const clip of this.clips) {
-      if (clip.start > until) break;
-      if (clipEnd(clip) <= frame || !this.audible(clip)) continue;
+    for (const clip of this.clipsAround(frame, until)) {
+      if (!this.audible(clip)) continue;
       const url = this.sounds.get(clip.media)!;
       const media = this.media.get(clip.media)!;
       const time = clip.source_in + Math.max(0, frame - clip.start) / fps * clip.speed;
@@ -623,8 +669,9 @@ class Preview {
         for (let sample = start + late * fps; sample <= end; sample = Math.min(end, sample + 1)) {
           const local = sample - clip.start;
           let volume = 10 ** (paramAt(clip, "volume_db", sample) / 20);
-          if (clip.fade_in > 0) volume *= Math.min(1, (local + 1) / (clip.fade_in + 1));
-          if (clip.fade_out > 0) volume *= Math.min(1, (clip.duration - local) / (clip.fade_out + 1));
+          // Linear from silence at the clip's start and to silence at its end, as the export's (mix.rs fade_gain).
+          if (clip.fade_in > 0) volume *= Math.min(1, Math.max(0, local / clip.fade_in));
+          if (clip.fade_out > 0) volume *= Math.min(1, Math.max(0, (clip.duration - local) / clip.fade_out));
           const t = at + (sample - start - late * fps) / fps;
           if (sample === start + late * fps) gain.gain.setValueAtTime(volume, t);
           else gain.gain.linearRampToValueAtTime(volume, t);
@@ -644,7 +691,7 @@ class Preview {
           source.connect(gain).connect(mute).connect(audio.destination);
         } else source.connect(gain).connect(audio.destination);
         source.start(at, Math.max(0, offset / clip.speed + late), length);
-        const scheduled = { source, gain, mute };
+        const scheduled = { source, gain, mute, clip: clip.id, url };
         source.onended = () => {
           source.disconnect(); gain.disconnect(); mute?.disconnect();
           if (this.scheduled.get(key) === scheduled) this.scheduled.delete(key);
@@ -663,12 +710,15 @@ class Preview {
     this.scheduled.clear();
   }
 
-  private draw() {
+  /** `scene`: the sources a playback tick already looked up (and warmed) for its frame. */
+  private draw(scene?: { frame: number; sources: PictureSource[] }) {
     if (!this.engine || !this.project || this.error) return;
     if (this.use((engine) => engine.isLost())) { this.recover(); return; }
+    this.syncEngine();
     const wanted = Math.floor(playhead.frame);
-    const sources = this.sceneSources(wanted);
-    this.warm(wanted, sources);
+    const reuse = scene?.frame === wanted;
+    const sources = reuse ? scene.sources : this.sceneSources(wanted);
+    if (!reuse) this.warm(wanted, sources);
     let frame = wanted;
     let selected = sources;
     const ready = this.picturesReady(sources);
@@ -753,6 +803,24 @@ class Preview {
       if (this.buffering) { this.buffering = false; this.notify(); }
     }
   }
+}
+
+/** Each clip's JSON, kept while the clip object is (snapshots share unchanged clips). */
+const clipJson = new WeakMap<Clip, string>();
+
+/**
+ * The project as JSON for the engine. Clips are most of it and a drag changes
+ * a few, so each clip's text is made once and reused while the clip is unchanged.
+ */
+export function projectJson(project: Project) {
+  const { clips, ...rest } = project;
+  const head = JSON.stringify(rest);
+  const parts = clips.map((clip) => {
+    let json = clipJson.get(clip);
+    if (json === undefined) clipJson.set(clip, (json = JSON.stringify(clip)));
+    return json;
+  });
+  return `${head.slice(0, -1)}${head.length > 2 ? "," : ""}"clips":[${parts.join(",")}]}`;
 }
 
 export const preview = new Preview();

@@ -155,6 +155,10 @@ export function Timeline() {
   const snapLine = useRef<number | null>(null);
   const drag = useRef<Drag | null>(null);
   const queued = useRef(0);
+  /** The lanes and ruler as last drawn, and what they were drawn from (see draw). */
+  const layer = useRef<{ canvas: HTMLCanvasElement; key: unknown[] } | null>(null);
+  /** Counts thumbnails, waveforms and fonts arriving, each of which redraws the lanes. */
+  const assets = useRef(0);
 
   const { rows, height: contentHeight } = layoutRows(project);
   const fps = project.settings.fps;
@@ -165,6 +169,10 @@ export function Timeline() {
       queued.current = 0;
       draw();
     });
+  };
+  const assetLoaded = () => {
+    assets.current++;
+    requestDraw();
   };
 
   // Do not keep decoded strips (or late fetch completions) from another project.
@@ -221,10 +229,17 @@ export function Timeline() {
     });
     const offEditor = useEditor.subscribe(requestDraw);
     const offView = useView.subscribe(requestDraw);
+    // Clip labels are measured in Geist: fit and draw them again once it's in.
+    const onFonts = () => {
+      fitted.clear();
+      assetLoaded();
+    };
+    document.fonts?.addEventListener("loadingdone", onFonts);
     return () => {
       offPlayhead();
       offEditor();
       offView();
+      document.fonts?.removeEventListener("loadingdone", onFonts);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -628,9 +643,85 @@ export function Timeline() {
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
     }
+    const { ppf, scrollX, scrollY } = useView.getState();
+    const { rows } = layoutRows(project);
+
+    // The lanes and the ruler change only with these, not with the playhead:
+    // they're drawn once into a layer, and each tick copies it.
+    const key = [project, state.selection, state.media, ppf, scrollX, scrollY, canvas.width, canvas.height, dpr, preview.sections, drop.current, assets.current];
+    const cached = layer.current;
+    if (!cached || key.some((value, index) => value !== cached.key[index])) {
+      const lanes = cached?.canvas ?? document.createElement("canvas");
+      if (lanes.width !== canvas.width || lanes.height !== canvas.height) {
+        lanes.width = canvas.width;
+        lanes.height = canvas.height;
+      }
+      const lanesCtx = lanes.getContext("2d")!;
+      lanesCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      lanesCtx.clearRect(0, 0, width, height);
+      drawLanes(lanesCtx, project, width, height);
+      layer.current = { canvas: lanes, key };
+    }
     const ctx = canvas.getContext("2d")!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // (A canvas with no size can't be drawn from.)
+    if (canvas.width && canvas.height) ctx.drawImage(layer.current!.canvas, 0, 0);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
+
+    // The pointer's guides, under the ruler.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, RULER, width, height - RULER);
+    ctx.clip();
+
+    // Razor guide.
+    if (state.tool === "razor" && hover.current && hover.current.y > RULER && !drag.current) {
+      const hit = clipAt(hover.current.x, hover.current.y);
+      if (hit) {
+        const row = rows.find((candidate) => candidate.track.id === hit.clip.track)!;
+        const x = Math.round(hover.current.x) + 0.5;
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 2]);
+        ctx.beginPath();
+        ctx.moveTo(x, row.y - scrollY);
+        ctx.lineTo(x, row.y - scrollY + row.h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    if (drag.current?.kind === "marquee") drawMarquee(ctx, drag.current);
+
+    // Snap guide.
+    if (snapLine.current !== null) {
+      const x = Math.round(frameToX(snapLine.current)) + 0.5;
+      ctx.strokeStyle = "#facc15";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, RULER);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Playhead.
+    const px = Math.round(frameToX(playhead.frame)) + 0.5;
+    if (px >= -10 && px <= width + 10) drawPlayhead(ctx, px, height);
+
+    if (!project.clips.length && !drop.current) {
+      ctx.fillStyle = "#5c5c5c";
+      ctx.font = "13px 'Geist Variable', system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Drag media or elements here", width / 2, RULER + (height - RULER) / 2);
+      ctx.textAlign = "left";
+    }
+  }
+
+  /** The lanes (rows, clips, a drop's ghost, the in/out dimming) and the ruler. */
+  function drawLanes(ctx: CanvasRenderingContext2D, project: Project, width: number, height: number) {
+    const state = useEditor.getState();
     const { ppf, scrollY } = useView.getState();
     const { rows } = layoutRows(project);
     const selected = new Set(state.selection);
@@ -661,7 +752,7 @@ export function Timeline() {
       const y = row.y - scrollY + 1;
       const h = row.h - 2;
       if (y > height || y + h < RULER) continue;
-      drawClip(ctx, project, clip, x0, x1, y, h, selected.has(clip.id), row.track, statuses, width, requestDraw);
+      drawClip(ctx, project, clip, x0, x1, y, h, selected.has(clip.id), row.track, statuses, width, assetLoaded);
     }
 
     // Drop ghost: picture where it will land and, for footage with sound, its audio too.
@@ -694,49 +785,7 @@ export function Timeline() {
     dimOutsideSpan(ctx, width, height, ppf, useView.getState().scrollX, marks);
     ctx.restore();
 
-    // Razor guide.
-    if (state.tool === "razor" && hover.current && hover.current.y > RULER && !drag.current) {
-      const hit = clipAt(hover.current.x, hover.current.y);
-      if (hit) {
-        const row = rows.find((candidate) => candidate.track.id === hit.clip.track)!;
-        const x = Math.round(hover.current.x) + 0.5;
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 2]);
-        ctx.beginPath();
-        ctx.moveTo(x, row.y - scrollY);
-        ctx.lineTo(x, row.y - scrollY + row.h);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
-
-    if (drag.current?.kind === "marquee") drawMarquee(ctx, drag.current);
-
-    // Snap guide.
-    if (snapLine.current !== null) {
-      const x = Math.round(frameToX(snapLine.current)) + 0.5;
-      ctx.strokeStyle = "#facc15";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, RULER);
-      ctx.lineTo(x, height);
-      ctx.stroke();
-    }
-
     drawRuler(ctx, width, fps, ppf, useView.getState().scrollX, preview.sections, marks, project.markers);
-
-    // Playhead.
-    const px = Math.round(frameToX(playhead.frame)) + 0.5;
-    if (px >= -10 && px <= width + 10) drawPlayhead(ctx, px, height);
-
-    if (!project.clips.length && !drop.current) {
-      ctx.fillStyle = "#5c5c5c";
-      ctx.font = "13px 'Geist Variable', system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("Drag media or elements here", width / 2, RULER + (height - RULER) / 2);
-      ctx.textAlign = "left";
-    }
   }
 
   const videoTracks = project.tracks.filter((track) => track.kind === "video");

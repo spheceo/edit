@@ -192,16 +192,18 @@ export const useEditor = create<EditorState>((set, get) => ({
     scheduleSave(0);
   },
 
+  // Not mid-drag: the next move would re-apply the gesture from its base over
+  // the undone project, and its end would push it and drop the redo steps.
   undo: () => {
-    const { past, project, future } = get();
-    if (!past.length || !project || refuseReadOnly()) return;
+    const { past, project, future, gestureBase } = get();
+    if (gestureBase || !past.length || !project || refuseReadOnly()) return;
     // The Drive link follows Drive, not the edit: undo keeps it.
     set({ project: { ...past[past.length - 1], drive: project.drive }, past: past.slice(0, -1), future: [project, ...future], dirty: true });
     scheduleSave(0);
   },
   redo: () => {
-    const { past, project, future } = get();
-    if (!future.length || !project || refuseReadOnly()) return;
+    const { past, project, future, gestureBase } = get();
+    if (gestureBase || !future.length || !project || refuseReadOnly()) return;
     set({ project: { ...future[0], drive: project.drive }, past: [...past, project], future: future.slice(1), dirty: true });
     scheduleSave(0);
   },

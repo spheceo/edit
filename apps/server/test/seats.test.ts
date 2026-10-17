@@ -34,7 +34,7 @@ test("faces_are_each_angles_medians_in_any_order", () => {
 });
 
 // The scene finder is native (`seatsScenes`); the stub doesn't have it.
-test.skipIf(findAddon() === null)("a_room_seen_again_is_the_same_angle_however_short", () => {
+test.skipIf(findAddon() === null)("a_room_seen_again_is_the_same_angle_however_short", async () => {
   useNative(null);
   const frame = (shade: number, stripe: boolean) =>
     Array.from({ length: WIDE * HIGH }, (_, index) => (stripe && index % WIDE < WIDE / 2 ? Math.min(shade + 120, 255) : shade));
@@ -43,7 +43,7 @@ test.skipIf(findAddon() === null)("a_room_seen_again_is_the_same_angle_however_s
   for (let i = 0; i < 50; i++) frames.push(...frame(40, true));
   for (let i = 0; i < 10; i++) frames.push(...frame(200, false));
   for (let i = 0; i < 10; i++) frames.push(...frame(40, true));
-  const { scenes, angles } = native().seatsScenes(Buffer.from(frames));
+  const { scenes, angles } = await native().seatsScenes(Buffer.from(frames));
   expect(angles).toBe(1);
   expect(scenes.map((scene) => scene[2])).toEqual([0, null, 0]);
 });

@@ -462,7 +462,7 @@ export function createStub(): Stub {
     censorIssues() {
       return { issues: [], pending: [] };
     },
-    seatsScenes() {
+    async seatsScenes() {
       notInStub("seatsScenes");
     },
     async desktopFiles() {

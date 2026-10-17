@@ -154,7 +154,7 @@ export async function seats(source: string, transcript: Transcript): Promise<Sea
   if (found !== null && sameNames(found.names, wanted)) return found;
   const started = performance.now();
   const frames = await framesOf(source, cache);
-  const { scenes, angles: middles } = native().seatsScenes(frames);
+  const { scenes, angles: middles } = await native().seatsScenes(frames);
   const work = join(os.tmpdir(), `edit-seats-${process.pid}-${media.mediaKey(source)}`);
   try {
     fs.mkdirSync(work, { recursive: true });

@@ -1,0 +1,230 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script>window.CESIUM_BASE_URL = "https://cdn.jsdelivr.net/npm/cesium@1.146.0/Build/Cesium/";</script>
+<script src="https://cdn.jsdelivr.net/npm/cesium@1.146.0/Build/Cesium/Cesium.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/cesium@1.146.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<style>html,body{margin:0;overflow:hidden;background:#000}#map{position:absolute;left:0;top:0}</style></head><body><div id="map"></div>
+<script>
+const C = __CONFIG__;
+const send = (type, body) => fetch(location.href, { method: "POST", headers: { "content-type": type, "x-map-info": JSON.stringify(info) }, body });
+// A refused tile request carries the relay's reason (e.g. today's maps used up).
+const fail = (error) => send("text/plain", (error && error.statusCode && String(error.response || error.statusCode)) || String((error && error.stack) || error));
+window.onerror = (message) => fail(message);
+const info = { start: Date.now() };
+// Exactly the picture's size (the window is a little larger).
+document.getElementById("map").style.cssText += `;width:${C.width}px;height:${C.height}px`;
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+// Checks often: a moving shot asks this for every frame.
+async function until(test, ms) { const end = Date.now() + ms; while (!test() && Date.now() < end) await sleep(25); return test(); }
+// Grade the imagery before the building marker is drawn, so it stays bright
+// and sharp. This is baked into every still and moving-shot frame.
+function createMapLook(width, height) {
+  const stops = -1, vignette = 0.55;
+  // Exposure in linear light, cached as an sRGB lookup rather than calculated
+  // for every pixel of every frame.
+  const exposure = Uint8Array.from({ length: 256 }, (_, i) => {
+    const s = i / 255, linear = (s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4) * 2 ** stops;
+    return Math.round(255 * (linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1 / 2.4) - 0.055));
+  });
+  return (source, ctx) => {
+    ctx.drawImage(source, 0, 0, width, height);
+    const picture = ctx.getImageData(0, 0, width, height), pixels = picture.data;
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = exposure[pixels[i]]; pixels[i + 1] = exposure[pixels[i + 1]]; pixels[i + 2] = exposure[pixels[i + 2]];
+    }
+    ctx.putImageData(picture, 0, 0);
+    ctx.save();
+    ctx.translate(width / 2, height / 2); ctx.scale(width / 2, height / 2);
+    const shade = ctx.createRadialGradient(0, 0, 0.25, 0, 0, Math.SQRT2);
+    shade.addColorStop(0, "rgba(0,0,0,0)"); shade.addColorStop(0.45, "rgba(0,0,0,0.08)"); shade.addColorStop(1, `rgba(0,0,0,${vignette})`);
+    ctx.fillStyle = shade; ctx.fillRect(-1, -1, 2, 2);
+    ctx.restore();
+  };
+}
+// The place in glowing red, drawn over the picture: the building's outline
+// raised to its roof (heights read off the 3D tiles), or a ring on the ground.
+// Where it lands in the picture goes back as info.building (left, top, right, bottom px).
+let roof = null;
+async function mark(ctx, ground, opacity) {
+  const scene = window.viewer.scene;
+  const toScreen = (lon, lat, height) => scene.cartesianToCanvasCoordinates(Cesium.Cartesian3.fromDegrees(lon, lat, height));
+  const scale = C.width / scene.canvas.width;
+  info.building = null;
+  const frame = (points) => {
+    const xs = points.map((p) => p.x * scale), ys = points.map((p) => p.y * scale);
+    info.building = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map(Math.round);
+  };
+  const path = (points) => { ctx.beginPath(); points.forEach((p, i) => (i ? ctx.lineTo(p.x * scale, p.y * scale) : ctx.moveTo(p.x * scale, p.y * scale))); ctx.closePath(); };
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.shadowColor = "rgba(255, 30, 30, 0.95)";
+  ctx.shadowBlur = 36 * C.height / 1080;
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 4 * C.height / 1080;
+  ctx.strokeStyle = "rgba(255, 60, 60, 0.95)";
+  ctx.fillStyle = "rgba(255, 25, 25, 0.38)";
+  if (C.ring) {
+    const middle = C.ring.reduce((sum, p) => [sum[0] + p[0] / C.ring.length, sum[1] + p[1] / C.ring.length], [0, 0]);
+    // Measured once, so a moving shot's outline holds steady.
+    if (roof === null) {
+      roof = ground + 8;
+      try {
+        const inside = C.ring.map((p) => Cesium.Cartographic.fromDegrees(middle[0] + (p[0] - middle[0]) * 0.6, middle[1] + (p[1] - middle[1]) * 0.6)).concat([Cesium.Cartographic.fromDegrees(middle[0], middle[1])]);
+        const heights = (await scene.sampleHeightMostDetailed(inside)).map((c) => c.height).filter(Number.isFinite).sort((a, b) => a - b);
+        if (heights.length) roof = Math.max(ground + 3, heights[Math.floor(heights.length / 2)]);
+      } catch (error) { console.log(error); }
+    }
+    const base = C.ring.map((p) => toScreen(p[0], p[1], ground));
+    const top = C.ring.map((p) => toScreen(p[0], p[1], roof));
+    if (base.concat(top).some((p) => !p)) return ctx.restore();
+    frame(base.concat(top));
+    for (let i = 0; i + 1 < base.length; i++) { path([base[i], base[i + 1], top[i + 1], top[i]]); ctx.fill(); }
+    path(top); ctx.fill(); ctx.stroke();
+    for (let i = 0; i < base.length; i++) { ctx.beginPath(); ctx.moveTo(base[i].x * scale, base[i].y * scale); ctx.lineTo(top[i].x * scale, top[i].y * scale); ctx.stroke(); }
+  } else {
+    const ring = [];
+    for (let i = 0; i <= 64; i++) {
+      const angle = (i / 64) * Math.PI * 2, meters = 28;
+      ring.push(toScreen(C.lon + (meters * Math.cos(angle)) / (111320 * Math.cos((C.lat * Math.PI) / 180)), C.lat + (meters * Math.sin(angle)) / 110540, ground + 1));
+    }
+    if (ring.some((p) => !p)) return ctx.restore();
+    frame(ring);
+    path(ring); ctx.fill(); ctx.lineWidth *= 1.5; ctx.stroke();
+  }
+  ctx.restore();
+}
+
+(async () => {
+  Cesium.GoogleMaps.mapTilesApiEndpoint = new Cesium.Resource({ url: C.relay + "/" });
+  Cesium.GoogleMaps.defaultApiKey = "relay";
+  const viewer = (window.viewer = new Cesium.Viewer("map", {
+    globe: false, baseLayer: false, baseLayerPicker: false, geocoder: false, homeButton: false, sceneModePicker: false,
+    navigationHelpButton: false, animation: false, timeline: false, fullscreenButton: false, infoBox: false,
+    selectionIndicator: false, contextOptions: { webgl: { preserveDrawingBuffer: true } },
+  }));
+  viewer.resolutionScale = 1;
+  const scene = viewer.scene;
+  // No camera collision: while only coarse tiles are in, it takes the camera
+  // for underground and lifts it away from the place.
+  scene.screenSpaceCameraController.enableInputs = false;
+  scene.screenSpaceCameraController.enableCollisionDetection = false;
+  const tileset = await Cesium.createGooglePhotorealistic3DTileset({ onlyUsingWithGoogleGeocoder: true }, { showCreditsOnScreen: true, maximumScreenSpaceError: 6, enableCollision: false });
+  scene.primitives.add(tileset);
+  const place = Cesium.Cartographic.fromDegrees(C.lon, C.lat);
+  viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(C.lon, C.lat, 900) });
+  await until(() => tileset.tilesLoaded, 30000);
+  // The ground: the lowest of a few points around the place (the place itself
+  // may be a roof or a tree).
+  let ground = 0;
+  try {
+    const around = [place];
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2, meters = 45;
+      around.push(Cesium.Cartographic.fromDegrees(C.lon + (meters * Math.cos(angle)) / (111320 * Math.cos((C.lat * Math.PI) / 180)), C.lat + (meters * Math.sin(angle)) / 110540));
+    }
+    const heights = (await scene.sampleHeightMostDetailed(around)).map((c) => c && c.height).filter(Number.isFinite);
+    if (heights.length) ground = Math.min(...heights);
+  } catch (error) { info.sampleError = String(error); }
+  info.ground = ground;
+  const center = Cesium.Cartesian3.fromDegrees(C.lon, C.lat, ground + 8);
+  const aim = (heading = C.heading, range = C.range) => {
+    viewer.camera.lookAt(center, new Cesium.HeadingPitchRange(Cesium.Math.toRadians(heading), Cesium.Math.toRadians(-C.pitch), range));
+    viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+  };
+  aim();
+  await sleep(500);
+  await until(() => tileset.tilesLoaded, 60000);
+  // Aim again in case anything moved the camera, and let any new tiles in.
+  aim();
+  await sleep(300);
+  await until(() => tileset.tilesLoaded, 20000);
+  info.loaded = tileset.tilesLoaded;
+  info.range = Math.round(Cesium.Cartesian3.distance(viewer.camera.positionWC, center));
+
+  info.seconds = (Date.now() - info.start) / 1000;
+  await sleep(1500);
+  const out = document.createElement("canvas");
+  out.width = C.width; out.height = C.height;
+  const ctx = out.getContext("2d", { willReadFrequently: true });
+  const drawMap = createMapLook(C.width, C.height);
+  // Measure the building even before its reveal, so labels can track it from
+  // any frame. Timing is in source seconds, independent of capture speed.
+  const draw = async (frame = 0) => {
+    viewer.render();
+    ctx.clearRect(0, 0, C.width, C.height);
+    drawMap(scene.canvas, ctx);
+    if (C.highlight) {
+      const elapsed = frame / C.fps - C.highlight_after;
+      const t = C.highlight_fade > 0 ? Math.max(0, Math.min(1, elapsed / C.highlight_fade)) : Number(elapsed >= 0);
+      await mark(ctx, ground, t * t * (3 - 2 * t));
+    }
+  };
+  const picture = (type, quality) => new Promise((done) => out.toBlob(done, type, quality));
+  if (!C.frames) {
+    await draw();
+    return send("image/png", await picture("image/png"));
+  }
+  // A moving shot: the camera circles the place (orbit degrees, positive to
+  // its right) and closes in (push, a fraction of the range) at a constant
+  // speed, aimed at it throughout. Frames go to the server, which makes the
+  // footage; those it already has (C.have, from an attempt cut short) aren't
+  // made again.
+  const have = new Set(C.have || []);
+  const pose = (i) => {
+    const t = C.frames > 1 ? i / (C.frames - 1) : 0;
+    aim(C.heading - C.orbit * t, C.range * (1 - C.push * t));
+  };
+  // The camera moves every frame and never rests: ask for every tile a view
+  // needs at once rather than holding back while it moves, and more at a time
+  // (they all come through the one relay).
+  tileset.foveatedScreenSpaceError = false;
+  tileset.cullRequestsWhileMoving = false;
+  Cesium.RequestScheduler.maximumRequestsPerServer = 48;
+  const capture = async (i) => {
+    await draw(i);
+    const sent = await fetch(`${location.href}/frame/${i}`, { method: "POST", headers: { "content-type": "image/jpeg" }, body: await picture("image/jpeg", 0.9) });
+    if (!sent.ok) throw new Error(`frame ${i}: ${sent.status}`);
+  };
+  // 1) The first frame, with all its tiles in (it stands in for the shot
+  //    until the rest is made).
+  pose(0);
+  viewer.render();
+  await until(() => tileset.tilesLoaded, 20000);
+  if (!have.has(0)) await capture(0);
+  // 2) Where the building is in every frame: the camera's path is fixed, so
+  //    this needs no tiles beyond the place's own. Sent at once, so the editor
+  //    can carry on while the frames are made.
+  const scratch = document.createElement("canvas").getContext("2d");
+  info.track = [];
+  for (let i = 0; i < C.frames; i++) {
+    pose(i);
+    viewer.render();
+    if (C.highlight) await mark(scratch, ground, 1);
+    info.track.push(C.highlight ? info.building : null);
+  }
+  info.ready = (Date.now() - info.start) / 1000;
+  await fetch(location.href, { method: "POST", headers: { "content-type": "application/json", "x-map-phase": "ready" }, body: JSON.stringify(info) });
+  // 3) Fly the path once, resting briefly every so often, so the tiles the
+  //    frames need are mostly in before any is captured.
+  const step = Math.max(1, Math.round(C.fps / 3));
+  for (let i = step; i < C.frames; i += step) {
+    if (have.has(i)) continue;
+    pose(i);
+    viewer.render();
+    await until(() => tileset.tilesLoaded, 3000);
+  }
+  info.warmed = (Date.now() - info.start) / 1000;
+  // 4) The frames: each waits a moment for any tile still coming (the first
+  //    half second longer, so the shot never opens on missing tiles).
+  info.incomplete = 0;
+  for (let i = 1; i < C.frames; i++) {
+    if (have.has(i)) continue;
+    pose(i);
+    viewer.render();
+    await sleep(0);
+    if (!(await until(() => tileset.tilesLoaded, i < C.fps / 2 ? 5000 : 1000))) info.incomplete++;
+    await capture(i);
+  }
+  info.seconds = (Date.now() - info.start) / 1000;
+  await fetch(location.href, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(info) });
+})().catch(fail);
+</script></body></html>

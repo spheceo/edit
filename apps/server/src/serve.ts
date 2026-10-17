@@ -6,10 +6,12 @@
 import type { Server } from "bun";
 
 import { createApp, hostname, type App } from "./app.ts";
+import { setListening } from "./broll.ts";
 import * as diag from "./diag.ts";
 import { registerEditingTools } from "./edit_tools.ts";
 import { ExportRegistry } from "./exports.ts";
 import { listen } from "./http/server.ts";
+import { registerMediaTools } from "./media_tools.ts";
 import { allowedHosts } from "./http/host.ts";
 import { holdLock } from "./media_drive/layout.ts";
 import { initNative } from "./native/index.ts";
@@ -150,7 +152,9 @@ export function start(home: string, host: string | null, port: number): { app: A
     machine: hostname() ?? "this machine",
     services: { exports: new ExportRegistry(), updater: new update.Updater(home) },
   });
+  // Tools register here; WP5's and WP6's register as their modules load (through seams).
   registerEditingTools();
+  registerMediaTools();
   seams.speakers.watch(app);
   // Cloud projects (Settings → Cloud): sync, locks, and letting them go on the way out.
   optional("cloud", () => seams.cloudProjects.start(app));
@@ -171,6 +175,8 @@ export function start(home: string, host: string | null, port: number): { app: A
     try {
       servers.push(listen(app, router, address.ip, address.port) as Server<unknown>);
       console.log(`edit: http://${shown}`);
+      // The first address is where map pages reach this server (main.rs set broll::LISTENING once).
+      if (servers.length === 1) setListening(address.ip, address.port);
     } catch (error) {
       console.error(`edit: could not bind ${shown}: ${diag.messageOf(error)}`);
     }

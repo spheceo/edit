@@ -13,6 +13,7 @@ import { serveFile } from "./http/files.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
 import { baseRouter } from "./http/server.ts";
 import { importPaths } from "./import.ts";
+import { routes as mediaRoutes } from "./media_tools.ts";
 import { check as checkDrive, status as driveStatus } from "./media_drive/layout.ts";
 import { isMediaPath } from "./media.ts";
 import type { ExportOptions, Project, Style } from "./model.ts";
@@ -27,7 +28,11 @@ import { VERSION } from "./version.ts";
 
 type Context = RouteContext<App>;
 
-/** Every route the server answers: server.rs's router, every package's routes in it. */
+/**
+ * Every route the server answers: server.rs's router, every package's routes
+ * in it (WP8's library, drive, agent and map routes are one `media_tools`
+ * call; WP6's captions, watch and transcribe are `captions.routes`).
+ */
 export function buildRouter(): Router<App> {
   const router = baseRouter()
     .get("/api/health", health)
@@ -49,7 +54,7 @@ export function buildRouter(): Router<App> {
     .post("/api/projects/{id}/import", importMedia)
     .post("/api/projects/{id}/upload", uploadMedia, { bodyLimit: null })
     .get("/api/projects/{id}/media-status", mediaStatus);
-  seams.library.routes(router);
+  mediaRoutes(router);
   seams.research.routes(router);
   seams.captions.routes(router);
   seams.subtitles.routes(router);
@@ -58,15 +63,11 @@ export function buildRouter(): Router<App> {
     .get("/api/projects/{id}/frame/{frame}", framePng)
     .post("/api/projects/{id}/export", startExport)
     .post("/api/projects/{id}/export/cancel", cancelExport);
-  seams.drive.routes(router);
   router
     .get("/api/export/encoders", exportEncoders)
     .get("/api/exports/file", exportedFile)
     .post("/api/exports/reveal", revealExport);
-  seams.agent.routes(router);
-  seams.watch.routes(router);
   seams.script.routes(router);
-  seams.broll.routes(router);
   router.get("/api/fs", browse);
   return router;
 }

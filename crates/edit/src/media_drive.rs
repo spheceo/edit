@@ -192,16 +192,11 @@ impl Layout {
         }
     }
 
-    /// The name a file's cache key uses: a file in a media folder is named by
-    /// its place in the data folder, so moving it there (or importing it
-    /// there in the first place) keeps its key.
+    /// The name a file's cache key uses under this layout (the running
+    /// server's is the engine's, `key_path`).
+    #[cfg(test)]
     pub fn key_path(&self, path: &Path) -> PathBuf {
-        for dir in &self.known {
-            if let Ok(rest) = path.strip_prefix(dir) {
-                return self.home.join(rest);
-            }
-        }
-        path.to_path_buf()
+        edit_engine::util::key_path_in(&self.home, &self.known, path)
     }
 
     /// Where a data-folder file goes on the media drive.
@@ -214,25 +209,16 @@ impl Layout {
     }
 }
 
-/// The running server's layout, for cache keys (`media::media_key` has no
-/// store at hand). Unset (tests, CLI) means keys are plain paths.
-static PUBLISHED: std::sync::RwLock<Option<Layout>> = std::sync::RwLock::new(None);
-
+/// Gives the running server's layout to the engine, for cache keys
+/// (`media::media_key` has no store at hand). Unpublished (tests, CLI), keys
+/// are plain paths.
 pub fn publish(layout: &Layout) {
-    *PUBLISHED
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(layout.clone());
+    edit_engine::util::use_media_folders(layout.home.clone(), layout.known.clone());
 }
 
 /// [`Layout::key_path`] with the running server's layout.
 pub fn key_path(path: &Path) -> PathBuf {
-    match &*PUBLISHED
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    {
-        Some(layout) => layout.key_path(path),
-        None => path.to_path_buf(),
-    }
+    edit_engine::util::key_path(path)
 }
 
 /// Whether the media folder can be used: its drive is mounted and the folder

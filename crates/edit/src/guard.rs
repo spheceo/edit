@@ -8,25 +8,9 @@ use std::panic::AssertUnwindSafe;
 
 use futures_util::FutureExt;
 
-/// What a panic said, for logs and the job's error.
-pub fn message(payload: &(dyn Any + Send)) -> String {
-    payload
-        .downcast_ref::<&str>()
-        .map(|text| (*text).to_owned())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown panic".to_owned())
-}
-
-fn crashed(what: &str, payload: &(dyn Any + Send)) -> String {
-    let message = message(payload);
-    crate::diag::error("crash", format!("{what} crashed: {message}"));
-    format!("{what} crashed ({message}); this is a bug in Edit")
-}
-
-/// Runs `work`, turning a panic into an error naming `what`.
-pub fn catch<T>(what: &str, work: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(AssertUnwindSafe(work)).map_err(|payload| crashed(what, &*payload))
-}
+/// What a panic said, and `catch`: the engine's (its crashes are logged
+/// through `diag` like the server's own).
+pub use edit_engine::util::{catch, crashed, message};
 
 /// `catch` for a future.
 pub async fn catch_async<T>(what: &str, work: impl Future<Output = T>) -> Result<T, String> {

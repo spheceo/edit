@@ -111,7 +111,7 @@ pub struct Small {
 
 impl Small {
     /// `image` box-filtered down to at most ANALYSIS_WIDTH wide.
-    pub fn of(image: &Image) -> Self {
+    pub(crate) fn of(image: &Image) -> Self {
         let step = image.width.div_ceil(ANALYSIS_WIDTH).max(1);
         let (width, height, pixels) = shrink(image.pixels, image.width, image.height, step);
         let (qw, qh, quarter) = shrink(&pixels, width, height, 4);

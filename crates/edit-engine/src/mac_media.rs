@@ -615,7 +615,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "edit-{name}-{}-{}",
             std::process::id(),
-            crate::store::now_ms()
+            crate::util::now_ms()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -686,7 +686,7 @@ mod tests {
         assert!(reader.frame(10.0, &mut pixels, Order::Rgba, false).unwrap());
 
         let rotated = dir.join("rotated.mp4");
-        let made = Command::new(crate::tools::ffmpeg())
+        let made = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-display_rotation", "90", "-i"])
             .arg(&path)
             .args(["-c", "copy"])
@@ -698,7 +698,7 @@ mod tests {
         assert_eq!((info.width, info.height), (32, 64));
         let mut reader = Reader::open(&rotated, 32, 64).unwrap();
         reader.frame(0.0, &mut pixels, Order::Rgba, false).unwrap();
-        let reference = Command::new(crate::tools::ffmpeg())
+        let reference = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-threads", "1", "-i"])
             .arg(&rotated)
             .args([
@@ -732,7 +732,7 @@ mod tests {
     fn reads_past_the_video_track_when_the_sound_is_longer() {
         let dir = temp_dir("longer-sound");
         let path = dir.join("short-video.mp4");
-        let made = Command::new(crate::tools::ffmpeg())
+        let made = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-f", "lavfi", "-i"])
             .arg("testsrc2=size=64x32:rate=30:duration=1")
             .args(["-f", "lavfi", "-i", "sine=duration=3:sample_rate=48000"])
@@ -758,7 +758,7 @@ mod tests {
     fn a_leading_empty_edit_shows_the_first_picture_not_black() {
         let dir = temp_dir("empty-edit");
         let path = dir.join("late-start.mp4");
-        let made = Command::new(crate::tools::ffmpeg())
+        let made = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-f", "lavfi", "-i"])
             .arg("testsrc2=size=64x32:rate=30:duration=1")
             .args(["-vf", "setpts=PTS+0.1/TB", "-c:v", "libx264"])
@@ -786,7 +786,7 @@ mod tests {
         let dir = temp_dir("sound");
         let path = dir.join("clicks.m4a");
         // A click every 0.25 s on the left, silence on the right.
-        let made = Command::new(crate::tools::ffmpeg())
+        let made = Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-f", "lavfi", "-i"])
             .arg("aevalsrc='if(lt(mod(n\\,12000)\\,24)\\,0.8\\,0)|0':s=48000:d=3")
             .args(["-c:a", "aac", "-b:a", "256k"])

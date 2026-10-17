@@ -28,14 +28,9 @@ use crate::server::App;
 /// Identifies Edit to the services it calls.
 const USER_AGENT: &str = "edit-video-editor/0.1 (+https://github.com/spheceo/edit)";
 
-const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"];
-
-/// A still image (png, jpg…), which imports as a clip of footage.
-pub fn is_image_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-}
+/// A still image (png, jpg…), which imports as a clip of footage: the
+/// engine's list, so probing and importing agree.
+pub use edit_engine::media::is_image_path;
 
 /// Seconds of footage a still becomes: room to hold it, push in and trim.
 const STILL_SECONDS: u32 = 30;

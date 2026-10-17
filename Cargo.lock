@@ -942,9 +942,9 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
- "cc",
  "ebur128",
  "edit-core",
+ "edit-engine",
  "edit-render",
  "futures-util",
  "mime_guess",
@@ -968,6 +968,23 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "edit-engine"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "cc",
+ "ebur128",
+ "edit-core",
+ "edit-render",
+ "parking_lot",
+ "png 0.18.1",
+ "pollster",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

@@ -125,11 +125,9 @@ pub fn adopt_shell_env() {
 const ORIGINAL: &str = "EDIT_EXE";
 
 /// The binary that was started (not the `Edit` link `run_as_edit` runs as).
+/// The engine reads the same variable to find the FFmpeg shipped beside it.
 pub fn original_exe() -> std::io::Result<PathBuf> {
-    match std::env::var_os(ORIGINAL) {
-        Some(path) => Ok(PathBuf::from(path)),
-        None => std::env::current_exe(),
-    }
+    edit_engine::util::original_exe()
 }
 
 /// macOS shows a bare binary in the Dock by its file name, so the `edit`

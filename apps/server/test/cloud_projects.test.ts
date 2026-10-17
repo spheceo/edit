@@ -450,7 +450,7 @@ test("the cloud routes: settings (private, checked), status, open and close, tak
     expect(JSON.parse(fs.readFileSync(`${home}/cloud.json`, "utf8"))).toEqual({ holder: "Sphe's Mac" });
     expect(await call("POST", "/api/cloud", { holder: 5 })).toEqual({
       status: 422,
-      body: { text: "Failed to deserialize the JSON body into the target type: holder: invalid type: integer `5`, expected a string" },
+      body: { text: "Failed to deserialize the JSON body into the target type: holder: invalid type: integer `5`, expected a string at line 1 column 11" },
     });
 
     const id = store.create("Case", SETTINGS_1080).project.id;

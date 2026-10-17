@@ -84,6 +84,17 @@ function config(side: SideName, home: string, user: string, env: Record<string, 
   };
 }
 
+/**
+ * The HOME both servers see: empty (no ~/.edit, no Codex sign-in), but with the
+ * login keychain linked in, without which headless Chrome (research, maps) hangs.
+ */
+function standInHome(user: string): void {
+  fs.mkdirSync(nodePath.join(user, "Library"), { recursive: true });
+  const keychains = nodePath.join(process.env.HOME ?? "", "Library/Keychains");
+  const link = nodePath.join(user, "Library/Keychains");
+  if (fs.existsSync(keychains) && !fs.existsSync(link)) fs.symlinkSync(keychains, link);
+}
+
 // ---------------------------------------------------------------------------
 // The seed home: made once by the Rust server (cloud off), then cloned.
 
@@ -121,7 +132,7 @@ async function makeSeed(seedDir: string, fixtures: Fixtures): Promise<Seed> {
   const home = nodePath.join(seedDir, "home");
   const user = nodePath.join(seedDir, "user");
   fs.mkdirSync(nodePath.join(home, "projects"), { recursive: true });
-  fs.mkdirSync(user, { recursive: true });
+  standInHome(user);
   for (const { id } of REAL) {
     const source = nodePath.join(process.env.HOME ?? "", ".edit/projects", `${id}.json`);
     const project = remapProject(source, fixtures, JSON.parse(fs.readFileSync(source, "utf8")).name as string);
@@ -239,7 +250,7 @@ const seed = await makeSeed(nodePath.join(dir, "seed"), fixtures);
 const runDir = nodePath.join(dir, "run");
 fs.rmSync(runDir, { recursive: true, force: true });
 const user = nodePath.join(runDir, "user");
-fs.mkdirSync(user, { recursive: true });
+standInHome(user);
 // --replay FILE: the mock answers from a recording (an earlier run's <dir>/recording.json) where it has one.
 const replayFile = flag("--replay");
 const replay = replayFile === undefined ? null : new Map(Object.entries(JSON.parse(fs.readFileSync(replayFile, "utf8")) as Record<string, { status: number; type: string; body: string }>));

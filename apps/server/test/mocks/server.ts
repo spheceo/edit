@@ -166,5 +166,10 @@ export class MockServer {
     // Google.
     this.on("POST", "/token", () => Response.json({ access_token: "mock-access-token", expires_in: 3600, token_type: "Bearer" }));
     this.on("GET", "/drive/v3/files", () => Response.json({ files: [] }));
+    // As endpoints.ts (and endpoints.rs) send them: the Google host first in the path.
+    this.on("POST", "/oauth2.googleapis.com/token", () =>
+      Response.json({ access_token: "mock-access-token", expires_in: 3600, token_type: "Bearer" }),
+    );
+    this.on("GET", "/www.googleapis.com/drive/v3/files", () => Response.json({ files: [] }));
   }
 }

@@ -1211,7 +1211,7 @@ async function renderMoving(app: App, job: MapShotJob, render: MapRender): Promi
  * The finished footage in place of its first frame: the stand-in media
  * becomes the moving shot (same id), so every clip using it plays it.
  */
-async function swapInMap(app: App, projectId: string, first: string, out: string): Promise<void> {
+export async function swapInMap(app: App, projectId: string, first: string, out: string): Promise<void> {
   let failure: string | null = null;
   try {
     await swapMedia(app, projectId, first, out);

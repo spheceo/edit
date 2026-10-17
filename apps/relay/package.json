@@ -1,0 +1,11 @@
+{
+  "name": "edit-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "cf deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.151.1"
+  }
+}

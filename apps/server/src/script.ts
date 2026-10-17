@@ -420,7 +420,7 @@ function timestamp(text: string, at: number): [number, number] | null {
 
 const DASHES = ["-", "–", "—", "‑", "‐", "−"];
 
-function findRanges(text: string): Range[] {
+export function findRanges(text: string): Range[] {
   const ranges: Range[] = [];
   let at = 0;
   while (at < text.length) {

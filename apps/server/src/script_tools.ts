@@ -404,8 +404,9 @@ const COLLECT: Struct = {
 async function researchCollect(context: RouteContext<App>): Promise<Response> {
   const { app } = context;
   const id = context.params.id ?? "";
-  projectOr404(app, id);
+  // axum ran the body's extractor before the handler.
   const given = await body(context, COLLECT);
+  projectOr404(app, id);
   const queries = (given.queries as string[]).map((query) => trim(query)).filter((query) => query !== "");
   if (queries.length === 0) throw bad("say what to search for");
   if (research.collecting(id)) throw bad("already collecting images for this project");

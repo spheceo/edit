@@ -39,3 +39,46 @@ proved is now exercised for real by `crates/edit-native/test/*.test.ts`.
 5. **Signing.** Always re-sign after `bun build --compile` (see above).
 
 Nothing else in section 1.2 needed changing: errors as `Error.message`, async on napi's tokio runtime (not `AsyncTask`), `Buffer`s for images, and the JSON-string boundary for rich types all behave as the plan assumes.
+
+## The real addon (`crates/edit-native`)
+
+- The whole engine loads and works in Bun: wgpu/Metal frame renders, a full
+  export with FFmpeg and progress, AVFoundation previews, loudness, Vision
+  (cached faces), the flock and `reexec`. `just native-test`: 31 tests, ~3 s.
+- Embedded in `bun build --compile` it still renders on the GPU from another
+  directory with the `.node` moved away (`just native-compiled`). A debug
+  addon makes a ~79 MB binary; the release size is still to measure.
+- `@napi-rs/cli` 3.10.8 (a dev dependency of `crates/edit-native`) builds it;
+  `napi.dtsHeaderFile` prepends `dts-header.d.ts`, which imports the ts-rs
+  types, so `index.d.ts` names `Project`-side types (`Probe`, `Plan`,
+  `ExportOptions`, `Media`, …) instead of `any`.
+
+## Where the bindings differ from plan section 1.3, and why
+
+- **`ProjectInput`** is a TS union in the header; on the Rust side it's one
+  `#[napi(object)]` (`ProjectArg` in `index.d.ts`, with optional `ref` and
+  `json`), because napi objects can't be unions. `json` wins when both are given.
+- **`projectCommit(id, rev, json)`**: `rev` is the rev the project has once
+  saved (what a later `ref` names). Its `id` is set to `id`, as `Store::update` does.
+- **`projectLoad`** doesn't check that the file's id matches its name or
+  resolve media paths: both need the store's layout, so TS does them (resolving
+  doesn't change whether a project validates).
+- **`lightPreview(source)`** and **`mediaFrames`** use the cache dir from `init`
+  rather than taking one.
+- **`ExportJob.start`** takes the plan from `exportPlan` and the final output
+  path (with its extension, in a folder that exists); `wait()` rejects with
+  `"cancelled"` whenever `cancel()` was called, whatever the engine said as it
+  stopped (the Rust server sent the engine's own error in its `cancelled`
+  event; nearly always also "cancelled"). Progress comes every 200 ms, so a
+  very short export may report none.
+- **Added `textBlock(text, px, weight, lineHeight)`**: the desktop profile's
+  layout (moving to TS) measures its Notepad lines with the renderer's text
+  layout; there was no binding for that.
+- **`seatsScenes`** returns the last scene's end as `Infinity` (the engine's
+  `f64::INFINITY`; JSON would have made it `null`).
+- **`loudnessSpans`**: a silent stretch's integrated loudness is the gate's
+  floor (-70), not `-Infinity`.
+- **`shutdown()`** needed a way to stop the frame renderer: `FrameRenderer::stop`
+  (new; the Rust server never calls it).
+- **`init`** can be called once: FFmpeg, the cache dir and the log sink keep the
+  first values (`OnceLock`s in the engine); `setMediaFolders` changes the folders.

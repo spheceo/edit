@@ -245,8 +245,11 @@ fn operation_on(
         }
         "transition" => transition(project, args),
         "evidence_board" => evidence_board(project, args),
+        "evidence_card" => crate::graphics::evidence_card(project, args),
+        "date_title" => crate::graphics::date_title(project, args),
+        "place_label" => crate::graphics::place_label(project, args),
         other => Err(format!(
-            "unknown op {other}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, tidy_tracks"
+            "unknown op {other}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, evidence_card, date_title, place_label, tidy_tracks"
         )),
     }
 }
@@ -1259,6 +1262,11 @@ pub fn audit(project: &Project) -> Value {
             }
         }
     }
+    // A found photo or still as plain B-roll (letterboxed, often): pictures
+    // go on screen only inside a designed graphic (an evidence card or board).
+    issues.extend(crate::graphics::bare_stills(project));
+    // The date in a box or glowing: it's white with a drop shadow only.
+    issues.extend(crate::graphics::date_drift(project));
     issues.sort_by_key(Value::to_string);
     json!({"issues":issues, "frames":project.duration(), "clips":project.clips.len()})
 }

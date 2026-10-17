@@ -12,6 +12,7 @@ mod edit_plan;
 mod edit_review;
 mod export;
 mod footage_search;
+mod graphics;
 mod guard;
 mod library;
 mod loudness;

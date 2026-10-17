@@ -28,6 +28,8 @@ struct Shot {
     y: Option<f64>,
     scale: Option<f64>,
     smooth: Option<bool>,
+    /// A picture's label under it on its evidence card.
+    label: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -252,6 +254,24 @@ pub fn cover(project: &mut Project, args: &Value) -> Result<(Value, Vec<String>)
 
     // The shots, on the lowest free track above the footage.
     let shots_track = free_above(project, None, cut.start, cut.end);
+    // The B-roll look over the whole stretch, above the footage shots (and
+    // under a picture's evidence card, which stays in colour over its
+    // greyed backdrop).
+    let look = if args.look {
+        let track = free_above(project, Some(&shots_track), cut.start, cut.end);
+        let id = project.fresh_id("c");
+        project.clips.push(clip_from(json!({
+                "id": id, "track": track, "start": cut.start, "duration": cut.end - cut.start,
+                "color": "blue", "name": format!("{prefix}B-roll look"),
+                "type": "adjustment",
+                "grade": { "exposure": 0.0, "contrast": 0.0, "saturation": -0.6, "temperature": 0.0, "vignette": 0.3 },
+                "opacity": 1.0,
+            }))?);
+        Some(id)
+    } else {
+        None
+    };
+
     let mut placed = Vec::new();
     let mut smooth = Vec::new();
     for (index, (shot, (start, end))) in args.shots.iter().zip(&spans).enumerate() {
@@ -285,12 +305,38 @@ pub fn cover(project: &mut Project, args: &Value) -> Result<(Value, Vec<String>)
                     needs
                 ));
         }
-        let scale = shot.scale.unwrap_or(1.0);
-        let [from, to] = shot.push.unwrap_or([1.0, 1.08]);
         let label = shot
             .name
             .clone()
             .unwrap_or_else(|| format!("shot {}", index + 1));
+        // A picture is never a bare still: it goes on as an evidence card.
+        if still {
+            let blur = free_above(project, Some(&shots_track), *start, *end);
+            let photo = free_above(project, Some(&blur), *start, *end);
+            let over = free_above(project, Some(&photo), *start, *end);
+            let tracks = crate::graphics::CardTracks {
+                backdrop: shots_track.clone(),
+                blur,
+                photo,
+                label: over,
+            };
+            let clips = crate::graphics::card(
+                project,
+                &shot.media,
+                (*start, *end),
+                shot.label.as_deref(),
+                &tracks,
+                &format!("{prefix}B-roll: {label} · card "),
+            )
+            .map_err(|error| format!("shot {}: {error}", index + 1))?;
+            placed.push(json!({
+                "clip": clips.first(), "name": label, "evidence_card": clips,
+                "start": *start as f64 / fps, "end": *end as f64 / fps,
+            }));
+            continue;
+        }
+        let scale = shot.scale.unwrap_or(1.0);
+        let [from, to] = shot.push.unwrap_or([1.0, 1.08]);
         let id = project.fresh_id("c");
         let clip = clip_from(json!({
             "id": id, "track": shots_track, "start": start, "duration": duration,
@@ -313,22 +359,6 @@ pub fn cover(project: &mut Project, args: &Value) -> Result<(Value, Vec<String>)
             "source": [shot.source_in, shot.source_in + needs],
         }));
     }
-
-    // The B-roll look over the whole stretch, above the shots.
-    let look = if args.look {
-        let track = free_above(project, Some(&shots_track), cut.start, cut.end);
-        let id = project.fresh_id("c");
-        project.clips.push(clip_from(json!({
-                "id": id, "track": track, "start": cut.start, "duration": cut.end - cut.start,
-                "color": "blue", "name": format!("{prefix}B-roll look"),
-                "type": "adjustment",
-                "grade": { "exposure": 0.0, "contrast": 0.0, "saturation": -0.6, "temperature": 0.0, "vignette": 0.3 },
-                "opacity": 1.0,
-            }))?);
-        Some(id)
-    } else {
-        None
-    };
 
     // The vertical drop into the cut-in, straddling the cut above everything.
     let drop = if drop && cut.start >= 3 {

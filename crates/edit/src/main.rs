@@ -18,6 +18,7 @@ mod mcp;
 mod media;
 mod media_drive;
 mod mix;
+mod motion;
 mod render;
 mod research;
 mod script;

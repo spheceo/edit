@@ -318,6 +318,50 @@ test("ensure_local fetches the proxies another machine made, saves where they ar
   }
 });
 
+test("a media replaced while its proxy downloads keeps its own source and gets its own proxy", async () => {
+  const fixture = home("cloud-replaced");
+  const { store, app, cleanup } = fixture;
+  try {
+    const cache = store.cacheDir();
+    mock.cloud.put("edit/proxies/sha256/aaaa.mp4", "proxy A");
+    mock.cloud.put("edit/proxies/sha256/bbbb.mp4", "proxy B");
+    const cloudOf = (hex: string) => ({ source: `sha256:${hex}`, original: `edit/originals/sha256/${hex}/clip.mov`, proxy: `edit/proxies/sha256/${hex}.mp4`, size: 7 });
+    const id = store.create("replaced", SETTINGS).project.id;
+    await store.update(id, "test", (project) => {
+      project.media.push({ ...media("m1", "/elsewhere/a.mp4"), cloud: cloudOf("aaaa") });
+    });
+    testCloud(fixture.home, [[id, null]]).attach(store);
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = () => {};
+    const downloading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    mock.cloud.beforeGet = async (key) => {
+      if (key !== "edit/proxies/sha256/aaaa.mp4") return;
+      started();
+      await held;
+    };
+    const ensured = cloudMedia.ensureLocal(app, id);
+    await downloading;
+    // Source A becomes B under the same media id while A's proxy downloads.
+    await store.update(id, "test", (project) => {
+      project.media[0] = { ...media("m1", "/elsewhere/b.mp4"), cloud: cloudOf("bbbb") };
+    });
+    release();
+    await ensured;
+    const after = store.get(id)!.project.media[0]!;
+    expect(after.cloud).toEqual(cloudOf("bbbb"));
+    expect(cloudMedia.isLocalCopy(cache, after.path)).toBe(true);
+    expect(fs.readFileSync(after.path, "utf8")).toBe("proxy B");
+  } finally {
+    mock.cloud.beforeGet = null;
+    cleanup();
+  }
+});
+
 test("exports read the originals through presigned URLs, share the proxy's waveform, and refuse a file only another machine has", async () => {
   const fixture = home("cloud-export");
   const { dir, store, cleanup } = fixture;

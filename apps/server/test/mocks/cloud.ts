@@ -53,6 +53,8 @@ export class CloudMock {
   readonly convex = new ConvexMock();
   /** Objects per r2/list page (the relay's is 1000). */
   listPage = 1000;
+  /** Waited on before an R2 GET of its key is answered (a slow download). */
+  beforeGet: ((key: string) => Promise<void>) | null = null;
   /** R2 PUTs answered 500 while above 0 (each counts one down). */
   failPuts = 0;
   /** When set, /v1/cloud/* needs `Bearer <token>` (the relay's CLOUD_TOKEN). */
@@ -192,7 +194,10 @@ export class CloudMock {
     });
     // R2 itself, behind the presigned URLs.
     mock.on("PUT", /^\/r2\//, (request) => this.r2Put(request));
-    mock.on("GET", /^\/r2\//, (request) => this.r2Get(request));
+    mock.on("GET", /^\/r2\//, async (request) => {
+      await this.beforeGet?.(decodeKey(request.path.slice("/r2/".length)));
+      return this.r2Get(request);
+    });
     // Convex's file storage (upload URLs and body URLs).
     mock.on("POST", /^\/convex\/upload\//, (request) => {
       const type = request.headers.get("content-type") ?? "";

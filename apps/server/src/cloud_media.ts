@@ -996,8 +996,12 @@ async function ensureLocalNow(app: App, id: string): Promise<void> {
   throw new Error(`${fetched}; ${missing}`);
 }
 
-/** Fetches the proxies of `id`'s cloud media that aren't here (`ensureLocal`). */
-async function fetchProxies(app: App, id: string): Promise<void> {
+/**
+ * Fetches the proxies of `id`'s cloud media that aren't here (`ensureLocal`).
+ * A media replaced while its proxy downloaded (another source under the same
+ * id) isn't given the old one; its own is fetched in another round.
+ */
+async function fetchProxies(app: App, id: string, round = 0): Promise<void> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
   const cache = app.store.cacheDir();
@@ -1022,7 +1026,7 @@ async function fetchProxies(app: App, id: string): Promise<void> {
   }
   // A media whose upload another machine hasn't finished has no proxy yet.
   const unready: string[] = [];
-  const jobs: [string, string, string][] = [];
+  const jobs: [string, string, string, string][] = [];
   for (const [media, name, source, proxy] of missing) {
     let key = proxy ?? readyProxy(records.find((record) => record.source === source) ?? null);
     if (key !== null && !cloud.validKey(key)) key = null;
@@ -1030,21 +1034,21 @@ async function fetchProxies(app: App, id: string): Promise<void> {
       unready.push(name);
       continue;
     }
-    jobs.push([media, key, localPath(cache, key)]);
+    jobs.push([media, key, localPath(cache, key), source]);
   }
   // Three at a time; the ones already in this machine's cache cost nothing.
-  const results: ({ ok: [string, string, string] } | { error: string })[] = [];
+  const results: ({ ok: [string, string, string, string] } | { error: string })[] = [];
   for (let at = 0; at < jobs.length; at += PARALLEL) {
     const batch = jobs.slice(at, at + PARALLEL);
     results.push(
       ...(await Promise.all(
-        batch.map(async ([media, key, local]) => {
+        batch.map(async ([media, key, local, source]) => {
           if (!isFile(local) && !enabled) {
             return { error: `${key} isn't on this machine and the cloud isn't set up (EDIT_RELAY_TOKEN)` };
           }
           try {
             await diag.timeOnAsync("cloud", "cloud: fetch proxy", key, () => fetchKey(key, local));
-            return { ok: [media, key, canonical(local)] as [string, string, string] };
+            return { ok: [media, key, canonical(local), source] as [string, string, string, string] };
           } catch (error) {
             return { error: failure(error) };
           }
@@ -1054,19 +1058,26 @@ async function fetchProxies(app: App, id: string): Promise<void> {
   }
   const errors: string[] = [];
   if (unready.length > 0) errors.push(`still uploading from another machine: ${unready.join(", ")}`);
-  const found: [string, string, string][] = [];
+  const found: [string, string, string, string][] = [];
   for (const result of results) {
     if ("ok" in result) found.push(result.ok);
     else errors.push(result.error);
   }
+  // Media replaced while their proxies downloaded: fetched again.
+  let replaced = 0;
   if (found.length > 0) {
     const repoint = (project: Project) => {
-      for (const [mediaId, key, local] of found) {
+      replaced = 0;
+      for (const [mediaId, key, local, source] of found) {
         const media = project.media.find((item) => item.id === mediaId);
-        if (media?.cloud !== undefined && media.cloud !== null) {
-          media.path = local;
-          media.cloud.proxy = key;
+        if (media?.cloud === undefined || media.cloud === null) continue;
+        // Still the media it was fetched for, and still not here.
+        if (media.cloud.source !== source || isFile(media.path)) {
+          replaced += 1;
+          continue;
         }
+        media.path = local;
+        media.cloud.proxy = key;
       }
     };
     // One change (one undo step, one event), retried if another writer lands in between.
@@ -1097,8 +1108,11 @@ async function fetchProxies(app: App, id: string): Promise<void> {
     // Previews, thumbnails and waveforms for the files now here.
     for (const [mediaId] of found) {
       const media = mediaOf(saved, mediaId);
-      if (media !== undefined) app.media.ensure(media.path, probeOf(media));
+      if (media !== undefined && isFile(media.path)) app.media.ensure(media.path, probeOf(media));
     }
+  }
+  if (replaced > 0 && round < 3) {
+    await fetchProxies(app, id, round + 1);
   }
   if (errors.length > 0) {
     diag.warn("cloud", `${id}: ${errors.join("; ")}`);

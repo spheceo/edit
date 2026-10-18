@@ -26,6 +26,8 @@ function createMapLook(width, height) {
     return Math.round(255 * (linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1 / 2.4) - 0.055));
   });
   return (source, ctx) => {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.drawImage(source, 0, 0, width, height);
     const picture = ctx.getImageData(0, 0, width, height), pixels = picture.data;
     for (let i = 0; i < pixels.length; i += 4) {
@@ -101,13 +103,17 @@ async function mark(ctx, ground, opacity) {
     navigationHelpButton: false, animation: false, timeline: false, fullscreenButton: false, infoBox: false,
     selectionIndicator: false, contextOptions: { webgl: { preserveDrawingBuffer: true } },
   }));
-  viewer.resolutionScale = 1;
+  // Drawn at 1.5x and scaled down into the frame, with FXAA: a city seen from
+  // far off is thousands of small roofs, which shimmered from frame to frame
+  // and smeared at 1x (the interrogation demo's Van Nuys shot).
+  viewer.resolutionScale = 1.5;
   const scene = viewer.scene;
+  scene.postProcessStages.fxaa.enabled = true;
   // No camera collision: while only coarse tiles are in, it takes the camera
   // for underground and lifts it away from the place.
   scene.screenSpaceCameraController.enableInputs = false;
   scene.screenSpaceCameraController.enableCollisionDetection = false;
-  const tileset = await Cesium.createGooglePhotorealistic3DTileset({ onlyUsingWithGoogleGeocoder: true }, { showCreditsOnScreen: true, maximumScreenSpaceError: 6, enableCollision: false });
+  const tileset = await Cesium.createGooglePhotorealistic3DTileset({ onlyUsingWithGoogleGeocoder: true }, { showCreditsOnScreen: true, maximumScreenSpaceError: 4, enableCollision: false });
   scene.primitives.add(tileset);
   const place = Cesium.Cartographic.fromDegrees(C.lon, C.lat);
   viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(C.lon, C.lat, 900) });

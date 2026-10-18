@@ -117,3 +117,13 @@ test("the cache is read back, its endless last scene included", async () => {
     cleanup();
   }
 });
+
+test("seats_count_the_speakers_seen_on_camera", () => {
+  const dot = { x: 0, y: 0, h: 100 };
+  // One angle with the person questioned facing the camera, one cutaway angle with her again: one person seen.
+  const alone = new Seats([], [new Map([["Stephanie (Suspect)", dot]]), new Map([["Stephanie (Suspect)", dot]])], ["Detective", "Stephanie (Suspect)"]);
+  expect(alone.seen()).toBe(1);
+  const both = new Seats([], [new Map([["Suspect", dot], ["Officer", dot]])], ["Officer", "Suspect"]);
+  expect(both.seen()).toBe(2);
+  expect(new Seats().seen()).toBe(0);
+});

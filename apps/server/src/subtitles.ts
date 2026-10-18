@@ -1035,7 +1035,12 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
       const media = mediaOf(project, mediaId);
       if (media === undefined) return;
       try {
-        seated.set(mediaId, await seats.seats(media.path, transcript));
+        // Lines go by faces only where two or more speakers are on camera:
+        // with one (the person questioned facing it, the detectives behind
+        // it) their lines jumped up beside the face while everyone else's
+        // sat at the bottom; then every line is bottom middle.
+        const found = await seats.seats(media.path, transcript);
+        if (found.seen() >= 2) seated.set(mediaId, found);
       } catch (error) {
         diag.warn("subtitles", `no face positions for ${media.name}: ${diag.messageOf(error)}; bottom middle`);
       }

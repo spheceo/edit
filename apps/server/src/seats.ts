@@ -58,6 +58,11 @@ export class Seats {
     readonly names: string[] = [],
   ) {}
 
+  /** How many of the speakers are seen on camera anywhere in the footage. */
+  seen(): number {
+    return new Set(this.angles.flatMap((faces) => [...faces.keys()])).size;
+  }
+
   /** Where `name`'s face is at `at` seconds into the source, if they're seen there. */
   dot(name: string, at: number): Dot | null {
     const scene = this.scenes.find(([start, end]) => start <= at && at < end);

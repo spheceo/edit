@@ -63,6 +63,8 @@ export { routes } from "./captions_tools.ts";
 export const WATCH_MODEL = "gpt-6-luna";
 /** Names caption clips so a second run replaces the first. */
 const NAME = "Caption";
+/** Where a callout's line ends below a face: this share of the face's height under its chin (the neck). */
+const NECK = 0.15;
 /** How long a finished caption stays up after its last word (seconds). */
 const HOLD = 0.35;
 /** Camera shake on captions, in pixels at 1080p. */
@@ -1543,11 +1545,14 @@ export async function followRegion(
         `No face Edit can follow clearly in that box at ${fixed(time, 2)}s (faces found there, project pixels from the top-left: ${listed(atIndex)}). A callout's leader points only at a clearly visible face: give the box of the right person's face from that list, or drop the leader (style.leader null) and keep the callout a plain label.`,
       );
     }
+    // A callout's line ends at the neck, just under the chin, whatever
+    // place or offset says: an end on the face ("on", a nudge from the
+    // centre) put the interrogation demo's line across Lazarus's mouth.
     const points = faces.smooth(
       track.map(([, face]) => {
         const f = faces.inFrame(size, transform, framePx, face);
         const x = f32(f[0] + f[2]) / 2.0;
-        const y = place === "above" ? f[1] : place === "below" ? f[3] : f32(f[1] + f[3]) / 2.0;
+        const y = f32(f[3] + NECK * f32(f[3] - f[1]));
         return [x, y] as [number, number];
       }),
     );
@@ -1558,8 +1563,8 @@ export async function followRegion(
       const [x, y] = points[index]!;
       const local = shot.start + ((sampleIndex / faces.RATE - shot.source_in) / shot.speed) * fps - target.start;
       if (local < -1.0 || local > target.duration + 1.0) continue;
-      xs.push(key(local, x + offset[0]));
-      ys.push(key(local, y + offset[1]));
+      xs.push(key(local, x));
+      ys.push(key(local, y));
     }
     if (xs.length === 0) throw new Error("the face isn't on screen while the callout is up");
     const count = xs.length;

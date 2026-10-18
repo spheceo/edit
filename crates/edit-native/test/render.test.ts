@@ -125,7 +125,8 @@ describe("export", () => {
     await Bun.sleep(20);
     expect(progress.length).toBeGreaterThan(0);
     expect(progress).toEqual([...progress].sort((a, b) => a - b));
-    expect(Math.max(...progress)).toBeLessThan(1);
+    // The last report can land as it finishes.
+    expect(Math.max(...progress)).toBeLessThanOrEqual(1);
     expect(job.wait()).rejects.toThrow("already waited");
   }, 120_000);
 

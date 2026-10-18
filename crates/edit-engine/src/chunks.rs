@@ -307,20 +307,26 @@ pub enum Piece {
     Old { file: PathBuf, at: i64 },
 }
 
-/// How far a keyframe's decoding time leads its presentation (seconds) in
-/// `file`: the out point of a stretch copied out of it is the next chunk's
-/// keyframe's decoding time, not its frame's.
-pub fn lead(file: &Path) -> Result<f64, String> {
+/// What a stretch copied out of the last export needs to know of it: how
+/// far a keyframe's decoding time leads its presentation (the out point of a
+/// stretch is the next chunk's keyframe's decoding time, not its frame's), and
+/// where its keyframes are shown (seconds), so each stretch starts on its own.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OldFile {
+    pub lead: f64,
+    pub keyframes: Vec<f64>,
+}
+
+/// Reads `file`'s picture packets (not decoded) for [`OldFile`].
+pub fn old_file(file: &Path) -> Result<OldFile, String> {
     let output = Command::new(crate::util::ffprobe())
         .args([
             "-v",
             "error",
             "-select_streams",
             "v:0",
-            "-read_intervals",
-            "%+#1",
             "-show_entries",
-            "packet=pts_time,dts_time",
+            "packet=pts_time,dts_time,flags",
             "-of",
             "csv=p=0",
         ])
@@ -329,20 +335,24 @@ pub fn lead(file: &Path) -> Result<f64, String> {
         .output()
         .map_err(|error| format!("ffprobe: {error}"))?;
     let text = String::from_utf8_lossy(&output.stdout);
-    let line = text
-        .lines()
-        .next()
-        .ok_or("the last export has no picture")?;
-    let mut parts = line.split(',').map(str::trim);
-    let pts: f64 = parts
-        .next()
-        .and_then(|value| value.parse().ok())
-        .ok_or("the last export's picture has no times")?;
-    let dts: f64 = parts
-        .next()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(pts);
-    Ok((pts - dts).max(0.0))
+    let mut old = OldFile::default();
+    for (index, line) in text.lines().enumerate() {
+        let mut parts = line.split(',').map(str::trim);
+        let pts: Option<f64> = parts.next().and_then(|value| value.parse().ok());
+        let dts: Option<f64> = parts.next().and_then(|value| value.parse().ok());
+        let key = parts.next().is_some_and(|flags| flags.starts_with('K'));
+        let Some(pts) = pts else { continue };
+        if index == 0 {
+            old.lead = (pts - dts.unwrap_or(pts)).max(0.0);
+        }
+        if key {
+            old.keyframes.push(pts);
+        }
+    }
+    if old.keyframes.is_empty() {
+        return Err("the last export has no picture".to_owned());
+    }
+    Ok(old)
 }
 
 /// A path as FFmpeg's concat list quotes it.
@@ -351,8 +361,9 @@ fn quoted(path: &Path) -> String {
 }
 
 /// The concat list joining `pieces` (with their chunks' lengths) at `fps`;
-/// `lead` is the last export's ([`lead`]), when anything comes from it.
-pub fn concat_list(pieces: &[(Piece, i64)], fps: f64, lead: f64) -> String {
+/// `old` is the last export's ([`old_file`]), when anything comes from it.
+/// Fails when a stretch to copy doesn't start on one of its keyframes.
+pub fn concat_list(pieces: &[(Piece, i64)], fps: f64, old: &OldFile) -> Result<String, String> {
     // Only the picture (track 1 in a chunk and in the joined file): the last
     // export's sound starts early (AAC's priming), and concat would shift the
     // picture by that much if it counted it.
@@ -364,10 +375,21 @@ pub fn concat_list(pieces: &[(Piece, i64)], fps: f64, lead: f64) -> String {
                 text.push_str(&format!("file {}\nduration {duration}\n", quoted(path)));
             }
             Piece::Old { file, at } => {
-                let inpoint = *at as f64 / fps;
+                // Just past the keyframe the chunk starts on, as the file has
+                // it: seeking to its exact time can land on the keyframe
+                // before (a stretch copied out of 97 s came out 12 frames
+                // long), and copies drift from the frame's own time by ticks.
+                let shown = *at as f64 / fps;
+                let keyframe = old
+                    .keyframes
+                    .iter()
+                    .copied()
+                    .find(|time| (time - shown).abs() < 0.5 / fps)
+                    .ok_or_else(|| format!("the last export has no keyframe at frame {at}"))?;
+                let inpoint = keyframe + 0.000_002;
                 // Stops before the next chunk's keyframe, which is decoded
                 // `lead` before it's shown; half a frame for rounding.
-                let outpoint = (*at + frames) as f64 / fps - lead - 0.5 / fps;
+                let outpoint = (*at + frames) as f64 / fps - old.lead - 0.5 / fps;
                 text.push_str(&format!(
                     "file {}\ninpoint {inpoint}\noutpoint {outpoint}\nduration {duration}\n",
                     quoted(file)
@@ -375,7 +397,7 @@ pub fn concat_list(pieces: &[(Piece, i64)], fps: f64, lead: f64) -> String {
             }
         }
     }
-    text
+    Ok(text)
 }
 
 /// The video packets in `file`'s first picture stream (read, not decoded).
@@ -445,10 +467,20 @@ mod tests {
                 120,
             ),
         ];
-        let text = concat_list(&pieces, 30.0, 1.0 / 30.0);
+        let old = OldFile {
+            lead: 1.0 / 30.0,
+            keyframes: vec![0.0, 2.0, 4.0001],
+        };
+        let text = concat_list(&pieces, 30.0, &old).unwrap();
         assert!(text.contains("file '/c/a b.mp4'\nduration 4\n"));
-        assert!(text.contains("file '/out/it'\\''s.mp4'\ninpoint 4\noutpoint 7.95"));
+        assert!(text.contains("file '/out/it'\\''s.mp4'\ninpoint 4.000102\noutpoint 7.95"));
         assert!(text.contains("duration 4\n"));
+        // A stretch that doesn't start on a keyframe can't be copied.
+        let none = OldFile {
+            lead: 0.0,
+            keyframes: vec![0.0],
+        };
+        assert!(concat_list(&pieces, 30.0, &none).is_err());
     }
 
     #[test]

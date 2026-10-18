@@ -1455,15 +1455,15 @@ fn export_chunked(
             return Err("chunks were encoded with different settings".to_owned());
         }
     }
-    let lead = match &last {
+    let old = match &last {
         Some(last)
             if pieces
                 .iter()
                 .any(|(piece, _)| matches!(piece, Piece::Old { .. })) =>
         {
-            chunks::lead(&last.output)?
+            chunks::old_file(&last.output)?
         }
-        _ => 0.0,
+        _ => chunks::OldFile::default(),
     };
     let chapters = crate::export::chapters_file(options, plan, fps)
         .map(|text| -> Result<ExportFile, String> {
@@ -1473,7 +1473,7 @@ fn export_chunked(
         })
         .transpose()?;
     let concat = beside(output, ".chunks.txt");
-    std::fs::write(&concat.0, chunks::concat_list(&pieces, fps, lead))
+    std::fs::write(&concat.0, chunks::concat_list(&pieces, fps, &old)?)
         .map_err(|error| error.to_string())?;
     let sound = match (&sound_key, &old_sound) {
         (None, _) => None,
@@ -2835,21 +2835,30 @@ mod tests {
         assert!(made.chunks.len() >= 2, "{:?}", made.chunks);
         assert_eq!(made.output, one);
         shows(&one, |frame| (frame / 30) % 2 == 1, 3000);
-        // Clip 96 turns blue: only the last chunk changes.
+        // Clip 96 (frames 2880 to 2909) turns blue: the chunk it's in is new,
+        // and every chunk that ends before it is copied as it was. (A chunk
+        // may or may not end on its first frame now: content decides.)
         let changed = cuts(&red, &blue, &[96], false);
         let two = run(&changed, "two.mp4");
         let again = manifest(&cache);
         assert_eq!(again.output, two);
-        assert_eq!(made.chunks.len(), again.chunks.len());
-        for (before, after) in made
-            .chunks
-            .iter()
-            .zip(&again.chunks)
-            .take(made.chunks.len() - 1)
-        {
-            assert_eq!(before, after);
-        }
-        assert_ne!(made.chunks.last(), again.chunks.last());
+        let before_the_change = |manifest: &crate::chunks::Manifest| {
+            manifest
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.at + chunk.frames < 2880)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(before_the_change(&made), before_the_change(&again));
+        let covering = |manifest: &crate::chunks::Manifest| {
+            manifest
+                .chunks
+                .iter()
+                .find(|chunk| (chunk.at..chunk.at + chunk.frames).contains(&2880))
+                .map(|chunk| chunk.key.clone())
+        };
+        assert_ne!(covering(&made), covering(&again));
         assert_eq!(made.sound, again.sound, "only the picture changed");
         shows(
             &two,

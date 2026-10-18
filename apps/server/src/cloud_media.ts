@@ -452,16 +452,39 @@ export interface Upload {
   /** The proxy's key and this machine's copy, when it goes up too. */
   proxy: string | null;
   local: string | null;
+  /** `file` is Edit's own copy (a browser upload): removed once it's all up, never before. */
+  removeAfter?: boolean;
 }
 
-/** Uploads imports left running, by the file imported (the upload route keeps its copy until they're done). */
-const uploading = new Map<string, Promise<void>>();
+/** Uploads imports left running, by the file imported: whether they all went up. */
+const uploading = new Map<string, { key: string; home: string; upload: Upload; done: Promise<boolean> }>();
 /** One at a time, beside whatever else uses the network. */
 const uploadSlot = new Semaphore(1);
 
-/** Resolves once the uploads importing `file` started are done (at once when there are none). */
-export function uploaded(file: string): Promise<void> {
-  return uploading.get(file) ?? Promise.resolve();
+/**
+ * Resolves once the uploads importing `file` started are done (at once when
+ * there are none): true when they all went up, false when one failed (it's
+ * tried again when Edit starts).
+ */
+export function uploaded(file: string): Promise<boolean> {
+  return uploading.get(file)?.done ?? Promise.resolve(true);
+}
+
+/**
+ * Removes `file` (Edit's own copy of a browser upload) once its upload is
+ * safely in the cloud: now if nothing is uploading it, else when that
+ * upload succeeds, here or after a restart. A failed upload keeps it, as
+ * the only copy of the original.
+ */
+export function removeWhenUploaded(file: string): void {
+  const running = uploading.get(file);
+  if (running === undefined) {
+    fs.rmSync(file, { force: true });
+    return;
+  }
+  running.upload.removeAfter = true;
+  // Noted with the job, so a restart's retry removes it too.
+  jobs.begin(running.home, "upload", "-", { ...running.upload }, running.upload.source);
 }
 
 /**
@@ -471,16 +494,24 @@ export function uploaded(file: string): Promise<void> {
  */
 export function uploadLater(home: string, upload: Upload): void {
   const key = jobs.begin(home, "upload", "-", { ...upload }, upload.source);
-  const done = uploadSlot
+  const entry = { key, home, upload, done: Promise.resolve(true) };
+  entry.done = uploadSlot
     .with(() => diag.timeOnAsync("cloud", "cloud: upload import", upload.file, () => runUpload(upload)))
     .then(
-      () => jobs.end(home, key),
-      (error: unknown) => diag.error("cloud", `uploading ${upload.file}: ${scrub(failure(error))} (tried again when Edit starts)`),
+      () => {
+        jobs.end(home, key);
+        if (upload.removeAfter === true) fs.rmSync(upload.file, { force: true });
+        return true;
+      },
+      (error: unknown) => {
+        diag.error("cloud", `uploading ${upload.file}: ${scrub(failure(error))} (tried again when Edit starts)`);
+        return false;
+      },
     )
     .finally(() => {
-      if (uploading.get(upload.file) === done) uploading.delete(upload.file);
+      if (uploading.get(upload.file) === entry) uploading.delete(upload.file);
     });
-  uploading.set(upload.file, done);
+  uploading.set(upload.file, entry);
 }
 
 async function runUpload(upload: Upload): Promise<void> {

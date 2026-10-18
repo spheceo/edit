@@ -163,8 +163,10 @@ export interface CloudMediaSeam {
   forExport(project: Project, start: number, end: number, cache: string): Promise<[Project, Originals]>;
   /** Puts a file from this machine in the cloud (deduplicated by content) and returns the media to add; footage's uploads finish in the background. */
   importLocal(cache: string, path: string, probe: Probe, name: string): Promise<Made>;
-  /** Resolves once the background uploads importing `file` are done. */
-  uploaded(file: string): Promise<void>;
+  /** Resolves once the background uploads importing `file` are done: whether they all went up. */
+  uploaded(file: string): Promise<boolean>;
+  /** Removes Edit's own copy of a browser upload once it's in the cloud (kept while it isn't). */
+  removeWhenUploaded(file: string): void;
   /** Starts again an import's upload a restart cut short (its job's args). */
   resumeUpload(home: string, args: Record<string, unknown>): void;
   /** `<cache>/cloud/tmp`, for files on their way up (old leftovers removed). */

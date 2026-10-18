@@ -577,8 +577,9 @@ async function uploadMedia(context: Context): Promise<Response> {
     // copy here. Sounds and pictures stay where they are (`cloud_media`).
     const media = added[0] === undefined ? undefined : project?.media.find((item) => item.id === added[0]);
     if (media?.cloud !== undefined && media.cloud !== null && fs.existsSync(target) && media.path !== canonical(target)) {
-      // Once it's gone up (the import answered before the upload finished).
-      void seams.cloudMedia.uploaded(canonical(target)).finally(() => fs.rmSync(target, { force: true }));
+      // Once it's gone up (the import answered before the upload finished);
+      // kept while it hasn't, as the only copy of the original.
+      seams.cloudMedia.removeWhenUploaded(canonical(target));
     }
     return json({ rev, added, project });
   } finally {

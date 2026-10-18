@@ -56,6 +56,34 @@ function projectWith(items: Media[]): Project {
   return project;
 }
 
+test("a browser upload's copy is removed only once its upload went up, after a restart too", async () => {
+  const fixture = home("cloud-upload-fails");
+  const { dir, store, cleanup } = fixture;
+  try {
+    const video = `${dir}/upload.mov`;
+    fs.writeFileSync(video, "only copy of the original");
+    mock.cloud.failPuts = 1000;
+    await cloudMedia.importLocal(store.cacheDir(), video, VIDEO, "upload.mov");
+    cloudMedia.removeWhenUploaded(video);
+    expect(await cloudMedia.uploaded(video)).toBe(false);
+    // Kept: it's the only copy, and the retry needs it.
+    expect(fs.readFileSync(video, "utf8")).toBe("only copy of the original");
+    const noted = (JSON.parse(fs.readFileSync(`${fixture.home}/jobs.json`, "utf8")) as { kind: string; args: Record<string, unknown> }[]).filter(
+      (job) => job.kind === "upload",
+    );
+    expect(noted.length).toBe(1);
+    expect(noted[0]!.args.removeAfter).toBe(true);
+    // Edit starts again with the network back: the retry goes up and then removes it.
+    mock.cloud.failPuts = 0;
+    cloudMedia.resumeUpload(fixture.home, noted[0]!.args);
+    expect(await cloudMedia.uploaded(video)).toBe(true);
+    expect(fs.existsSync(video)).toBe(false);
+  } finally {
+    mock.cloud.failPuts = 0;
+    cleanup();
+  }
+});
+
 test("analysis_sits_beside_the_source", () => {
   expect(cloudMedia.analysisPrefix("sha256:abc")).toBe("edit/analysis/sha256/abc/");
   expect(cloudMedia.analysisPrefix("drive:F1#100-2000")).toBe("edit/analysis/drive/F1/100-2000/");

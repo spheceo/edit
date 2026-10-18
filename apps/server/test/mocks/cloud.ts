@@ -53,6 +53,8 @@ export class CloudMock {
   readonly convex = new ConvexMock();
   /** Objects per r2/list page (the relay's is 1000). */
   listPage = 1000;
+  /** R2 PUTs answered 500 while above 0 (each counts one down). */
+  failPuts = 0;
   /** When set, /v1/cloud/* needs `Bearer <token>` (the relay's CLOUD_TOKEN). */
   token: string | null = null;
   private nextUpload = 1;
@@ -212,6 +214,10 @@ export class CloudMock {
     }
     if (!request.query.has("X-Amz-Signature")) return new Response("<Error><Code>AccessDenied</Code><Message>no signature</Message></Error>", { status: 403 });
     const key = decodeKey(request.path.slice("/r2/".length));
+    if (this.failPuts > 0) {
+      this.failPuts -= 1;
+      return new Response("<Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>", { status: 500 });
+    }
     const uploadId = request.query.get("uploadId");
     if (uploadId !== null) {
       const upload = this.uploads.get(uploadId);

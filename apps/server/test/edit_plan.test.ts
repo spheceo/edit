@@ -418,6 +418,20 @@ test("capitals_and_a_still_light_leak_survive_a_plan", () => {
   expect(glow.type === "adjustment" && [glow.grade.leak, glow.grade.leak_x]).toEqual([0.8, -1]);
 });
 
+test("words_under_a_blur_are_flagged", () => {
+  const p = project("plan");
+  apply(p, [
+    { op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 90, fill: [0.5, 0.5, 0.5, 1] } },
+    { op: "add", clip: { type: "text", track: "new", name: "Tag", start: 0, duration: 60, text: "TERMINATION INTERVIEW", style: { size: 30 }, transform: { x: 0, y: -450 } } },
+    { op: "add", clip: { type: "text", track: "new", name: "Clear", start: 0, duration: 60, text: "Elsewhere", transform: { x: 0, y: 400 } } },
+    // A monitor's redaction on a track above both, over the first only.
+    { op: "add", clip: { type: "adjustment", track: "new", name: "Redaction", start: 0, duration: 90, blur: { radius: 45, x: 450, y: -450, width: 1100, height: 180 } } },
+  ]);
+  const under = kinds(p, "text_under_blur");
+  expect(under.length).toBe(1);
+  expect(under[0]!.clip).toBe(clipNamed(p, "Tag").id);
+});
+
 test("unresolved_reference_and_bad_final_state_fail", () => {
   const p = project("plan");
   expect(() => apply(p, [{ op: "delete", select: { ids: [{ $ref: "missing" }] } }])).toThrow(

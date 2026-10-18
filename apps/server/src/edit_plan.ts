@@ -27,7 +27,7 @@ import {
   trackOf,
 } from "./project.ts";
 import { isBug } from "./guard.ts";
-import { asInt, compareStrings, f32Saved as f32, idiv, jsonForSerde, remEuclid, round, trim } from "./rust.ts";
+import { asInt, charCount, compareStrings, f32Saved as f32, idiv, jsonForSerde, remEuclid, round, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { HIT } from "./sfx.ts";
 import { readStruct, SerdeError, type Struct } from "./serde.ts";
@@ -1195,6 +1195,25 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   issues.push(...graphics.dateDrift(project));
   // A subtitle or intro caption on someone's face (faces found so far).
   issues.push(...(hooks.textOnFaces(project) as Record<string, unknown>[]));
+  // Words under a blur (a redaction or a title's blur on a track above
+  // them) are blurred with the picture: text goes above every blur over it.
+  const blurs = project.clips.filter(
+    (clip) => clip.type === "adjustment" && visible(clip.track) && (clip.blur?.radius ?? 0) > 0 && (clip.opacity ?? 1) > 0,
+  );
+  for (const text of project.clips) {
+    if (text.type !== "text" || !visible(text.track)) continue;
+    const [x, y] = [text.transform?.x ?? 0, text.transform?.y ?? 0];
+    const halfWidth = (text.style.size * 0.3 * Math.min(charCount(text.text), 40)) / 2;
+    const halfHeight = text.style.size * 0.75;
+    const over = blurs.find((blur) => {
+      if (blur.type !== "adjustment" || blur.blur === undefined || blur.blur === null) return false;
+      if (level(blur.track) <= level(text.track) || blur.start >= clipEnd(text) || clipEnd(blur) <= text.start) return false;
+      const [width, height] = [blur.blur.width ?? 0, blur.blur.height ?? 0];
+      if (width <= 0 || height <= 0) return true;
+      return Math.abs(x - (blur.blur.x ?? 0)) < width / 2 + halfWidth && Math.abs(y - (blur.blur.y ?? 0)) < height / 2 + halfHeight;
+    });
+    if (over !== undefined) issues.push({ kind: "text_under_blur", clip: text.id, blur: over.id, start: Math.max(text.start, over.start) });
+  }
   return { issues: sortIssues(issues), frames: total, clips: project.clips.length };
 }
 

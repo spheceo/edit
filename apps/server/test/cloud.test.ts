@@ -322,3 +322,8 @@ test.skipIf(process.env.EDIT_CLOUD_LIVE !== "1")("live_stream_round_trip_and_fai
     restore = mock.useEnv({ EDIT_RELAY_TOKEN: "cloud-token" });
   }
 });
+
+test("a weak etag (R2 gzips small JSON on the way) is the same object", () => {
+  expect(cloud.strongEtag('W/"a172f7b0"')).toBe('"a172f7b0"');
+  expect(cloud.strongEtag('"a172f7b0"')).toBe('"a172f7b0"');
+});

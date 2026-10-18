@@ -700,6 +700,17 @@ function exists(path: string): boolean {
   }
 }
 
+/**
+ * An ETag without its weak mark: R2 gzips a small JSON on the way (an
+ * analysis file) and answers `W/"…"` for the same object, which read as
+ * "changed while downloading" on every try, so no machine ever fetched
+ * another's transcripts and paid to transcribe them again.
+ */
+export function strongEtag(etag: string): string {
+  const trimmed = etag.trim();
+  return trimmed.startsWith("W/") ? trimmed.slice(2) : trimmed;
+}
+
 /** One try at getting the rest of `object` into `partial`. */
 async function fetchRest(key: string, object: Head, partial: string, progress: Report): Promise<void> {
   let have = sizeOf(partial);
@@ -727,7 +738,7 @@ async function fetchRest(key: string, object: Head, partial: string, progress: R
     stall.connected();
     const code = String(response.status);
     const etag = (response.headers.get("etag") ?? "").trim();
-    if (object.etag !== null && etag !== "" && etag !== object.etag) {
+    if (object.etag !== null && etag !== "" && strongEtag(etag) !== strongEtag(object.etag)) {
       await response.body?.cancel().catch(() => {});
       fs.rmSync(partial, { force: true });
       throw new Error(`${key} changed while downloading; download it again`);

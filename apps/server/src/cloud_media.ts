@@ -14,6 +14,9 @@
 //   in whole milliseconds of the Drive file.
 // - `sha256:<hex>`: a file from a disk (added files, browser uploads,
 //   voice-over takes, library sounds, stills), by its content.
+// - `youtube:<video id>` and `youtube:<video id>#<start ms>-<end ms>`: a
+//   YouTube video (downloaded here with yt-dlp, `youtube.ts`) and its
+//   excerpts, as Drive's; keys `edit/{originals,excerpts,proxies,analysis}/youtube/<id>/…`.
 //
 // R2 keys (all under `edit/`):
 // - `edit/originals/drive/<file id>/<name>` and `edit/originals/sha256/<hex>/<name>`:
@@ -57,6 +60,7 @@ import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts"
 import { isBug } from "./guard.ts";
 import * as jobs from "./jobs.ts";
 import { mediaKey, Semaphore } from "./media.ts";
+import * as youtube from "./youtube.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { canonical, extension, fileStem, isFile, join, parent } from "./paths.ts";
@@ -210,17 +214,29 @@ function millis(seconds: number): number {
   return Math.max(Math.round(seconds * 1000), 0);
 }
 
+/** An excerpt's source: of a Drive file id, or of a source (`youtube:<id>`). */
 export function excerptSource(file: string, start: number, end: number): string {
-  return `drive:${file}#${millis(start)}-${millis(end)}`;
+  const base = file.includes(":") ? file : `drive:${file}`;
+  return `${base}#${millis(start)}-${millis(end)}`;
+}
+
+/** A whole source's place in keys: `drive/<id>`, `youtube/<id>`. */
+function sourcePath(source: string): string {
+  const colon = source.indexOf(":");
+  return `${source.slice(0, colon)}/${source.slice(colon + 1)}`;
 }
 
 /** The proxy's key for a source (see the notes at the top). */
 export function proxyKey(source: string): string | null {
   let key: string;
-  if (source.startsWith("drive:")) {
-    const drive = source.slice("drive:".length);
-    const hash = drive.indexOf("#");
-    key = hash >= 0 ? `edit/proxies/drive/${drive.slice(0, hash)}/${drive.slice(hash + 1)}.mp4` : `edit/proxies/drive/${drive}.mp4`;
+  const kind = ["drive:", "youtube:"].find((prefix) => source.startsWith(prefix));
+  if (kind !== undefined) {
+    const rest = source.slice(kind.length);
+    const hash = rest.indexOf("#");
+    const id = hash >= 0 ? rest.slice(0, hash) : rest;
+    if (kind === "youtube:" && youtube.idOf(`youtube:${id}`) === null) return null;
+    const dir = `edit/proxies/${kind.slice(0, -1)}`;
+    key = hash >= 0 ? `${dir}/${id}/${rest.slice(hash + 1)}.mp4` : `${dir}/${id}.mp4`;
   } else if (source.startsWith("sha256:")) {
     key = `edit/proxies/sha256/${source.slice("sha256:".length)}.mp4`;
   } else {
@@ -697,6 +713,46 @@ export async function driveOriginal(
   return { file, source, key, name, size };
 }
 
+/**
+ * Puts YouTube video `file` (`youtube:<id>`) on R2 unless the registry has
+ * it: downloaded whole into `scratch` with yt-dlp, uploaded, and the local
+ * copy returned (`local`) for the excerpts to be cut from; the caller removes
+ * it. `progress(bytes, total, name)` as it downloads.
+ */
+export async function youtubeOriginal(
+  home: string,
+  file: string,
+  scratch: string,
+  progress: (bytes: number, total: number | null, name: string) => void,
+): Promise<[Original, string | null]> {
+  const id = youtube.idOf(file);
+  if (id === null) throw new Error(`${debugStr(file)} isn't a YouTube video`);
+  const source = file;
+  const record = await getRecord(source);
+  const ready = readyOriginal(record);
+  if (record !== null && ready !== null) {
+    const size = Math.max(Math.trunc(record.size), 0);
+    progress(size, size, record.name);
+    return [{ file, source, key: ready, name: record.name, size }, null];
+  }
+  const dir = join(scratch, `youtube-${id}`);
+  const got = await youtube.download(home, id, dir, progress);
+  const name = scriptParts.safeName(got.name);
+  const key = record !== null && cloud.validKey(record.originalKey) ? record.originalKey : `edit/originals/youtube/${id}/${segment(name)}`;
+  if (record === null) await putRecord({ source, name, originalKey: key, size: got.size });
+  await diag.timeOnAsync("cloud", "cloud: upload youtube", source, () => cloud.uploadFile(got.path, key));
+  let duration: number | null = null;
+  try {
+    duration = await scriptParts.durationOf(got.path);
+  } catch {
+    duration = null;
+  }
+  const done: Record<string, unknown> = { source, originalReady: true, size: got.size };
+  if (duration !== null) done.duration = duration;
+  await putRecord(done);
+  return [{ file, source, key, name, size: got.size }, got.path];
+}
+
 /** How often a cloud copy is asked how far it's got, and how long it may sit still before this Mac takes over. */
 export const jobTiming = { poll: 2000, stall: 10 * 60_000, sleep: (ms: number) => Bun.sleep(ms) };
 
@@ -843,8 +899,14 @@ async function streamDrive(url: string, key: string, total: number | null, progr
  * does on a disk. Each is on R2 at full quality with its proxy; only the
  * proxies are kept here.
  */
-export async function driveExcerpts(cache: string, original: Original, ranges: [number, number][]): Promise<Excerpt[]> {
-  const url = await getUrl(original.key, 6 * HOUR);
+export async function driveExcerpts(
+  cache: string,
+  original: Original,
+  ranges: [number, number][],
+  input: string | null = null,
+): Promise<Excerpt[]> {
+  // A copy still on this disk (a YouTube download on its way up) is cut from here.
+  const url = input ?? (await getUrl(original.key, 6 * HOUR));
   // Read here even when the registry knows it: a URL FFmpeg can't read would
   // otherwise only show as keyframes not found (excerpts from the start).
   const duration = await scriptParts.durationOf(url);
@@ -930,7 +992,7 @@ async function excerptMedia(
       cloud: { source, original: readyKey, proxy: readyProxyKey, size: Math.max(Math.trunc(record.size), 0) },
     };
   }
-  const key = `edit/excerpts/drive/${original.file}/${millis(start)}-${millis(end)}.${ext}`;
+  const key = `edit/excerpts/${sourcePath(original.source)}/${millis(start)}-${millis(end)}.${ext}`;
   const proxy = proxyKey(source);
   if (proxy === null) throw new Error("no proxy key");
   const local = localPath(cache, proxy);

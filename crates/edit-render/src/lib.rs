@@ -76,7 +76,9 @@ struct GradeUniforms {
     glitch_seed: f32,
     focus_exposure: f32,
     vignette_saturation: f32,
-    _pad2: [f32; 2],
+    /// The light leak: strength, and where it comes from (-1 left .. 1 right).
+    leak: f32,
+    leak_x: f32,
 }
 
 #[repr(C)]
@@ -1276,7 +1278,8 @@ impl Renderer {
                         glitch_seed: glitch.seed,
                         focus_exposure: grade.focus_exposure,
                         vignette_saturation: grade.vignette_saturation,
-                        _pad2: [0.0; 2],
+                        leak: grade.leak.max(0.0),
+                        leak_x: grade.leak_x,
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));

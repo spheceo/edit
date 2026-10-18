@@ -509,6 +509,8 @@ const params: Record<string, [Getter, Setter]> = {
   vignette_x: [(c) => (c.type === "adjustment" ? (c.grade.vignette_x ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.vignette_x = v)],
   vignette_y: [(c) => (c.type === "adjustment" ? (c.grade.vignette_y ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.vignette_y = v)],
   vignette_size: [(c) => (c.type === "adjustment" ? (c.grade.vignette_size ?? 1) : 1), (c, v) => c.type === "adjustment" && (c.grade.vignette_size = v)],
+  leak: [(c) => (c.type === "adjustment" ? (c.grade.leak ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.leak = v)],
+  leak_x: [(c) => (c.type === "adjustment" ? (c.grade.leak_x ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.leak_x = v)],
   glitch: [
     (c) => (c.type === "adjustment" ? (c.glitch?.amount ?? 0) : 0),
     (c, v) => c.type === "adjustment" && (c.glitch = changedGlitch(c.glitch, { amount: v })),
@@ -530,7 +532,7 @@ function animatableParams(clip: Clip): string[] {
   switch (clip.type) {
     case "video": return ["x", "y", "scale", "rotation", "shake", "opacity"];
     case "text": return ["x", "y", "scale", "rotation", "shake", "opacity", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"];
-    case "adjustment": return ["shake", "glitch", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "blur", "blur.x", "blur.y", "blur.width", "blur.height", "opacity"];
+    case "adjustment": return ["shake", "glitch", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "leak", "leak_x", "blur", "blur.x", "blur.y", "blur.width", "blur.height", "opacity"];
     case "solid": return ["opacity"];
     case "waveform": return ["x", "y", "scale", "rotation", "opacity", "gain", "glow.radius", "glow.strength"];
     case "audio": return ["volume_db"];
@@ -799,7 +801,7 @@ export function validateProject(project: Project): string | null {
   const unique = (items: { id: string }[]) => items.every((item) => item.id.length > 0) && new Set(items.map((item) => item.id)).size === items.length;
   if (!unique(project.tracks) || !unique(project.media) || !unique(project.clips)) return `IDs must be nonempty and unique within each collection`;
   if (project.media.some((media) => media.duration < 0 || media.fps < 0 || media.markers?.some((marker) => marker.time < 0))) return `media timing must be nonnegative`;
-  if (project.script?.blocks.some((block) => block.kind === "footage" && (!/^[a-zA-Z0-9_-]{1,200}$/.test(block.file) || block.start < 0 || block.end <= block.start))) return `script footage needs a Drive ID and positive source range`;
+  if (project.script?.blocks.some((block) => block.kind === "footage" && (!/^([a-zA-Z0-9_-]{1,200}|youtube:[a-zA-Z0-9_-]{11})$/.test(block.file) || block.start < 0 || block.end <= block.start))) return `script footage needs a Drive ID or YouTube video and positive source range`;
   const tracks = new Map(project.tracks.map((track) => [track.id, track]));
   const byTrack = new Map<string, Clip[]>();
   for (const clip of project.clips) {

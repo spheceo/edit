@@ -45,4 +45,16 @@ focus_exposure?: number,
  * Saturation change where the vignette falls only, -1..1 (-0.7 = the
  * surroundings nearly grey while the person keeps their colour).
  */
-vignette_saturation?: number, };
+vignette_saturation?: number, 
+/**
+ * A light leak: warm light washing over the picture from one side, added
+ * as light (0 = none, 1 = a strong orange glow, 3+ burns to white where
+ * it's brightest). Keyed up and down across a cut it's the courtroom's
+ * and interrogation's transition.
+ */
+leak?: number, 
+/**
+ * Where the leak's light comes from across the frame: -1 the left edge,
+ * 0 the centre, 1 the right edge (keyed to sweep it across).
+ */
+leak_x?: number, };

@@ -142,6 +142,31 @@ test("clip rows and transcript line times read as they always have", () => {
   expect(lineSeconds("No transcribed speech")).toBeNull();
 });
 
+test("one call recolours every subtitle of one person", async () => {
+  const { app, id } = setUp("tools-person");
+  const yellow = [1, 0.85, 0.1, 1];
+  const blue = [0.2, 0.5, 1, 1];
+  const line = (who: string, start: number, color: number[]) =>
+    clip({ id: `s${start}`, type: "text", track: projectOf(app, id).tracks[0]!.id, name: `Subtitle · ${who}`, start, duration: 30, text: "line", style: { color } });
+  await app.store.update(id, "test", (project) => {
+    project.clips.push(line("Stephanie Lazarus", 0, yellow), line("Jim Nuttall", 30, blue), line("Stephanie Lazarus", 60, yellow));
+    savedPlanHooks.oneColourPerPerson(project);
+  });
+  Object.assign(planHooks, { oneColourPerPerson: savedPlanHooks.oneColourPerPerson });
+  try {
+    const red = [0.9, 0.15, 0.15, 1];
+    const answer = await said(app, "update_clips", { person: "stephanie lazarus", patch: { style: { color: red } } });
+    expect(answer).toStartWith("updated 2 clip(s)");
+    const project = projectOf(app, id);
+    const colours = project.clips.map((one) => (one.type === "text" ? one.style.color.map((c) => Math.round(c * 100) / 100) : null));
+    expect(colours).toEqual([red, blue, red]);
+    expect(project.people!.find((one) => one.name === "Stephanie Lazarus")!.color).toBe("#e62626");
+    expect(await refused(app, "update_clips", { person: "Nobody", patch: {} })).toStartWith("no person Nobody in the cast");
+  } finally {
+    Object.assign(planHooks, { oneColourPerPerson: () => [] });
+  }
+});
+
 test("adding, changing and removing clips answer", async () => {
   const { app, id } = setUp("tools-clips");
   expect(await said(app, "add_text", { text: "Hello", start: 1, duration: 2 })).toMatch(/^added text clip c\d+$/);
@@ -164,7 +189,7 @@ test("adding, changing and removing clips answer", async () => {
   expect(await said(app, "update_clips", { clip_ids: [text.id], patch: { opacity: 0.5 } })).toBe(`updated 1 clip(s): ${text.id}`);
   expect(await said(app, "update_clips", { track: text.track, start: 2, patch: { opacity: 0.5 } })).toBe(`updated 1 clip(s): ${text.id}`);
   expect(await said(app, "update_clips", { label: "Nobody:", patch: { opacity: 0.5 } })).toBe("no clips matched; nothing changed");
-  expect(await refused(app, "update_clips", { patch: {} })).toBe("pick the clips: clip_ids, label or track");
+  expect(await refused(app, "update_clips", { patch: {} })).toBe("pick the clips: clip_ids, label, person or track");
   expect(await said(app, "set_keyframes", { clip_id: text.id, param: "opacity", keyframes: [{ frame: 10, value: 1 }, { frame: 0, value: 0 }] })).toBe(
     `set opacity keyframes on ${text.id}`,
   );

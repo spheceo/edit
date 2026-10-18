@@ -156,7 +156,14 @@ export interface CloudMediaSeam {
   /** Starts a backfill of cloud project `id` in the background. */
   backfillSoon(app: App, id: string): void;
   /** The media a script plays from Drive file `original`: an excerpt per span the `ranges` need. */
-  driveExcerpts(cache: string, original: Original, ranges: [number, number][]): Promise<Excerpt[]>;
+  driveExcerpts(cache: string, original: Original, ranges: [number, number][], input?: string | null): Promise<Excerpt[]>;
+  /** Puts YouTube video `file` (`youtube:<id>`) on R2 unless the registry has it; the download it was cut from here, for the caller to remove. */
+  youtubeOriginal(
+    home: string,
+    file: string,
+    scratch: string,
+    progress: (bytes: number, total: number | null, name: string) => void,
+  ): Promise<[Original, string | null]>;
   /** Puts Drive file `file` on R2, streamed from Drive into the upload, unless the registry has it. */
   driveOriginal(file: string, scratch: string, progress: (bytes: number, total: number | null, name: string) => void): Promise<Original>;
   /** `project` as an export of frames start..end reads it: cloud media pointing at their originals (presigned URLs). */
@@ -471,16 +478,16 @@ export interface SubtitlesSeam {
   footageSound(project: Project, from: number, to: number): Clip[];
   hiddenRole(role: string): boolean;
   houseStyle(width: number, height: number, color: Rgba): TextStyle;
-  houseWords(app: App, project: Project, from: number, to: number, neglect: boolean): Promise<HouseWords>;
+  houseWords(app: App, project: Project, from: number, to: number, neglect: boolean, extra?: readonly string[]): Promise<HouseWords>;
   longestMs(word: string): number;
-  muteHouseWords(app: App, projectId: string, from: number, to: number, neglect: boolean): Promise<Json>;
+  muteHouseWords(app: App, projectId: string, from: number, to: number, neglect: boolean, extra?: readonly string[]): Promise<Json>;
   repackSubtitles(app: App, projectId: string, options: SubtitleOptions): Promise<Json>;
   roleOf(role: string | null, name: string): string;
   segment(words: TimedWord[]): Cue[];
   silentRole(role: string): boolean;
   star(text: string, found: Suggestion[]): string;
-  starOnScreen(project: Project, from: number, to: number, neglect: boolean): number;
-  suggestions(words: TimedWord[], neglect: boolean, fromMs: number, toMs: number): Suggestion[];
+  starOnScreen(project: Project, from: number, to: number, neglect: boolean, extra?: readonly string[]): number;
+  suggestions(words: TimedWord[], neglect: boolean, fromMs: number, toMs: number, extra?: readonly string[]): Suggestion[];
   timedWords(words: Word[], from: number, to: number): TimedWord[];
   /** Repack's tokeniser: /[\p{L}\p{N}]+(?:['’][\p{L}]+)?/gu on lowercase text. */
   tokens(text: string): string[];

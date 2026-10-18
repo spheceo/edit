@@ -684,3 +684,63 @@ fn fades_and_typewriters_rasterize_only_on_change() {
     }
     assert!(frames[5] != frames[6], "a glyph appears at 3.0");
 }
+
+#[test]
+fn a_light_leak_warms_from_its_side_and_burns_toward_white() {
+    let (w, h) = (320_u32, 180_u32);
+    let Some(mut renderer) = renderer(w, h) else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    renderer.upload_video_rgba("grey", 1, 1, &[60, 60, 60, 255]);
+    let footage = Layer::Video {
+        clip: "c1".into(),
+        media: "grey".into(),
+        source_time: 0.0,
+        transform: Transform {
+            scale: w as f32,
+            ..Transform::default()
+        },
+        opacity: 1.0,
+        crop: Default::default(),
+        frame: None,
+    };
+    let leak = |leak: f32| Layer::Adjustment {
+        grade: Grade {
+            leak,
+            leak_x: -1.0,
+            ..Grade::default()
+        },
+        shake: Default::default(),
+        glitch: Default::default(),
+        blur: Default::default(),
+        opacity: 1.0,
+    };
+    let mut frame = |layers: Vec<Layer>| {
+        renderer.render(&Scene {
+            width: w,
+            height: h,
+            layers,
+        });
+        renderer.read_output().unwrap_or_default()
+    };
+    let at = |pixels: &[u8], x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    let plain = frame(vec![footage.clone()]);
+    // Off, it's nothing at all.
+    assert_eq!(frame(vec![footage.clone(), leak(0.0)]), plain);
+    let soft = frame(vec![footage.clone(), leak(0.6)]);
+    save("leak-soft.png", w, h, &soft);
+    let [r, g, b] = at(&soft, 20, 70);
+    let [far_r, ..] = at(&soft, 300, 70);
+    // Warm (red over blue) and strongest on its own side.
+    assert!(r > g && g > b, "{r} {g} {b}");
+    assert!(r > far_r + 30, "{r} vs {far_r}");
+    let burnt = frame(vec![footage, leak(4.0)]);
+    save("leak-burnt.png", w, h, &burnt);
+    let [r, g, b] = at(&burnt, 20, 70);
+    // Strong, its source burns out nearly white.
+    assert!(r > 245 && g > 220 && b > 170, "{r} {g} {b}");
+}

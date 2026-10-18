@@ -97,7 +97,13 @@ registerTool("mute_house_words", async ({ app, args, projectId }) => {
   const fps = fpsOf(project);
   const [from, to] = span(args, fps, 0, duration(project));
   const neglect = args.neglect === true;
-  const summary = await subtitles.muteHouseWords(app, projectId, from, to, neglect);
+  // The video's own words besides the house's (a Doc's "Blur this": murder, killer).
+  const given = args.words;
+  if (given !== undefined && given !== null && (!Array.isArray(given) || given.some((word) => typeof word !== "string"))) {
+    throw new Error("words must be a list of words or phrases");
+  }
+  const extra = ((given ?? []) as string[]).map((word) => word.trim()).filter((word) => word !== "");
+  const summary = await subtitles.muteHouseWords(app, projectId, from, to, neglect, extra);
   return text(`muted ${fixed(from / fps, 2)}–${fixed(to / fps, 2)}s: ${stableStringify(summary)}`);
 });
 

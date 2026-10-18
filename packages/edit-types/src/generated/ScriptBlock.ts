@@ -2,11 +2,11 @@
 
 export type ScriptBlock = { "kind": "footage", 
 /**
- * The link as written (a Google Drive file).
+ * The link as written (a Google Drive file or a YouTube video).
  */
 url: string, 
 /**
- * The file's id (Drive file id): ranges of one file share it.
+ * The file's id (a Drive file id, or `youtube:<video id>`): ranges of one file share it.
  */
 file: string, start: number, end: number, 
 /**

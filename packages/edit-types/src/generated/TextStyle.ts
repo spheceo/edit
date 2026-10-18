@@ -41,4 +41,9 @@ leader?: Leader,
 /**
  * How lines line up with each other (the block stays where it's placed).
  */
-align?: TextAlign, };
+align?: TextAlign, 
+/**
+ * Shown in capitals (the text itself is kept as written: transcripts,
+ * starring and word times still read it): a courtroom's subtitles.
+ */
+uppercase?: boolean, };

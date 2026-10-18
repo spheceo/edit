@@ -50,6 +50,8 @@ const PARAM_INFO: Record<string, { label: string; color: string; format: (value:
   vignette_x: { label: "Vignette X", color: "#f87171", format: (v) => `${Math.round(v)} px` },
   vignette_y: { label: "Vignette Y", color: "#86efac", format: (v) => `${Math.round(v)} px` },
   vignette_size: { label: "Vignette size", color: "#c4b5fd", format: (v) => v.toFixed(2) },
+  leak: { label: "Light leak", color: "#fdba74", format: (v) => v.toFixed(2) },
+  leak_x: { label: "Leak from", color: "#fcd34d", format: (v) => v.toFixed(2) },
   glitch: { label: "Glitch", color: "#2dd4bf", format: (v) => `${Math.round(v)} px` },
   blur: { label: "Blur", color: "#93c5fd", format: (v) => `${Math.round(v)} px` },
   "blur.x": { label: "Blur X", color: "#f87171", format: (v) => `${Math.round(v)} px` },

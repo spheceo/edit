@@ -27,7 +27,9 @@ struct Grade {
     // Inside the vignette's clear area: extra stops; where it falls: extra saturation.
     focus_exposure: f32,
     vignette_saturation: f32,
-    _q: vec2f,
+    // The light leak: strength, and where it comes from (-1 left .. 1 right).
+    leak: f32,
+    leak_x: f32,
 };
 
 @group(0) @binding(0) var<uniform> g: Grade;
@@ -114,6 +116,18 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     var lin = to_linear(max(base.rgb, vec3f(0.0))) * exp2(g.exposure + g.focus_exposure * (1.0 - falloff));
     let t = g.temperature;
     lin = lin * vec3f(1.0 + 0.18 * t, 1.0 + 0.02 * t, 1.0 - 0.18 * t);
+    // The light leak: warm light added as light, from a soft source a little
+    // above the middle on one side, wider than tall, with a faint wash over
+    // the whole frame; orange where it's faint, turning white where it's strong.
+    if (g.leak > 0.0) {
+        let p = (in.uv - 0.5) * vec2f(g.aspect, 1.0);
+        let source = vec2f(g.leak_x * g.aspect * 0.5, -0.12);
+        let q = (p - source) * vec2f(0.55, 1.0);
+        let glow = exp(-dot(q, q) * 2.4) + 0.06;
+        let light = g.leak * glow;
+        let warm = mix(vec3f(1.0, 0.28, 0.05), vec3f(1.0, 0.9, 0.75), clamp((light - 0.8) * 0.4, 0.0, 1.0));
+        lin = lin + warm * light;
+    }
     var s = to_srgb(max(lin, vec3f(0.0)));
     s = (s - 0.5) * (1.0 + g.contrast) + 0.5;
     let luma = dot(s, vec3f(0.2126, 0.7152, 0.0722));

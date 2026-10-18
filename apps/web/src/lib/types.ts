@@ -220,7 +220,7 @@ export const ANIMATABLE: Record<ClipType, string[]> = {
   video: ["opacity", "x", "y", "scale", "rotation", "shake"],
   audio: ["volume_db"],
   text: ["opacity", "x", "y", "scale", "rotation", "shake", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"],
-  adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "glitch", "blur", "blur.x", "blur.y", "blur.width", "blur.height"],
+  adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "leak", "leak_x", "glitch", "blur", "blur.x", "blur.y", "blur.width", "blur.height"],
   solid: ["opacity"],
   waveform: ["opacity", "x", "y", "scale", "rotation", "gain", "glow.radius", "glow.strength"],
 };

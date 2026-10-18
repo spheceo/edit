@@ -388,6 +388,23 @@ test("transitions_are_built_the_house_way", () => {
   expect(() => apply(p, [{ op: "transition", kind: "dip" }])).toThrow();
 });
 
+test("a_style_s_own_transition_is_built_and_heard_but_never_called_repetitive", () => {
+  const p = project("plan");
+  const plan: unknown[] = [{ op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 3000, fill: [0, 0, 0, 1] } }];
+  for (let index = 0; index < 6; index++) plan.push({ op: "transition", kind: index % 2 === 0 ? "light_leak" : "burn", at: 100 + index * 200 });
+  apply(p, plan);
+  const leak = clipNamed(p, "Light leak");
+  expect([leak.start, leak.duration, leak.type]).toEqual([92, 16, "adjustment"]);
+  expect(Object.keys(leak.keyframes!)).toEqual(["exposure", "leak", "leak_x"]);
+  expect(Math.max(...leak.keyframes!.leak!.map((key) => key.value))).toBe(3.2);
+  const burn = clipNamed(p, "Bridge flash");
+  expect([burn.start, burn.duration]).toEqual([294, 12]);
+  expect(burn.keyframes!.exposure![1]).toMatchObject({ frame: 6, value: 2.6 });
+  // On every bridge on purpose; but each one is heard.
+  expect(kinds(p, "repetitive_transitions")).toEqual([]);
+  expect(kinds(p, "silent_transition").length).toBe(6);
+});
+
 test("unresolved_reference_and_bad_final_state_fail", () => {
   const p = project("plan");
   expect(() => apply(p, [{ op: "delete", select: { ids: [{ $ref: "missing" }] } }])).toThrow(

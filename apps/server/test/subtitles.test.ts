@@ -418,6 +418,10 @@ function textOf(project: Project, id: string): string {
 test("every_text_on_screen_gets_house_words_starred", () => {
   expect(starText("Charges:\nChild Abuse\nAggravated child abuse", false)).toBe("Charges:\nChild A****\nAggravated child a****");
   expect(starText('"He choked me"', false)).toBe('"He c***** me"');
+  // A video's own words ("Blur this" in its script) are starred like the house's.
+  expect(starText("The 1986 murder of a nurse", false)).toBe("The 1986 murder of a nurse");
+  expect(starText("The 1986 murder of a nurse", false, ["murder = m****r"])).toBe("The 1986 m****r of a nurse");
+  expect(starText("Murdered in 1986", false, ["murdered"])).toBe("M******* in 1986");
   expect(starText("Shit, he punched him", false)).toBe("S**t, he punched him");
   expect(starText("Shit, he punched him", true)).toBe("S**t, he p****** him");
   // Mute-only words stay readable; words are never removed.

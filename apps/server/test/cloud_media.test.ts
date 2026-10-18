@@ -104,6 +104,9 @@ test("sources_name_their_proxies", () => {
   expect(cloudMedia.proxyKey(cloudMedia.excerptSource("abc", 61.4994, 182.0))).toBe("edit/proxies/drive/abc/61499-182000.mp4");
   expect(cloudMedia.proxyKey("sha256:00ff")).toBe("edit/proxies/sha256/00ff.mp4");
   expect(cloudMedia.proxyKey("youtube:x")).toBeNull();
+  expect(cloudMedia.proxyKey("youtube:MeT7tyZqfiw")).toBe("edit/proxies/youtube/MeT7tyZqfiw.mp4");
+  expect(cloudMedia.proxyKey(cloudMedia.excerptSource("youtube:MeT7tyZqfiw", 42, 172.5))).toBe("edit/proxies/youtube/MeT7tyZqfiw/42000-172500.mp4");
+  expect(cloudMedia.analysisPrefix("youtube:MeT7tyZqfiw#42000-172500")).toBe("edit/analysis/youtube/MeT7tyZqfiw/42000-172500/");
   expect(cloudMedia.proxyKey("drive:../x")).toBeNull();
 });
 

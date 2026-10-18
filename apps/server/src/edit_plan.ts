@@ -350,10 +350,16 @@ export function setKeyframes(clip: Clip, keyframes: Record<string, Keyframe[]>):
  * - flash: white, 6 frames centred on the cut, fading out (with a shutter).
  * - dip: to black and straight back, `frames` long (12) centred on the cut.
  * - open: the reverse dip that opens the video, black fading out over ~0.5 s.
+ * - light_leak: warm light sweeping across and burning to white on the cut,
+ *   16 frames straddling it (the courtroom's flash).
+ * - burn: the picture burning out warm to near white on the cut and back,
+ *   12 frames straddling it (the interrogation's "Bridge flash").
+ * The last two are a style's one transition, used on every bridge on purpose:
+ * the audit's repetitive_transitions leaves them alone.
  */
 function transition(project: Project, args: Args): Json {
   const kind = str(args.kind);
-  if (kind === null) throw new Error("transition needs kind: drop, flash, dip or open");
+  if (kind === null) throw new Error("transition needs kind: drop, flash, dip, open, light_leak or burn");
   const at = int(args.at);
   const cut = () => {
     if (at === null) throw new Error(`a ${kind} needs at (the cut's frame)`);
@@ -365,6 +371,7 @@ function transition(project: Project, args: Args): Json {
   let length: number;
   let content: Args;
   let opacity: Args[] | null;
+  let keys: Record<string, Args[]> = {};
   switch (kind) {
     case "drop":
       [name, start, length, content, opacity] = ["Drop", cut() - 3, 6, { type: "adjustment", shake: { preset: "vertical" } }, null];
@@ -400,15 +407,33 @@ function transition(project: Project, args: Args): Json {
       ];
       break;
     }
+    case "light_leak":
+      [name, start, length, content, opacity] = ["Light leak", cut() - 8, 16, { type: "adjustment", grade: { temperature: 0.25 } }, null];
+      keys = {
+        leak: [key(0, 0, "in"), key(8, 3.2, "out"), key(15, 0, "linear")],
+        leak_x: [key(0, -0.9, "linear"), key(15, 0.6, "linear")],
+        exposure: [key(0, 0, "in"), key(8, 0.7, "out"), key(15, 0, "linear")],
+      };
+      break;
+    case "burn":
+      [name, start, length, content, opacity] = ["Bridge flash", cut() - 6, 12, { type: "adjustment", grade: { temperature: 0.35 } }, null];
+      keys = {
+        exposure: [key(0, 0, "in"), key(6, 2.6, "out"), key(11, 0, "linear")],
+        leak: [key(0, 0, "in"), key(6, 1.2, "out"), key(11, 0, "linear")],
+        leak_x: [key(0, -0.5, "linear"), key(11, 0.5, "linear")],
+      };
+      break;
     default:
-      throw new Error(`unknown transition ${kind}; use drop, flash, dip or open`);
+      throw new Error(`unknown transition ${kind}; use drop, flash, dip, open, light_leak or burn`);
   }
   // Never before the start of the video: what's cut off the front goes.
   const [from, frames] = [Math.max(start, 0), length - Math.max(-start, 0)];
   const id = freshId(project, "c");
   const track = addTrack(project, "video");
   const fields: Args = { ...content, id, name, track, start: from, duration: frames };
-  if (opacity !== null) fields.keyframes = { opacity };
+  if (opacity !== null) keys = { ...keys, opacity };
+  const params = Object.keys(keys).sort(compareKeys);
+  if (params.length > 0) fields.keyframes = Object.fromEntries(params.map((param) => [param, keys[param]!]));
   project.clips.push(clipOrSay(fields, `${kind}: `));
   return id;
 }
@@ -1053,7 +1078,7 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   const near = asInt(round(0.5 * fps));
   const short = asInt(round(4 * fps));
   for (const clip of project.clips) {
-    if (clip.name !== "Drop" && clip.name !== "Flash" && clip.name !== "Dip") continue;
+    if (!["Drop", "Flash", "Dip", "Light leak", "Bridge flash"].includes(clip.name ?? "")) continue;
     const middle = clip.start + idiv(clip.duration, 2);
     const sounded = heard.some(
       ([start, stop]) => Math.abs(start - middle) <= near || (stop - start <= short && start <= middle && middle <= stop + near),

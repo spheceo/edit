@@ -206,6 +206,13 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                     }
                     _ => (text.clone(), None, *animation),
                 };
+                // Capitals letter for letter, so a typewriter's glyph count
+                // and word times still line up with the text as written.
+                let text = if style.uppercase {
+                    capitals(&text)
+                } else {
+                    text
+                };
                 let mut style = style.clone();
                 style.size = anim("size", style.size);
                 style.tracking = anim("tracking", style.tracking);
@@ -250,6 +257,8 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         vignette_aspect: grade.vignette_aspect,
                         focus_exposure: grade.focus_exposure,
                         vignette_saturation: grade.vignette_saturation,
+                        leak: anim("leak", grade.leak).max(0.0),
+                        leak_x: anim("leak_x", grade.leak_x),
                     },
                     glitch: GlitchFrame {
                         // Amounts are at 1080p.
@@ -411,6 +420,20 @@ pub fn words_shown(text: &str, times: &[f32], stagger: f32, local: f32) -> Strin
     }
     // `end` always follows a char, so this is the whole prefix.
     text.get(..end).unwrap_or_default().to_owned()
+}
+
+/// `text` in capitals, one letter for one (a letter whose capital is longer,
+/// like "ß", stays as it is).
+fn capitals(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            let mut upper = c.to_uppercase();
+            match (upper.next(), upper.next()) {
+                (Some(one), None) => one,
+                _ => c,
+            }
+        })
+        .collect()
 }
 
 fn seed_of(text: &str) -> u32 {
@@ -1267,6 +1290,36 @@ mod tests {
         assert_eq!(words_shown(text, &times, 4.0, 99.0), text);
         // Without times, one word every `stagger` frames.
         assert_eq!(words_shown("a b c", &[], 4.0, 5.0), "a b");
+    }
+
+    #[test]
+    fn capitals_are_shown_letter_for_letter_and_the_text_kept() {
+        let mut project = project();
+        project.clips[1].keyframes = Default::default();
+        project.clips[1].content = ClipContent::Text {
+            text: "Is that clear, f***? Straße".into(),
+            style: TextStyle {
+                uppercase: true,
+                ..TextStyle::default()
+            },
+            transform: Transform::default(),
+            animation: TextAnimation::default(),
+            opacity: 1.0,
+            word_times: Vec::new(),
+        };
+        let shown = evaluate(&project, 40)
+            .layers
+            .into_iter()
+            .find_map(|layer| match layer {
+                Layer::Text { text, .. } => Some(text),
+                _ => None,
+            });
+        assert_eq!(shown.as_deref(), Some("IS THAT CLEAR, F***? STRAßE"));
+        let kept = match &project.clips[1].content {
+            ClipContent::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        };
+        assert_eq!(kept, Some("Is that clear, f***? Straße"));
     }
 
     #[test]

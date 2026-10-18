@@ -28,6 +28,7 @@ import * as seams from "./seams.ts";
 import type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 import * as tools from "./tools.ts";
 import type { Word } from "./transcribe.ts";
+import * as youtube from "./youtube.ts";
 
 export type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 
@@ -494,6 +495,35 @@ function notes(refs: [number, string][], comments: Map<string, string>): string[
   return out;
 }
 
+/** The label of a footage block that plays a reused video whole (a narration's "Reuse: <link>" note). */
+export const REUSE = "Reuse (the whole video)";
+
+/** The script file a footage link names: a Drive file id, or `youtube:<id>`. */
+export function footageFile(url: string): string | null {
+  return driveFileId(url) ?? youtube.fileOf(url);
+}
+
+/** A link's `t=` in seconds: Drive's `91.506`, YouTube's `86`, `86s` or `1m26s`. */
+function linkStart(url: string): number | null {
+  const t = query(url, "t");
+  if (t === null) return null;
+  return youtube.videoId(url) !== null ? youtube.startOf(t) : parseF64(t.replace(/s+$/, ""));
+}
+
+/**
+ * The narration in text beside ranges in one paragraph (a Doc that runs the
+ * cut-ins on from the ranges, "…the investigation. (0:42 - 2:52)The
+ * investigation proved…"): words, not the brackets and pluses between ranges.
+ */
+function besideRanges(text: string): string | null {
+  const words = text.match(/\p{L}[\p{L}'’]*/gu) ?? [];
+  if (words.length < 3) return null;
+  const cleaned = collapse(text)
+    .replace(/^[\s()[\]+&,]+/u, "")
+    .replace(/[\s([+&,]+$/u, "");
+  return cleaned === "" ? null : cleaned;
+}
+
 /** Reads a script Doc's HTML export into footage ranges and narration. */
 export function parse(html: string): Parsed {
   const [title, paras, comments] = readHtml(html);
@@ -501,7 +531,7 @@ export function parse(html: string): Parsed {
   const files: [string, string][] = [];
   for (const para of paras) {
     for (const [, , url] of para.links) {
-      const id = driveFileId(url);
+      const id = footageFile(url);
       if (id !== null) files.push([url, id]);
     }
   }
@@ -509,6 +539,28 @@ export function parse(html: string): Parsed {
   let last: [string, string] | null = only;
   const blocks: ScriptBlock[] = [];
   let seenFootage = false;
+  // "Reuse: <link>" on a narration: a finished video of ours plays after it,
+  // whole (its range is set to the whole file once it's downloaded).
+  const reuse = (found: string[]) => {
+    for (const note of found) {
+      const link = /^reuse:\s*(\S+)/i.exec(note)?.[1];
+      const file = link === undefined ? null : footageFile(link);
+      if (link === undefined || file === null) continue;
+      blocks.push({ kind: "footage", url: link, file, start: 0, end: 1, label: REUSE, notes: [note] });
+    }
+  };
+  // Paragraphs of narration one after another are one cut-in; narration
+  // written on from ranges starts its own (`own`): a hook paragraph followed
+  // by a paragraph that runs the setup on into the hearing is two cut-ins.
+  const narrate = (text: string, found: string[], own = false) => {
+    const previous = blocks[blocks.length - 1];
+    if (!own && previous !== undefined && previous.kind === "narration") {
+      previous.text += `\n\n${text}`;
+      previous.notes = [...(previous.notes ?? []), ...found];
+    } else {
+      blocks.push({ kind: "narration", text, notes: found });
+    }
+  };
   for (const para of paras) {
     const ranges = findRanges(para.text);
     if (ranges.length === 0) {
@@ -517,21 +569,26 @@ export function parse(html: string): Parsed {
       // Doc's heading (title, "Assets:", durations), never a cut-in.
       if (text === "" || !seenFootage) continue;
       const found = notes(para.refs, comments);
-      const previous = blocks[blocks.length - 1];
-      if (previous !== undefined && previous.kind === "narration") {
-        previous.text += `\n\n${text}`;
-        previous.notes = [...(previous.notes ?? []), ...found];
-      } else {
-        blocks.push({ kind: "narration", text, notes: found });
-      }
+      narrate(text, found);
+      reuse(found);
       continue;
     }
+    // Narration written on from the ranges in the same paragraph: before,
+    // between and after them, in order.
+    const said = (from: number, to: number) => (seenFootage ? besideRanges(para.text.slice(from, to)) : null);
+    const gaps = ranges.map((range, index) => said(index === 0 ? 0 : ranges[index - 1]!.end, range.start));
+    const tail = ranges.length > 0 ? said(ranges[ranges.length - 1]!.end, para.text.length) : null;
     seenFootage = true;
     ranges.forEach((range, index) => {
+      const gap = gaps[index];
+      const gapFrom = index === 0 ? 0 : ranges[index - 1]!.end;
+      if (gap !== null && gap !== undefined) {
+        narrate(gap, notes(para.refs.filter(([at]) => at >= gapFrom && at < range.start), comments), true);
+      }
       let linked: [string, string] | null = null;
       for (const [start, end, url] of para.links) {
         if (start < range.end && end > range.start) {
-          const id = driveFileId(url);
+          const id = footageFile(url);
           if (id !== null) {
             linked = [url, id];
             break;
@@ -543,11 +600,19 @@ export function parse(html: string): Parsed {
       const [url, file] = chosen;
       last = [url, file];
       // The link's ?t= is the exact start (the text rounds to the second).
-      const t = query(url, "t");
-      const exact = t === null ? null : parseF64(t.replace(/s+$/, ""));
+      const exact = linkStart(url);
       const start = exact !== null && Math.abs(exact - range.from) <= 2 ? exact : range.from;
-      const next = ranges[index + 1]?.start ?? Number.MAX_SAFE_INTEGER;
-      const from = index === 0 ? 0 : range.start;
+      // Its notes: from the range (or the paragraph's start) to the next range or narration.
+      const nextGap = gaps[index + 1];
+      const next =
+        index + 1 < ranges.length
+          ? nextGap !== null && nextGap !== undefined
+            ? range.end
+            : ranges[index + 1]!.start
+          : tail !== null
+            ? range.end
+            : Number.MAX_SAFE_INTEGER;
+      const from = index === 0 && (gap === null || gap === undefined) ? 0 : range.start;
       const refs = para.refs.filter(([at]) => at >= from && at < next);
       const rangeNotes = notes(refs, comments);
       const block: ScriptBlock = {
@@ -563,6 +628,12 @@ export function parse(html: string): Parsed {
       if (words !== null) block.words = words;
       blocks.push(block);
     });
+    if (tail !== null) {
+      const after = ranges[ranges.length - 1]!.end;
+      const found = notes(para.refs.filter(([at]) => at >= after), comments);
+      narrate(tail, found, true);
+      reuse(found);
+    }
   }
   return { title, blocks };
 }
@@ -1266,7 +1337,7 @@ export function clock(seconds: number): string {
 /** The ranges (seconds) a project's script plays from one file. */
 function fileRanges(project: Project, file: string): [number, number][] {
   return (project.script?.blocks ?? []).flatMap((block): [number, number][] =>
-    block.kind === "footage" && block.file === file ? [[block.start, block.end]] : [],
+    block.kind === "footage" && block.file === file ? [[block.start, block.label === REUSE ? Number.MAX_SAFE_INTEGER : block.end]] : [],
   );
 }
 
@@ -1370,8 +1441,9 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     }
     const laidOut = result === null;
     // Laid out: the cut-ins get their voice-over, spoken and split across them.
+    // Not a courtroom video's: its narration is the user's recording (styles.ts).
     const now = app.store.get(id);
-    const unvoiced = now !== null && !seams.voiceover.anyPlaced(now.project);
+    const unvoiced = now !== null && now.project.style !== "courtroom" && !seams.voiceover.anyPlaced(now.project);
     if (laidOut && unvoiced) {
       app.scripts.set(app, id, (job) => {
         job.state = "voicing";
@@ -1441,8 +1513,13 @@ type Fetched = [bytes: number, name: string | null, cut: Excerpt[]];
 /** Downloads a Drive file to this machine and cuts the script's excerpts from it. */
 async function footageToDisk(app: App, id: string, index: number, file: string): Promise<Fetched> {
   const progress = fileProgress(app, id, index);
-  const path = await diag.timeOnAsync("script", "script: download", `Drive file ${file}`, () => {
+  const video = youtube.idOf(file);
+  const path = await diag.timeOnAsync("script", "script: download", video === null ? `Drive file ${file}` : `YouTube video ${video}`, async () => {
     // The media drive not connected: said, not downloaded elsewhere.
+    if (video !== null) {
+      const dir = join(app.store.driveDir(), "youtube", video);
+      return (await youtube.download(app.store.home, video, dir, progress)).path;
+    }
     const dir = join(app.store.driveDir(), file);
     return download(dir, file, progress);
   });
@@ -1467,18 +1544,31 @@ async function footageToDisk(app: App, id: string, index: number, file: string):
  */
 async function footageToCloud(app: App, id: string, index: number, file: string): Promise<Fetched> {
   const progress = fileProgress(app, id, index);
-  const original = await diag.timeOnAsync("script", "script: download to cloud", `Drive file ${file}`, () => {
-    const scratch = seams.cloudMedia.scratchDir(app.store.cacheDir());
-    return seams.cloudMedia.driveOriginal(file, scratch, progress);
-  });
-  setFileState(app, id, index, "cutting");
-  const live = app.store.get(id);
-  const ranges = live === null ? [] : fileRanges(live.project, file);
-  const cache = app.store.cacheDir();
-  const cutUp = await diag.timeOnAsync("script", "script: cloud excerpts", original.key, () =>
-    seams.cloudMedia.driveExcerpts(cache, original, ranges),
-  );
-  return [original.size, original.name, cutUp];
+  const scratch = seams.cloudMedia.scratchDir(app.store.cacheDir());
+  const [original, local] =
+    youtube.idOf(file) !== null
+      ? await diag.timeOnAsync("script", "script: youtube to cloud", file, () =>
+          seams.cloudMedia.youtubeOriginal(app.store.home, file, scratch, progress),
+        )
+      : [
+          await diag.timeOnAsync("script", "script: download to cloud", `Drive file ${file}`, () =>
+            seams.cloudMedia.driveOriginal(file, scratch, progress),
+          ),
+          null,
+        ];
+  try {
+    setFileState(app, id, index, "cutting");
+    const live = app.store.get(id);
+    const ranges = live === null ? [] : fileRanges(live.project, file);
+    const cache = app.store.cacheDir();
+    const cutUp = await diag.timeOnAsync("script", "script: cloud excerpts", original.key, () =>
+      seams.cloudMedia.driveExcerpts(cache, original, ranges, local),
+    );
+    return [original.size, original.name, cutUp];
+  } finally {
+    // A YouTube download is on R2 now: its copy here goes.
+    if (local !== null) fs.rmSync(parent(local) ?? local, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -1526,6 +1616,8 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
         (excerpt) => excerpt.from <= block.start + 1e-6 && block.end <= excerpt.to + 1e-6,
       );
       if (found === undefined) continue;
+      // A reused video plays to its end.
+      if (block.label === REUSE && found.from === 0) block.end = found.to;
       const mediaId = byPath.get(found.path);
       if (mediaId === undefined) continue;
       block.media = mediaId;

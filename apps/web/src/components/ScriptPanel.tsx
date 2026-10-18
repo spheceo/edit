@@ -225,7 +225,7 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
                   ? job.files.some((file) => file.state === "failed")
                     ? "Some footage didn't download"
                     : (job.error ?? "The import stopped")
-                  : "Downloading footage from Drive"}
+                  : "Downloading footage"}
         </span>
         {job.state === "failed" && (
           <button
@@ -320,7 +320,7 @@ function AttachScript({ project }: { project: Project }) {
       </span>
       <div className="mt-3 text-center font-medium">Follow a script</div>
       <p className="mx-auto mt-1 max-w-[280px] text-center text-[12px] leading-relaxed text-muted">
-        Paste a Google Doc. Edit downloads the Drive footage it links and lays out each range, with cut-ins for the narration.
+        Paste a Google Doc. Edit downloads the footage it links (Drive or YouTube) and lays out each range, with cut-ins for the narration.
       </p>
       <input
         value={url}

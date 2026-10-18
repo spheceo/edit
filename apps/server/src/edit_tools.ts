@@ -402,8 +402,22 @@ async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[
   const ids = isNull(args.clip_ids) ? null : strings(args.clip_ids);
   const label = str(args.label);
   const track = str(args.track);
-  if (ids === null && label === null && track === null) throw new Error("pick the clips: clip_ids, label or track");
+  const who = str(args.person);
+  if (ids === null && label === null && track === null && who === null) throw new Error("pick the clips: clip_ids, label, person or track");
   const [, [changed, people]] = await app.store.update(projectId, ORIGIN, (project) => {
+    // A person of the cast, by id, name or label ("Officer:" or "Officer").
+    let personId: string | null = null;
+    if (who !== null) {
+      const wanted = who.toLowerCase().replace(/:$/, "");
+      const found = (project.people ?? []).find((one) =>
+        [one.id, one.name, one.label ?? "", ...(one.names ?? [])].some((name) => name.toLowerCase().replace(/:$/, "") === wanted),
+      );
+      if (found === undefined) {
+        const cast = (project.people ?? []).map((one) => one.label ?? one.name).join(", ");
+        throw new Error(`no person ${who} in the cast${cast === "" ? "" : ` (${cast})`}`);
+      }
+      personId = found.id;
+    }
     const fps = fpsOf(project);
     const fromGiven = num(args.start);
     const toGiven = num(args.end);
@@ -420,7 +434,8 @@ async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[
         (track === null || clip.track === track) &&
         (from === null || clip.start >= from) &&
         (to === null || clip.start < to) &&
-        (label === null || (clip.type === "text" && clip.style?.label?.text === label));
+        (label === null || (clip.type === "text" && clip.style?.label?.text === label)) &&
+        (personId === null || clip.person === personId);
       if (!picked) return clip;
       const value = mergeClip(structuredClone(clip) as unknown as Args, structuredClone(patch));
       value.id = clip.id;

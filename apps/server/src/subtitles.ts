@@ -272,7 +272,7 @@ export function parseTerm(entry: string): [string, string | null] {
  * first word (further back for a word timed as an instant) to 25 ms after
  * the last, within `fromMs`..`toMs`.
  */
-export function suggestions(words: TimedWord[], neglect: boolean, fromMs: number, toMs: number): Suggestion[] {
+export function suggestions(words: TimedWord[], neglect: boolean, fromMs: number, toMs: number, extra: readonly string[] = []): Suggestion[] {
   const stream: [string, number][] = [];
   words.forEach((word, index) => {
     for (const token of tokens(word.text)) stream.push([token, index]);
@@ -301,6 +301,8 @@ export function suggestions(words: TimedWord[], neglect: boolean, fromMs: number
     for (const entry of NEGLECT_TERMS) add(entry, true);
   }
   for (const entry of HOUSE_TERMS) add(entry, true);
+  // A video's own words (a Doc's "Blur this"), muted and starred like the house's.
+  for (const entry of extra) add(entry, true);
   // Longest first (a stable sort, as Rust's).
   listed = [...listed].sort((a, b) => b.parts.length - a.parts.length);
   const out: Suggestion[] = [];
@@ -1242,7 +1244,14 @@ export function timedWords(words: Word[], from: number, to: number): TimedWord[]
  * footage and the voice-overs between `from` and `to` (timeline frames), and
  * the mutes for them. Only the footage's go in `found` (they star subtitles).
  */
-export async function houseWords(app: App, project: Project, from: number, to: number, neglect: boolean): Promise<HouseWords> {
+export async function houseWords(
+  app: App,
+  project: Project,
+  from: number,
+  to: number,
+  neglect: boolean,
+  extra: readonly string[] = [],
+): Promise<HouseWords> {
   const fps = fpsOf(project);
   const sound: [Clip, boolean][] = [
     ...footageSound(project, from, to).map((clip) => [clip, false] as [Clip, boolean]),
@@ -1262,7 +1271,7 @@ export async function houseWords(app: App, project: Project, from: number, to: n
     const onTimeline = onTimelineOf(clip, fps);
     let entry = out.mutes.get(clip.id);
     if (entry === undefined) out.mutes.set(clip.id, (entry = [visibleFrom, visibleTo, []]));
-    for (const suggestion of suggestions(words, neglect, visibleFrom * 1000.0, visibleTo * 1000.0)) {
+    for (const suggestion of suggestions(words, neglect, visibleFrom * 1000.0, visibleTo * 1000.0, extra)) {
       entry[2].push({ from: suggestion.start_ms / 1000.0, to: suggestion.end_ms / 1000.0 });
       const listed: Record<string, unknown> = {
         term: suggestion.term,
@@ -1301,16 +1310,23 @@ function saidDuring(found: Found[], start: number, end: number, fps: number): Su
  * moving nothing: for subtitles finished by hand. Replaces the mutes made
  * before in that span.
  */
-export async function muteHouseWords(app: App, projectId: string, from: number, to: number, neglect: boolean): Promise<unknown> {
+export async function muteHouseWords(
+  app: App,
+  projectId: string,
+  from: number,
+  to: number,
+  neglect: boolean,
+  extra: readonly string[] = [],
+): Promise<unknown> {
   if (to <= from) throw new Error("the span is empty");
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
   const fps = fpsOf(live.project);
-  const house = await houseWords(app, live.project, from, to, neglect);
+  const house = await houseWords(app, live.project, from, to, neglect, extra);
   const [after, [starredCount, onScreen]] = await app.store.update(projectId, "agent", (project) => {
     writeMutes(project, house.mutes);
     const count = starSubtitles(project, house.found, from, to, fps);
-    return [count, starOnScreen(project, from, to, neglect)] as const;
+    return [count, starOnScreen(project, from, to, neglect, extra)] as const;
   });
   return { rev: after.rev, subtitles_starred: starredCount, texts_starred: onScreen, mutes: house.listed };
 }
@@ -1340,14 +1356,14 @@ export function starSubtitles(project: Project, found: Found[], from: number, to
  * `neglect`) starred out, whatever is said: for any text on screen. Words
  * keep their places and lengths, so word timings still fit.
  */
-export function starText(text: string, neglect: boolean): string {
+export function starText(text: string, neglect: boolean, extra: readonly string[] = []): string {
   const words: TimedWord[] = splitWhitespace(text).map((word, index) => ({
     text: word,
     start_ms: index * 100.0,
     end_ms: index * 100.0 + 50.0,
     speaker: null,
   }));
-  return star(text, suggestions(words, neglect, -Number.MAX_VALUE, Number.MAX_VALUE));
+  return star(text, suggestions(words, neglect, -Number.MAX_VALUE, Number.MAX_VALUE, extra));
 }
 
 /**
@@ -1355,11 +1371,11 @@ export function starText(text: string, neglect: boolean): string {
  * and `to` (timeline frames): subtitles, speaker captions, callouts,
  * quotes, charges, labels. How many changed.
  */
-export function starOnScreen(project: Project, from: number, to: number, neglect: boolean): number {
+export function starOnScreen(project: Project, from: number, to: number, neglect: boolean, extra: readonly string[] = []): number {
   let changed = 0;
   for (const clip of project.clips) {
     if (clip.start >= to || clipEnd(clip) <= from || clip.type !== "text") continue;
-    const starredText = starText(clip.text, neglect);
+    const starredText = starText(clip.text, neglect, extra);
     if (starredText !== clip.text) {
       clip.text = starredText;
       changed += 1;

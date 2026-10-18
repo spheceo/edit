@@ -235,9 +235,9 @@ pub struct Script {
 pub enum ScriptBlock {
     /// A range of linked footage, in seconds of that file.
     Footage {
-        /// The link as written (a Google Drive file).
+        /// The link as written (a Google Drive file or a YouTube video).
         url: String,
-        /// The file's id (Drive file id): ranges of one file share it.
+        /// The file's id (a Drive file id, or `youtube:<video id>`): ranges of one file share it.
         file: String,
         start: f64,
         end: f64,
@@ -843,6 +843,10 @@ pub struct TextStyle {
     /// How lines line up with each other (the block stays where it's placed).
     #[serde(default, skip_serializing_if = "TextAlign::is_center")]
     pub align: TextAlign,
+    /// Shown in capitals (the text itself is kept as written: transcripts,
+    /// starring and word times still read it): a courtroom's subtitles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uppercase: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -1063,6 +1067,7 @@ impl Default for TextStyle {
             label: None,
             leader: None,
             align: TextAlign::Center,
+            uppercase: false,
         }
     }
 }
@@ -1396,6 +1401,16 @@ pub struct Grade {
     /// surroundings nearly grey while the person keeps their colour).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub vignette_saturation: f32,
+    /// A light leak: warm light washing over the picture from one side, added
+    /// as light (0 = none, 1 = a strong orange glow, 3+ burns to white where
+    /// it's brightest). Keyed up and down across a cut it's the courtroom's
+    /// and interrogation's transition.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub leak: f32,
+    /// Where the leak's light comes from across the frame: -1 the left edge,
+    /// 0 the centre, 1 the right edge (keyed to sweep it across).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub leak_x: f32,
 }
 
 impl Default for Grade {
@@ -1412,6 +1427,8 @@ impl Default for Grade {
             vignette_aspect: 1.0,
             focus_exposure: 0.0,
             vignette_saturation: 0.0,
+            leak: 0.0,
+            leak_x: 0.0,
         }
     }
 }
@@ -1586,6 +1603,8 @@ pub fn animatable_params(content: &ClipContent) -> &'static [&'static str] {
             "vignette_x",
             "vignette_y",
             "vignette_size",
+            "leak",
+            "leak_x",
             "glitch",
             "blur",
             "blur.x",
@@ -1837,14 +1856,18 @@ impl Project {
                     file, start, end, ..
                 } = block
                 {
-                    if file.is_empty()
-                        || file.len() > 200
-                        || !file
-                            .chars()
+                    // A Drive file id, or `youtube:<video id>`.
+                    let id_chars = |id: &str| {
+                        id.chars()
                             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-                    {
+                    };
+                    let drive = !file.is_empty() && file.len() <= 200 && id_chars(file);
+                    let youtube = file
+                        .strip_prefix("youtube:")
+                        .is_some_and(|id| id.len() == 11 && id_chars(id));
+                    if !drive && !youtube {
                         return Err(
-                            "script file must be a Google Drive ID, without path separators"
+                            "script file must be a Google Drive ID or youtube:<video id>, without path separators"
                                 .to_owned(),
                         );
                     }
@@ -2207,6 +2230,8 @@ fn content_finite(content: &ClipContent) -> bool {
                 grade.vignette_aspect,
                 grade.focus_exposure,
                 grade.vignette_saturation,
+                grade.leak,
+                grade.leak_x,
                 glitch.amount,
                 glitch.slices,
                 glitch.rgb,
@@ -2294,6 +2319,32 @@ mod validation_tests {
         });
         project
     }
+    #[test]
+    fn script_files_are_drive_ids_or_youtube_videos() {
+        let with = |file: &str| {
+            let mut project = project();
+            project.script = Some(Script {
+                source: None,
+                blocks: vec![serde_json::from_value(serde_json::json!({
+                    "kind": "footage", "url": "", "file": file, "start": 1.0, "end": 2.0, "label": ""
+                }))
+                .unwrap_or_else(|error| panic!("{error}"))],
+            });
+            project.validate()
+        };
+        assert!(with("1H9hY3w4LjzWlSAqY8hfp3I5Ft5PP0X9Y").is_ok());
+        assert!(with("youtube:MeT7tyZqfiw").is_ok());
+        for bad in [
+            "youtube:short",
+            "youtube:../../etc/x",
+            "drive:abc",
+            "../x",
+            "",
+        ] {
+            assert!(with(bad).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn an_ntsc_project_runs_at_a_thousand_over_a_thousand_and_one() {
         let mut project: Project = serde_json::from_str(

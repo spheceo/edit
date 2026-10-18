@@ -256,3 +256,58 @@ test("place_voiceovers, tighten_voiceover and speed_voiceover say what's missing
     cleanup();
   }
 });
+
+test("place_voiceovers with some recordings keeps the cut-ins they don't read", async () => {
+  const [{ app, cleanup, home }] = withAgents("voiceover-partial");
+  try {
+    const id = app.store.create("Case", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const take = (name: string, words: string[]) => {
+      const path = `${home}/${name}.mp3`;
+      fs.writeFileSync(path, name);
+      const transcript = app.media.paths(path).transcript;
+      fs.mkdirSync(transcript.slice(0, transcript.lastIndexOf("/")), { recursive: true });
+      const said = words.map((text, index) => ({ text, start: index * 0.5, end: index * 0.5 + 0.4, speaker: "speaker_0" }));
+      fs.writeFileSync(transcript, JSON.stringify({ model: "scribe_v2", language: "eng", words: said }));
+      return path;
+    };
+    const first = take("first", ["the", "detectives", "kept", "asking", "about", "him"]);
+    const second = take("second", ["she", "never", "saw", "the", "file", "coming"]);
+    await app.store.update(id, "test", (project) => {
+      project.media.push(
+        { id: "a1", name: "first", path: first, kind: "audio", duration: 20, width: 0, height: 0, fps: 0, has_audio: true },
+        { id: "a2", name: "second", path: second, kind: "audio", duration: 20, width: 0, height: 0, fps: 0, has_audio: true },
+      );
+      const track = project.tracks[0]!.id;
+      project.clips.push(
+        { id: "k1", type: "solid", track, start: 0, duration: 60, name: "Cut-in 1", fill: [0, 0, 0, 1], color: "pink" } as never,
+        { id: "k2", type: "solid", track, start: 60, duration: 60, name: "Cut-in 2", fill: [0, 0, 0, 1], color: "pink" } as never,
+      );
+      project.script = {
+        blocks: [
+          { kind: "narration", text: "The detectives kept asking about him.", clip: "k1" },
+          { kind: "narration", text: "She never saw the file coming.", clip: "k2" },
+        ],
+      };
+    });
+    const call = async (args: Record<string, unknown>) => {
+      const reply = (await dispatch(app, { id: 1, method: "tools/call", params: { name: "place_voiceovers", arguments: { project_id: id, ...args } } }, null)) as {
+        result: { content: { text: string }[] };
+      };
+      return reply.result.content[0]!.text;
+    };
+    const voiced = () =>
+      app.store.get(id)!.project.script!.blocks.map((block) => {
+        const clip = block.kind === "narration" && block.voiceover ? app.store.get(id)!.project.clips.find((own) => own.id === block.voiceover) : undefined;
+        return clip?.type === "audio" ? clip.media : null;
+      });
+    await call({});
+    expect(voiced()).toEqual(["a1", "a2"]);
+    // A new take of the first cut-in only: the second keeps its voice-over.
+    const answer = await call({ media_ids: ["a1"] });
+    expect(answer).toContain("its voice-over stays");
+    expect(voiced()).toEqual(["a1", "a2"]);
+    expect(app.store.get(id)!.project.clips.filter((clip) => clip.name === "Voice-over").length).toBe(2);
+  } finally {
+    cleanup();
+  }
+});

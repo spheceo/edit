@@ -1410,7 +1410,7 @@
     "name": "realign_script"
   },
   {
-    "description": "Lay voice-over recordings on the script's cut-ins. The recordings read the cut-ins' text: each is transcribed, the words that read each cut-in are found, and that stretch of audio is placed where the cut-in is (on a voice-over track). The cut-in (card and words) takes the voice-over's length and everything after moves with it, so the timeline stays butted. Placing again replaces what it placed. Takes a while the first time (transcription). Reports what was placed and any cut-in whose words weren't found.",
+    "description": "Lay voice-over recordings on the script's cut-ins. The recordings read the cut-ins' text: each is transcribed, the words that read each cut-in are found, and that stretch of audio is placed where the cut-in is (on a voice-over track). The cut-in (card and words) takes the voice-over's length and everything after moves with it, so the timeline stays butted. Placing again replaces what it placed; with media_ids, only on the cut-ins those recordings read (the others keep their voice-overs: a new take of one line touches only that line). A take whose transcript comes back garbled (a few stray words for a long take) is transcribed once more. Takes a while the first time (transcription). Reports what was placed and any cut-in whose words weren't found.",
     "inputSchema": {
       "properties": {
         "media_ids": {

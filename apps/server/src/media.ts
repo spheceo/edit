@@ -347,6 +347,20 @@ export class Processor {
     }
   }
 
+  /**
+   * Transcribes `source` again, its transcript dropped first: for one the
+   * transcriber garbled (a few stray words for a whole take).
+   */
+  retranscribe(source: string, hasAudio: boolean): MediaStatus {
+    if (this.entry(source).transcript === "working") return this.status(source);
+    fs.rmSync(this.paths(source).transcript, { force: true });
+    this.set(source, (status) => {
+      status.transcript = "pending";
+      delete status.transcript_error;
+    });
+    return this.transcribe(source, hasAudio);
+  }
+
   /** Transcribes `source` through the relay unless already done or running. */
   transcribe(source: string, hasAudio: boolean): MediaStatus {
     const current = this.entry(source);

@@ -72,13 +72,19 @@ export async function place(app: App, id: string, given: string[] | null): Promi
   const [, report] = await app.store.update(id, "agent", (project) => {
     const fps = fpsOf(project);
     const blocks = structuredClone(project.script?.blocks ?? []);
-    // What it placed before goes; the cut-ins keep the length they were given.
-    const previous = blocks.flatMap((block) =>
-      block.kind === "narration" && block.voiceover !== undefined && block.voiceover !== null ? [block.voiceover] : [],
-    );
-    const before = project.clips.find((clip) => previous.includes(clip.id))?.track;
-    project.clips = project.clips.filter((clip) => !previous.includes(clip.id));
+    // What it placed before goes where it places again; the cut-ins keep the
+    // length they were given. Recordings named by hand (`given`) replace only
+    // the cut-ins they read: the others keep their voice-overs.
+    const previous = new Map<number, string>();
+    blocks.forEach((block, index) => {
+      if (block.kind === "narration" && block.voiceover !== undefined && block.voiceover !== null) previous.set(index, block.voiceover);
+    });
+    const before = project.clips.find((clip) => [...previous.values()].includes(clip.id))?.track;
     const track = before !== undefined && trackOf(project, before) !== undefined ? before : addTrack(project, "audio");
+    const drop = (index: number) => {
+      const old = previous.get(index);
+      if (old !== undefined) project.clips = project.clips.filter((clip) => clip.id !== old);
+    };
 
     const report: Json[] = [];
     const voiceovers = new Map<number, string>();
@@ -97,8 +103,18 @@ export async function place(app: App, id: string, given: string[] | null): Promi
       }
       const preview = splitWhitespace(block.text).slice(0, 8).join(" ");
       const missing = { cut_in: preview, placed: false, why: "its words weren't found in the recordings" };
+      const kept = given !== null ? previous.get(index) : undefined;
+      const unread = () => {
+        if (kept !== undefined && clipOf(project, kept) !== undefined) {
+          voiceovers.set(index, kept);
+          report.push({ cut_in: preview, kept, why: "the recordings given don't read it: its voice-over stays" });
+        } else {
+          drop(index);
+          report.push(missing);
+        }
+      };
       if (best === null || !(best[2].matched >= wanted.length * LEAST_MATCH)) {
-        report.push(missing);
+        unread();
         return;
       }
       const [media, words, match] = best;
@@ -106,9 +122,10 @@ export async function place(app: App, id: string, given: string[] | null): Promi
       const first = words[match.first];
       const last = words[match.last];
       if (first === undefined || last === undefined) {
-        report.push(missing);
+        unread();
         return;
       }
+      drop(index);
       const ending = match.first > 0 ? words[match.first - 1]?.end : undefined;
       const starting = words[match.last + 1]?.start;
       const from = Math.max(first.start - LEAD, ending === undefined ? 0 : (ending + first.start) / 2, 0);
@@ -254,10 +271,27 @@ function placedVoiceovers(project: Project): string[] {
 /** How long a recording's transcription is waited for. */
 const TRANSCRIBE_LIMIT_MS = 15 * 60 * 1000;
 
-/** A recording's words, transcribing it first if needed. */
+/**
+ * Whether a recording's transcript is too thin to be its speech: a few words
+ * for a long take (the transcriber once answered 19 s of narration with
+ * ". latest 卧"), so it's transcribed once more.
+ */
+export function garbled(words: Word[], seconds: number): boolean {
+  return seconds >= 8 && words.length < seconds / 4;
+}
+
+/** A recording's words, transcribing it first if needed (and once more if it comes back garbled). */
 async function transcript(app: App, media: Media): Promise<Word[]> {
+  const words = await transcribed(app, media, false);
+  if (!garbled(words, media.duration)) return words;
+  diag.warn("voice", `${media.name}: ${words.length} words heard in ${round(media.duration)} s; transcribing it again`);
+  return transcribed(app, media, true);
+}
+
+async function transcribed(app: App, media: Media, again: boolean): Promise<Word[]> {
   const path = media.path;
-  app.media.transcribe(path, media.has_audio);
+  if (again) app.media.retranscribe(path, media.has_audio);
+  else app.media.transcribe(path, media.has_audio);
   const started = timing.now();
   for (;;) {
     const status = app.media.status(path);

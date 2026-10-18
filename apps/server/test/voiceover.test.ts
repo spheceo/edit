@@ -10,6 +10,7 @@ import { suggestions, timedWords, writeMutes, footageSound } from "../src/subtit
 import type { Word } from "../src/transcribe.ts";
 import {
   find,
+  garbled,
   isVoiceover,
   pauses,
   removePauses,
@@ -212,6 +213,14 @@ test("tolerates_a_slip_and_a_skipped_word", () => {
   expect(recording[found.first]).toBe("the");
   expect(recording[found.last]).toBe("rescue");
   expect(found.matched >= cutInWords.length - 2).toBe(true);
+});
+
+test("a_take_with_a_few_stray_words_for_its_length_is_garbled", () => {
+  const word = (text: string) => ({ text, start: 0, end: 0.1 });
+  expect(garbled([word("."), word("latest"), word("卧")], 18.96)).toBe(true);
+  expect(garbled(Array.from({ length: 50 }, () => word("said")), 18.96)).toBe(false);
+  // A short take may say very little.
+  expect(garbled([word("Hello.")], 3)).toBe(false);
 });
 
 test("words_compare_loosely_only_when_long", () => {

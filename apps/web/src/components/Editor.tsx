@@ -5,7 +5,7 @@ import { addElement, addMarker, clipEnd, deleteClips, duplicateClips, rippleDele
 import { playhead, preview } from "../lib/playback";
 import { api, ApiError, useMachine } from "../lib/api";
 import { cloudApi } from "../lib/cloud";
-import { clientId, connectEvents, flushSave, syncScriptJob, useEditor } from "../lib/store";
+import { clientId, connectEvents, leave, settled, syncScriptJob, useEditor } from "../lib/store";
 import { clearIn, clearInOut, clearOut, markIn, markOut } from "../lib/inOut";
 import { goToEnd, goToStart, useView } from "../lib/timelineView";
 import { uploadFiles } from "../lib/upload";
@@ -93,10 +93,11 @@ export function Editor({ id }: { id: string }) {
   useEffect(() => {
     let alive = true;
     connectEvents();
+    // The project left last saves everything first (reopening it shows its last edits).
     // A cloud project: downloaded first if it's only in the cloud, and its
     // lock asked for, so the editor knows whether it's read-only.
-    cloudApi
-      .open(id, clientId)
+    settled()
+      .then(() => cloudApi.open(id, clientId))
       .then((cloud) => alive && useEditor.setState({ cloud }))
       .catch((error) => {
         // Unreachable server: the project request below says so.
@@ -120,9 +121,8 @@ export function Editor({ id }: { id: string }) {
     return () => {
       alive = false;
       clearInterval(heartbeat);
-      void flushSave().finally(() => cloudApi.close(id, clientId).catch(() => {}));
       preview.pause();
-      useEditor.getState().close();
+      void leave().finally(() => cloudApi.close(id, clientId).catch(() => {}));
     };
   }, [id]);
 

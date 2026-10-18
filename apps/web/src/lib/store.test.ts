@@ -53,21 +53,70 @@ describe("save isolation", () => {
     state().redo(); state().redo(); expect(name()).toBe("dragged");
   });
 
-  it("keeps edits made during a conflicting save recoverable with undo", async () => {
+  it("keeps edits made during a conflicting save on top of the latest version", async () => {
     const { useEditor, flushSave } = await import("./store");
     const { ApiError } = await import("./api");
     let fail!: (error: Error) => void;
-    api.saveProject.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+    api.saveProject.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+    api.saveProject.mockResolvedValue({ rev: 3 });
     useEditor.getState().load(1, project("p1"));
     useEditor.getState().edit(draft => { draft.name = "first edit"; });
     const saving = flushSave();
     useEditor.getState().edit(draft => { draft.name = "latest edit"; });
-    fail(Object.assign(new ApiError("conflict", 409, null), { body: { rev: 2, project: project("p1") } }));
+    // Someone else added a track meanwhile.
+    const theirs = { ...project("p1"), tracks: [{ id: "v9", kind: "video" }] } as Project;
+    fail(Object.assign(new ApiError("conflict", 409, null), { body: { rev: 2, project: theirs } }));
     await saving;
     expect(useEditor.getState().rev).toBe(2);
-    useEditor.getState().undo();
     expect(useEditor.getState().project?.name).toBe("latest edit");
+    expect(useEditor.getState().project?.tracks.map(track => track.id)).toEqual(["v9"]);
     expect(useEditor.getState().dirty).toBe(true);
+  });
+
+  it("leaving saves an edit queued behind a save under way before it closes", async () => {
+    const { useEditor, flushSave, leave, settled } = await import("./store");
+    let finish!: (value: { rev: number }) => void;
+    api.saveProject.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    api.saveProject.mockResolvedValue({ rev: 3 });
+    useEditor.getState().load(1, project("p1"));
+    useEditor.getState().edit(draft => { draft.name = "first"; });
+    void flushSave();
+    useEditor.getState().edit(draft => { draft.name = "second"; });
+    const left = leave();
+    // Still open until it's saved.
+    expect(useEditor.getState().project?.name).toBe("second");
+    finish({ rev: 2 });
+    await left;
+    await settled();
+    expect(api.saveProject).toHaveBeenCalledTimes(2);
+    expect(api.saveProject.mock.calls[1]![1]).toBe(2);
+    expect(useEditor.getState().project).toBeNull();
+  });
+
+  it("leaving mid-drag saves the drag", async () => {
+    const { useEditor, leave } = await import("./store");
+    api.saveProject.mockResolvedValue({ rev: 2 });
+    useEditor.getState().load(1, project("p1"));
+    useEditor.getState().beginGesture();
+    useEditor.getState().gesture(draft => { draft.name = "dragged"; });
+    await leave();
+    expect(api.saveProject).toHaveBeenCalledTimes(1);
+    expect((api.saveProject.mock.calls[0]![2] as { set: { name: string } }).set.name).toBe("dragged");
+  });
+
+  it("an import's answer keeps an edit made while it ran", async () => {
+    const { useEditor } = await import("./store");
+    useEditor.getState().load(1, project("p1"));
+    useEditor.getState().edit(draft => { draft.name = "renamed"; });
+    const media = { id: "m1", name: "a.wav", path: "/a.wav", kind: "audio", duration: 1, width: 0, height: 0, fps: 0, has_audio: true };
+    useEditor.getState().adopt(2, { ...project("p1"), media: [media] } as Project);
+    expect(useEditor.getState().project?.name).toBe("renamed");
+    expect(useEditor.getState().project?.media.map(item => item.id)).toEqual(["m1"]);
+    expect(useEditor.getState().rev).toBe(2);
+    expect(useEditor.getState().dirty).toBe(true);
+    // Undo goes back to before the import.
+    useEditor.getState().undo();
+    expect(useEditor.getState().project?.media).toEqual([]);
   });
 
   it("saves only what changed since the server's version, and takes changes as patches", async () => {

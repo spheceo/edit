@@ -113,6 +113,63 @@ let server: { rev: number; project: Project } | null = null;
 function remember(rev: number, project: Project) {
   if (server === null || server.project.id !== project.id || rev >= server.rev) server = { rev, project };
 }
+
+/**
+ * The server's version the project on screen was last in step with: its
+ * unsaved edits are what changed since. A change from the server (an import's
+ * answer, another client's edit, a conflict) is taken with those edits put
+ * back on top (`rebase`), never in their place.
+ */
+let synced: Project | null = null;
+
+/** Every list patch without its reordering (an order that can't fit after a change from elsewhere). */
+function withoutOrders(patch: patches.Patch): patches.Patch {
+  const lists: patches.Patch["lists"] = {};
+  for (const [key, list] of Object.entries(patch.lists)) lists[key] = { put: list.put, remove: list.remove };
+  return { ...patch, lists };
+}
+
+/**
+ * `incoming` (the server's newer version) with the unsaved edits on screen
+ * put on top: `kept` when there were any and they fit, `lost` when they
+ * didn't (the caller keeps the version on screen in the undo history).
+ */
+function rebase(incoming: Project): { project: Project; kept: boolean; lost: boolean } {
+  const { project, dirty } = useEditor.getState();
+  if (!project || !dirty || synced === null || synced.id !== incoming.id) return { project: incoming, kept: false, lost: false };
+  const local = patches.diff(synced, project);
+  if (patches.empty(local)) return { project: incoming, kept: false, lost: false };
+  for (const attempt of [local, withoutOrders(local)]) {
+    try {
+      const merged = patches.apply(incoming, attempt);
+      if (validateProject(merged) === null) return { project: merged, kept: true, lost: false };
+    } catch {
+      // Doesn't fit as it is: try without the reordering, then give up.
+    }
+  }
+  return { project: incoming, kept: false, lost: true };
+}
+
+/** Takes the server's newer `incoming` at `rev` with the edits on screen kept on top (one undo step). */
+function takeFromServer(rev: number, incoming: Project, extra: Partial<EditorState> = {}) {
+  const state = useEditor.getState();
+  const current = state.project;
+  if (!current) return;
+  const { project: merged, kept, lost } = rebase(incoming);
+  synced = incoming;
+  const next = shareProject(current, merged);
+  useEditor.setState({
+    project: next,
+    rev,
+    dirty: kept,
+    gestureBase: null,
+    past: next === current ? state.past : [...state.past.slice(-HISTORY_LIMIT), current],
+    future: [],
+    ...extra,
+  });
+  if (kept) scheduleSave(0);
+  if (lost) useEditor.getState().toast("The project changed while you were editing and your latest change didn't fit; undo brings it back.", "error");
+}
 let readOnlySaid = 0;
 
 /** A cloud project someone else is editing can't be changed here: says so (now and then) and refuses. */
@@ -154,12 +211,14 @@ export const useEditor = create<EditorState>((set, get) => ({
     editorSession++;
     clearTimeout(saveTimer);
     server = { rev, project };
+    synced = project;
     set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, driveState: null, media: {}, scriptJob: null });
   },
   close: () => {
     editorSession++;
     clearTimeout(saveTimer);
     server = null;
+    synced = null;
     set({ project: null, rev: 0, past: [], future: [], gestureBase: null, dirty: false, saving: false, selection: [], media: {}, cloud: null });
   },
 
@@ -224,14 +283,13 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   adopt: (rev, next) => {
     if (get().gestureBase) get().endGesture();
-    const { project, past } = get();
+    const { project } = get();
     if (!project || next.id !== project.id || rev < get().rev) return;
     remember(rev, next);
-    // The live event for our own change can land first: it bumps rev but leaves the project
-    // to this response. Another client's event may instead have brought the change already.
+    // The live event for the change can land first and have brought it already.
     if (rev === get().rev && JSON.stringify(project) === JSON.stringify(next)) return;
-    next = shareProject(project, next);
-    set({ project: next, rev, past: next === project ? past : [...past.slice(-HISTORY_LIMIT), project], future: [], dirty: false });
+    // Edits made while the server worked on it (a rename during an import) stay.
+    takeFromServer(rev, next);
   },
 
   select: (ids, mode = "replace") => {
@@ -311,15 +369,16 @@ async function saveProject(state: EditorState) {
     if (session !== editorSession) return;
     remember(rev, project);
     const current = useEditor.getState();
+    if (rev >= current.rev) synced = project;
     useEditor.setState({ rev: Math.max(rev, current.rev), dirty: current.project !== project });
   } catch (error) {
     if (session !== editorSession) return;
     if (error instanceof ApiError && error.status === 409) {
+      // Changed elsewhere meanwhile: the edits on screen go on top of the latest version.
       const body = error.body as { rev: number; project: Project };
       remember(body.rev, body.project);
-      const current = useEditor.getState();
-      useEditor.setState({ project: shareProject(current.project ?? project, body.project), rev: body.rev, dirty: false, gestureBase: null, past: [...current.past.slice(-HISTORY_LIMIT), current.project ?? project], future: [] });
-      useEditor.getState().toast("The project changed elsewhere; showing the latest version.", "info");
+      takeFromServer(body.rev, body.project);
+      useEditor.getState().toast("The project changed elsewhere; your edits are kept on the latest version.", "info");
     } else if (error instanceof ApiError && error.status === 423) {
       // A cloud project someone else is editing now (they took over): show theirs.
       useEditor.getState().toast(error.message, "error");
@@ -327,19 +386,24 @@ async function saveProject(state: EditorState) {
         const live = await api.project(project.id);
         if (session === editorSession) {
           remember(live.rev, live.project);
+          synced = live.project;
           useEditor.setState({ project: live.project, rev: live.rev, dirty: false, gestureBase: null });
         }
       } catch {
         // Offline: keep what's on screen.
       }
     } else if (error instanceof ApiError && error.status === 400) {
-      // The server refused the change: show what it has, never a version that can't be saved.
-      useEditor.getState().toast(`That change couldn't be saved (${error.message}); restored the last saved version.`, "error");
+      // The server refused the change: show what it has, never a version that
+      // can't be saved; what was on screen stays one undo away.
+      useEditor.getState().toast(`That change couldn't be saved (${error.message}); restored the last saved version (undo brings yours back).`, "error");
       try {
         const live = await api.project(project.id);
         if (session === editorSession) {
           remember(live.rev, live.project);
-          useEditor.setState({ project: live.project, rev: live.rev, dirty: false });
+          synced = live.project;
+          const current = useEditor.getState();
+          const past = current.project ? [...current.past.slice(-HISTORY_LIMIT), current.project] : current.past;
+          useEditor.setState({ project: live.project, rev: live.rev, dirty: false, gestureBase: null, past, future: [] });
         }
       } catch {
         // Offline: keep what's on screen; the next save retries.
@@ -353,6 +417,35 @@ async function saveProject(state: EditorState) {
 }
 
 export const flushSave = flush;
+
+/** Settles when the last editor left has saved what it had. */
+let leaving: Promise<void> = Promise.resolve();
+
+/**
+ * Leaves the open project: finishes a drag, saves every edit (waiting for a
+ * save already under way, then saving what came after it), and only then
+ * closes it. The next project waits for this (`settled`), so nothing it does
+ * can drop the last edits, and reopening the same project fetches them.
+ */
+export function leave(): Promise<void> {
+  const state = useEditor.getState();
+  if (state.gestureBase) state.endGesture();
+  const session = editorSession;
+  leaving = (async () => {
+    for (let round = 0; round < 3; round++) {
+      await flush();
+      if (session !== editorSession || !useEditor.getState().dirty) break;
+    }
+    if (session !== editorSession) return;
+    if (useEditor.getState().dirty) useEditor.getState().toast("Your last changes couldn't be saved.", "error");
+    useEditor.getState().close();
+  })();
+  return leaving;
+}
+
+export function settled(): Promise<void> {
+  return leaving;
+}
 
 // ---------------------------------------------------------------------------
 // Live events: agent edits, media processing, exports.
@@ -398,7 +491,10 @@ function catchUp() {
     .then(({ rev, project: fresh }) => {
       const now = useEditor.getState();
       if (now.project?.id === fresh.id) remember(rev, fresh);
-      if (now.project?.id === fresh.id && !now.dirty && rev > now.rev) useEditor.setState({ rev, project: shareProject(now.project, fresh) });
+      if (now.project?.id === fresh.id && !now.dirty && rev > now.rev) {
+        synced = fresh;
+        useEditor.setState({ rev, project: shareProject(now.project, fresh) });
+      }
     })
     .catch(() => {});
   void api
@@ -442,22 +538,12 @@ export function connectEvents() {
       }
       if (full === undefined) return;
       remember(event.rev, full);
-      if (event.origin === clientId) {
-        if (event.rev > state.rev) useEditor.setState({ rev: event.rev });
-        return;
-      }
       if (event.rev <= state.rev) return;
-      clearTimeout(saveTimer);
-      const next = shareProject(project, full);
-      useEditor.setState({
-        project: next,
-        rev: event.rev,
-        dirty: false,
-        gestureBase: null,
-        past: next === project ? state.past : [...state.past.slice(-HISTORY_LIMIT), project],
-        future: [],
-        selection: state.selection.filter((id) => full.clips.some((clip) => clip.id === id)),
-      });
+      // Our own: a save's echo (its answer sets the rev) or a change made at
+      // our request (an import), taken now unless edits on screen are waiting
+      // to save (their save then meets it and keeps both).
+      if (event.origin === clientId && (state.dirty || inFlight !== null)) return;
+      takeFromServer(event.rev, full, { selection: state.selection.filter((id) => full.clips.some((clip) => clip.id === id)) });
       if (event.origin === "agent") {
         clearTimeout(agentTimer);
         useEditor.setState({ agentActive: Date.now() });

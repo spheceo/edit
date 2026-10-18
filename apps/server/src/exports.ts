@@ -26,6 +26,8 @@ interface Running {
   key: string;
   cancelled: boolean;
   job: ExportJob | null;
+  /** The timeline kept for a restart (`snapshotFile`), removed when it ends. */
+  snapshot: string | null;
 }
 
 /**
@@ -49,6 +51,27 @@ export interface ExportRecord {
 
 /** How many exports a project keeps listed (the oldest drop off the list; their files stay). */
 const KEEP_LISTED = 30;
+
+/**
+ * The project as an export running for it was asked for, kept while it runs
+ * so an export a restart cut short carries on with that timeline, not edits
+ * made since (`resumeSnapshot`).
+ */
+function snapshotFile(home: string, id: string): string {
+  return join(home, "jobs", `export-${id}.json`);
+}
+
+/** The project an export a restart cut short was started with, if it was kept. */
+export function resumeSnapshot(home: string, id: string, args: Record<string, unknown>): Project | null {
+  const path = args.snapshot;
+  // Only the file Edit keeps for it: jobs.json names nothing else to read.
+  if (typeof path !== "string" || path !== snapshotFile(home, id)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(path, "utf8")) as Project;
+  } catch {
+    return null;
+  }
+}
 
 function recordsFile(home: string): string {
   return join(home, "exports.json");
@@ -172,8 +195,19 @@ export class ExportRegistry implements seams.Exports {
     if (this.jobs.size > 0) {
       throw new Error("an export is already running; wait for it or cancel it before starting another");
     }
-    const key = jobs.begin(this.home, "export", project.id, { options, output: path });
-    const running: Running = { output: path, key, cancelled: false, job: null };
+    let snapshot: string | null = null;
+    if (this.home !== null) {
+      snapshot = snapshotFile(this.home, project.id);
+      try {
+        fs.mkdirSync(join(this.home, "jobs"), { recursive: true });
+        writeAtomic(snapshot, jsonForSerde(project));
+      } catch (error) {
+        diag.warn("export", `couldn't keep ${project.id}'s timeline for a restart: ${ioMessage(error)}`);
+        snapshot = null;
+      }
+    }
+    const key = jobs.begin(this.home, "export", project.id, snapshot === null ? { options, output: path } : { options, output: path, snapshot });
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -182,6 +216,7 @@ export class ExportRegistry implements seams.Exports {
       if (!seams.isUnavailable(error)) {
         this.jobs.delete(project.id);
         jobs.end(this.home, key);
+        if (snapshot !== null) fs.rmSync(snapshot, { force: true });
         throw error;
       }
     }
@@ -293,6 +328,7 @@ export class ExportRegistry implements seams.Exports {
     }
     this.jobs.delete(id);
     jobs.end(this.home, running.key);
+    if (running.snapshot !== null) fs.rmSync(running.snapshot, { force: true });
     if (upload && result.ok) {
       try {
         seams.drive.start(store, library, project, output);

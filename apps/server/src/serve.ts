@@ -12,7 +12,7 @@ import { startCleaning } from "./cache_cleanup.ts";
 import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
 import { registerEditingTools } from "./edit_tools.ts";
-import { ExportRegistry } from "./exports.ts";
+import { ExportRegistry, resumeSnapshot } from "./exports.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
@@ -229,7 +229,10 @@ function resumeJobs(app: App): void {
   void jobs.resume(app.store.home, {
     export: async (job) => {
       const { options, output } = job.args as { options: ExportOptions; output: string };
-      await app.exports.start(app.store, app.library, project(job.project), options, output);
+      // The timeline it was started with, not edits made since.
+      const current = project(job.project);
+      const asked = resumeSnapshot(app.store.home, job.project, job.args) ?? current;
+      await app.exports.start(app.store, app.library, asked, options, output);
     },
     drive: (job) => {
       const { path } = job.args as { path: string };

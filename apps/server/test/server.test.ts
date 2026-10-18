@@ -3,7 +3,9 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import type { App } from "../src/app.ts";
-import { ExportRegistry } from "../src/exports.ts";
+import { ExportRegistry, resumeSnapshot } from "../src/exports.ts";
+import type * as jobs from "../src/jobs.ts";
+import type { ExportOptions } from "../src/model.ts";
 import { parseRange } from "../src/http/files.ts";
 import type { Router } from "../src/http/router.ts";
 import { respond } from "../src/http/server.ts";
@@ -277,6 +279,30 @@ test("an export runs one at a time, tells clients how it goes, and only its file
     // The default name: the project's, made safe, in the exports folder.
     const project = store.get(id)!.project;
     expect(defaultExportPath(store, project)).toBe(`${store.layout().exportsDir()}/Teen_ the edit_.mp4`);
+  } finally {
+    useNative(before);
+    cleanup();
+  }
+});
+
+test("an export a restart cuts short carries on with the timeline it was asked for", async () => {
+  const { dir, home, store, cleanup } = fixtureHome("server-export-snapshot");
+  const before = useNative(exportingNative(5000));
+  const registry = new ExportRegistry(home);
+  try {
+    const id = store.create("Asked for", { width: 64, height: 36, fps: 30 }).project.id;
+    await registry.start(store, null as never, store.get(id)!.project, { format: "h264" } as ExportOptions, `${dir}/a.mp4`);
+    // Editing goes on while it runs, then the server stops.
+    await store.update(id, "ui", (project) => void (project.name = "Edited since"));
+    const job = (JSON.parse(fs.readFileSync(`${home}/jobs.json`, "utf8")) as jobs.Job[]).find((one) => one.kind === "export")!;
+    expect(resumeSnapshot(home, id, job.args)?.name).toBe("Asked for");
+    // Only the file Edit keeps for that project is read.
+    expect(resumeSnapshot(home, "other", job.args)).toBeNull();
+    expect(resumeSnapshot(home, id, { ...job.args, snapshot: `${home}/projects/${id}.json` })).toBeNull();
+    // Ended (here cancelled): the snapshot goes with the job.
+    registry.cancel(id);
+    while (registry.running()) await Bun.sleep(10);
+    expect(fs.existsSync(String(job.args.snapshot))).toBe(false);
   } finally {
     useNative(before);
     cleanup();

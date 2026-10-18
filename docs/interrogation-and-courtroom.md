@@ -24,8 +24,11 @@ Research (Gemini's answers, stills, transcripts, Doc exports) is on the LaCie:
 - [x] Mixed narration/range paragraphs, "Reuse: <link>" notes, no generated voice for courtroom
 - [x] Effects: the light leak (`grade.leak`, plan transitions `light_leak` and `burn`), capitals (`style.uppercase`), `update_clips {person}`, `mute_house_words {words}`; the guides use them
 - [x] Server rebuilt and restarted
-- [ ] Interrogation demo project created and edited
-- [ ] Courtroom demo project created and edited (needs `newest.mp3` again: the T3 attachment is gone)
+- [x] Interrogation demo project created and edited (Oct 18: "2 Hours Of Cops Realizing Their Own Colleague Is The KILLER", 2:34:53 with the reused Zelich video; import ~45 min, the agent's edit 55 min over 136 model calls, then a fix-up turn for the Lazarus framing and THE CRIME SEEN watermark)
+- [x] Courtroom demo project created and edited (Oct 18: "Corrupt Cop FAKES CRIME — His Own Bodycam BACKFIRES In Court!", 19:26 on `newest.mp3`; the agent's edit 23 min over 50 model calls)
+- [ ] Not exported yet (the user reviews first)
+
+Found while making them, fixed in code: yt-dlp needs FFmpeg by its full path; a garbled take transcript is transcribed again and a partial place_voiceovers keeps the other cut-ins; repack_subtitles works out three files' seats at once, and an older subtitle run never saves over a newer one; map_view asked again answers with the media it already made; people far apart in time, or suspects, may keep one colour; the audit flags text under a blur; the house style asks for footage to fill the frame and for other channels' watermarks to go. Left as they are: the courtroom's punch-ins at 2.8× into one pane of a stacked feed are soft (the guide says 1.3–2×).
 
 ## Blockers (Oct 17; 1–3 fixed Oct 18)
 

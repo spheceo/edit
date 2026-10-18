@@ -23,4 +23,10 @@ test("every_style_has_the_house_skills", () => {
   }
   expect(styles.instructions("bodycam")).toBe("THIS VIDEO'S STYLE: bodycam. The house style above applies to it.");
   expect(styles.allSkillNames()).toEqual(SKILLS.map((skill) => skill.name));
+  // Interrogations and courtrooms have their own rules and versions of the workflow.
+  expect(styles.instructions("interrogation")).toContain("INTERROGATION VIDEOS");
+  expect(styles.instructions("courtroom")).toContain("COURTROOM VIDEO");
+  for (const style of ["interrogation", "courtroom"] as const) {
+    expect(styles.skill(style, "edit-workflow")).not.toBe(get("edit-workflow"));
+  }
 });

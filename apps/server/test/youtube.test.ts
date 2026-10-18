@@ -98,7 +98,9 @@ function fakeYtdlp(dir: string, refusals: number): string {
     script,
     `#!/bin/sh
 n=$(cat "${count}" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${count}"
-for arg in "$@"; do case "$prev" in -P) out="$arg";; esac; prev="$arg"; done
+for arg in "$@"; do case "$prev" in -P) out="$arg";; --ffmpeg-location) ff="$arg";; esac; prev="$arg"; done
+# As yt-dlp: FFmpeg by a bare name isn't found, and the streams stay unmerged.
+case "$ff" in /*) ;; *) echo "EDIT-FILE $out/never-merged.mp4"; exit 0;; esac
 if [ $n -le ${refusals} ]; then echo "ERROR: [youtube] abc: Sign in to confirm you're not a bot" >&2; exit 1; fi
 echo "EDIT 512 1024 NA Some title"
 echo "EDIT 1024 1024 NA Some title"

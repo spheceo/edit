@@ -108,6 +108,17 @@ async function fetchYtdlp(to: string): Promise<string> {
   });
 }
 
+/**
+ * Where yt-dlp finds FFmpeg (it merges the picture and the sound): a path,
+ * never a bare name, which yt-dlp takes for a missing FFmpeg and then leaves
+ * the streams unmerged without a word under --no-warnings.
+ */
+function ffmpegArgs(): string[] {
+  const tool = tools.ffmpeg();
+  const path = tool.includes("/") ? tool : Bun.which(tool);
+  return path === null ? [] : ["--ffmpeg-location", path];
+}
+
 /** yt-dlp's JavaScript runtime for YouTube's challenges: Deno by default; Node or Bun when that's what this Mac has. */
 function runtimeArgs(): string[] {
   if (Bun.which("deno") !== null) return [];
@@ -221,6 +232,8 @@ async function runYtdlp(
     "--no-playlist",
     "--no-warnings",
     "--newline",
+    // --print below makes it quiet; the progress lines still come.
+    "--progress",
     "--no-mtime",
     "--retries",
     "5",
@@ -233,8 +246,7 @@ async function runYtdlp(
     FORMAT,
     "--merge-output-format",
     "mp4",
-    "--ffmpeg-location",
-    tools.ffmpeg(),
+    ...ffmpegArgs(),
     ...runtimeArgs(),
     "-P",
     dir,
@@ -285,6 +297,7 @@ async function runYtdlp(
     }
   };
   const [, stderr, code] = await Promise.all([lines(), new Response(child.stderr).text(), child.exited]);
-  if (code !== 0 || path === null || !fs.existsSync(path)) return { path: null, stderr };
+  if (code !== 0 || path === null) return { path: null, stderr };
+  if (!fs.existsSync(path)) return { path: null, stderr: `${stderr}\nERROR: yt-dlp finished without the file it named` };
   return { path, stderr };
 }

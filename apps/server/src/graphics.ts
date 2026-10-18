@@ -8,6 +8,10 @@
 //   with a shadow over a dark blurred copy of itself filling the frame, easing
 //   in and slowly pushing in, with a clean label under it. cover_cut_in lays
 //   every picture shot out this way too.
+// - `title_collage`: a compilation's title card (Judge Jester's "When cocky
+//   attorneys taunted judges…"): the cases' photos framed in white, a row
+//   above and a row below, the title in big glowing capitals between them,
+//   over a darkened courtroom.
 
 import { clipFrom } from "./clips.ts";
 import type { Clip, Project } from "./model.ts";
@@ -436,4 +440,130 @@ export function dateDrift(project: Project): Record<string, unknown>[] {
     }
   }
   return out;
+}
+
+/**
+ * A compilation's title card, from `{"op":"title_collage","title":"When…",
+ * "photos":["m1",…],"start":F,"end":F,"backdrop":"m9","backdrop_at":12.5}`:
+ * 2–6 photos (one per case: the people it's about), each cropped to the same
+ * box (~25% of the width, ~37% of the height) and framed in white with a
+ * shadow, half in a row above and the rest below, popping in one after
+ * another; the title between the rows in white Geist 900 capitals with a
+ * soft white glow, rising in after them; over `backdrop` (a courtroom shot:
+ * footage from `backdrop_at` seconds, or a picture) darkened and softened
+ * with a slow push-in, else a dark wood-brown. Each on a new track above
+ * everything there.
+ */
+export function titleCollage(project: Project, args: Args): Record<string, unknown> {
+  const [start, end] = span(args, "title_collage");
+  const title = typeof args.title === "string" ? trim(args.title) : "";
+  if (title === "") throw new Error("title_collage needs title (the video's title)");
+  const photos = Array.isArray(args.photos) ? args.photos.filter((id): id is string => typeof id === "string") : [];
+  if (photos.length < 2 || photos.length > 6) throw new Error("title_collage needs photos: 2 to 6 pictures' media ids (one per case)");
+  const [width, height] = [project.settings.width, project.settings.height];
+  const k = height / 1080;
+  const duration = end - start;
+  const last = Math.max(duration - 1, 1);
+  const key = (frame: number, value: number, ease: string) => ({ frame, value, ease });
+  const made: string[] = [];
+  // The backdrop: a courtroom, darkened and softened, pushing in slowly.
+  const backdrop = typeof args.backdrop === "string" ? args.backdrop : null;
+  if (backdrop !== null) {
+    const media = mediaOf(project, backdrop);
+    if (media === undefined) throw new Error(`no media ${backdrop}`);
+    const [w, h] = [Math.max(media.width, 1), Math.max(media.height, 1)];
+    const fit = Math.min(width / w, height / h);
+    const cover = Math.max(width / (w * fit), height / (h * fit)) * 1.04;
+    push(project, made, {
+      type: "video",
+      name: "Title card · backdrop",
+      track: addTrack(project, "video"),
+      start,
+      duration,
+      media: backdrop,
+      source_in: Math.max(num(args.backdrop_at) ?? 0, 0),
+      speed: media.kind === "image" ? 1 : 0.5,
+      transform: { scale: cover },
+      keyframes: { scale: [key(0, cover, "linear"), key(last, cover * 1.05, "linear")] },
+    });
+    push(project, made, {
+      type: "adjustment",
+      name: "Title card · darken",
+      track: addTrack(project, "video"),
+      start,
+      duration,
+      blur: { radius: 6 * k },
+      grade: { exposure: -1.5, saturation: -0.25, vignette: 0.55 },
+    });
+  } else {
+    push(project, made, {
+      type: "solid",
+      name: "Title card · backdrop",
+      track: addTrack(project, "video"),
+      start,
+      duration,
+      fill: [0.13, 0.08, 0.06, 1],
+    });
+  }
+  // The photos: the same box each, cropped to it, a row above and a row below.
+  const [boxW, boxH] = [0.245 * width, 0.37 * height];
+  const top = Math.ceil(photos.length / 2);
+  const rows: [string[], number, number][] = [
+    [photos.slice(0, top), -0.285 * height, 0.345 * width],
+    [photos.slice(top), 0.262 * height, 0.352 * width],
+  ];
+  let index = 0;
+  for (const [row, y, spacing] of rows) {
+    row.forEach((mediaId, column) => {
+      const media = mediaOf(project, mediaId);
+      if (media === undefined) throw new Error(`no media ${mediaId}`);
+      if (media.kind !== "image") throw new Error(`${mediaId} isn't a picture: title_collage's photos are pictures (a still_frame for a hearing)`);
+      const [w, h] = [Math.max(media.width, 1), Math.max(media.height, 1)];
+      const fit = Math.min(width / w, height / h);
+      const [box, aspect] = [boxW / boxH, w / h];
+      const side = aspect > box ? (1 - box / aspect) / 2 : 0;
+      const ends = aspect > box ? 0 : (1 - aspect / box) / 2;
+      const scale = boxW / (w * fit * (1 - 2 * side));
+      const from = Math.min(index * 4, Math.max(duration - 12, 0));
+      index += 1;
+      push(project, made, {
+        type: "video",
+        name: `Title card · photo ${index}`,
+        track: addTrack(project, "video"),
+        start: start + from,
+        duration: duration - from,
+        media: mediaId,
+        source_in: 0,
+        fade_in: 6,
+        crop: { left: side, right: side, top: ends, bottom: ends },
+        transform: { x: (column - (row.length - 1) / 2) * spacing, y, scale },
+        frame: { width: 5 * k, color: [1, 1, 1, 1], shadow: 0.55 },
+        keyframes: { scale: [key(0, scale * 0.9, "out"), key(8, scale, "linear"), key(Math.max(last - from, 9), scale * 1.02, "linear")] },
+      });
+    });
+  }
+  // The title between the rows, after the photos.
+  const from = Math.min(index * 4 + 4, Math.max(duration - 12, 0));
+  push(project, made, {
+    type: "text",
+    name: "Title card · title",
+    track: addTrack(project, "video"),
+    start: start + from,
+    duration: duration - from,
+    fade_out: 8,
+    text: title,
+    style: {
+      font: "Geist",
+      weight: 900,
+      size: round(62 * k),
+      color: [1, 1, 1, 1],
+      line_height: 1.12,
+      max_width: 0.88 * width,
+      uppercase: true,
+      glow: { enabled: true, color: [1, 1, 1, 1], radius: 28 * k, strength: 0.55 },
+    },
+    transform: { x: 0, y: -0.012 * height },
+    animation: { preset: "rise", duration: 12, stagger: 0.6 },
+  });
+  return { clips: made };
 }

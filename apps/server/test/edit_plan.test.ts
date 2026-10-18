@@ -432,6 +432,33 @@ test("words_under_a_blur_are_flagged", () => {
   expect(under[0]!.clip).toBe(clipNamed(p, "Tag").id);
 });
 
+test("a_compilation_title_card_frames_its_photos_in_two_rows_around_the_title", () => {
+  const p = project("plan");
+  for (let index = 1; index <= 5; index++) {
+    // Portraits and landscapes alike: each cropped to the same box.
+    const [width, height] = index % 2 === 0 ? [800, 1200] : [1920, 1080];
+    p.media.push(media({ id: `m${index}`, name: "photo", path: `/p${index}.jpg`, kind: "image", duration: 30, width, height }));
+  }
+  apply(p, [{ op: "title_collage", title: "When cocky attorneys taunted judges…", photos: ["m1", "m2", "m3", "m4", "m5"], start: 0, end: 150 }]);
+  const photos = p.clips.filter((clip) => (clip.name ?? "").startsWith("Title card · photo"));
+  expect(photos.length).toBe(5);
+  const ys = photos.map((clip) => (clip.type === "video" ? Math.round(clip.transform.y) : 0));
+  expect(ys.filter((y) => y < 0).length).toBe(3);
+  expect(ys.filter((y) => y > 0).length).toBe(2);
+  for (const clip of photos) {
+    if (clip.type !== "video") continue;
+    expect(clip.frame).toBeTruthy();
+    // Every photo shows the same box: its width at full scale is ~25% of the frame.
+    const own = p.media.find((one) => one.id === clip.media)!;
+    const fit = Math.min(1920 / own.width, 1080 / own.height);
+    const shown = own.width * fit * clip.transform.scale * (1 - clip.crop!.left - clip.crop!.right);
+    expect(Math.abs(shown - 0.245 * 1920)).toBeLessThan(1);
+  }
+  const title = clipNamed(p, "Title card · title");
+  expect(title.type === "text" && title.style.uppercase).toBe(true);
+  expect(() => apply(p, [{ op: "title_collage", title: "When…", photos: ["m1"], start: 0, end: 150 }])).toThrow("2 to 6");
+});
+
 test("unresolved_reference_and_bad_final_state_fail", () => {
   const p = project("plan");
   expect(() => apply(p, [{ op: "delete", select: { ids: [{ $ref: "missing" }] } }])).toThrow(

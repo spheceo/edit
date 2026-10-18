@@ -320,13 +320,15 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return graphics.evidenceCard(project, args);
     case "date_title":
       return graphics.dateTitle(project, args);
+    case "title_collage":
+      return graphics.titleCollage(project, args);
     case "place_label":
       return graphics.placeLabel(project, args);
     case "markers":
       return markers.edit(project, args);
     default:
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, evidence_card, date_title, place_label, desktop_profile, markers, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, markers, tidy_tracks`,
       );
   }
 }

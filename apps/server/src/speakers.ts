@@ -369,7 +369,7 @@ async function name(app: App, source: string, target: string): Promise<void> {
  * The editors' colour code (Repack's subtitles): the first of each is the
  * role's own colour, the rest shades for a second or third person in it.
  */
-function palette(role: string, victimPresent: boolean): readonly string[] {
+export function palette(role: string, victimPresent: boolean): readonly string[] {
   switch (role) {
     // A second officer is paler than the first, a third deeper; the rest
     // stand too close to those to be told apart, so are picked only when
@@ -399,10 +399,10 @@ function palette(role: string, victimPresent: boolean): readonly string[] {
   }
 }
 
-const OTHER = ["#3ddc84", "#ffb3d9", "#b8f23a", "#9cff8a", "#a6e3ff", "#ffd59e"] as const;
+export const OTHER = ["#3ddc84", "#ffb3d9", "#b8f23a", "#9cff8a", "#a6e3ff", "#ffd59e"] as const;
 
 /** Colours for a person whose role has no shade left that stands apart: light ones no role starts with. */
-const SPARE = ["#c9a8ff", "#ff9e9e", "#e0ff8a", "#ffc2f0"] as const;
+export const SPARE = ["#c9a8ff", "#ff9e9e", "#e0ff8a", "#ffc2f0"] as const;
 
 /**
  * How far apart (CIE76 ΔE) two people's colours must be. Officer shades
@@ -574,6 +574,8 @@ export function roleFromLabel(label: string): string {
       "dcf",
       "cps",
       "caseworker",
+      "social",
+      "dcfs",
       "firefighter",
       "nurse",
       "doctor",

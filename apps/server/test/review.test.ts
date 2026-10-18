@@ -51,4 +51,6 @@ test("any_share_link_of_one_video_reads_its_print_view", () => {
   expect(printUrl(print)).toBe(print);
   expect(() => printUrl(`https://next.frame.io/share/${share}`)).toThrow("one video's comments");
   expect(() => printUrl("https://example.com/")).toThrow("Frame.io share link");
+  // A team member's own link (signed in) isn't readable here: say what to send instead.
+  expect(() => printUrl("https://next.frame.io/print/comments/51f87734-97c4-428a-a15c-91bd7d46f9dd")).toThrow("needs a sign-in");
 });

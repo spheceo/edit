@@ -30,6 +30,9 @@ const FOOTER = "To pick up a draggable item";
 /** The print view's link for any Frame.io share link of one asset (`…/view/<asset>`, `…/print/comments/<asset>`). */
 export function printUrl(url: string): string {
   const found = /^https:\/\/next\.frame\.io\/share\/([0-9a-f-]{36})(?:\/(?:view|print\/comments)\/([0-9a-f-]{36}))?/.exec(trim(url));
+  if (found === null && /^https:\/\/next\.frame\.io\//.test(trim(url))) {
+    throw new Error("that Frame.io link needs a sign-in; ask for the video's share link (Share → copy link: https://next.frame.io/share/…), or its comments pasted or exported as text");
+  }
   if (found === null) throw new Error("give a Frame.io share link (https://next.frame.io/share/…)");
   const [, share, asset] = found;
   if (asset === undefined) throw new Error("give the link to one video's comments (…/share/<id>/view/<asset> or …/print/comments/<asset>)");

@@ -171,3 +171,107 @@ export function calloutTiming(project: Project, transcripts: Map<string, Transcr
   }
   return issues;
 }
+
+/** Every word heard on the timeline from the footage's own sound: its frame and stem. */
+function heardWords(project: Project, transcripts: Map<string, Transcript>): [number, string][] {
+  const fps = fpsOf(project);
+  const heard: [number, string][] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || trackOf(project, clip.track)?.muted === true) continue;
+    if (project.media.find((media) => media.id === clip.media)?.kind !== "video") continue;
+    const transcript = transcripts.get(clip.media);
+    if (transcript === undefined) continue;
+    const to = clip.source_in + (clip.duration / fps) * clip.speed;
+    for (const word of transcript.words) {
+      const middle = (word.start + word.end) / 2.0;
+      if (middle < clip.source_in || middle >= to) continue;
+      heard.push([clip.start + toI64(round(((middle - clip.source_in) / clip.speed) * fps)), stem(word.text)]);
+    }
+  }
+  return heard;
+}
+
+/**
+ * Captions and subtitles whose words aren't what's said while they're up
+ * (Mom & Teen's "Come on. Come out here." over "Come on, baby."; Mom Leaves 5
+ * Kids' "fault. It's your"): of the line's words and those said under it, at
+ * least two and 40% don't match (a word of the line matches one said within a
+ * second of it; starred words aren't counted).
+ */
+export function textNotSaid(project: Project, transcripts: Map<string, Transcript>): unknown[] {
+  const fps = fpsOf(project);
+  const heard = heardWords(project, transcripts);
+  if (heard.length === 0) return [];
+  const second = toI64(round(fps));
+  const edge = toI64(round(0.15 * fps));
+  const issues: unknown[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "text") continue;
+    const name = clip.name ?? "";
+    if (!(name.startsWith("Caption") || name.startsWith("Subtitle"))) continue;
+    const shown = splitWhitespace(clip.text)
+      .filter((word) => !word.includes("*"))
+      .map(stem)
+      .filter((word) => word !== "");
+    if (shown.length < 3) continue;
+    const near = heard.filter(([frame]) => frame >= clip.start - second && frame < clipEnd(clip) + second).map(([, word]) => word);
+    if (near.length === 0) continue;
+    const unheard = shown.filter((word) => !near.includes(word)).length;
+    const under = heard.filter(([frame]) => frame >= clip.start + edge && frame < clipEnd(clip) - edge).map(([, word]) => word);
+    const unshown = under.filter((word) => !shown.includes(word)).length;
+    const off = unheard + unshown;
+    if (off >= 2 && off / (shown.length + unshown) >= 0.4) {
+      issues.push({ kind: "text_not_said", clip: clip.id, start: clip.start, text: clip.text });
+    }
+  }
+  return issues;
+}
+
+/**
+ * Footage that doesn't play its script range whole (Mom & Teen's first teaser
+ * stopped before "Yeah, there it is. Goddamn it.": "It is really important
+ * that we ensure that the intro and all clips in the video are exactly
+ * according to the script"): each range's first and last words found again in
+ * the transcript, and more than a quarter second of it not played by any
+ * clip of that media on the footage track (realign_script fixes the cut).
+ */
+export function offScript(project: Project, transcripts: Map<string, Transcript>): unknown[] {
+  const fps = fpsOf(project);
+  const base = project.tracks.find((track) => track.kind === "video")?.id;
+  const issues: unknown[] = [];
+  for (const block of project.script?.blocks ?? []) {
+    if (block.kind !== "footage" || block.media == null || block.words == null || block.clip == null) continue;
+    const transcript = transcripts.get(block.media);
+    if (transcript === undefined) continue;
+    const offset = block.media_start ?? 0;
+    const [cutIn, cutOut] = seams.script.align(transcript.words, null, block.words, block.start - offset, block.end - offset);
+    if (cutIn === null || cutOut === null) continue;
+    const played = project.clips
+      .filter((clip) => clip.type === "video" && clip.track === base && clip.media === block.media)
+      .map((clip): [number, number] => {
+        const from = clip.type === "video" ? clip.source_in : 0;
+        const speed = clip.type === "video" ? clip.speed : 1;
+        return [from, from + (clip.duration / fps) * speed];
+      })
+      .filter(([from, to]) => to > cutIn && from < cutOut)
+      .sort((a, b) => a[0] - b[0]);
+    let at = cutIn;
+    let missing = 0;
+    for (const [from, to] of played) {
+      missing += Math.max(from - at, 0);
+      at = Math.max(at, to);
+    }
+    missing += Math.max(cutOut - at, 0);
+    if (missing > 0.25) {
+      issues.push({
+        kind: "off_script",
+        range: block.label,
+        clip: block.clip,
+        script_seconds: [round(cutIn * 100) / 100, round(cutOut * 100) / 100],
+        seconds_not_played: round(missing * 10) / 10,
+        fix: "realign_script, or put the range back whole",
+      });
+    }
+  }
+  return issues;
+}

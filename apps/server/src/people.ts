@@ -9,10 +9,11 @@
 // relabels people's words (add_subtitles, caption_speakers, update_clips,
 // a plan), `oneColourPerPerson` gives every person (a subtitle label:
 // "Officer:", "Tabitha:") one colour everywhere: their subtitles' labels,
-// their intro captions and their quotes; no two people share a colour or a
-// near shade while the palette lasts. A person keeps the colour they have
-// when it still stands apart (re-runs, and a colour chosen on purpose, stay
-// put); the agent's part is only who is who (one label per person).
+// their intro captions and their quotes, by their ROLE (the team's code:
+// officers teal, suspects yellow, medics purple…), people near in time never
+// alike. A person keeps the colour they have while it's their role's; the
+// agent's part is who is who (one label per person) and, where the story
+// says, their role.
 //
 // A subtitled (Repack-style) video's subtitles carry no label: each is the
 // person its clip name says ("Subtitle · Lauren Wambles (Suspect)") and
@@ -71,27 +72,6 @@ export const SUBTITLE_PREFIX = "Subtitle · ";
 /** A quote or claim list of someone's words: "Quote · Tabitha". */
 export const QUOTE_PREFIX = "Quote · ";
 
-/** The palette colour a role starts from. */
-function roleColour(role: string): string | null {
-  switch (role) {
-    case "officer":
-      return PALETTE[0];
-    case "leader":
-      return PALETTE[1];
-    case "suspect":
-      return PALETTE[2];
-    case "victim":
-    case "witness":
-      return PALETTE[3];
-    case "medic":
-      return PALETTE[4];
-    case "bystander":
-      return PALETTE[5];
-    default:
-      return null;
-  }
-}
-
 /** "Officer:" → "officer": who a label is, whatever its case or colon. */
 export function personKey(label: string): string {
   return trim(trim(label).replace(/:+$/, "")).toLowerCase();
@@ -124,6 +104,8 @@ interface Person {
   names: Map<string, number>;
   /** When they're on screen (frames). */
   spans: [number, number][];
+  /** Their role as the cast has it (set by hand, or as first worked out), which decides their colour. */
+  role?: string;
 }
 
 /** What a clip says of whose words it is. */
@@ -238,6 +220,12 @@ export function oneColourPerPerson(project: Project): unknown {
     delete project.people;
     return [];
   }
+  // A role the cast already gives someone stays theirs (the agent sets the
+  // story's ones: a mother who is the suspect is yellow, not a witness's orange).
+  for (const entry of project.people ?? []) {
+    const person = people.get(castKey(entry));
+    if (person !== undefined && entry.role !== undefined && entry.role !== "") person.role = entry.role;
+  }
   const colours = assign(people, fpsOf(project));
   // Every line of theirs in it.
   const changed = new Map<string, number>();
@@ -340,6 +328,7 @@ function cast(project: Project, order: [string, Person][], colours: Map<string, 
  * the colour they start from.
  */
 function roleOf(key: string, person: Person): string {
+  if (person.role !== undefined) return person.role;
   const roles = new Map<string, number>();
   for (const [name, count] of person.names) {
     const role = speakers.roleFromLabel(name);
@@ -349,45 +338,54 @@ function roleOf(key: string, person: Person): string {
 }
 
 /**
- * Colours for `people`, most lines first: each keeps the colour most of
- * their lines have while it stands APART from every colour taken (and,
- * for an officer, leader or dispatch, isn't pink: `speakers.allowed`), else
- * takes their role's, else the palette's next that stands apart. Past
- * the palette, someone (the fewest lines come last) shares the colour of
- * whoever is on screen furthest away in time from them.
+ * Colours for `people` by ROLE, the team's code (their FOIA subtitle guide:
+ * officers teal, sergeants and detectives blue, suspects yellow, victims and
+ * witnesses orange, a witness white when a victim is in it too, paramedics,
+ * doctors and DCF purple, brief bystanders white, anyone else a light extra
+ * colour): most lines first, each person keeps the colour they have while it
+ * is one of their role's shades and nobody near them in time has it; else
+ * they take their role's first shade free near them; past those, a light
+ * spare that stands APART from everyone's; past those, whoever's furthest
+ * away in time shares. Mom Leaves 5 Kids' doctor kept a yellow that stood
+ * apart from everyone's ("I don't understand why this is yellow. I think
+ * this is a medical person"): a colour standing apart isn't enough, it has
+ * to say who they are.
  */
 function assign(people: Map<string, Person>, fps: number): Map<string, string> {
   const order = sorted(people).sort((a, b) => b[1].lines - a[1].lines);
+  const roles = new Map([...people].map(([key, person]) => [person, roleOf(key, person)]));
+  const victim = [...roles.values()].includes("victim");
+  const near = (a: Person, b: Person) => gapBetween(a.spans, b.spans) < APART_IN_TIME * fps;
   const taken: [string, Person][] = [];
   const out = new Map<string, string>();
-  // Apart from everyone's, and never pink for an official. A colour someone
-  // already has (chosen on purpose: each case's person questioned in red in
-  // a compilation) may match people never on screen within APART_IN_TIME of
-  // them, or another suspect's (the cases' suspects in red, their teasers
-  // back to back); newcomers still take colours apart from everyone's.
-  const roles = new Map([...people].map(([key, person]) => [person, roleOf(key, person)]));
-  const far = (a: Person, b: Person) =>
-    gapBetween(a.spans, b.spans) >= APART_IN_TIME * fps || (roles.get(a) === "suspect" && roles.get(b) === "suspect");
-  const free = (role: string, colour: string, person: Person, kept = false) =>
-    speakers.allowed(role, colour) &&
-    taken.every(([other, holder]) => speakers.apart(colour, other) >= APART || (kept && far(person, holder)));
+  // A shade of one's role: free unless someone near in time has it.
+  const shadeFree = (colour: string, person: Person) => taken.every(([other, holder]) => other !== colour || !near(person, holder));
+  // An extra colour: apart from everyone's taken near in time.
+  const extraFree = (colour: string, person: Person) =>
+    taken.every(([other, holder]) => !near(person, holder) || speakers.apart(colour, other) >= APART);
+  const shades = (role: string): readonly string[] => {
+    const own = speakers.palette(role, victim);
+    return own === speakers.OTHER ? [] : own;
+  };
   // First everyone who keeps their own colour (most lines first), so a
-  // newcomer never takes the colour someone already has and moves them on.
+  // newcomer never moves them on.
   for (const [key, person] of order) {
+    const role = roles.get(person)!;
     const own = sorted(person.colours).sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (own !== undefined && !whitish(own) && free(roleOf(key, person), own, person, true)) {
+    if (own === undefined) continue;
+    const ofRole = shades(role).includes(own) || (shades(role).length === 0 && !whitish(own) && extraFree(own, person));
+    if (ofRole && speakers.allowed(role, own) && shadeFree(own, person)) {
       taken.push([own, person]);
       out.set(key, own);
     }
   }
   for (const [key, person] of order) {
     if (out.has(key)) continue;
-    const role = roleOf(key, person);
-    const fromRole = roleColour(role);
+    const role = roles.get(person)!;
     const colour =
-      (fromRole !== null && free(role, fromRole, person) ? fromRole : undefined) ??
-      PALETTE.find((candidate) => free(role, candidate, person)) ??
-      furthestInTime(person, taken);
+      shades(role).find((shade) => shadeFree(shade, person)) ??
+      [...speakers.OTHER, ...speakers.SPARE].find((extra) => speakers.allowed(role, extra) && extraFree(extra, person)) ??
+      furthestInTime(person, taken, shades(role).length > 0 ? shades(role) : speakers.OTHER);
     taken.push([colour, person]);
     out.set(key, colour);
   }
@@ -432,10 +430,10 @@ function gapBetween(a: [number, number][], b: [number, number][]): number {
   return least;
 }
 
-function furthestInTime(person: Person, taken: [string, Person][]): string {
+function furthestInTime(person: Person, taken: [string, Person][], colours: readonly string[]): string {
   const gap = gapBetween;
   let best: [string, number, number] | undefined;
-  for (const colour of PALETTE) {
+  for (const colour of colours) {
     const holders = taken.filter(([own]) => own === colour).map(([, holder]) => holder);
     const nearest = holders.reduce((least, holder) => Math.min(least, gap(person.spans, holder.spans)), Number.POSITIVE_INFINITY);
     const lines = holders.reduce((sum, holder) => sum + holder.lines, 0);
@@ -444,7 +442,7 @@ function furthestInTime(person: Person, taken: [string, Person][]): string {
       best = [colour, nearest, lines];
     }
   }
-  return best?.[0] ?? PALETTE[0];
+  return best?.[0] ?? colours[0] ?? PALETTE[0];
 }
 
 /**

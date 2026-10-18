@@ -35,8 +35,10 @@ interface Args {
   cut_in: unknown;
   shots: Shot[];
   look: boolean;
-  /** "drop" (the vertical drop) or "none" (another transition, placed separately). */
+  /** "none" (the default: the transition is placed separately) or "drop" (the vertical drop). */
   into: string | null;
+  /** Dissolve between shots of different moments (default true). */
+  dissolve: boolean;
 }
 
 // Option fields here are kept as null (the struct is only read, never written).
@@ -66,6 +68,7 @@ const ARGS: Struct = {
     required("shots", { vec: { struct: SHOT } }),
     field("look", "bool", true),
     keep(optional("into", "string")),
+    field("dissolve", "bool", true),
   ],
 };
 
@@ -160,6 +163,9 @@ export function setSmoothByDefault(on: boolean): void {
   smoothByDefault = on;
 }
 
+/** Frames two B-roll shots of different moments dissolve over. */
+const DISSOLVE = 12;
+
 export function cover(project: Project, given: Record<string, unknown>): [Record<string, unknown>, string[]] {
   let args: Args;
   try {
@@ -170,8 +176,9 @@ export function cover(project: Project, given: Record<string, unknown>): [Record
   }
   if (args.shots.length === 0) throw new Error("give at least one shot");
   let drop: boolean;
-  if (args.into === null || args.into === "drop") drop = true;
-  else if (args.into === "none") drop = false;
+  // The vertical drop only when asked: the team isn't a fan of it ("not a fan of this transition right here").
+  if (args.into === "drop") drop = true;
+  else if (args.into === null || args.into === "none") drop = false;
   else throw new Error(`into is drop or none, not ${args.into}`);
   const fps = fpsOf(project);
   const cut = findCutIn(project, args.cut_in);
@@ -234,11 +241,34 @@ export function cover(project: Project, given: Record<string, unknown>): [Record
 
   // The shots, on the lowest free track above the footage.
   const shotsTrack = freeAbove(project, null, cut.start, cut.end);
+  // Between shots of different moments, a dissolve (the team: "make a
+  // dissolve here"): the shot going out runs DISSOLVE frames past the cut and
+  // whichever of the two is on the upper track fades over them, so shots
+  // alternate between two tracks. Cuts within one moment stay hard (one push-in).
+  const video = (index: number) => {
+    const shot = args.shots[index];
+    return shot !== undefined && mediaOf(project, shot.media)?.kind === "video";
+  };
+  const extend = args.shots.map((shot, index) => {
+    const next = args.shots[index + 1];
+    if (!args.dissolve || next === undefined || !video(index) || !video(index + 1)) return 0;
+    const speed = Math.min(Math.max(shot.speed ?? 0.5, 0.05), 20);
+    const [start, end] = spans[index]!;
+    const ends = shot.source_in + ((end - start) / fps) * speed;
+    const sameMoment = next.media === shot.media && Math.abs(next.source_in - ends) < 2;
+    const room = (mediaOf(project, shot.media)?.duration ?? 0) - ends;
+    return sameMoment || room < (DISSOLVE / fps) * speed + 0.05 ? 0 : DISSOLVE;
+  });
+  const dissolving = extend.some((frames) => frames > 0);
+  const upperTrack = dissolving ? freeAbove(project, shotsTrack, cut.start, cut.end) : shotsTrack;
+  // Which track each shot is on: a new one after each dissolve.
+  const onUpper: boolean[] = [];
+  args.shots.forEach((_, index) => onUpper.push(index === 0 ? false : extend[index - 1]! > 0 ? !onUpper[index - 1] : onUpper[index - 1]!));
   // The B-roll look over the whole stretch, above the footage shots (and
   // under a picture's evidence card, which stays in colour over its greyed backdrop).
   let look: string | null = null;
   if (args.look) {
-    const track = freeAbove(project, shotsTrack, cut.start, cut.end);
+    const track = freeAbove(project, upperTrack, cut.start, cut.end);
     const id = freshId(project, "c");
     project.clips.push(
       clipOfFields({
@@ -265,7 +295,11 @@ export function cover(project: Project, given: Record<string, unknown>): [Record
     const still = media.kind === "image";
     if (media.kind === "audio") throw new Error(`shot ${index + 1}: ${shot.media} is audio`);
     const speed = still ? 1 : Math.min(Math.max(shot.speed ?? 0.5, 0.05), 20);
-    const duration = end - start;
+    const duration = end - start + extend[index]!;
+    const upper = onUpper[index]!;
+    // The upper of a dissolving pair fades: in from the shot under it, or out over the next.
+    const fadeIn = upper && index > 0 && extend[index - 1]! > 0 ? extend[index - 1]! : 0;
+    const fadeOut = upper ? extend[index]! : 0;
     const needs = (duration / fps) * speed;
     if (!Number.isFinite(shot.source_in) || shot.source_in < 0) {
       throw new Error(`shot ${index + 1}: source_in must be finite and nonnegative`);
@@ -312,11 +346,13 @@ export function cover(project: Project, given: Record<string, unknown>): [Record
     project.clips.push(
       clipOfFields({
         id,
-        track: shotsTrack,
+        track: upper ? upperTrack : shotsTrack,
         start,
         duration,
         color: "cyan",
         name: `${prefix}B-roll: ${label}`,
+        fade_in: fadeIn,
+        fade_out: fadeOut,
         type: "video",
         media: shot.media,
         source_in: Math.max(shot.source_in, 0),

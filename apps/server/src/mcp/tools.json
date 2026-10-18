@@ -444,7 +444,7 @@
     "name": "update_clip"
   },
   {
-    "description": "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\") or by person (every clip of one person of the cast: one call recolours someone), optionally only on one track and within start/end (timeline seconds). E.g. one person's short name on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\"}}}}. A relabel or recolour then gives every person (label) one colour across the video, kept apart from everyone else's (subtitles, intro captions, \"Quote · <label>\" clips); the result lists them.",
+    "description": "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\") or by person (every clip of one person of the cast: one call recolours someone), optionally only on one track and within start/end (timeline seconds). E.g. one person's short name on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\"}}}}. A relabel or recolour then gives every person (label) one colour across the video, kept apart from everyone else's (subtitles, intro captions, \"Quote · <label>\" clips); the result lists them. With person and role, sets who they are in the story (their colour follows the team's code).",
     "inputSchema": {
       "properties": {
         "clip_ids": {
@@ -479,11 +479,23 @@
         "track": {
           "description": "Only clips on this track id.",
           "type": "string"
+        },
+        "role": {
+          "description": "With person: their role in the story, which decides their colour by the team's code (officer teal, leader blue, suspect yellow, victim and witness orange, medic purple for paramedics, doctors and DCF, bystander white, other a light extra): e.g. a mother who is the suspect. The patch may be left out.",
+          "enum": [
+            "officer",
+            "leader",
+            "suspect",
+            "victim",
+            "witness",
+            "medic",
+            "bystander",
+            "other"
+          ],
+          "type": "string"
         }
       },
-      "required": [
-        "patch"
-      ],
+      "required": [],
       "type": "object"
     },
     "name": "update_clips"
@@ -860,7 +872,7 @@
     "name": "smooth_slow_motion"
   },
   {
-    "description": "Cover a cut-in with B-roll in one call, the house way (B-ROLL IN CUT-INS, PUSH-INS, B-ROLL LOOK, VOICE-OVERS): your shots butted end to end from the cut-in's first frame to its last (each picture only, slowed to speed 0.5, a linear push-in 1 → 1.08; native frame sampling with no background render by default), the B-roll look adjustment over the stretch, the vertical drop into the cut-in (into \"none\" when you'll put another transition there), the black card and its words deleted and the voice-over moved onto A1 in purple. You pick the shots (media_transcript, look_at_media) and time them to the narration's phrases (media_transcript words on the voice-over); this does the rest. A picture (an image media: a found photo, a still) is never laid on as a bare still: it goes on as an evidence card (framed, over a dark blurred copy of itself, easing in, with its label under it when the shot has one). Running it again on the same cut-in replaces what it placed. Afterwards add what's particular to the cut-in (a person's vignette and label, a quote, other transitions and their sounds) with batch. Returns each shot's clip id and span.",
+    "description": "Cover a cut-in with B-roll in one call, the house way (B-ROLL IN CUT-INS, PUSH-INS, B-ROLL LOOK, VOICE-OVERS): your shots from the cut-in's first frame to its last (each picture only, at its speed, default 0.5, a linear push-in 1 → 1.08; native frame sampling with no background render by default), dissolving into each other between different moments (the shot going out runs 12 frames on under the next), the B-roll look adjustment over the stretch, no transition into the cut-in unless into \"drop\" (place the cut-in's transition in the same plan), the black card and its words deleted and the voice-over moved onto A1 in purple. You pick the shots (media_transcript, look_at_media) and time them to the narration's phrases (media_transcript words on the voice-over); this does the rest. A picture (an image media: a found photo, a still) is never laid on as a bare still: it goes on as an evidence card (framed, over a dark blurred copy of itself, easing in, with its label under it when the shot has one). Running it again on the same cut-in replaces what it placed. Afterwards add what's particular to the cut-in (a person's vignette and label, a quote, other transitions and their sounds) with batch. Returns each shot's clip id and span.",
     "inputSchema": {
       "properties": {
         "cut_in": {
@@ -871,10 +883,10 @@
           ]
         },
         "into": {
-          "description": "The transition into the cut-in: the vertical drop (default), or none.",
+          "description": "The transition into the cut-in: none (default: place a flash, shutter, dip or crossfade yourself; TRANSITIONS), or the vertical drop (only when asked: the team isn't a fan of it).",
           "enum": [
-            "drop",
-            "none"
+            "none",
+            "drop"
           ],
           "type": "string"
         },
@@ -942,6 +954,10 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "dissolve": {
+          "description": "Dissolve (12 frames) between shots of different moments (default true); cuts within one moment stay hard.",
+          "type": "boolean"
         }
       },
       "required": [

@@ -452,7 +452,7 @@ test("capitals_and_a_still_light_leak_survive_a_plan", () => {
   expect(glow.type === "adjustment" && [glow.grade.leak, glow.grade.leak_x]).toEqual([0.8, -1]);
 });
 
-test("words_under_a_blur_are_flagged", () => {
+test("words_go_above_every_blur_and_any_left_under_one_are_flagged", () => {
   const p = project("plan");
   apply(p, [
     { op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 90, fill: [0.5, 0.5, 0.5, 1] } },
@@ -461,9 +461,16 @@ test("words_under_a_blur_are_flagged", () => {
     // A monitor's redaction on a track above both, over the first only.
     { op: "add", clip: { type: "adjustment", track: "new", name: "Redaction", start: 0, duration: 90, blur: { radius: 45, x: 450, y: -450, width: 1100, height: 180 } } },
   ]);
-  const under = kinds(p, "text_under_blur");
-  expect(under.length).toBe(1);
-  expect(under[0]!.clip).toBe(clipNamed(p, "Tag").id);
+  // The plan puts every word above the blur, wherever the blur's box is.
+  expect(kinds(p, "text_under_blur")).toEqual([]);
+  const level = (name: string) => p.tracks.findIndex((track) => track.id === clipNamed(p, name).track);
+  expect(level("Tag")).toBeGreaterThan(level("Redaction"));
+  expect(level("Clear")).toBeGreaterThan(level("Redaction"));
+  // A blur put over words some other way is flagged, box or not.
+  const words = clipNamed(p, "Clear");
+  const blur = clipNamed(p, "Redaction");
+  [words.track, blur.track] = [blur.track, words.track];
+  expect(kinds(p, "text_under_blur").map((issue) => issue.clip)).toEqual([words.id]);
 });
 
 test("a_compilation_title_card_frames_its_photos_in_two_rows_around_the_title", () => {

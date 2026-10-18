@@ -45,6 +45,7 @@ import {
   clipOf,
   fps as fpsOf,
   freshId,
+  liftTextOverBlurs,
   mediaOf,
   sample,
   subtitlesTrack,
@@ -931,6 +932,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
     const starred = seams.subtitles.starOnScreen(project, 0, Number.MAX_SAFE_INTEGER, neglect, [], house.kept);
     // One colour per person across the video (their captions and quotes too).
     const people = seams.people.oneColourPerPerson(project);
+    liftTextOverBlurs(project);
     return [placed, carriedOver, starred, people] as const;
   });
   // Then off the faces under them (bottom middle unless one is there).
@@ -1222,6 +1224,8 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
     }
     // One colour per person: the same as their subtitles and quotes.
     seams.people.oneColourPerPerson(project);
+    // Never under a blur (a child's face blurred in the teaser).
+    liftTextOverBlurs(project);
     return [placed, underFaces] as const;
   });
   return {

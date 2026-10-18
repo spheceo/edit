@@ -282,6 +282,8 @@ export interface ScriptSeam {
   keyframeBefore(path: string, time: number): Promise<number>;
   parse(html: string): Parsed;
   realign(app: App, id: string): Promise<Json[]>;
+  /** Where to cut a range from its first and last words (transcript seconds; null where a word isn't found). */
+  align(words: Word[], peaks: Uint8Array | null, cue: [string, string], start: number, end: number): [number | null, number | null];
   /** The URL that downloads Drive file `file` (past the virus-scan page) and its headers; `scratch` may be written and is removed. */
   resolve(file: string, scratch: string): Promise<[url: string, head: DriveHead]>;
   /** A file name safe on every disk: no separators or leading dots ("footage.mp4" when nothing's left). */
@@ -626,6 +628,8 @@ export interface CaptionsSeam {
 
 export interface EditReviewSeam {
   calloutTiming(project: Project, transcripts: Map<string, Transcript>): Json[];
+  offScript(project: Project, transcripts: Map<string, Transcript>): Json[];
+  textNotSaid(project: Project, transcripts: Map<string, Transcript>): Json[];
   subtitleCoverage(project: Project, transcripts: Map<string, Transcript>): Json;
 }
 

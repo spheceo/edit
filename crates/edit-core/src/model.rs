@@ -76,7 +76,7 @@ pub struct Person {
     /// officer, leader, suspect, victim, witness…; "other" when unknown.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub role: String,
-    /// Their one colour, "#rrggbb": never white or a near-white grey (their words are white).
+    /// Their one colour, "#rrggbb": by their role (the team's code); white or a near-white grey only for a bystander or a witness.
     pub color: String,
     /// The transcripts' names their words came from ("Agent", "Travis Lawson (Agent)").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2110,9 +2110,11 @@ impl Project {
                     person.id, person.color
                 )
             })?;
-            if whitish(color) {
+            // The team's code gives white only to a bystander, or a witness
+            // when a victim is in it too; anyone else in white reads as nobody's.
+            if whitish(color) && !matches!(person.role.as_str(), "bystander" | "witness") {
                 return Err(format!(
-                    "{} ({}) can't be white or a near-white grey: their words are white",
+                    "{} ({}) can't be white or a near-white grey: their words are white (only a bystander's or a witness's may be)",
                     person.name, person.id
                 ));
             }

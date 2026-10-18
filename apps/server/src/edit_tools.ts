@@ -61,6 +61,8 @@ export const hooks = {
   peopleSummary: (project: Project): Record<string, string> => seams.people.summary(project),
   calloutTiming: (project: Project, transcripts: Map<string, Transcript>): Json[] =>
     seams.editReview.calloutTiming(project, transcripts),
+  offScript: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.offScript(project, transcripts),
+  textNotSaid: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.textNotSaid(project, transcripts),
   subtitleCoverage: (project: Project, transcripts: Map<string, Transcript>): Json =>
     seams.editReview.subtitleCoverage(project, transcripts),
   smoothingPending: (projectId: string): string[] => seams.broll.smoothingPending(projectId),
@@ -397,7 +399,11 @@ const objectOf = (value: unknown): Args =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Args) : {};
 
 async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[]> {
-  const patch = args.patch;
+  // A person's role (the team's colour code goes by it): with person, the patch may be left out.
+  const role = str(args.role);
+  if (role !== null && !PERSON_ROLES.includes(role)) throw new Error(`role is one of ${PERSON_ROLES.join(", ")}`);
+  if (role !== null && isNull(args.person)) throw new Error("role needs person: whose role it is");
+  const patch = role !== null && args.patch === undefined ? {} : args.patch;
   if (typeof patch !== "object" || patch === null || Array.isArray(patch)) throw new Error("patch must be an object");
   const ids = isNull(args.clip_ids) ? null : strings(args.clip_ids);
   const label = str(args.label);
@@ -417,6 +423,7 @@ async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[
         throw new Error(`no person ${who} in the cast${cast === "" ? "" : ` (${cast})`}`);
       }
       personId = found.id;
+      if (role !== null) found.role = role;
     }
     const fps = fpsOf(project);
     const fromGiven = num(args.start);
@@ -444,7 +451,7 @@ async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[
       return next;
     });
     // A relabel or recolour: one colour per person, everywhere.
-    const people = touchesPeople(patch as Args) && changed.length > 0 ? editPlan.hooks.oneColourPerPerson(project) : null;
+    const people = (touchesPeople(patch as Args) || role !== null) && changed.length > 0 ? editPlan.hooks.oneColourPerPerson(project) : null;
     return [changed, people] as const;
   });
   if (changed.length === 0) return text("no clips matched; nothing changed");
@@ -454,6 +461,9 @@ async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[
       : `\npeople (one colour each, kept apart; a colour too near someone else's was changed): ${stableStringify(people)}`;
   return text(`updated ${changed.length} clip(s): ${changed.join(", ")}${said}`);
 }
+
+/** The roles a person can have (speakers.ts's, which the colour code goes by). */
+const PERSON_ROLES = ["officer", "leader", "suspect", "victim", "witness", "medic", "bystander", "other"];
 
 async function coverCutIn({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const [, [report, smooth]] = await app.store.update(projectId, ORIGIN, (project) => cutin.cover(project, args));
@@ -800,7 +810,8 @@ async function withReview(project: Project, input: ProjectInput, frames: number[
  */
 export function audited(app: App, project: Project, rev: number | null): Args {
   const audit = editPlan.audit(project) as Args & { issues: Json[] };
-  const extra = hooks.calloutTiming(project, cachedTranscripts(app, project, false));
+  const heard = cachedTranscripts(app, project, false);
+  const extra = [...hooks.calloutTiming(project, heard), ...hooks.offScript(project, heard), ...hooks.textNotSaid(project, heard)];
   const censor = (input: ProjectInput) => native().censorIssues(input, true);
   const { issues: censored, pending } =
     rev === null

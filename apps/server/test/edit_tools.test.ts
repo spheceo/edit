@@ -450,10 +450,16 @@ test("a cut-in is covered in one call, its card gone and its voice-over on A1", 
   });
   const project = projectOf(app, id);
   expect(clipOf(project, "voice")).toMatchObject({ track: "a4", color: "purple" });
-  expect(project.clips.filter((own) => own.name?.startsWith("Cut-in 1 · B-roll:")).map((own) => [own.start, own.duration])).toEqual([
-    [300, 150],
-    [450, 150],
+  // Two moments dissolve: the first runs 12 frames on under the second, which fades in on the track above.
+  const shots = project.clips.filter((own) => own.name?.startsWith("Cut-in 1 · B-roll:"));
+  expect(shots.map((own) => [own.start, own.duration, own.fade_in, own.fade_out])).toEqual([
+    [300, 162, 0, 0],
+    [450, 150, 12, 0],
   ]);
+  const level = (track: string) => project.tracks.findIndex((own) => own.id === track);
+  expect(level(shots[1]!.track)).toBeGreaterThan(level(shots[0]!.track));
+  // No vertical drop unless asked for (the team isn't a fan of it).
+  expect(report.vertical_drop).toBeNull();
   expect(await refused(app, "cover_cut_in", { cut_in: 2, shots: [{ media: "m1", source_in: 0 }] })).toBe("cut_in is 1 to 1");
   expect(await refused(app, "cover_cut_in", { cut_in: 1 })).toBe("arguments: missing field `shots`");
   expect(await refused(app, "cover_cut_in", { cut_in: 1, shots: [{ media: "m1", source_in: 597 }] })).toBe(

@@ -73,6 +73,53 @@ export function addTrack(project: Project, kind: TrackKind): string {
   return id;
 }
 
+/**
+ * Words are never under a blur (the team: "all blurrings must always be
+ * under the subtitles"; Mom & Teen's child-privacy blur sat above the intro's
+ * captions): every text on screen while a blur on a higher track is up moves
+ * onto a track of text just above the highest such blur (one free for its
+ * span, else a new one there); a subtitles track moves up whole. Returns how
+ * many texts moved.
+ */
+export function liftTextOverBlurs(project: Project): number {
+  const at = (id: string) => project.tracks.findIndex((track) => track.id === id);
+  const shown = (id: string) => project.tracks[at(id)]?.hidden !== true;
+  const blurs = project.clips.filter(
+    (clip) => clip.type === "adjustment" && (clip.blur?.radius ?? 0) > 0 && (clip.opacity ?? 1) > 0 && shown(clip.track),
+  );
+  if (blurs.length === 0) return 0;
+  const overlaps = (a: Clip, b: Clip) => a.start < clipEnd(b) && b.start < clipEnd(a);
+  let moved = 0;
+  for (const text of project.clips) {
+    if (text.type !== "text" || !shown(text.track)) continue;
+    const over = blurs.filter((blur) => at(blur.track) > at(text.track) && overlaps(blur, text));
+    if (over.length === 0) continue;
+    const top = Math.max(...over.map((blur) => at(blur.track)));
+    const own = project.tracks[at(text.track)]!;
+    if (own.subtitles === true) {
+      // The subtitles stay on their track, which goes above the blur.
+      project.tracks.splice(at(own.id), 1);
+      project.tracks.splice(top, 0, own);
+      moved += 1;
+      continue;
+    }
+    const free = project.tracks.slice(top + 1).find(
+      (track) =>
+        track.kind === "video" &&
+        track.subtitles !== true &&
+        project.clips.every((clip) => clip.track !== track.id || (clip.type === "text" && !overlaps(clip, text))),
+    );
+    let target = free?.id;
+    if (target === undefined) {
+      target = freshId(project, "v");
+      project.tracks.splice(top + 1, 0, { id: target, kind: "video", hidden: false, muted: false, locked: false });
+    }
+    text.track = target;
+    moved += 1;
+  }
+  return moved;
+}
+
 /** The subtitles' track, made (on top of every video track) if there isn't one. */
 export function subtitlesTrack(project: Project): string {
   const existing = project.tracks.find((track) => track.subtitles === true);

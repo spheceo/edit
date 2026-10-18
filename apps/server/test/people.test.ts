@@ -114,7 +114,9 @@ test("an_officer_in_pink_is_moved_off_it", () => {
   oneColourPerPerson(edit);
   const officer = labelColour(edit, "o1");
   expect(pinkish(officer), officer).toBe(false);
-  expect(labelColour(edit, "m1")).toBe("#ff66d1");
+  // Role decides it (the team's code): an officer teal, a mother (a witness) orange.
+  expect(officer).toBe("#00e5c7");
+  expect(labelColour(edit, "m1")).toBe("#e57e00");
 });
 
 test("never_white_and_merged_voices_are_named", () => {
@@ -132,11 +134,27 @@ test("never_white_and_merged_voices_are_named", () => {
   expect(PALETTE.every((colour) => !whitish(colour))).toBe(true);
 });
 
-test("the_palette_stands_apart_and_more_people_share_far_apart_in_time", () => {
+test("colours_follow_the_role_and_people_near_in_time_never_share", () => {
   PALETTE.forEach((a, i) => {
     for (const b of PALETTE.slice(i + 1)) expect(apart(a, b), `${a} vs ${b}`).toBeGreaterThanOrEqual(APART);
   });
-  // 22 people, each in their own minute, all in white to start with.
+  // Mom Leaves 5 Kids: a doctor in yellow (a suspect's) and a sergeant in orange.
+  const roles = project([
+    subtitle("d1", 0, "Como (Doctor)", "Doctor:", "#ffff00"),
+    subtitle("s1", 40, "Sergeant", "Sergeant:", "#e57e00"),
+    subtitle("r1", 80, "Ray (Sergeant)", "Ray:", "#f0b2ff"),
+    subtitle("w1", 120, "Social Worker", "Social worker:", "#ff66d1"),
+    subtitle("o1", 160, "Officer", "Officer:", "#00e5c7"),
+  ]);
+  oneColourPerPerson(roles);
+  expect(["d1", "w1", "o1"].map((id) => labelColour(roles, id))).toEqual(["#f33bff", "#f78cff", "#00e5c7"]);
+  // Two sergeants: the leaders' blue and its paler shade.
+  expect(["s1", "r1"].map((id) => labelColour(roles, id)).sort()).toEqual(["#0090e5", "#5cb6f0"]);
+  // A suspect the cast names as one (a mother whose story makes her the suspect) is yellow.
+  roles.people!.find((person) => person.label === "Ray:")!.role = "suspect";
+  oneColourPerPerson(roles);
+  expect(labelColour(roles, "r1")).toBe("#ffff00");
+  // 22 people of no known role, a minute apart: everyone near in time differs; far apart, colours come back.
   const clips: TextClip[] = [];
   for (let person = 0; person < 22; person++) {
     for (let line = 0; line < 30 - person; line++) {
@@ -146,13 +164,9 @@ test("the_palette_stands_apart_and_more_people_share_far_apart_in_time", () => {
   const edit = project(clips);
   oneColourPerPerson(edit);
   const colour = (person: number) => labelColour(edit, `p${person}-0`);
-  const seen = new Set(Array.from({ length: 20 }, (_, person) => colour(person)));
-  expect(seen.size, "the first 20 people all differ").toBe(20);
-  // The two with the fewest lines share with whoever is furthest away: the first people.
-  for (const late of [20, 21]) {
-    const shared = colour(late);
-    const with_ = Array.from({ length: 20 }, (_, person) => person).find((person) => colour(person) === shared)!;
-    expect(late - with_, `person ${late} shares with ${with_}`).toBeGreaterThanOrEqual(10);
+  for (let person = 1; person < 22; person++) {
+    expect(colour(person), `person ${person} beside ${person - 1}`).not.toBe(colour(person - 1));
+    expect(whitish(colour(person))).toBe(false);
   }
 });
 
@@ -171,7 +185,7 @@ test("each_case_s_person_questioned_keeps_red_when_they_never_meet", () => {
   expect(labelColour(edit, "det-0")).not.toBe(red);
 });
 
-test("suspects_given_red_keep_it_back_to_back", () => {
+test("suspects_are_yellow_even_given_red_back_to_back", () => {
   // A compilation's intro: two cases' suspects in teasers a second apart.
   const red = "#eb2929";
   const clips: TextClip[] = [];
@@ -181,7 +195,8 @@ test("suspects_given_red_keep_it_back_to_back", () => {
   }
   const edit = project(clips);
   oneColourPerPerson(edit);
-  expect([labelColour(edit, "a-0"), labelColour(edit, "b-0")]).toEqual([red, red]);
+  // Suspects are yellow whatever they were given (the team's code), two side by side in two shades.
+  expect([labelColour(edit, "a-0"), labelColour(edit, "b-0")]).toEqual(["#fff47a", "#ffff00"]);
 });
 
 // The TS side's own.
@@ -222,7 +237,7 @@ test("repack_subtitles_people_get_one_colour_and_an_id_each", () => {
     expect(labelColour(p, clip.id)).toBe(person!.color);
   }
   expect(people.some((person) => whitish(person.color))).toBe(false);
-  for (const a of people) for (const b of people) if (a !== b) expect(apart(a.color, b.color)).toBeGreaterThanOrEqual(APART);
+  for (const a of people) for (const b of people) if (a !== b) expect(a.color).not.toBe(b.color);
   // A re-run keeps everyone's id and colour; a newcomer gets a new id.
   const before = structuredClone(people);
   p.clips.push(repack("f", 150, "Dispatcher", "#00e5c7"));

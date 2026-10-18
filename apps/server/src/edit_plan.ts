@@ -20,6 +20,7 @@ import {
   freeTrack,
   freeTrackFrom,
   freshId,
+  liftTextOverBlurs,
   mediaOf,
   mergeClip,
   tidyTracks,
@@ -27,7 +28,7 @@ import {
   trackOf,
 } from "./project.ts";
 import { isBug } from "./guard.ts";
-import { asInt, charCount, compareStrings, f32Saved as f32, idiv, jsonForSerde, remEuclid, round, trim } from "./rust.ts";
+import { asInt, compareStrings, f32Saved as f32, idiv, jsonForSerde, remEuclid, round, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { HIT } from "./sfx.ts";
 import { readStruct, SerdeError, type Struct } from "./serde.ts";
@@ -137,6 +138,8 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   ) {
     hooks.oneColourPerPerson(project);
   }
+  // No words under a blur, whatever the plan added where.
+  liftTextOverBlurs(project);
   const invalid = native().projectValidate(jsonForSerde(project));
   if (invalid !== null) throw new Error(`final plan is invalid: ${invalid}; nothing saved`);
   return { results, smooth };
@@ -1283,18 +1286,14 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   const blurs = project.clips.filter(
     (clip) => clip.type === "adjustment" && visible(clip.track) && (clip.blur?.radius ?? 0) > 0 && (clip.opacity ?? 1) > 0,
   );
+  // Any blur at all above them while they're up (the team: "all blurrings
+  // must always be under the subtitles"), wherever its box is: a box that
+  // missed the words by its estimate still sat over Mom & Teen's captions.
   for (const text of project.clips) {
     if (text.type !== "text" || !visible(text.track)) continue;
-    const [x, y] = [text.transform?.x ?? 0, text.transform?.y ?? 0];
-    const halfWidth = (text.style.size * 0.3 * Math.min(charCount(text.text), 40)) / 2;
-    const halfHeight = text.style.size * 0.75;
-    const over = blurs.find((blur) => {
-      if (blur.type !== "adjustment" || blur.blur === undefined || blur.blur === null) return false;
-      if (level(blur.track) <= level(text.track) || blur.start >= clipEnd(text) || clipEnd(blur) <= text.start) return false;
-      const [width, height] = [blur.blur.width ?? 0, blur.blur.height ?? 0];
-      if (width <= 0 || height <= 0) return true;
-      return Math.abs(x - (blur.blur.x ?? 0)) < width / 2 + halfWidth && Math.abs(y - (blur.blur.y ?? 0)) < height / 2 + halfHeight;
-    });
+    const over = blurs.find(
+      (blur) => level(blur.track) > level(text.track) && blur.start < clipEnd(text) && clipEnd(blur) > text.start,
+    );
     if (over !== undefined) issues.push({ kind: "text_under_blur", clip: text.id, blur: over.id, start: Math.max(text.start, over.start) });
   }
   return { issues: sortIssues(issues), frames: total, clips: project.clips.length };

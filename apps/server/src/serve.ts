@@ -245,5 +245,8 @@ function resumeJobs(app: App): void {
       project(job.project);
       seams.watch.watchInBackground(app, job.project);
     },
+    upload: (job) => {
+      seams.cloudMedia.resumeUpload(app.store.home, job.args);
+    },
   });
 }

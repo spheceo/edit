@@ -193,7 +193,13 @@ test("files from a disk: a sound goes up as itself, footage with a proxy made on
     expect(made.path).toBe(fs.realpathSync(`${cache}/cloud/proxies/sha256/${hex}.mp4`));
     expect(cloudMedia.isLocalCopy(cache, made.path)).toBe(true);
     expect(made.cloud).toEqual({ source: `sha256:${hex}`, original: `edit/originals/sha256/${hex}/interview.mov`, proxy: `edit/proxies/sha256/${hex}.mp4`, size: 15 });
+    // The import answered with the proxy made; the uploads go on behind it, noted so a restart carries on.
+    const noted = () => (JSON.parse(fs.readFileSync(`${fixture.home}/jobs.json`, "utf8")) as { kind: string }[]).filter((job) => job.kind === "upload");
+    expect(noted().length).toBe(1);
+    await cloudMedia.uploaded(video);
+    expect(noted()).toEqual([]);
     expect(mock.cloud.objects.has(made.cloud!.original) && mock.cloud.objects.has(made.cloud!.proxy!)).toBe(true);
+    expect(await cloudMedia.getRecord(made.cloud!.source)).toMatchObject({ originalReady: true, proxyReady: true });
     expect(fs.readFileSync(video, "utf8")).toBe("pretend footage");
     // Carried to the proxy's cache folder, where everything now looks.
     const after = `${cache}/${mediaKey(made.path)}`;

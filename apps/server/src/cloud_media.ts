@@ -55,6 +55,7 @@ import * as diag from "./diag.ts";
 import * as endpoints from "./endpoints.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
+import * as jobs from "./jobs.ts";
 import { mediaKey, Semaphore } from "./media.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
 import { native } from "./native/index.ts";
@@ -72,6 +73,8 @@ export type { Made, Original } from "./seams.ts";
 const HOUR = 3600;
 /** Proxies fetched at once. */
 const PARALLEL = 3;
+/** Analysis files fetched at once per source (each a few KB). */
+const ANALYSIS_AT_ONCE = 8;
 
 /**
  * What this module uses of the script package (WP4's seam), here so tests can
@@ -434,6 +437,74 @@ function failure(error: unknown): string {
  * each in the registry as it's done. A proxy made here is removed again when
  * anything fails, so a failure leaves nothing behind.
  */
+/**
+ * An import's uploads, left to finish after the import answered: the
+ * original (when the cloud hasn't it) and the proxy made here (when the
+ * cloud hasn't it), then the registry told they're ready.
+ */
+export interface Upload {
+  file: string;
+  source: string;
+  size: number;
+  duration: number;
+  originalKey: string;
+  uploadOriginal: boolean;
+  /** The proxy's key and this machine's copy, when it goes up too. */
+  proxy: string | null;
+  local: string | null;
+}
+
+/** Uploads imports left running, by the file imported (the upload route keeps its copy until they're done). */
+const uploading = new Map<string, Promise<void>>();
+/** One at a time, beside whatever else uses the network. */
+const uploadSlot = new Semaphore(1);
+
+/** Resolves once the uploads importing `file` started are done (at once when there are none). */
+export function uploaded(file: string): Promise<void> {
+  return uploading.get(file) ?? Promise.resolve();
+}
+
+/**
+ * Starts `upload` in the background, noted in `<home>/jobs.json` so a
+ * restart carries on with it; a failure is logged and stays noted, so the
+ * next start tries again.
+ */
+export function uploadLater(home: string, upload: Upload): void {
+  const key = jobs.begin(home, "upload", "-", { ...upload }, upload.source);
+  const done = uploadSlot
+    .with(() => diag.timeOnAsync("cloud", "cloud: upload import", upload.file, () => runUpload(upload)))
+    .then(
+      () => jobs.end(home, key),
+      (error: unknown) => diag.error("cloud", `uploading ${upload.file}: ${scrub(failure(error))} (tried again when Edit starts)`),
+    )
+    .finally(() => {
+      if (uploading.get(upload.file) === done) uploading.delete(upload.file);
+    });
+  uploading.set(upload.file, done);
+}
+
+async function runUpload(upload: Upload): Promise<void> {
+  if (upload.uploadOriginal) {
+    await cloud.uploadFile(upload.file, upload.originalKey);
+    await putRecord({ source: upload.source, originalReady: true, size: upload.size, duration: upload.duration });
+  }
+  if (upload.proxy !== null && upload.local !== null) {
+    await cloud.uploadFile(upload.local, upload.proxy);
+    await putRecord({ source: upload.source, proxyKey: upload.proxy, proxyReady: true });
+  }
+}
+
+/** A noted upload a restart cut short (jobs.ts), started again while its files are still here. */
+export function resumeUpload(home: string, args: Record<string, unknown>): void {
+  const upload = args as unknown as Upload;
+  if (typeof upload.file !== "string" || typeof upload.source !== "string" || typeof upload.originalKey !== "string") {
+    throw new Error("not an upload");
+  }
+  if (upload.uploadOriginal && !isFile(upload.file)) throw new Error(`${upload.file} is gone`);
+  if (upload.local !== null && !isFile(upload.local)) throw new Error(`${upload.local} is gone`);
+  uploadLater(home, upload);
+}
+
 async function publish(
   file: string,
   probe: Probe,
@@ -442,7 +513,24 @@ async function publish(
   uploadOriginal: boolean,
   proxy: string,
   local: string,
+  later: string | null = null,
 ): Promise<void> {
+  if (later !== null) {
+    // The import needs only the proxy here: the uploads go on after it answers.
+    if (!isFile(local)) {
+      await diag.timeOnAsync("cloud", "cloud: make proxy", source, async () => {
+        if (parent(local) !== null) fs.mkdirSync(parent(local)!, { recursive: true });
+        try {
+          await native().makeCloudProxy(file, probe, local);
+        } catch (error) {
+          fs.rmSync(local, { force: true });
+          throw error;
+        }
+      });
+    }
+    uploadLater(later, { file, source, size: sizeOf(file), duration: probe.duration, originalKey, uploadOriginal, proxy, local });
+    return;
+  }
   const makeHere = !isFile(local);
   const settle = (work: Promise<void>) => work.then(() => null, (error: unknown) => error);
   const [sent, proxied] = await Promise.all([
@@ -480,14 +568,17 @@ async function publish(
  * is never changed or removed.
  */
 export function importLocal(cache: string, path: string, probe: Probe, name: string): Promise<Made> {
-  return putLocal(cache, path, probe, name, probe.kind !== "video");
+  // Footage answers once its proxy is made here; the uploads carry on behind
+  // (`uploadLater`), so an import never waits for gigabytes to go up.
+  return putLocal(cache, path, probe, name, probe.kind !== "video", parent(cache));
 }
 
 /**
  * `importLocal`; `own`: the file goes up as it is and is its own proxy
- * (sounds, pictures, short renders Edit made), else it gets a proxy.
+ * (sounds, pictures, short renders Edit made), else it gets a proxy. With
+ * `later` (the data folder), footage's uploads finish in the background.
  */
-async function putLocal(cache: string, path: string, probe: Probe, name: string, own: boolean): Promise<Made> {
+async function putLocal(cache: string, path: string, probe: Probe, name: string, own: boolean, later: string | null = null): Promise<Made> {
   const hex = await sha256File(path);
   const source = `sha256:${hex}`;
   const size = sizeOf(path);
@@ -511,13 +602,15 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
   if (proxy === null) throw new Error("no proxy key");
   const local = localPath(cache, proxy);
   if (ready !== null) {
-    if (needOriginal) {
+    if (needOriginal && later !== null) {
+      uploadLater(later, { file: path, source, size, duration: probe.duration, originalKey, uploadOriginal: true, proxy: null, local: null });
+    } else if (needOriginal) {
       await cloud.uploadFile(path, originalKey);
       await putRecord({ source, originalReady: true, size });
     }
     await fetchKey(proxy, local);
   } else {
-    await publish(path, probe, source, originalKey, needOriginal, proxy, local);
+    await publish(path, probe, source, originalKey, needOriginal, proxy, local, later);
   }
   const made = canonical(local);
   carryAnalysis(cache, path, made);
@@ -836,13 +929,26 @@ async function excerptMedia(
  * machine that hasn't backfilled them yet) are named in the error and in the
  * project's cloud status (`missing`), never silently left out.
  */
-export async function ensureLocal(app: App, id: string): Promise<void> {
+export function ensureLocal(app: App, id: string): Promise<void> {
+  // One at a time per project: a second ask (another open, a pull) shares it.
+  const running = ensuring.get(id);
+  if (running !== undefined) return running;
+  const done = ensureLocalNow(app, id).finally(() => ensuring.delete(id));
+  ensuring.set(id, done);
+  return done;
+}
+
+/** `ensureLocal`s under way, by project. */
+const ensuring = new Map<string, Promise<void>>();
+
+async function ensureLocalNow(app: App, id: string): Promise<void> {
   let fetched: string | null = null;
   try {
     await fetchProxies(app, id);
   } catch (error) {
     fetched = failure(error);
   }
+  // After the proxies: analysis goes in the folder named after each media's file here.
   await fetchAnalysis(app, id);
   const live = app.store.get(id);
   const left = live === null ? [] : stranded(live.project);
@@ -1589,14 +1695,15 @@ async function fetchAnalysisOf(source: string, dir: string): Promise<number> {
   }
   const shared = readShared(dir);
   let fetched = 0;
-  for (const object of objects) {
-    if (!object.key.startsWith(prefix)) continue;
+  // Small files: several at once (each its own request).
+  const one = async (object: cloud.CloudObject): Promise<void> => {
+    if (!object.key.startsWith(prefix)) return;
     const name = object.key.slice(prefix.length);
     const local = join(dir, name);
-    if (!isAnalysis(name)) continue;
+    if (!isAnalysis(name)) return;
     // Another machine's keys add to this one's.
     const merge = name === WATCH_KEYS && fs.existsSync(local);
-    if (fs.existsSync(local) && !merge) continue;
+    if (fs.existsSync(local) && !merge) return;
     try {
       fs.mkdirSync(parent(local)!, { recursive: true });
     } catch {
@@ -1618,6 +1725,9 @@ async function fetchAnalysisOf(source: string, dir: string): Promise<number> {
     } finally {
       if (merge) fs.rmSync(target, { force: true });
     }
+  };
+  for (let index = 0; index < objects.length; index += ANALYSIS_AT_ONCE) {
+    await Promise.all(objects.slice(index, index + ANALYSIS_AT_ONCE).map(one));
   }
   if (fetched > 0) writeShared(dir, shared);
   return fetched;

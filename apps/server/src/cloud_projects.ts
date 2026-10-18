@@ -1327,11 +1327,10 @@ async function download(app: App, cloudProjects: Cloud, id: string): Promise<voi
   const [project, rev] = fetched;
   cloudProjects.take(id, project, rev);
   diag.info("cloud", `${id} downloaded from the cloud (rev ${rev})`);
-  try {
-    await cloudMedia.ensureLocal(app, id);
-  } catch (error) {
+  // The editor opens now; the footage follows in the background.
+  void cloudMedia.ensureLocal(app, id).catch((error: unknown) => {
     diag.warn("cloud", `fetching ${id}'s footage: ${diag.messageOf(error)}`);
-  }
+  });
 }
 
 /** Takes the lock from whoever has it and shows their latest version. */

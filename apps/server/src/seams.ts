@@ -161,8 +161,12 @@ export interface CloudMediaSeam {
   driveOriginal(file: string, scratch: string, progress: (bytes: number, total: number | null, name: string) => void): Promise<Original>;
   /** `project` as an export of frames start..end reads it: cloud media pointing at their originals (presigned URLs). */
   forExport(project: Project, start: number, end: number, cache: string): Promise<[Project, Originals]>;
-  /** Puts a file from this machine in the cloud (deduplicated by content) and returns the media to add. */
+  /** Puts a file from this machine in the cloud (deduplicated by content) and returns the media to add; footage's uploads finish in the background. */
   importLocal(cache: string, path: string, probe: Probe, name: string): Promise<Made>;
+  /** Resolves once the background uploads importing `file` are done. */
+  uploaded(file: string): Promise<void>;
+  /** Starts again an import's upload a restart cut short (its job's args). */
+  resumeUpload(home: string, args: Record<string, unknown>): void;
   /** `<cache>/cloud/tmp`, for files on their way up (old leftovers removed). */
   scratchDir(cache: string): string;
 }

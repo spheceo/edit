@@ -26,13 +26,14 @@ import {
   subtitlesTrack,
   trackOf,
 } from "./project.ts";
-import { byteLength, charCount, chars, f32, get, isAlphabetic, isAlphanumeric, isWhitespace, lines as linesOf, round, splitWhitespace, toI64, trim } from "./rust.ts";
+import { byteLength, charCount, chars, f32, fixed, get, isAlphabetic, isAlphanumeric, isWhitespace, lines as linesOf, round, splitWhitespace, toI64, trim } from "./rust.ts";
 import * as seats from "./seats.ts";
 import type {
   ClipMutes,
   Cue,
   Found,
   HouseWords,
+  Kept,
   Line,
   SubtitleOptions,
   Suggestion,
@@ -166,6 +167,16 @@ function isVerbForm(token: string, term: string): boolean {
     (stem) => token.startsWith(stem) && ["ed", "ing", "in", "er", "ers", "en", "ive"].includes(token.slice(stem.length)),
   );
 }
+
+/**
+ * A muted word in the narration keeps its first sound ("bl-"), at most this
+ * long (ms) and at most `VOICEOVER_ONSET_SHARE` of the word: a word cut out
+ * whole from a voice reads as a mistake in the edit (the team, on "blood").
+ */
+const VOICEOVER_ONSET_MS = 120.0;
+const VOICEOVER_ONSET_SHARE = 0.4;
+/** The media marker that keeps a house word unmuted where it's said (`mute_house_words` keep). */
+export const NOT_MUTED = "not muted";
 
 /** A muted word is silenced from a little before it starts (ms). */
 const MUTE_LEAD_MS = 30.0;
@@ -1276,6 +1287,20 @@ export function timedWords(words: Word[], from: number, to: number): TimedWord[]
 }
 
 /**
+ * The mute for a house word (source seconds): the whole word in the footage;
+ * in the narration all but its first sound, so it's heard as meant.
+ */
+export function muteOf(suggestion: Suggestion, words: TimedWord[], voiceOver: boolean): Mute {
+  let fromMs = suggestion.start_ms;
+  if (voiceOver) {
+    const word = words[suggestion.word];
+    const said = word === undefined ? 0.0 : word.end_ms - word.start_ms;
+    fromMs = Math.max(fromMs, suggestion.at_ms + Math.min(VOICEOVER_ONSET_MS, said * VOICEOVER_ONSET_SHARE));
+  }
+  return { from: round(fromMs) / 1000.0, to: suggestion.end_ms / 1000.0 };
+}
+
+/**
  * Finds the house words (and the neglect list's when `neglect`) said in the
  * footage and the voice-overs between `from` and `to` (timeline frames), and
  * the mutes for them. Only the footage's go in `found` (they star subtitles).
@@ -1295,7 +1320,7 @@ export async function houseWords(
   ];
   sound.sort((a, b) => a[0].start - b[0].start);
   const transcripts = new Map<string, Transcript>();
-  const out: HouseWords = { mutes: new Map(), found: [], listed: [] };
+  const out: HouseWords = { mutes: new Map(), found: [], listed: [], kept: [] };
   for (const [clip, voiceOver] of sound) {
     if (clip.type !== "audio") continue;
     const media = mediaOf(project, clip.media);
@@ -1307,8 +1332,17 @@ export async function houseWords(
     const onTimeline = onTimelineOf(clip, fps);
     let entry = out.mutes.get(clip.id);
     if (entry === undefined) out.mutes.set(clip.id, (entry = [visibleFrom, visibleTo, []]));
+    const notMuted = (media.markers ?? []).filter((marker) => marker.name === NOT_MUTED).map((marker) => marker.time * 1000.0);
     for (const suggestion of suggestions(words, neglect, visibleFrom * 1000.0, visibleTo * 1000.0, extra)) {
-      entry[2].push({ from: suggestion.start_ms / 1000.0, to: suggestion.end_ms / 1000.0 });
+      if (notMuted.some((at) => at >= suggestion.start_ms - 250.0 && at <= suggestion.end_ms + 250.0)) {
+        out.kept.push({
+          term: suggestion.term,
+          at_ms: onTimeline(suggestion.at_ms),
+          timeline_ms: [onTimeline(suggestion.start_ms), onTimeline(suggestion.end_ms)],
+        });
+        continue;
+      }
+      entry[2].push(muteOf(suggestion, words, voiceOver));
       const listed: Record<string, unknown> = {
         term: suggestion.term,
         time: round(onTimeline(suggestion.at_ms) / 10.0) / 100.0,
@@ -1353,18 +1387,46 @@ export async function muteHouseWords(
   to: number,
   neglect: boolean,
   extra: readonly string[] = [],
+  keep: readonly number[] = [],
 ): Promise<unknown> {
   if (to <= from) throw new Error("the span is empty");
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
   const fps = fpsOf(live.project);
-  const house = await houseWords(app, live.project, from, to, neglect, extra);
+  let house = await houseWords(app, live.project, from, to, neglect, extra);
+  // Words to leave unmuted where they're said: a "not muted" marker on the
+  // media at the word, so every later run (add_subtitles too) leaves it.
+  const marks: [mediaId: string, seconds: number, term: string][] = [];
+  for (const seconds of keep) {
+    let best: [number, Record<string, unknown>] | null = null;
+    for (const listed of house.listed as Record<string, unknown>[]) {
+      const off = Math.abs(Number(listed.time) - seconds);
+      if (off <= 1.0 && (best === null || off < best[0])) best = [off, listed];
+    }
+    if (best === null) throw new Error(`no house word is muted near ${fixed(seconds, 2)}s`);
+    const clip = live.project.clips.find((one) => one.id === best[1].clip);
+    if (clip === undefined || clip.type !== "audio") continue;
+    const source = clip.source_in + ((Number(best[1].time) * fps - clip.start) / fps) * clip.speed;
+    marks.push([clip.media, round(source * 1000.0) / 1000.0, String(best[1].term)]);
+  }
+  const marked = marks.length > 0 ? await app.store.update(projectId, "agent", (project) => {
+    for (const [mediaId, seconds, term] of marks) {
+      const media = mediaOf(project, mediaId);
+      if (media === undefined) continue;
+      media.markers = [...(media.markers ?? []), { time: seconds, name: NOT_MUTED, note: term }].sort((a, b) => a.time - b.time);
+    }
+  }) : null;
+  if (marked !== null) house = await houseWords(app, marked[0].project, from, to, neglect, extra);
   const [after, [starredCount, onScreen]] = await app.store.update(projectId, "agent", (project) => {
     writeMutes(project, house.mutes);
     const count = starSubtitles(project, house.found, from, to, fps);
-    return [count, starOnScreen(project, from, to, neglect, extra)] as const;
+    return [count, starOnScreen(project, from, to, neglect, extra, house.kept)] as const;
   });
-  return { rev: after.rev, subtitles_starred: starredCount, texts_starred: onScreen, mutes: house.listed };
+  const summary: Record<string, unknown> = { rev: after.rev, subtitles_starred: starredCount, texts_starred: onScreen, mutes: house.listed };
+  if (house.kept.length > 0) {
+    summary.not_muted = house.kept.map((one) => ({ term: one.term, time: round(one.at_ms / 10.0) / 100.0 }));
+  }
+  return summary;
 }
 
 /**
@@ -1392,14 +1454,15 @@ export function starSubtitles(project: Project, found: Found[], from: number, to
  * `neglect`) starred out, whatever is said: for any text on screen. Words
  * keep their places and lengths, so word timings still fit.
  */
-export function starText(text: string, neglect: boolean, extra: readonly string[] = []): string {
+export function starText(text: string, neglect: boolean, extra: readonly string[] = [], spared: readonly string[] = []): string {
   const words: TimedWord[] = splitWhitespace(text).map((word, index) => ({
     text: word,
     start_ms: index * 100.0,
     end_ms: index * 100.0 + 50.0,
     speaker: null,
   }));
-  return star(text, suggestions(words, neglect, -Number.MAX_VALUE, Number.MAX_VALUE, extra));
+  const found = suggestions(words, neglect, -Number.MAX_VALUE, Number.MAX_VALUE, extra);
+  return star(text, found.filter((suggestion) => !spared.includes(suggestion.term)));
 }
 
 /**
@@ -1407,11 +1470,22 @@ export function starText(text: string, neglect: boolean, extra: readonly string[
  * and `to` (timeline frames): subtitles, speaker captions, callouts,
  * quotes, charges, labels. How many changed.
  */
-export function starOnScreen(project: Project, from: number, to: number, neglect: boolean, extra: readonly string[] = []): number {
+export function starOnScreen(
+  project: Project,
+  from: number,
+  to: number,
+  neglect: boolean,
+  extra: readonly string[] = [],
+  kept: readonly Kept[] = [],
+): number {
+  const fps = fpsOf(project);
   let changed = 0;
   for (const clip of project.clips) {
     if (clip.start >= to || clipEnd(clip) <= from || clip.type !== "text") continue;
-    const starredText = starText(clip.text, neglect, extra);
+    // A word kept unmuted where it's said stays readable on screen then too.
+    const [fromMs, toMs] = [(clip.start / fps) * 1000.0 - 500.0, (clipEnd(clip) / fps) * 1000.0 + 500.0];
+    const spared = kept.filter((one) => one.timeline_ms[0] < toMs && one.timeline_ms[1] > fromMs).map((one) => one.term);
+    const starredText = starText(clip.text, neglect, extra, spared);
     if (starredText !== clip.text) {
       clip.text = starredText;
       changed += 1;

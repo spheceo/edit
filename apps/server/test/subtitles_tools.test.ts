@@ -180,6 +180,43 @@ test("mute_house_words mutes the sound and stars the subtitles already there, mo
   }
 });
 
+test("mute_house_words keep leaves a word unmuted and unstarred there, and later runs leave it too", async () => {
+  const { app, dir, store, cleanup } = fixtureHome("keep");
+  try {
+    const id = await footage(app, dir);
+    await store.update(id, "test", (project) => {
+      project.clips.push({
+        id: "s",
+        track: "v2",
+        start: 30,
+        duration: 60,
+        color: "cyan",
+        name: "Subtitle · Officer",
+        fade_in: 0,
+        fade_out: 0,
+        type: "text",
+        text: "Stop fucking moving.",
+        style: { font: "Geist", weight: 700, size: 96, color: [1, 1, 1, 1], tracking: 0, line_height: 1.15, glow: { enabled: true, color: null, radius: 46, strength: 0.5 } },
+        transform: { x: 0, y: -200, scale: 1, rotation: 0 },
+        animation: { preset: "none", duration: 12, stagger: 1.5 },
+        opacity: 1,
+      });
+    });
+    const kept = await call(app, "mute_house_words", { project_id: id, end: 10, keep: [1.4] });
+    expect(kept.isError).toBe(false);
+    expect(kept.text).toContain('"not_muted":[{"term":"fucking","time":1.35}]');
+    const again = await call(app, "mute_house_words", { project_id: id, end: 10 });
+    expect(again.text).toContain('"mutes":[]');
+    const project = store.get(id)!.project;
+    expect((project.clips.find((clip) => clip.id === "s") as TextClip).text).toBe("Stop fucking moving.");
+    expect((project.clips.find((clip) => clip.id === "a") as AudioClip).mutes).toEqual([]);
+    expect(project.media[0]!.markers).toEqual([{ time: 1.35, name: "not muted", note: "fucking" }]);
+    expect((await call(app, "mute_house_words", { project_id: id, end: 10, keep: [5] })).text).toContain("no house word is muted near 5.00s");
+  } finally {
+    cleanup();
+  }
+});
+
 test("add_subtitles goes to the captions package; place_subtitles works with no faces found", async () => {
   const { app, dir, cleanup } = fixtureHome("add");
   // No voice-overs in this edit (voiceover.voiceoverSound finds none).

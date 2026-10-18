@@ -3,7 +3,7 @@
 //! pictures (`desktop`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
@@ -160,6 +160,16 @@ pub fn censor_issues(
         let (issues, pending) = edit_engine::censor::issues(&project, &crate::cache_dir()?, start);
         Ok(CensorCheck { issues, pending })
     })
+}
+
+/// Reads a video for censored stretches in the background (one at a time),
+/// so the audit's `censored_broll` is ready when the edit is reviewed: for
+/// footage whose light preview was just made.
+#[napi]
+pub fn censor_warm(path: String) {
+    if let Ok(cache) = crate::cache_dir() {
+        edit_engine::censor::analyse_in_background(cache, PathBuf::from(path));
+    }
 }
 
 #[napi(object)]

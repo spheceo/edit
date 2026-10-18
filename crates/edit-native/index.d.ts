@@ -69,6 +69,13 @@ export interface CensorCheck {
  */
 export declare function censorIssues(project: ProjectInput, start: boolean): CensorCheck
 
+/**
+ * Reads a video for censored stretches in the background (one at a time),
+ * so the audit's `censored_broll` is ready when the edit is reviewed: for
+ * footage whose light preview was just made.
+ */
+export declare function censorWarm(path: string): void
+
 /** The cloud proxy's bitrate (bits/s) for a `width` × `height` picture. */
 export declare function cloudProxyBitrate(width: number, height: number): number
 

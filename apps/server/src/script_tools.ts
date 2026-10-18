@@ -1,7 +1,7 @@
 // The script, voice and research package's MCP tools (search_web,
 // read_page, add_article, case_articles, look_at_found, reject_found,
-// collect_images, use_found, realign_script, place_voiceovers,
-// tighten_voiceover, speed_voiceover) and routes (`/api/voice/*`,
+// collect_images, use_found, read_review, realign_script, place_voiceovers,
+// tighten_voiceover, speed_voiceover, revoice_cut_in) and routes (`/api/voice/*`,
 // `/api/scripts/preview`, `/api/projects/{id}/script(/job)`,
 // `/api/projects/{id}/research/*`). Importing this module registers the tools
 // (seams.ts does); the server calls `routes` on its router. The script
@@ -21,6 +21,7 @@ import { native } from "./native/index.ts";
 import { duration as projectDuration, fps as fpsOf } from "./project.ts";
 import { isFile } from "./paths.ts";
 import * as research from "./research.ts";
+import * as review from "./review.ts";
 import { display, fixed, round, toI64, trim } from "./rust.ts";
 import * as script from "./script.ts";
 import { field, read, readStruct, required, SerdeError, type Struct } from "./serde.ts";
@@ -88,6 +89,15 @@ registerTool("read_page", async ({ args }) => {
   if (url === null) throw new Error("url is required");
   const limit = clampInt(uint(args.limit) ?? 12_000, 500, 60_000);
   return text(await research.readPage(url, limit));
+});
+
+registerTool("read_review", async ({ app, args, projectId }) => {
+  const url = str(args.url);
+  if (url === null) throw new Error("url is required");
+  const page = await diag.timeAsync("research", "read a review", () => research.hooks.dump(review.printUrl(url), review.WAIT_MS));
+  const found = review.comments(page);
+  if (found.length === 0) throw new Error("no comments on that page (is the link shared with comments visible?)");
+  return text(stableStringify({ comments: review.placed(liveProject(app, projectId), found, review.assetFps(page)) }));
 });
 
 registerTool("add_article", async ({ app, args, projectId }) => {
@@ -245,6 +255,14 @@ registerTool("speed_voiceover", async ({ app, args, projectId }) => {
   if (speed === null) throw new Error("speed is required");
   const [, [start, end, saved]] = await app.store.update(projectId, ORIGIN, (project) => voiceover.speedUp(project, from, to, speed));
   return text(`sped ${fixed(start / fps, 2)}–${fixed(end / fps, 2)}s up ${display(speed)}x: saved ${fixed(saved / fps, 2)}s`);
+});
+
+registerTool("revoice_cut_in", async ({ app, args, projectId }) => {
+  const cutIn = num(args.cut_in);
+  if (cutIn === null || !Number.isInteger(cutIn) || cutIn < 1) throw new Error("cut_in is required (its number, from 1)");
+  const words = typeof args.text === "string" ? args.text : null;
+  const done = await diag.timeAsync("voiceover", "revoice a cut-in", () => voiceover.revoice(app, projectId, cutIn, words));
+  return text(stableStringify(done));
 });
 
 // ---------------------------------------------------------------------------

@@ -180,7 +180,7 @@ test("the voice-over routes answer", async () => {
     let [status, value] = await http("POST", "/api/voice", { name: "  " });
     expect(status).toBe(200);
     const project = (value as { project: { id: string; name: string; lines: { id: string }[]; voice: { speed: number } } }).project;
-    expect([project.name, project.lines.length, project.voice.speed]).toEqual(["Untitled voice-over", 1, 1.1]);
+    expect([project.name, project.lines.length, project.voice.speed]).toEqual(["Untitled voice-over", 1, 1.15]);
     [status, value] = await http("GET", "/api/voice");
     expect((value as { projects: { id: string }[] }).projects.map((own) => own.id)).toEqual([project.id]);
     expect(await http("GET", "/api/voice/nope")).toEqual([404, { error: "no such voice-over" }]);

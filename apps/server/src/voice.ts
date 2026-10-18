@@ -43,8 +43,9 @@ export function defaultSettings(): VoiceSettings {
     similarity_boost: 0.75,
     style: 0,
     use_speaker_boost: true,
-    // A touch quicker than the voice's own pace (the team's call; 1.2 is ElevenLabs' fastest).
-    speed: 1.1,
+    // Quicker than the voice's own pace (the team's call: 1.1 on Oct 16, and
+    // after Mom Leaves 5 Kids "slightly faster, maybe just 5%"; 1.2 is ElevenLabs' fastest).
+    speed: 1.15,
   };
 }
 

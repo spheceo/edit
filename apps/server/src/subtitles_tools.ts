@@ -103,7 +103,11 @@ registerTool("mute_house_words", async ({ app, args, projectId }) => {
     throw new Error("words must be a list of words or phrases");
   }
   const extra = ((given ?? []) as string[]).map((word) => word.trim()).filter((word) => word !== "");
-  const summary = await subtitles.muteHouseWords(app, projectId, from, to, neglect, extra);
+  const keep = args.keep;
+  if (keep !== undefined && keep !== null && (!Array.isArray(keep) || keep.some((time) => typeof time !== "number"))) {
+    throw new Error("keep must be a list of timeline seconds");
+  }
+  const summary = await subtitles.muteHouseWords(app, projectId, from, to, neglect, extra, (keep ?? []) as number[]);
   return text(`muted ${fixed(from / fps, 2)}–${fixed(to / fps, 2)}s: ${stableStringify(summary)}`);
 });
 

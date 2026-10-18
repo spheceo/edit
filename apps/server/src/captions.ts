@@ -928,7 +928,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
       placed += 1;
     }
     // Every other text on screen too (captions, callouts, charges), all of the video.
-    const starred = seams.subtitles.starOnScreen(project, 0, Number.MAX_SAFE_INTEGER, neglect);
+    const starred = seams.subtitles.starOnScreen(project, 0, Number.MAX_SAFE_INTEGER, neglect, [], house.kept);
     // One colour per person across the video (their captions and quotes too).
     const people = seams.people.oneColourPerPerson(project);
     return [placed, carriedOver, starred, people] as const;

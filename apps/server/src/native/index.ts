@@ -232,6 +232,7 @@ export interface Native {
   facesCached(source: string): Record<number, Box[]> | null; // S
   readonly FACES_RATE: number;
   censorIssues(project: ProjectInput, start: boolean): { issues: unknown[]; pending: string[] }; // S (+BG)
+  censorWarm(path: string): void; // BG
   /** Camera angles from 64×36 grey frames; TS does the FFmpeg read that makes them (the engine's seats.rs `scenes`). */
   seatsScenes(gray64x36: Buffer): Promise<{ scenes: [number, number, number | null][]; angles: number }>; // A (the addon answers asynchronously)
   desktopFiles(width: number, height: number, photoTitle: string, notepadTitle: string): Promise<[string, string, string]>; // A

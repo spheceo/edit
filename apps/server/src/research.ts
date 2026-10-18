@@ -41,7 +41,7 @@ const PAGE = 35;
 /** The ways out that tests replace: the headless browser. */
 export const hooks = {
   /** A page as the browser renders it (scripts run), from a fresh profile that's deleted afterwards. */
-  dump: (url: string): Promise<string> => chromeDump(url),
+  dump: (url: string, waitMs?: number): Promise<string> => chromeDump(url, waitMs),
 };
 
 /** Collections in progress (by project). */
@@ -232,7 +232,7 @@ export function articleBody(page: string): string | null {
 }
 
 /** Chrome on this machine, headless: the page once it's rendered. */
-async function chromeDump(url: string): Promise<string> {
+async function chromeDump(url: string, waitMs = 6000): Promise<string> {
   const browser = seams.broll.chrome();
   if (browser === null) throw new Error("research needs Google Chrome (or Chromium) installed");
   const profile = join(os.tmpdir(), `edit-research-${process.pid}-${process.hrtime.bigint()}`);
@@ -246,7 +246,7 @@ async function chromeDump(url: string): Promise<string> {
         "--no-default-browser-check",
         "--mute-audio",
         "--disable-extensions",
-        "--virtual-time-budget=6000",
+        `--virtual-time-budget=${waitMs}`,
         `--user-agent=${USER_AGENT}`,
         `--user-data-dir=${profile}`,
         "--dump-dom",
@@ -268,7 +268,7 @@ async function chromeDump(url: string): Promise<string> {
     }
     return Buffer.concat(chunks);
   })();
-  const timeout = Bun.sleep(30_000).then(() => null);
+  const timeout = Bun.sleep(Math.max(30_000, waitMs + 20_000)).then(() => null);
   const bytes = await Promise.race([reading, timeout]);
   child.kill();
   await child.exited;

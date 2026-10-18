@@ -89,6 +89,27 @@ test("a_transition_without_a_sound_is_flagged", () => {
   expect(silent[0]!.at).toBe(200);
 });
 
+test("long_broll_shots_and_music_that_outstays_its_song_are_flagged", () => {
+  const p = project("plan");
+  p.media.push(footage());
+  p.media.push(media({ id: "song", name: "Song.wav", path: "/home/library/music/abc/Song.wav", kind: "audio", duration: 120 }));
+  p.media.push(media({ id: "vo", name: "vo.mp3", path: "/vo.mp3", kind: "audio", duration: 30 }));
+  apply(p, [
+    { op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 3000, fill: [0, 0, 0, 1] } },
+    { op: "add", clip: { type: "video", track: "new", name: "Cut-in 1 · B-roll: a", media: "m1", source_in: 10, start: 0, duration: 120 } },
+    { op: "add", clip: { type: "video", track: "v2", name: "Cut-in 1 · B-roll: b", media: "m1", source_in: 100, start: 120, duration: 150 } },
+    { op: "add", clip: { type: "audio", track: "new", name: "Voice-over", media: "vo", source_in: 0, start: 0, duration: 600 } },
+    // Thirty seconds of one song, stopping with ten seconds of narration left.
+    { op: "add", clip: { type: "audio", track: "new", media: "song", source_in: 0, start: 0, duration: 300 } },
+    { op: "add", clip: { type: "audio", track: "new", media: "song", source_in: 0, start: 1000, duration: 300 } },
+    { op: "add", clip: { type: "audio", track: "new", media: "song", source_in: 0, start: 2000, duration: 900 } },
+  ]);
+  expect(kinds(p, "long_broll_shot").map((issue) => issue.seconds)).toEqual([5]);
+  expect(kinds(p, "music_bed_long").map((issue) => issue.seconds)).toEqual([30]);
+  expect(kinds(p, "music_repeated")[0]!.starts).toEqual([0, 1000, 2000]);
+  expect(kinds(p, "music_stops_mid_narration").map((issue) => issue.narration_left)).toEqual([10]);
+});
+
 test("the_same_transitions_over_and_over_are_flagged", () => {
   const repeated = (list: string[]) => {
     const p = project("plan");
@@ -174,6 +195,19 @@ function assertGlides(own: Clip, photos: number[], end: number): void {
   // Before the first photo and after the last it drifts, never stops.
   for (let step = 0; step < Math.trunc(end); step++) expect(speed(step + 0.5), `stopped at ${step}`).toBeGreaterThan(0.3);
 }
+
+test("an_evidence_boards_title_is_written_over_its_first_photo_and_moves_with_it", () => {
+  const p = boardProject(2);
+  apply(p, [{ op: "evidence_board", start: 0, end: 200, title: "Nevaeh's account", items: [{ media: "m1", label: "the bed", at: 60 }, { media: "m2", label: "the window", at: 140 }] }]);
+  const title = clipNamed(p, "Evidence board · title") as TextClip;
+  const photo = clipNamed(p, "Evidence board · photo 1");
+  expect([title.text, title.start, title.duration, title.style.font]).toEqual(["Nevaeh's account", 0, 200, "Reenie Beanie"]);
+  // Above the photo by the same distance all the way down the board.
+  for (const frame of [0, 60, 140, 199]) {
+    expect(Math.abs(sample(title.keyframes!.x!, frame)! - sample(photo.keyframes!.x!, frame)!)).toBeLessThan(0.5);
+    expect(sample(photo.keyframes!.y!, frame)! - sample(title.keyframes!.y!, frame)!).toBeCloseTo(0.4 * 1080, 0);
+  }
+});
 
 test("an_evidence_board_glides_continuously_past_photos_centred_on_their_words", () => {
   const p = boardProject(5);

@@ -478,6 +478,7 @@ export function createStub(): Stub {
       return null;
     },
     FACES_RATE: 2.0,
+    censorWarm() {},
     censorIssues() {
       return { issues: [], pending: [] };
     },

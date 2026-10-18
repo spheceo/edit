@@ -8,7 +8,7 @@ import * as cutin from "./cutin.ts";
 import * as desktop from "./desktop.ts";
 import * as graphics from "./graphics.ts";
 import * as markers from "./markers.ts";
-import type { Clip, Keyframe, Project } from "./model.ts";
+import type { Clip, Keyframe, Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import {
   addTrack,
@@ -615,7 +615,8 @@ class Stretch {
  * photo). The older timing still works: without `at`, `frames` is the time
  * around each photo (default 75), centred in its middle, and `pan` the frames
  * between (for the board or per photo, default 30). `illustrative: true` adds
- * a small "Illustrative images" in the corner. Each photo's moment is marked
+ * a small "Illustrative images" in the corner; `title` a handwritten heading
+ * over the first photo, written on as the board comes in. Each photo's moment is marked
  * on the timeline ("board photo", its label as the note) and gets a quiet
  * camera shutter whose click lands on it (`shutters: false` for none; a
  * shutter already within 8 frames, a transition's on the cut into the board,
@@ -846,6 +847,25 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
       });
     }
   });
+  // A heading over the first photo, written on as the board comes in: whose
+  // account or what record the board is ("Nevaeh's account", "Prior reports").
+  const title = str(args.title);
+  if (title !== null && trim(title) !== "") {
+    const [tx, ty] = [spots[0]![0], spots[0]![1] - 0.4 * height];
+    const track = addTrack(project, "video");
+    add({
+      type: "text",
+      name: "Evidence board · title",
+      track,
+      start,
+      duration: total,
+      text: trim(title),
+      style: { font: "Reenie Beanie", weight: 400, size: 170 * k, color: [0.12, 0.12, 0.14, 1], glow: { enabled: false } },
+      transform: { x: tx - opening.x, y: ty - opening.y, rotation: -2 },
+      animation: { preset: "typewriter", stagger: 2, duration: 1 },
+      keyframes: keys(tx, ty, 0),
+    });
+  }
   // The board's vignette, over all of it.
   const shade = addTrack(project, "video");
   add({ type: "adjustment", name: "Evidence board · vignette", track: shade, start, duration: total, grade: { vignette: 0.38 } });
@@ -994,6 +1014,20 @@ export function selected(project: Project, select: unknown): string[] {
 
 // ---------------------------------------------------------------------------
 // The audit
+
+/** Seconds a B-roll shot may hold before the audit asks for a new one (long_broll_shot). */
+const LONGEST_BROLL_SHOT = 4.5;
+/** Seconds of one song a bed may play before the audit asks for a change (music_bed_long). */
+const LONGEST_BED = 25;
+
+/**
+ * Whether a clip plays music: the team's library's (`<home>/library/music/…`),
+ * or on another machine's copy any sound file a song long that isn't narration.
+ */
+function isMusic(clip: Clip, media: Media | undefined): boolean {
+  if (clip.type !== "audio" || media === undefined || media.kind !== "audio" || clip.name === "Voice-over") return false;
+  return media.path.includes("/library/music/") || media.duration >= 45;
+}
 
 /**
  * Deterministic review catches mechanical issues without asking a model to
@@ -1189,6 +1223,53 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       fix: "vary them for their moments: flash or shutter, crossfade, dip, drop (TRANSITIONS)",
     });
     at = stop;
+  }
+  // B-roll that holds one shot too long: the team wants cut-ins alive, a new
+  // shot on each thing the narration names (Mom Leaves 5 Kids: shots of 7–11 s
+  // under narration, "we need more clips", "change clips more frequently").
+  const longest = asInt(round(LONGEST_BROLL_SHOT * fps));
+  for (const clip of project.clips) {
+    if (clip.type !== "video" || clip.track === base || !(clip.name ?? "").includes("B-roll:")) continue;
+    if (clip.duration > longest) {
+      issues.push({ kind: "long_broll_shot", clip: clip.id, start: clip.start, seconds: round((clip.duration / fps) * 10) / 10 });
+    }
+  }
+  // Music: a song's good part is usually its opening (often only the first
+  // 10–20 s), so a bed that runs on past it, the same song under cut-in after
+  // cut-in, and a bed that stops while the narration carries on all came
+  // back from the team as "change the music".
+  const music = project.clips.filter(
+    (clip): clip is Extract<Clip, { type: "audio" }> =>
+      visible(clip.track) && isMusic(clip, clip.type === "audio" ? mediaOf(project, clip.media) : undefined),
+  );
+  for (const clip of music) {
+    const played = (clip.duration / fps) * (clip.speed ?? 1);
+    if (played > LONGEST_BED) {
+      issues.push({ kind: "music_bed_long", clip: clip.id, start: clip.start, seconds: round(played * 10) / 10 });
+    }
+  }
+  const songs = new Map<string, Clip[]>();
+  for (const clip of music) {
+    if (clip.type !== "audio") continue;
+    songs.set(clip.media, [...(songs.get(clip.media) ?? []), clip]);
+  }
+  for (const [media, clips] of songs) {
+    if (clips.length < 3) continue;
+    issues.push({
+      kind: "music_repeated",
+      media,
+      name: mediaOf(project, media)?.name ?? media,
+      starts: clips.map((clip) => clip.start).sort((a, b) => a - b),
+    });
+  }
+  const second = asInt(round(fps));
+  for (const clip of music) {
+    const stop = clipEnd(clip);
+    const talking = voiceovers.find(([start, until]) => start < stop && until - stop > second);
+    const carried = music.some((other) => other !== clip && other.start <= stop + idiv(second, 2) && clipEnd(other) > stop + idiv(second, 2));
+    if (talking !== undefined && !carried) {
+      issues.push({ kind: "music_stops_mid_narration", clip: clip.id, at: stop, narration_left: round(((talking[1] - stop) / fps) * 10) / 10 });
+    }
   }
   // A found photo or still as plain B-roll (letterboxed, often): pictures go
   // on screen only inside a designed graphic (an evidence card or board).

@@ -56,4 +56,5 @@ SKILLS: the rest of the house style is in skills, one per part of the edit. Load
 - subtitles: Subtitles in an edit (after the intro): watching, wording, speakers and their colours.
 - subtitle-video: A subtitled video (Repack style): subtitles for the whole video and nothing else, then export and upload.
 - music-and-sound: Music beds and sound effects from the team's library, and their levels.
-- final-pass: The last review of a whole edit and the fixes it finds.`;
+- final-pass: The last review of a whole edit and the fixes it finds.
+- feedback: A round of the team's notes on an export (a Frame.io link): read, sort, fix across the video, report each.`;

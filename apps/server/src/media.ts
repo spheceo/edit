@@ -345,6 +345,11 @@ export class Processor {
         });
       }
     }
+    // Its censored stretches (from the light preview when there is one), so
+    // the audit's censored_broll is ready by the time the edit is reviewed:
+    // started only by the audit, Mom Leaves 5 Kids' final pass found all
+    // sixteen files still pending and its blurred B-roll went out.
+    if (probe.kind === "video") native().censorWarm(source);
   }
 
   /**

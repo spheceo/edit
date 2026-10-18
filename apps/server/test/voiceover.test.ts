@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import type { Clip, Project, Track } from "../src/model.ts";
 import { findAddon, useNative, wrap, type Native } from "../src/native/index.ts";
 import { clipEnd, clipOf, duration } from "../src/project.ts";
-import { suggestions, timedWords, writeMutes, footageSound } from "../src/subtitles.ts";
+import { footageSound, muteOf, suggestions, timedWords, writeMutes } from "../src/subtitles.ts";
 import type { Word } from "../src/transcribe.ts";
 import {
   find,
@@ -77,6 +77,16 @@ function realNative(): Native | null {
   useNative(real);
   return real;
 }
+
+test("the_narrations_mute_keeps_the_words_first_sound", () => {
+  const heard = [said("the", 1.0, 1.2), said("blood", 1.3, 1.7), said("was", 1.8, 2.0)];
+  const timed = timedWords(heard, 0.0, 10.0);
+  const [found] = suggestions(timed, true, 0, 10_000);
+  // The footage's: the whole word and a little either side.
+  expect(muteOf(found!, timed, false)).toEqual({ from: 1.27, to: 1.725 });
+  // The narration's: "bl-" is heard (120 ms at most, 40% of the word).
+  expect(muteOf(found!, timed, true)).toEqual({ from: 1.42, to: 1.725 });
+});
 
 test("voiceovers_are_heard_for_house_words_beside_the_footage", () => {
   stubNative();

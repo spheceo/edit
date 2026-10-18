@@ -302,6 +302,7 @@ export interface Voices {
   get(id: string): VoiceProject;
   create(name: string, source: string | null, lines: [string, string | null][]): VoiceProject;
   forProject(name: string, source: string, lines: [string, string | null][]): VoiceProject;
+  save(project: VoiceProject): void;
   /** The UI's changes (`Changes`, as JSON; refused in serde's words). */
   update(id: string, changes: Json): VoiceProject;
   delete(id: string): void;
@@ -456,6 +457,16 @@ export interface HouseWords {
   mutes: ClipMutes;
   found: Found[];
   listed: Json[];
+  /** Words left unmuted on purpose ("not muted" media markers): the term and when it's said (timeline ms). */
+  kept: Kept[];
+}
+
+/** A house word said where it isn't what the list is for ("it hit her" as realising): never muted or starred there. */
+export interface Kept {
+  term: string;
+  /** When the word starts (timeline ms). */
+  at_ms: number;
+  timeline_ms: [number, number];
 }
 
 export interface SubtitleOptions {
@@ -484,13 +495,13 @@ export interface SubtitlesSeam {
   houseStyle(width: number, height: number, color: Rgba): TextStyle;
   houseWords(app: App, project: Project, from: number, to: number, neglect: boolean, extra?: readonly string[]): Promise<HouseWords>;
   longestMs(word: string): number;
-  muteHouseWords(app: App, projectId: string, from: number, to: number, neglect: boolean, extra?: readonly string[]): Promise<Json>;
+  muteHouseWords(app: App, projectId: string, from: number, to: number, neglect: boolean, extra?: readonly string[], keep?: readonly number[]): Promise<Json>;
   repackSubtitles(app: App, projectId: string, options: SubtitleOptions): Promise<Json>;
   roleOf(role: string | null, name: string): string;
   segment(words: TimedWord[]): Cue[];
   silentRole(role: string): boolean;
   star(text: string, found: Suggestion[]): string;
-  starOnScreen(project: Project, from: number, to: number, neglect: boolean, extra?: readonly string[]): number;
+  starOnScreen(project: Project, from: number, to: number, neglect: boolean, extra?: readonly string[], kept?: readonly Kept[]): number;
   suggestions(words: TimedWord[], neglect: boolean, fromMs: number, toMs: number, extra?: readonly string[]): Suggestion[];
   timedWords(words: Word[], from: number, to: number): TimedWord[];
   /** Repack's tokeniser: /[\p{L}\p{N}]+(?:['’][\p{L}]+)?/gu on lowercase text. */

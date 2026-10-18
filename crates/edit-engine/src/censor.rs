@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, OnceLock};
 
 use edit_core::{ClipContent, MediaKind, Project, TrackKind};
@@ -141,7 +141,7 @@ pub fn analyse(cache: &Path, source: &Path) -> Result<Vec<u8>, String> {
     if light.is_some() {
         command.args(["-skip_frame", "nokey"]);
     }
-    let output = command
+    command
         .arg("-i")
         .arg(light.as_deref().unwrap_or(source))
         .args([
@@ -152,15 +152,10 @@ pub fn analyse(cache: &Path, source: &Path) -> Result<Vec<u8>, String> {
             "-f",
             "rawvideo",
             "pipe:1",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("ffmpeg: {error}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
-    }
-    Ok(output
-        .stdout
+        ]);
+    // Background work: it waits while an export runs (now that imports start it).
+    let frames = crate::media::run_background(&mut command)?;
+    Ok(frames
         .as_chunks::<{ WIDE * HIGH }>()
         .0
         .iter()

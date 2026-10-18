@@ -253,6 +253,81 @@ export async function send(app: App, voiceId: string, id: string): Promise<Json>
   return { media: added, report };
 }
 
+/** How far a new take may be sped or slowed to fit its cut-in (`revoice`). */
+const REVOICE_SPEEDS: [number, number] = [0.85, 1.2];
+
+/**
+ * Speaks cut-in `cutIn` (1-based) again with the house voice, with `text`
+ * when given (a word fixed: "himself" → "herself"; a house word reworded so
+ * the narration needn't be muted), and puts the new take in place of its
+ * voice-over, played at the speed that fits the cut-in as it is, so nothing
+ * else on the timeline moves. The script's cut-in text follows.
+ */
+export async function revoice(app: App, id: string, cutIn: number, text: string | null): Promise<Json> {
+  const live = app.store.get(id);
+  if (live === null) throw new Error("no such project");
+  const blocks = (live.project.script?.blocks ?? []).filter((block) => block.kind === "narration");
+  const block = blocks[cutIn - 1];
+  if (block === undefined || block.kind !== "narration") throw new Error(`there's no cut-in ${cutIn} (the script has ${blocks.length})`);
+  const clipId = block.voiceover ?? null;
+  const placed = clipId === null ? undefined : clipOf(live.project, clipId);
+  if (placed === undefined || placed.type !== "audio") throw new Error(`cut-in ${cutIn} has no voice-over placed yet: place_voiceovers first`);
+  const words = trim(text ?? block.text);
+  if (words === "") throw new Error("text is empty");
+  const label = `Cut-in ${cutIn}`;
+  // This edit's voice-over (made on another machine, there's none here: one
+  // is started from the script's lines, and only this line is spoken).
+  const lines = seams.voice.narrationLines(live.project);
+  let voice = app.voices
+    .list()
+    .map((summary) => app.voices.get((summary as { id: string }).id))
+    .filter((own) => own.source === id && own.lines.some((line) => line.label === label))
+    .sort((a, b) => b.modified_ms - a.modified_ms)[0];
+  voice ??= app.voices.create(`${live.project.name} (voice-over)`, id, lines);
+  const line = voice.lines.find((own) => own.label === label);
+  if (line === undefined) throw new Error(`the voice-over has no line for ${label}`);
+  line.text = words;
+  app.voices.save(voice);
+  const spoken = await diag.timeAsync("voice", "voice: revoice a cut-in", () => app.voices.generate(voice.id, line.id));
+  const take = spoken.lines.find((own) => own.id === line.id)?.chosen ?? null;
+  if (take === null) throw new Error("the line wasn't spoken");
+  const file = join(app.store.uploadsDir(id), "voice-over", `${voice.name.replaceAll("/", "-")} - ${label} (${take}).mp3`);
+  try {
+    fs.mkdirSync(join(app.store.uploadsDir(id), "voice-over"), { recursive: true });
+    copyFile(app.voices.takePath(voice.id, take), file);
+  } catch (error) {
+    throw new Error(ioMessage(error));
+  }
+  const [, added, errors] = await importPaths(app, id, [file], false, "voice");
+  const mediaId = added[0];
+  if (mediaId === undefined) throw new Error(`Couldn't import the take: ${debugStrings(errors)}`);
+  const fps = fpsOf(live.project);
+  const [saved, report] = await app.store.update(id, "agent", (project) => {
+    const clip = clipOf(project, placed.id);
+    const media = mediaOf(project, mediaId);
+    if (clip === undefined || clip.type !== "audio" || media === undefined) throw new Error("the voice-over changed while the take was spoken");
+    const seconds = clip.duration / fps;
+    const speed = media.duration / seconds;
+    if (speed < REVOICE_SPEEDS[0] || speed > REVOICE_SPEEDS[1]) {
+      throw new Error(
+        `the new take is ${round(media.duration * 10) / 10} s and the cut-in ${round(seconds * 10) / 10} s: too far apart to fit by speed; reword it nearer the old length (the take is media ${mediaId})`,
+      );
+    }
+    clip.media = mediaId;
+    clip.source_in = 0;
+    clip.speed = f32Saved(speed);
+    // Its house words are muted again by the next mute_house_words.
+    clip.mutes = [];
+    const own = (project.script?.blocks ?? []).filter((one) => one.kind === "narration")[cutIn - 1];
+    if (own !== undefined && own.kind === "narration") own.text = words;
+    return { cut_in: cutIn, clip: clip.id, media: mediaId, take_seconds: round(media.duration * 100) / 100, speed: round(speed * 1000) / 1000, text: words };
+  });
+  // Its words, for get_edit_context's cut-in timings and the mutes.
+  const media = mediaOf(saved.project, mediaId);
+  if (media !== undefined) await transcript(app, media);
+  return { ...report, rev: saved.rev, then: "run mute_house_words over the whole timeline (its mutes were cleared)" };
+}
+
 /** Whether any cut-in already plays a voice-over. */
 export function anyPlaced(project: Project): boolean {
   return placedVoiceovers(project).length > 0;

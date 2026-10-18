@@ -267,26 +267,51 @@ async function reviewEdit({ app, args, projectId }: ToolCall): Promise<Content[]
   return withReview(found.project, { ref: { id: projectId, rev: found.rev } }, frames, report);
 }
 
-function getProject({ app, projectId }: ToolCall): Content[] {
+/**
+ * The project as JSON, compact and within the context budget: a project too
+ * big to send whole (1–2 MB on a long edit, cut off by the model's client
+ * long before the end) gives its clips in timeline order up to the budget and
+ * says where to carry on. `start` / `end` (seconds) narrow the clips to a span.
+ */
+function getProject({ app, args, projectId }: ToolCall): Content[] {
   const found = live(app, projectId);
   const project = found.project;
   const labels: Record<string, string | null> = {};
   for (const track of project.tracks) labels[track.id] = trackLabel(project, track.id);
   const total = durationOf(project);
-  return text(
-    stableStringify(
-      {
-        rev: found.rev,
-        duration_frames: total,
-        duration_seconds: total / fpsOf(project),
-        track_labels: labels,
-        sections: onLive(found, (input) => native().sections(input)),
-        smoothing: hooks.smoothingPending(projectId),
-        project,
-      },
-      2,
-    ),
-  );
+  const fps = fpsOf(project);
+  const from = num(args.start);
+  const to = num(args.end);
+  const first = from === null ? -Infinity : round(from * fps);
+  const last = to === null ? Infinity : round(to * fps);
+  const clips = project.clips.filter((clip) => clip.start < last && clip.start + clip.duration > first);
+  const head: Record<string, unknown> = {
+    rev: found.rev,
+    duration_frames: total,
+    duration_seconds: total / fps,
+    track_labels: labels,
+    sections: onLive(found, (input) => native().sections(input)),
+    smoothing: hooks.smoothingPending(projectId),
+  };
+  const whole = stableStringify({ ...head, project: { ...project, clips } });
+  if (whole.length <= BUDGET) return text(whole);
+  // Clips in timeline order while they fit beside everything else.
+  let room = BUDGET - stableStringify({ ...head, project: { ...project, clips: [] } }).length;
+  const ordered = [...clips].sort((a, b) => a.start - b.start);
+  const shown: typeof clips = [];
+  for (const clip of ordered) {
+    room -= stableStringify(clip).length + 1;
+    if (room < 0 && shown.length > 0) break;
+    shown.push(clip);
+  }
+  const next = ordered[shown.length];
+  head.clips_shown = {
+    shown: shown.length,
+    of: clips.length,
+    next_start_seconds: next === undefined ? null : next.start / fps,
+    note: "The project is too big to send whole: call again with start (seconds) for the clips after these, or use get_edit_context.",
+  };
+  return text(stableStringify({ ...head, project: { ...project, clips: shown } }));
 }
 
 async function addText({ app, args, projectId }: ToolCall): Promise<Content[]> {

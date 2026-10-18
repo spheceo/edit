@@ -319,12 +319,18 @@
     "name": "review_edit"
   },
   {
-    "description": "The full project JSON plus track labels and duration. For routine planning use get_edit_context; request this only when the full model is needed.",
+    "description": "The full project JSON plus track labels and duration. For routine planning use get_edit_context; request this only when the full model is needed. A project too big to send whole gives its clips in timeline order up to a limit (clips_shown says where to carry on); start/end (seconds) narrow the clips to a span.",
     "inputSchema": {
       "properties": {
+        "end": {
+          "type": "number"
+        },
         "project_id": {
           "description": "Defaults to the project open in the UI.",
           "type": "string"
+        },
+        "start": {
+          "type": "number"
         }
       },
       "required": [],

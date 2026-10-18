@@ -200,6 +200,20 @@ test("deleting a card can close the gap it leaves and drop it from the script", 
   expect(project.script!.blocks).toEqual([]);
 });
 
+test("a project too big to send whole gives its clips up to the budget and says where to carry on", async () => {
+  const { app } = setUp("tools-big");
+  for (let at = 0; at < 400; at++) {
+    await said(app, "add_clip", { clip: { type: "solid", track: "v2", start: 30 + at * 2, duration: 2, fill: [0, 0, 0, 1], name: "x".repeat(60) } });
+  }
+  const big = await said(app, "get_project");
+  expect(big.length).toBeLessThan(37_000);
+  const cut = JSON.parse(big) as { clips_shown: { shown: number; of: number; next_start_seconds: number }; project: Project };
+  expect(cut.clips_shown.of).toBe(400);
+  expect(cut.project.clips.length).toBe(cut.clips_shown.shown);
+  const after = JSON.parse(await said(app, "get_project", { start: cut.clips_shown.next_start_seconds })) as { project: Project };
+  expect(after.project.clips[0]!.start).toBe(Math.round(cut.clips_shown.next_start_seconds * 30));
+});
+
 test("markers, the project and the edit context read back as JSON", async () => {
   const { app, id } = setUp("tools-read");
   expect(await said(app, "markers")).toBe('{"markers":[]}');

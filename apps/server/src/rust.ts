@@ -1,4 +1,4 @@
-// The bits of Rust's standard library whose behaviour the ported modules keep,
+// The bits of Rust's standard library whose behaviour the server keeps,
 // where JS's own differs: rounding half away from zero (`f64::round`), `{:.N}`
 // formatting (the exact value, ties to even), f32 arithmetic (`Math.fround`
 // after every step, which gives exactly f32's result for + − × ÷), and the
@@ -114,7 +114,7 @@ export function get<T>(map: Record<string, T> | undefined | null, key: string): 
   return map !== undefined && map !== null && Object.hasOwn(map, key) ? map[key] : undefined;
 }
 
-// Formatting helpers the editing tools (WP7) brought.
+// Formatting helpers the editing tools use.
 function increment(digits: string): string {
   const out = digits.split("");
   for (let index = out.length - 1; index >= 0; index--) {
@@ -291,9 +291,9 @@ const POW10 = Array.from({ length: 309 }, (_, index) => Number(`1e${index}`));
  * literal: the digits as a u64 (later ones dropped once it would overflow),
  * as f64, times or over one power of ten. Correctly rounded for up to 15
  * significant digits, but not always beyond: "9.299999999999999" is read as
- * 9.3. The Rust server parses every file and request body so, and the addon
- * reads exactly (it has `float_roundtrip`, so the values passed to it keep
- * what they are); where Rust reads text, the TS reads it with this.
+ * 9.3. Projects were always read so, and the addon reads exactly (it has
+ * `float_roundtrip`, so the values passed to it keep what they are); where
+ * numbers must come out as serde reads them, the TS reads them with this.
  */
 export function serdeNumber(literal: string): number {
   let at = 0;
@@ -387,7 +387,7 @@ const LOSSY = /[\d.]{16}|\d[eE][+-]?\d/;
  * JSON text with each number literal that serde reads differently from its
  * exact value rewritten as the value serde reads; everything else (strings,
  * key order, spacing) untouched. For text handed to the addon, which reads
- * exactly, where the Rust server read the same text with serde (project files).
+ * exactly, where serde's reading of the same text is what's wanted (project files).
  */
 export function asSerdeRead(text: string): string {
   if (!LOSSY.test(text)) return text;
@@ -426,8 +426,8 @@ const NUMBER_CHAR = /[0-9.eE+-]/;
 
 /**
  * JSON for the addon: JSON.stringify, except that a negative zero stays `-0`
- * (JSON.stringify writes 0, losing the sign the Rust server's f32/f64 math
- * keeps and writes as -0.0). The addon reads a `-0` an integer field can't
+ * (JSON.stringify writes 0, losing the sign edit-core's f32/f64 math keeps
+ * and writes as -0.0). The addon reads a `-0` an integer field can't
  * take as 0.
  */
 export function jsonForSerde(value: unknown): string {

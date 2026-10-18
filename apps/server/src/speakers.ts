@@ -3,9 +3,8 @@
 // Scribe's voice numbers with a role, and a name when the footage says one.
 // The labels are saved into the transcript itself.
 //
-// speakers.rs guarded every read-modify-write of a transcript with a mutex;
-// here each one runs without an await between its read and its write, which
-// is as atomic on the one JS thread (never hold one across the model call).
+// Every read-modify-write of a transcript runs without an await between its
+// read and its write, which is atomic on the one JS thread (never hold one across the model call).
 
 import * as fs from "node:fs";
 

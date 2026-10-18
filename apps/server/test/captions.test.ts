@@ -1,4 +1,4 @@
-// captions.rs's tests, same names, and the package's tools and routes end to
+// captions.ts's tests, and the package's tools and routes end to
 // end on the stub (Luna through a stand-in Agents).
 
 import { afterEach, expect, test } from "bun:test";
@@ -412,7 +412,7 @@ test("caption_speakers asks Luna who speaks and lays the intro's captions out (n
   }
 });
 
-test("track_region, transcribe, find_in_footage and the routes answer as mcp.rs and server.rs did", async () => {
+test("track_region, transcribe, find_in_footage and the routes answer", async () => {
   const { app, dir, cleanup } = fixtureHome("captions-tools");
   try {
     const id = await footage(app, dir);

@@ -1,5 +1,5 @@
 // What the agent is taught for each kind of video (a project's style:
-// bodycam, interrogation, courtroom; styles.rs). They all share the house
+// bodycam, interrogation, courtroom). They all share the house
 // style (the MCP instructions and the skills) for now. A style's own rules go
 // in its guide: `notes` are added to the agent's instructions, and `skills`
 // are added to the shared ones (one with a shared skill's name replaces it

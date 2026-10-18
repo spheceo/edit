@@ -1,6 +1,6 @@
 //! The engine's diagnostics: what it did, what went wrong and how long it
-//! took, handed to the host's sink (the Rust server's `diag`, or the native
-//! addon's log callback). The engine never writes the log file itself.
+//! took, handed to the host's sink (the native addon's log callback, which
+//! the server's `diag` writes). The engine never writes the log file itself.
 //! Without a sink (tests, tools) problems go to stderr.
 
 use std::fmt::Display;

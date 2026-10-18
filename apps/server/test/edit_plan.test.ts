@@ -8,7 +8,7 @@ import { sample, trackOf } from "../src/project.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { clip, clipNamed, media, project, stubNative } from "./helpers/model.ts";
 
-// WP5's people and faces aren't here: the plan's hooks into them do nothing.
+// People and faces aren't here: the plan's hooks into them do nothing.
 const saved = { ...hooks };
 beforeAll(() => {
   stubNative();

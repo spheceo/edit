@@ -1,4 +1,4 @@
-// The short names broll.rs gives the files it makes (`fingerprint`): Rust's
+// The short names broll gives the files it makes (`fingerprint`): Rust's
 // `DefaultHasher` (SipHash-1-3, keys 0 and 0) over each part as `str::hash`
 // feeds it (its UTF-8 bytes, then 0xff), the low 48 bits in hex. The files
 // already on disk (stills, smoothed shots, map renders) are named this way, so
@@ -55,7 +55,7 @@ export function siphash(bytes: Uint8Array, k0 = 0n, k1 = 0n, c = 1, d = 3): bigi
   return (v0 ^ v1 ^ v2 ^ v3) & MASK;
 }
 
-/** broll.rs `fingerprint`: 12 hex digits naming what `parts` describe. */
+/** `fingerprint`: 12 hex digits naming what `parts` describe. */
 export function fingerprint(parts: string[]): string {
   const chunks: Uint8Array[] = [];
   for (const part of parts) {

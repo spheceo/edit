@@ -1,4 +1,4 @@
-// Edit's cloud (cloud.rs): footage originals and preview proxies on Cloudflare
+// Edit's cloud: footage originals and preview proxies on Cloudflare
 // R2, project files in Convex, all through the relay (apps/relay/src/cloud.ts),
 // which holds the R2 keys and Convex's service token. Edit only ever sees
 // short-lived presigned URLs and the answers of `edit:` Convex functions.
@@ -1000,7 +1000,7 @@ export async function runCli(args: string[], io: CliIo = TERMINAL): Promise<void
 }
 
 /**
- * `edit cloud backfill <project id> [--port N]` (main.rs cloud_backfill): asks
+ * `edit cloud backfill <project id> [--port N]`: asks
  * the running Edit to put every media of a cloud project that isn't in the
  * cloud yet there now, and prints its answer. The exit code: 0, or 1 when
  * Edit refused; not reaching Edit is thrown (`edit: …`, exit 2).

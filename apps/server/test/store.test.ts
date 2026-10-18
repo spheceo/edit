@@ -72,7 +72,7 @@ test("simultaneous_project_creation_does_not_overwrite_projects", () => {
   }
 });
 
-test("a new project has the house tracks and saves as the Rust store saves it", () => {
+test("a new project has the house tracks and saves with them", () => {
   const { home, store, cleanup } = fixtureHome("store-new");
   try {
     const live = store.create("  Mom & Teen  ", SETTINGS);
@@ -97,7 +97,7 @@ test("a new project has the house tracks and saves as the Rust store saves it", 
   }
 });
 
-test("update edits a copy, validates, and words its failures as store.rs", async () => {
+test("update edits a copy, validates, and words its failures", async () => {
   const { store, cleanup } = fixtureHome("store-update");
   try {
     const live = store.create("p", SETTINGS);
@@ -173,7 +173,7 @@ test("the cloud hook is asked before every write and told after", async () => {
     await expect(slow).rejects.toThrow("project changed while editing; retry");
     expect(store.get(id)?.project.name).toBe("fast");
 
-    // Invalid before refused, as the Rust store answered.
+    // Invalid before refused.
     refuse = "held elsewhere";
     const bad = store.checkout(id)!;
     bad.project.settings.fps = 0;

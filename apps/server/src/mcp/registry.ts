@@ -1,6 +1,6 @@
 // The MCP tools: their declarations (names, descriptions, schemas) are
 // tools.json, and each package registers the handlers for its tools here. A
-// declared tool nobody has registered answers that it isn't ported.
+// declared tool nobody has registered answers that it isn't registered.
 
 import type { App } from "../app.ts";
 import declared from "./tools.json" with { type: "json" };
@@ -29,7 +29,7 @@ export interface Tool {
   inputSchema: { type: "object"; properties: Record<string, Record<string, unknown>>; required: string[] };
 }
 
-/** Every tool as tools/list declares it (the Rust server's list). */
+/** Every tool as tools/list declares it. */
 export const TOOLS: Tool[] = declared as unknown as Tool[];
 
 interface Registered {
@@ -58,7 +58,7 @@ export function unregisterTool(name: string): void {
 }
 
 /** The tools declared but not registered yet (what's left to port). */
-export function unported(): string[] {
+export function unregistered(): string[] {
   return TOOLS.map((tool) => tool.name).filter((name) => !handlers.has(name));
 }
 
@@ -67,7 +67,7 @@ export function text(value: string): Content[] {
   return [{ type: "text", text: value }];
 }
 
-/** A picture and its caption (`mcp.rs image`). */
+/** A picture and its caption. */
 export function image(data: Uint8Array, caption: string, mimeType = "image/png"): Content[] {
   return [
     { type: "image", data: Buffer.from(data).toString("base64"), mimeType },

@@ -1,4 +1,4 @@
-// Projects for the editing tools' tests, built as the Rust tests build them
+// Projects for the editing tools' tests, built as edit-core builds them
 // (`Project::new`, `serde_json::from_value::<Clip>`), on a fresh native stub.
 
 import { clipFrom } from "../../src/clips.ts";

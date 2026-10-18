@@ -1,7 +1,7 @@
-// The "desktop" profile screen (desktop.rs, the TS half): a person's photo in
-// a dark Photo Viewer window and a few lines about them typed into a Notepad
-// window beside it, on a blue desktop with light beams, the whole screen
-// slowly pushing in. It's how the team's videos show someone when the only
+// The "desktop" profile screen (the engine's desktop.rs draws its pictures):
+// a person's photo in a dark Photo Viewer window and a few lines about them
+// typed into a Notepad window beside it, on a blue desktop with light beams,
+// the whole screen slowly pushing in. It's how the team's videos show someone when the only
 // picture is a mugshot or a still (a lone still never sits on black).
 //
 // The wallpaper and the two windows' frames are pictures the addon draws

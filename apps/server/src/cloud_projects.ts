@@ -1,4 +1,4 @@
-// Cloud projects (cloud_projects.rs): with cloud on (a relay token, Settings →
+// Cloud projects: with cloud on (a relay token, Settings →
 // Cloud), projects are kept in Convex (Edit's `edit:` functions, through the
 // relay: `cloud.ts`), so a teammate can open one on their Mac and carry on
 // where someone else stopped. One machine edits a project at a time: it holds
@@ -949,7 +949,7 @@ export function cloudOf(app: App): Cloud | null {
 }
 
 /**
- * The server's cloud projects (main.rs: `Cloud::open(home, machine)` then
+ * The server's cloud projects (`Cloud::open(home, machine)` then
  * `cloud_projects::start`): attaches the store's hook and starts the loop.
  */
 export function start(app: App): Cloud {

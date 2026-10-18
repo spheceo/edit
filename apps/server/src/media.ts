@@ -1,5 +1,5 @@
 // Background media work: scrub proxies, thumbnail strips, waveforms, and
-// transcription (media.rs's Processor). The heavy lifting is the addon's
+// transcription. The heavy lifting is the addon's
 // (probing, previews, waveforms, picture thumbnails); this side schedules it,
 // keeps each file's status and tells the UI (`media` events). The FFmpeg-only
 // thumbnail strip is made here.
@@ -23,7 +23,7 @@ import * as transcribe from "./transcribe.ts";
 
 export type { Probe } from "./model.ts";
 
-/** A counting semaphore for async work (tokio's, as media.rs used it). */
+/** A counting semaphore for async work . */
 export class Semaphore {
   private waiting: (() => void)[] = [];
 
@@ -73,7 +73,7 @@ export const THUMB_HEIGHT = 72;
 
 export const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", "mxf"];
 export const AUDIO_EXTENSIONS = ["wav", "mp3", "m4a", "aac", "flac", "aif", "aiff", "ogg", "opus"];
-/** A still image, which imports as a clip of footage (broll.rs IMAGE_EXTENSIONS; the addon keeps its own copy). */
+/** A still image, which imports as a clip of footage (the addon keeps its own list). */
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"];
 
 export function isMediaPath(path: string): boolean {
@@ -116,7 +116,7 @@ export interface MediaStatus {
   error?: string;
 }
 
-/** The status in the field order media.rs serializes it, optional fields left out when unset. */
+/** The status in the field order it's always been written in, optional fields left out when unset. */
 function shown(status: MediaStatus): MediaStatus {
   const out: MediaStatus = {
     proxy: status.proxy,

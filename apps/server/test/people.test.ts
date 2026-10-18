@@ -1,4 +1,4 @@
-// people.rs's tests, same names, same cases.
+// people.ts's tests.
 
 import { expect, test } from "bun:test";
 

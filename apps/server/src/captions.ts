@@ -1,4 +1,4 @@
-// Speaker captions for intro clips (captions.rs): each spoken line as a
+// Speaker captions for intro clips: each spoken line as a
 // word-by-word caption in the house style, placed by the person saying it
 // (under their face when the face detector sees it clearly, else bottom
 // middle, never on a face), with a touch of handheld shake; the plain
@@ -14,7 +14,7 @@
 // `transcriptOf`, `hex`, `subtitleName` and `captionSize` live in
 // captions_core.ts (moved out to break the cycle with the subtitles package).
 // Numbers saved in the project are f32 there, so the arithmetic that makes
-// them is f32 here (`f32` after every step), as captions.rs's was.
+// them is f32 here (`f32` after every step).
 
 import * as fs from "node:fs";
 
@@ -173,7 +173,7 @@ export function linesOf(clip: string, words: Word[]): Line[] {
   return lines;
 }
 
-/** Where the model finds each line's speaker (captions.rs Watched). */
+/** Where the model finds each line's speaker. */
 interface Watched {
   lines: Said[];
 }

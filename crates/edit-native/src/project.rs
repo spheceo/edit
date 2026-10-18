@@ -79,7 +79,7 @@ pub(crate) fn parse(json: &str) -> Result<Project, String> {
     match serde_json::from_str(json) {
         Ok(project) => Ok(project),
         // The TS server writes JS's negative zero as `-0` (JSON.stringify would
-        // drop the sign the Rust server's f32/f64 math keeps), which serde
+        // drop the sign edit-core's f32/f64 math keeps), which serde
         // reads as a float: an integer field refuses it. Then all of them are 0.
         Err(error) => match zero_negative_zeros(json) {
             Some(zeroed) => serde_json::from_str(&zeroed).map_err(|_| error.to_string()),
@@ -297,7 +297,7 @@ pub fn animatable_params() -> napi::Result<HashMap<String, Vec<String>>> {
 }
 
 /// A keyframe track's value at each of `frames` (`edit_core::sample`), for
-/// parity tests of the TS port.
+/// tests that the TS sampling matches it.
 #[napi(
     ts_args_type = "keys: Keyframe[], frames: number[]",
     ts_return_type = "(number | null)[]"

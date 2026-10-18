@@ -1,8 +1,7 @@
-// JSON with sorted keys. The Rust server built most of what it answered with
-// `json!`, whose objects (serde_json without `preserve_order`) are BTreeMaps:
-// keys come out sorted, at every depth. Agents read that text (an MCP tool's
-// JSON-as-text output), so it comes out the same way here. Project files and
-// struct-shaped answers keep their field order and don't go through this.
+// JSON with sorted keys, at every depth (as serde_json's `json!` writes
+// them). Agents read that text (an MCP tool's JSON-as-text output), so it
+// stays the same from answer to answer. Project files and struct-shaped
+// answers keep their field order and don't go through this.
 //
 // It writes the text itself rather than building a sorted copy for
 // JSON.stringify: JS objects list integer-like keys ("2", "10") first and in

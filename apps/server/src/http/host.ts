@@ -67,7 +67,7 @@ export function sameOrigin(origin: string, host: string): boolean {
 
 /**
  * The host names this server answers to: localhost, this machine's name, its
- * Tailscale address and name when there is one (main.rs gathers those), the
+ * Tailscale address and name when there is one (serve.ts gathers those), the
  * host it was told to bind, and `EDIT_HOSTS` (comma-separated).
  */
 export function allowedHosts(extra: { host?: string | null; tailscale?: (string | null)[] } = {}): string[] {

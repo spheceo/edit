@@ -1,4 +1,4 @@
-// Writing files safely (store.rs write_atomic and friends), apart from the
+// Writing files safely (atomic writes and friends), apart from the
 // store so the media drive's layout can use them without importing it.
 
 import * as fs from "node:fs";

@@ -1,4 +1,4 @@
-// Research on this machine (research.rs): web and image searches through the
+// Research on this machine: web and image searches through the
 // local Chrome, headless, in a throwaway profile (not signed in, no cookies,
 // nothing kept), so nothing lands in anyone's search history; they leave from
 // this machine's own connection. Articles come from DuckDuckGo, images from
@@ -7,8 +7,8 @@
 // Found images are collected per project in `<home>/research/<project>/` for
 // the user to review; the ones they keep go into the media bin.
 //
-// Plain fetches (article pages, image downloads) go through Bun's fetch where
-// the Rust server ran curl; the browser stays a child process (`hooks.dump`,
+// Plain fetches (article pages, image downloads) go through Bun's fetch; the
+// browser stays a child process (`hooks.dump`,
 // which tests replace).
 
 import { createHash } from "node:crypto";
@@ -80,7 +80,7 @@ function isItem(value: unknown): value is Item {
   );
 }
 
-/** An item as research.rs serializes it: fields in order, `media` only once there is one. */
+/** An item as it's always been written: fields in order, `media` only once there is one. */
 function shownItem(item: Item): Item {
   const out: Item = {
     id: item.id,
@@ -774,7 +774,7 @@ export function decode(text: string): string {
 
 /**
  * Sets a found image's status; kept the first time, it goes into the media
- * bin, named after its caption (server.rs review_found). Returns it (with its
+ * bin, named after its caption. Returns it (with its
  * media, once kept).
  */
 export async function reviewFound(app: App, id: string, item: string, status: string, origin: string): Promise<Item> {

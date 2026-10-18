@@ -1,4 +1,4 @@
-// Cached transcript coverage (edit_review.rs), so a model need not compare
+// Cached transcript coverage, so a model need not compare
 // thousands of words against hundreds of subtitle clips by hand, and quote
 // callouts away from the words that point to them. No transcription or paid
 // calls: the transcripts given are the ones already made.

@@ -398,7 +398,7 @@ export interface RippleResult {
 
 /**
  * A keyframe track's value at each of `frames` (`edit_core::sample`), for
- * parity tests of the TS port.
+ * tests that the TS sampling matches it.
  */
 export declare function sampleKeyframes(keys: Keyframe[], frames: number[]): (number | null)[]
 

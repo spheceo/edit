@@ -1,5 +1,5 @@
 // The subtitles package end to end on the stub: its MCP tools, its routes,
-// and the pieces moved over from captions.rs.
+// and the pieces it shares with captions.
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -93,7 +93,7 @@ test("repack_subtitles subtitles the footage in its speakers' colours, mutes and
       ],
       mutes: [{ term: "fucking", time: 1.35, starred: true, clip: "a" }],
     });
-    // Keys sorted, as the Rust server's json! values.
+    // Keys sorted.
     expect(text.indexOf('"mutes"')).toBeLessThan(text.indexOf('"rev"'));
     const project = store.get(id)!.project;
     const subtitles = project.clips.filter((clip): clip is TextClip => clip.type === "text");
@@ -190,7 +190,7 @@ test("add_subtitles goes to the captions package; place_subtitles works with no 
       text: '{"footage_not_analysed":[],"moved":0,"moved_by_hand_left_alone":0,"off_bottom_middle_now":0,"rev":3,"subtitles":0,"with_a_face_under_them":0}',
       isError: false,
     });
-    // WP6 (captions.ts) makes them.
+    // captions.ts makes them.
     const added = await call(app, "add_subtitles", { project_id: id });
     expect(added.isError).toBe(false);
     expect(added.text.startsWith("subtitled 0.00–30.00s: {")).toBe(true);
@@ -205,7 +205,7 @@ function request(path: string, init: RequestInit = {}): Request {
   return new Request(`http://localhost:7700${path}`, { ...init, headers });
 }
 
-test("the repack and speaker routes answer as server.rs did", async () => {
+test("the repack and speaker routes answer", async () => {
   const { app, dir, cleanup } = fixtureHome("routes");
   try {
     const id = await footage(app, dir);

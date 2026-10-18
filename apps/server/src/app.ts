@@ -1,4 +1,4 @@
-// The server's shared state, handed to every route and tool (server.rs App).
+// The server's shared state, handed to every route and tool.
 // One per server; tests make their own over a fixture home. The renderer that
 // was `App.frames` is the addon's (its queue lives there: `native.renderFrames`).
 
@@ -9,7 +9,7 @@ import { Library as DriveLibrary } from "./library.ts";
 import { Processor } from "./media.ts";
 import { native, type Native } from "./native/index.ts";
 import {
-  unportedServices,
+  stubServices,
   type Agents,
   type Exports,
   type Library,
@@ -42,15 +42,15 @@ export interface AppOptions {
   port?: number;
   allowedHosts?: string[];
   machine?: string;
-  /** The services other packages make; "not ported" stubs until they land. */
+  /** The services other packages make; stubs that throw "not available" (a test puts its own in). */
   services?: Partial<Pick<App, "exports" | "agents" | "scripts" | "library" | "updater" | "voices">>;
 }
 
 export function createApp(options: AppOptions): App {
-  // WP8's: the Codex bridge and the sound library (whose sign-in drive.ts shares).
+  // The Codex bridge and the sound library (whose sign-in drive.ts shares).
   const port = options.port ?? 7700;
   const services = {
-    ...unportedServices(options.store.home),
+    ...stubServices(options.store.home),
     agents: options.services?.agents ?? new CodexAgents(options.store, options.store.home, port),
     library: options.services?.library ?? new DriveLibrary(),
     ...options.services,

@@ -201,7 +201,7 @@ export function createStub(): Stub {
       size = String(stat.size);
       modified = String(Math.floor(stat.mtimeMs));
     } catch {
-      // A missing file still has a key (as in media.rs: its metadata is None).
+      // A missing file still has a key (as in the engine's media.rs: its metadata is None).
     }
     return hash(`${name}\u0000${size}\u0000${modified}`);
   };
@@ -403,7 +403,7 @@ export function createStub(): Stub {
       notInStub("smoothSlowMotion");
     },
     cloudProxyBitrate(width, height) {
-      // media.rs cloud_proxy_bitrate: 4 Mbit/s at 1080p, down to 0.8.
+      // The engine's cloud_proxy_bitrate: 4 Mbit/s at 1080p, down to 0.8.
       const rate = Math.floor((4_000_000 * width * height) / (1920 * 1080));
       return Math.min(Math.max(rate, 800_000), 4_000_000);
     },

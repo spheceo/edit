@@ -1,4 +1,4 @@
-// The team's sound library (library.rs): a Google Drive folder ("Music & SFX
+// The team's sound library: a Google Drive folder ("Music & SFX
 // Library", a folder per category under "Music" and "Sound effects") is the
 // source of truth. Edit lists it through the Drive API and downloads a sound
 // the first time it's used, into `<home>/library/<music|sfx>/<checksum>/`.
@@ -15,8 +15,7 @@
 // for); both are read with the listing.
 //
 // Every Google call goes through curl with the sign-in on stdin (never in a
-// process's arguments), as the Rust server did: the same retries and stall
-// limits on downloads, and drive.ts shares `curl`.
+// process's arguments): retries and stall limits on downloads, and drive.ts shares `curl`.
 //
 // The loudness half (`loudness`, `levels`, `gainTo`, `footageLoudness`) is
 // arithmetic over the addon's analysis of each file (`loudnessSpans`).
@@ -58,7 +57,7 @@ export interface Found extends Sound {
   md5: string;
 }
 
-/** What the library holds (library.rs Listing), as the UI gets it. */
+/** What the library holds, as the UI gets it. */
 export interface Listing {
   sounds: Found[];
   /** The usage guide, as plain text. */
@@ -414,7 +413,7 @@ export async function levels(path: string, from: number, seconds: number): Promi
   return spanLevels(span, length);
 }
 
-/** library.rs `span_levels`, from the span the analysis measured. */
+/** The levels of a span, from the span the analysis measured. */
 export function spanLevels(span: { integrated: number; loudest: number; peak: number }, seconds: number): [number, number] {
   if (seconds > 3.0 && span.integrated > -70.0) return [span.integrated, span.peak];
   if (span.loudest > -70.0) return [span.loudest, span.peak];

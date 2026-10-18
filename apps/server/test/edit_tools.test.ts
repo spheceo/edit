@@ -6,7 +6,7 @@ import type { App } from "../src/app.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
 import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, lineSeconds, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
-import { unported } from "../src/mcp/registry.ts";
+import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
 import { clipOf, newProject } from "../src/project.ts";
 import { fixtureHome, write, type Fixture } from "./helpers/home.ts";
@@ -21,7 +21,7 @@ beforeAll(() => {
   // Cloud off: the house sounds import as they are.
   savedToken = process.env.EDIT_RELAY_TOKEN;
   delete process.env.EDIT_RELAY_TOKEN;
-  // The packages these tools reach that aren't ported yet answer as an empty edit would.
+  // The packages these tools reach that a test doesn't provide answer as an empty edit would.
   Object.assign(hooks, {
     peopleSummary: () => ({}),
     calloutTiming: () => [],
@@ -111,12 +111,12 @@ test("batch_refs_become_the_clips_earlier_calls_added", () => {
 });
 
 test("every editing tool is declared and registered", () => {
-  for (const name of EDITING_TOOLS) expect(unported()).not.toContain(name);
+  for (const name of EDITING_TOOLS) expect(unregistered()).not.toContain(name);
   // Registering again changes nothing.
   registerEditingTools();
 });
 
-test("clip rows and transcript line times read as the Rust server wrote them", () => {
+test("clip rows and transcript line times read as they always have", () => {
   const project = newProject("p", "t", { width: 1920, height: 1080, fps: 30 });
   const row = (fields: Record<string, unknown>) => clipRow(project, clip(fields));
   expect(row({ id: "c1", track: "v1", start: 0, duration: 30, type: "video", media: "m1", source_in: 12.345, speed: 0.5, link: "l1" })).toBe(
@@ -142,7 +142,7 @@ test("clip rows and transcript line times read as the Rust server wrote them", (
   expect(lineSeconds("No transcribed speech")).toBeNull();
 });
 
-test("adding, changing and removing clips answer as mcp.rs did", async () => {
+test("adding, changing and removing clips answer", async () => {
   const { app, id } = setUp("tools-clips");
   expect(await said(app, "add_text", { text: "Hello", start: 1, duration: 2 })).toMatch(/^added text clip c\d+$/);
   const text = projectOf(app, id).clips[0]!;

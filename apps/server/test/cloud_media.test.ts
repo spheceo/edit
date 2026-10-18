@@ -404,28 +404,6 @@ test("a Drive file streams to R2 with nothing on this disk, the registry remembe
   }
 });
 
-// Live: against a real relay, R2 and Convex (EDIT_RELAY_URL / EDIT_RELAY_TOKEN
-// with EDIT_CLOUD_LIVE=1, e.g. `bunx wrangler dev` with apps/relay/.dev.vars),
-// as cloud_media.rs's ignored tests; the Drive ones also need the Google
-// sign-in. They need the real addon (proxies, probes, exports). Not ported
-// yet beyond their names: the mock-backed tests above cover the same paths.
-const live = process.env.EDIT_CLOUD_LIVE !== "1";
-test.skipIf(live)("live_excerpts_ensure_local_and_export", () => {
-  throw new Error("not ported: run cloud_media.rs's against the real relay");
-});
-test.skipIf(live)("live_imports_from_disk", () => {
-  throw new Error("not ported: run cloud_media.rs's against the real relay");
-});
-test.skipIf(live)("live_ensure_local_follows_the_lock", () => {
-  throw new Error("not ported: run cloud_media.rs's against the real relay");
-});
-test.skipIf(live)("live_script_import", () => {
-  throw new Error("not ported: run cloud_media.rs's against the real relay");
-});
-test.skipIf(live)("live_drive_streams_to_r2", () => {
-  throw new Error("not ported: run cloud_media.rs's against the real relay");
-});
-
 test("an export reads a cloud original from the file it was imported from while that's unchanged", async () => {
   const fixture = home("cloud-local-original");
   const { dir, store, cleanup } = fixture;

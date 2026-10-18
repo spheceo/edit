@@ -1,10 +1,9 @@
-// Scripts (script.rs): read a Google Doc (footage ranges linked to Google
+// Scripts: read a Google Doc (footage ranges linked to Google
 // Drive files and the narration between them), download the footage from
 // Drive, and lay the edit out in order: each range as a clip, each narration
 // as a cut-in card.
 //
-// The Rust server went through curl; Bun's fetch has a TLS stack of its own,
-// so requests go out from here. Redirects are followed by hand so a Google
+// Requests go out through Bun's fetch. Redirects are followed by hand so a Google
 // call never leaves https (unless a stand-in over http is set, endpoints.ts),
 // as curl's `--proto` / `--proto-redir` held it. Drive's "can't scan this
 // file for viruses" page is skipped with `confirm=t`, or by following its form.
@@ -765,7 +764,7 @@ type JobState = ScriptJob["state"];
 
 const RUNNING: JobState[] = ["downloading", "transcribing", "placing", "voicing"];
 
-/** A job as script.rs serializes it: its fields in order, the unset ones left out. */
+/** A job as it's always been written: its fields in order, the unset ones left out. */
 function shownJob(job: ScriptJob): ScriptJob {
   const files = job.files.map((file) => {
     const shown: Record<string, unknown> = { file: file.file };

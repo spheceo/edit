@@ -1,4 +1,4 @@
-// The HTTP server (server.rs `router` and its layers): every request is timed
+// The HTTP server : every request is timed
 // by its route and logged when it failed (outermost, so it also sees requests
 // the host check turned away or that crashed); the host check; a route that
 // has a bug answers with a JSON error and the server carries on; `/api/ws`

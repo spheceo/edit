@@ -1,5 +1,5 @@
-// seats.rs's tests, same names, same cases (the scene finder's is the
-// addon's, so it runs only against the real one); then the TS side's own.
+// seats.ts's tests (the scene finder is the addon's, so its test runs only
+// against the real one).
 
 import { expect, test } from "bun:test";
 

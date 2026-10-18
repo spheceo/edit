@@ -1,4 +1,4 @@
-// Rust's `Path` semantics, which the ported code leans on: `starts_with` and
+// Rust's `Path` semantics, which the server leans on: `starts_with` and
 // `strip_prefix` compare whole components (so /a/bc doesn't start with /a/b),
 // and `join` doesn't resolve `..` the way Node's path.join does (a joined
 // name stays the name it was).
@@ -126,7 +126,7 @@ export function userHome(): string {
   return home !== undefined && home !== "" ? home : ".";
 }
 
-/** A `~/…` path in the user's home (server.rs expand_home); anything else as it is. */
+/** A `~/…` path in the user's home; anything else as it is. */
 export function expandHome(path: string): string {
   if (path.startsWith("~/")) return join(process.env.HOME ?? "", path.slice(2));
   return path;

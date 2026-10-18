@@ -1,4 +1,4 @@
-// speakers.rs's tests, same names, same cases; then the TS side's own.
+// speakers.ts's tests.
 
 import { expect, test } from "bun:test";
 

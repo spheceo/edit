@@ -108,7 +108,7 @@ export function lastLine(stderr: string, fallback = "ffmpeg failed"): string {
 
 /**
  * Runs FFmpeg (or any tool) to the end, stdin closed. Its stdout, or why it
- * failed: the last line it wrote (media.rs `run`).
+ * failed: the last line it wrote (as the engine's media.rs `run` says it).
  */
 export async function run(command: string[]): Promise<Uint8Array> {
   let child: Bun.Subprocess<"ignore", "pipe", "pipe">;

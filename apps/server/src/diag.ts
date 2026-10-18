@@ -218,7 +218,7 @@ export function uptime(): number {
 
 /**
  * `text` with every URL replaced: presigned URLs are credentials, never shown
- * or logged (cloud_media.rs scrub; native lines and errors go through it).
+ * or logged (native lines and errors go through it).
  */
 export function scrub(text: string): string {
   let out = "";

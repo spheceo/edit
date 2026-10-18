@@ -15,8 +15,8 @@
 //
 // The detector and its cache file are native (`native.facesDetect` /
 // `facesCached`, one analysis per file at a time); the placement is here.
-// Its arithmetic is f32, as faces.rs's was (`f32` after every step), since
-// the places it picks are saved in the project.
+// Its arithmetic is f32 (`f32` after every step), as edit-core's would be,
+// since the places it picks are saved in the project.
 
 import { captionSize } from "./captions_core.ts";
 import type { App } from "./app.ts";
@@ -172,7 +172,7 @@ export function placeFrom(
   return [spot.x, spot.y];
 }
 
-/** faces.rs `place_from`: `place` with the house place's centre at `bottom`. */
+/** `place` with the house place's centre at `bottom`. */
 export function placeAt(
   size: [number, number],
   frame: [number, number],

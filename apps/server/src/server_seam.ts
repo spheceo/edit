@@ -1,4 +1,4 @@
-// What other packages use from server.rs (through `seams.server`): where an
+// What other packages use from the server core (through `seams.server`): where an
 // export goes by default, and keeping a found image.
 
 import type { App } from "./app.ts";
@@ -18,7 +18,7 @@ export function defaultExportPath(store: Store, project: Project): string {
 
 /**
  * Sets a found image's status; kept the first time, it goes into the media
- * bin, named after its caption (server.rs review_found, which research.ts has).
+ * bin, named after its caption (research.ts has it).
  */
 export function reviewFound(app: App, id: string, item: string, status: string, origin: string): Promise<seams.ResearchItem> {
   return seams.research.reviewFound(app, id, item, status, origin);

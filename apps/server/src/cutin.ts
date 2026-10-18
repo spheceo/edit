@@ -1,4 +1,4 @@
-// Covering a cut-in with B-roll in one go, the house way (cutin.rs): the
+// Covering a cut-in with B-roll in one go, the house way: the
 // shots the agent picked, butted end to end across the cut-in, each slowed,
 // pushed in using native frame sampling, the B-roll look over them, the
 // vertical drop into the cut, and the placeholder card and words gone with

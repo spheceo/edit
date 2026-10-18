@@ -31,12 +31,12 @@ export interface Transcript {
   speakers?: Record<string, string>;
   /** Each voice's role in Repack's colour code (officer, suspect, witness…). */
   roles?: Record<string, string>;
-  /** Each voice's colour ("#00e5c7"), from its role (see speakers.rs). */
+  /** Each voice's colour ("#00e5c7"), from its role (see speakers.ts). */
   colors?: Record<string, string>;
 }
 
 /**
- * A transcript as transcribe.rs writes it: its fields in order, the maps
+ * A transcript as it's always been written: its fields in order, the maps
  * sorted (BTreeMaps) and left out when empty, and each word's speaker only
  * when it has one.
  */

@@ -23,8 +23,8 @@
 //   saying so rather than put on the internal disk unannounced, and its files
 //   show as missing like any missing file.
 //
-// This is the layout half of media_drive.rs (WP1); `edit media` and the move
-// are WP2's, on top of it.
+// This is the layout half; `edit media` and the move (move.ts) are on top
+// of it.
 
 import * as fs from "node:fs";
 
@@ -388,7 +388,7 @@ function volumes(): { name: string | null; path: string }[] {
       }
     })
     .map((path) => ({ name: fileName(path), path }));
-  // Sorted by their JSON, as media_drive.rs sorts them.
+  // Sorted by their JSON, as they've always been sorted.
   return out.sort((a, b) => {
     const x = stableStringify(a);
     const y = stableStringify(b);

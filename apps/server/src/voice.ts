@@ -1,4 +1,4 @@
-// Voice-over projects (voice.rs), for now apart from the video projects: a
+// Voice-over projects, for now apart from the video projects: a
 // script of lines, each spoken by an ElevenLabs voice through Edit's relay,
 // kept as takes to listen to and choose between. Each lives in
 // `~/.edit/voice/<id>/` (project.json, takes/<take>.mp3).
@@ -172,7 +172,7 @@ interface LineChange {
 /**
  * What the UI may change: names, the voice, and the lines' words, order and
  * chosen takes. Takes themselves only come from generating. Read as serde
- * reads voice.rs `Changes` (a SerdeError in its words when it isn't one).
+ * reads `Changes` (a SerdeError in its words when it isn't one).
  */
 export interface Changes {
   name: string;
@@ -197,7 +197,7 @@ function settingsShown(voice: VoiceSettings): VoiceSettings {
   };
 }
 
-/** A voice-over as voice.rs serializes it: fields in order, the skipped ones left out. */
+/** A voice-over as it's always been written: fields in order, the skipped ones left out. */
 export function shown(project: VoiceProject): VoiceProject {
   const out: Record<string, unknown> = {
     id: project.id,

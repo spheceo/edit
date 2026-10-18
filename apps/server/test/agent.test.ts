@@ -1,4 +1,4 @@
-// agent.rs's tests: the outgoing RPCs echoed to the test instead of Codex, on
+// agent.ts's tests: the outgoing RPCs echoed to the test instead of Codex, on
 // a fixture home (no Codex is started, no real project edited).
 
 import { expect, test } from "bun:test";

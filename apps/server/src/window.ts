@@ -1,4 +1,4 @@
-// The desktop app's side here (app.rs): the window is its own small program
+// The desktop app's side here: the window is its own small program
 // now (crates/edit-window, a Tauri helper), extracted from the binary to
 // `<home>/bin/Edit` (that file name is what the Dock shows) and started onto
 // the server's URL. It quits when its stdin closes, so a server that dies
@@ -118,7 +118,7 @@ export function runWindow(helper: string, url: string): void {
     try {
       await seams.cloudProjects.shutdown();
     } catch (error) {
-      if (!seams.isNotPorted(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
+      if (!seams.isUnavailable(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
     }
     process.exit(code === 0 ? 0 : code);
   });

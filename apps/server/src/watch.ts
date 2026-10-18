@@ -1,4 +1,4 @@
-// The watcher for subtitled videos (watch.rs), after Repack's: Gemini watches
+// The watcher for subtitled videos, after Repack's: Gemini watches
 // the footage a few minutes at a time, with its sound, and says who speaks
 // each subtitle line and which stretches are footage to subtitle, already
 // subtitled, narration or something else. Its answers correct the speakers in
@@ -12,9 +12,9 @@
 // when it's set (`EDIT_AI_GATEWAY_URL` sends that to a stand-in).
 //
 // Answers are cached per window in the media's cache dir (`watch/`), keyed as
-// watch.rs keys them, and a finished watch leaves a receipt in
-// `cache/watch-projects/`, keyed by a hash of what serde_json wrote, so the
-// Rust server's caches are this one's too.
+// they've always been keyed, and a finished watch leaves a receipt in
+// `cache/watch-projects/`, keyed by a hash of what serde_json wrote, so
+// caches made by earlier versions still hit.
 
 import * as fs from "node:fs";
 
@@ -244,7 +244,7 @@ function unexpected(value: unknown): string {
   return Array.isArray(value) ? "sequence" : "map";
 }
 
-/** An answer as serde reads watch.rs's `Answer` (defaults filled, extra fields ignored); throws in serde's words. */
+/** An answer as serde reads an `Answer` (defaults filled, extra fields ignored); throws in serde's words. */
 export function readAnswer(value: unknown): Answer {
   const struct = (name: string, v: unknown): Record<string, unknown> => {
     if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error(`invalid type: ${unexpected(v)}, expected struct ${name}`);

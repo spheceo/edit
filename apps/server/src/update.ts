@@ -1,5 +1,5 @@
-// Self-update from the repo's GitHub Releases (built by the release workflow;
-// update.rs). `GET /api/update` says whether a newer version is out;
+// Self-update from the repo's GitHub Releases (built by the release
+// workflow). `GET /api/update` says whether a newer version is out;
 // `POST /api/update` downloads it, checks its SHA-256, swaps it in for the
 // running binary and restarts in place. On Unix that's an exec
 // (`native.reexec`), so `edit serve` keeps its terminal, PID and flags, and the

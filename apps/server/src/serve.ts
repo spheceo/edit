@@ -1,4 +1,4 @@
-// Starting the server (main.rs `start`): the log, FFmpeg, the store and the
+// Starting the server: the log, FFmpeg, the store and the
 // addon, the data folder's lock, the hosts it answers to, the App with every
 // package's services, the speaker watcher, cloud projects, Ctrl-C, and one
 // listener per address `bindAddresses` gives.
@@ -105,7 +105,7 @@ export function tailscaleName(): string | null {
   return null;
 }
 
-/** main.rs fail: "edit: <why>" on stderr, exit 2. */
+/** "edit: <why>" on stderr, exit 2. */
 export function fail(message: string): never {
   console.error(`edit: ${message}`);
   process.exit(2);
@@ -163,7 +163,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   setSmoothByDefault(app.native.smoothSupported());
   // The cache kept to what's used.
   startCleaning(app);
-  // Tools register here; WP5's and WP6's register as their modules load (through seams).
+  // Tools register here; the subtitles' and captions' register as their modules load (through seams).
   registerEditingTools();
   registerMediaTools();
   seams.speakers.watch(app);
@@ -174,7 +174,7 @@ export function start(home: string, host: string | null, port: number): { app: A
       try {
         await seams.cloudProjects.shutdown();
       } catch (error) {
-        if (!seams.isNotPorted(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
+        if (!seams.isUnavailable(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
       }
       process.exit(130);
     })();
@@ -186,7 +186,7 @@ export function start(home: string, host: string | null, port: number): { app: A
     try {
       servers.push(listen(app, router, address.ip, address.port) as Server<unknown>);
       console.log(`edit: http://${shown}`);
-      // The first address is where map pages reach this server (main.rs set broll::LISTENING once).
+      // The first address is where map pages reach this server .
       if (servers.length === 1) setListening(address.ip, address.port);
     } catch (error) {
       console.error(`edit: could not bind ${shown}: ${diag.messageOf(error)}`);
@@ -210,12 +210,12 @@ export function start(home: string, host: string | null, port: number): { app: A
   return { app, servers };
 }
 
-/** Runs a package's start-up step, which may not be ported yet (then it's skipped, quietly). */
+/** Runs a package's start-up step, whose service may not be available (then it's skipped, quietly). */
 function optional(area: string, work: () => void): void {
   try {
     work();
   } catch (error) {
-    if (!seams.isNotPorted(error)) diag.warn(area, diag.messageOf(error));
+    if (!seams.isUnavailable(error)) diag.warn(area, diag.messageOf(error));
   }
 }
 

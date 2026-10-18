@@ -1,11 +1,11 @@
-// The editing tools (mcp.rs's generic tool handlers, WP7): reading the edit
+// The editing tools : reading the edit
 // (get_project, get_edit_context, review_edit), changing it (apply_edit_plan,
 // add_text, add_clip, update_clip(s), delete_clips, set_keyframes, set_in_out,
 // markers, remove_time, tidy_tracks, cover_cut_in), media (import_media,
 // still_frame, add_sound_effect), looking (render_frame, contact_sheet,
 // look_at_media), export, skills, and batch. Every mutation goes through the
-// store, so the open UI updates live. Their text is what the Rust server
-// said, word for word: agents read it.
+// store, so the open UI updates live. Agents read their text: change it
+// with care.
 
 import * as fs from "node:fs";
 
@@ -53,9 +53,9 @@ type Args = Record<string, unknown>;
 type Json = unknown;
 
 /**
- * What these tools reach in packages not ported yet, through their seams
- * (WP2's exports path, WP5's people, WP6's review, WP8's B-roll and library,
- * the watcher). Tests put their own in.
+ * What these tools reach in other packages, through their seams (the
+ * exports path, people, review, B-roll and library, the watcher). Tests put
+ * their own in.
  */
 export const hooks = {
   peopleSummary: (project: Project): Record<string, string> => seams.people.summary(project),
@@ -64,8 +64,8 @@ export const hooks = {
   subtitleCoverage: (project: Project, transcripts: Map<string, Transcript>): Json =>
     seams.editReview.subtitleCoverage(project, transcripts),
   smoothingPending: (projectId: string): string[] => seams.broll.smoothingPending(projectId),
-  // Nothing to smooth starts nothing (as broll.rs's loop over no clips), so a
-  // plan or cover without slowed shots never reaches for WP8 after it saved.
+  // Nothing to smooth starts nothing, so a plan or cover without slowed
+  // shots never reaches for B-roll after it saved.
   smoothInBackground: (app: App, projectId: string, clipIds: string[]): string[] =>
     clipIds.length === 0 ? [] : seams.broll.smoothInBackground(app, projectId, clipIds),
   waitForSmoothing: (projectId: string, limitMs: number): Promise<boolean> =>
@@ -771,7 +771,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   return audit;
 }
 
-/** A transcript file as transcribe.rs reads it, or null. */
+/** A transcript file as it reads, or null. */
 function readTranscript(path: string): Transcript | null {
   let value: unknown;
   try {
@@ -1334,7 +1334,7 @@ export async function planAssets(app: App, project: Project, operations: Json[])
 }
 
 // ---------------------------------------------------------------------------
-// Placing sounds (add_sound_effect here, add_from_library in WP8)
+// Placing sounds (add_sound_effect here, add_from_library in media_tools.ts)
 
 /** Where a sound goes: its `times` (timeline seconds) and every place each of its `markers` (names) is. */
 export function soundTimes(store: Store, id: string, args: Args): number[] {

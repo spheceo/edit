@@ -1,4 +1,4 @@
-// Sound effects bundled with Edit (sfx.rs). They're embedded in the binary
+// Sound effects bundled with Edit. They're embedded in the binary
 // (imported as files: `bun build --compile` carries them) and written into
 // <home>/sfx so a project imports them like any other file.
 
@@ -52,7 +52,7 @@ function bytes(sound: Sound): Uint8Array {
   return known;
 }
 
-/** FNV-1a (64-bit) over `data`, as its low 32 bits (sfx.rs `hash as u32`). */
+/** FNV-1a (64-bit) over `data`, as its low 32 bits (how the files have always been named, so old projects keep theirs). */
 export function fnv1a32(data: Uint8Array): number {
   // The 64-bit product kept as two 32-bit halves: hash * 0x100000001b3 is
   // hash * 0x1b3 plus hash's low half shifted up 32 (into the high half).

@@ -1,4 +1,4 @@
-// The `edit` command (main.rs): the desktop app, the server, and the small
+// The `edit` command: the desktop app, the server, and the small
 // commands beside them. `main.ts` runs it; this file only defines it, so
 // tests can call its parts.
 

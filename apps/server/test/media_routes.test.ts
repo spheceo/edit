@@ -1,4 +1,4 @@
-// WP8's routes as server.rs answered them: the library, the Drive link and
+// The media package's routes: the library, the Drive link and
 // the agent panel.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";

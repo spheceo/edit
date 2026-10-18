@@ -160,7 +160,7 @@ test.skipIf(ffmpeg === null || ffprobe === null)(
       const [, polled] = await http("GET", `/api/projects/${id}/script/job`);
       expect(polled).toMatchObject({ unfinished: false, job: { state: "done" } });
       // Again: nothing to fetch, nothing placed twice; the research is asked
-      // for again only because none was saved yet (as script.rs does).
+      // for again only because none was saved yet .
       await start(app, id, false);
       expect(store.get(id)!.project.clips.length).toBe(project.clips.length);
       expect(sent.length).toBe(2);
@@ -173,7 +173,7 @@ test.skipIf(ffmpeg === null || ffprobe === null)(
   60_000,
 );
 
-test("the voice-over routes answer as server.rs did", async () => {
+test("the voice-over routes answer", async () => {
   const [{ app, cleanup }] = withAgents("voice-routes");
   try {
     const http = serve(app);
@@ -207,7 +207,7 @@ test("the voice-over routes answer as server.rs did", async () => {
   }
 });
 
-test("the research routes answer as server.rs did", async () => {
+test("the research routes answer", async () => {
   const [{ app, cleanup }] = withAgents("research-routes");
   try {
     const http = serve(app);
@@ -220,7 +220,7 @@ test("the research routes answer as server.rs did", async () => {
       400,
       { error: "kept images stay (they're in the media bin)" },
     ]);
-    // Nothing found yet: there's no folder to write the index in (as server.rs answered).
+    // Nothing found yet: there's no folder to write the index in.
     expect(await http("POST", `/api/projects/${id}/research/clear`)).toEqual([400, { error: "No such file or directory (os error 2)" }]);
     expect(await http("POST", `/api/projects/${id}/research/x`, { status: "maybe", origin: "ui" })).toEqual([
       400,

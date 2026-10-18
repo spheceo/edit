@@ -1,4 +1,4 @@
-// The web UI (apps/web/dist). A release embeds it in the binary (WP2's
+// The web UI (apps/web/dist). A release embeds it in the binary (the
 // embed step registers those files with `useAssets`); a dev run serves the
 // folder on disk. Every path that isn't a file is the SPA's shell.
 

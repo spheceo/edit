@@ -1,4 +1,4 @@
-// `find_in_footage` (footage_search.rs): where things are said across all of
+// `find_in_footage`: where things are said across all of
 // a project's footage, from the transcripts already made. Picking B-roll for a
 // cut-in is finding the moments its narration talks about; one search for
 // every phrase of every cut-in replaces reading transcript after transcript.

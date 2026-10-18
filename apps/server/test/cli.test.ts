@@ -18,7 +18,7 @@ function edit(args: string[], env: Record<string, string> = {}) {
   return { code: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };
 }
 
-test("edit --version, help, mcp and refusals print what main.rs printed", () => {
+test("edit --version, help, mcp and refusals print what they should", () => {
   expect(edit(["--version"])).toEqual({ code: 0, stdout: `edit ${VERSION}\n`, stderr: "" });
   expect(edit(["-V"]).stdout).toBe(`edit ${VERSION}\n`);
   expect(edit(["help"]).stdout).toBe(HELP);
@@ -41,7 +41,7 @@ test("edit media says where media goes, from the data folder given", () => {
     const shown = edit(["media", "status", "--home", home, "--port", "1"], { EDIT_MEDIA_DIR: "" });
     expect(shown.code).toBe(0);
     expect(shown.stdout).toBe(`Media stays in ${home} (no media drive set).\n`);
-    // As main.rs read it, the subcommand comes first.
+    // The subcommand comes first.
     expect(edit(["media", "--home", home]).stderr).toContain("edit: unknown media command --home\n\nedit media — ");
     expect(edit(["media", "help"]).stdout.startsWith("edit media — where Edit keeps its big media files")).toBe(true);
   } finally {

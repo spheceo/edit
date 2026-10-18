@@ -1,7 +1,7 @@
-// server.rs's generic handlers (health, diagnostics, setup, the file browser,
+// The server's generic handlers (health, diagnostics, setup, the file browser,
 // the media drive, updates, projects, imports and uploads, media files,
 // frames, exports) and `buildRouter`, which puts them together with every
-// package's routes, in server.rs's order.
+// package's routes.
 
 import * as fs from "node:fs";
 
@@ -34,9 +34,9 @@ import { jsonForSerde } from "./rust.ts";
 type Context = RouteContext<App>;
 
 /**
- * Every route the server answers: server.rs's router, every package's routes
- * in it (WP8's library, drive, agent and map routes are one `media_tools`
- * call; WP6's captions, watch and transcribe are `captions.routes`).
+ * Every route the server answers: the generic ones, every package's routes
+ * in it (the library, drive, agent and map routes are one `media_tools`
+ * call; captions, watch and transcribe are `captions.routes`).
  */
 export function buildRouter(): Router<App> {
   const router = baseRouter()
@@ -314,7 +314,7 @@ async function updateInstall({ app }: Context): Promise<Response> {
   try {
     uploading = seams.drive.uploading();
   } catch (error) {
-    if (!seams.isNotPorted(error)) throw error;
+    if (!seams.isUnavailable(error)) throw error;
   }
   if (app.exports.running() || uploading) {
     throw new ApiError(409, "an export or Drive upload is running; update when it's done");
@@ -769,7 +769,7 @@ async function startExport(context: Context): Promise<Response> {
     try {
       done = await seams.broll.waitForSmoothing(id, 120_000);
     } catch (error) {
-      if (!seams.isNotPorted(error)) throw error;
+      if (!seams.isUnavailable(error)) throw error;
     }
     if (!done) {
       throw bad(
@@ -782,7 +782,7 @@ async function startExport(context: Context): Promise<Response> {
   try {
     await seams.broll.waitForMaps(app, id, 5000);
   } catch (error) {
-    if (!seams.isNotPorted(error)) throw bad(diag.messageOf(error));
+    if (!seams.isUnavailable(error)) throw bad(diag.messageOf(error));
   }
   const live = liveOr404(app, id);
   const output =

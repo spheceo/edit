@@ -50,7 +50,7 @@ export interface InitConfig {
  */
 export type ProjectInput = { ref: { id: string; rev: number } } | { json: string };
 
-/** A media file's cache files (media.rs CachePaths), all under `<cache>/<media key>/`. */
+/** A media file's cache files (the engine's media.rs CachePaths), all under `<cache>/<media key>/`. */
 export interface CachePaths {
   /** Preview picture (video sources only, no sound). */
   proxy: string;
@@ -80,7 +80,7 @@ export interface RawImage {
   pixels: Buffer;
 }
 
-/** A face as shares of the picture: [x0, y0, x1, y1], its corners from the picture's top left (faces.rs). */
+/** A face as shares of the picture: [x0, y0, x1, y1], its corners from the picture's top left (the engine's faces.rs). */
 export type Box = [number, number, number, number];
 
 export interface RenderRequest {
@@ -138,7 +138,7 @@ export interface LoudnessSpan {
   peak: number;
 }
 
-/** A running export (render.rs): cancel it, or wait for its file. */
+/** A running export (the engine's render.rs): cancel it, or wait for its file. */
 export interface ExportJob {
   cancel(): void;
   /** Rejects "cancelled" after cancel(). */
@@ -225,14 +225,14 @@ export interface Native {
   facesCached(source: string): Record<number, Box[]> | null; // S
   readonly FACES_RATE: number;
   censorIssues(project: ProjectInput, start: boolean): { issues: unknown[]; pending: string[] }; // S (+BG)
-  /** Camera angles from 64×36 grey frames; TS does the FFmpeg read that makes them (seats.rs:195-232). */
+  /** Camera angles from 64×36 grey frames; TS does the FFmpeg read that makes them (the engine's seats.rs `scenes`). */
   seatsScenes(gray64x36: Buffer): Promise<{ scenes: [number, number, number | null][]; angles: number }>; // A (the addon answers asynchronously)
   desktopFiles(width: number, height: number, photoTitle: string, notepadTitle: string): Promise<[string, string, string]>; // A
   /**
    * The laid-out size [width, height] of `text` in the bundled Geist at `px`
    * (left-aligned, still, 2 px pad), as the renderer lays it out: desktop.rs
-   * `text_block` (edit_render::text::rasterize's block). WP7 needs it for the
-   * desktop profile's notes; a contract addition.
+   * `text_block` (edit_render::text::rasterize's block), for the desktop
+   * profile's notes.
    */
   textBlock(text: string, px: number, weight: number, lineHeight: number): [number, number]; // S
 }

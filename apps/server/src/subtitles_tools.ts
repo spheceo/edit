@@ -1,6 +1,6 @@
-// The subtitles package's MCP tools (mcp.rs: add_subtitles, place_subtitles,
-// repack_subtitles, mute_house_words, set_segments) and routes (server.rs:
-// `POST /api/projects/{id}/repack-subtitles`, `POST
+// The subtitles package's MCP tools (add_subtitles, place_subtitles,
+// repack_subtitles, mute_house_words, set_segments) and routes (`POST
+// /api/projects/{id}/repack-subtitles`, `POST
 // /api/projects/{id}/media/{media}/speakers`). Importing this module
 // registers the tools; the server calls `routes` on its router.
 
@@ -224,7 +224,7 @@ async function speakerRoute(context: RouteContext<App>): Promise<Response> {
     if (isBug(error)) throw error;
     throw bad(diag.messageOf(error));
   }
-  // The transcript as transcribe.rs serializes it (its fields in order).
+  // The transcript as it's always been written (its fields in order).
   return new Response(serialize(transcript), { headers: { "content-type": "application/json" } });
 }
 

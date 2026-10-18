@@ -27,7 +27,7 @@ test("window titles default and are cut to 60 characters", () => {
   expect(titles({ photo_title: "  ", title: ` ${"x".repeat(70)} ` })).toEqual(["Photo Viewer", "x".repeat(60)]);
 });
 
-// Renders a profile to PNGs for eyeballing (desktop.rs's is ignored too: it needs a GPU and a photo).
+// Renders a profile to PNGs for eyeballing (it needs a GPU and a photo).
 test.skip("render_a_profile", () => {});
 
 // The window frames are the addon's drawing (edit-engine's desktop.rs): checked against the real one when it's built.

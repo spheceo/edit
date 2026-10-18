@@ -2,7 +2,7 @@
 // another's, as a TS signature, filled by the module that owns it (typed by
 // the interface, so the compiler holds the module to what its callers were
 // promised). Services `App` carries that a test doesn't provide are stubs that
-// throw "not ported".
+// throw "not available".
 //
 // Callers always go through these objects (`seams.subtitles.footageSound(…)`),
 // never import another package's module directly, which keeps import cycles
@@ -60,38 +60,38 @@ import * as stylesModule from "./styles.ts";
 import type { Transcript, Word } from "./transcribe.ts";
 
 /** What a seam does until its package lands. */
-export function notPorted(what: string): never {
-  throw new Error(`${what} is not ported yet`);
+export function unavailable(what: string): never {
+  throw new Error(`${what} is not available`);
 }
 
 /**
- * A stub object whose every function throws "not ported" naming it; its
- * constants (`known`, copied from the Rust) are there already.
+ * A stub object whose every function throws "not available" naming it; its
+ * constants (`known`) are there already.
  */
 function stub<T extends object>(module: string, known: Partial<T> = {}): T {
   return new Proxy(known as T, {
     get(target, name) {
       if (typeof name !== "string" || name === "then") return undefined;
       if (name in target) return (target as Record<string, unknown>)[name];
-      return (..._args: unknown[]) => notPorted(`${module}.${name}`);
+      return (..._args: unknown[]) => unavailable(`${module}.${name}`);
     },
   });
 }
 
 type Json = unknown;
 
-/** A package's REST routes (its handlers from server.rs), registered on the router. */
+/** A package's REST routes, registered on the router. */
 export type Routes = (router: Router<App>) => void;
 
-/** Whether `error` is a seam's "not ported yet" (callers with a sensible fallback use it meanwhile). */
-export function isNotPorted(error: unknown): boolean {
-  return error instanceof Error && error.message.endsWith(" is not ported yet");
+/** Whether `error` is a seam's "not available" (callers with a sensible fallback use it meanwhile). */
+export function isUnavailable(error: unknown): boolean {
+  return error instanceof Error && error.message.endsWith(" is not available");
 }
 
 // ---------------------------------------------------------------------------
-// WP2: shell, server core, shipping
+// Shell, server core, shipping
 
-/** One export at a time; what was exported since the server started (render.rs Exports). */
+/** One export at a time; what was exported since the server started (exports.ts). */
 export interface Exports {
   /** Starts exporting `project` to `path` (or its default); returns where it goes. */
   start(store: Store, library: Library, project: Project, options: ExportOptions, path: string | null): Promise<string>;
@@ -103,7 +103,7 @@ export interface Exports {
   exported(path: string): boolean;
 }
 
-/** Self-update (update.rs Updater). */
+/** Self-update. */
 export interface Updater {
   status(): Promise<Json>;
   install(): Promise<Json>;
@@ -121,14 +121,14 @@ export interface AppSeam {
   originalExe(): string;
 }
 
-// WP2 has landed: server_seam.ts and app_seam.ts.
+// server_seam.ts and app_seam.ts.
 export const server: ServerSeam = serverModule;
 export const app: AppSeam = appModule;
 
 // ---------------------------------------------------------------------------
-// WP3: cloud
+// Cloud
 
-/** A file Edit adds as media, and where it is on R2 when it's a cloud media (cloud_media.rs Made). */
+/** A file Edit adds as media, and where it is on R2 when it's a cloud media. */
 export interface Made {
   path: string;
   name: string;
@@ -136,7 +136,7 @@ export interface Made {
   cloud: NonNullable<Media["cloud"]> | null;
 }
 
-/** A Drive file put on R2 (cloud_media.rs Original). */
+/** A Drive file put on R2. */
 export interface Original {
   file: string;
   source: string;
@@ -179,8 +179,7 @@ export interface CloudProjectsSeam {
   /** On the way out: pushes what's left and lets every lock go. */
   shutdown(): Promise<void>;
   /**
-   * The server's cloud projects (main.rs: `Cloud::open(home, machine)` then
-   * `cloud_projects::start`): attaches the store's hook and starts the push loop.
+   * The server's cloud projects: attaches the store's hook and starts the push loop.
    */
   start(app: App): void;
   /** `edit cloud …` outside a server: the relay token saved in Settings → Cloud, unless the env sets one. */
@@ -189,20 +188,19 @@ export interface CloudProjectsSeam {
 
 export interface CloudSeam {
   /**
-   * `edit cloud [url | put | get | head | ls | rm | convex] …` (cloud.rs
-   * run_cli): prints what the relay answered; a failure is thrown with the
+   * `edit cloud [url | put | get | head | ls | rm | convex] …` prints what the relay answered; a failure is thrown with the
    * text `edit: <text>` shows (exit 2).
    */
   runCli(args: string[]): Promise<void>;
   /**
-   * `edit cloud backfill <id> [--port N]` (main.rs cloud_backfill): asks the
+   * `edit cloud backfill <id> [--port N]`: asks the
    * running Edit to backfill a cloud project and prints its answer; the exit
    * code (1 when Edit refused); a failure to reach it is thrown (exit 2).
    */
   backfillCli(id: string | undefined, port: number): Promise<number>;
 }
 
-// WP3 has landed: cloud.ts, cloud_projects.ts and cloud_media.ts.
+// cloud.ts, cloud_projects.ts and cloud_media.ts.
 export const cloudMedia: CloudMediaSeam = cloudMediaModule;
 export const cloudProjects: CloudProjectsSeam = {
   delete: (app, id) => cloudProjectsModule.remove(app, id),
@@ -219,11 +217,11 @@ export const cloud: CloudSeam = {
 };
 
 // ---------------------------------------------------------------------------
-// WP4: script, voice, research (filled: script.ts, voice.ts, voiceover.ts,
-// research.ts; their routes are `script.routes`, their tools register as
-// script_tools.ts loads, which this file does)
+// Script, voice, research (script.ts, voice.ts, voiceover.ts, research.ts;
+// their routes are `script.routes`, their tools register as script_tools.ts
+// loads, which this file does)
 
-/** A stretch of a Drive file a script plays, as a file here (script.rs Excerpt). */
+/** A stretch of a Drive file a script plays, as a file here. */
 export interface Excerpt {
   /** The file (in cloud mode, the local proxy). */
   path: string;
@@ -234,13 +232,13 @@ export interface Excerpt {
   cloud: Made | null;
 }
 
-/** A script Doc read into blocks (script.rs Parsed). */
+/** A script Doc read into blocks. */
 export interface Parsed {
   title: string;
   blocks: ScriptBlock[];
 }
 
-/** What Drive serves for a file: the last response's headers after redirects (script.rs DriveHead). */
+/** What Drive serves for a file: the last response's headers after redirects. */
 export interface DriveHead {
   /** HTTP status (0: no answer). */
   status: number;
@@ -252,7 +250,7 @@ export interface DriveHead {
   total: number | null;
 }
 
-/** Script imports in progress, per project (script.rs Jobs). */
+/** Script imports in progress, per project. */
 export interface ScriptJobs {
   get(project: string): ScriptJob | null;
   /** Starts a job for `project` unless one is running; whether it did (says so as a `script` event). */
@@ -289,13 +287,13 @@ export interface ScriptSeam {
   routes: Routes;
 }
 
-/** Voice-over projects (voice.rs Voices), `<home>/voice/<id>/`. */
+/** Voice-over projects, `<home>/voice/<id>/`. */
 export interface Voices {
   list(): Json[];
   get(id: string): VoiceProject;
   create(name: string, source: string | null, lines: [string, string | null][]): VoiceProject;
   forProject(name: string, source: string, lines: [string, string | null][]): VoiceProject;
-  /** The UI's changes (voice.rs Changes, as JSON; refused in serde's words). */
+  /** The UI's changes (`Changes`, as JSON; refused in serde's words). */
   update(id: string, changes: Json): VoiceProject;
   delete(id: string): void;
   deleteTake(id: string, line: string, take: string): VoiceProject;
@@ -330,7 +328,7 @@ export interface VoiceoverSeam {
   voiceoverSound(project: Project, from: number, to: number): Clip[];
 }
 
-/** A found image awaiting review (research.rs Item). */
+/** A found image awaiting review. */
 export interface ResearchItem {
   /** The first 16 hex digits of the file's SHA-256. */
   id: string;
@@ -372,7 +370,7 @@ export interface ResearchSeam {
   items(home: string, project: string): ResearchItem[];
   readPage(url: string, limit: number): Promise<string>;
   reject(home: string, project: string, ids: string[]): number;
-  /** Sets a found image's status; kept the first time, it goes into the media bin, named after its caption (server.rs review_found). */
+  /** Sets a found image's status; kept the first time, it goes into the media bin, named after its caption. */
   reviewFound(app: App, id: string, item: string, status: string, origin: string): Promise<ResearchItem>;
   searchWeb(query: string): Promise<WebResult[]>;
   /** A found image shrunk into a 320×240 cell (letterboxed) as RGBA, for contact sheets. */
@@ -390,9 +388,9 @@ export const voiceover: VoiceoverSeam = voiceoverModule;
 export const research: ResearchSeam = researchModule;
 
 // ---------------------------------------------------------------------------
-// WP5: subtitles, speakers, people, seats, faces
+// Subtitles, speakers, people, seats, faces
 
-/** A transcript word in ms of its clip's source (subtitles.rs TimedWord). */
+/** A transcript word in ms of its clip's source. */
 export interface TimedWord {
   text: string;
   start_ms: number;
@@ -402,7 +400,7 @@ export interface TimedWord {
   stretched?: true;
 }
 
-/** A subtitle: words [from, to) of the clip's list (subtitles.rs Cue). */
+/** A subtitle: words [from, to) of the clip's list. */
 export interface Cue {
   words: [number, number];
   start_ms: number;
@@ -424,7 +422,7 @@ export interface Line {
   doubtful?: boolean;
 }
 
-/** A house word to mute (and maybe star) (subtitles.rs Suggestion). */
+/** A house word to mute (and maybe star). */
 export interface Suggestion {
   term: string;
   starred: boolean;
@@ -435,14 +433,14 @@ export interface Suggestion {
   end_ms: number;
 }
 
-/** A house word found in the footage's sound (subtitles.rs Found). */
+/** A house word found in the footage's sound. */
 export interface Found {
   clip: string;
   suggestion: Suggestion;
   timeline_ms: [number, number];
 }
 
-/** Per audio clip: the stretch looked at (source seconds) and its mutes there (subtitles.rs ClipMutes). */
+/** Per audio clip: the stretch looked at (source seconds) and its mutes there. */
 export type ClipMutes = Map<string, [from: number, to: number, mutes: Mute[]]>;
 
 export interface HouseWords {
@@ -494,7 +492,7 @@ export interface SubtitlesSeam {
   routes(router: import("./http/router.ts").Router<App>): void;
 }
 
-/** One person on screen across the whole video, for `distinct` (speakers.rs Person). */
+/** One person on screen across the whole video, for `distinct`. */
 export interface Person {
   role: string;
   lines: number;
@@ -511,7 +509,7 @@ export interface SpeakersSeam {
   ensure(app: App, source: string): void;
   roleTitle(role: string): string;
   setRole(app: App, source: string, voice: string, role: string, label: string | null): Promise<Transcript>;
-  /** Names the voices of every transcript that comes in, from now on (the server starts it, main.rs); returns a way to stop. */
+  /** Names the voices of every transcript that comes in, from now on (the server starts it); returns a way to stop. */
   watch(app: App): () => void;
 }
 
@@ -524,8 +522,8 @@ export interface PeopleSeam {
 
 /**
  * Where a face is: [x0, y0, x1, y1], corners as shares of the picture from
- * its top left (faces.rs), or, once `inFrame` has placed it, project pixels
- * from the frame's centre.
+ * its top left (the engine's faces.rs), or, once `inFrame` has placed it,
+ * project pixels from the frame's centre.
  */
 export type Face = Box;
 
@@ -549,8 +547,8 @@ export interface FacesSeam {
   textOnFaces(project: Project): Json[];
 }
 
-// WP5 has landed: subtitles.ts, speakers.ts, people.ts and faces.ts (seats.ts
-// is behind subtitles). They import this file too; a module namespace is
+// subtitles.ts, speakers.ts, people.ts and faces.ts (seats.ts is behind
+// subtitles). They import this file too; a module namespace is
 // there (if not yet filled) whichever of the two loads first, and nothing
 // reads it before the first call.
 export const subtitles: SubtitlesSeam = subtitlesModule;
@@ -559,9 +557,9 @@ export const people: PeopleSeam = peopleModule;
 export const faces: FacesSeam = facesModule;
 
 // ---------------------------------------------------------------------------
-// WP6: captions, watching, review
+// Captions, watching, review
 
-/** Where place_captions puts a caption (captions.rs Under). */
+/** Where place_captions puts a caption. */
 export type Under = { kind: "auto" } | { kind: "bottom" } | { kind: "at"; x: number; y: number };
 
 export interface CaptionsSeam {
@@ -611,7 +609,7 @@ export interface FootageSearchSeam {
   find(app: App, project: Project, phrases: string[], limit: number, context: number): Json;
 }
 
-/** A stretch of footage the watcher sends at once (watch.rs Window). */
+/** A stretch of footage the watcher sends at once. */
 export interface Window {
   lines: [number, number];
   start: number;
@@ -636,7 +634,7 @@ export interface WatchSeam {
   watchInBackground(app: App, projectId: string): void;
 }
 
-// WP6 has landed: captions.ts (with WP5's captions_core.ts for `hex`,
+// captions.ts (with captions_core.ts for `hex`,
 // `transcriptOf`, `subtitleName` and `captionSize`), edit_review.ts,
 // footage_search.ts and watch.ts; captions_tools.ts has their tools and routes.
 export const captions: CaptionsSeam = captionsModule;
@@ -645,7 +643,7 @@ export const footageSearch: FootageSearchSeam = footageSearchModule;
 export const watch: WatchSeam = watchModule;
 
 // ---------------------------------------------------------------------------
-// WP7: editing tools and plans
+// Editing tools and plans
 
 export interface StylesSeam {
   /** What the agent's instructions say about the project's style. */
@@ -657,7 +655,7 @@ export interface SfxSeam {
   readonly HIT: string;
 }
 
-/** How a sound is placed (mcp.rs Sound). */
+/** How a sound is placed. */
 export interface PlacedSound {
   volume_db: number;
   /** Plays at most this long: for a sound with a hit, the stretch around it, `lead` seconds before it (default half). */
@@ -668,7 +666,7 @@ export interface PlacedSound {
   color: Clip["color"];
 }
 
-/** mcp.rs's helpers other packages' tools use (WP8's add_from_library places its sounds with them). */
+/** The editing tools' helpers other packages' tools use (add_from_library places its sounds with them). */
 export interface EditingSeam {
   /** Where a sound goes: its `times` (timeline seconds) and every place each of its `markers` (names) is. */
   soundTimes(store: Store, id: string, args: Record<string, unknown>): number[];
@@ -687,9 +685,9 @@ export interface EditingSeam {
     times: number[],
     sound: PlacedSound,
   ): Promise<string>;
-  /** Timeline seconds for each marker name; an unknown name is an error listing the names there are (markers.rs times). */
+  /** Timeline seconds for each marker name; an unknown name is an error listing the names there are. */
   markerTimes(project: Project, names: string[]): number[];
-  /** Words heard on the timeline as phrases with timeline times (mcp.rs timeline_transcript; read_transcript's answer). */
+  /** Words heard on the timeline as phrases with timeline times (read_transcript's answer). */
   timelineTranscript(app: App, project: Project): string;
 }
 
@@ -704,13 +702,13 @@ export const editing: EditingSeam = {
 };
 
 // ---------------------------------------------------------------------------
-// WP8: media sources, sound, agent
+// Media sources, sound, agent
 
-/** The Codex bridge behind the agent panel (agent.rs Agents). */
+/** The Codex bridge behind the agent panel. */
 export interface Agents {
   status(): Promise<Json>;
   /**
-   * One question to a model through the user's Codex (agent.rs `ask`): an
+   * One question to a model through the user's Codex: an
    * ephemeral read-only thread with `instructions` as its developer
    * instructions, `input` its user turn (Codex input items), the answer held
    * to `schema` when given; the answer's text, or a thrown Error after
@@ -720,7 +718,7 @@ export interface Agents {
 }
 
 /**
- * The agent panel's side of the bridge (agent.rs Agents), which `App.agents`
+ * The agent panel's side of the bridge, which `App.agents`
  * is in the server (agent.ts): `agentPanel(app)` for it. Tests' agents may
  * answer only `status` and `ask`.
  */
@@ -729,7 +727,7 @@ export interface AgentPanel extends Agents {
   models(refresh: boolean): Promise<Json>;
   /** A project's chat: its entries, whether a turn is running, its model and effort. */
   chat(project: string): Json;
-  /** Sends the user's (or Edit's: script.rs's research) message to a project's chat, starting its turn. */
+  /** Sends the user's (or Edit's: the script's research) message to a project's chat, starting its turn. */
   send(project: string, text: string, model: string | null, effort: string | null): Promise<void>;
   /** Stops a project's running turn. */
   stop(project: string): Promise<void>;
@@ -737,18 +735,18 @@ export interface AgentPanel extends Agents {
   reset(project: string): void;
 }
 
-/** The app's agents as the panel (and script.rs's research turn) use them. */
+/** The app's agents as the panel (and the script's research turn) use them. */
 export function agentPanel(app: App): AgentPanel {
   return app.agents as AgentPanel;
 }
 
-/** The team's sound library on Drive (library.rs Library). */
+/** The team's sound library on Drive. */
 export interface Library {
-  /** A Google access token for Drive calls (the library's sign-in, shared by drive.rs). */
+  /** A Google access token for Drive calls (the library's sign-in, shared by drive.ts). */
   accessToken(): Promise<string>;
 }
 
-/** A library sound (library.rs Sound). */
+/** A library sound. */
 export interface Sound {
   id: string;
   name: string;
@@ -792,14 +790,14 @@ export interface LibrarySeam {
   loudness(path: string, from: number, seconds: number): Promise<number>;
 }
 
-// WP8 has landed: broll.ts, drive.ts and library.ts (and agent.ts, which
+// broll.ts, drive.ts and library.ts (and agent.ts, which
 // App carries as `agents`, with library.ts's Library as `library`).
 export const broll: BrollSeam = brollModule;
 export const drive: DriveSeam = driveModule;
 export const library: LibrarySeam = libraryModule;
 
-/** The services App carries that other packages make (stubs until they land; WP4's are in). */
-export function unportedServices(home: string): {
+/** The services App carries that other packages make: stubs for a test to replace, but the script jobs and voices. */
+export function stubServices(home: string): {
   exports: Exports;
   updater: Updater;
   agents: Agents;

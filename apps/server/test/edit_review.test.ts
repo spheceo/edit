@@ -1,4 +1,4 @@
-// edit_review.rs's tests, same names.
+// edit_review.ts's tests.
 
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";

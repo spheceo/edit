@@ -282,8 +282,8 @@ test("edit cloud … prints what the relay answered, and refuses without a token
 
 /**
  * Against a real relay (EDIT_RELAY_URL / EDIT_RELAY_TOKEN; e.g. `wrangler dev`
- * with apps/relay/.dev.vars) with EDIT_CLOUD_LIVE=1, as cloud.rs's ignored
- * test. Uses and cleans up `edit/test/live-<pid>/`.
+ * with apps/relay/.dev.vars) with EDIT_CLOUD_LIVE=1. Uses and cleans up
+ * `edit/test/live-<pid>/`.
  */
 test.skipIf(process.env.EDIT_CLOUD_LIVE !== "1")("live_stream_round_trip_and_failed_stream_aborts", async () => {
   restore();

@@ -240,7 +240,7 @@ export const ELEMENT_SECONDS: Record<Element, number> = {
   waveform: 5,
 };
 
-/** The cut-in card's words: sized so long narration still fits (edit script.rs `cut_in_style`). */
+/** The cut-in card's words: sized so long narration still fits (the server's script.ts lays out the same). */
 function cutInStyle(width: number, height: number, text: string): TextStyle {
   const k = height / 1080;
   const maxWidth = width * 0.62;
@@ -940,7 +940,7 @@ const SOUND_EFFECT_SECONDS = 3;
 /** A sound effect (a bundled sound, one from the team's library, or any very short audio): heard, never transcribed. */
 export function isSoundEffect(media: Media) {
   // Bundled sounds live in <Edit's home>/sfx (apps/server/src/sfx.ts), the
-  // library's in <Edit's home>/library/<music|sfx>/<checksum> (library.rs).
+  // library's in <Edit's home>/library/<music|sfx>/<checksum>.
   return (
     media.kind === "audio" &&
     (media.duration <= SOUND_EFFECT_SECONDS || /[\\/]sfx[\\/][^\\/]+$/.test(media.path) || /[\\/]library[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+$/.test(media.path))

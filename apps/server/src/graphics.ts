@@ -1,4 +1,4 @@
-// House graphics built in one plan operation (graphics.rs), so their look is
+// House graphics built in one plan operation, so their look is
 // right by construction rather than rebuilt (and drifted) by hand each edit:
 // - `date_title`: the date cut-in's date, white with only a drop shadow (an
 //   edit came out with a 65% black box and a glow on it).

@@ -1,4 +1,4 @@
-// app.rs's one export other packages use (through `seams.app`).
+// The app's one export other packages use (through `seams.app`).
 
 /**
  * The binary that was started: the compiled `edit` (bun in a dev run). The

@@ -1,5 +1,4 @@
-// faces.rs's tests (the placement half that's TS now), same names, same cases;
-// then the TS side's own.
+// faces.ts's tests (placement; detection is the addon's).
 
 import { expect, test } from "bun:test";
 
@@ -51,7 +50,7 @@ test("a_face_is_followed_not_a_hand", () => {
   expect(clearlyVisible(far, 8)).toBe(false);
 });
 
-/** captions.rs `subtitle_style(1920, 1080)`: what subtitle_size reads of it (48 px, wrapped at 1512). */
+/** The subtitle style at 1080p: what subtitle_size reads of it (48 px, wrapped at 1512). */
 function subtitleStyle(): TextStyle {
   return {
     font: "Montserrat",

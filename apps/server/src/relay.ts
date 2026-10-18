@@ -1,8 +1,7 @@
 // Edit's relay (apps/relay/): the Cloudflare Worker that holds every API key,
 // so Edit installs never do. `EDIT_RELAY_URL` points at another relay (e.g.
 // `wrangler dev`), and `EDIT_RELAY_TOKEN` is sent as `Authorization: Bearer`.
-// The Rust server went through curl to have no TLS stack of its own; Bun's
-// fetch has one, so requests go straight out. Nothing secret is ever put in a
+// Requests go out through Bun's fetch. Nothing secret is ever put in a
 // child process's arguments: what still runs curl gets `authConfig` on stdin.
 
 import * as fs from "node:fs";

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { dispatch, INSTRUCTIONS, registerTool, targetProject, text, toolReference, TOOLS } from "../src/mcp/index.ts";
-import { handlerFor, unregisterTool, unported } from "../src/mcp/registry.ts";
+import { handlerFor, unregisterTool, unregistered } from "../src/mcp/registry.ts";
 import { stableStringify } from "../src/stable.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -44,7 +44,7 @@ test("every tool takes project_id; the instructions list the skills", () => {
   }
   expect(INSTRUCTIONS.startsWith("Edit is a local video editor.")).toBe(true);
   expect(INSTRUCTIONS).toContain("- final-pass: The last review of a whole edit and the fixes it finds.");
-  expect(unported()).not.toContain("list_projects");
+  expect(unregistered()).not.toContain("list_projects");
 });
 
 test("JSON-RPC: initialize, ping, tools/list, notifications and unknown methods", async () => {
@@ -90,13 +90,13 @@ test("tools/call: the project preamble, errors as content, and registered handle
     });
     const id = store.create("p", { width: 1920, height: 1080, fps: 30 }).project.id;
     // A declared tool no package has registered yet says so (packages register theirs as they land).
-    const waiting = unported()[0];
-    if (waiting !== undefined) expect((await call(waiting)).result.content[0]!.text).toBe(`${waiting} is not ported yet`);
+    const waiting = unregistered()[0];
+    if (waiting !== undefined) expect((await call(waiting)).result.content[0]!.text).toBe(`${waiting} is not available`);
     expect((await call("no_such_tool")).result.content[0]!.text).toBe("unknown tool no_such_tool");
     expect((await call("delete_clips", { project_id: "p2" }, id)).result.content[0]!.text).toBe(
       `this chat works on project ${id} only: delete_clips can't touch p2 (get_edit_context and get_project can read it)`,
     );
-    // These tools' own handlers (WP7's) step aside while the test's stand in.
+    // These tools' own handlers step aside while the test's stand in.
     const own = new Map(["markers", "tidy_tracks"].map((name) => [name, handlerFor(name)]));
     for (const name of own.keys()) unregisterTool(name);
     registerTool("markers", ({ projectId, args }) => text(stableStringify({ project: projectId, args })));

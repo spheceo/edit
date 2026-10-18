@@ -1,5 +1,5 @@
-// The edit-core helpers ported to TS (project.ts), with edit-core's own tests
-// (model.rs, eval.rs, sections.rs) and mcp.rs's for the edit primitives.
+// The edit-core helpers in TS (project.ts), with edit-core's own tests
+// (model.rs, eval.rs, sections.rs) and the edit primitives'.
 
 import { expect, test } from "bun:test";
 

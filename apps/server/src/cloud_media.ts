@@ -1,4 +1,4 @@
-// Footage of cloud projects (cloud_media.rs): originals and proxies on R2
+// Footage of cloud projects: originals and proxies on R2
 // (`cloud.ts`), only the small proxies on this machine. A media's `cloud` says
 // where its files are; its `path` is this machine's copy of the proxy.
 //
@@ -77,7 +77,7 @@ const PARALLEL = 3;
 const ANALYSIS_AT_ONCE = 8;
 
 /**
- * What this module uses of the script package (WP4's seam), here so tests can
+ * What this module uses of the script package (its seam), here so tests can
  * stand in for it before it lands.
  */
 export const scriptParts = {
@@ -1377,12 +1377,12 @@ export async function backfill(app: App, id: string): Promise<Record<string, unk
   return backfillSlot.with(() => backfillNow(app, id, true));
 }
 
-/** Whether `path` is a map shot's first frame standing in for footage still rendering (WP8's broll). */
+/** Whether `path` is a map shot's first frame standing in for footage still rendering (broll's). */
 function isMapStandIn(path: string): boolean {
   try {
     return seams.broll.isMapStandIn(path);
   } catch (error) {
-    if (error instanceof Error && error.message.endsWith(" is not ported yet")) return false;
+    if (error instanceof Error && error.message.endsWith(" is not available")) return false;
     throw error;
   }
 }
@@ -1487,7 +1487,7 @@ const SHARED = "cloud-shared.json";
  * The media keys the watcher's answers in a cache dir were asked under
  * (`watch/keys.json`, read by `watch.ts`): its answers are named by the media
  * key, which differs once they're carried to a proxy or fetched by another
- * machine. A watch file like the others, so the Rust server shares it too.
+ * machine. A watch file like the others, so it's shared like them.
  */
 export const WATCH_KEYS = "watch/keys.json";
 

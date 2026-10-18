@@ -1,4 +1,4 @@
-// subtitles.rs's tests, same names, same cases.
+// subtitles.ts's tests.
 
 import { expect, test } from "bun:test";
 

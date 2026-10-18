@@ -1,7 +1,7 @@
-// The script, voice and research package's MCP tools (mcp.rs: search_web,
+// The script, voice and research package's MCP tools (search_web,
 // read_page, add_article, case_articles, look_at_found, reject_found,
 // collect_images, use_found, realign_script, place_voiceovers,
-// tighten_voiceover, speed_voiceover) and routes (server.rs: `/api/voice/*`,
+// tighten_voiceover, speed_voiceover) and routes (`/api/voice/*`,
 // `/api/scripts/preview`, `/api/projects/{id}/script(/job)`,
 // `/api/projects/{id}/research/*`). Importing this module registers the tools
 // (seams.ts does); the server calls `routes` on its router. The script

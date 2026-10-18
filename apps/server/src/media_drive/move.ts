@@ -1,5 +1,5 @@
 // Moving what's in the data folder to the media drive (`edit media move`) and
-// the `edit media` command (media_drive.rs's CLI half; the layout is layout.ts).
+// the `edit media` command (the layout is layout.ts).
 
 import * as fs from "node:fs";
 
@@ -364,7 +364,7 @@ export const HELP = `edit media — where Edit keeps its big media files
   EDIT_MEDIA_DIR overrides the setting.
 `;
 
-/** `edit media …`; `fail` prints "edit: <why>" and exits 2 (main.rs fail). */
+/** `edit media …`; `fail` prints "edit: <why>" and exits 2. */
 export async function runCli(home: string, port: number, args: string[], fail: (message: string) => never): Promise<void> {
   const flag = (name: string) => {
     const at = args.indexOf(name);

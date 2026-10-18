@@ -1,4 +1,4 @@
-// watch.rs's tests, same names (the paid ones stay behind their env gates),
+// watch.ts's tests (the paid ones stay behind their env gates),
 // and a whole watch against the gateway mock.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
@@ -56,7 +56,7 @@ test("completed_watch_key_ignores_cosmetic_edits_but_not_speech_or_timing", () =
   expect(completedKey(p, transcripts, false)).not.toBe(corrected);
 });
 
-test("floats are written as serde_json writes them, so receipts match the Rust server's", () => {
+test("floats are written as serde_json writes them, so receipts match earlier versions'", () => {
   expect([1.0, 0.25, 1.5, -2.0, 0.0, -0.0, 1e-7, 0.0001, 0.00001, 0.000001, 1e16, 1e15, 123456789012345680, 30.000000000000004].map(serdeF64)).toEqual([
     "1.0",
     "0.25",

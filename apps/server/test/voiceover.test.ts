@@ -1,4 +1,4 @@
-// voiceover.rs's tests, same names. Ripples are the addon's (edit_core
+// voiceover.ts's tests. Ripples are the addon's (edit_core
 // remove_time / speed_span_holding): those run against the real one when it's built.
 
 import { expect, test } from "bun:test";

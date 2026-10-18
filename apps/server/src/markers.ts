@@ -1,4 +1,4 @@
-// Marked moments the agent plans sounds on (markers.rs): a moment of a source
+// Marked moments the agent plans sounds on: a moment of a source
 // (a door slamming at 12.4 s of the bodycam) is a media marker, so it stays on
 // the moment however the clips showing it move; a moment of the edit itself (a
 // photo landing on an evidence board) is a timeline marker. Sounds are then
@@ -8,7 +8,7 @@ import type { Marker, Media, Project, TimelineMarker } from "./model.ts";
 import { clipContains, clipEnd, clipOf, fps as fpsOf } from "./project.ts";
 import { compareStrings, fixed, round, trim } from "./rust.ts";
 
-/** The marker a placed sound lines up on the cut (sfx.rs HIT). */
+/** The marker a placed sound lines up on the cut. */
 export const HIT = "hit";
 
 type Args = Record<string, unknown>;

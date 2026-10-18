@@ -1,7 +1,7 @@
 // MCP (streamable HTTP, JSON responses) so Codex / Claude Code can edit.
 // Every mutation goes through the store, so the open UI updates live.
 //
-// This is the protocol half of mcp.rs: JSON-RPC dispatch, the tool list, and
+// This is the protocol half: JSON-RPC dispatch, the tool list, and
 // the preamble every tool call shares (which project it works on). The tools
 // themselves are registered by their packages (`registry.ts`).
 
@@ -122,7 +122,7 @@ export async function call(
   const asked = typeof args.project_id === "string" ? args.project_id : null;
   const projectId = app.store.resolve(targetProject(scope, asked, name));
   if (registered === undefined) {
-    if (TOOLS.some((tool) => tool.name === name)) throw new Error(`${name} is not ported yet`);
+    if (TOOLS.some((tool) => tool.name === name)) throw new Error(`${name} is not available`);
     throw new Error(`unknown tool ${name}`);
   }
   return registered.handler({ app, args, projectId, scope });

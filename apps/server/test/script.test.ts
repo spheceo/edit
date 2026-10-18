@@ -1,4 +1,4 @@
-// script.rs's tests, same names, plus the Drive and Docs paths against the mock.
+// script.ts's tests, plus the Drive and Docs paths against the mock.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";

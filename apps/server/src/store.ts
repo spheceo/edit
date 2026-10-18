@@ -37,7 +37,7 @@ export interface Live {
 
 export type UpdateKind = "not_found" | "conflict" | "invalid" | "refused";
 
-/** Why a write didn't happen (store.rs UpdateError); callers word it for whoever asked. */
+/** Why a write didn't happen; callers word it for whoever asked. */
 export class UpdateError extends Error {
   constructor(
     readonly kind: UpdateKind,
@@ -296,7 +296,7 @@ export class Store {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       return { problem: `can't read it: ${ioMessage(error)}` };
     }
-    // As serde read it in the Rust server (the addon reads numbers exactly).
+    // As serde reads it (the addon reads numbers exactly).
     const loaded = native().projectLoad(asSerdeRead(text));
     if (loaded.problem !== undefined) {
       // A file holding another project says so, even when it doesn't validate either.
@@ -421,7 +421,7 @@ export class Store {
   /**
    * Read-modify-write used by agent tools and server-side edits: `edit` gets a
    * copy to change and must not await (it runs atomically). Throws an Error
-   * with the reason, worded as store.rs words it.
+   * with the reason.
    */
   async update<T>(id: string, origin: string, edit: (project: Project) => T): Promise<[Live, T]> {
     const current = this.get(id);
@@ -455,7 +455,7 @@ export class Store {
     const json = jsonForSerde(project);
     const cloud = this.cloudHook;
     if (cloud !== null) {
-      // Invalid before refused, as the Rust store answered (it validated first).
+      // Invalid before refused: a bad save says what's wrong with it first.
       const invalid = native().projectValidate(json);
       if (invalid !== null) throw new UpdateError("invalid", invalid);
       try {
@@ -594,13 +594,13 @@ export function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** How a subtitle's clip name starts ("Subtitle · <who>"; subtitles.rs NAME). */
+/** How a subtitle's clip name starts ("Subtitle · <who>"). */
 export const SUBTITLE_NAME = "Subtitle";
 
 /**
  * Whether `project` is a subtitled video: subtitles over its footage and
  * nothing else (an edit's subtitles carry the same name, among cut-ins,
- * B-roll and sound). subtitles.rs's; here because `list` needs it.
+ * B-roll and sound). Here, not in subtitles.ts, because `list` needs it.
  */
 export function isSubtitled(project: Project): boolean {
   const prefix = `${SUBTITLE_NAME} · `;

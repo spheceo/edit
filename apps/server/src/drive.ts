@@ -1,4 +1,4 @@
-// Exports on the team's Google Drive (drive.rs). A whole export of a
+// Exports on the team's Google Drive. A whole export of a
 // subtitled video is uploaded to the "Subtitles" folder (Repack's, where its
 // own renders go); a normal edit isn't (it's downloaded from Edit; "Render"
 // is only where one went before, Oct 17). Anyone with the link may view it, and the
@@ -131,7 +131,7 @@ export function start(store: Store, library: Library, project: Project, path: st
   const job = jobs.begin(store.home, "drive", id, { path });
   uploads.set(id, number);
   const emit = (state: string, extra: Record<string, unknown>) => {
-    // Keys sorted, as the Rust server's `json!` event read.
+    // Keys sorted, as events always were.
     const event: Record<string, unknown> = { type: "drive", id, state, name, ...extra };
     store.emit(JSON.parse(stableStringify(event)) as Record<string, unknown>);
   };

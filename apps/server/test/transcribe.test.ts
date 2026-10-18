@@ -29,7 +29,7 @@ test("no words is an error, and odd times are made sane", () => {
   expect(transcript.language).toBeNull();
 });
 
-test("a transcript is written as transcribe.rs writes it", () => {
+test("a transcript is written with its fields in order", () => {
   expect(
     serialize({
       model: "scribe_v2",

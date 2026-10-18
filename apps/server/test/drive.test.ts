@@ -1,4 +1,4 @@
-// drive.rs's tests, and an upload against the mock Drive.
+// drive.ts's tests, and an upload against the mock Drive.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 

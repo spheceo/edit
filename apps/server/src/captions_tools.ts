@@ -1,6 +1,6 @@
-// The captions package's MCP tools (mcp.rs: caption_speakers, place_captions,
+// The captions package's MCP tools (caption_speakers, place_captions,
 // track_region, watch_footage, transcribe, media_transcript, find_in_footage,
-// read_transcript) and routes (server.rs: `POST /api/projects/{id}/captions`,
+// read_transcript) and routes (`POST /api/projects/{id}/captions`,
 // `POST /api/projects/{id}/watch`, `POST
 // /api/projects/{id}/media/{media}/transcribe`). Importing this module
 // registers the tools; the server calls `routes` on its router.

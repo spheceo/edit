@@ -1,4 +1,4 @@
-// Voice-overs for the script's cut-ins (voiceover.rs). The recordings read
+// Voice-overs for the script's cut-ins. The recordings read
 // the cut-ins' text, so each cut-in's words are found in their transcripts and
 // that stretch of audio is laid where the cut-in is. The cut-in is lengthened
 // to it and everything after moves with it, so the timeline stays butted.

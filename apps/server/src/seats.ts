@@ -66,7 +66,7 @@ export class Seats {
   }
 
   /**
-   * As seats.rs writes it (serde_json): `{"scenes":[[s,e,angle]…],"angles":[{name:{x,y,h}}…],"names":[…]}`.
+   * As it's always been written (serde_json): `{"scenes":[[s,e,angle]…],"angles":[{name:{x,y,h}}…],"names":[…]}`.
    * The last scene's end is infinite, which serde_json writes as null.
    */
   toJson(): string {
@@ -84,9 +84,8 @@ export class Seats {
 
   /**
    * Reads `toJson`'s text back; null when it isn't one. A scene's end of
-   * null is the infinite end serde_json wrote as null (seats.rs couldn't
-   * read its own file back because of it, so its cache never hit; see the
-   * port notes).
+   * null is the infinite end serde_json wrote as null (files earlier
+   * versions wrote couldn't be read back because of it).
    */
   static parse(text: string): Seats | null {
     let value: unknown;

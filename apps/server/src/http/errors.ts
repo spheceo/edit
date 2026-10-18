@@ -1,4 +1,4 @@
-// How routes answer failures (server.rs ApiError): `{"error": "<why>"}` with
+// How routes answer failures: `{"error": "<why>"}` with
 // a status. A route throws ApiError (or returns `apiError(...)`); the server
 // turns it into the response. Some refusals were plain text in Rust (the host
 // check, axum's own body rejections), and stay plain text.

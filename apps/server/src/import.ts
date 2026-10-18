@@ -1,4 +1,4 @@
-// Bringing files into a project (server.rs import_paths and friends): probed,
+// Bringing files into a project : probed,
 // sent to the cloud in cloud mode (the original goes to R2 and footage is
 // edited from its proxy), added as media once per path, optionally laid at
 // the end of the timeline, and then their previews, loudness analysis and, for

@@ -117,7 +117,7 @@ test("a body of the wrong shape says where, as serde does (line and column just 
       return [response.status, await response.text()];
     };
     const prefix = "Failed to deserialize the JSON body into the target type: ";
-    // As the Rust server answered these (axum's Json, serde_path_to_error).
+    // As serde_path_to_error words them.
     expect(await ask('{"width":3}')).toEqual([422, `${prefix}missing field \`name\` at line 1 column 11`]);
     expect(await ask('{ "name": 3 }')).toEqual([422, `${prefix}name: invalid type: integer \`3\`, expected a string at line 1 column 11`]);
     expect(await ask('{"name":"x",\n "project":{"clips":[{"id":"x","track":"nope"}]}}')).toEqual([

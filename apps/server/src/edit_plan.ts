@@ -1,4 +1,4 @@
-// A section-sized transaction (edit_plan.rs): resolve references, apply all
+// A section-sized transaction: resolve references, apply all
 // operations, validate once, commit once. Intermediate overlaps are allowed;
 // invalid plans save nothing. Its `audit` is the mechanical review the agent
 // gets back instead of rendering for everything.
@@ -37,7 +37,7 @@ type Args = Record<string, unknown>;
 type Json = unknown;
 
 /**
- * What the plan reaches in other packages (WP5's people and faces), through
+ * What the plan reaches in other packages (people and faces), through
  * their seams; tests put their own in.
  */
 export const hooks = {

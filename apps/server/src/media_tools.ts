@@ -1,5 +1,5 @@
-// WP8's MCP tools (mcp.rs: list_library, add_from_library, set_loudness,
-// measure_audio, smooth_slow_motion, map_view) and routes (server.rs: the
+// The media package's MCP tools (list_library, add_from_library, set_loudness,
+// measure_audio, smooth_slow_motion, map_view) and routes (the
 // library, the map pages Chrome renders, the Drive link and the agent panel).
 // `registerMediaTools()` registers the tools (the server's entry point calls
 // it, as it calls registerEditingTools); `routes(router)` adds the routes.
@@ -237,7 +237,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
   ["map_view", mapView],
 ];
 
-/** Registers WP8's tools with the MCP server (once; later calls do nothing). */
+/** Registers the media tools with the MCP server (once; later calls do nothing). */
 export function registerMediaTools(): void {
   for (const [name, handler] of TOOLS) {
     if (handlerFor(name)?.handler === handler) continue;
@@ -248,7 +248,7 @@ export function registerMediaTools(): void {
 // ---------------------------------------------------------------------------
 // Routes
 
-/** A `json!` answer: keys sorted, as the Rust server's read. */
+/** A JSON answer with its keys sorted (stable.ts). */
 function sortedJson(value: unknown, status = 200): Response {
   return new Response(stableStringify(value), { status, headers: { "content-type": "application/json" } });
 }
@@ -431,7 +431,7 @@ async function mapFrameRoute(context: RouteContext<App>): Promise<Response> {
   return new Response(null, { status: broll.mapFrame(context.params.token ?? "", index, bytes) });
 }
 
-/** WP8's routes, as server.rs declared them. */
+/** The media package's routes. */
 export function routes(router: Router<App>): void {
   router.get("/api/library", libraryRoute);
   router.post("/api/projects/{id}/library", libraryImportRoute);

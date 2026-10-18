@@ -1,4 +1,4 @@
-// The server's export registry (render.rs Exports): one export at a time, its
+// The server's export registry : one export at a time, its
 // `export` events, the files it may hand out, and the Drive upload after a
 // subtitled video. The rendering, mixing, the partial file beside the
 // destination and its rename are the addon's (`ExportJob`).
@@ -179,7 +179,7 @@ export class ExportRegistry implements seams.Exports {
     try {
       upload = seams.drive.wanted(project, options, plan);
     } catch (error) {
-      if (!seams.isNotPorted(error)) {
+      if (!seams.isUnavailable(error)) {
         this.jobs.delete(project.id);
         jobs.end(this.home, key);
         throw error;
@@ -214,14 +214,14 @@ export class ExportRegistry implements seams.Exports {
         try {
           [exported, originals] = await seams.cloudMedia.forExport(project, plan.start, plan.end, store.cacheDir());
         } catch (error) {
-          if (!seams.isNotPorted(error)) throw error;
+          if (!seams.isUnavailable(error)) throw error;
         }
         try {
           let pending: string[] = [];
           try {
             pending = seams.broll.smoothingPending(exported.id);
           } catch (error) {
-            if (!seams.isNotPorted(error)) throw error;
+            if (!seams.isUnavailable(error)) throw error;
           }
           if (pending.length > 0) {
             diag.info(

@@ -1,4 +1,4 @@
-// footage_search.rs's test, same name.
+// footage_search.ts's test.
 
 import { expect, test } from "bun:test";
 

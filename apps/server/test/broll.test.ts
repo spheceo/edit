@@ -1,4 +1,4 @@
-// broll.rs's tests, and the B-roll pieces on the stub: map pages, stand-ins,
+// broll.ts's tests, and the B-roll pieces on the stub: map pages, stand-ins,
 // smoothing, stills and transcripts.
 
 import * as fs from "node:fs";

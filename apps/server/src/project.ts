@@ -1,4 +1,4 @@
-// The small edit-core helpers the server calls per item, ported rather than
+// The small edit-core helpers the server calls per item, in TS rather than
 // called across the native boundary (they run in tight loops), plus
 // the edit primitives other packages use.
 //
@@ -25,7 +25,7 @@ export const PROJECT_VERSION = 1;
 /** JavaScript's largest safe integer: ids, frames and next_id stay under it. */
 const SAFE = 9_007_199_254_740_991;
 
-/** How every speaker caption's clip name starts ("Caption · <who>"; captions.rs). */
+/** How every speaker caption's clip name starts ("Caption · <who>"). */
 export const CAPTION_PREFIX = "Caption · ";
 
 export const DEFAULT_SETTINGS: Settings = { width: 1920, height: 1080, fps: 30 };
@@ -226,7 +226,7 @@ export function isDateCard(text: string): boolean {
     });
 }
 
-/** Audio this short is a sound effect, wherever it came from (sections.rs). */
+/** Audio this short is a sound effect, wherever it came from (edit-core's sections.rs). */
 const SOUND_EFFECT_SECONDS = 3.0;
 
 /**
@@ -238,7 +238,7 @@ export function isSoundEffect(media: Media): boolean {
 }
 
 /**
- * Bundled sounds are written to `<Edit's home>/sfx/` (sfx.rs), the team
+ * Bundled sounds are written to `<Edit's home>/sfx/`, the team
  * library's sounds and music to `<Edit's home>/library/<music|sfx>/<checksum>/`.
  */
 function inSfxFolder(path: string): boolean {
@@ -247,7 +247,7 @@ function inSfxFolder(path: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Keyframes (eval.rs), in f32 as edit-core has them.
+// Keyframes (edit-core's eval.rs), in f32 as edit-core has them.
 
 const f = Math.fround;
 const F32_EPSILON = 1.1920929e-7;
@@ -361,7 +361,7 @@ export function ease(kind: Ease, t: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Edit primitives other packages share (mcp.rs).
+// Edit primitives other packages share.
 
 /**
  * Moves clips down onto the track below wherever it's empty for the clip's

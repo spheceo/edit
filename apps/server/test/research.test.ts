@@ -1,4 +1,4 @@
-// research.rs's tests, same names, plus the research tools against the mock
+// research.ts's tests, plus the research tools against the mock
 // (pages and images served by it; the headless browser replaced by `hooks.dump`).
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";

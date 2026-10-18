@@ -1,11 +1,11 @@
-// broll.rs names the files it makes with DefaultHasher; these values were
-// printed by that code (rustc 1.99, `fingerprint` copied from broll.rs).
+// broll names the files it makes with Rust's DefaultHasher, so files made
+// before stay valid; these values were printed by the Rust (rustc 1.99).
 
 import { expect, test } from "bun:test";
 
 import { debugModified, fingerprint, siphash } from "../src/hash.ts";
 
-test("fingerprints are the Rust server's", () => {
+test("fingerprints are the ones files were named by", () => {
   expect(fingerprint([])).toBe("a762150c532c");
   expect(fingerprint([""])).toBe("6ea523c53def");
   expect(fingerprint(["a"])).toBe("50b9a4f0e9f3");

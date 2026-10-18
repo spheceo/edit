@@ -1,4 +1,4 @@
-// voice.rs's test, same name, plus the voice-over of a script's cut-ins made
+// voice.ts's test, plus the voice-over of a script's cut-ins made
 // end to end against the mock relay (speech, then transcription to place it).
 
 import { afterAll, beforeAll, expect, test } from "bun:test";

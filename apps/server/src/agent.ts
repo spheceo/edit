@@ -1,4 +1,4 @@
-// Edit's built-in agent (agent.rs): Codex through `codex app-server`
+// Edit's built-in agent: Codex through `codex app-server`
 // (JSON-RPC 2.0 over newline-delimited stdio), using the user's own `codex
 // login`.
 //
@@ -125,7 +125,7 @@ export const timing = {
   sleep: (ms: number) => Bun.sleep(ms),
 };
 
-/** A mutex for async work (tokio's Mutex, as agent.rs held them). */
+/** A mutex for async work (one turn of a chat at a time). */
 class Lock {
   private tail: Promise<void> = Promise.resolve();
 

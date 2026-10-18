@@ -1,9 +1,8 @@
-// The parts of captions.rs the subtitles package needs, moved here (WP5) to
-// break the cycle between it and the captions package (WP6): a media's
-// transcript (`transcript_of`), "#rrggbb" as a colour (`hex`), a speaker's
-// short name (`subtitle_name`) and a caption's rough size (`caption_size`,
-// which faces' audit uses). The captions seam hands these out, so WP6's
-// captions.ts should take them from here rather than port them again.
+// The parts of captions the subtitles package needs, here to break the cycle
+// between it and the captions package: a media's transcript (`transcriptOf`),
+// "#rrggbb" as a colour (`hex`), a speaker's short name (`subtitleName`) and a
+// caption's rough size (`captionSize`, which faces' audit uses). The captions
+// seam hands these out.
 
 import * as fs from "node:fs";
 
@@ -48,7 +47,7 @@ export async function transcriptOf(app: App, media: Media): Promise<Transcript> 
 }
 
 /**
- * A transcript file as serde reads transcribe.rs's `Transcript`: `model` and
+ * A transcript file as serde reads Edit's transcript files: `model` and
  * `words` required, each word's text and times; the maps default to empty.
  */
 export function parseTranscript(text: string): Transcript {

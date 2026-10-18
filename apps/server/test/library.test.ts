@@ -1,4 +1,4 @@
-// library.rs's tests, and the library against the mock Drive: its listing,
+// library.ts's tests, and the library against the mock Drive: its listing,
 // sign-in, downloads and the sound tools.
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";

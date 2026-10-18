@@ -1,5 +1,5 @@
 // The house style beyond the core, as skills the agent loads when it gets to
-// that part of the edit (the `skill` tool; skills.rs). All of it in every
+// that part of the edit (the `skill` tool). All of it in every
 // request was ~14k tokens read again on every round trip; now each part comes
 // in once, when it's needed. `edit-workflow` is the whole edit, stage by
 // stage, in one turn ("start the editing workflow"). Each one's one-line

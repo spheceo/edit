@@ -113,6 +113,8 @@ export interface ExportStart {
   plan: Plan;
   output: string;
   cacheDir: string;
+  /** Media id → a local copy of its sound to mix instead of its file (a cloud original's). */
+  sounds?: Record<string, string>;
 }
 
 export interface TrackRequest {

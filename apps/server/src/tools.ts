@@ -93,7 +93,8 @@ let certificates: boolean | null = null;
 export function urlArgs(path: string): string[] {
   if (!isUrl(path)) return [];
   certificates ??= isFile(SYSTEM_CERTIFICATES);
-  return certificates ? ["-ca_file", SYSTEM_CERTIFICATES, ...RECONNECT] : [...RECONNECT];
+  // Plain HTTP (a local stand-in) has no TLS to give certificates to.
+  return certificates && path.startsWith("https:") ? ["-ca_file", SYSTEM_CERTIFICATES, ...RECONNECT] : [...RECONNECT];
 }
 
 /** The last non-empty line of FFmpeg's stderr: what it says went wrong. */

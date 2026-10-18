@@ -11,6 +11,7 @@
 //! addon (`crates/edit-native`) are its two hosts.
 
 pub mod censor;
+pub mod chunks;
 pub mod desktop;
 pub mod export;
 pub mod faces;

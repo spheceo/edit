@@ -132,6 +132,8 @@ export interface ExportStart {
   /** The finished file (with the format's extension, in a folder that exists). */
   output: string
   cacheDir: string
+  /** Media id → a local copy of its sound to mix instead of its file (a cloud original's). */
+  sounds?: Record<string, string>
 }
 
 /** Frames looked at per second of source when finding faces. */

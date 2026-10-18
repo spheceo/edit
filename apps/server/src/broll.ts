@@ -12,6 +12,7 @@ import * as os from "node:os";
 import type { App } from "./app.ts";
 import { parseTranscript } from "./captions_core.ts";
 import * as diag from "./diag.ts";
+import * as jobs from "./jobs.ts";
 import { copyFile, ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { debugModified, fingerprint } from "./hash.ts";
@@ -473,12 +474,14 @@ export function smoothInBackground(app: App, projectId: string, clipIds: string[
     if (clips.has(clipId)) continue;
     clips.add(clipId);
     started.push(clipId);
+    const job = jobs.begin(app.store.home, "smooth", projectId, { clip: clipId }, clipId);
     void (async () => {
       try {
         await diag.timeAsync("agent", "smooth slow motion (background)", () => smoothSlowMotion(app, projectId, clipId));
       } catch (error) {
         diag.warn("agent", `smoothing ${clipId} in ${projectId}: ${diag.messageOf(error)}`);
       }
+      jobs.end(app.store.home, job);
       const pending = smoothing.get(projectId);
       if (pending !== undefined) {
         pending.delete(clipId);

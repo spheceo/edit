@@ -22,6 +22,7 @@ import type { App } from "./app.ts";
 import * as castOf from "./cast.ts";
 import { parseTranscript, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
+import * as jobs from "./jobs.ts";
 import { ioMessage, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { mediaKey, Semaphore } from "./media.ts";
@@ -1048,11 +1049,13 @@ export function watchInBackground(app: App, projectId: string): void {
   } catch {
     return;
   }
+  const job = jobs.begin(app.store.home, "watch", projectId, {});
   void diag
     .timeAsync("watch", "watch footage (background)", () => watchFootage(app, projectId, { force: false, segments: null }))
     .catch((error: unknown) => {
       diag.warn("watch", `background watch of ${projectId}: ${diag.messageOf(error)}`);
-    });
+    })
+    .finally(() => jobs.end(app.store.home, job));
 }
 
 /** Runs `work` over `items` at most `limit` at a time; each result (or what it threw), in order. */

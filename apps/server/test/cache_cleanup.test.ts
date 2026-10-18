@@ -34,11 +34,18 @@ test("the cache loses rebuildable files of media nobody uses and old half-writte
     put(`${cache}/${gone}/watch/abc.json`, 3);
     // Nobody's but touched just now: stays.
     put(`${cache}/fedcba9876543210/preview.mp4`, 50, Date.now());
+    // An export's leftover chunks go after a few days; its manifest and fresh ones stay.
+    put(`${cache}/export-chunks/p/0123.mp4`, 11);
+    put(`${cache}/export-chunks/p/4567.mp4`, 13, Date.now());
+    put(`${cache}/export-chunks/p/manifest-v1.json`, 2);
     const dry = cleanCache(app, true);
-    expect(dry.bytes).toBe(20 + 30 + 40 + 5);
+    expect(dry.bytes).toBe(20 + 30 + 40 + 5 + 11);
     expect(fs.existsSync(`${cache}/${gone}/preview.mp4`)).toBe(true);
     const done = cleanCache(app, false);
-    expect(done.bytes).toBe(95);
+    expect(fs.existsSync(`${cache}/export-chunks/p/0123.mp4`)).toBe(false);
+    expect(fs.existsSync(`${cache}/export-chunks/p/4567.mp4`)).toBe(true);
+    expect(fs.existsSync(`${cache}/export-chunks/p/manifest-v1.json`)).toBe(true);
+    expect(done.bytes).toBe(106);
     expect(fs.existsSync(`${cache}/${usedKey}/preview.mp4`)).toBe(true);
     expect(fs.existsSync(`${cache}/${usedKey}/preview.partial.mp4.sb-a0dac0bf-H5wfgu`)).toBe(false);
     expect(fs.existsSync(`${cache}/${gone}/preview.mp4`)).toBe(false);

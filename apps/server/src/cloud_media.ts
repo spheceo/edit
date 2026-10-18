@@ -63,6 +63,7 @@ import { mediaOf } from "./project.ts";
 import { charCount, debugStr, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Excerpt, Made, Original, Originals } from "./seams.ts";
+import * as tools from "./tools.ts";
 import { stableStringify } from "./stable.ts";
 
 export { isLocalCopy } from "./media.ts";
@@ -507,8 +508,9 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
     }
     return { path, name, probe, cloud: { source, original: originalKey, proxy: originalKey, size } };
   }
-  // Exports read this very file while it's here.
+  // Exports read this very file while it's here; elsewhere, its sound copy.
   rememberLocalOriginal(cache, originalKey, path);
+  if (probe.has_audio) shareSound(cache, path, originalKey);
   const ready = readyProxy(record);
   const proxy = ready ?? proxyKey(source);
   if (proxy === null) throw new Error("no proxy key");
@@ -910,6 +912,7 @@ async function fetchProxies(app: App, id: string): Promise<void> {
 /** What an export made on the side (waveform levels for its originals); removed by `release`. */
 class ExportOriginals implements Originals {
   readonly dirs: string[] = [];
+  readonly sounds: Record<string, string> = {};
 
   release(): void {
     for (const dir of this.dirs) fs.rmSync(dir, { recursive: true, force: true });
@@ -981,12 +984,28 @@ export async function forExport(project: Project, start: number, end: number, ca
   if (onDisk.size > 0) diag.info("export", `${project.id}: reading ${onDisk.size} cloud originals from this machine's copies`);
   if (needed.length === 0) return [out, originals];
   if (!cloud.enabled()) throw new Error("this edit's footage is in the cloud: exporting it needs the cloud (EDIT_RELAY_TOKEN)");
+  const urls = new Map<string, string>();
   for (const [mediaId, key] of needed) {
     // Long enough for any export.
     const url = await getUrl(key, 24 * HOUR);
+    urls.set(mediaId, url);
     const media = out.media.find((item) => item.id === mediaId);
     if (media !== undefined) media.path = url;
   }
+  // The sound is mixed from each original's sound copy, on this machine.
+  const heard = needed.filter(([mediaId]) => mediaOf(project, mediaId)?.has_audio === true);
+  const copies = new Semaphore(3);
+  await Promise.all(
+    heard.map(async ([mediaId, key]) => {
+      const release = await copies.acquire();
+      try {
+        const copy = await soundCopy(cache, key, urls.get(mediaId)!);
+        if (copy !== null) originals.sounds[mediaId] = copy;
+      } finally {
+        release();
+      }
+    }),
+  );
   // Waveforms read their levels from the proxy's cache: the originals share them.
   out.media.forEach((media, index) => {
     const before = project.media[index];
@@ -1004,6 +1023,95 @@ export async function forExport(project: Project, start: number, end: number, ca
   });
   diag.info("export", `${project.id}: reading ${needed.length} cloud originals straight from the cloud`);
   return [out, originals];
+}
+
+// ---------------------------------------------------------------------------
+// Sound copies (speed-plan 4.1): an export of footage that's only in the
+// cloud decoded its sound over the network, clip by clip (11 minutes of a
+// 32-minute export, before its picture started). Each original's sound is
+// copied out without re-encoding (seconds, ~1% of the file) and kept beside
+// it in the cloud, so an export fetches that small file once and mixes it
+// locally with AVFoundation.
+
+/** The cloud key of `original`'s sound copy. */
+export function soundKey(original: string): string {
+  return `edit/sound/${original.startsWith("edit/") ? original.slice("edit/".length) : original}.mov`;
+}
+
+/** Copies the first sound of `input` (a file or URL) into `out` as it is (MOV: AVFoundation reads it). */
+export async function copySound(input: string, out: string): Promise<void> {
+  fs.mkdirSync(parent(out) ?? ".", { recursive: true });
+  const partial = `${out}.partial.mov`;
+  try {
+    await tools.run([
+      tools.ffmpeg(),
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-protocol_whitelist",
+      tools.protocols(input),
+      ...tools.urlArgs(input),
+      "-i",
+      input,
+      "-vn",
+      "-map",
+      "0:a:0",
+      "-c:a",
+      "copy",
+      "-f",
+      "mov",
+      partial,
+    ]);
+    fs.renameSync(partial, out);
+  } catch (error) {
+    fs.rmSync(partial, { force: true });
+    throw new Error(scrub(diag.messageOf(error)));
+  }
+}
+
+/** Makes `path`'s sound copy and puts it in the cloud for `original`, in the background. */
+function shareSound(cache: string, path: string, original: string): void {
+  const key = soundKey(original);
+  const local = localPath(cache, key);
+  void (async () => {
+    try {
+      if ((await cloud.head(key)) !== null) return;
+      if (!isFile(local)) await copySound(path, local);
+      await cloud.uploadFile(local, key);
+    } catch (error) {
+      diag.warn("cloud", `the sound copy of ${fileStem(path) ?? path}: ${diag.messageOf(error)}`);
+    }
+  })();
+}
+
+/**
+ * A copy of cloud original `key`'s sound on this machine, for an export: one
+ * kept from before, the cloud's, or made now from the original at `url` (and
+ * then shared). Null when none can be had (the mix reads the original).
+ */
+export async function soundCopy(cache: string, key: string, url: string): Promise<string | null> {
+  const copy = soundKey(key);
+  const local = localPath(cache, copy);
+  if (isFile(local)) return local;
+  try {
+    if ((await cloud.head(copy)) !== null) {
+      await fetchKey(copy, local);
+      return local;
+    }
+  } catch (error) {
+    diag.warn("export", `fetching a sound copy: ${diag.messageOf(error)}`);
+  }
+  try {
+    await diag.timeOnAsync("export", "export: sound copy", copy, () => copySound(url, local));
+  } catch (error) {
+    diag.warn("export", `copying the sound out of a cloud original: ${diag.messageOf(error)}`);
+    return null;
+  }
+  void cloud.uploadFile(local, copy).catch((error: unknown) => {
+    diag.warn("cloud", `sharing a sound copy: ${diag.messageOf(error)}`);
+  });
+  return local;
 }
 
 // ---------------------------------------------------------------------------

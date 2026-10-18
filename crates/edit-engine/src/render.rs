@@ -1174,6 +1174,46 @@ pub fn partial_path(output: &Path, id: &str, format: Format) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Removes partial files of this export ([`partial_path`]) that a server no
+/// longer running left beside `output` (killed mid-export: the file can be
+/// gigabytes, and a restarted server's has a new name).
+fn remove_stale_partials(output: &Path, id: &str, format: Format) {
+    let (Some(dir), Some(name)) = (output.parent(), output.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.", name.to_string_lossy());
+    let suffix = format!("-{id}.partial.{}", format.extension());
+    let Ok(entries) = std::fs::read_dir(if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    }) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file = entry.file_name().to_string_lossy().into_owned();
+        let Some(pid) = file
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(&suffix))
+            .and_then(|pid| pid.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        // This process exports one thing at a time, so its own is left over too.
+        // SAFETY: signal 0 only asks whether the process exists.
+        let alive = pid != std::process::id() as i32
+            && (unsafe { libc::kill(pid, 0) } == 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM));
+        if !alive {
+            crate::log::info(
+                "export",
+                format!("removing {file}, left by an export cut short"),
+            );
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Exports `project` (its media already the files to read: originals, not
 /// proxies) to `output` through its partial file ([`partial_path`]), renamed
 /// onto `output` once complete. "cancelled" when `cancel` is set.
@@ -1184,9 +1224,11 @@ pub fn export_file(
     plan: &Plan,
     output: &Path,
     cache: &Path,
+    sounds: &HashMap<String, PathBuf>,
     cancel: &AtomicBool,
     progress: impl FnMut(f32),
 ) -> Result<(), String> {
+    remove_stale_partials(output, &project.id, options.format);
     let path = partial_path(output, &project.id, options.format);
     std::fs::OpenOptions::new()
         .write(true)
@@ -1194,19 +1236,330 @@ pub fn export_file(
         .open(&path)
         .map_err(|error| error.to_string())?;
     let temporary = ExportFile(path);
-    export(
-        project,
-        options,
-        plan,
-        &temporary.0,
-        cache,
-        cancel,
-        progress,
-    )?;
+    let mut progress = progress;
+    #[cfg(target_os = "macos")]
+    let settings = native_options(project, options, plan, false)?;
+    #[cfg(not(target_os = "macos"))]
+    let settings: Option<()> = None;
+    let mut made = None;
+    if let Some(settings) = settings {
+        #[cfg(target_os = "macos")]
+        match export_chunked(
+            project,
+            options,
+            plan,
+            settings,
+            &temporary.0,
+            cache,
+            sounds,
+            cancel,
+            &mut progress,
+        ) {
+            Ok(chunks) => made = Some(chunks),
+            Err(error) if error == "cancelled" || cancel.load(Ordering::Acquire) => {
+                return Err("cancelled".to_owned())
+            }
+            Err(error) => crate::log::warn(
+                "export",
+                format!("a chunked export failed ({error}); exporting it whole"),
+            ),
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = settings;
+    }
+    if made.is_none() {
+        export_with(
+            project,
+            options,
+            plan,
+            &temporary.0,
+            cache,
+            sounds,
+            cancel,
+            &mut progress,
+        )?;
+    }
     if cancel.load(Ordering::Acquire) {
         return Err("cancelled".to_owned());
     }
-    std::fs::rename(&temporary.0, output).map_err(|error| error.to_string())
+    std::fs::rename(&temporary.0, output).map_err(|error| error.to_string())?;
+    if let Some((chunks, sound)) = made {
+        let dir = crate::chunks::folder(cache, &project.id);
+        // Its chunks are in the file now, which the next export copies them out of.
+        crate::chunks::tidy(&dir, &[], options.format.extension());
+        if let Err(error) =
+            crate::chunks::Manifest::save(&dir, output, project.fps(), &chunks, sound)
+        {
+            crate::log::warn(
+                "export",
+                format!("couldn't remember the export's chunks: {error}"),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Exports `project` to `output` in chunks (`chunks.rs`): the chunks that are
+/// in the last export (or left by a run that stopped) are copied, the rest
+/// rendered, and the sound mixed again only when something heard changed.
+/// Says which chunks the file is made of and the sound's key.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn export_chunked(
+    project: &Project,
+    options: &ExportOptions,
+    plan: &Plan,
+    settings: crate::mac_media::WriterOptions,
+    output: &Path,
+    cache: &Path,
+    sounds: &HashMap<String, PathBuf>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(Vec<crate::chunks::Chunk>, Option<String>), String> {
+    use crate::chunks::{self, Piece};
+    let _first = crate::media::foreground();
+    let fps = project.fps();
+    let seconds = plan.seconds(fps);
+    let extension = options.format.extension();
+    let dir = chunks::folder(cache, &project.id);
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let key = format!(
+        "{:?}|{}x{}|{}|{}|{}",
+        options.format, plan.width, plan.height, settings.bitrate, settings.key_interval, fps
+    );
+    let list = crate::log::time_on("export", "export: chunks", &project.id, || {
+        Ok::<_, String>(chunks::split(project, plan, &key))
+    })?;
+    let last = chunks::Manifest::load(&dir, fps);
+    let mut pieces = Vec::new();
+    let mut todo = Vec::new();
+    let mut copied = 0;
+    for chunk in &list {
+        let file = chunks::made(&dir, &chunk.key, extension);
+        if file.exists() {
+            copied += chunk.frames();
+            pieces.push((Piece::File(file), chunk.frames()));
+            continue;
+        }
+        if let Some((last, saved)) = last.as_ref().and_then(|last| {
+            last.find(&chunk.key)
+                .filter(|saved| saved.frames == chunk.frames())
+                .map(|saved| (last, saved))
+        }) {
+            copied += chunk.frames();
+            pieces.push((
+                Piece::Old {
+                    file: last.output.clone(),
+                    at: saved.at,
+                },
+                chunk.frames(),
+            ));
+            continue;
+        }
+        todo.push(chunk);
+        pieces.push((Piece::File(file), chunk.frames()));
+    }
+    // Chunks of other exports, and any cut short, go.
+    chunks::tidy(&dir, &list.iter().collect::<Vec<_>>(), extension);
+    let parts = if plan.audio {
+        crate::mix::parts(
+            &heard_segments(project, plan.start, plan.end),
+            |media| sound_path(project, sounds, media),
+            plan.start as f64 / fps,
+            seconds,
+        )
+    } else {
+        Vec::new()
+    };
+    let sound_key = (!parts.is_empty()).then(|| sound_key(options, &parts, seconds));
+    let old_sound = last
+        .as_ref()
+        .filter(|last| sound_key.is_some() && last.sound == sound_key)
+        .map(|last| last.output.clone());
+    crate::log::info(
+        "export",
+        format!(
+            "export: {} of {} chunks ({} of {} frames) already made; the sound {}",
+            list.len() - todo.len(),
+            list.len(),
+            copied,
+            plan.end - plan.start,
+            match (&sound_key, &old_sound) {
+                (None, _) => "isn't needed",
+                (Some(_), Some(_)) => "is the last export's",
+                (Some(_), None) => "is mixed again",
+            }
+        ),
+    );
+    let rendering = todo.iter().map(|chunk| chunk.frames()).sum::<i64>() as f32;
+    let total = (plan.end - plan.start).max(1) as f32;
+    let sound_share = if sound_key.is_some() && old_sound.is_none() {
+        0.05
+    } else {
+        0.0
+    };
+    let picture_share = (1.0 - sound_share) * (rendering / total);
+    let sound_file = beside(output, ".sound.m4a");
+    if sound_key.is_some() && old_sound.is_none() {
+        mix_sound(
+            project,
+            options,
+            &parts,
+            seconds,
+            &sound_file.0,
+            cancel,
+            &mut |done| progress(done * sound_share),
+        )?;
+    }
+    if !todo.is_empty() {
+        let ranges: Vec<(i64, i64)> = todo.iter().map(|chunk| (chunk.start, chunk.end)).collect();
+        let sink = Sink::Chunks(ChunkSink {
+            todo: todo
+                .iter()
+                .map(|chunk| {
+                    (
+                        chunk.start,
+                        chunk.end,
+                        chunks::made(&dir, &chunk.key, extension),
+                    )
+                })
+                .collect(),
+            open: None,
+            size: (plan.width, plan.height),
+            fps,
+            settings: crate::mac_media::WriterOptions {
+                faststart: false,
+                ..settings
+            },
+        });
+        crate::log::time_on("export", "export: native video", &project.id, || {
+            render_frames(project, &ranges, sink, cache, cancel, &mut |done| {
+                progress(sound_share + done * picture_share)
+            })
+        })?;
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err("cancelled".to_owned());
+    }
+    // Chunks joined without re-encoding need one codec setup.
+    let mut setups = HashSet::new();
+    for (piece, _) in &pieces {
+        let file: &Path = match piece {
+            Piece::File(path) => path,
+            Piece::Old { file, .. } => file,
+        };
+        setups.insert(chunks::setup_hash(file)?);
+        if setups.len() > 1 {
+            return Err("chunks were encoded with different settings".to_owned());
+        }
+    }
+    let lead = match &last {
+        Some(last)
+            if pieces
+                .iter()
+                .any(|(piece, _)| matches!(piece, Piece::Old { .. })) =>
+        {
+            chunks::lead(&last.output)?
+        }
+        _ => 0.0,
+    };
+    let chapters = crate::export::chapters_file(options, plan, fps)
+        .map(|text| -> Result<ExportFile, String> {
+            let file = beside(output, ".chapters.txt");
+            std::fs::write(&file.0, text).map_err(|error| error.to_string())?;
+            Ok(file)
+        })
+        .transpose()?;
+    let concat = beside(output, ".chunks.txt");
+    std::fs::write(&concat.0, chunks::concat_list(&pieces, fps, lead))
+        .map_err(|error| error.to_string())?;
+    let sound = match (&sound_key, &old_sound) {
+        (None, _) => None,
+        (Some(_), Some(old)) => Some(old.as_path()),
+        (Some(_), None) => Some(sound_file.0.as_path()),
+    };
+    crate::log::time_on("export", "export: join", &project.id, || {
+        join_chunks(
+            options,
+            &concat.0,
+            sound,
+            chapters.as_ref().map(|file| file.0.as_path()),
+            output,
+        )
+    })?;
+    let frames = chunks::frames_in(output)?;
+    if frames != plan.end - plan.start {
+        return Err(format!(
+            "the joined export has {frames} frames, not {}",
+            plan.end - plan.start
+        ));
+    }
+    progress(1.0);
+    Ok((list, sound_key))
+}
+
+/// Joins the chunks in the concat list `list`, the sound (its first sound
+/// stream: a mix or the last export) and chapters into `output`.
+#[cfg(target_os = "macos")]
+fn join_chunks(
+    options: &ExportOptions,
+    list: &Path,
+    sound: Option<&Path>,
+    chapters: Option<&Path>,
+    output: &Path,
+) -> Result<(), String> {
+    let mut command = Command::new(crate::util::ffmpeg());
+    command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+        ])
+        .arg(list);
+    let mut inputs = 1;
+    if let Some(sound) = sound {
+        command.arg("-i").arg(sound);
+        inputs += 1;
+    }
+    if let Some(chapters) = chapters {
+        command.args(["-f", "ffmetadata", "-i"]).arg(chapters);
+    }
+    command.args(["-map", "0:v:0"]);
+    if sound.is_some() {
+        command.args(["-map", "1:a:0"]);
+    }
+    if chapters.is_some() {
+        command.args(["-map_chapters", &inputs.to_string()]);
+    } else {
+        command.args(["-map_chapters", "-1"]);
+    }
+    command.args(["-map_metadata", "-1", "-c", "copy"]);
+    if options.format == Format::Hevc {
+        command.args(["-tag:v", "hvc1"]);
+    }
+    let result = command
+        .args(["-movflags", "+faststart", "-f", "mp4"])
+        .arg(output)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        return Err(stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("joining the chunks failed")
+            .trim()
+            .to_owned());
+    }
+    Ok(())
 }
 
 /// Audio that's heard (unmuted, from media with sound) and overlaps frames `[start, end)`.
@@ -1226,13 +1579,48 @@ pub fn heard_segments(project: &Project, start: i64, end: i64) -> Vec<AudioSegme
 }
 
 /// Exports `project` to `output` (written as it goes: see [`export_file`]).
-#[allow(clippy::too_many_arguments)]
 pub fn export(
     project: &Project,
     options: &ExportOptions,
     plan: &Plan,
     output: &Path,
     cache: &Path,
+    cancel: &AtomicBool,
+    progress: impl FnMut(f32),
+) -> Result<(), String> {
+    export_with(
+        project,
+        options,
+        plan,
+        output,
+        cache,
+        &HashMap::new(),
+        cancel,
+        progress,
+    )
+}
+
+/// The file each heard media's sound is mixed from: its copy in `sounds`, else its own.
+fn sound_path(
+    project: &Project,
+    sounds: &HashMap<String, PathBuf>,
+    media: &str,
+) -> Option<PathBuf> {
+    sounds
+        .get(media)
+        .cloned()
+        .or_else(|| project.media(media).map(|media| PathBuf::from(&media.path)))
+}
+
+/// [`export`], mixing from `sounds` where given.
+#[allow(clippy::too_many_arguments)]
+fn export_with(
+    project: &Project,
+    options: &ExportOptions,
+    plan: &Plan,
+    output: &Path,
+    cache: &Path,
+    sounds: &HashMap<String, PathBuf>,
     cancel: &AtomicBool,
     mut progress: impl FnMut(f32),
 ) -> Result<(), String> {
@@ -1251,7 +1639,7 @@ pub fn export(
     let parts = if plan.audio {
         crate::mix::parts(
             &heard_segments(project, plan.start, plan.end),
-            |media| project.media(media).map(|media| PathBuf::from(&media.path)),
+            |media| sound_path(project, sounds, media),
             plan.start as f64 / fps,
             seconds,
         )
@@ -1280,27 +1668,16 @@ pub fn export(
     // The sound's share of the progress is its share of the time, roughly.
     let share = if video { 0.05 } else { 1.0 };
     if sound {
-        let scratch = beside(output, ".mix.f32");
         let destination = sound_file.as_ref().map_or(output, |file| file.0.as_path());
-        let codec = crate::export::audio_args(options);
-        let encoding = crate::mix::Encoding {
-            codec: &codec,
-            // MP4's AAC goes into an .m4a that the join copies.
-            aac: (video && matches!(options.format, Format::H264 | Format::Hevc))
-                .then(|| crate::export::audio_bitrate(options.format, options.quality)),
-        };
-        crate::log::time_on("export", "export: sound", &project.id, || {
-            crate::mix::render(
-                &parts,
-                (seconds * crate::mix::RATE as f64).round() as usize,
-                options.loudness,
-                &encoding,
-                destination,
-                &scratch.0,
-                cancel,
-                |done| progress(done * share),
-            )
-        })?;
+        mix_sound(
+            project,
+            options,
+            &parts,
+            seconds,
+            destination,
+            cancel,
+            &mut |done| progress(done * share),
+        )?;
     }
     let before = if sound { share } else { 0.0 };
     if video {
@@ -1333,6 +1710,58 @@ pub fn export(
         })?;
     }
     Ok(())
+}
+
+/// Mixes `parts` (`seconds` long) into `destination`: the file itself for a
+/// sound format, else the sound a join copies in.
+fn mix_sound(
+    project: &Project,
+    options: &ExportOptions,
+    parts: &[crate::mix::Part],
+    seconds: f64,
+    destination: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let video = options.format.has_video();
+    let scratch = beside(destination, ".mix.f32");
+    let codec = crate::export::audio_args(options);
+    let encoding = crate::mix::Encoding {
+        codec: &codec,
+        // MP4's AAC goes into an .m4a that the join copies.
+        aac: (video && matches!(options.format, Format::H264 | Format::Hevc))
+            .then(|| crate::export::audio_bitrate(options.format, options.quality)),
+    };
+    crate::log::time_on("export", "export: sound", &project.id, || {
+        crate::mix::render(
+            parts,
+            (seconds * crate::mix::RATE as f64).round() as usize,
+            options.loudness,
+            &encoding,
+            destination,
+            &scratch.0,
+            cancel,
+            progress,
+        )
+    })
+}
+
+/// What a mix of `parts` sounds like, as a key: the parts (their files by
+/// content), the loudness and the codec. The same key is the same sound.
+fn sound_key(options: &ExportOptions, parts: &[crate::mix::Part], seconds: f64) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "sound-v1".hash(&mut hasher);
+    env!("EDIT_RENDER_SOURCE").hash(&mut hasher);
+    format!("{parts:?}").hash(&mut hasher);
+    for part in parts {
+        crate::chunks::content_key(&part.path).hash(&mut hasher);
+    }
+    format!("{:?}", options.loudness).hash(&mut hasher);
+    crate::export::audio_args(options).hash(&mut hasher);
+    crate::export::audio_bitrate(options.format, options.quality).hash(&mut hasher);
+    seconds.to_bits().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Puts the picture, sound and chapters into `output` without re-encoding.
@@ -1404,7 +1833,17 @@ fn render_picture(
     #[cfg(target_os = "macos")]
     if let Some(writer) = native_writer(project, options, plan, output, alone)? {
         return crate::log::time_on("export", "export: native video", &project.id, || {
-            render_frames(project, plan, Sink::Native(writer), cache, cancel, progress)
+            render_frames(
+                project,
+                &[(plan.start, plan.end)],
+                Sink::Native {
+                    writer,
+                    first: plan.start,
+                },
+                cache,
+                cancel,
+                progress,
+            )
         });
     }
     let settings = project.settings;
@@ -1461,7 +1900,14 @@ fn render_picture(
         height,
     };
     let result = crate::log::time_on("export", "export: video", &project.id, || {
-        render_frames(project, plan, sink, cache, cancel, progress)
+        render_frames(
+            project,
+            &[(plan.start, plan.end)],
+            sink,
+            cache,
+            cancel,
+            progress,
+        )
     });
     if result.is_err() {
         let _ = encoder.kill();
@@ -1482,15 +1928,14 @@ fn render_picture(
 
 /// The standard Mac video path encodes with AVFoundation; the compositor
 /// remains shared with the browser. Nonstandard shapes/rates and
-/// software-quality exports keep the compatibility encoder.
+/// software-quality exports keep the compatibility encoder (None).
 #[cfg(target_os = "macos")]
-fn native_writer(
+fn native_options(
     project: &Project,
     options: &ExportOptions,
     plan: &Plan,
-    output: &Path,
     alone: bool,
-) -> Result<Option<crate::mac_media::Writer>, String> {
+) -> Result<Option<crate::mac_media::WriterOptions>, String> {
     if !options.hardware
         || std::env::var_os("EDIT_FFMPEG_VIDEO").is_some()
         || !matches!(options.format, Format::H264 | Format::Hevc)
@@ -1502,20 +1947,27 @@ fn native_writer(
     {
         return Ok(None);
     }
-    let rate = crate::export::video_bitrate(options, plan, project.fps())?;
-    match crate::mac_media::Writer::open(
-        output,
-        plan.width,
-        plan.height,
-        project.fps(),
-        crate::mac_media::WriterOptions {
-            hevc: options.format == Format::Hevc,
-            bitrate: rate,
-            key_interval: (project.settings.fps * 2) as i32,
-            finished: true,
-            faststart: alone,
-        },
-    ) {
+    Ok(Some(crate::mac_media::WriterOptions {
+        hevc: options.format == Format::Hevc,
+        bitrate: crate::export::video_bitrate(options, plan, project.fps())?,
+        key_interval: (project.settings.fps * 2) as i32,
+        finished: true,
+        faststart: alone,
+    }))
+}
+
+#[cfg(target_os = "macos")]
+fn native_writer(
+    project: &Project,
+    options: &ExportOptions,
+    plan: &Plan,
+    output: &Path,
+    alone: bool,
+) -> Result<Option<crate::mac_media::Writer>, String> {
+    let Some(settings) = native_options(project, options, plan, alone)? else {
+        return Ok(None);
+    };
+    match crate::mac_media::Writer::open(output, plan.width, plan.height, project.fps(), settings) {
         Ok(writer) => Ok(Some(writer)),
         Err(error) => {
             crate::log::warn(
@@ -1527,10 +1979,90 @@ fn native_writer(
     }
 }
 
+/// Writes each chunk of a chunked export to its own file: `<key>.partial.mp4`
+/// while it's being written, renamed to `<key>.mp4` once whole.
+#[cfg(target_os = "macos")]
+struct ChunkSink {
+    /// Frames `[start, end)` and the file, in the order they're rendered.
+    todo: VecDeque<(i64, i64, PathBuf)>,
+    /// The chunk being written: its frames, file, writer and frames written.
+    open: Option<(i64, i64, PathBuf, crate::mac_media::Writer, i64)>,
+    size: (u32, u32),
+    fps: f64,
+    settings: crate::mac_media::WriterOptions,
+}
+
+#[cfg(target_os = "macos")]
+impl ChunkSink {
+    fn partial(path: &Path) -> PathBuf {
+        path.with_extension("partial.mp4")
+    }
+
+    fn write(&mut self, frame: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
+        if self.open.as_ref().is_some_and(|open| frame >= open.1) {
+            self.close()?;
+        }
+        if self.open.is_none() {
+            let (start, end, path) = self
+                .todo
+                .pop_front()
+                .ok_or("a frame came after the last chunk")?;
+            if frame != start {
+                return Err("a chunk's frames came out of order".to_owned());
+            }
+            let writer = crate::mac_media::Writer::open(
+                &Self::partial(&path),
+                self.size.0,
+                self.size.1,
+                self.fps,
+                self.settings,
+            )?;
+            self.open = Some((start, end, path, writer, 0));
+        }
+        let Some((start, _, _, writer, written)) = self.open.as_mut() else {
+            return Err("no chunk is open".to_owned());
+        };
+        writer.frame(frame - *start, pixels, stride, Order::Rgba)?;
+        *written += 1;
+        Ok(())
+    }
+
+    /// Finishes the open chunk; one cut short is removed, never kept.
+    fn close(&mut self) -> Result<(), String> {
+        let Some((start, end, path, mut writer, written)) = self.open.take() else {
+            return Ok(());
+        };
+        let partial = Self::partial(&path);
+        if written != end - start {
+            drop(writer);
+            let _ = std::fs::remove_file(&partial);
+            return Err("the export stopped part-way through a chunk".to_owned());
+        }
+        writer.finish(written)?;
+        std::fs::rename(&partial, &path).map_err(|error| error.to_string())
+    }
+
+    fn finish(mut self) -> Result<(), String> {
+        self.close()?;
+        if self.todo.is_empty() {
+            Ok(())
+        } else {
+            Err("the export stopped before every chunk was made".to_owned())
+        }
+    }
+}
+
 /// Where rendered frames go (on the encoder thread).
 enum Sink {
+    /// Frames from `first` on into one file.
     #[cfg(target_os = "macos")]
-    Native(crate::mac_media::Writer),
+    Native {
+        writer: crate::mac_media::Writer,
+        first: i64,
+    },
+    /// Each chunk into its own file (`chunks.rs`).
+    #[cfg(target_os = "macos")]
+    Chunks(ChunkSink),
     Pipe {
         stdin: BufWriter<ChildStdin>,
         width: u32,
@@ -1539,11 +2071,15 @@ enum Sink {
 }
 
 impl Sink {
-    /// One RGBA frame whose rows are `stride` bytes apart.
-    fn write(&mut self, index: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
+    /// Timeline frame `frame` (RGBA, rows `stride` bytes apart).
+    fn write(&mut self, frame: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
         match self {
             #[cfg(target_os = "macos")]
-            Sink::Native(writer) => writer.frame(index, pixels, stride, Order::Rgba),
+            Sink::Native { writer, first } => {
+                writer.frame(frame - *first, pixels, stride, Order::Rgba)
+            }
+            #[cfg(target_os = "macos")]
+            Sink::Chunks(chunks) => chunks.write(frame, pixels, stride),
             Sink::Pipe {
                 stdin,
                 width,
@@ -1563,7 +2099,9 @@ impl Sink {
     fn finish(self, frames: i64) -> Result<(), String> {
         match self {
             #[cfg(target_os = "macos")]
-            Sink::Native(mut writer) => writer.finish(frames),
+            Sink::Native { mut writer, .. } => writer.finish(frames),
+            #[cfg(target_os = "macos")]
+            Sink::Chunks(chunks) => chunks.finish(),
             Sink::Pipe { mut stdin, .. } => stdin
                 .flush()
                 .map_err(|_| "the encoder stopped early".to_owned()),
@@ -1673,7 +2211,7 @@ fn decoder(
 /// (the one idle longest, so it can get ahead), and passes the frame on.
 fn planner(
     project: &Project,
-    plan: &Plan,
+    ranges: &[(i64, i64)],
     jobs: Vec<mpsc::Sender<DecodeJob>>,
     planned: mpsc::SyncSender<Planned>,
     cancel: &AtomicBool,
@@ -1685,7 +2223,7 @@ fn planner(
     let mut decoders: Vec<(Option<String>, i64)> = vec![(None, i64::MIN); jobs.len()];
     // Where each decoder's reader was left: file and source seconds.
     let mut left: Vec<Option<(PathBuf, f64)>> = vec![None; jobs.len()];
-    for frame in plan.start..plan.end {
+    for frame in ranges.iter().flat_map(|&(from, to)| from..to) {
         if cancel.load(Ordering::Acquire) {
             break;
         }
@@ -1802,16 +2340,18 @@ fn planner(
 
 /// A frame read back for the encoder: the buffer it's in and when it's ready.
 struct Readback {
-    index: i64,
+    /// The timeline frame.
+    frame: i64,
     slot: usize,
     submission: wgpu::SubmissionIndex,
     mapped: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
 }
 
-/// Renders frames `[plan.start, plan.end)` into `sink`, finishing it.
+/// Renders the frames of `ranges` (timeline frames `[from, to)`, in order)
+/// into `sink`, finishing it.
 fn render_frames(
     project: &Project,
-    plan: &Plan,
+    ranges: &[(i64, i64)],
     mut sink: Sink,
     cache: &Path,
     cancel: &AtomicBool,
@@ -1822,7 +2362,11 @@ fn render_frames(
     let device = renderer.device().clone();
     let row = renderer.output_row_bytes() as usize;
     let buffers: Vec<wgpu::Buffer> = (0..READBACKS).map(|_| renderer.output_buffer()).collect();
-    let total = (plan.end - plan.start).max(1);
+    let total = ranges
+        .iter()
+        .map(|(from, to)| to - from)
+        .sum::<i64>()
+        .max(1);
     std::thread::scope(|scope| {
         let (planned_tx, planned) = mpsc::sync_channel::<Planned>(LOOKAHEAD);
         let mut job_senders = Vec::new();
@@ -1837,7 +2381,7 @@ fn render_frames(
             outputs.push(out_rx);
             recyclers.push(recycle_tx);
         }
-        scope.spawn(move || planner(project, plan, job_senders, planned_tx, cancel));
+        scope.spawn(move || planner(project, ranges, job_senders, planned_tx, cancel));
         let (free_tx, free) = mpsc::sync_channel::<usize>(READBACKS);
         for slot in 0..READBACKS {
             let _ = free_tx.send(slot);
@@ -1869,7 +2413,7 @@ fn render_frames(
                     .slice(..)
                     .get_mapped_range()
                     .map_err(|error| format!("GPU readback failed: {error}"))?;
-                let wrote = sink.write(readback.index, &view, row);
+                let wrote = sink.write(readback.frame, &view, row);
                 drop(view);
                 buffer.unmap();
                 wrote?;
@@ -1890,6 +2434,7 @@ fn render_frames(
                 (Duration::ZERO, Duration::ZERO, Duration::ZERO);
             let started = Instant::now();
             let mut planned = planned.into_iter();
+            let mut done = 0;
             loop {
                 let waiting = Instant::now();
                 let Some(planned) = planned.next() else {
@@ -1967,15 +2512,16 @@ fn render_frames(
                     });
                 readback_tx
                     .send(Readback {
-                        index: planned.frame - plan.start,
+                        frame: planned.frame,
                         slot,
                         submission,
                         mapped,
                     })
                     .map_err(|_| "the encoder stopped".to_owned())?;
+                done += 1;
                 if last_report.elapsed() > Duration::from_millis(200) {
                     last_report = Instant::now();
-                    progress((planned.frame - plan.start) as f32 / total as f32);
+                    progress(done as f32 / total as f32);
                 }
             }
             if cancel.load(Ordering::Acquire) {
@@ -1985,7 +2531,7 @@ fn render_frames(
                 "export",
                 format!(
                     "{} frames composited in {}; waited {} on planning, {} on decoding, {} on encoding",
-                    plan.end - plan.start,
+                    total,
                     crate::log::human(started.elapsed()),
                     crate::log::human(on_plan),
                     crate::log::human(on_decode),
@@ -2191,6 +2737,231 @@ mod tests {
                 "cut {index}: click at {loudest} samples, expected 4800"
             );
         }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// 100 one-second cuts alternating red and blue (`blue_at` makes those
+    /// clips blue instead), each with its sound.
+    fn cuts(red: &Path, blue: &Path, blue_at: &[i64], skip_first: bool) -> Project {
+        let mut clips = Vec::new();
+        let first = i64::from(skip_first);
+        for index in first..100 {
+            let blue_here = index % 2 == 1 || blue_at.contains(&index);
+            let media = if blue_here { "b" } else { "r" };
+            let start = (index - first) * 30;
+            clips.push(
+                json!({"id": format!("v{index}"), "track": "v", "type": "video", "media": media,
+                "source_in": 0.4 + index as f64 * 0.005, "start": start, "duration": 30}),
+            );
+            clips.push(json!({"id": format!("a{index}"), "track": "a", "type": "audio", "media": if index % 2 == 1 { "b" } else { "r" },
+                "source_in": 0.4, "start": start, "duration": 30}));
+        }
+        serde_json::from_value(json!({
+            "version": 1, "id": "chunky", "name": "t",
+            "settings": {"width": 320, "height": 180, "fps": 30},
+            "media": [
+                {"id": "r", "name": "red", "path": red, "kind": "video", "duration": 2.0, "width": 320, "height": 180, "fps": 30, "has_audio": true},
+                {"id": "b", "name": "blue", "path": blue, "kind": "video", "duration": 2.0, "width": 320, "height": 180, "fps": 30, "has_audio": true}
+            ],
+            "tracks": [{"id": "v", "kind": "video"}, {"id": "a", "kind": "audio"}],
+            "clips": clips,
+        }))
+        .unwrap()
+    }
+
+    fn manifest(cache: &Path) -> crate::chunks::Manifest {
+        let text = std::fs::read_to_string(
+            crate::chunks::folder(cache, "chunky").join("manifest-v1.json"),
+        )
+        .unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    /// Every frame of `output` is the colour `project` has there.
+    fn shows(output: &Path, blue: impl Fn(usize) -> bool, frames: usize) {
+        let decoded = decode_video(output);
+        let pixel = 32 * 18 * 3;
+        assert_eq!(decoded.len(), pixel * frames);
+        for frame in 0..frames {
+            let middle = &decoded[frame * pixel + (9 * 32 + 16) * 3..][..3];
+            assert!(
+                if blue(frame) {
+                    middle[2] > 180 && middle[0] < 80
+                } else {
+                    middle[0] > 180 && middle[2] < 80
+                },
+                "frame {frame}: {middle:?}"
+            );
+        }
+    }
+
+    /// A chunked re-export copies what didn't change out of the last export
+    /// and gives the same file a whole export would: every frame, the sound
+    /// the length of the picture; a trim near the start leaves later chunks
+    /// as they were.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_re_export_redoes_only_the_chunks_that_changed() {
+        let dir = temp_dir("chunks");
+        let red = source(&dir, "red.mp4", "red", 0.5);
+        let blue = source(&dir, "blue.mp4", "blue", 1.0);
+        let options = ExportOptions::default();
+        let cache = dir.join("cache");
+        let run = |project: &Project, name: &str| {
+            let plan = export_plan(project, &options).unwrap();
+            let output = dir.join(name);
+            export_file(
+                project,
+                &options,
+                &plan,
+                &output,
+                &cache,
+                &HashMap::new(),
+                &AtomicBool::new(false),
+                |_| {},
+            )
+            .unwrap();
+            output
+        };
+        let first = cuts(&red, &blue, &[], false);
+        let one = run(&first, "one.mp4");
+        let made = manifest(&cache);
+        assert!(made.chunks.len() >= 2, "{:?}", made.chunks);
+        assert_eq!(made.output, one);
+        shows(&one, |frame| (frame / 30) % 2 == 1, 3000);
+        // Clip 96 turns blue: only the last chunk changes.
+        let changed = cuts(&red, &blue, &[96], false);
+        let two = run(&changed, "two.mp4");
+        let again = manifest(&cache);
+        assert_eq!(again.output, two);
+        assert_eq!(made.chunks.len(), again.chunks.len());
+        for (before, after) in made
+            .chunks
+            .iter()
+            .zip(&again.chunks)
+            .take(made.chunks.len() - 1)
+        {
+            assert_eq!(before, after);
+        }
+        assert_ne!(made.chunks.last(), again.chunks.last());
+        assert_eq!(made.sound, again.sound, "only the picture changed");
+        shows(
+            &two,
+            |frame| (frame / 30) % 2 == 1 || frame / 30 == 96,
+            3000,
+        );
+        let first_frame = Command::new(crate::util::ffprobe())
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-read_intervals",
+                "%+#1",
+                "-show_entries",
+                "packet=pts_time",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&two)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&first_frame.stdout).trim(),
+            "0.000000",
+            "the picture starts with the sound"
+        );
+        assert!((duration(&two, "v:0") - 100.0).abs() < 0.04);
+        assert!(
+            (duration(&two, "a:0") - 100.0).abs() < 0.05,
+            "{}",
+            duration(&two, "a:0")
+        );
+        // The first cut trimmed away: everything after moves 30 frames earlier,
+        // and every chunk after the first is one the last export had.
+        let trimmed = cuts(&red, &blue, &[96], true);
+        let three = run(&trimmed, "three.mp4");
+        let last = manifest(&cache);
+        assert!(
+            last.chunks
+                .iter()
+                .skip(1)
+                .all(|chunk| again.chunks.iter().any(|old| old.key == chunk.key)),
+            "{:?} against {:?}",
+            last.chunks,
+            again.chunks
+        );
+        shows(
+            &three,
+            |frame| {
+                let index = frame / 30 + 1;
+                index % 2 == 1 || index == 96
+            },
+            2970,
+        );
+        assert!(
+            (duration(&three, "a:0") - 99.0).abs() < 0.05,
+            "{}",
+            duration(&three, "a:0")
+        );
+        // Nothing's left in the chunk folder but the manifest.
+        let left: Vec<_> = std::fs::read_dir(crate::chunks::folder(&cache, "chunky"))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(left.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_media_with_a_sound_copy_is_mixed_from_it() {
+        let project: Project = serde_json::from_value(json!({
+            "version": 1, "id": "p", "name": "t",
+            "settings": {"width": 320, "height": 180, "fps": 30},
+            "media": [{"id": "m", "name": "m", "path": "https://r2/x.mp4?sig", "kind": "video", "duration": 2.0, "width": 320, "height": 180, "fps": 30, "has_audio": true}],
+            "tracks": [], "clips": [],
+        }))
+        .unwrap();
+        let sounds = HashMap::from([("m".to_owned(), PathBuf::from("/cache/sound.mov"))]);
+        assert_eq!(
+            sound_path(&project, &sounds, "m"),
+            Some(PathBuf::from("/cache/sound.mov"))
+        );
+        assert_eq!(
+            sound_path(&project, &HashMap::new(), "m"),
+            Some(PathBuf::from("https://r2/x.mp4?sig"))
+        );
+    }
+
+    #[test]
+    fn partial_exports_of_dead_servers_are_removed() {
+        let dir = temp_dir("stale");
+        let output = dir.join("out.mp4");
+        let own = std::process::id();
+        for name in [
+            "out.mp4.999999-p.partial.mp4".to_owned(),
+            format!("out.mp4.{own}-p.partial.mp4"),
+            "out.mp4.1-p.partial.mp4".to_owned(),
+            "out.mp4.999999-q.partial.mp4".to_owned(),
+            "other.mp4.999999-p.partial.mp4".to_owned(),
+        ] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        remove_stale_partials(&output, "p", Format::H264);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                "other.mp4.999999-p.partial.mp4",
+                "out.mp4.1-p.partial.mp4",
+                "out.mp4.999999-q.partial.mp4"
+            ]
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

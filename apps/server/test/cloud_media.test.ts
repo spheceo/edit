@@ -446,3 +446,42 @@ test("an export reads a cloud original from the file it was imported from while 
     cleanup();
   }
 });
+
+test("an export of cloud-only footage mixes from a copy of its sound: made once, shared, then fetched", async () => {
+  const fixture = home("cloud-sound");
+  const { dir, store, cleanup } = fixture;
+  try {
+    const cache = store.cacheDir();
+    const footage = `${dir}/footage.mp4`;
+    const made = Bun.spawnSync([
+      "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:size=64x36:rate=30:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", footage,
+    ]);
+    expect(made.exitCode).toBe(0);
+    const original = "edit/originals/sha256/cc/footage.mp4";
+    mock.cloud.put(original, fs.readFileSync(footage));
+    const proxy = `${dir}/proxy.mp4`;
+    fs.writeFileSync(proxy, "proxy");
+    const project = projectWith([{ ...media("m1", proxy), cloud: { source: "sha256:cc", original, proxy: "edit/proxies/sha256/cc.mp4", size: 5 } }]);
+    project.clips.push({ id: "c1", track: "v1", start: 0, duration: 30, type: "video", media: "m1", source_in: 0, speed: 1 } as Project["clips"][number]);
+    const copyKey = cloudMedia.soundKey(original);
+    expect(copyKey).toBe("edit/sound/originals/sha256/cc/footage.mp4.mov");
+    const [, first] = await cloudMedia.forExport(project, 0, 30, cache);
+    const local = first.sounds!.m1!;
+    expect(local).toBe(cloudMedia.localPath(cache, copyKey));
+    const streams = Bun.spawnSync(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", local]);
+    expect(streams.stdout.toString().trim()).toBe("audio");
+    // Shared for other machines, in the background.
+    for (let wait = 0; wait < 100 && !mock.cloud.objects.has(copyKey); wait++) await Bun.sleep(20);
+    expect(mock.cloud.objects.has(copyKey)).toBe(true);
+    // Another machine (no local copy) fetches it rather than reading the original again.
+    fs.rmSync(local);
+    const reads = mock.calls(`/r2/${original}`).length;
+    const [, again] = await cloudMedia.forExport(project, 0, 30, cache);
+    expect(again.sounds!.m1).toBe(local);
+    expect(fs.existsSync(local)).toBe(true);
+    expect(mock.calls(`/r2/${original}`).length).toBe(reads);
+  } finally {
+    cleanup();
+  }
+});

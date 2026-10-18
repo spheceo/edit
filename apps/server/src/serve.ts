@@ -4,6 +4,7 @@
 // listener per address `bindAddresses` gives.
 
 import type { Server } from "bun";
+import * as fs from "node:fs";
 
 import { createApp, hostname, type App } from "./app.ts";
 import { pauseForExports, setListening } from "./broll.ts";
@@ -12,6 +13,8 @@ import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
 import { registerEditingTools } from "./edit_tools.ts";
 import { ExportRegistry } from "./exports.ts";
+import * as jobs from "./jobs.ts";
+import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
 import { registerMediaTools } from "./media_tools.ts";
 import { allowedHosts } from "./http/host.ts";
@@ -191,6 +194,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   }
   if (servers.length === 0) fail(`nothing to listen on (is port ${port} taken?)`);
   console.log(`edit: data in ${home}`);
+  resumeJobs(app);
   if (update.enabled()) {
     void update
       .check()
@@ -213,4 +217,33 @@ function optional(area: string, work: () => void): void {
   } catch (error) {
     if (!seams.isNotPorted(error)) diag.warn(area, diag.messageOf(error));
   }
+}
+
+/** Starts again the exports, uploads, smoothing and watches a restart cut short (jobs.ts). */
+function resumeJobs(app: App): void {
+  const project = (id: string) => {
+    const live = app.store.get(id);
+    if (live === null) throw new Error("the project is gone");
+    return live.project;
+  };
+  void jobs.resume(app.store.home, {
+    export: async (job) => {
+      const { options, output } = job.args as { options: ExportOptions; output: string };
+      await app.exports.start(app.store, app.library, project(job.project), options, output);
+    },
+    drive: (job) => {
+      const { path } = job.args as { path: string };
+      if (!fs.existsSync(path)) throw new Error(`${path} is gone`);
+      seams.drive.start(app.store, app.library, project(job.project), path);
+    },
+    smooth: (job) => {
+      const { clip } = job.args as { clip: string };
+      if (!project(job.project).clips.some((one) => one.id === clip)) throw new Error("the clip is gone");
+      seams.broll.smoothInBackground(app, job.project, [clip]);
+    },
+    watch: (job) => {
+      project(job.project);
+      seams.watch.watchInBackground(app, job.project);
+    },
+  });
 }

@@ -44,6 +44,14 @@ function size(path: string): number {
   }
 }
 
+function safeList(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
 function age(path: string, now: number): number {
   try {
     return now - fs.statSync(path).mtimeMs;
@@ -152,6 +160,16 @@ export function cleanCache(app: App, dryRun: boolean, now = Date.now()): CleanRe
     }
   }
   if (dropped) writeLocalOriginals(cache, known);
+  // Chunks an export left when it stopped part-way (the engine's chunks.rs):
+  // a run again soon carries on from them; after a few days they go.
+  const chunksDir = join(cache, "export-chunks");
+  for (const project of safeList(chunksDir)) {
+    for (const entry of safeList(join(chunksDir, project))) {
+      if (!entry.endsWith(".mp4")) continue;
+      const path = join(chunksDir, project, entry);
+      if (age(path, now) >= DOWNLOADED) remove(path);
+    }
+  }
   for (const name of names) {
     if (!/^[0-9a-f]{16}$/.test(name)) continue;
     const dir = join(cache, name);

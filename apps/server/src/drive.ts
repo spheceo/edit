@@ -14,6 +14,7 @@
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
+import * as jobs from "./jobs.ts";
 import { googleProto, google } from "./endpoints.ts";
 import { ioMessage, nowMs } from "./files.ts";
 import { catchBugsAsync } from "./guard.ts";
@@ -127,6 +128,7 @@ export function start(store: Store, library: Library, project: Project, path: st
   const into = folder(subtitleVideo(project));
   nextUpload += 1;
   const number = nextUpload;
+  const job = jobs.begin(store.home, "drive", id, { path });
   uploads.set(id, number);
   const emit = (state: string, extra: Record<string, unknown>) => {
     // Keys sorted, as the Rust server's `json!` event read.
@@ -161,6 +163,7 @@ export function start(store: Store, library: Library, project: Project, path: st
       emit("failed", { error: failure });
     }
     if (uploads.get(id) === number) uploads.delete(id);
+    jobs.end(store.home, job);
   })();
 }
 

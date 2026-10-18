@@ -156,6 +156,8 @@ export interface Original {
 /** The temporary originals an export reads (removed when the export is done). */
 export interface Originals {
   release(): void;
+  /** Media id → a local copy of its sound, mixed instead of the original (cloud_media `soundCopy`). */
+  sounds?: Record<string, string>;
 }
 
 export interface CloudMediaSeam {

@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
+import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
 import { catchBugsAsync } from "./guard.ts";
 import type { ExportOptions, Project } from "./model.ts";
@@ -21,6 +22,8 @@ const KEEP_FINISHED = 50;
 
 interface Running {
   output: string;
+  /** Its entry in the jobs a restart resumes. */
+  key: string;
   cancelled: boolean;
   job: ExportJob | null;
 }
@@ -169,7 +172,8 @@ export class ExportRegistry implements seams.Exports {
     if (this.jobs.size > 0) {
       throw new Error("an export is already running; wait for it or cancel it before starting another");
     }
-    const running: Running = { output: path, cancelled: false, job: null };
+    const key = jobs.begin(this.home, "export", project.id, { options, output: path });
+    const running: Running = { output: path, key, cancelled: false, job: null };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -177,6 +181,7 @@ export class ExportRegistry implements seams.Exports {
     } catch (error) {
       if (!seams.isNotPorted(error)) {
         this.jobs.delete(project.id);
+        jobs.end(this.home, key);
         throw error;
       }
     }
@@ -226,7 +231,7 @@ export class ExportRegistry implements seams.Exports {
           }
           if (running.cancelled) throw new Error("cancelled");
           const job = native().ExportJob.start(
-            { project: { json: jsonForSerde(exported) }, options, plan, output, cacheDir: store.cacheDir() },
+            { project: { json: jsonForSerde(exported) }, options, plan, output, cacheDir: store.cacheDir(), sounds: originals?.sounds ?? {} },
             (progress) => {
               try {
                 emit("running", progress);
@@ -287,6 +292,7 @@ export class ExportRegistry implements seams.Exports {
       emit("failed", 0, { error: result.error });
     }
     this.jobs.delete(id);
+    jobs.end(this.home, running.key);
     if (upload && result.ok) {
       try {
         seams.drive.start(store, library, project, output);

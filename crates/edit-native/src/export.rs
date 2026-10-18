@@ -107,6 +107,8 @@ pub struct ExportStart {
     /// The finished file (with the format's extension, in a folder that exists).
     pub output: String,
     pub cache_dir: String,
+    /// Media id → a local copy of its sound to mix instead of its file (a cloud original's).
+    pub sounds: Option<std::collections::HashMap<String, String>>,
 }
 
 #[napi(object)]
@@ -141,6 +143,12 @@ impl ExportJob {
         })?;
         let output = PathBuf::from(job.output);
         let cache = PathBuf::from(job.cache_dir);
+        let sounds: std::collections::HashMap<String, PathBuf> = job
+            .sounds
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(media, path)| (media, PathBuf::from(path)))
+            .collect();
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut running = RUNNING.lock();
@@ -158,6 +166,7 @@ impl ExportJob {
                     &plan,
                     &output,
                     &cache,
+                    &sounds,
                     &stop,
                     |progress| crate::report(&on_progress, f64::from(progress)),
                 )

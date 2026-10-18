@@ -49,7 +49,7 @@ describe("frame renders", () => {
 
   test("frames by ref, as one sheet, encoded for an agent", async () => {
     if (!gpu) return;
-    native.projectCommit("p-sheet", 4, JSON.stringify(solidProject("p-sheet")));
+    native.projectKeep(native.projectPrepare("p-sheet", JSON.stringify(solidProject("p-sheet"))).token, 4);
     const images = await native.renderFrames({
       project: { ref: { id: "p-sheet", rev: 4 } },
       frames: [0, 15, 30, 45],

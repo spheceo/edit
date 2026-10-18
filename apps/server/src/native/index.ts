@@ -43,12 +43,18 @@ export interface InitConfig {
 }
 
 /**
- * A project for native work: by reference to a revision `projectCommit` has
+ * A project for native work: by reference to a revision `projectKeep` has
  * seen (renders, censor checks, plans), or as JSON (exports, whose paths
  * `cloud_media.forExport` rewrites). A reference native no longer holds throws
  * `"stale project"`; send it again as JSON (`withProject` does).
  */
 export type ProjectInput = { ref: { id: string; rev: number } } | { json: string };
+
+/** A project validated and serialized for saving (`projectPrepare`); `projectKeep` keeps it once saved. */
+export interface Prepared {
+  json: string;
+  token: number;
+}
 
 /** A media file's cache files (the engine's media.rs CachePaths), all under `<cache>/<media key>/`. */
 export interface CachePaths {
@@ -168,7 +174,8 @@ export interface Native {
   // edit-core
   projectLoad(json: string): { json: string; problem?: string }; // S
   projectValidate(json: string): string | null; // S
-  projectCommit(id: string, rev: number, json: string): { pretty: string; json: string }; // S
+  projectPrepare(id: string, json: string): Prepared; // S
+  projectKeep(token: number, rev: number): boolean; // S
   removeTime(project: ProjectInput, start: number, end: number): { json: string; rippled: Rippled }; // S
   speedSpanHolding(
     project: ProjectInput,
@@ -240,7 +247,7 @@ export interface Native {
 // ---------------------------------------------------------------------------
 // Loading
 
-/** What `projectCommit` caches miss with: the caller sends the project again as JSON. */
+/** What `projectKeep` caches miss with: the caller sends the project again as JSON. */
 export const STALE = "stale project";
 
 let current: Native | null = null;

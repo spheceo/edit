@@ -13,7 +13,7 @@ use parking_lot::{Condvar, Mutex};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -104,7 +104,7 @@ pub(crate) struct VideoReader {
     source: Source,
     pub(crate) width: u32,
     pub(crate) height: u32,
-    child: Option<(Child, ChildStdout)>,
+    child: Option<(crate::util::Watched, ChildStdout)>,
     #[cfg(target_os = "macos")]
     native: Option<crate::mac_media::Reader>,
     #[cfg(target_os = "macos")]
@@ -212,7 +212,7 @@ impl VideoReader {
             .spawn()
             .map_err(|error| format!("ffmpeg: {error}"))?;
         let stdout = child.stdout.take().ok_or("ffmpeg stdout")?;
-        self.child = Some((child, stdout));
+        self.child = Some((crate::util::Watched::new(child), stdout));
         self.start = first as f64 / fps;
         self.next_index = 0;
         self.eof = false;
@@ -385,8 +385,7 @@ impl VideoReader {
 
     fn stop(&mut self) {
         if let Some((mut child, _)) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.stop();
         }
     }
 }
@@ -1735,16 +1734,18 @@ fn mix_sound(
             .then(|| crate::export::audio_bitrate(options.format, options.quality)),
     };
     crate::log::time_on("export", "export: sound", &project.id, || {
-        crate::mix::render(
-            parts,
-            (seconds * crate::mix::RATE as f64).round() as usize,
-            options.loudness,
-            &encoding,
-            destination,
-            &scratch.0,
-            cancel,
-            progress,
-        )
+        crate::util::killed_on_cancel(cancel, || {
+            crate::mix::render(
+                parts,
+                (seconds * crate::mix::RATE as f64).round() as usize,
+                options.loudness,
+                &encoding,
+                destination,
+                &scratch.0,
+                cancel,
+                progress,
+            )
+        })
     })
 }
 
@@ -1753,8 +1754,8 @@ fn mix_sound(
 fn sound_key(options: &ExportOptions, parts: &[crate::mix::Part], seconds: f64) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    "sound-v1".hash(&mut hasher);
-    env!("EDIT_RENDER_SOURCE").hash(&mut hasher);
+    "sound-v2".hash(&mut hasher);
+    env!("EDIT_SOUND_SOURCE").hash(&mut hasher);
     format!("{parts:?}").hash(&mut hasher);
     for part in parts {
         crate::chunks::content_key(&part.path).hash(&mut hasher);
@@ -2235,7 +2236,23 @@ fn planner(
         }
         let scene = evaluate_seen(project, frame);
         let mut decodes = Vec::new();
-        let mut present = HashSet::new();
+        let present: HashSet<&String> = scene
+            .layers
+            .iter()
+            .filter_map(|layer| match layer {
+                Layer::Video { clip, .. } => Some(clip),
+                _ => None,
+            })
+            .collect();
+        // A clip that's gone has finished its run: its decoder is free for
+        // the clips starting on this frame.
+        for (busy, ended) in &mut decoders {
+            if busy.as_ref().is_some_and(|clip| !present.contains(clip)) {
+                *busy = None;
+                *ended = frame;
+            }
+        }
+        assigned.retain(|clip, _| present.contains(clip));
         for layer in &scene.layers {
             let Layer::Video {
                 clip,
@@ -2246,7 +2263,6 @@ fn planner(
             else {
                 continue;
             };
-            present.insert(clip.clone());
             let source = match sources.get(media) {
                 Some(source) => source.clone(),
                 None => match project.media(media) {
@@ -2270,8 +2286,9 @@ fn planner(
                 },
             };
             let (worker, first) = match assigned.get(clip) {
-                Some(worker) => (*worker, false),
-                None => {
+                Some(Some(worker)) => (Some(*worker), false),
+                // Decoded inline (none was free), or new: a free decoder takes it.
+                _ => {
                     // A jump cut forward in the file a free decoder just read
                     // continues there (decoding the gap costs less than a
                     // seek); otherwise the decoder idle longest gets ahead.
@@ -2323,14 +2340,6 @@ fn planner(
                 },
             ));
         }
-        // A clip that's gone has finished its run: its decoder is free.
-        for (busy, ended) in &mut decoders {
-            if busy.as_ref().is_some_and(|clip| !present.contains(clip)) {
-                *busy = None;
-                *ended = frame;
-            }
-        }
-        assigned.retain(|clip, _| present.contains(clip));
         if planned
             .send(Planned {
                 frame,
@@ -2358,6 +2367,19 @@ struct Readback {
 fn render_frames(
     project: &Project,
     ranges: &[(i64, i64)],
+    sink: Sink,
+    cache: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    crate::util::killed_on_cancel(cancel, || {
+        render_frames_watched(project, ranges, sink, cache, cancel, progress)
+    })
+}
+
+fn render_frames_watched(
+    project: &Project,
+    ranges: &[(i64, i64)],
     mut sink: Sink,
     cache: &Path,
     cancel: &AtomicBool,
@@ -2382,7 +2404,10 @@ fn render_frames(
             let (job_tx, job_rx) = mpsc::channel::<DecodeJob>();
             let (out_tx, out_rx) = mpsc::sync_channel(2);
             let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<u8>>();
-            scope.spawn(move || decoder(job_rx, out_tx, recycle_rx));
+            let decoders = crate::util::decoders();
+            scope.spawn(move || {
+                crate::util::with_decoders(decoders, || decoder(job_rx, out_tx, recycle_rx))
+            });
             job_senders.push(job_tx);
             outputs.push(out_rx);
             recyclers.push(recycle_tx);
@@ -2496,7 +2521,11 @@ fn render_frames(
                 }
                 let gone: Vec<String> = inline
                     .keys()
-                    .filter(|clip| !planned.decodes.iter().any(|(active, _)| active == *clip))
+                    .filter(|clip| {
+                        !planned.decodes.iter().any(|(active, decode)| {
+                            active == *clip && matches!(decode, Decode::Inline(..))
+                        })
+                    })
                     .cloned()
                     .collect();
                 for clip in gone {
@@ -3218,6 +3247,51 @@ mod tests {
             println!("{label}: 600 frames in {:.2?}", started.elapsed());
         }
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Three layers cut to one: the clip starting on that frame gets one of
+    /// the decoders the three just left, not the compositor's own thread.
+    #[test]
+    fn a_clip_after_a_layered_cut_gets_a_decoder() {
+        let clip = |id: &str, track: &str, start: i64, duration: i64| {
+            json!({"id": id, "track": track, "type": "video", "media": "m",
+                "source_in": 0.0, "start": start, "duration": duration})
+        };
+        let project: Project = serde_json::from_value(json!({
+            "version": 1, "id": "p", "name": "t",
+            "settings": {"width": 320, "height": 180, "fps": 30},
+            "media": [{"id": "m", "name": "m", "path": "/nowhere/m.mp4", "kind": "video",
+                "duration": 2.0, "width": 320, "height": 180, "fps": 30, "has_audio": false}],
+            "tracks": [{"id": "v1", "kind": "video"}, {"id": "v2", "kind": "video"},
+                {"id": "v3", "kind": "video"}],
+            "clips": [clip("a", "v1", 0, 1), clip("b", "v2", 0, 1), clip("c", "v3", 0, 1),
+                clip("d", "v1", 1, 2)],
+        }))
+        .unwrap();
+        let (senders, _receivers): (Vec<_>, Vec<_>) =
+            (0..DECODERS).map(|_| mpsc::channel::<DecodeJob>()).unzip();
+        let (planned_tx, planned) = mpsc::sync_channel(8);
+        planner(
+            &project,
+            &[(0, 3)],
+            senders,
+            planned_tx,
+            &AtomicBool::new(false),
+        );
+        let decodes: Vec<Vec<(String, bool)>> = planned
+            .into_iter()
+            .map(|planned| {
+                planned
+                    .decodes
+                    .into_iter()
+                    .map(|(clip, decode)| (clip, matches!(decode, Decode::Worker(_))))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(decodes.len(), 3);
+        assert!(decodes[0].iter().all(|(_, worker)| *worker), "{decodes:?}");
+        assert_eq!(decodes[1], vec![("d".to_owned(), true)]);
+        assert_eq!(decodes[2], vec![("d".to_owned(), true)]);
     }
 
     #[test]

@@ -1,9 +1,9 @@
 // STUB: an in-memory stand-in for the native addon, with the contract's exact
 // signatures (index.ts), for tests and for running the server without the
 // addon built. It is not the engine:
-// - projectLoad / projectValidate / projectCommit check only the structure
+// - projectLoad / projectValidate / projectPrepare check only the structure
 //   and the commonest rules of Project::validate (same messages), and don't
-//   fill serde defaults or round f32 fields; `pretty` is JSON.stringify's.
+//   fill serde defaults or round f32 fields.
 // - mediaKey / keyOf are a stable hash of the same inputs, NOT edit-engine's
 //   SipHash: keys made here never match the real cache.
 // - probe and imageSize ask ffprobe (when there is one); preview making writes
@@ -177,6 +177,9 @@ export function createStub(): Stub {
   const locks = new Set<string>();
   // (id, rev) → project JSON, the last two revs of at most 16 projects, as the engine keeps them.
   const projects = new Map<string, Map<number, string>>();
+  /** Prepared projects not yet kept, by token: [id, json]. */
+  const prepared = new Map<number, [string, string]>();
+  let nextToken = 1;
 
   const resolve = (input: ProjectInput): Project => {
     if ("json" in input) return JSON.parse(input.json) as Project;
@@ -332,7 +335,7 @@ export function createStub(): Stub {
       const shape = shapeProblem(value);
       return shape ?? stubValidate(withDefaults(value as Record<string, unknown>));
     },
-    projectCommit(id, rev, json) {
+    projectPrepare(id, json) {
       const value = JSON.parse(json) as unknown;
       const shape = shapeProblem(value);
       if (shape !== null) throw new Error(shape);
@@ -340,6 +343,16 @@ export function createStub(): Stub {
       const invalid = stubValidate(project);
       if (invalid !== null) throw new Error(invalid);
       const compact = JSON.stringify(project);
+      const token = nextToken++;
+      prepared.set(token, [id, compact]);
+      for (const old of prepared.keys()) if (prepared.size > 16) prepared.delete(old);
+      return { json: compact, token };
+    },
+    projectKeep(token, rev) {
+      const found = prepared.get(token);
+      if (found === undefined) return false;
+      prepared.delete(token);
+      const [id, compact] = found;
       let revs = projects.get(id);
       if (revs === undefined) {
         if (projects.size >= 16) projects.delete(projects.keys().next().value!);
@@ -348,7 +361,7 @@ export function createStub(): Stub {
       }
       revs.set(rev, compact);
       for (const kept of revs.keys()) if (kept < rev - 1) revs.delete(kept);
-      return { pretty: JSON.stringify(project, null, 2), json: compact };
+      return true;
     },
     removeTime() {
       notInStub("removeTime");

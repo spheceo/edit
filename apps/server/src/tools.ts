@@ -81,7 +81,17 @@ export function protocols(path: string): string {
 }
 
 const SYSTEM_CERTIFICATES = "/etc/ssl/cert.pem";
-const RECONNECT = ["-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10"];
+// A read that gets nothing for 30 s fails (and reconnects) rather than waiting forever.
+const RECONNECT = [
+  "-reconnect",
+  "1",
+  "-reconnect_on_network_error",
+  "1",
+  "-reconnect_delay_max",
+  "10",
+  "-rw_timeout",
+  "30000000",
+];
 let certificates: boolean | null = null;
 
 /**

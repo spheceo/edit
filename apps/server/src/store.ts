@@ -1,12 +1,13 @@
 // Projects on disk plus the live revision every client and agent edits against.
 //
 // Every write ends in `commitUnguarded`, which runs without a single await:
-// the rev check, the addon's validate-and-serialize (`projectCommit`, which
-// also caches that revision for renders by reference), the atomic write and
-// the in-memory swap happen with nothing else running in between, as they did
-// under the Rust store's lock. The one await on the way there is the cloud
-// hook's `mayWrite` (it may take a lock over the network), so the rev is
-// checked again after it.
+// the rev check, the atomic write, the addon keeping that revision for renders
+// by reference (`projectKeep`) and the in-memory swap happen with nothing else
+// running in between. The project is validated and serialized once before
+// (`projectPrepare`). The one await on the way is the cloud hook's `mayWrite`
+// (it may take a lock over the network), so the rev is checked after it;
+// `update` awaits it before reading the project, so its read, edit and save
+// have no await between them and can't lose a race.
 //
 // The live projects are frozen: the Rust store handed out clones, and a caller
 // here that changed what `get` returned would change every reader's copy.
@@ -18,7 +19,7 @@ import * as diag from "./diag.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import * as mediaDrive from "./media_drive/layout.ts";
 import type { Clip, DriveFile, Project, ProjectSummary, Settings, Style } from "./model.ts";
-import { native } from "./native/index.ts";
+import { native, type Prepared } from "./native/index.ts";
 import { extension, fileStem, join } from "./paths.ts";
 import { duration, mediaOf, newProject } from "./project.ts";
 import { asSerdeRead, jsonForSerde } from "./rust.ts";
@@ -356,20 +357,18 @@ export class Store {
     const id = project.id;
     if (!validId(id)) throw new Error(`not a project id: ${JSON.stringify(id)}`);
     this.currentLayout.resolveProject(project);
-    const json = jsonForSerde(project);
-    const invalid = native().projectValidate(json);
-    if (invalid !== null) throw new Error(invalid);
+    const prepared = native().projectPrepare(id, jsonForSerde(project));
     for (let attempt = 0; attempt < 5; attempt++) {
       const current = this.load(id);
       if (current === null) {
-        const live = this.write(id, 1, project);
+        const live = this.save(id, 1, prepared);
         this.projects.set(id, live);
         return live;
       }
       // Never written over (see `list`).
       if ("problem" in current) throw new Error(`this machine's copy of ${id} won't load: ${current.problem}`);
       try {
-        return this.commitUnguarded(id, current.rev, json, origin);
+        return this.commitUnguarded(id, current.rev, prepared, origin);
       } catch (error) {
         if (error instanceof UpdateError && (error.kind === "conflict" || error.kind === "not_found")) continue;
         throw error instanceof UpdateError ? new Error(error.message) : error;
@@ -422,10 +421,24 @@ export class Store {
    * Read-modify-write used by agent tools and server-side edits: `edit` gets a
    * copy to change and must not await (it runs atomically). Throws an Error
    * with the reason.
+   *
+   * The cloud lock is settled first, so reading, editing and saving run with
+   * no await between them: another save can't land in between and turn this
+   * one into a conflict (edits count and collect as they go, so they aren't
+   * run twice).
    */
   async update<T>(id: string, origin: string, edit: (project: Project) => T): Promise<[Live, T]> {
+    if (this.get(id) === null) throw new Error(`no project ${id}`);
+    const cloud = this.cloudHook;
+    if (cloud !== null) {
+      try {
+        await cloud.mayWrite(id);
+      } catch (error) {
+        throw new Error(diag.messageOf(error));
+      }
+    }
     const current = this.get(id);
-    if (current === null) throw new Error(`no project ${id}`);
+    if (current === null) throw new Error("project was deleted while editing");
     const project = structuredClone(current.project) as Project;
     const value = edit(project);
     if (value instanceof Promise) {
@@ -433,7 +446,9 @@ export class Store {
     }
     project.id = id;
     try {
-      return [await this.commit(id, current.rev, project, origin), value];
+      const live = this.commitUnguarded(id, current.rev, this.prepare(id, project), origin);
+      cloud?.wrote(id);
+      return [live, value];
     } catch (error) {
       if (!(error instanceof UpdateError)) throw error;
       switch (error.kind) {
@@ -452,40 +467,42 @@ export class Store {
    * machine change it (every write path ends here). Throws UpdateError.
    */
   async commit(id: string, rev: number, project: Project, origin: string): Promise<Live> {
-    const json = jsonForSerde(project);
+    // Invalid before refused: a bad save says what's wrong with it first.
+    const prepared = this.prepare(id, project);
     const cloud = this.cloudHook;
     if (cloud !== null) {
-      // Invalid before refused: a bad save says what's wrong with it first.
-      const invalid = native().projectValidate(json);
-      if (invalid !== null) throw new UpdateError("invalid", invalid);
       try {
         await cloud.mayWrite(id);
       } catch (error) {
         throw new UpdateError("refused", diag.messageOf(error));
       }
     }
-    const live = this.commitUnguarded(id, rev, json, origin);
+    const live = this.commitUnguarded(id, rev, prepared, origin);
     cloud?.wrote(id);
     return live;
   }
 
+  /** `project` validated and serialized as saved; throws UpdateError "invalid". */
+  private prepare(id: string, project: Project): Prepared {
+    try {
+      return native().projectPrepare(id, jsonForSerde(project));
+    } catch (error) {
+      throw new UpdateError("invalid", diag.messageOf(error));
+    }
+  }
+
   /** Synchronous from the rev check to the swap: nothing can land in between. */
-  private commitUnguarded(id: string, rev: number, json: string, origin: string): Live {
+  private commitUnguarded(id: string, rev: number, prepared: Prepared, origin: string): Live {
     // Another writer may have landed between read and commit.
     const current = this.projects.get(id);
     if (current === undefined) throw new UpdateError("not_found", `no project ${id}`);
     if (current.rev !== rev) throw new UpdateError("conflict", `revision conflict: current ${current.rev}`, current);
-    let prepared: { pretty: string; json: string };
-    try {
-      prepared = native().projectCommit(id, rev + 1, json);
-    } catch (error) {
-      throw new UpdateError("invalid", diag.messageOf(error));
-    }
     try {
       this.writeFile(id, prepared.json);
     } catch (error) {
       throw new UpdateError("invalid", ioMessage(error));
     }
+    native().projectKeep(prepared.token, rev + 1);
     const live: Live = { rev: rev + 1, project: deepFreeze(JSON.parse(prepared.json) as Project) };
     this.projects.set(id, live);
     const event: Event = { type: "project", id, rev: live.rev, origin, project: live.project };
@@ -497,12 +514,16 @@ export class Store {
 
   /** Validates and saves a project new to this store as `rev`; throws the reason. */
   private write(id: string, rev: number, project: Project): Live {
-    const prepared = native().projectCommit(id, rev, jsonForSerde(project));
+    return this.save(id, rev, native().projectPrepare(id, jsonForSerde(project)));
+  }
+
+  private save(id: string, rev: number, prepared: Prepared): Live {
     try {
       this.writeFile(id, prepared.json);
     } catch (error) {
       throw new Error(ioMessage(error));
     }
+    native().projectKeep(prepared.token, rev);
     return { rev, project: deepFreeze(JSON.parse(prepared.json) as Project) };
   }
 

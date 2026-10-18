@@ -23,7 +23,7 @@ const project = {
   tracks: [{ id: "v1", kind: "video" }],
   clips: [{ id: "s", track: "v1", type: "solid", fill: [0, 0, 1, 1], start: 0, duration: 30 }],
 };
-const committed = native.projectCommit("p", 1, JSON.stringify(project));
+const committed = native.projectPrepare("p", JSON.stringify(project));
 const [image] = await native.renderFrames({
   project: { ref: { id: "p", rev: 1 } },
   frames: [0],
@@ -31,4 +31,4 @@ const [image] = await native.renderFrames({
   priority: "ui",
   encode: "png",
 });
-console.log(JSON.stringify({ key: native.mediaKey(home), bytes: committed.pretty.length, png: image.data.length }));
+console.log(JSON.stringify({ key: native.mediaKey(home), bytes: committed.json.length, png: image.data.length }));

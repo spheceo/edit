@@ -105,13 +105,17 @@ pub fn protocols(path: &Path) -> &'static str {
 pub fn url_args(path: &Path) -> &'static [&'static str] {
     const SYSTEM: &str = "/etc/ssl/cert.pem";
     static FOUND: OnceLock<bool> = OnceLock::new();
-    const RECONNECT: [&str; 6] = [
+    // A read that gets nothing for 30 s fails (and reconnects) rather than
+    // waiting forever on a connection that went quiet.
+    const RECONNECT: [&str; 8] = [
         "-reconnect",
         "1",
         "-reconnect_on_network_error",
         "1",
         "-reconnect_delay_max",
         "10",
+        "-rw_timeout",
+        "30000000",
     ];
     if !is_url(path) {
         &[]
@@ -125,6 +129,8 @@ pub fn url_args(path: &Path) -> &'static [&'static str] {
             RECONNECT[3],
             RECONNECT[4],
             RECONNECT[5],
+            RECONNECT[6],
+            RECONNECT[7],
         ]
     } else {
         &RECONNECT
@@ -226,6 +232,107 @@ pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as u64)
+}
+
+// ---------------------------------------------------------------------------
+// Decoders a cancel kills
+
+/// The FFmpeg decoders an export started. A decoder blocked in a read (a
+/// stalled network, a hung FFmpeg) never looks at the cancel flag, so
+/// [`killed_on_cancel`] kills them: the blocked read ends and the export
+/// stops. A pid is listed only until its child is reaped (taken out first,
+/// under the same lock), so a kill never reaches a reused pid.
+#[derive(Default)]
+pub struct Decoders {
+    pids: parking_lot::Mutex<std::collections::HashSet<u32>>,
+}
+
+impl Decoders {
+    fn kill_all(&self) {
+        for pid in self.pids.lock().iter() {
+            // SAFETY: signalling our own child, listed only until it's reaped.
+            unsafe {
+                libc::kill(*pid as i32, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+std::thread_local! {
+    static DECODERS: std::cell::RefCell<Option<std::sync::Arc<Decoders>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// This thread's export's decoders, to carry into the threads it starts.
+pub fn decoders() -> Option<std::sync::Arc<Decoders>> {
+    DECODERS.with(|current| current.borrow().clone())
+}
+
+/// Runs `work` with the decoders it starts listed in `decoders`.
+pub fn with_decoders<T>(decoders: Option<std::sync::Arc<Decoders>>, work: impl FnOnce() -> T) -> T {
+    let before = DECODERS.with(|current| current.replace(decoders));
+    let result = work();
+    DECODERS.with(|current| current.replace(before));
+    result
+}
+
+/// Runs `work` (an export), killing the decoders it starts once `cancel` is set.
+pub fn killed_on_cancel<T>(cancel: &std::sync::atomic::AtomicBool, work: impl FnOnce() -> T) -> T {
+    let decoders = std::sync::Arc::new(Decoders::default());
+    let done = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !done.load(Ordering::Acquire) {
+                if cancel.load(Ordering::Acquire) {
+                    decoders.kill_all();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        });
+        let result = with_decoders(Some(std::sync::Arc::clone(&decoders)), work);
+        done.store(true, Ordering::Release);
+        result
+    })
+}
+
+/// A decoder child listed with this thread's export (if any) until it's reaped.
+pub struct Watched {
+    pub child: std::process::Child,
+    decoders: Option<std::sync::Arc<Decoders>>,
+}
+
+impl Watched {
+    pub fn new(child: std::process::Child) -> Self {
+        let decoders = decoders();
+        if let Some(decoders) = &decoders {
+            decoders.pids.lock().insert(child.id());
+        }
+        Self { child, decoders }
+    }
+
+    fn unlist(&mut self) {
+        if let Some(decoders) = self.decoders.take() {
+            decoders.pids.lock().remove(&self.child.id());
+        }
+    }
+
+    /// Waits for it to exit (it's no longer killed on cancel).
+    pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.unlist();
+        self.child.wait()
+    }
+
+    pub fn stop(&mut self) {
+        self.unlist();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for Watched {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 // ---------------------------------------------------------------------------

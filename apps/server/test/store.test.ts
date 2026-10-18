@@ -158,20 +158,35 @@ test("the cloud hook is asked before every write and told after", async () => {
     await expect(store.update(id, "ui", () => 0)).rejects.toThrow("Sam is editing this project on kenobi");
     refuse = null;
 
-    // A write waiting on the lock loses to one that landed meanwhile: the rev is checked again.
+    // A commit waiting on the lock loses to one that landed meanwhile: the rev is checked again.
     let open = () => {};
     gate = new Promise<void>((resolve) => {
       open = resolve;
     });
-    const slow = store.update(id, "ui", (project) => {
-      project.name = "slow";
-    });
+    const stale = store.checkout(id)!;
+    stale.project.name = "stale";
+    const slow = store.commit(id, stale.rev, stale.project, "ui");
     const fast = store.checkout(id)!;
     fast.project.name = "fast";
     await store.commit(id, fast.rev, fast.project, "ui");
     open();
-    await expect(slow).rejects.toThrow("project changed while editing; retry");
+    await expect(slow).rejects.toThrow("revision conflict");
     expect(store.get(id)?.project.name).toBe("fast");
+
+    // An update waits for the lock before it reads, so a save landing
+    // meanwhile is built on rather than failing it.
+    gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const update = store.update(id, "agent", (project) => {
+      project.name += " + agent";
+    });
+    const ui = store.checkout(id)!;
+    ui.project.name = "ui";
+    await store.commit(id, ui.rev, ui.project, "ui");
+    open();
+    await update;
+    expect(store.get(id)?.project.name).toBe("ui + agent");
 
     // Invalid before refused.
     refuse = "held elsewhere";

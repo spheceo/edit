@@ -13,7 +13,7 @@ import type {
   Sections,
 } from "../../packages/edit-types/src/index";
 
-/** A project `projectCommit` saw (by id and the rev it saved as), or the whole JSON. */
+/** A project `projectKeep` kept (by id and the rev it saved as), or the whole JSON. */
 export type ProjectInput = { ref: { id: string; rev: number } } | { json: string };
 
 /** A face: [x0, y0, x1, y1] as shares of the picture from its top left. */

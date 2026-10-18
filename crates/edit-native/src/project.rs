@@ -1,8 +1,8 @@
 //! edit-core for the TS server: loading, validating and committing project
-//! JSON exactly as the Rust store does (`serde_json::to_vec_pretty`, so files
-//! stay byte-identical), ripple edits, sections and keyframe sampling.
+//! JSON as the store writes it (compact), ripple edits, sections and keyframe
+//! sampling.
 //!
-//! Projects cross as JSON. `projectCommit` keeps the parsed project per
+//! Projects cross as JSON. `projectKeep` keeps the parsed project per
 //! (id, rev) (the last 2 revs of at most 16 projects), so renders, checks
 //! and plans can pass `{ ref: { id, rev } }` instead of the whole JSON; a
 //! miss is "stale project", and the caller sends `{ json }` instead.
@@ -25,7 +25,7 @@ pub struct ProjectRef {
     pub rev: i64,
 }
 
-/// `{ ref: { id, rev } }` (a project `projectCommit` saw) or `{ json }`;
+/// `{ ref: { id, rev } }` (a project `projectKeep` kept) or `{ json }`;
 /// typed as the header's `ProjectInput` union wherever it's taken.
 #[napi(object, js_name = "ProjectArg")]
 pub struct ProjectInput {
@@ -187,28 +187,56 @@ pub fn project_validate(json: String) -> Option<String> {
 }
 
 #[napi(object)]
-pub struct Committed {
-    /// The file's bytes, as the Rust store writes them.
-    pub pretty: String,
-    /// The same project, compact (what to parse back).
+pub struct Prepared {
+    /// The project as the store writes it: compact, serde defaults filled.
     pub json: String,
+    /// What `projectKeep` keeps once the save lands.
+    pub token: u32,
 }
 
+/// Prepared projects not yet saved, by token (a save that lost a race is
+/// never kept; the oldest go).
+static PREPARED: Mutex<VecDeque<(u32, String, Arc<Project>)>> = Mutex::new(VecDeque::new());
+const PREPARED_KEPT: usize = 16;
+
 /// Validates `json` as project `id` (its id set to `id`) and serializes it
-/// as the store writes it; kept as (`id`, `rev`) for `ref`s, `rev` being the
-/// rev it has once saved.
+/// as the store writes it. The store checks the rev and saves the file, then
+/// `projectKeep`s it under the rev it saved as, for `ref`s: parsed and
+/// validated once however long the store waits in between (a cloud lock).
 #[napi]
-pub fn project_commit(id: String, rev: i64, json: String) -> napi::Result<Committed> {
-    crate::sync("committing a project", || {
+pub fn project_prepare(id: String, json: String) -> napi::Result<Prepared> {
+    crate::sync("preparing a project", || {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
         let mut project = parse(&json)?;
         project.id.clone_from(&id);
         project.validate()?;
-        let pretty = serde_json::to_vec_pretty(&project).map_err(|error| error.to_string())?;
-        let pretty = String::from_utf8(pretty).map_err(|error| error.to_string())?;
         let json = compact(&project)?;
-        keep(&id, rev, Arc::new(project));
-        Ok(Committed { pretty, json })
+        let token = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut prepared = PREPARED.lock();
+        prepared.push_back((token, id, Arc::new(project)));
+        while prepared.len() > PREPARED_KEPT {
+            prepared.pop_front();
+        }
+        Ok(Prepared { json, token })
     })
+}
+
+/// Keeps the project `projectPrepare` gave `token` as its id's `rev`, for
+/// `ref`s; false when it's gone (a later `ref` then misses and sends JSON).
+#[napi]
+pub fn project_keep(token: u32, rev: i64) -> bool {
+    let found = {
+        let mut prepared = PREPARED.lock();
+        let at = prepared.iter().position(|(other, _, _)| *other == token);
+        at.and_then(|at| prepared.remove(at))
+    };
+    match found {
+        Some((_, id, project)) => {
+            keep(&id, rev, project);
+            true
+        }
+        None => false,
+    }
 }
 
 #[napi(object)]

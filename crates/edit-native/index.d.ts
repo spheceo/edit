@@ -13,7 +13,7 @@ import type {
   Sections,
 } from "../../packages/edit-types/src/index";
 
-/** A project `projectCommit` saw (by id and the rev it saved as), or the whole JSON. */
+/** A project `projectKeep` kept (by id and the rev it saved as), or the whole JSON. */
 export type ProjectInput = { ref: { id: string; rev: number } } | { json: string };
 
 /** A face: [x0, y0, x1, y1] as shares of the picture from its top left. */
@@ -71,13 +71,6 @@ export declare function censorIssues(project: ProjectInput, start: boolean): Cen
 
 /** The cloud proxy's bitrate (bits/s) for a `width` × `height` picture. */
 export declare function cloudProxyBitrate(width: number, height: number): number
-
-export interface Committed {
-  /** The file's bytes, as the Rust store writes them. */
-  pretty: string
-  /** The same project, compact (what to parse back). */
-  json: string
-}
 
 /** Tiles pictures into a sheet `columns` across and encodes it. */
 export declare function composeSheet(images: Array<RawImage>, columns: number, encoding: "png" | "agent"): Promise<EncodedImage>
@@ -302,6 +295,13 @@ export interface NativeLog {
   failure?: string
 }
 
+export interface Prepared {
+  /** The project as the store writes it: compact, serde defaults filled. */
+  json: string
+  /** What `projectKeep` keeps once the save lands. */
+  token: number
+}
+
 export interface PreviewJob {
   source: string
   probe: Probe
@@ -320,7 +320,7 @@ export interface PreviewJob {
 export declare function probe(path: string): Promise<Probe>
 
 /**
- * `{ ref: { id, rev } }` (a project `projectCommit` saw) or `{ json }`;
+ * `{ ref: { id, rev } }` (a project `projectKeep` kept) or `{ json }`;
  * typed as the header's `ProjectInput` union wherever it's taken.
  */
 export interface ProjectArg {
@@ -329,17 +329,24 @@ export interface ProjectArg {
 }
 
 /**
- * Validates `json` as project `id` (its id set to `id`) and serializes it
- * as the store writes it; kept as (`id`, `rev`) for `ref`s, `rev` being the
- * rev it has once saved.
+ * Keeps the project `projectPrepare` gave `token` as its id's `rev`, for
+ * `ref`s; false when it's gone (a later `ref` then misses and sends JSON).
  */
-export declare function projectCommit(id: string, rev: number, json: string): Committed
+export declare function projectKeep(token: number, rev: number): boolean
 
 /**
  * A project file's text as the store loads it: parsed (serde defaults
  * filled in) and validated.
  */
 export declare function projectLoad(json: string): Loaded
+
+/**
+ * Validates `json` as project `id` (its id set to `id`) and serializes it
+ * as the store writes it. The store checks the rev and saves the file, then
+ * `projectKeep`s it under the rev it saved as, for `ref`s: parsed and
+ * validated once however long the store waits in between (a cloud lock).
+ */
+export declare function projectPrepare(id: string, json: string): Prepared
 
 export interface ProjectRef {
   id: string

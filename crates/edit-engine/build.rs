@@ -45,6 +45,22 @@ fn main() {
         "cargo:rustc-env=EDIT_RENDER_SOURCE={:016x}",
         hasher.finish()
     );
+    // What mixes and encodes an export's sound (the mixer, the model's mutes
+    // and segments, the decoders): a sound made by other code is never reused.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for path in [
+        "../edit-core/src",
+        "src/mix.rs",
+        "src/render.rs",
+        "src/export.rs",
+        "src/util.rs",
+        "src/mac_media.rs",
+        "src/mac_media.m",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+        hash_tree(Path::new(path), &mut hasher);
+    }
+    println!("cargo:rustc-env=EDIT_SOUND_SOURCE={:016x}", hasher.finish());
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
             .file("src/mac_media.m")

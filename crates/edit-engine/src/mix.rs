@@ -180,9 +180,15 @@ impl Source for NativeSource {
 }
 
 /// A stretch decoded by FFmpeg (other formats, other speeds, other systems).
+/// Its end is checked: a decoder that failed (a missing or broken file) is an
+/// error, never a stretch of silence in an export that looks fine.
 struct FfmpegSource {
-    child: Child,
+    child: crate::util::Watched,
     stdout: BufReader<ChildStdout>,
+    /// FFmpeg's complaints, read as they come (so a full pipe never blocks it).
+    stderr: Option<std::thread::JoinHandle<String>>,
+    path: PathBuf,
+    ended: bool,
     bytes: Vec<u8>,
 }
 
@@ -216,15 +222,51 @@ impl FfmpegSource {
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("ffmpeg: {error}"))?;
         let stdout = child.stdout.take().ok_or("ffmpeg stdout")?;
+        let stderr = child.stderr.take().map(|mut pipe| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = pipe.read_to_string(&mut text);
+                text
+            })
+        });
         Ok(Self {
-            child,
+            child: crate::util::Watched::new(child),
             stdout: BufReader::with_capacity(1 << 16, stdout),
+            stderr,
+            path: path.to_owned(),
+            ended: false,
             bytes: Vec::new(),
         })
+    }
+
+    /// At the end of its output: whether FFmpeg finished or failed.
+    fn finish(&mut self) -> Result<(), String> {
+        if self.ended {
+            return Ok(());
+        }
+        self.ended = true;
+        let status = self.child.wait().map_err(|error| error.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        let stderr = self
+            .stderr
+            .take()
+            .and_then(|thread| thread.join().ok())
+            .unwrap_or_default();
+        let why = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map_or_else(|| status.to_string(), |line| line.trim().to_owned());
+        Err(format!(
+            "could not decode the sound of {}: {why}",
+            self.path.display()
+        ))
     }
 }
 
@@ -237,7 +279,10 @@ impl Source for FfmpegSource {
                 .stdout
                 .read(self.bytes.get_mut(filled..).unwrap_or_default())
             {
-                Ok(0) => break,
+                Ok(0) => {
+                    self.finish()?;
+                    break;
+                }
                 Ok(n) => filled += n,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(format!("decoding sound: {error}")),
@@ -252,13 +297,6 @@ impl Source for FfmpegSource {
             *sample = f32::from_le_bytes(*bytes);
         }
         Ok(frames)
-    }
-}
-
-impl Drop for FfmpegSource {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
@@ -1031,6 +1069,84 @@ mod tests {
             let got = left(&out, 0.25);
             assert!((got - 0.15 * 10_f32.powf(-0.5)).abs() < 2e-4, "{got}");
         }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn mix_result(
+        native: bool,
+        parts: &[Part],
+        total: usize,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
+        mix_with(
+            Sources::new(native),
+            parts,
+            total,
+            cancel,
+            |_| {},
+            |_| Ok(()),
+        )
+    }
+
+    /// A missing or broken file fails the mix: it never becomes silence in an
+    /// export that looks fine.
+    #[test]
+    fn a_sound_that_cannot_be_decoded_fails_the_mix() {
+        let dir = temp_dir("broken");
+        let broken = dir.join("broken.wav");
+        std::fs::write(&broken, b"not a wav file at all").unwrap();
+        for path in [dir.join("missing.wav"), broken] {
+            for native in [true, false] {
+                let error = mix_result(
+                    native,
+                    &[part(&path, segment(0.0, 1.0, 0.0))],
+                    RATE,
+                    &AtomicBool::new(false),
+                )
+                .unwrap_err();
+                assert!(
+                    error.contains("could not decode the sound"),
+                    "{native} {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        // A clip running past its file's end is still silence after it.
+        let short = ramp(&dir, "ramp.wav");
+        let out = mixed_with(false, &[part(&short, segment(0.0, 2.0, 9.5))], RATE * 2);
+        assert!((left(&out, 0.25) - 0.975).abs() < 1e-3);
+        assert_eq!(left(&out, 1.5), 0.0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A decoder that never answers (here FFmpeg waits on a pipe nobody
+    /// writes to) is killed by the cancel instead of holding the export.
+    #[test]
+    fn cancel_stops_a_decoder_that_hangs() {
+        let dir = temp_dir("hang");
+        let fifo = dir.join("never.wav");
+        assert!(Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        let cancel = AtomicBool::new(false);
+        let started = Instant::now();
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                cancel.store(true, Ordering::Release);
+            });
+            crate::util::killed_on_cancel(&cancel, || {
+                mix_result(false, &[part(&fifo, segment(0.0, 1.0, 0.0))], RATE, &cancel)
+            })
+        });
+        assert!(result.is_err());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -1,8 +1,9 @@
-/** HH:MM:SS:FF at `fps`. */
+/** HH:MM:SS:FF at `fps`; an NTSC rate (23.976) counts at its whole rate (24), as non-drop-frame timecode does. */
 export function timecode(frame: number, fps: number) {
   const f = Math.max(0, Math.floor(frame));
-  const totalSeconds = Math.floor(f / fps);
-  const ff = f % fps;
+  const base = Math.max(1, Math.round(fps));
+  const totalSeconds = Math.floor(f / base);
+  const ff = f % base;
   const ss = totalSeconds % 60;
   const mm = Math.floor(totalSeconds / 60) % 60;
   const hh = Math.floor(totalSeconds / 3600);

@@ -12,6 +12,7 @@ import { openMenu } from "./ContextMenu";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { cx, IconButton } from "./ui";
+import { rate } from "../lib/types";
 
 const useFrame = () => useSyncExternalStore(playhead.subscribe, () => Math.floor(playhead.frame));
 const usePlaying = () => useSyncExternalStore(playhead.subscribe, () => playhead.playing);
@@ -193,7 +194,7 @@ function dragTransform(event: React.PointerEvent, wrap: HTMLDivElement) {
 function Transport({ fullscreen }: { fullscreen: boolean }) {
   const frame = useFrame();
   const playing = usePlaying();
-  const fps = useEditor((state) => state.project?.settings.fps ?? 30);
+  const fps = useEditor((state) => (state.project ? rate(state.project.settings) : 30));
   const duration = useEditor((state) => (state.project ? projectDuration(state.project) : 0));
   const points = useInOut();
   const span = inOutSpan(duration, points);

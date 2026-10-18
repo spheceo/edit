@@ -106,8 +106,16 @@ export function duration(project: Project): number {
   return end;
 }
 
+/** Frames per second: `settings.fps`, ×1000/1001 when `settings.ntsc` (edit-core `Project::fps`). */
 export function fps(project: Project): number {
-  return Math.max(project.settings.fps, 1);
+  const whole = Math.max(project.settings.fps, 1);
+  return project.settings.ntsc === true ? (whole * 1000) / 1001 : whole;
+}
+
+/** The rate as people say it: "30", "23.976". */
+export function rateText(settings: { fps: number; ntsc?: boolean }): string {
+  if (settings.ntsc !== true) return String(settings.fps);
+  return (Math.round((settings.fps * 1000 * 1000) / 1001) / 1000).toString();
 }
 
 /** One-based display index for a track among tracks of its kind (V1, A2…). */

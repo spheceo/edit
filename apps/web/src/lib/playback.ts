@@ -9,6 +9,7 @@ import { clipEnd, paramAt, projectDuration, validateProject } from "./edit";
 import { mutePoints } from "./mutes";
 import { savedFrame, saveFrame } from "./storage";
 import type { Clip, Media, Project, Sections, Track } from "./types";
+import { rate } from "./types";
 
 type Listener = () => void;
 class Playhead {
@@ -326,7 +327,7 @@ class Preview {
     this.sounds = nextSounds;
     this.loadPeaks(project);
     // Sound already queued keeps playing (nothing re-buffers) unless what it was cut from changed.
-    if (previous?.settings.fps !== project.settings.fps || [...this.scheduled.values()].some((sound) => this.outdated(sound, changed))) {
+    if ((previous ? rate(previous.settings) : undefined) !== rate(project.settings) || [...this.scheduled.values()].some((sound) => this.outdated(sound, changed))) {
       this.resetClock();
     }
     this.engineStale = true;
@@ -459,7 +460,7 @@ class Preview {
   private tick() {
     if (!this.project || !this.audio || this.audio.state !== "running") return;
     if (!this.engine) { this.resetClock(); this.setBuffering(true); return; }
-    const fps = this.project.settings.fps;
+    const fps = rate(this.project.settings);
     let frame = this.runningClock
       ? this.frameAtStart + Math.max(0, this.audio.currentTime - this.clockStart) * fps
       : playhead.frame;
@@ -555,7 +556,7 @@ class Preview {
       if (!picture && media && clip?.type === "video") {
         const time = videoTime(source.time, media.fps, media.duration);
         picture = this.decoder.nearbyPicture(this.sources.get(source.media)!, time, STAND_IN_REACH * Math.max(1, clip.speed),
-          Math.max(0, clip.source_in - 0.5 / (media.fps || 30)), clip.source_in + clip.duration / this.project!.settings.fps * clip.speed);
+          Math.max(0, clip.source_in - 0.5 / (media.fps || 30)), clip.source_in + clip.duration / rate(this.project!.settings) * clip.speed);
       }
       if (!picture) return null;
       pictures.push(picture);
@@ -574,12 +575,12 @@ class Preview {
     if (media.kind === "image") this.decoder.requestImage(url, url);
     else if (!playhead.playing && this.dragging && !this.settled) this.decoder.requestRough(url, url, lane, source.time, media.fps || 30, media.duration);
     else this.decoder.requestVideo(url, url, lane, source.time, media.fps || 30, media.duration,
-      playhead.playing ? 1 : this.direction, playhead.playing, speed / this.project!.settings.fps);
+      playhead.playing ? 1 : this.direction, playhead.playing, speed / rate(this.project!.settings));
   }
 
   private warm(frame: number, sources: PictureSource[]) {
     if (!this.project) return;
-    const fps = this.project.settings.fps;
+    const fps = rate(this.project.settings);
     const lanes = new Set<string>();
     for (const source of sources) this.requestPicture(source, lanes);
     // Scrubbing needs one picture, not concurrent audio and future-cut decodes.
@@ -608,7 +609,7 @@ class Preview {
     if (!this.audible(clip)) return;
     const media = this.media.get(clip.media)!;
     const url = this.sounds.get(clip.media)!;
-    const time = clip.source_in + Math.max(0, frame - clip.start) / this.project!.settings.fps * clip.speed;
+    const time = clip.source_in + Math.max(0, frame - clip.start) / rate(this.project!.settings) * clip.speed;
     if (time >= media.duration) return;
     const lane = `a:${clip.id}`;
     lanes.add(lane);
@@ -617,7 +618,7 @@ class Preview {
 
   private audioReady(frame: number, ahead: number) {
     if (!this.project) return true;
-    const fps = this.project.settings.fps;
+    const fps = rate(this.project.settings);
     const until = frame + ahead * fps;
     return this.clipsAround(frame, until).every((clip) => {
       if (!this.audible(clip)) return true;
@@ -636,7 +637,7 @@ class Preview {
     const project = this.project;
     const audio = this.audio;
     if (!project || !audio) return;
-    const fps = project.settings.fps;
+    const fps = rate(project.settings);
     const until = frame + fps * AUDIO_AHEAD;
     for (const clip of this.clipsAround(frame, until)) {
       if (!this.audible(clip)) continue;
@@ -746,7 +747,7 @@ class Preview {
         if (media && clip?.type === "video") {
           const time = videoTime(source.time, media.fps, media.duration);
           picture = this.decoder.nearbyPicture(this.sources.get(source.media)!, time, 0.12 * clip.speed,
-            Math.max(0, clip.source_in - 0.5 / (media.fps || 30)), clip.source_in + clip.duration / this.project.settings.fps * clip.speed);
+            Math.max(0, clip.source_in - 0.5 / (media.fps || 30)), clip.source_in + clip.duration / rate(this.project.settings) * clip.speed);
         }
       }
       if (!picture) {

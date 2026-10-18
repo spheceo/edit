@@ -6,6 +6,19 @@ export interface Settings {
   width: number;
   height: number;
   fps: number;
+  /** The NTSC rate near `fps` (×1000/1001: 23.976, 29.97); `rate(settings)` is the real rate. */
+  ntsc?: boolean;
+}
+
+/** Frames per second: `fps`, ×1000/1001 when `ntsc` (edit-core `Project::fps`). Timeline frames are at this rate. */
+export function rate(settings: Settings): number {
+  const whole = Math.max(settings.fps, 1);
+  return settings.ntsc === true ? (whole * 1000) / 1001 : whole;
+}
+
+/** The rate as people say it: "30", "23.976". */
+export function rateText(settings: Settings): string {
+  return settings.ntsc === true ? (Math.round((Math.max(settings.fps, 1) * 1000 * 1000) / 1001) / 1000).toString() : String(settings.fps);
 }
 
 export type MediaKind = "video" | "audio" | "image";

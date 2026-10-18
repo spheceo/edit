@@ -1866,7 +1866,11 @@ fn render_picture(
             "-s",
             &format!("{width}x{height}"),
             "-framerate",
-            &settings.fps.to_string(),
+            &if settings.ntsc {
+                format!("{}/1001", settings.fps * 1000)
+            } else {
+                settings.fps.to_string()
+            },
             "-i",
             "pipe:0",
             "-filter_complex",
@@ -2933,6 +2937,73 @@ mod tests {
             sound_path(&project, &HashMap::new(), "m"),
             Some(PathBuf::from("https://r2/x.mp4?sig"))
         );
+    }
+
+    /// An NTSC project (24 × 1000/1001) exports at exactly 24000/1001, its
+    /// frames and sound the timeline's length at that rate.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_ntsc_project_exports_at_its_exact_rate() {
+        let dir = temp_dir("ntsc");
+        let red = source(&dir, "red.mp4", "red", 0.5);
+        let project: Project = serde_json::from_value(json!({
+            "version": 1, "id": "ntsc", "name": "t",
+            "settings": {"width": 320, "height": 180, "fps": 24, "ntsc": true},
+            "media": [{"id": "r", "name": "red", "path": red, "kind": "video", "duration": 2.0, "width": 320, "height": 180, "fps": 30, "has_audio": true}],
+            "tracks": [{"id": "v", "kind": "video"}, {"id": "a", "kind": "audio"}],
+            "clips": [
+                {"id": "v1", "track": "v", "type": "video", "media": "r", "source_in": 0.0, "start": 0, "duration": 46},
+                {"id": "a1", "track": "a", "type": "audio", "media": "r", "source_in": 0.0, "start": 0, "duration": 46}
+            ],
+        }))
+        .unwrap();
+        assert!((project.fps() - 23.976_023_976).abs() < 1e-6);
+        let options = ExportOptions::default();
+        let plan = export_plan(&project, &options).unwrap();
+        let output = dir.join("ntsc.mp4");
+        let cache = dir.join("cache");
+        export_file(
+            &project,
+            &options,
+            &plan,
+            &output,
+            &cache,
+            &HashMap::new(),
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
+        let probe = Command::new(crate::util::ffprobe())
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-count_packets",
+                "-show_entries",
+                "stream=r_frame_rate,nb_read_packets",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&probe.stdout).trim(),
+            "24000/1001,46"
+        );
+        let seconds = 46.0 * 1001.0 / 24000.0;
+        assert!(
+            (duration(&output, "v:0") - seconds).abs() < 0.01,
+            "{}",
+            duration(&output, "v:0")
+        );
+        assert!(
+            (duration(&output, "a:0") - seconds).abs() < 0.03,
+            "{}",
+            duration(&output, "a:0")
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

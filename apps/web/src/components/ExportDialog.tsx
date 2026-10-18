@@ -35,6 +35,7 @@ import { flushSave, useEditor, type DriveState } from "../lib/store";
 import { shortDuration, timecode } from "../lib/time";
 import type { DriveFile } from "../lib/types";
 import { Button, cx, Modal, Select, spring, Switch, Tabs } from "./ui";
+import { rate } from "../lib/types";
 
 type Settings = Omit<ExportOptions, "range" | "chapters">;
 
@@ -79,6 +80,8 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [, setTick] = useState(0);
 
   const fps = project?.settings.fps ?? 30;
+  // Timeline frames are at the project's real rate (23.976 for an NTSC 24).
+  const frameRate = project ? rate(project.settings) : 30;
   const duration = project ? projectDuration(project) : 0;
   const inOut = inOutSpan(duration, points);
   const intro = preview.sections?.intro ?? null;
@@ -133,9 +136,9 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
       : spanChoice === "intro" && intro
         ? [intro[0], intro[1]]
         : [0, duration];
-  const seconds = (range[1] - range[0]) / fps;
+  const seconds = (range[1] - range[0]) / frameRate;
   const outFps = settings.fps ?? fps;
-  const spanChapters = chaptersInSpan(chapters, range, fps);
+  const spanChapters = chaptersInSpan(chapters, range, frameRate);
   const embedding = hasChapters(settings.format) && embed && spanChapters.length >= 2;
   const [width, height] = outputSize(settings, project.settings.width, project.settings.height);
   const bytes = estimateBytes(settings, width, height, seconds, outFps);
@@ -180,15 +183,15 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
 
   const copyChapters = () => {
     void navigator.clipboard
-      .writeText(youtubeChapters(spanChapters, range, fps))
+      .writeText(youtubeChapters(spanChapters, range, frameRate))
       .then(() => toast(`Copied ${spanChapters.length} chapters for the YouTube description`))
       .catch(() => toast("Couldn't copy to the clipboard", "error"));
   };
 
   const spans = [
-    inOut && { value: "inout" as const, label: `In–Out · ${shortDuration((inOut[1] - inOut[0]) / fps)}` },
-    { value: "whole" as const, label: `Whole · ${shortDuration(duration / fps)}` },
-    intro && { value: "intro" as const, label: `Intro · ${shortDuration((intro[1] - intro[0]) / fps)}` },
+    inOut && { value: "inout" as const, label: `In–Out · ${shortDuration((inOut[1] - inOut[0]) / frameRate)}` },
+    { value: "whole" as const, label: `Whole · ${shortDuration(duration / frameRate)}` },
+    intro && { value: "intro" as const, label: `Intro · ${shortDuration((intro[1] - intro[0]) / frameRate)}` },
   ].filter((entry): entry is { value: SpanChoice; label: string } => Boolean(entry));
   const sizes = [2160, 1440, 1080, 720].map((size) => ({ value: size, label: `${size}p` }));
   const rates = [...new Set([30, 60, fps])].sort((a, b) => a - b);
@@ -223,8 +226,8 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
               still={still}
             />
             <div className="mt-2 flex items-center justify-between font-mono text-[11px] text-faint tabular">
-              <span>{timecode(range[0], fps)}</span>
-              {!still && <span>{timecode(range[1], fps)}</span>}
+              <span>{timecode(range[0], frameRate)}</span>
+              {!still && <span>{timecode(range[1], frameRate)}</span>}
             </div>
             <p className="mt-3 text-[12px] text-muted tabular">
               {[hasVideo(settings.format) && `${width}×${height}`, hasVideo(settings.format) && !still && `${outFps} fps`, still ? "one frame" : shortDuration(seconds), bytes !== null && `≈ ${formatBytes(bytes)}`]

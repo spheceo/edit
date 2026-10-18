@@ -959,7 +959,7 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
   const orbit = clamp(num(args.orbit) ?? 15.0, -90.0, 90.0);
   const push = clamp(num(args.push) ?? 0.12, 0.0, 0.6);
   const { width, height } = project.settings;
-  const fps = Math.max(project.settings.fps, 1);
+  const fps = fpsOf(project);
   const frames = still ? 0 : Math.max(toI64(round(seconds * fps)), 0);
   let lat: number;
   let lon: number;

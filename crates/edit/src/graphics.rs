@@ -472,6 +472,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 fps: 30,
+                ntsc: false,
             },
         );
         let mut photo: Media = serde_json::from_value(json!({"id": "m1", "name": "news.jpg",

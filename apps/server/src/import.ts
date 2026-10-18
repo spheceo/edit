@@ -171,12 +171,15 @@ async function addMedia(
   const [live, added] = await app.store.update(id, origin, (project) => {
     const added: string[] = [];
     // A subtitled video in the making (footage into an empty project with no
-    // script): the project takes a rate the footage's divides into evenly, so
-    // its export doesn't judder (23.976 footage at 30 fps repeats every
+    // script): the project takes the footage's own rate where it can, so its
+    // export shows every frame once (23.976 footage at 30 fps repeats every
     // fourth frame; at 24, one frame in 1001).
     const first = items.find((item) => item.probe.kind === "video");
     if (place && project.clips.length === 0 && (project.script === undefined || project.script === null) && origin !== "voice" && origin !== "script" && first !== undefined) {
-      project.settings.fps = footageRate(first.probe.fps);
+      const rate = footageRate(first.probe.fps);
+      project.settings.fps = rate.fps;
+      if (rate.ntsc) project.settings.ntsc = true;
+      else delete project.settings.ntsc;
     }
     for (const item of items) {
       const existing = project.media.find((other) => other.path === item.path);
@@ -231,12 +234,16 @@ async function addMedia(
  * more than 30 (twice the frames to render and export for no gain in a
  * subtitled video): 23.976 and 24 → 24, 25 and 50 → 25, the rest → 30.
  */
-export function footageRate(fps: number): number {
-  if (!Number.isFinite(fps) || fps <= 0) return 30;
-  const near = (rate: number) => Math.abs(fps - rate) < 0.05 || Math.abs(fps - rate * 1000 / 1001) < 0.05;
-  if (near(24)) return 24;
-  if (near(25) || near(50)) return 25;
-  return 30;
+export function footageRate(fps: number): { fps: number; ntsc: boolean } {
+  if (!Number.isFinite(fps) || fps <= 0) return { fps: 30, ntsc: false };
+  // NTSC rates (×1000/1001) are kept: 23.976 is 23.976, not 24.
+  const ntsc = (rate: number) => Math.abs(fps - (rate * 1000) / 1001) < 0.005;
+  const near = (rate: number) => Math.abs(fps - rate) < 0.05 || Math.abs(fps - (rate * 1000) / 1001) < 0.05;
+  if (near(24)) return { fps: 24, ntsc: ntsc(24) };
+  if (near(25) || near(50)) return { fps: 25, ntsc: false };
+  if (near(30)) return { fps: 30, ntsc: ntsc(30) };
+  if (near(60)) return { fps: 30, ntsc: ntsc(60) };
+  return { fps: 30, ntsc: false };
 }
 
 const COLORS: ClipColor[] = ["blue", "purple", "cyan", "green", "orange", "pink"];

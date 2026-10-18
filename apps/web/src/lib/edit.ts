@@ -4,7 +4,7 @@
 import { current, isDraft } from "immer";
 
 import { isSubtitled } from "./drive";
-import { HOUSE_BOX, HOUSE_GLOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind } from "./types";
+import { HOUSE_BOX, HOUSE_GLOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind, rate } from "./types";
 
 export const freshId = (project: Project, prefix: string) => {
   for (;;) {
@@ -77,7 +77,7 @@ function shiftKeyframes(clip: Clip, by: number) {
 export function trimStart(project: Project, clip: Clip, delta: number) {
   delta = Math.min(delta, clip.duration - 1);
   if (clip.type === "video" || clip.type === "audio") {
-    const fps = project.settings.fps;
+    const fps = rate(project.settings);
     const maxBack = Math.floor((clip.source_in * fps) / clip.speed);
     delta = Math.max(delta, -maxBack);
     clip.source_in = Math.max(0, clip.source_in + (delta / fps) * clip.speed);
@@ -93,7 +93,7 @@ export function maxDuration(project: Project, clip: Clip) {
   if (clip.type !== "video" && clip.type !== "audio") return Number.POSITIVE_INFINITY;
   const media = mediaOf(project, clip.media);
   if (!media) return clip.duration;
-  return Math.max(1, Math.floor(((media.duration - clip.source_in) / clip.speed) * project.settings.fps));
+  return Math.max(1, Math.floor(((media.duration - clip.source_in) / clip.speed) * rate(project.settings)));
 }
 
 /** Splits `clip` at absolute `frame`; returns the new right-hand clip. */
@@ -106,7 +106,7 @@ function splitClip(project: Project, clip: Clip, frame: number, link?: string): 
   right.duration = clip.duration - offset;
   right.fade_in = 0;
   if (link !== undefined) right.link = link;
-  if (right.type === "video" || right.type === "audio") right.source_in += (offset / project.settings.fps) * sourceSpeed(clip);
+  if (right.type === "video" || right.type === "audio") right.source_in += (offset / rate(project.settings)) * sourceSpeed(clip);
   shiftKeyframes(right, offset);
   clip.duration = offset;
   clip.fade_out = 0;
@@ -171,7 +171,7 @@ const colorCycle: ClipColor[] = ["blue", "purple", "cyan", "green", "orange", "p
 export function placeMedia(project: Project, mediaId: string, frame: number, videoTrack?: string): string[] {
   const media = mediaOf(project, mediaId);
   if (!media) return [];
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
   const duration = Math.max(1, Math.floor(media.duration * fps));
   const start = Math.max(0, Math.round(frame));
   const end = start + duration;
@@ -260,7 +260,7 @@ function cutInStyle(width: number, height: number, text: string): TextStyle {
 /** Adds a generated element at `frame`: on `onTrack` (overwriting), else a free track above the footage. */
 export function addElement(project: Project, element: Element, frame: number, onTrack?: string): string {
   const subtitleProject = element === "subtitle" && isSubtitled(project);
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
   const duration = Math.max(1, Math.round(ELEMENT_SECONDS[element] * fps));
   const start = Math.max(0, Math.round(frame));
   let track: string;
@@ -848,7 +848,7 @@ export function setFades(project: Project, ids: Iterable<string>, frames: number
 
 /** Marks the source of each selected clip under `frame`; the mark shows on every clip of that media. */
 export function addMarker(project: Project, ids: Iterable<string>, frame: number) {
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
   const done = new Set<string>();
   for (const id of ids) {
     const clip = project.clips.find((candidate) => candidate.id === id);

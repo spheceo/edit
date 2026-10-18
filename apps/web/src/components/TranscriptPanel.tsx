@@ -8,6 +8,7 @@ import { useEditor } from "../lib/store";
 import type { Project, Transcript } from "../lib/types";
 import { toggleMenu } from "./ContextMenu";
 import { Button, cx, Spinner } from "./ui";
+import { rate } from "../lib/types";
 
 /** Transcripts by `${project}/${media}`, loaded once each. */
 const loaded = new Map<string, Transcript>();
@@ -129,7 +130,7 @@ export function TranscriptPanel() {
   const toast = useEditor((state) => state.toast);
   const [version, setVersion] = useState(0);
   const list = useRef<HTMLDivElement>(null);
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
   const { clips, tracks } = project;
 
   // Media heard on the timeline, in order of first use.

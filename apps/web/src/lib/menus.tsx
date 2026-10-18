@@ -59,6 +59,7 @@ import {
 } from "./edit";
 import { playhead, preview } from "./playback";
 import { useEditor } from "./store";
+import { rate } from "./types";
 
 const state = () => useEditor.getState();
 
@@ -94,7 +95,7 @@ export function clipMenu(clipId: string): MenuItem[] {
   const timed = clips.some((clip) => clip.type === "video" || clip.type === "audio");
   const linked = isLinked(project, ids);
   const canLink = !linked && clips.some((clip) => clip.type === "video") && clips.some((clip) => clip.type === "audio");
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
   return [
     {
       label: "Split at playhead",

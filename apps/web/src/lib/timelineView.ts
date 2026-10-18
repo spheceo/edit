@@ -8,6 +8,7 @@ import { inOutSpan, pointsOf } from "./inOut";
 import { playhead, preview } from "./playback";
 import { useEditor } from "./store";
 import type { Project, Section, Sections, TimelineMarker } from "./types";
+import { rate } from "./types";
 
 /** Height of the band of sections (intro, B-roll, story, outro) atop the ruler, in px. */
 const BAND = 18;
@@ -53,7 +54,7 @@ export const setLanesWidth = (width: number) => {
 /** Frames the view can cover: the edit (or the playhead, if past it) plus room, and at least a minute. */
 export function contentFrames() {
   const project = useEditor.getState().project;
-  const fps = project?.settings.fps ?? 30;
+  const fps = (project ? rate(project.settings) : 30);
   const end = project ? projectDuration(project) : 0;
   return Math.max(end * 1.05, playhead.frame + fps, fps * 60);
 }
@@ -65,7 +66,7 @@ export function contentFrames() {
  */
 export function initialPpf() {
   const project = useEditor.getState().project;
-  const fps = project?.settings.fps ?? 30;
+  const fps = (project ? rate(project.settings) : 30);
   const end = project ? projectDuration(project) : 0;
   const seconds = Math.min(30, Math.max(10, (end / fps) * 1.2));
   return lanesWidth / (seconds * fps);

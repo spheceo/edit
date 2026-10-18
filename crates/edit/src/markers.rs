@@ -333,6 +333,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 fps: 30,
+                ntsc: false,
             },
         );
         p.media.push(serde_json::from_value(json!({"id":"m1","name":"bodycam","path":"/b.mp4","kind":"video","duration":600.0,"width":1920,"height":1080,"has_audio":true})).unwrap());

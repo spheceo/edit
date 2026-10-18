@@ -20,6 +20,7 @@ import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
 import { cx, spring, Spinner } from "./ui";
 import { toggleFullscreen, Viewer } from "./Viewer";
+import { rate } from "../lib/types";
 
 const MEDIA_WIDTH = 280;
 const SIDE_WIDTH = 296;
@@ -301,7 +302,7 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
       if (!project) return;
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
-      const fps = project.settings.fps;
+      const fps = rate(project.settings);
       const handled = () => event.preventDefault();
 
       if (mod && key === "z") {

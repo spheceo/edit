@@ -31,6 +31,7 @@ import { GRAPH_HEADER, GraphEditor } from "./GraphEditor";
 import { clipTitle } from "./Inspector";
 import { ELEMENT_MIME, MEDIA_MIME } from "./MediaPanel";
 import { cx, IconButton } from "./ui";
+import { rate } from "../lib/types";
 
 const HEADER = 84;
 const VIDEO_ROW = 48;
@@ -161,7 +162,7 @@ export function Timeline() {
   const assets = useRef(0);
 
   const { rows, height: contentHeight } = layoutRows(project);
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
 
   const requestDraw = () => {
     if (queued.current) return;
@@ -725,7 +726,7 @@ export function Timeline() {
     const { ppf, scrollY } = useView.getState();
     const { rows } = layoutRows(project);
     const selected = new Set(state.selection);
-    const fps = project.settings.fps;
+    const fps = rate(project.settings);
     const statuses = state.media;
 
     // Rows.
@@ -1030,7 +1031,7 @@ function drawClip(
 
   const visible0 = Math.max(x0, -2);
   const visible1 = Math.min(x0 + w, width + 2);
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
   const ppf = (x1 - x0) / clip.duration;
   const sourceAt = (x: number) =>
     (clip.type === "video" || clip.type === "audio" ? clip.source_in : 0) + ((x - x0) / ppf / fps) * ("speed" in clip ? clip.speed : 1);

@@ -5,7 +5,7 @@
 export const INSTRUCTIONS = `Edit is a local video editor. Tools edit the project the user has open (pass project_id to target another). Changes appear live in their UI and are undoable there.
 
 Model (JSON):
-- settings: {width, height, fps}. Timeline times (clip.start, clip.duration, fade_in, fade_out, keyframe.frame) are integer FRAMES at settings.fps. source_in is SECONDS into the media.
+- settings: {width, height, fps, ntsc?}; ntsc means the rate is fps×1000/1001 (23.976, 29.97). Timeline times (clip.start, clip.duration, fade_in, fade_out, keyframe.frame) are integer FRAMES at that rate. source_in is SECONDS into the media.
 - tracks: video tracks composite in list order (first = bottom, label V1); audio tracks mix. A track holds non-overlapping clips. Video-type clips go on video tracks; audio clips on audio tracks. One video track may be the subtitles' own (subtitles: true): always the top video track, holding only subtitles (add_subtitles puts them there; new tracks go beneath it; tidy_tracks leaves it alone). Put nothing else on it.
 - clip: {id, track, start, duration, color (blue|cyan|green|yellow|orange|red|purple|pink), link?, fade_in, fade_out, keyframes, type, ...}
   - type "video" (also images): media, source_in, speed (0.05..20), transform {x, y (px from frame centre, y down), scale (1 = fit frame), rotation (deg clockwise), shake (px of handheld camera wobble, 0 = still)}, opacity 0..1, optional crop {left, right, top, bottom} = shares of the picture cut off each side (0..1); what's left stays where it was in the picture (move it with x/y); optional frame {width (px, default 12), color, shadow 0..1 (default 0.55)} = a printed photo's dark border and soft drop shadow (evidence boards)

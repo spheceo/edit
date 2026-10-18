@@ -868,6 +868,7 @@ async fn create_project(State(app): State<App>, Json(body): Json<CreateProject>)
         width: body.width.unwrap_or(defaults.width),
         height: body.height.unwrap_or(defaults.height),
         fps: body.fps.unwrap_or(defaults.fps),
+        ntsc: false,
     };
     let live = app
         .store

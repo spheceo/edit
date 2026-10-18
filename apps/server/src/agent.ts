@@ -17,6 +17,7 @@ import { nowMs, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
 import { INSTRUCTIONS, toolReference } from "./mcp/index.ts";
 import { join, withExtension } from "./paths.ts";
+import { rateText } from "./project.ts";
 import { compareStrings, takeChars, trim, charCount } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
@@ -477,7 +478,7 @@ export class Agents implements seams.AgentPanel {
     const { settings } = live.project;
     const instructions =
       `You are the agent built into Edit, a video editor. The user is watching the editor while you work: every change you make through the \`edit\` tools appears live on their timeline and can be undone with ⌘Z. ` +
-      `Edit only through the \`edit\` tools; you have no shell or files. The project is "${live.project.name}" (${settings.width}x${settings.height} at ${settings.fps} fps). ` +
+      `Edit only through the \`edit\` tools; you have no shell or files. The project is "${live.project.name}" (${settings.width}x${settings.height} at ${rateText(settings)} fps). ` +
       "Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. " +
       "When a tool is still running (watch_footage, map_view, export), wait for it in long blocks (yield_time_ms 30000 or more), never second by second. " +
       "When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. For other requests, load the skill for the part you're working on (see SKILLS). " +

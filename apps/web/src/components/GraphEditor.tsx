@@ -11,7 +11,7 @@ import { controlPoints, effectiveHandles, isAnimated, paramAt, sample, segmentSp
 import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import { drawMarquee, drawPlayhead, drawRuler, getLanesWidth, leftTheWindow, MOST_PPF, RULER, setLanesWidth, setView, useView } from "../lib/timelineView";
-import { ANIMATABLE, type Clip, type Ease, type Handle, type Keyframe } from "../lib/types";
+import { ANIMATABLE, type Clip, type Ease, type Handle, type Keyframe, rate } from "../lib/types";
 import { openMenu } from "./ContextMenu";
 import { cx } from "./ui";
 
@@ -281,7 +281,7 @@ function Curves({
   const queued = useRef(0);
   const state = useRef({ clip, params, focused, mode, selected });
   state.current = { clip, params, focused, mode, selected };
-  const fps = useEditor((editor) => editor.project?.settings.fps ?? 30);
+  const fps = useEditor((editor) => (editor.project ? rate(editor.project.settings) : 30));
 
   const requestDraw = () => {
     if (queued.current) return;

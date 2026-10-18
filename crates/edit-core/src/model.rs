@@ -289,6 +289,10 @@ pub struct Settings {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// The NTSC rate near `fps`: ×1000/1001 (24 → 23.976, 30 → 29.97), the
+    /// rate of footage shot that way, so its every frame is shown once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ntsc: bool,
 }
 
 impl Default for Settings {
@@ -297,6 +301,7 @@ impl Default for Settings {
             width: 1920,
             height: 1080,
             fps: 30,
+            ntsc: false,
         }
     }
 }
@@ -1722,8 +1727,14 @@ impl Project {
         self.clips.iter().map(Clip::end).max().unwrap_or(0)
     }
 
+    /// Frames per second: `settings.fps`, ×1000/1001 when `settings.ntsc`.
     pub fn fps(&self) -> f64 {
-        f64::from(self.settings.fps.max(1))
+        let fps = f64::from(self.settings.fps.max(1));
+        if self.settings.ntsc {
+            fps * 1000.0 / 1001.0
+        } else {
+            fps
+        }
     }
 
     /// One-based display index for a track among tracks of its kind (V1, A2…).
@@ -2283,6 +2294,23 @@ mod validation_tests {
         });
         project
     }
+    #[test]
+    fn an_ntsc_project_runs_at_a_thousand_over_a_thousand_and_one() {
+        let mut project: Project = serde_json::from_str(
+            r#"{"version":1,"id":"p","name":"p","settings":{"width":1920,"height":1080,"fps":24},"media":[],"tracks":[],"clips":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(project.fps(), 24.0);
+        assert!(!serde_json::to_string(&project.settings)
+            .unwrap()
+            .contains("ntsc"));
+        project.settings.ntsc = true;
+        assert!((project.fps() - 24000.0 / 1001.0).abs() < 1e-12);
+        assert!(serde_json::to_string(&project.settings)
+            .unwrap()
+            .contains(r#""ntsc":true"#));
+    }
+
     #[test]
     fn a_persons_clips_are_all_in_their_colour_and_nobody_is_white() {
         let mut p = project();

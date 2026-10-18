@@ -71,7 +71,7 @@ test.skipIf(ffmpeg === null || ffprobe === null)("importing probes, adds once, p
     expect(project.media[0]).toMatchObject({ id: "m6", name: "clip.mp4", path: footage, kind: "video", has_audio: true, width: 320 });
     expect(project.clips.map((clip) => clip.type)).toEqual(["video", "audio"]);
     // The first footage into an empty project sets its rate.
-    expect(project.settings.fps).toBe(footageRate(project.media[0]!.fps));
+    expect(project.settings.fps).toBe(footageRate(project.media[0]!.fps).fps);
     // Footage in a project with no script starts its transcript straight away.
     expect(["working", "ready"]).toContain(app.media.status(footage).transcript);
     // The same file again is the same media.
@@ -138,8 +138,12 @@ test("a ~/ path is in the user's home", () => {
   expect(expandHome("~user/a.mp4")).toBe("~user/a.mp4");
 });
 
-test("a subtitled video takes a rate its footage divides into evenly, at most 30", () => {
-  expect([23.976023976023978, 24, 25, 29.97002997, 30, 50, 59.94005994, 60, 15, 12.5, 0, Number.NaN].map(footageRate)).toEqual([
-    24, 24, 25, 30, 30, 25, 30, 30, 30, 30, 30, 30,
+test("a subtitled video takes its footage's rate (NTSC ones exactly) or one it divides into evenly, at most 30", () => {
+  const rate = (fps: number) => {
+    const { fps: whole, ntsc } = footageRate(fps);
+    return ntsc ? `${whole}n` : `${whole}`;
+  };
+  expect([23.976023976023978, 24, 25, 29.97002997, 30, 50, 59.94005994, 60, 15, 12.5, 0, Number.NaN].map(rate)).toEqual([
+    "24n", "24", "25", "30n", "30", "25", "30n", "30", "30", "30", "30", "30",
   ]);
 });

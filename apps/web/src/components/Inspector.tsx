@@ -22,7 +22,7 @@ import { FONTS, playhead } from "../lib/playback";
 import { openDialog } from "../lib/dialogs";
 import { useEditor } from "../lib/store";
 import { shortDuration, timecode } from "../lib/time";
-import { HOUSE_BOX, HOUSE_SHADOW, resolvedShake, SHAKE_PRESETS, type Clip, type Project, type Rgba, type ShakeDirection, type ShakeEdges, type ShakeEnvelope, type ShakeMotion, type ShakePreset, type TextPreset } from "../lib/types";
+import { HOUSE_BOX, HOUSE_SHADOW, resolvedShake, SHAKE_PRESETS, type Clip, type Project, type Rgba, type ShakeDirection, type ShakeEdges, type ShakeEnvelope, type ShakeMotion, type ShakePreset, type TextPreset, rate } from "../lib/types";
 import { Button, ColorField, cx, Kbd, Scrub, Select, Switch } from "./ui";
 
 const useInspectorFrame = () =>
@@ -151,7 +151,7 @@ function useClipEditor(clip: Clip) {
 
 function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
   const frame = useInspectorFrame();
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
   const { begin, end, update, once, recolour } = useClipEditor(clip);
   const inside = frame >= clip.start && frame < clip.start + clip.duration;
 
@@ -916,7 +916,7 @@ function Many({ clips }: { clips: Clip[] }) {
 }
 
 function ProjectInfo({ project }: { project: Project }) {
-  const fps = project.settings.fps;
+  const fps = rate(project.settings);
   return (
     <>
       <Header icon={<Clapperboard size={14} />} title="Project" color="#8f8f8f" />

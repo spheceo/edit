@@ -1562,7 +1562,7 @@ export function watchedUses(project: Project): Serde {
     };
   });
   const keyed = uses.map((use) => [serdeText(use), use] as const).sort((a, b) => compareKeys(a[0], b[0]));
-  return { fps: project.settings.fps, uses: keyed.map(([, use]) => use) };
+  return { fps: fpsOf(project), uses: keyed.map(([, use]) => use) };
 }
 
 /** The receipt key of a finished watch: what it looked at and the transcripts it left. */

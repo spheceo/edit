@@ -10,6 +10,8 @@ export interface Settings {
   width: number;
   height: number;
   fps: number;
+  /** The NTSC rate near `fps` (×1000/1001: 23.976, 29.97); `fps(project)` is the real rate. */
+  ntsc?: boolean;
 }
 
 export type MediaKind = "video" | "audio" | "image";

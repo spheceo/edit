@@ -242,6 +242,35 @@ test("resolve takes the id given, else the open one, else the newest", () => {
   }
 });
 
+test("listing summarises projects without keeping them, and sees a file change", async () => {
+  const { home, store, cleanup } = fixtureHome("store-list");
+  try {
+    const ids: string[] = [];
+    for (const name of ["One", "Two", "Three"]) {
+      const id = store.create(name, { width: 64, height: 36, fps: 30 }).project.id;
+      await store.update(id, "test", (project) => {
+        project.media.push({ id: "m1", name: "a.mp4", path: `/footage/${name}.mp4`, kind: "video", duration: 5, width: 64, height: 36, fps: 30, has_audio: true });
+      });
+      ids.push(id);
+    }
+    const fresh = Store.open(home);
+    const kept = () => (fresh as unknown as { projects: Map<string, unknown> }).projects.size;
+    expect(fresh.list().map((summary) => summary.name).sort()).toEqual(["One", "Three", "Two"]);
+    expect(kept()).toBe(0);
+    expect(fresh.usingMedia("/footage/Two.mp4")).toEqual([ids[1]!]);
+    expect(kept()).toBe(0);
+    // Saved by another writer: the summary follows the file.
+    await store.update(ids[0]!, "test", (project) => void (project.name = "One again"));
+    expect(fresh.list().some((summary) => summary.name === "One again")).toBe(true);
+    // An open project is summarised from memory.
+    fresh.get(ids[2]!);
+    expect(kept()).toBe(1);
+    expect(fresh.list().length).toBe(3);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a file holding another project says so", () => {
   const { home, store, cleanup } = fixtureHome("store-other");
   try {

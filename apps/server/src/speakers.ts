@@ -274,8 +274,8 @@ export function labels(named: Named): Map<string, string> {
  */
 function context(app: App, source: string): string {
   let out = "";
-  for (const summary of app.store.list()) {
-    const live = app.store.get(summary.id);
+  for (const id of app.store.usingMedia(source)) {
+    const live = app.store.get(id);
     if (live === null) continue;
     const project = live.project;
     if (!project.media.some((media) => media.path === source)) continue;

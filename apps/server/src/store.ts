@@ -99,6 +99,8 @@ export class Store {
   /** Layout changes reach cache keys (`mediaDrive.publish`): the server's store. */
   private publishes = false;
   private projects = new Map<string, Live>();
+  /** Summaries of projects not loaded, by id, with the file version (size:mtime) they were read from. */
+  private summaries = new Map<string, { stamp: string; summary: ProjectSummary; media: string[] }>();
   /** The project the UI opened last; agent tools default to it. */
   private active: string | null = null;
   readonly events = new Events();
@@ -208,67 +210,98 @@ export class Store {
     return join(this.home, "projects", `${id}.chat.json`);
   }
 
+  /**
+   * Every project's summary, newest first. Read without keeping the projects:
+   * an open one is summarised from memory, any other from its file, parsed
+   * once per version of the file (size and mtime) and let go, so the home
+   * screen doesn't hold every project's whole document.
+   */
   list(): ProjectSummary[] {
-    const out: ProjectSummary[] = [];
+    return this.listed().map(([summary]) => summary);
+  }
+
+  /** The ids of the projects whose media include `path` (as saved, or as found here). */
+  usingMedia(path: string): string[] {
+    return this.listed()
+      .filter(([summary, media]) => summary.problem === undefined && media.includes(path))
+      .map(([summary]) => summary.id);
+  }
+
+  private listed(): [ProjectSummary, string[]][] {
+    const out: [ProjectSummary, string[]][] = [];
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(join(this.home, "projects"), { withFileTypes: true });
     } catch {
       return out;
     }
+    const seen = new Set<string>();
     for (const entry of entries) {
       const path = join(this.home, "projects", entry.name);
       if (extension(path) !== "json") continue;
       const id = fileStem(path);
-      if (id === null) continue;
-      let modifiedMs = 0;
+      if (id === null || !validId(id)) continue;
+      let stat: fs.Stats;
       try {
-        modifiedMs = Math.floor(fs.statSync(path).mtimeMs);
+        stat = fs.statSync(path);
       } catch {
-        modifiedMs = 0;
-      }
-      const loaded = this.load(id);
-      if (loaded === null) continue;
-      if ("problem" in loaded) {
-        // Shown, not hidden: a project that won't open must not look deleted.
-        let name = id;
-        try {
-          const value = JSON.parse(fs.readFileSync(path, "utf8")) as { name?: unknown };
-          if (typeof value.name === "string") name = value.name;
-        } catch {
-          name = id;
-        }
-        out.push({
-          id,
-          name,
-          style: "bodycam",
-          modified_ms: modifiedMs,
-          width: 0,
-          height: 0,
-          fps: 0,
-          duration_frames: 0,
-          clips: 0,
-          problem: loaded.problem,
-        });
         continue;
       }
-      const project = loaded.project;
-      const summary: ProjectSummary = {
-        id: project.id,
-        name: project.name,
-        style: project.style,
-        modified_ms: modifiedMs,
-        width: project.settings.width,
-        height: project.settings.height,
-        fps: project.settings.fps,
-        duration_frames: duration(project),
-        clips: project.clips.length,
-      };
-      if (isSubtitled(project)) summary.subtitles = true;
-      if (project.drive !== undefined && project.drive !== null) summary.drive = project.drive as DriveFile;
-      out.push(summary);
+      if (!stat.isFile()) continue;
+      seen.add(id);
+      const modifiedMs = Math.floor(stat.mtimeMs);
+      const live = this.projects.get(id);
+      if (live !== undefined) {
+        out.push([summaryOf(live.project, modifiedMs), live.project.media.map((media) => media.path)]);
+        continue;
+      }
+      const stamp = `${stat.size}:${stat.mtimeMs}`;
+      let cached = this.summaries.get(id);
+      if (cached === undefined || cached.stamp !== stamp) {
+        const read = this.readSummary(id, path, modifiedMs);
+        if (read === null) continue;
+        cached = { stamp, summary: read[0], media: read[1] };
+        this.summaries.set(id, cached);
+      }
+      out.push([cached.summary, cached.media]);
     }
-    return out.sort((a, b) => b.modified_ms - a.modified_ms);
+    for (const id of this.summaries.keys()) if (!seen.has(id)) this.summaries.delete(id);
+    return out.sort((a, b) => b[0].modified_ms - a[0].modified_ms);
+  }
+
+  /** A project file's summary and media paths, read without keeping it (null: gone). */
+  private readSummary(id: string, path: string, modifiedMs: number): [ProjectSummary, string[]] | null {
+    const loaded = this.read(id);
+    if (loaded === null) return null;
+    if ("problem" in loaded) {
+      // Shown, not hidden: a project that won't open must not look deleted.
+      let name = id;
+      try {
+        const value = JSON.parse(fs.readFileSync(path, "utf8")) as { name?: unknown };
+        if (typeof value.name === "string") name = value.name;
+      } catch {
+        name = id;
+      }
+      const summary: ProjectSummary = {
+        id,
+        name,
+        style: "bodycam",
+        modified_ms: modifiedMs,
+        width: 0,
+        height: 0,
+        fps: 0,
+        duration_frames: 0,
+        clips: 0,
+        problem: loaded.problem,
+      };
+      return [summary, []];
+    }
+    const project = loaded.project;
+    // Paths as saved and as found here (a file on the media drive).
+    const media = project.media.map((item) => item.path);
+    this.currentLayout.resolveProject(project);
+    for (const item of project.media) if (!media.includes(item.path)) media.push(item.path);
+    return [summaryOf(project, modifiedMs), media];
   }
 
   get(id: string): Live | null {
@@ -290,6 +323,19 @@ export class Store {
     if (!validId(id)) return null;
     const cached = this.projects.get(id);
     if (cached !== undefined) return cached;
+    const read = this.read(id);
+    if (read === null || "problem" in read) return read;
+    const project = read.project;
+    // Files moved to (or back from) the media drive are found.
+    this.currentLayout.resolveProject(project);
+    const live: Live = { rev: 1, project: deepFreeze(project) };
+    this.projects.set(id, live);
+    this.summaries.delete(id);
+    return live;
+  }
+
+  /** Project `id`'s file, parsed and validated (not kept), or why not. */
+  private read(id: string): { project: Project } | { problem: string } | null {
     let text: string;
     try {
       text = fs.readFileSync(this.path(id), "utf8");
@@ -309,11 +355,7 @@ export class Store {
     }
     const project = JSON.parse(loaded.json) as Project;
     if (project.id !== id) return { problem: `its file holds project ${project.id}` };
-    // Files moved to (or back from) the media drive are found.
-    this.currentLayout.resolveProject(project);
-    const live: Live = { rev: 1, project: deepFreeze(project) };
-    this.projects.set(id, live);
-    return live;
+    return { project };
   }
 
   /** A new project (the default style). */
@@ -582,6 +624,23 @@ export class Store {
     if (first === undefined) throw new Error("no projects yet; create one in the UI first");
     return first.id;
   }
+}
+
+function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
+  const summary: ProjectSummary = {
+    id: project.id,
+    name: project.name,
+    style: project.style,
+    modified_ms: modifiedMs,
+    width: project.settings.width,
+    height: project.settings.height,
+    fps: project.settings.fps,
+    duration_frames: duration(project),
+    clips: project.clips.length,
+  };
+  if (isSubtitled(project)) summary.subtitles = true;
+  if (project.drive !== undefined && project.drive !== null) summary.drive = project.drive as DriveFile;
+  return summary;
 }
 
 /** The `"id"` a project file names, read without parsing the whole of it, or null. */

@@ -1023,7 +1023,10 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
       const first = join(dir, `map-${key}-first.jpg`);
       if (isFile(first)) await swapInMap(app, projectId, first, out);
     }
-    media = await importOne(app, projectId, out);
+    // Asked again: the media it already is (in a cloud project its path is
+    // the cloud copy now, so importing the file again made a second media
+    // of the same name, and an agent took one map for another).
+    media = existingMedia(app, projectId, out) ?? (await importOne(app, projectId, out));
   } else if (frames === 0) {
     const shots = join(dir, `map-${key}.frames`);
     try {
@@ -1102,6 +1105,14 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
     rendering,
     note,
   };
+}
+
+/** The project's media that is the file `out` (by its path, or the name a map's file gives it), if any. */
+export function existingMedia(app: App, projectId: string, out: string): string | null {
+  const project = app.store.get(projectId)?.project;
+  if (project === undefined) return null;
+  const [path, name] = [canonical(out), fileName(out)];
+  return project.media.find((media) => media.path === path || (name !== null && media.name === name))?.id ?? null;
 }
 
 /** Adds one file to the project's media (or finds it there). */

@@ -190,6 +190,21 @@ test("map_view without a place or a point says what it needs", async () => {
   }
 });
 
+test("a finished map asked for again is the media it already is", async () => {
+  const { app, cleanup } = fixtureHome("map-again");
+  try {
+    const id = app.store.create("map", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await app.store.update(id, "test", (project) => {
+      // In a cloud project the map's path is its cloud copy; only its name is the file's.
+      project.media.push({ id: "m7", name: "map-d5237a608b36.mp4", path: "/cache/cloud/proxies/sha256/53b4.mp4", kind: "video", duration: 8, width: 1920, height: 1080, fps: 30, has_audio: false });
+    });
+    expect(broll.existingMedia(app, id, "/home/media/p/maps/map-d5237a608b36.mp4")).toBe("m7");
+    expect(broll.existingMedia(app, id, "/home/media/p/maps/map-5d85b0021f29.mp4")).toBeNull();
+  } finally {
+    cleanup();
+  }
+});
+
 test("rustJson sorts keys at every depth", () => {
   expect(rustJson({ b: 1, a: [true, null, "x"], c: { z: 1, y: 2 } })).toBe('{"a":[true,null,"x"],"b":1,"c":{"y":2,"z":1}}');
 });

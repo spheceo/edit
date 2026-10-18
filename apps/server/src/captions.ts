@@ -780,6 +780,7 @@ export function starredText(line: Line, found: Found[]): string {
 export async function subtitles(app: App, projectId: string, from: number, to: number, neglect: boolean): Promise<unknown> {
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
+  const run = seams.subtitles.beginRun(projectId);
   const project = live.project;
   const fps = fpsOf(project);
   // The footage's own sound: audio clips of video files (not sound effects or music).
@@ -804,6 +805,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
   const { width, height } = project.settings;
   const style = subtitleStyle(width, height);
   const transform: Transform = { x: 0, y: f32(f32(height) * f32(0.4)), scale: 1, rotation: 0 };
+  if (!seams.subtitles.latestRun(projectId, run)) return seams.subtitles.SUPERSEDED;
   const [saved, [placed, kept, starred, people]] = await app.store.update(projectId, "agent", (project) => {
     // Who each transcript voice was made out to be (a relabel: "Mother" →
     // "Tabitha:") and their colour: a re-run keeps them.

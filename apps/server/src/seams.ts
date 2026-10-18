@@ -476,6 +476,10 @@ export interface SubtitlesSeam {
   fillSegments(given: Segment[], duration: number): Segment[];
   /** The footage's own sound in the span: audio clips of video files on tracks that are heard. */
   footageSound(project: Project, from: number, to: number): Clip[];
+  /** Starts a subtitle run of project `id` (`latestRun` says whether a newer one has started since). */
+  beginRun(id: string): number;
+  latestRun(id: string, run: number): boolean;
+  SUPERSEDED: Json;
   hiddenRole(role: string): boolean;
   houseStyle(width: number, height: number, color: Rgba): TextStyle;
   houseWords(app: App, project: Project, from: number, to: number, neglect: boolean, extra?: readonly string[]): Promise<HouseWords>;

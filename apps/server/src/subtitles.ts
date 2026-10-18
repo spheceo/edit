@@ -955,6 +955,7 @@ function visible(clip: Clip & { type: "audio" }, from: number, to: number, fps: 
 export async function repackSubtitles(app: App, projectId: string, options: SubtitleOptions): Promise<unknown> {
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
+  const run = beginRun(projectId);
   const project = live.project;
   const fps = fpsOf(project);
   const { from, to, neglect, hold_ms: holdMs, overlap, faces } = options;
@@ -1040,6 +1041,7 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
       }
     });
   }
+  if (!latestRun(projectId, run)) return SUPERSEDED;
   const [after, [placed, skipped, outside, texts]] = await app.store.update(projectId, "agent", (edited) => {
     // Stacked lines (overlap) go on tracks of their own under the
     // subtitles' track, made as needed; a re-run removes them by name.
@@ -1206,6 +1208,30 @@ export function footageSound(project: Project, from: number, to: number): Clip[]
     return media !== undefined && media.kind === "video" && media.has_audio;
   });
 }
+
+/**
+ * Each project's latest subtitle run (repack_subtitles, add_subtitles): a run
+ * saves only while it's the latest, so one whose caller gave up waiting (an
+ * agent's tool call timed out) and that finishes after a newer run never
+ * writes its older subtitles over the newer ones.
+ */
+const runs = new Map<string, number>();
+let nextRun = 0;
+
+/** Starts a subtitle run of project `id`: its number, for `latestRun`. */
+export function beginRun(id: string): number {
+  nextRun += 1;
+  runs.set(id, nextRun);
+  return nextRun;
+}
+
+/** Whether run `run` of project `id` is still its latest. */
+export function latestRun(id: string, run: number): boolean {
+  return runs.get(id) === run;
+}
+
+/** What a run a newer one overtook answers. */
+export const SUPERSEDED = { saved: false, note: "a newer subtitle run started while this one was working; it saved nothing (the newer run's subtitles stand)" };
 
 /** How many files' seats are worked out at once by repack_subtitles. */
 const SEAT_FILES_AT_ONCE = 3;

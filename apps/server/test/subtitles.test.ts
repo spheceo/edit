@@ -24,6 +24,8 @@ import {
   starOnScreen,
   starSubtitles,
   starText,
+  beginRun,
+  latestRun,
   suggestions,
   tokens,
   uncram,
@@ -542,4 +544,16 @@ test("stars_subtitles_in_place_keeping_their_words", () => {
   // Not up while it's said, or not a subtitle: left alone.
   expect(of("s2")[0]).toBe("fuck off");
   expect(of("t")[0]).toBe("fuck");
+});
+
+test("an_older_subtitle_run_never_saves_over_a_newer_one", () => {
+  const first = beginRun("p1");
+  expect(latestRun("p1", first)).toBe(true);
+  // The agent gave up waiting and asked again: the first run's result is dropped.
+  const second = beginRun("p1");
+  expect(latestRun("p1", first)).toBe(false);
+  expect(latestRun("p1", second)).toBe(true);
+  // Other projects' runs are their own.
+  beginRun("p2");
+  expect(latestRun("p1", second)).toBe(true);
 });

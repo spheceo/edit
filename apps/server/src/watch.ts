@@ -7,9 +7,9 @@
 // many clips of many files, is watched once per stretch of each file its
 // clips use.
 //
-// The model is reached through the Vercel AI Gateway with
-// `AI_GATEWAY_API_KEY` from the environment (`EDIT_AI_GATEWAY_URL` sends it
-// to a stand-in); it is meant to move behind the relay.
+// The model is reached through the Vercel AI Gateway: through Edit's relay,
+// which holds the key, or straight with this machine's `AI_GATEWAY_API_KEY`
+// when it's set (`EDIT_AI_GATEWAY_URL` sends that to a stand-in).
 //
 // Answers are cached per window in the media's cache dir (`watch/`), keyed as
 // watch.rs keys them, and a finished watch leaves a receipt in
@@ -23,6 +23,7 @@ import * as castOf from "./cast.ts";
 import { parseTranscript, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import * as jobs from "./jobs.ts";
+import * as relay from "./relay.ts";
 import { ioMessage, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { mediaKey, Semaphore } from "./media.ts";
@@ -536,14 +537,23 @@ async function cutAt(source: string, preview: [string, string] | null, window: W
   });
 }
 
-function apiKey(): string {
+/**
+ * Where the watcher's model calls go, and the bearer they carry: straight to
+ * the gateway with this machine's AI_GATEWAY_API_KEY, else through Edit's
+ * relay (which holds the key) with the cloud token. Throws when neither is set.
+ */
+function route(): { url: string; bearer: string } {
   const key = trim(process.env.AI_GATEWAY_API_KEY ?? "");
-  if (key === "") throw new Error("the watcher needs AI_GATEWAY_API_KEY");
-  if (/["\\\n\r]/.test(key)) throw new Error("AI_GATEWAY_API_KEY isn't a key");
-  return key;
+  if (key !== "") {
+    if (/["\\\n\r]/.test(key)) throw new Error("AI_GATEWAY_API_KEY isn't a key");
+    return { url: gateway(), bearer: key };
+  }
+  const cloud = relay.token();
+  if (cloud !== null) return { url: `${relay.url()}/v1/cloud/ai/chat`, bearer: cloud };
+  throw new Error("the watcher needs the cloud token (Settings → Cloud) or AI_GATEWAY_API_KEY");
 }
 
-/** The AI Gateway's chat completions URL (`EDIT_AI_GATEWAY_URL` names a stand-in's base; endpoints.rs). */
+/** The AI Gateway's chat completions URL (`EDIT_AI_GATEWAY_URL` names a stand-in's base). */
 export function gateway(): string {
   const base = trim(process.env.EDIT_AI_GATEWAY_URL ?? "").replace(/\/+$/u, "");
   return `${base === "" ? "https://ai-gateway.vercel.sh" : base}/v1/chat/completions`;
@@ -551,7 +561,7 @@ export function gateway(): string {
 
 /** Posts `body` (a file) to the gateway. */
 export async function post(body: string): Promise<unknown> {
-  const key = apiKey();
+  const { url, bearer } = route();
   let bytes: Uint8Array;
   try {
     bytes = fs.readFileSync(body);
@@ -561,9 +571,9 @@ export async function post(body: string): Promise<unknown> {
   let status: number;
   let text: string;
   try {
-    const response = await fetch(gateway(), {
+    const response = await fetch(url, {
       method: "POST",
-      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
       body: bytes,
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -689,7 +699,7 @@ export async function watchWindow(
       }
     }
   }
-  apiKey();
+  route();
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch (error) {
@@ -1045,7 +1055,7 @@ export async function watchFootage(app: App, projectId: string, options: WatchOp
 /** Starts watching `projectId`'s footage in the background (the editing workflow does at its start). */
 export function watchInBackground(app: App, projectId: string): void {
   try {
-    apiKey();
+    route();
   } catch {
     return;
   }

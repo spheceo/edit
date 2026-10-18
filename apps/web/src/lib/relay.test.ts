@@ -188,3 +188,36 @@ describe("relay cloud jobs: Drive → R2", () => {
     expect(registered).toMatchObject({ path: "edit:putMedia", args: { source: "drive:FILEabcdefgh", originalKey: "edit/originals/drive/FILEabcdefgh/a.mp4", size: 25, originalReady: true, token: "svc" } });
   });
 });
+
+describe("relay cloud: Google sign-in and the AI Gateway", () => {
+  const env = { CLOUD_TOKEN: "cloud-secret", GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r", AI_GATEWAY_API_KEY: "gw-key" } as Env;
+  const post = (route: string, body: string, token = "cloud-secret", given: Env = env) =>
+    relay.fetch(new Request(`https://relay.test/v1/cloud/${route}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "content-length": String(body.length) }, body }), given);
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("hands Edit a short-lived Google access token, only with the cloud token", async () => {
+    const upstream = vi.fn(async () => Response.json({ access_token: "ya29.x", expires_in: 3599 }));
+    vi.stubGlobal("fetch", upstream);
+    expect((await post("google/token", "{}", "wrong")).status).toBe(401);
+    expect(upstream).not.toHaveBeenCalled();
+    const answer = await post("google/token", "{}");
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ access_token: "ya29.x", expires_in: 3599 });
+    expect((await post("google/token", "{}", "cloud-secret", { ...env, GOOGLE_DOCS_REFRESH_TOKEN: undefined })).status).toBe(502);
+  });
+
+  it("passes a chat completion through with the relay's key and returns the gateway's answer as it is", async () => {
+    let sent: { url: string; auth: string | null; body: string } | null = null;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init: RequestInit = {}) => {
+      sent = { url: String(input), auth: new Headers(init.headers).get("authorization"), body: await new Response(init.body).text() };
+      return Response.json({ error: { message: "slow down" } }, { status: 429 });
+    });
+    expect((await post("ai/chat", '{"model":"m"}', "wrong")).status).toBe(401);
+    expect(sent).toBeNull();
+    const answer = await post("ai/chat", '{"model":"m"}');
+    expect(answer.status).toBe(429);
+    expect(await answer.json()).toEqual({ error: { message: "slow down" } });
+    expect(sent).toEqual({ url: "https://ai-gateway.vercel.sh/v1/chat/completions", auth: "Bearer gw-key", body: '{"model":"m"}' });
+    expect((await post("ai/chat", "{}", "cloud-secret", { ...env, AI_GATEWAY_API_KEY: undefined })).status).toBe(503);
+  });
+});

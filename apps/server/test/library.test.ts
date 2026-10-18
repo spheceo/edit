@@ -137,7 +137,7 @@ test("the library is read from Drive, with its notes and guide, through one sign
 test("a sign-in that's missing or refused says so", async () => {
   const restoreEnv = mock.useEnv({ GOOGLE_DOCS_REFRESH_TOKEN: "" });
   try {
-    await expect(new library.Library().accessToken()).rejects.toThrow("need a Google Drive sign-in");
+    await expect(new library.Library().accessToken()).rejects.toThrow("need the team's sign-in");
   } finally {
     restoreEnv();
   }
@@ -298,4 +298,25 @@ test("safe names keep files on every disk", () => {
   expect(library.safeName("a/b:c.wav")).toBe("a_b_c.wav");
   expect(library.safeName("  ..hidden.wav ")).toBe("hidden.wav");
   expect(library.safeName("...")).toBe("sound.wav");
+});
+
+test("without a sign-in of its own, Edit borrows the relay's (with the cloud token)", async () => {
+  const put = mock.useEnv({ GOOGLE_DRIVE_CLIENT_ID: undefined, GOOGLE_DRIVE_CLIENT_SECRET: undefined, GOOGLE_DOCS_REFRESH_TOKEN: undefined });
+  try {
+    await expect(new library.Library().accessToken()).rejects.toThrow("paste the cloud token in Settings → Cloud");
+    const back = mock.useEnv({ EDIT_RELAY_TOKEN: "cloud-tok" });
+    try {
+      mock.on("POST", "/v1/cloud/google/token", () => Response.json({ access_token: "from-relay", expires_in: 3600 }));
+      const signedIn = new library.Library();
+      expect(await signedIn.accessToken()).toBe("from-relay");
+      expect(await signedIn.accessToken()).toBe("from-relay");
+      const asked = mock.calls("/v1/cloud/google/token", "POST");
+      expect(asked.length).toBe(1);
+      expect(asked[0]!.headers.get("authorization")).toBe("Bearer cloud-tok");
+    } finally {
+      back();
+    }
+  } finally {
+    put();
+  }
 });

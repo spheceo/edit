@@ -23,6 +23,7 @@ import {
   unfence,
   voicesFor,
   watchWindow,
+  post,
   windows,
   LONGEST,
   type Answer,
@@ -452,4 +453,22 @@ test("segments are held to who is heard: talk marked narration is footage, a nar
   // A narrator's voice the watch saw as someone in the room (diarisation lumped them in): left alone.
   const lumped = heard.map((word) => ({ ...word, seen: false }));
   expect(voicedSegments(given.slice(0, 1), lumped, s(41), fps).filter((segment) => segment.kind === "narration")).toEqual([]);
+});
+
+test("without a gateway key of its own, the watcher asks through the relay with the cloud token", async () => {
+  const put = mock.useEnv({ AI_GATEWAY_API_KEY: undefined, EDIT_RELAY_TOKEN: "cloud-tok" });
+  const { dir, cleanup } = scratch("watch-relay");
+  try {
+    mock.on("POST", "/v1/cloud/ai/chat", () => Response.json({ choices: [{ message: { content: "hi" } }] }));
+    const body = `${dir}/body.json`;
+    write(body, '{"model":"m"}');
+    expect(await post(body)).toEqual({ choices: [{ message: { content: "hi" } }] });
+    const sent = mock.calls("/v1/cloud/ai/chat", "POST");
+    expect(sent.length).toBe(1);
+    expect(sent[0]!.headers.get("authorization")).toBe("Bearer cloud-tok");
+    expect(sent[0]!.text()).toBe('{"model":"m"}');
+  } finally {
+    cleanup();
+    put();
+  }
 });

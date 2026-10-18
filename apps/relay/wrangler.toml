@@ -22,6 +22,10 @@ preview_urls = false
 # Cloud jobs (/v1/cloud/jobs/*, src/jobs.ts: Drive → R2 without the Mac) also
 # need Google's sign-in, the same three Edit uses for Drive:
 #   GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DOCS_REFRESH_TOKEN
+# which /v1/cloud/google/token also hands Edit as a short-lived access token
+# (the sound library, script imports, Drive links and uploads), and the
+# footage watcher's model calls (/v1/cloud/ai/chat) need:
+#   AI_GATEWAY_API_KEY
 
 [vars]
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus

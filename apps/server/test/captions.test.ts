@@ -464,7 +464,7 @@ test("track_region, transcribe, find_in_footage and the routes answer as mcp.rs 
     try {
       response = await post(`/api/projects/${id}/watch`, { force: true });
       expect(response.status).toBe(400);
-      expect(((await response.json()) as { error: string }).error).toContain("the watcher needs AI_GATEWAY_API_KEY");
+      expect(((await response.json()) as { error: string }).error).toContain("the watcher needs the cloud token");
     } finally {
       if (key !== undefined) process.env.AI_GATEWAY_API_KEY = key;
     }

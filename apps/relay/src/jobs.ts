@@ -79,6 +79,11 @@ const DRIVE = "https://www.googleapis.com/drive/v3";
 // --- Google -----------------------------------------------------------------------
 
 async function googleToken(env: JobsEnv): Promise<string> {
+  return (await googleSignIn(env)).access_token;
+}
+
+/** A fresh access token for the team's Google sign-in (Drive and Docs), and how long it lasts (seconds). */
+export async function googleSignIn(env: JobsEnv): Promise<{ access_token: string; expires_in: number }> {
   if (!env.GOOGLE_DRIVE_CLIENT_ID || !env.GOOGLE_DRIVE_CLIENT_SECRET || !env.GOOGLE_DOCS_REFRESH_TOKEN) {
     throw new Upstream("Google Drive is not configured on the relay yet.");
   }
@@ -92,9 +97,10 @@ async function googleToken(env: JobsEnv): Promise<string> {
       grant_type: "refresh_token",
     }),
   });
-  const value = (await answer.json().catch(() => null)) as { access_token?: unknown } | null;
+  const value = (await answer.json().catch(() => null)) as { access_token?: unknown; expires_in?: unknown } | null;
   if (!answer.ok || typeof value?.access_token !== "string") throw new Upstream(`Google sign-in failed (${answer.status}).`);
-  return value.access_token;
+  const expires = typeof value.expires_in === "number" && value.expires_in > 0 ? Math.floor(value.expires_in) : 3600;
+  return { access_token: value.access_token, expires_in: expires };
 }
 
 /** A Drive file id (the characters Drive uses). */

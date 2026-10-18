@@ -20,8 +20,12 @@
  *   /v1/cloud/jobs/drive            {file, key}  → {id, status}: Drive file → R2 in the cloud (jobs.ts)
  *   /v1/cloud/jobs/status           {id}         → {id, status, bytes?, total?, output?, error?}
  *   /v1/cloud/jobs/cancel           {id}         → {ok}
+ *   /v1/cloud/google/token          {}           → {access_token, expires_in}: the team's Google sign-in
+ *                                   (Drive and Docs: the sound library, script imports, Drive links and uploads)
+ *   /v1/cloud/ai/chat               an AI Gateway chat completion, passed through with the relay's
+ *                                   AI_GATEWAY_API_KEY (the footage watcher); the gateway's answer as it is
  */
-import { cancelJob, driveJob, jobStatus, type JobsEnv } from "./jobs";
+import { cancelJob, driveJob, googleSignIn, jobStatus, type JobsEnv } from "./jobs";
 
 export interface CloudEnv extends JobsEnv {
   /** Edit's bearer token for /v1/cloud/* (EDIT_RELAY_TOKEN on the app side). */
@@ -34,6 +38,8 @@ export interface CloudEnv extends JobsEnv {
   CONVEX_URL?: string;
   /** Passed as `args.token` to every `edit:` function, which checks it. */
   CONVEX_SERVICE_TOKEN?: string;
+  /** Vercel's AI Gateway, for the footage watcher (/v1/cloud/ai/chat). */
+  AI_GATEWAY_API_KEY?: string;
 }
 
 const HOUR = 3600;
@@ -44,12 +50,16 @@ const MAX_DELETE = 40;
 const MAX_PART_URLS = 1000;
 const MAX_BODY = 8 * 1024 * 1024;
 const CONVEX_KINDS = new Set(["query", "mutation", "action"]);
+/** A watch window's request: a few minutes of 360p video, base64 (Edit caps the clip at 15 MiB). */
+const MAX_AI_BODY = 32 * 1024 * 1024;
+const AI_GATEWAY = "https://ai-gateway.vercel.sh/v1/chat/completions";
 /** Only Edit's module: the relay must not reach Repack's other functions. */
 const CONVEX_PATH = /^edit:[A-Za-z_][A-Za-z0-9_]*$/;
 
 export async function cloud(request: Request, url: URL, env: CloudEnv): Promise<Response> {
   if (!(await cloudAuthorized(request, env))) return json(401, { error: "This relay needs Edit's cloud token." });
   if (request.method !== "POST") return json(405, { error: `POST JSON to ${url.pathname}` });
+  if (url.pathname === "/v1/cloud/ai/chat") return aiChat(request, env);
   if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY) return json(413, { error: "Request too large." });
   let body: Record<string, unknown>;
   try {
@@ -61,6 +71,14 @@ export async function cloud(request: Request, url: URL, env: CloudEnv): Promise<
   }
   const route = url.pathname.slice("/v1/cloud/".length);
   if (route === "convex") return convex(body, env);
+  if (route === "google/token") {
+    try {
+      return json(200, await googleSignIn(env));
+    } catch (error) {
+      if (error instanceof Upstream) return json(502, { error: error.message });
+      throw error;
+    }
+  }
   if (route.startsWith("jobs/")) {
     const r2 = r2Config(env);
     if (!r2) return json(503, { error: "Cloud storage is not configured on the relay yet." });
@@ -89,6 +107,25 @@ export async function cloud(request: Request, url: URL, env: CloudEnv): Promise<
 }
 
 /** `Bearer <CLOUD_TOKEN>`, compared in constant time; refused when unset. */
+/** A chat completion through the AI Gateway with the relay's key; the body and the answer pass through untouched. */
+async function aiChat(request: Request, env: CloudEnv): Promise<Response> {
+  if (!env.AI_GATEWAY_API_KEY) return json(503, { error: { message: "The AI Gateway is not configured on the relay yet." } });
+  const length = Number(request.headers.get("content-length") ?? 0);
+  if (!(length > 0)) return json(411, { error: { message: "Send the request's length." } });
+  if (length > MAX_AI_BODY) return json(413, { error: { message: "Request too large." } });
+  let answer: Response;
+  try {
+    answer = await fetch(AI_GATEWAY, {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.AI_GATEWAY_API_KEY}`, "content-type": "application/json" },
+      body: request.body,
+    });
+  } catch {
+    return json(502, { error: { message: "Couldn't reach the AI Gateway." } });
+  }
+  return new Response(answer.body, { status: answer.status, headers: { "content-type": answer.headers.get("content-type") ?? "application/json" } });
+}
+
 export async function cloudAuthorized(request: Request, env: CloudEnv): Promise<boolean> {
   if (!env.CLOUD_TOKEN) return false;
   const sent = request.headers.get("authorization") ?? "";

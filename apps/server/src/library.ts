@@ -4,10 +4,11 @@
 // the first time it's used, into `<home>/library/<music|sfx>/<checksum>/`.
 // Nothing is bundled with Edit.
 //
-// The folder is private, so Edit needs a Google sign-in that can read it:
-// GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and
-// GOOGLE_DOCS_REFRESH_TOKEN. For testing these are Repack's (same names),
-// which `just dev` reads from Infisical.
+// The folder is private, so Edit needs a Google sign-in that can read it: the
+// relay hands out a short-lived one to Edits with the cloud token (Settings →
+// Cloud), and a machine with GOOGLE_DRIVE_CLIENT_ID,
+// GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set signs in
+// itself (`just dev` reads Repack's from Infisical).
 //
 // Beside the sounds sit an index (a .txt with a note per file, "first ~20
 // seconds, low volume") and a usage guide (a Doc on what each category is
@@ -28,6 +29,7 @@ import { google, googleProto } from "./endpoints.ts";
 import { catchBugsAsync } from "./guard.ts";
 import { importPaths } from "./import.ts";
 import { Semaphore } from "./media.ts";
+import * as relay from "./relay.ts";
 import type { AudioClip, Clip, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { join } from "./paths.ts";
@@ -219,9 +221,17 @@ export class Library implements seams.Library {
       },
     );
     if (id === null || secret === null || refresh === null || id === undefined || secret === undefined || refresh === undefined) {
-      throw new Error(
-        "The sound library and Drive uploads need a Google Drive sign-in: start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set (`just dev` reads Repack's from Infisical).",
-      );
+      if (relay.token() === null) {
+        throw new Error(
+          "The sound library and Google Drive need the team's sign-in: paste the cloud token in Settings → Cloud (or start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set).",
+        );
+      }
+      // The relay keeps the sign-in and hands out an access token for an hour.
+      const given = await relay.json<{ access_token?: unknown; expires_in?: unknown }>("POST", "/v1/cloud/google/token", {}, "Google sign-in", 30);
+      if (typeof given.access_token !== "string") throw new Error("the relay's Google sign-in came back without a token");
+      const lasts = typeof given.expires_in === "number" && given.expires_in > 0 ? given.expires_in : 3600;
+      this.token = [given.access_token, this.now() + Math.max(lasts - 120, 0) * 1000];
+      return given.access_token;
     }
     const config = (
       [

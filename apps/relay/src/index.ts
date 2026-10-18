@@ -53,7 +53,7 @@ const MODEL = "scribe_v2";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY), speech: Boolean(speechKey(env)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.CLOUD_TOKEN && env.R2_BUCKET && env.CONVEX_URL) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY), speech: Boolean(speechKey(env)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.CLOUD_TOKEN && env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);

@@ -3,6 +3,8 @@ import type { DecodeRequest, DecodeResponse } from "./decoder.protocol";
 
 const decoding = vi.hoisted(() => ({
   gate: null as Promise<void> | null,
+  /** Opens that fail before one succeeds. */
+  failOpens: 0,
   closed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(), audioRanges: vi.fn(), videoOpened: vi.fn(), scrubbed: vi.fn(), keyed: vi.fn(), sampled: vi.fn(),
 }));
 vi.mock("mediabunny", () => ({
@@ -10,7 +12,10 @@ vi.mock("mediabunny", () => ({
   StreamSource: class {},
   Input: class {
     dispose = decoding.disposed;
-    async getPrimaryVideoTrack() { return { canDecode: async () => true, getFirstTimestamp: async () => 0 }; }
+    async getPrimaryVideoTrack() {
+      if (decoding.failOpens > 0) { decoding.failOpens--; throw new Error("the connection dropped"); }
+      return { canDecode: async () => true, getFirstTimestamp: async () => 0 };
+    }
     async getPrimaryAudioTrack() { return { canDecode: async () => true }; }
   },
   EncodedPacketSink: class {
@@ -64,7 +69,7 @@ describe("decoder worker scheduling and PCM boundaries", () => {
   let scope: { onmessage: ((event: MessageEvent<DecodeRequest>) => void) | null; postMessage: (data: DecodeResponse) => void };
   const send = (data: DecodeRequest) => scope.onmessage!({ data } as MessageEvent<DecodeRequest>);
   beforeEach(async () => {
-    vi.resetModules(); vi.clearAllMocks(); decoding.gate = null; messages = [];
+    vi.resetModules(); vi.clearAllMocks(); decoding.gate = null; decoding.failOpens = 0; messages = [];
     scope = { onmessage: null, postMessage: (data) => messages.push(data) };
     vi.stubGlobal("self", scope);
     await import("./decode.worker");
@@ -115,6 +120,19 @@ describe("decoder worker scheduling and PCM boundaries", () => {
     expect(decoding.videoOpened).toHaveBeenCalledOnce();
     expect(decoding.scrubbed).toHaveBeenCalledTimes(2);
     expect(messages.filter((m) => m.type === "video").map((m) => m.time)).toEqual([1, 1.2, 1.3, 1.5]);
+  });
+
+  it("opens a file afresh after a failed open, so the same request can succeed", async () => {
+    const done = (id: number) => vi.waitFor(() => expect(messages.some((m) => m.type === "done" && m.id === id)).toBe(true));
+    decoding.failOpens = 1;
+    send({ type: "video", id: 1, key: "file", url: "/file", lane: "v:clip", times: [1], playing: false });
+    await done(1);
+    expect(messages.some((m) => m.type === "error" && m.id === 1)).toBe(true);
+    // The failed file is let go, not kept with its rejected track.
+    expect(decoding.disposed).toHaveBeenCalledOnce();
+    send({ type: "video", id: 2, key: "file", url: "/file", lane: "v:clip", times: [1], playing: false });
+    await done(2);
+    expect(messages.filter((m) => m.type === "video").map((m) => m.time)).toEqual([1]);
   });
 
   it("answers a rough scrub with the keyframe at or before the time", async () => {

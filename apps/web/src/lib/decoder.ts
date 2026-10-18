@@ -12,7 +12,7 @@ export function videoTime(time: number, fps: number, duration: number) {
   return Math.max(0, Math.min((Math.floor(time * rate + 0.5 + 1e-7) + 0.01) / rate, Math.max(0, duration - 1e-6)));
 }
 
-interface Flight { id: number; key: string; values: Set<string>; /** A rough request's time. */ rough?: number }
+interface Flight { id: number; kind: "video" | "audio"; key: string; values: Set<string>; /** A rough request's time. */ rough?: number }
 
 /** Source seconds within which a decoded picture is close enough mid-drag (a preview's keyframe interval). */
 const ROUGH_REACH = 0.55;
@@ -52,11 +52,28 @@ export class Decoder {
         if (generation === this.generation) this.receive(data);
         else if (data.type === "video") data.frame.close();
       };
-      worker.onerror = (event) => { if (generation === this.generation) this.failed(`The ${kind} decoder worker failed: ${event.message}`); };
-      worker.onmessageerror = () => { if (generation === this.generation) this.failed(`The ${kind} decoder could not transfer a decoded sample`); };
+      const fail = (error: string) => {
+        if (generation !== this.generation || this[kind] !== worker) return;
+        this.retire(kind);
+        this.failed(error);
+      };
+      worker.onerror = (event) => fail(`The ${kind} decoder worker failed: ${event.message}`);
+      worker.onmessageerror = () => fail(`The ${kind} decoder could not transfer a decoded sample`);
       this[kind] = worker;
     }
     return worker;
+  }
+
+  /**
+   * Stops a worker that failed and forgets what it was asked: the same request
+   * (the preview's retry) goes to a fresh worker instead of waiting on a dead one.
+   */
+  private retire(kind: "video" | "audio") {
+    this[kind]?.terminate();
+    this[kind] = null;
+    for (const [lane, flight] of this.flights) if (flight.kind === kind) this.flights.delete(lane);
+    // The fresh worker hears which lanes to keep.
+    this.retained = undefined;
   }
 
   private receive(data: DecodeResponse) {
@@ -132,7 +149,7 @@ export class Decoder {
     if (active?.key === key && active.rough !== undefined && Math.abs(active.rough - at) <= ROUGH_REACH) return;
     const id = ++this.serial;
     this.files.add(key);
-    this.flights.set(lane, { id, key, values: new Set(), rough: at });
+    this.flights.set(lane, { id, kind: "video", key, values: new Set(), rough: at });
     this.stats.videoRequests++;
     this.worker("video")?.postMessage({ type: "video", id, key, url, lane, times: [at], playing: false, rough: true } satisfies DecodeRequest);
   }
@@ -162,7 +179,7 @@ export class Decoder {
     if (active?.key === key && times.every((t) => active.values.has(frameKey(key, t)))) return;
     const id = ++this.serial;
     this.files.add(key);
-    this.flights.set(lane, { id, key, values: new Set(times.map((t) => frameKey(key, t))) });
+    this.flights.set(lane, { id, kind: "video", key, values: new Set(times.map((t) => frameKey(key, t))) });
     this.stats.videoRequests++;
     this.worker("video")?.postMessage({ type: "video", id, key, url, lane, times, playing } satisfies DecodeRequest);
   }
@@ -182,7 +199,7 @@ export class Decoder {
     if (!chunks.length || (active?.key === key && chunks.every((chunk) => active.values.has(audioKey(key, chunk, speed))))) return;
     const id = ++this.serial;
     this.files.add(key);
-    this.flights.set(lane, { id, key, values: new Set(chunks.map((chunk) => audioKey(key, chunk, speed))) });
+    this.flights.set(lane, { id, kind: "audio", key, values: new Set(chunks.map((chunk) => audioKey(key, chunk, speed))) });
     this.stats.audioRequests++;
     this.worker("audio")?.postMessage({ type: "audio", id, key, url, lane, chunks, speed } satisfies DecodeRequest);
   }

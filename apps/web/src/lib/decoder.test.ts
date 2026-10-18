@@ -6,6 +6,7 @@ class WorkerStub {
   static workers: WorkerStub[] = [];
   messages: DecodeRequest[] = [];
   onmessage: ((event: MessageEvent<DecodeResponse>) => void) | null = null;
+  onerror: ((event: { message: string }) => void) | null = null;
   terminate = vi.fn();
   constructor() { WorkerStub.workers.push(this); }
   postMessage(message: DecodeRequest) { this.messages.push(message); }
@@ -30,6 +31,20 @@ describe("worker decoder client", () => {
     expect(videoTime(17 / 29.97, 29.97, 10)).toBeCloseTo(17.01 / 29.97);
     expect(videoTime(-2, 30, 10)).toBe(0);
     expect(videoTime(20, 30, 10)).toBeLessThan(10);
+  });
+
+  it("a crashed worker is replaced, and the same request goes to the new one", () => {
+    const failed = vi.fn();
+    decoder = new Decoder(changed, failed);
+    const time = videoTime(2, 30, 10);
+    decoder.requestVideo("file", "/file", "v:c1", time, 30, 10);
+    const first = WorkerStub.workers[0]!;
+    first.onerror!({ message: "out of memory" });
+    expect(failed).toHaveBeenCalledWith("The video decoder worker failed: out of memory");
+    expect(first.terminate).toHaveBeenCalled();
+    decoder.requestVideo("file", "/file", "v:c1", time, 30, 10);
+    expect(WorkerStub.workers).toHaveLength(2);
+    expect(WorkerStub.workers[1]!.job.type).toBe("video");
   });
 
   it("coalesces in-flight requests, caches completed frames and batches refill work", () => {

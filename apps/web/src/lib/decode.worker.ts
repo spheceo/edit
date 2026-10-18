@@ -13,6 +13,8 @@ interface File {
   video?: Promise<{ sink: VideoSampleSink; packets: EncodedPacketSink; first: number }>;
   audio?: Promise<AudioSampleSink>;
   users: number;
+  /** Failed: no longer handed out (the next request opens the file afresh), disposed once unused. */
+  retired?: boolean;
 }
 /**
  * During playback one decoder per lane stays open between jobs, so each batch
@@ -46,6 +48,23 @@ function trimFiles() {
     file.input.dispose();
     files.delete(key);
   }
+}
+
+/** One user fewer; a retired file is disposed when its last user lets go. */
+function letGo(file: File) {
+  file.users--;
+  if (file.retired && file.users <= 0) file.input.dispose();
+}
+
+/**
+ * Stops handing out a file whose open or decoder failed: its rejected
+ * promises and broken reader would fail every later request the same way.
+ */
+function retire(key: string, file: File) {
+  if (file.retired) return;
+  file.retired = true;
+  if (files.get(key) === file) files.delete(key);
+  if (file.users <= 0) file.input.dispose();
 }
 
 function open(job: DecodeJob) {
@@ -90,7 +109,7 @@ function closeCursor(lane: Lane) {
   lane.cursor = null;
   cursor.held?.close();
   void cursor.samples.return(undefined).catch(() => {});
-  cursor.file.users--;
+  letGo(cursor.file);
 }
 
 /** The decoded picture shown at `time`: the last frame starting at or before it. */
@@ -220,11 +239,13 @@ async function run(job: DecodeJob, lane: Lane) {
     if (job.type === "video") await decodeVideo(job, file, lane);
     else await decodeAudio(job, file, lane);
   } catch (error) {
-    // A failed decoder can't be trusted for the next request on this lane.
+    // A failed decoder can't be trusted for the next request on this lane,
+    // nor its file for the next request at all.
     closeCursor(lane);
+    if (file) retire(job.key, file);
     if (!lane.cancelled) scope.postMessage({ type: "error", id: job.id, key: job.key, lane: job.lane, error: String(error) });
   } finally {
-    if (file) file.users--;
+    if (file) letGo(file);
     running--;
     lane.running = null;
     if (lane.cancelled) closeCursor(lane);

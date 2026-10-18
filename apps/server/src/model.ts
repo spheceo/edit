@@ -105,6 +105,8 @@ export interface ProjectSummary {
   /** Media its timeline uses: how many, and how many aren't on this machine (or in the cloud) any more. */
   media_used?: number;
   missing?: number;
+  /** Media in the cloud not fetched to this machine yet (they come when it opens). */
+  remote?: number;
 }
 
 export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";

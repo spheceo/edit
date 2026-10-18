@@ -323,7 +323,7 @@ test("a project's summary counts the footage it plays that's gone", async () => 
       );
     });
     const summary = store.list().find((one) => one.id === id)!;
-    expect([summary.media_used, summary.missing]).toEqual([3, 1]);
+    expect([summary.media_used, summary.missing, summary.remote]).toEqual([3, 1, 1]);
   } finally {
     cleanup();
   }

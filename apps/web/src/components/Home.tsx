@@ -161,6 +161,9 @@ function ProjectCard({
   const missing = project.missing ?? 0;
   const used = project.media_used ?? missing;
   const mostlyMissing = missing > 0 && missing * 2 >= used;
+  // Cloud footage not on this Mac yet: it comes down when the project opens.
+  const fetching = project.remote ?? 0;
+  const mostlyRemote = !mostlyMissing && fetching > 0 && fetching * 2 >= used;
   // Someone else's live lock (this machine's own isn't news).
   const editor = remote?.holder && !remote.here ? remote.holder : null;
 
@@ -212,6 +215,12 @@ function ProjectCard({
               <span className="text-[11.5px] text-muted tabular">
                 {missing} of {used} files aren't on this Mac
               </span>
+            </div>
+          ) : mostlyRemote ? (
+            <div className="flex flex-col items-center gap-1.5 px-6 text-center">
+              <CloudDownload size={20} className="text-muted" />
+              <span className="text-[12.5px] font-medium text-fg">Footage in the cloud</span>
+              <span className="text-[11.5px] text-muted">Downloads when you open it</span>
             </div>
           ) : project.duration_frames > 0 ? (
             <img

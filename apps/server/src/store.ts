@@ -644,6 +644,8 @@ function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
   const used = usedMedia(project).length;
   if (used > 0) summary.media_used = used;
   if (missing.length > 0) summary.missing = missing.length;
+  const remote = usedMedia(project).filter((media) => media.cloud !== undefined && media.cloud !== null && !isRegularFile(media.path)).length;
+  if (remote > 0) summary.remote = remote;
   return summary;
 }
 

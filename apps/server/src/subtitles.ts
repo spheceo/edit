@@ -1025,18 +1025,20 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
   );
   const { width, height } = project.settings;
   const frame = (ms: number) => toI64(round((ms / 1000.0) * fps));
-  // Where each speaker sits, per file, for lines under their face.
+  // Where each speaker sits, per file, for lines under their face: a few
+  // files at once (each is a frame scan and model calls; one after another,
+  // an interrogation compilation's 70 excerpts took ~40 minutes).
   const seated = new Map<string, seats.Seats>();
   if (faces) {
-    for (const [mediaId, transcript] of transcripts) {
+    await seats.atOnce([...transcripts], SEAT_FILES_AT_ONCE, async ([mediaId, transcript]) => {
       const media = mediaOf(project, mediaId);
-      if (media === undefined) continue;
+      if (media === undefined) return;
       try {
         seated.set(mediaId, await seats.seats(media.path, transcript));
       } catch (error) {
         diag.warn("subtitles", `no face positions for ${media.name}: ${diag.messageOf(error)}; bottom middle`);
       }
-    }
+    });
   }
   const [after, [placed, skipped, outside, texts]] = await app.store.update(projectId, "agent", (edited) => {
     // Stacked lines (overlap) go on tracks of their own under the
@@ -1204,6 +1206,9 @@ export function footageSound(project: Project, from: number, to: number): Clip[]
     return media !== undefined && media.kind === "video" && media.has_audio;
   });
 }
+
+/** How many files' seats are worked out at once by repack_subtitles. */
+const SEAT_FILES_AT_ONCE = 3;
 
 /** Writes `mutes` onto their audio clips: each clip's mutes inside the stretch looked at are replaced, the rest kept. */
 export function writeMutes(project: Project, mutes: ClipMutes): void {

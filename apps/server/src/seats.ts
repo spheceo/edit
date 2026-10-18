@@ -185,7 +185,7 @@ export async function seats(source: string, transcript: Transcript): Promise<Sea
 }
 
 /** Runs `work` over `items`, at most `limit` at a time; results in the items' order. */
-async function atOnce<T, R>(items: T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
+export async function atOnce<T, R>(items: T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
   const lane = async () => {

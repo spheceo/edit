@@ -19,14 +19,15 @@ Research (Gemini's answers, stills, transcripts, Doc exports) is on the LaCie:
 
 - [x] Style analysis, both styles
 - [x] `styles.ts`: INTERROGATION and COURTROOM guides written
-- [ ] Questions below answered
-- [ ] YouTube footage in script import (blocks both demos)
-- [ ] Missing effects chosen for the demos built
-- [ ] Server rebuilt and restarted once
+- [x] Questions below answered with the recommendations in bold (Oct 18; the Drive question too: re-exports keep their link)
+- [x] YouTube footage in script import (`youtube.ts`): yt-dlp straight from this Mac, Repack's `PROXY_URL` only when YouTube refuses; H.264 up to 1080p (720p where YouTube offers no more over plain HTTPS), the original sound
+- [x] Mixed narration/range paragraphs, "Reuse: <link>" notes, no generated voice for courtroom
+- [x] Effects: the light leak (`grade.leak`, plan transitions `light_leak` and `burn`), capitals (`style.uppercase`), `update_clips {person}`, `mute_house_words {words}`; the guides use them
+- [x] Server rebuilt and restarted
 - [ ] Interrogation demo project created and edited
-- [ ] Courtroom demo project created and edited
+- [ ] Courtroom demo project created and edited (needs `newest.mp3` again: the T3 attachment is gone)
 
-## Blockers
+## Blockers (Oct 17; 1–3 fixed Oct 18)
 
 1. **Both scripts link footage on YouTube; the script import only reads Drive links**, so neither project imports any footage.
    - Interrogation: "Footage 1/2/3" are `t5ljpPTNvCM`, `Si3rfqwM9uo`, `7aU0eYFAj0M`, 2–4 hours each. Ranges link YouTube with `&t=`.

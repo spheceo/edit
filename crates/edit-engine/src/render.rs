@@ -1174,8 +1174,8 @@ pub fn partial_path(output: &Path, id: &str, format: Format) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Removes partial files of this export ([`partial_path`]) that a server no
-/// longer running left beside `output` (killed mid-export: the file can be
+/// Removes partial files of this export ([`partial_path`]), and what was
+/// beside them, that a server no longer running left beside `output` (killed mid-export: the file can be
 /// gigabytes, and a restarted server's has a new name).
 fn remove_stale_partials(output: &Path, id: &str, format: Format) {
     let (Some(dir), Some(name)) = (output.parent(), output.file_name()) else {
@@ -1192,10 +1192,12 @@ fn remove_stale_partials(output: &Path, id: &str, format: Format) {
     };
     for entry in entries.flatten() {
         let file = entry.file_name().to_string_lossy().into_owned();
+        // The partial file, or what was beside it (its sound, chapters, concat list).
         let Some(pid) = file
             .strip_prefix(&prefix)
-            .and_then(|rest| rest.strip_suffix(&suffix))
-            .and_then(|pid| pid.parse::<i32>().ok())
+            .and_then(|rest| rest.split_once(&suffix))
+            .filter(|(_, after)| after.is_empty() || after.starts_with('.'))
+            .and_then(|(pid, _)| pid.parse::<i32>().ok())
         else {
             continue;
         };
@@ -2941,6 +2943,7 @@ mod tests {
         for name in [
             "out.mp4.999999-p.partial.mp4".to_owned(),
             format!("out.mp4.{own}-p.partial.mp4"),
+            "out.mp4.999999-p.partial.mp4.sound.m4a".to_owned(),
             "out.mp4.1-p.partial.mp4".to_owned(),
             "out.mp4.999999-q.partial.mp4".to_owned(),
             "other.mp4.999999-p.partial.mp4".to_owned(),

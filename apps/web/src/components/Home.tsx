@@ -157,6 +157,10 @@ function ProjectCard({
   const seconds = project.duration_frames / project.fps;
   const aspect = project.width / project.height;
   const inCloud = cloudOn && Boolean(status?.cloud);
+  // Footage the timeline plays that's gone from this Mac (deleted, or on a drive that isn't plugged in).
+  const missing = project.missing ?? 0;
+  const used = project.media_used ?? missing;
+  const mostlyMissing = missing > 0 && missing * 2 >= used;
   // Someone else's live lock (this machine's own isn't news).
   const editor = remote?.holder && !remote.here ? remote.holder : null;
 
@@ -200,6 +204,14 @@ function ProjectCard({
             <div className="flex flex-col items-center gap-2 px-6 text-center text-[12px] text-muted">
               <TriangleAlert size={20} className="text-amber-400" />
               Can't be opened
+            </div>
+          ) : mostlyMissing ? (
+            <div className="flex flex-col items-center gap-1.5 px-6 text-center" title={`${missing} of ${used} footage files the edit plays aren't on this Mac`}>
+              <TriangleAlert size={20} className="text-amber-400" />
+              <span className="text-[12.5px] font-medium text-fg">Footage missing</span>
+              <span className="text-[11.5px] text-muted tabular">
+                {missing} of {used} files aren't on this Mac
+              </span>
             </div>
           ) : project.duration_frames > 0 ? (
             <img
@@ -287,6 +299,9 @@ function ProjectCard({
             {project.problem
               ? `${project.problem} · ${ago(project.modified_ms)}`
               : `${STYLES.find((style) => style.value === project.style)?.label ?? "Bodycam"} · ${shortDuration(seconds)} · ${ago(project.modified_ms)}`}
+            {!project.problem && missing > 0 && !mostlyMissing && (
+              <span className="text-amber-300"> · {missing} {missing === 1 ? "file" : "files"} missing</span>
+            )}
           </div>
         </div>
       </motion.div>

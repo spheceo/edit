@@ -181,6 +181,9 @@ export const api = {
   reviewResearch: (id: string, item: string, status: FoundImage["status"], origin: string) =>
     request<{ item: FoundImage; rev: number; project: Project }>("POST", `/api/projects/${id}/research/${item}`, { status, origin }),
   mediaStatus: (id: string) => request<{ media: Record<string, MediaStatus> }>("GET", `/api/projects/${id}/media-status`),
+  /** The footage the timeline plays that isn't on this machine and can't be fetched. */
+  missingFootage: (id: string) =>
+    request<{ used: number; missing: { id: string; name: string; path: string }[] }>("GET", `/api/projects/${id}/missing`),
   browse: (path?: string) => request<FsListing>("GET", `/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   exportProject: (id: string, path: string, options: ExportOptions) =>
     request<{ path: string }>("POST", `/api/projects/${id}/export`, { path, options }),

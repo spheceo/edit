@@ -297,3 +297,34 @@ test("a subtitled video is subtitles over footage and nothing else", () => {
   (project.clips as unknown[]).push({ id: "c3", type: "text", name: "Caption · Officer" });
   expect(isSubtitled(project)).toBe(false);
 });
+
+test("a project's summary counts the footage it plays that's gone", async () => {
+  const { store, home, cleanup } = fixtureHome("missing-footage");
+  try {
+    const id = store.create("gone", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const here = `${home}/here.mp4`;
+    fs.writeFileSync(here, "x");
+    await store.update(id, "test", (project) => {
+      const track = project.tracks[0]!.id;
+      const media = (mid: string, path: string, cloud?: unknown) =>
+        ({ id: mid, name: mid, path, kind: "video", duration: 10, width: 1920, height: 1080, fps: 30, has_audio: false, ...(cloud ? { cloud } : {}) }) as never;
+      project.media.push(
+        media("m1", here),
+        media("m2", "/Volumes/Gone/a.mp4"),
+        // In the cloud: fetched when it opens, not missing.
+        media("m3", "/nowhere/proxy.mp4", { source: "sha256:aa", original: "edit/originals/sha256/aa/a.mp4", proxy: "edit/proxies/sha256/aa.mp4", size: 1 }),
+        // Not on the timeline: not counted.
+        media("m4", "/Volumes/Gone/b.mp4"),
+      );
+      project.clips.push(
+        ...["m1", "m2", "m3"].map(
+          (mid, index) => ({ id: `c${index}`, type: "video", track, start: index * 30, duration: 30, media: mid, source_in: 0, color: "blue" }) as never,
+        ),
+      );
+    });
+    const summary = store.list().find((one) => one.id === id)!;
+    expect([summary.media_used, summary.missing]).toEqual([3, 1]);
+  } finally {
+    cleanup();
+  }
+});

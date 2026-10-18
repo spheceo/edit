@@ -640,7 +640,26 @@ function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
   };
   if (isSubtitled(project)) summary.subtitles = true;
   if (project.drive !== undefined && project.drive !== null) summary.drive = project.drive as DriveFile;
+  const missing = missingMedia(project);
+  const used = usedMedia(project).length;
+  if (used > 0) summary.media_used = used;
+  if (missing.length > 0) summary.missing = missing.length;
   return summary;
+}
+
+/** The media the timeline plays (a clip uses them). */
+function usedMedia(project: Project): Project["media"] {
+  const used = new Set(project.clips.flatMap((clip) => ("media" in clip && typeof clip.media === "string" ? [clip.media] : [])));
+  return project.media.filter((media) => used.has(media.id));
+}
+
+/**
+ * The media the timeline plays whose file isn't on this machine and that the
+ * cloud can't bring back (a cloud media's copy is fetched when it opens):
+ * footage deleted or on a drive that isn't plugged in.
+ */
+export function missingMedia(project: Project): Project["media"] {
+  return usedMedia(project).filter((media) => (media.cloud === undefined || media.cloud === null) && !isRegularFile(media.path));
 }
 
 /** The `"id"` a project file names, read without parsing the whole of it, or null. */

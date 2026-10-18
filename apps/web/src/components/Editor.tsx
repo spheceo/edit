@@ -14,6 +14,7 @@ import { FileBrowser } from "./FileBrowser";
 import { Research } from "./Research";
 import { AgentPanel } from "./AgentPanel";
 import { CloudBanner } from "./CloudBanner";
+import { MissingBanner } from "./MissingBanner";
 import { MediaPanel } from "./MediaPanel";
 import { SidePanel } from "./SidePanel";
 import { Timeline } from "./Timeline";
@@ -145,6 +146,7 @@ export function Editor({ id }: { id: string }) {
     <div className="flex h-full flex-col bg-black">
       <TopBar onExport={() => setExporting(true)} />
       <CloudBanner />
+      <MissingBanner />
       <div className="flex min-h-0 flex-1 px-2 pb-2">
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1">

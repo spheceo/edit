@@ -26,7 +26,7 @@ import { canonical, expandHome, extension, fileName, fileStem, isFile, join, par
 import { DEFAULT_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
-import { UpdateError } from "./store.ts";
+import { missingMedia, UpdateError } from "./store.ts";
 import * as tools from "./tools.ts";
 import { VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
@@ -59,7 +59,8 @@ export function buildRouter(): Router<App> {
     .post("/api/projects/{id}/import", importMedia)
     .post("/api/projects/{id}/import-drive", importDriveMedia)
     .post("/api/projects/{id}/upload", uploadMedia, { bodyLimit: null })
-    .get("/api/projects/{id}/media-status", mediaStatus);
+    .get("/api/projects/{id}/media-status", mediaStatus)
+    .get("/api/projects/{id}/missing", missingFootage);
   mediaRoutes(router);
   seams.research.routes(router);
   seams.captions.routes(router);
@@ -374,6 +375,17 @@ function getProject({ app, params }: Context): Response {
     });
   }
   return json({ rev: live.rev, project: live.project });
+}
+
+/** The footage the timeline plays that isn't here and can't be fetched: the editor says so. */
+function missingFootage({ app, params }: Context): Response {
+  const live = liveOr404(app, params.id!);
+  const missing = missingMedia(live.project);
+  const used = new Set(live.project.clips.flatMap((clip) => ("media" in clip && typeof clip.media === "string" ? [clip.media] : [])));
+  return json({
+    used: live.project.media.filter((media) => used.has(media.id)).length,
+    missing: missing.map((media) => ({ id: media.id, name: media.name, path: media.path })),
+  });
 }
 
 async function putProject(context: Context): Promise<Response> {

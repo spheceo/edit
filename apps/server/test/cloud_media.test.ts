@@ -485,3 +485,47 @@ test("an export of cloud-only footage mixes from a copy of its sound: made once,
     cleanup();
   }
 });
+
+test("a Drive file is copied in the cloud when the relay can, with its progress; a failed job falls back to this Mac", async () => {
+  const fixture = home("cloud-drive-job");
+  const { store, cleanup } = fixture;
+  const sleep = cloudMedia.jobTiming.sleep;
+  cloudMedia.jobTiming.sleep = async () => {};
+  try {
+    const bytes = new Uint8Array(150_000).map((_, n) => n % 239);
+    mock.driveFile("DriveJob01", bytes, "Interview.mp4");
+    let polls = 0;
+    mock.on("POST", "/v1/cloud/jobs/drive", (request) => {
+      const body = request.json() as { file: string; key: string };
+      expect(body).toEqual({ file: "DriveJob01", key: "edit/originals/drive/DriveJob01/Interview.mp4" });
+      return Response.json({ id: "drive-DriveJob01-abc", status: "queued", total: bytes.length });
+    });
+    mock.on("POST", "/v1/cloud/jobs/status", () => {
+      polls += 1;
+      if (polls === 1) return Response.json({ id: "drive-DriveJob01-abc", status: "running", bytes: 64_000 });
+      // Done there: the object is in R2 and registered.
+      mock.cloud.put("edit/originals/drive/DriveJob01/Interview.mp4", bytes);
+      return Response.json({ id: "drive-DriveJob01-abc", status: "complete", bytes: bytes.length, output: { size: bytes.length } });
+    });
+    const scratch = cloudMedia.scratchDir(store.cacheDir());
+    const seen: number[] = [];
+    const downloads = mock.calls("/drive.usercontent.google.com/download").length;
+    const original = await cloudMedia.driveOriginal("DriveJob01", scratch, (sent) => seen.push(sent));
+    expect(original.size).toBe(150_000);
+    expect(seen).toEqual([0, 64_000, 150_000]);
+    // Only the probe's first byte came through this Mac.
+    const through = mock.calls("/drive.usercontent.google.com/download").slice(downloads);
+    expect(through.every((call) => call.headers.get("range") === "bytes=0-0")).toBe(true);
+    expect(await cloudMedia.getRecord("drive:DriveJob01")).toMatchObject({ originalReady: true, size: 150_000 });
+
+    // A job that fails: this Mac streams it.
+    mock.driveFile("DriveJob02", bytes, "Second.mp4");
+    mock.on("POST", "/v1/cloud/jobs/drive", () => Response.json({ id: "drive-DriveJob02-abc", status: "queued" }));
+    mock.on("POST", "/v1/cloud/jobs/status", () => Response.json({ id: "drive-DriveJob02-abc", status: "errored", error: "Google said no" }));
+    const second = await cloudMedia.driveOriginal("DriveJob02", scratch, () => {});
+    expect(Buffer.from(mock.cloud.objects.get(second.key)!).equals(Buffer.from(bytes))).toBe(true);
+  } finally {
+    cloudMedia.jobTiming.sleep = sleep;
+    cleanup();
+  }
+});

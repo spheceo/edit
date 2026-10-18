@@ -140,6 +140,13 @@ function reloadOnCoreChange(): Plugin {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), reloadOnCoreChange(), ...(https ? [httpRedirect(https.name)] : [])],
+  // The relay's code is tested here too; the Workers runtime's modules aren't.
+  resolve: {
+    alias: {
+      "cloudflare:workers": join(import.meta.dirname, "../relay/src/runtime-stub.ts"),
+      "cloudflare:workflows": join(import.meta.dirname, "../relay/src/runtime-stub.ts"),
+    },
+  },
   server: {
     port: 5173,
     // Reachable over Tailscale (and LAN) for remote dev; names below are allowed Host headers.

@@ -135,3 +135,56 @@ describe("relay cloud endpoints", () => {
     expect(await refused.json()).toEqual({ error: "Convex: BadJsonBody: nope" });
   });
 });
+
+describe("relay cloud jobs: Drive → R2", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("copies a Drive file part by part into an R2 multipart upload, checks its size and registers it", async () => {
+    const { DriveToR2 } = await import("../../../relay/src/jobs");
+    const file = new Uint8Array(25).map((_, index) => index);
+    const parts = new Map<number, Uint8Array>();
+    const calls: string[] = [];
+    let registered: unknown = null;
+    vi.stubGlobal("FixedLengthStream", class { readable: ReadableStream; writable: WritableStream; constructor() { const pipe = new TransformStream(); this.readable = pipe.readable; this.writable = pipe.writable; } });
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init: RequestInit = {}) => {
+      const url = new URL(String(input));
+      const method = init.method ?? "GET";
+      calls.push(`${method} ${url.host}${url.pathname}${url.searchParams.has("partNumber") ? `#${url.searchParams.get("partNumber")}` : ""}`);
+      if (url.host === "oauth2.googleapis.com") return Response.json({ access_token: "t" });
+      if (url.pathname.endsWith("/files/FILEabcdefgh") && !url.searchParams.has("alt")) return Response.json({ name: "a.mp4", size: "25", md5Checksum: "v1" });
+      if (url.searchParams.get("alt") === "media") {
+        const [from, to] = new Headers(init.headers).get("range")!.slice(6).split("-").map(Number);
+        return new Response(file.slice(from, to + 1), { status: 206 });
+      }
+      if (url.host.endsWith("r2.cloudflarestorage.com")) {
+        if (method === "HEAD") return parts.size === 3 && registered === null && calls.some((call) => call.startsWith("POST") && call.includes("complete")) ? new Response(null, { headers: { "content-length": "25" } }) : new Response(null, { status: 404 });
+        if (method === "POST" && url.searchParams.has("uploads")) return new Response("<InitiateMultipartUploadResult><UploadId>U1</UploadId></InitiateMultipartUploadResult>");
+        if (method === "PUT") {
+          parts.set(Number(url.searchParams.get("partNumber")), new Uint8Array(await new Response(init.body).arrayBuffer()));
+          return new Response(null, { headers: { etag: `"e${url.searchParams.get("partNumber")}"` } });
+        }
+        if (method === "POST" && url.searchParams.get("uploadId") === "U1") {
+          calls.push("POST complete");
+          return new Response("<CompleteMultipartUploadResult><ETag>\"all\"</ETag></CompleteMultipartUploadResult>");
+        }
+      }
+      if (url.pathname === "/api/mutation") {
+        registered = JSON.parse(String(init.body));
+        return Response.json({ status: "success", value: null });
+      }
+      return new Response("unexpected", { status: 500 });
+    });
+    const env = { GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r", R2_ACCOUNT_ID: "acct", R2_ACCESS_KEY_ID: "k", R2_SECRET_ACCESS_KEY: "x", R2_BUCKET: "b", CONVEX_URL: "https://convex.test", CONVEX_SERVICE_TOKEN: "svc" };
+    const steps: string[] = [];
+    const step = { do: async (name: string, config: unknown, work?: () => Promise<unknown>) => { steps.push(name); return (work ?? (config as () => Promise<unknown>))(); } };
+    // The runtime constructs it with (ctx, env); its base class is the runtime's.
+    const Job = DriveToR2 as unknown as new (ctx: unknown, env: unknown) => InstanceType<typeof DriveToR2>;
+    const job = new Job({}, env);
+    const done = await job.run({ payload: { file: "FILEabcdefgh", key: "edit/originals/drive/FILEabcdefgh/a.mp4", name: "a.mp4", size: 25, version: "v1", part: 10 } }, step as never);
+    expect(done).toEqual({ key: "edit/originals/drive/FILEabcdefgh/a.mp4", size: 25, name: "a.mp4" });
+    expect(steps).toEqual(["check the file", "look for a finished copy", "start the upload", "part 1 of 3", "part 2 of 3", "part 3 of 3", "finish the upload", "register"]);
+    expect([...parts.keys()].sort()).toEqual([1, 2, 3]);
+    expect(Array.from(parts.get(3)!)).toEqual([20, 21, 22, 23, 24]);
+    expect(registered).toMatchObject({ path: "edit:putMedia", args: { source: "drive:FILEabcdefgh", originalKey: "edit/originals/drive/FILEabcdefgh/a.mp4", size: 25, originalReady: true, token: "svc" } });
+  });
+});

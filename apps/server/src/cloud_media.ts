@@ -561,7 +561,11 @@ export async function driveOriginal(
   const key = record !== null && cloud.validKey(record.originalKey) ? record.originalKey : `edit/originals/drive/${file}/${segment(name)}`;
   if (record === null) await putRecord({ source, name, originalKey: key, size: head.total ?? 0 });
   progress(0, head.total, name);
-  const size = await streamDrive(url, key, head.total, (sent) => progress(sent, head.total, name));
+  // Copied in the cloud where the relay can (it finishes without this Mac),
+  // else streamed through this Mac as before.
+  const size =
+    (await driveInTheCloud(file, key, (sent) => progress(sent, head.total, name))) ??
+    (await streamDrive(url, key, head.total, (sent) => progress(sent, head.total, name)));
   let duration: number | null = null;
   try {
     duration = await scriptParts.durationOf(await getUrl(key, HOUR));
@@ -572,6 +576,70 @@ export async function driveOriginal(
   if (duration !== null) done.duration = duration;
   await putRecord(done);
   return { file, source, key, name, size };
+}
+
+/** How often a cloud copy is asked how far it's got, and how long it may sit still before this Mac takes over. */
+export const jobTiming = { poll: 2000, stall: 10 * 60_000, sleep: (ms: number) => Bun.sleep(ms) };
+
+/**
+ * Drive file `file` copied to R2 `key` by the relay's cloud job (speed-plan
+ * 7.1: apps/relay/src/jobs.ts), following its progress; the bytes stored, or
+ * null when the relay can't (an older relay, no Google sign-in there, the
+ * job failed or stood still), so this Mac streams it instead.
+ * `EDIT_CLOUD_JOBS=0` never asks.
+ */
+async function driveInTheCloud(file: string, key: string, progress: (sent: number) => void): Promise<number | null> {
+  if (process.env.EDIT_CLOUD_JOBS === "0") return null;
+  let id: string;
+  try {
+    const started = await cloud.relayJson("jobs/drive", { file, key });
+    if (typeof started.id !== "string") return null;
+    id = started.id;
+  } catch (error) {
+    const message = diag.messageOf(error);
+    if (!/\b404\b|not found|not configured/i.test(message)) diag.warn("cloud", `copying ${file} in the cloud: ${scrub(message)}; streaming it through this Mac`);
+    return null;
+  }
+  diag.info("cloud", `copying Drive file ${file} to the cloud there (job ${id})`);
+  let last = -1;
+  let moved = Date.now();
+  for (;;) {
+    let status: Record<string, unknown>;
+    try {
+      status = await cloud.relayJson("jobs/status", { id, key });
+    } catch (error) {
+      // The relay unreachable for a moment: the job carries on there.
+      diag.warn("cloud", `asking about job ${id}: ${scrub(diag.messageOf(error))}`);
+      status = { status: "running" };
+    }
+    const state = String(status.status);
+    const bytes = typeof status.bytes === "number" ? status.bytes : null;
+    if (state === "complete") {
+      const size = bytes ?? 0;
+      progress(size);
+      return size;
+    }
+    if (state === "errored" || state === "terminated" || state === "unknown") {
+      diag.warn("cloud", `the cloud copy of ${file} ${state === "unknown" ? "was lost" : `failed (${String(status.error ?? state)})`}; streaming it through this Mac`);
+      return null;
+    }
+    // Only forward: the parts' list empties as they're joined into the file.
+    if (bytes !== null && bytes > last) {
+      last = bytes;
+      moved = Date.now();
+      progress(bytes);
+    }
+    if (Date.now() - moved > jobTiming.stall) {
+      diag.warn("cloud", `the cloud copy of ${file} stood still for ${jobTiming.stall / 60_000} minutes; streaming it through this Mac`);
+      try {
+        await cloud.relayJson("jobs/cancel", { id, key });
+      } catch {
+        // It stops on its own.
+      }
+      return null;
+    }
+    await jobTiming.sleep(jobTiming.poll);
+  }
 }
 
 /**

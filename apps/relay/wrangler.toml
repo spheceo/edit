@@ -19,6 +19,9 @@ preview_urls = false
 #   R2_BUCKET              the bucket (shared with Repack; Edit only uses edit/…)
 #   CONVEX_URL             the Convex deployment, https://….convex.cloud
 #   CONVEX_SERVICE_TOKEN   added as args.token to every edit: function call
+# Cloud jobs (/v1/cloud/jobs/*, src/jobs.ts: Drive → R2 without the Mac) also
+# need Google's sign-in, the same three Edit uses for Drive:
+#   GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DOCS_REFRESH_TOKEN
 
 [vars]
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
@@ -66,3 +69,10 @@ class_name = "TranscriptionBudget"
 [[migrations]]
 tag = "v1-budget"
 new_sqlite_classes = ["TranscriptionBudget"]
+
+# Cloud jobs: a Drive file copied to R2 part by part, each part a durable step
+# (src/jobs.ts). Billed as Workflow steps on Workers Paid.
+[[workflows]]
+name = "edit-drive-to-r2"
+binding = "DRIVE_TO_R2"
+class_name = "DriveToR2"

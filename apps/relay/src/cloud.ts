@@ -17,9 +17,13 @@
  *   /v1/cloud/r2/list               {prefix, cursor?}  (a page of ≤1000)   → {objects: [{key, size}], cursor?}
  *   /v1/cloud/convex                {kind: query|mutation|action, path: "edit:…", args?}
  *                                   → Convex's answer ({status: "success", value} | {status: "error", errorMessage})
+ *   /v1/cloud/jobs/drive            {file, key}  → {id, status}: Drive file → R2 in the cloud (jobs.ts)
+ *   /v1/cloud/jobs/status           {id}         → {id, status, bytes?, total?, output?, error?}
+ *   /v1/cloud/jobs/cancel           {id}         → {ok}
  */
+import { cancelJob, driveJob, jobStatus, type JobsEnv } from "./jobs";
 
-export interface CloudEnv {
+export interface CloudEnv extends JobsEnv {
   /** Edit's bearer token for /v1/cloud/* (EDIT_RELAY_TOKEN on the app side). */
   CLOUD_TOKEN?: string;
   R2_ACCOUNT_ID?: string;
@@ -57,6 +61,20 @@ export async function cloud(request: Request, url: URL, env: CloudEnv): Promise<
   }
   const route = url.pathname.slice("/v1/cloud/".length);
   if (route === "convex") return convex(body, env);
+  if (route.startsWith("jobs/")) {
+    const r2 = r2Config(env);
+    if (!r2) return json(503, { error: "Cloud storage is not configured on the relay yet." });
+    try {
+      if (route === "jobs/drive") return json(200, await driveJob(body, env, r2));
+      if (route === "jobs/status") return json(200, await jobStatus(body, env, r2));
+      if (route === "jobs/cancel") return json(200, await cancelJob(body, env, r2));
+    } catch (error) {
+      if (error instanceof BadRequest) return json(400, { error: error.message });
+      if (error instanceof Upstream) return json(502, { error: error.message });
+      throw error;
+    }
+    return json(404, { error: "not found" });
+  }
   const handler = route.startsWith("r2/") && Object.hasOwn(R2_ROUTES, route.slice(3)) ? R2_ROUTES[route.slice(3)] : undefined;
   if (!handler) return json(404, { error: "not found" });
   const r2 = r2Config(env);
@@ -96,15 +114,15 @@ export function validPrefix(prefix: unknown): prefix is string {
 
 // --- R2 (S3 API, SigV4) -------------------------------------------------------
 
-interface R2 { host: string; bucket: string; accessKeyId: string; secret: string }
+export interface R2 { host: string; bucket: string; accessKeyId: string; secret: string }
 
-function r2Config(env: CloudEnv): R2 | null {
+export function r2Config(env: CloudEnv): R2 | null {
   if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY || !env.R2_BUCKET) return null;
   return { host: `${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`, bucket: env.R2_BUCKET, accessKeyId: env.R2_ACCESS_KEY_ID, secret: env.R2_SECRET_ACCESS_KEY };
 }
 
-class BadRequest extends Error {}
-class Upstream extends Error {}
+export class BadRequest extends Error {}
+export class Upstream extends Error {}
 
 const R2_ROUTES: Record<string, (body: Record<string, unknown>, r2: R2) => Promise<Response>> = {
   async url(body, r2) {
@@ -198,7 +216,7 @@ const R2_ROUTES: Record<string, (body: Record<string, unknown>, r2: R2) => Promi
   },
 };
 
-function needKey(key: unknown): string {
+export function needKey(key: unknown): string {
   if (!validKey(key)) throw new BadRequest("key must be a path under edit/ (no empty, . or .. segments).");
   return key;
 }
@@ -214,13 +232,13 @@ function needPartNumber(part: unknown): number {
 }
 
 /** A presigned URL for `key` in the bucket (path-style; `key` "" is the bucket). */
-function objectUrl(r2: R2, method: string, key: string, query: Record<string, string>, expires: number) {
+export function objectUrl(r2: R2, method: string, key: string, query: Record<string, string>, expires: number) {
   const path = `/${encodePath(r2.bucket)}${key ? `/${encodePath(key)}` : ""}`;
   return presign({ method, url: `https://${r2.host}${path}`, query, accessKeyId: r2.accessKeyId, secret: r2.secret, region: "auto", expires });
 }
 
 /** One S3 call from the relay itself, through a minute-long presigned URL. */
-async function r2Fetch(r2: R2, method: string, key: string, query: Record<string, string>, options: { body?: string; headers?: Record<string, string>; allow404?: boolean } = {}) {
+export async function r2Fetch(r2: R2, method: string, key: string, query: Record<string, string>, options: { body?: string; headers?: Record<string, string>; allow404?: boolean } = {}) {
   const answer = await fetch(await objectUrl(r2, method, key, query, 60), { method, body: options.body, headers: options.headers });
   if (answer.ok || (options.allow404 && answer.status === 404)) return answer;
   const text = method === "HEAD" ? "" : await answer.text();
@@ -282,12 +300,12 @@ async function sha256(text: string) {
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-function xmlValue(xml: string, tag: string): string | undefined {
+export function xmlValue(xml: string, tag: string): string | undefined {
   return xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1];
 }
 
-const escapeXml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-const unescapeXml = (text: string) => text
+export const escapeXml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+export const unescapeXml = (text: string) => text
   .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&apos;/g, "'")
   .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
   .replace(/&#x([0-9a-fA-F]+);/g, (_, code) => String.fromCodePoint(parseInt(code, 16)))
@@ -333,7 +351,7 @@ async function convex(body: Record<string, unknown>, env: CloudEnv): Promise<Res
   return json(answer.ok ? 502 : answer.status, { error: `Convex: ${message}` });
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

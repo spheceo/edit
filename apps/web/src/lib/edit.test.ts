@@ -138,6 +138,23 @@ describe("timeline operations", () => {
   });
 });
 
+describe("one colour per person (edit-core's validate_people)", () => {
+  const cast = (color: string, clipColor: [number, number, number, number]) =>
+    ({
+      ...project([{ id: "t1", track: "v1", type: "text", text: "Hi", start: 0, duration: 10, fade_in: 0, fade_out: 0, person: "p1", style: { color: clipColor } } as unknown as Clip]),
+      people: [{ id: "p1", name: "Officer", label: "Officer", role: "officer", color, names: [] }],
+    }) as unknown as Project;
+  it("refuses a white person and a clip out of its person's colour", () => {
+    expect(validateProject(cast("#3366ff", [0.2, 0.4, 1, 1]))).toBeNull();
+    expect(validateProject(cast("#ffffff", [1, 1, 1, 1]))).toContain("can't be white");
+    expect(validateProject(cast("#eeeeee", [0.933, 0.933, 0.933, 1]))).toContain("can't be white");
+    expect(validateProject(cast("#3366ff", [1, 0, 0, 1]))).toContain("recolour the person");
+    const nobody = cast("#3366ff", [0.2, 0.4, 1, 1]);
+    nobody.people = [];
+    expect(validateProject(nobody)).toContain("isn't in the cast");
+  });
+});
+
 describe("keyframe curves (mirrors edit-core eval tests)", () => {
   const key = (frame: number, value: number, ease: Keyframe["ease"], extra: Partial<Keyframe> = {}): Keyframe => ({ frame, value, ease, ...extra });
 

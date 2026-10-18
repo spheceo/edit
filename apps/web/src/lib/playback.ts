@@ -206,16 +206,23 @@ class Preview {
   }
 
   /**
-   * Runs an engine call. A Rust panic poisons the WASM instance, so any
-   * failure retires this engine and builds a fresh one on the same canvas
-   * instead of letting the error escape into React.
+   * Runs an engine call. A Rust panic poisons the WASM instance, so a panic
+   * retires this engine and builds a fresh one on the same canvas instead of
+   * letting the error escape into React. With `refusable`, an error the
+   * engine returned (a project it refuses) leaves it as it was: nothing is
+   * poisoned, and the previous project stays on screen.
    */
-  private use<T>(call: (engine: Engine) => T): T | undefined {
+  private use<T>(call: (engine: Engine) => T, refusable = false): T | undefined {
     const engine = this.engine;
     if (!engine) return undefined;
     try {
       return call(engine);
     } catch (error) {
+      if (refusable && !(error instanceof WebAssembly.RuntimeError)) {
+        console.warn("edit engine refused a call", error);
+        note("error", "preview", `the preview refused a change: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
       console.warn("edit engine failed; restarting", error);
       this.engine = null;
       if (this.canvas && this.restarts < 3) {
@@ -349,7 +356,7 @@ class Preview {
     if (!this.engineStale || !this.engine || !this.project) return;
     this.engineStale = false;
     const project = this.project;
-    this.use((engine) => engine.setProject(projectJson(project)));
+    this.use((engine) => engine.setProject(projectJson(project)), true);
     this.readSections();
     this.notify();
   }

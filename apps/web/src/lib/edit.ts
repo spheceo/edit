@@ -4,6 +4,7 @@
 import { current, isDraft } from "immer";
 
 import { isSubtitled } from "./drive";
+import { peopleProblem } from "./people";
 import { changedGlitch, changedShake, HOUSE_BOX, HOUSE_GLOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind, rate } from "./types";
 
 export const freshId = (project: Project, prefix: string) => {
@@ -832,7 +833,7 @@ export function validateProject(project: Project): string | null {
       if (sorted[i].start < clipEnd(sorted[i - 1])) return `clips would overlap on ${trackLabel(project, tracks.get(track)!)}`;
     }
   }
-  return null;
+  return peopleProblem(project);
 }
 
 /** Gives each clip a fade in and out of `frames` (0 removes them). */

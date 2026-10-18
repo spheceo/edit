@@ -31,3 +31,6 @@ node_modules/
 # The native addon (built by `just native`) and its tooling
 /crates/edit-native/node_modules/
 /crates/edit-native/*.node
+
+# Release output (`just release`)
+/package/

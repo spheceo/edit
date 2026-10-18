@@ -1,4 +1,4 @@
-import { Captions, Cloud, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Lock, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Lock, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -23,6 +23,10 @@ export function Home() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [cloud, setCloud] = useState<CloudList | null>(null);
   const [creating, setCreating] = useState(false);
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<Kind>("all");
+  const [style, setStyle] = useState<Style | null>(null);
+  const [subtitledOpen, setSubtitledOpen] = useState(() => localStorage.getItem(SUBTITLED_OPEN) !== "0");
   const toast = useEditor((state) => state.toast);
 
   const refresh = () => {
@@ -49,12 +53,49 @@ export function Home() {
   const cloudOnly = (cloud?.projects ?? []).filter((project) => !project.local && !projects?.some((local) => local.id === project.id));
   const count = (projects?.length ?? 0) + cloudOnly.length;
 
+  // What the search and filters keep.
+  const words = query.trim().toLowerCase();
+  const kept = (name: string, own: Style | undefined) => (words === "" || name.toLowerCase().includes(words)) && (style === null || own === style);
+  const all = projects ?? [];
+  const edits = all.filter((project) => !project.subtitles && kept(project.name, project.style));
+  const subtitled = all.filter((project) => project.subtitles && kept(project.name, project.style));
+  const cloudEdits = cloudOnly.filter((project) => kept(project.name, project.summary?.style as Style | undefined));
+  // The two edits worked on last, big at the top, while nothing narrows the list.
+  const narrowed = words !== "" || style !== null || kind !== "all";
+  const continuing = narrowed ? [] : edits.filter((project) => !project.problem).slice(0, 2);
+  const rest = edits.filter((project) => !continuing.includes(project));
+  const showEdits = kind !== "subtitled";
+  const showSubtitled = kind !== "edits";
+  const cardProps = (project: ProjectSummary) => ({
+    project,
+    onChanged: refresh,
+    cloudOn: Boolean(cloud?.on),
+    status: cloud?.statuses?.[project.id],
+    remote: remote.get(project.id),
+  });
+  const toggleSubtitled = () => {
+    localStorage.setItem(SUBTITLED_OPEN, subtitledOpen ? "0" : "1");
+    setSubtitledOpen(!subtitledOpen);
+  };
+
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[1040px] px-8 pt-8 pb-16">
-        <header className="flex items-center justify-between">
+      <div className="mx-auto max-w-[1120px] px-8 pt-8 pb-16">
+        <header className="flex items-center gap-4">
           <Logo size={22} />
-          <div className="flex items-center gap-1.5">
+          {projects && count > 0 && (
+            <label className="ml-4 flex h-8 max-w-[420px] flex-1 items-center gap-2 rounded-lg border border-line px-2.5 text-muted focus-within:border-line-strong">
+              <Search size={14} />
+              <input
+                value={query}
+                placeholder="Search projects"
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => event.key === "Escape" && setQuery("")}
+                className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-faint"
+              />
+            </label>
+          )}
+          <div className="ml-auto flex items-center gap-1.5">
             <UpdateButton />
             <AppMenu />
             <Button variant="primary" onClick={() => setCreating(true)}>
@@ -87,30 +128,94 @@ export function Home() {
 
         {projects && count > 0 && (
           <>
-            <div className="mt-12 mb-4 flex items-baseline gap-3">
-              <h2 className="text-[12px] font-medium tracking-wide text-muted uppercase">Projects</h2>
+            <div className="mt-8 flex flex-wrap items-center gap-2">
+              <div className="flex rounded-lg bg-panel p-0.5 ring-1 ring-line">
+                {(
+                  [
+                    ["all", "All", all.length + cloudOnly.length],
+                    ["edits", "Edits", all.filter((project) => !project.subtitles).length + cloudOnly.length],
+                    ["subtitled", "Subtitled videos", all.filter((project) => project.subtitles).length],
+                  ] as [Kind, string, number][]
+                ).map(([value, label, total]) => (
+                  <button
+                    key={value}
+                    onClick={() => setKind(value)}
+                    className={cx(
+                      "h-7 rounded-md px-3 text-[12px] font-medium transition-colors",
+                      kind === value ? "bg-active text-fg" : "text-muted hover:text-fg",
+                    )}
+                  >
+                    {label} <span className="text-faint tabular">{total}</span>
+                  </button>
+                ))}
+              </div>
               {cloud?.on && cloud.error && (
                 <span className="text-[12px] text-amber-300/80" title={cloud.error}>
                   {cloud.offline ? "Can't reach the cloud: showing what's on this Mac." : "The cloud's list didn't load."}
                 </span>
               )}
+              <div className="ml-auto flex gap-1.5">
+                {STYLES.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => setStyle(style === option.value ? null : option.value)}
+                    className={cx(
+                      "flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] transition-colors",
+                      style === option.value ? "border-line-strong bg-active text-fg" : "border-line text-muted hover:text-fg",
+                    )}
+                  >
+                    <span className="size-1.5 rounded-full" style={{ background: STYLE_COLOURS[option.value] }} />
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-4">
-              {projects.map((project, index) => (
-                <ProjectCard
-                  key={project.id}
-                  project={project}
-                  index={index}
-                  onChanged={refresh}
-                  cloudOn={Boolean(cloud?.on)}
-                  status={cloud?.statuses?.[project.id]}
-                  remote={remote.get(project.id)}
-                />
-              ))}
-              {cloudOnly.map((project, index) => (
-                <CloudCard key={project.id} project={project} index={projects.length + index} onChanged={refresh} />
-              ))}
-            </div>
+
+            {continuing.length > 0 && showEdits && (
+              <section className="mt-8">
+                <SectionTitle>Continue</SectionTitle>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {continuing.map((project, index) => (
+                    <ProjectCard key={project.id} index={index} big {...cardProps(project)} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {showEdits && (rest.length > 0 || cloudEdits.length > 0) && (
+              <section className="mt-9">
+                <SectionTitle count={rest.length + cloudEdits.length}>{continuing.length > 0 ? "More edits" : "Edits"}</SectionTitle>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4">
+                  {rest.map((project, index) => (
+                    <ProjectCard key={project.id} index={index} {...cardProps(project)} />
+                  ))}
+                  {cloudEdits.map((project, index) => (
+                    <CloudCard key={project.id} project={project} index={rest.length + index} onChanged={refresh} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {showSubtitled && subtitled.length > 0 && (
+              <section className="mt-9">
+                <button onClick={toggleSubtitled} className="group/title mb-3 flex items-center gap-1.5">
+                  <ChevronRight size={14} className={cx("text-muted transition-transform", subtitledOpen && "rotate-90")} />
+                  <span className="text-[12px] font-medium tracking-wide text-muted uppercase group-hover/title:text-fg">Subtitled videos</span>
+                  <span className="text-[12px] text-faint tabular">{subtitled.length}</span>
+                </button>
+                {subtitledOpen && (
+                  <div className="overflow-hidden rounded-xl border border-line">
+                    {subtitled.map((project) => (
+                      <ProjectRow key={project.id} {...cardProps(project)} />
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {(showEdits ? edits.length + cloudEdits.length : 0) + (showSubtitled ? subtitled.length : 0) === 0 && (
+              <p className="mt-16 text-center text-muted">Nothing matches{words ? ` “${query.trim()}”` : ""}.</p>
+            )}
           </>
         )}
       </div>
@@ -119,43 +224,44 @@ export function Home() {
   );
 }
 
-/** The card's picture: a frame near the start rather than the first (often a
- * dip from black), between 1 s in and 15% of the way (at most the first
- * minute), picked per project so it stays the same between visits. */
+type Kind = "all" | "edits" | "subtitled";
+
+/** Whether the subtitled videos' list is open (remembered on this browser). */
+const SUBTITLED_OPEN = "edit.home.subtitledOpen";
+
+/** Each kind of video's colour (its dot on cards and filters). */
+const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#ffd166" };
+
+function SectionTitle({ children, count }: { children: React.ReactNode; count?: number }) {
+  return (
+    <h2 className="mb-3 flex items-baseline gap-2 text-[12px] font-medium tracking-wide text-muted uppercase">
+      {children}
+      {count !== undefined && <span className="text-faint tabular">{count}</span>}
+    </h2>
+  );
+}
+
+/**
+ * The card's picture: a frame picked at random from the body of the edit
+ * (between 10% and 85% of the way, past the intro's dips), the same one until
+ * the project changes, so the home screen doesn't reshuffle on every visit.
+ */
 function coverFrame(project: ProjectSummary) {
   const total = project.duration_frames;
-  const from = Math.min(total - 1, Math.round(project.fps));
-  const to = Math.max(from, Math.min(Math.round(total * 0.15), Math.round(project.fps * 60)));
+  const from = Math.min(total - 1, Math.max(Math.round(total * 0.1), Math.round(project.fps)));
+  const to = Math.max(from, Math.round(total * 0.85));
   let hash = 2166136261;
-  for (const c of project.id) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619) >>> 0;
+  for (const c of `${project.id}:${project.modified_ms}`) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619) >>> 0;
   return from + (hash % (to - from + 1));
 }
 
-function ProjectCard({
-  project,
-  index,
-  onChanged,
-  cloudOn,
-  status,
-  remote,
-}: {
-  project: ProjectSummary;
-  index: number;
-  onChanged: () => void;
-  /** Cloud is on here. */
-  cloudOn: boolean;
-  /** Its cloud state on this machine (a cloud project). */
-  status?: CloudStatus;
-  /** It as listed in the cloud. */
-  remote?: CloudProject;
-}) {
+/** What a project's card says about it, and what can be done to it (rename, delete, move to cloud). */
+function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boolean, status?: CloudStatus, remote?: CloudProject) {
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [moving, setMoving] = useState(false);
   const toast = useEditor((state) => state.toast);
   const drive = useDriveLink(project.id, project.drive);
-  const seconds = project.duration_frames / project.fps;
-  const aspect = project.width / project.height;
   const inCloud = cloudOn && Boolean(status?.cloud);
   // Footage the timeline plays that's gone from this Mac (deleted, or on a drive that isn't plugged in).
   const missing = project.missing ?? 0;
@@ -166,6 +272,8 @@ function ProjectCard({
   const mostlyRemote = !mostlyMissing && fetching > 0 && fetching * 2 >= used;
   // Someone else's live lock (this machine's own isn't news).
   const editor = remote?.holder && !remote.here ? remote.holder : null;
+  // The cloud is only worth a word when something's off.
+  const cloudNews = inCloud && (editor !== null || status?.sync === "conflict" || status?.dirty === true || status?.sync === "offline");
 
   const rename = async (name: string) => {
     setRenaming(false);
@@ -178,7 +286,6 @@ function ProjectCard({
       toast(`Couldn't rename: ${(error as Error).message}`, "error");
     }
   };
-
   const remove = async () => {
     setDeleting(false);
     try {
@@ -188,132 +295,61 @@ function ProjectCard({
     }
     onChanged();
   };
-
-  return (
+  const open = () => {
+    if (renaming) return;
+    if (project.problem) toast(`“${project.name}” can't be opened: ${project.problem}`, "error");
+    else navigate(`/p/${project.id}`);
+  };
+  const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    toggleMenu(
+      event.currentTarget,
+      [
+        { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(true) },
+        ...(drive
+          ? [
+              { label: "Copy Drive link", icon: <Copy size={14} />, onSelect: () => void copyDriveLink(drive.url, toast) },
+              { label: "Open on Drive", icon: <ExternalLink size={14} />, onSelect: () => openDrive(drive.url) },
+            ]
+          : []),
+        ...(cloudOn && !status?.cloud && !project.problem
+          ? [{ label: "Move to cloud…", icon: <CloudUpload size={14} />, onSelect: () => setMoving(true) }]
+          : []),
+        { separator: true },
+        { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
+      ],
+      { width: 190 },
+    );
+  };
+  const driveMenu = (event: React.MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    if (!drive) return;
+    const box = event.currentTarget.getBoundingClientRect();
+    toggleMenu(
+      event.currentTarget,
+      [
+        { label: "Copy Drive link", icon: <Copy size={14} />, onSelect: () => void copyDriveLink(drive.url, toast) },
+        { label: "Open on Drive", icon: <ExternalLink size={14} />, onSelect: () => openDrive(drive.url) },
+      ],
+      { width: 180, at: { x: box.left, y: box.bottom + 4 } },
+    );
+  };
+  const nameInput = renaming ? (
+    <input
+      autoFocus
+      defaultValue={project.name}
+      onClick={(event) => event.stopPropagation()}
+      onFocus={(event) => event.currentTarget.select()}
+      onBlur={(event) => void rename(event.currentTarget.value.trim())}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") setRenaming(false);
+      }}
+      className="-mx-1.5 h-7 w-[calc(100%+12px)] rounded-md bg-black/80 px-1.5 font-semibold text-fg outline-none"
+    />
+  ) : null;
+  const dialogs = (
     <>
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ ...spring, delay: Math.min(index, 12) * 0.03 }}
-        className="group cursor-pointer"
-        onClick={() => {
-          if (renaming) return;
-          if (project.problem) toast(`“${project.name}” can't be opened: ${project.problem}`, "error");
-          else navigate(`/p/${project.id}`);
-        }}
-      >
-        <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-xl border border-line bg-panel transition-[border-color] duration-200 group-hover:border-line-strong">
-          {project.problem ? (
-            <div className="flex flex-col items-center gap-2 px-6 text-center text-[12px] text-muted">
-              <TriangleAlert size={20} className="text-amber-400" />
-              Can't be opened
-            </div>
-          ) : mostlyMissing ? (
-            <div className="flex flex-col items-center gap-1.5 px-6 text-center" title={`${missing} of ${used} footage files the edit plays aren't on this Mac`}>
-              <TriangleAlert size={20} className="text-amber-400" />
-              <span className="text-[12.5px] font-medium text-fg">Footage missing</span>
-              <span className="text-[11.5px] text-muted tabular">
-                {missing} of {used} files aren't on this Mac
-              </span>
-            </div>
-          ) : mostlyRemote ? (
-            <div className="flex flex-col items-center gap-1.5 px-6 text-center">
-              <CloudDownload size={20} className="text-muted" />
-              <span className="text-[12.5px] font-medium text-fg">Footage in the cloud</span>
-              <span className="text-[11.5px] text-muted">Downloads when you open it</span>
-            </div>
-          ) : project.duration_frames > 0 ? (
-            <img
-              src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=480&v=${project.modified_ms}`}
-              loading="lazy"
-              alt=""
-              className="max-h-full max-w-full opacity-0 transition-opacity duration-300"
-              style={{ aspectRatio: aspect }}
-              onLoad={(event) => event.currentTarget.classList.remove("opacity-0")}
-            />
-          ) : (
-            <Mark size={36} cut="#0a0a0a" />
-          )}
-          {(project.subtitles || drive || inCloud) && (
-            <div className="absolute top-2 left-2 flex gap-1">
-              {inCloud && <CloudBadge status={status} editor={editor} />}
-              {project.subtitles && (
-                <div className="flex h-6 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-fg">
-                  <Captions size={13} />
-                  Subtitles
-                </div>
-              )}
-              {drive && (
-                <button
-                  title={`On Drive: ${drive.name}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleMenu(
-                      event.currentTarget,
-                      [
-                        { label: "Copy Drive link", icon: <Copy size={14} />, onSelect: () => void copyDriveLink(drive.url, toast) },
-                        { label: "Open on Drive", icon: <ExternalLink size={14} />, onSelect: () => openDrive(drive.url) },
-                      ],
-                      { width: 180, at: { x: event.currentTarget.getBoundingClientRect().left, y: event.currentTarget.getBoundingClientRect().bottom + 4 } },
-                    );
-                  }}
-                  className="flex h-6 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-fg hover:bg-black"
-                >
-                  <Cloud size={13} />
-                  Drive
-                </button>
-              )}
-            </div>
-          )}
-          <button
-            title="More"
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleMenu(
-                event.currentTarget,
-                [
-                  { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(true) },
-                  ...(cloudOn && !status?.cloud && !project.problem
-                    ? [{ label: "Move to cloud…", icon: <CloudUpload size={14} />, onSelect: () => setMoving(true) }]
-                    : []),
-                  { separator: true },
-                  { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
-                ],
-                { width: 180 },
-              );
-            }}
-            className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-md bg-black/70 text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-fg"
-          >
-            <Ellipsis size={15} />
-          </button>
-        </div>
-        <div className="mt-2.5 px-0.5">
-          {renaming ? (
-            <input
-              autoFocus
-              defaultValue={project.name}
-              onClick={(event) => event.stopPropagation()}
-              onFocus={(event) => event.currentTarget.select()}
-              onBlur={(event) => void rename(event.currentTarget.value.trim())}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
-                if (event.key === "Escape") setRenaming(false);
-              }}
-              className="-mx-1.5 h-6 w-[calc(100%+12px)] rounded-md bg-hover px-1.5 font-medium outline-none"
-            />
-          ) : (
-            <div className="truncate font-medium">{project.name}</div>
-          )}
-          <div className="mt-0.5 truncate text-[12px] text-muted tabular" title={project.problem}>
-            {project.problem
-              ? `${project.problem} · ${ago(project.modified_ms)}`
-              : `${STYLES.find((style) => style.value === project.style)?.label ?? "Bodycam"} · ${shortDuration(seconds)} · ${ago(project.modified_ms)}`}
-            {!project.problem && missing > 0 && !mostlyMissing && (
-              <span className="text-amber-300"> · {missing} {missing === 1 ? "file" : "files"} missing</span>
-            )}
-          </div>
-        </div>
-      </motion.div>
       <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
         <div className="p-6">
           <h2 className="text-[15px] font-semibold">Delete “{project.name}”?</h2>
@@ -333,6 +369,183 @@ function ProjectCard({
         </div>
       </Modal>
       <MoveToCloud project={project} open={moving} onClose={() => setMoving(false)} onMoved={onChanged} />
+    </>
+  );
+  return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, open, menu, driveMenu, nameInput, dialogs };
+}
+
+interface CardProps {
+  project: ProjectSummary;
+  onChanged: () => void;
+  /** Cloud is on here. */
+  cloudOn: boolean;
+  /** Its cloud state on this machine (a cloud project). */
+  status?: CloudStatus;
+  /** It as listed in the cloud. */
+  remote?: CloudProject;
+}
+
+/** An edit: a frame of it with the title over a black gradient, as a streaming service's tile. */
+function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big = false }: CardProps & { index: number; big?: boolean }) {
+  const card = useProject(project, onChanged, cloudOn, status, remote);
+  const seconds = project.duration_frames / project.fps;
+  const styleLabel = STYLES.find((option) => option.value === project.style)?.label ?? "Bodycam";
+  const picture = !project.problem && !card.mostlyMissing && !card.mostlyRemote && project.duration_frames > 0;
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ ...spring, delay: Math.min(index, 12) * 0.03 }}
+        className="group cursor-pointer"
+        onClick={card.open}
+      >
+        <div
+          className={cx(
+            "relative aspect-video overflow-hidden rounded-xl border border-line bg-panel transition-[border-color,transform] duration-200 group-hover:border-line-strong",
+            big && "md:aspect-[16/8]",
+          )}
+        >
+          {picture ? (
+            <img
+              src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=${big ? 960 : 640}&v=${project.modified_ms}`}
+              loading="lazy"
+              alt=""
+              className="absolute inset-0 size-full object-cover opacity-0 transition-[opacity,transform] duration-500 group-hover:scale-[1.03]"
+              onLoad={(event) => event.currentTarget.classList.remove("opacity-0")}
+            />
+          ) : (
+            <div className="absolute inset-x-0 top-0 flex h-[58%] flex-col items-center justify-center gap-1.5 px-6 text-center">
+              {project.problem ? (
+                <>
+                  <TriangleAlert size={20} className="text-amber-400" />
+                  <span className="text-[12.5px] font-medium text-fg">Can't be opened</span>
+                </>
+              ) : card.mostlyMissing ? (
+                <>
+                  <TriangleAlert size={20} className="text-amber-400" />
+                  <span className="text-[12.5px] font-medium text-fg" title={`${card.missing} of ${card.used} files aren't on this Mac`}>
+                    Footage missing
+                  </span>
+                  {big && (
+                    <span className="text-[11.5px] text-muted tabular">
+                      {card.missing} of {card.used} files aren't on this Mac
+                    </span>
+                  )}
+                </>
+              ) : card.mostlyRemote ? (
+                <>
+                  <CloudDownload size={20} className="text-muted" />
+                  <span className="text-[12.5px] font-medium text-fg" title="Downloads when you open it">
+                    Footage in the cloud
+                  </span>
+                  {big && <span className="text-[11.5px] text-muted">Downloads when you open it</span>}
+                </>
+              ) : (
+                <Mark size={36} cut="#0a0a0a" />
+              )}
+            </div>
+          )}
+          {/* The black gradient the title sits on. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black via-black/70 to-transparent" />
+          <div className={cx("absolute inset-x-0 bottom-0", big ? "p-5" : "p-3.5")}>
+            {card.nameInput ?? (
+              <div className={cx("line-clamp-2 font-semibold tracking-[-0.01em] text-white drop-shadow", big ? "text-[19px] leading-tight" : "text-[14px] leading-snug")}>
+                {project.name}
+              </div>
+            )}
+            <div className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-white/70 tabular">
+              <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[project.style] ?? STYLE_COLOURS.bodycam }} />
+              {project.problem ? (
+                <span className="truncate" title={project.problem}>
+                  {project.problem}
+                </span>
+              ) : (
+                <span className="truncate">
+                  {styleLabel} · {shortDuration(seconds)} · {ago(project.modified_ms)}
+                  {card.missing > 0 && (!card.mostlyMissing || !big) && (
+                    <span className="text-amber-300">
+                      {" "}
+                      · {card.missing} {card.missing === 1 ? "file" : "files"} missing
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+          {(card.cloudNews || card.drive) && (
+            <div className="absolute top-2.5 left-2.5 flex gap-1">
+              {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
+              {card.drive && (
+                <button
+                  onClick={card.driveMenu}
+                  title={`On Drive: ${card.drive.name}`}
+                  className="flex h-6 items-center rounded-md bg-black/75 px-2 text-[11px] font-medium text-green-300 hover:bg-black"
+                >
+                  On Drive ↗
+                </button>
+              )}
+            </div>
+          )}
+          <button
+            title="More"
+            onClick={card.menu}
+            className="absolute top-2.5 right-2.5 flex size-7 items-center justify-center rounded-md bg-black/70 text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-fg"
+          >
+            <Ellipsis size={15} />
+          </button>
+        </div>
+      </motion.div>
+      {card.dialogs}
+    </>
+  );
+}
+
+/** A subtitled video: a row in the list (they're mostly opened for their Drive link). */
+function ProjectRow({ project, onChanged, cloudOn, status, remote }: CardProps) {
+  const card = useProject(project, onChanged, cloudOn, status, remote);
+  const seconds = project.duration_frames / project.fps;
+  const picture = !project.problem && !card.mostlyMissing && !card.mostlyRemote && project.duration_frames > 0;
+  return (
+    <>
+      <div onClick={card.open} className="group flex h-14 cursor-pointer items-center gap-3 border-t border-line px-3 first:border-t-0 hover:bg-hover">
+        <div className="flex h-9 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-panel">
+          {picture ? (
+            <img src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=160&v=${project.modified_ms}`} loading="lazy" alt="" className="size-full object-cover" />
+          ) : card.mostlyRemote ? (
+            <CloudDownload size={14} className="text-muted" />
+          ) : (
+            <TriangleAlert size={14} className="text-amber-400" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          {card.nameInput ?? <div className="truncate font-medium">{project.name}</div>}
+          {(project.problem || card.missing > 0 || card.cloudNews) && (
+            <div className="truncate text-[11.5px] text-amber-300/90">
+              {project.problem ?? (card.missing > 0 ? `${card.missing} of ${card.used} files missing` : card.editor ? `${card.editor} is editing` : "Not synced")}
+            </div>
+          )}
+        </div>
+        <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{shortDuration(seconds)}</span>
+        <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.modified_ms)}</span>
+        <span className="w-24 shrink-0 text-right text-[12px]">
+          {card.drive ? (
+            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className="text-green-300/90 hover:text-green-200">
+              On Drive ↗
+            </button>
+          ) : (
+            <span className="text-faint">Not uploaded</span>
+          )}
+        </span>
+        <button
+          title="More"
+          onClick={card.menu}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-fg"
+        >
+          <Ellipsis size={15} />
+        </button>
+      </div>
+      {card.dialogs}
     </>
   );
 }

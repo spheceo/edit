@@ -363,8 +363,11 @@ function assign(people: Map<string, Person>, fps: number): Map<string, string> {
   // Apart from everyone's, and never pink for an official. A colour someone
   // already has (chosen on purpose: each case's person questioned in red in
   // a compilation) may match people never on screen within APART_IN_TIME of
-  // them; newcomers still take colours apart from everyone's.
-  const far = (a: Person, b: Person) => gapBetween(a.spans, b.spans) >= APART_IN_TIME * fps;
+  // them, or another suspect's (the cases' suspects in red, their teasers
+  // back to back); newcomers still take colours apart from everyone's.
+  const roles = new Map([...people].map(([key, person]) => [person, roleOf(key, person)]));
+  const far = (a: Person, b: Person) =>
+    gapBetween(a.spans, b.spans) >= APART_IN_TIME * fps || (roles.get(a) === "suspect" && roles.get(b) === "suspect");
   const free = (role: string, colour: string, person: Person, kept = false) =>
     speakers.allowed(role, colour) &&
     taken.every(([other, holder]) => speakers.apart(colour, other) >= APART || (kept && far(person, holder)));

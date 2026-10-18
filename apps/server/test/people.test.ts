@@ -171,6 +171,19 @@ test("each_case_s_person_questioned_keeps_red_when_they_never_meet", () => {
   expect(labelColour(edit, "det-0")).not.toBe(red);
 });
 
+test("suspects_given_red_keep_it_back_to_back", () => {
+  // A compilation's intro: two cases' suspects in teasers a second apart.
+  const red = "#eb2929";
+  const clips: TextClip[] = [];
+  for (let line = 0; line < 6; line++) {
+    clips.push(subtitle(`a-${line}`, line * 60, "Stephanie (Suspect)", "Stephanie:", red));
+    clips.push(subtitle(`b-${line}`, line * 60 + 30, "Grant Hardin (Suspect)", "Grant:", red));
+  }
+  const edit = project(clips);
+  oneColourPerPerson(edit);
+  expect([labelColour(edit, "a-0"), labelColour(edit, "b-0")]).toEqual([red, red]);
+});
+
 // The TS side's own.
 
 test("the summary lists each label's lines, colours and voices", () => {

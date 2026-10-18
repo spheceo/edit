@@ -60,7 +60,7 @@ test("a_boxed_or_glowing_date_is_flagged", () => {
   const made = dateTitle(p, { text: "July 22, 2023", start: 0, duration: 81 });
   const date = clipById(p, made.date as string) as TextClip;
   date.style.glow.enabled = true;
-  date.style.background = { color: [0, 0, 0, 1], opacity: 0.65, pad_x: 12, pad_y: 8 };
+  date.style.background = { color: [0, 0, 0, 1], opacity: 0.65, pad_x: 12, pad_y: 8, border_color: [1, 1, 1, 1] };
   const flagged = dateDrift(p);
   expect(flagged.length).toBe(1);
   expect(flagged[0]!.boxed).toBe(true);

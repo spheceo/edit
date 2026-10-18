@@ -4,7 +4,7 @@
 import { current, isDraft } from "immer";
 
 import { isSubtitled } from "./drive";
-import { HOUSE_BOX, HOUSE_GLOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind, rate } from "./types";
+import { changedGlitch, changedShake, HOUSE_BOX, HOUSE_GLOW, resolvedShake, type Clip, type ClipColor, type Handle, type Keyframe, type Media, type Project, type TextStyle, type Track, type TrackKind, rate } from "./types";
 
 export const freshId = (project: Project, prefix: string) => {
   for (;;) {
@@ -485,7 +485,7 @@ const params: Record<string, [Getter, Setter]> = {
     (c) => ("transform" in c ? (c.transform.shake ?? 0) : c.type === "adjustment" ? resolvedShake(c.shake).amount : 0),
     (c, v) => {
       if ("transform" in c) c.transform.shake = v;
-      else if (c.type === "adjustment") c.shake = { ...c.shake, amount: v };
+      else if (c.type === "adjustment") c.shake = changedShake(c.shake, { amount: v });
     },
   ],
   size: [(c) => (c.type === "text" ? c.style.size : 0), (c, v) => c.type === "text" && (c.style.size = v)],
@@ -510,7 +510,7 @@ const params: Record<string, [Getter, Setter]> = {
   vignette_size: [(c) => (c.type === "adjustment" ? (c.grade.vignette_size ?? 1) : 1), (c, v) => c.type === "adjustment" && (c.grade.vignette_size = v)],
   glitch: [
     (c) => (c.type === "adjustment" ? (c.glitch?.amount ?? 0) : 0),
-    (c, v) => c.type === "adjustment" && (c.glitch = { ...c.glitch, amount: v }),
+    (c, v) => c.type === "adjustment" && (c.glitch = changedGlitch(c.glitch, { amount: v })),
   ],
   blur: [
     (c) => (c.type === "adjustment" ? (c.blur?.radius ?? 0) : 0),

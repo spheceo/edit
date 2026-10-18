@@ -70,9 +70,14 @@ test("tells_whether_a_file_is_still_there", () => {
 
 const OPTIONS: ExportOptions = {
   format: "h264",
+  range: null,
   shape: "original",
   fill: "blur",
+  size: null,
+  fps: null,
   quality: "high",
+  target_mb: null,
+  loudness: null,
   hardware: true,
   wait_for_smoothing: false,
   audio: true,

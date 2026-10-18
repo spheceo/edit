@@ -22,7 +22,7 @@ import { FONTS, playhead } from "../lib/playback";
 import { openDialog } from "../lib/dialogs";
 import { useEditor } from "../lib/store";
 import { shortDuration, timecode } from "../lib/time";
-import { HOUSE_BOX, HOUSE_SHADOW, resolvedShake, SHAKE_PRESETS, type Clip, type Project, type Rgba, type ShakeDirection, type ShakeEdges, type ShakeEnvelope, type ShakeMotion, type ShakePreset, type TextPreset, rate } from "../lib/types";
+import { changedShake, HOUSE_BOX, HOUSE_SHADOW, resolvedShake, SHAKE_PRESETS, type Clip, type Project, type Rgba, type ShakeDirection, type ShakeEdges, type ShakeEnvelope, type ShakeMotion, type ShakePreset, type TextPreset, rate } from "../lib/types";
 import { Button, ColorField, cx, Kbd, Scrub, Select, Switch } from "./ui";
 
 const useInspectorFrame = () =>
@@ -600,7 +600,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             <Row label="Motion">
               <Select<ShakeMotion>
                 value={resolvedShake(clip.shake).motion}
-                onChange={(motion) => once((live) => live.type === "adjustment" && (live.shake = { ...live.shake, motion }))}
+                onChange={(motion) => once((live) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { motion })))}
                 options={[
                   { value: "wiggle", label: "Wiggle" },
                   { value: "drop", label: "Drop (one fast move)" },
@@ -608,21 +608,21 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
               />
             </Row>
             {param("Amount", "shake", { step: 1, min: resolvedShake(clip.shake).motion === "drop" ? -2000 : 0, max: 2000, precision: 0, suffix: "px" })}
-            {field("Frequency", resolvedShake(clip.shake).frequency, (live, value) => live.type === "adjustment" && (live.shake = { ...live.shake, frequency: value }), {
+            {field("Frequency", resolvedShake(clip.shake).frequency, (live, value) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { frequency: value })), {
               step: 0.1,
               min: 0,
               max: 60,
               precision: 1,
               suffix: "/s",
             })}
-            {field("Tilt", resolvedShake(clip.shake).rotation, (live, value) => live.type === "adjustment" && (live.shake = { ...live.shake, rotation: value }), {
+            {field("Tilt", resolvedShake(clip.shake).rotation, (live, value) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { rotation: value })), {
               step: 0.05,
               min: 0,
               max: 20,
               precision: 2,
               suffix: "°",
             })}
-            {field("Motion blur", resolvedShake(clip.shake).motion_blur, (live, value) => live.type === "adjustment" && (live.shake = { ...live.shake, motion_blur: value }), {
+            {field("Motion blur", resolvedShake(clip.shake).motion_blur, (live, value) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { motion_blur: value })), {
               step: 0.05,
               min: 0,
               max: 4,
@@ -632,7 +632,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             <Row label="Envelope">
               <Select<ShakeEnvelope>
                 value={resolvedShake(clip.shake).envelope}
-                onChange={(envelope) => once((live) => live.type === "adjustment" && (live.shake = { ...live.shake, envelope }))}
+                onChange={(envelope) => once((live) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { envelope })))}
                 options={[
                   { value: "steady", label: "Steady" },
                   { value: "build", label: "Build into the end" },
@@ -644,7 +644,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             <Row label="Edges">
               <Select<ShakeEdges>
                 value={resolvedShake(clip.shake).edges}
-                onChange={(edges) => once((live) => live.type === "adjustment" && (live.shake = { ...live.shake, edges }))}
+                onChange={(edges) => once((live) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { edges })))}
                 options={[
                   { value: "mirror", label: "Mirror" },
                   { value: "zoom", label: "Zoom to hide" },
@@ -654,7 +654,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             <Row label="Direction">
               <Select<ShakeDirection>
                 value={resolvedShake(clip.shake).direction}
-                onChange={(direction) => once((live) => live.type === "adjustment" && (live.shake = { ...live.shake, direction }))}
+                onChange={(direction) => once((live) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { direction })))}
                 options={[
                   { value: "both", label: "Both" },
                   { value: "vertical", label: "Vertical" },

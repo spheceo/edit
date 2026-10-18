@@ -439,9 +439,7 @@ export async function checked(store: Store, library: Library, id: string): Promi
   }
   diag.info("drive", `${file.name} is gone from Drive; unlinking it from ${id}`);
   await store.update(id, "drive", (project) => {
-    if (project.drive !== undefined && project.drive !== null && project.drive.file_id === file.file_id) {
-      project.drive = null;
-    }
+    if (project.drive?.file_id === file.file_id) delete project.drive;
   });
   return null;
 }

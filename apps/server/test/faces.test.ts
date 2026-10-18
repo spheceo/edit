@@ -62,7 +62,7 @@ function subtitleStyle(): TextStyle {
     line_height: 1.15,
     glow: { enabled: false, color: null, radius: 46, strength: 0.5 },
     max_width: 1512,
-    background: { color: [0, 0, 0, 1], opacity: 1, pad_x: 12, pad_y: 8 },
+    background: { color: [0, 0, 0, 1], opacity: 1, pad_x: 12, pad_y: 8, border_color: [1, 1, 1, 1] },
   };
 }
 
@@ -212,7 +212,7 @@ test("place_subtitles moves Edit's subtitles off the faces under them and leaves
 });
 
 test("a caption's rough size wraps at its style's width", () => {
-  const style: TextStyle = { ...subtitleStyle(), size: 44, max_width: 806, background: { color: [0, 0, 0, 1], opacity: 0.45, pad_x: 12, pad_y: 8 } };
+  const style: TextStyle = { ...subtitleStyle(), size: 44, max_width: 806, background: { color: [0, 0, 0, 1], opacity: 0.45, pad_x: 12, pad_y: 8, border_color: [1, 1, 1, 1] } };
   const [w, h] = captionSize("x".repeat(10), style);
   expect(w).toBeCloseTo(10 * 44 * 0.56 + 24, 4);
   expect(h).toBeCloseTo(44 * f32(1.15) + 16, 4);

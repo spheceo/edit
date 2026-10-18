@@ -132,6 +132,8 @@ export class Entry {
   lock: Lock;
   /** The network job running for it. */
   busy: Step | null = null;
+  /** A lease renewal running beside a long step (`keepAliveDue`). */
+  renewing = false;
   /** Counts local writes, so a push knows whether more came in meanwhile. */
   edits = 0;
   changedAt: number | null = null;
@@ -201,6 +203,17 @@ export class Entry {
         return watched && due ? "Check" : null;
       }
     }
+  }
+
+  /**
+   * Whether the held lock's lease needs renewing while another step runs (a
+   * push or pull of a big project may take longer than the two-minute lease;
+   * the step itself may not renew it).
+   */
+  keepAliveDue(now: number): boolean {
+    if (this.lock.kind !== "held" || this.saved.token === undefined || this.renewing) return false;
+    if (this.busy === null || this.busy === "Renew" || this.busy === "Release" || this.busy === "Acquire") return false;
+    return this.renewedAt === null || since(now, this.renewedAt) >= RENEW_EVERY;
   }
 
   /**
@@ -555,10 +568,15 @@ export class Cloud implements CloudHook {
     }
     if (meta !== null && meta.rev > this.savedRev(id) && !this.dirty(id)) {
       const project = await remote.download(meta.bodyUrl);
-      this.take(id, project, meta.rev);
-      this.with(id, (entry) => {
-        entry.wantMedia = true;
-      });
+      // Asked again with nothing awaited before the take: a save that landed
+      // here during the download (the lock was already ours) isn't written
+      // over; the next push meets the newer version and keeps both.
+      if (meta.rev > this.savedRev(id) && !this.dirty(id)) {
+        this.take(id, project, meta.rev);
+        this.with(id, (entry) => {
+          entry.wantMedia = true;
+        });
+      }
     }
   }
 
@@ -979,6 +997,12 @@ async function loop(app: App, cloudProjects: Cloud): Promise<void> {
       const at = now();
       const due: [string, Step][] = [];
       for (const [id, entry] of cloudProjects.projects) {
+        if (entry.keepAliveDue(at)) {
+          entry.renewing = true;
+          void keepAlive(cloudProjects, id).finally(() => {
+            entry.renewing = false;
+          });
+        }
         const step = entry.step(at);
         if (step === null) continue;
         entry.busy = step;
@@ -1138,11 +1162,11 @@ async function pull(app: App, cloudProjects: Cloud, id: string): Promise<void> {
   // Changes made here since are kept, never overwritten.
   if (cloudProjects.dirty(id)) keepCopy(app, cloudProjects, id, null);
   cloudProjects.take(id, project, rev);
-  try {
-    await cloudMedia.ensureLocal(app, id);
-  } catch (error) {
-    diag.warn("cloud", `fetching ${id}'s footage: ${diag.messageOf(error)}`);
-  }
+  // Its footage is a step of its own, so renewing the lock never waits on a
+  // long download.
+  cloudProjects.with(id, (entry) => {
+    entry.wantMedia = true;
+  });
 }
 
 /** Keeps this machine's version of `id` as "<name> (conflicted copy)" (on this machine only) and says so. */
@@ -1230,6 +1254,25 @@ async function renew(app: App, cloudProjects: Cloud, id: string): Promise<void> 
   }
   if (renewed.lost !== null && renewed.lost !== cloudProjects.holder()) return lost(app, cloudProjects, id, renewed.lost);
   cloudProjects.with(id, (entry) => entry.forgetLock());
+}
+
+/**
+ * Renews the lease beside a long step. Only a renewal: a lock found lost is
+ * left to the step running (its push or pull meets it and deals with it).
+ */
+export async function keepAlive(cloudProjects: Cloud, id: string): Promise<void> {
+  const token = cloudProjects.with(id, (entry) => entry.saved.token ?? null) ?? null;
+  if (token === null) return;
+  try {
+    const renewed = await remote.renew(id, token);
+    if ("yes" in renewed) {
+      cloudProjects.with(id, (entry) => {
+        if (entry.saved.token === token) entry.renewedAt = now();
+      });
+    }
+  } catch (error) {
+    diag.warn("cloud", `renewing ${id} during a long transfer: ${diag.messageOf(error)}`);
+  }
 }
 
 async function release(cloudProjects: Cloud, id: string): Promise<void> {

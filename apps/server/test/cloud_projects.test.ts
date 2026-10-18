@@ -12,6 +12,7 @@ import {
   open,
   readSettings,
   readState,
+  remote,
   remove,
   routes,
   runStep,
@@ -172,6 +173,26 @@ test("a_busy_entry_waits_and_cloud_off_says_so", () => {
   expect(entry.status(true).message).toBe("kept");
   entry.pushed(1, entry.edits);
   expect(entry.status(true).sync).toBe("synced");
+});
+
+test("a_long_push_or_pull_keeps_the_lease_alive_beside_it", () => {
+  const t0 = 1_000_000;
+  const entry = new Entry({ rev: 3, dirty: true, token: "t" });
+  entry.renewedAt = t0;
+  entry.busy = "Push";
+  // Nothing due yet, and the step itself can't renew while it runs.
+  expect(entry.keepAliveDue(at(t0, 30))).toBe(false);
+  expect(entry.step(at(t0, 50))).toBeNull();
+  expect(entry.keepAliveDue(at(t0, 50))).toBe(true);
+  entry.renewing = true;
+  expect(entry.keepAliveDue(at(t0, 51))).toBe(false);
+  entry.renewing = false;
+  // Never beside a renewal or release of its own, nor for a lock not held.
+  entry.busy = "Renew";
+  expect(entry.keepAliveDue(at(t0, 50))).toBe(false);
+  entry.busy = "Pull";
+  entry.lock = { kind: "elsewhere", holder: "kenobi" };
+  expect(entry.keepAliveDue(at(t0, 50))).toBe(false);
 });
 
 test("a_token_from_before_a_restart_is_renewed_first", () => {
@@ -340,6 +361,41 @@ test("a conflict keeps this machine's changes as a conflicted copy and takes the
     // Nothing of theirs was overwritten.
     expect(mock.cloud.convex.body(id)!.name).toBe("Case (their edit)");
   } finally {
+    cleanup();
+  }
+});
+
+test("a save landing while the lock's first download runs is never written over", async () => {
+  const { store, projects, cleanup } = setup("cloud-claim-race");
+  const download = remote.download;
+  try {
+    const id = store.create("Case", SETTINGS_1080).project.id;
+    // Kenobi saved a newer version; this machine hasn't asked about the lock yet.
+    mock.cloud.convex.saveElsewhere({ ...structuredClone(store.get(id)!.project), name: "kenobi's" } as unknown as Record<string, unknown>, "kenobi");
+    projects.projects.set(id, new Entry({ rev: 0, dirty: false }));
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = () => {};
+    const downloading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    remote.download = async (url) => {
+      started();
+      await held;
+      return download(url);
+    };
+    const first = store.update(id, "agent", (project) => void (project.name += " + agent"));
+    await downloading;
+    // The lock is ours now: the editor's save goes ahead meanwhile.
+    await store.update(id, "ui", (project) => void (project.name = "my save"));
+    release();
+    await first;
+    expect(store.get(id)!.project.name).toBe("my save + agent");
+    expect(projects.dirty(id)).toBe(true);
+  } finally {
+    remote.download = download;
     cleanup();
   }
 });

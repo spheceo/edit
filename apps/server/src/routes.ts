@@ -18,7 +18,7 @@ import { baseRouter } from "./http/server.ts";
 import { importPaths } from "./import.ts";
 import { routes as mediaRoutes } from "./media_tools.ts";
 import { check as checkDrive, status as driveStatus } from "./media_drive/layout.ts";
-import { isMediaPath } from "./media.ts";
+import { isMediaPath, Semaphore } from "./media.ts";
 import type { ExportOptions, Project, Style } from "./model.ts";
 import { withProjectAsync } from "./native/index.ts";
 import * as patches from "./patch.ts";
@@ -719,6 +719,12 @@ async function mediaFile(context: Context): Promise<Response> {
 // ---------------------------------------------------------------------------
 // Frames and exports
 
+/**
+ * The UI's frame renders in flight. The renderer refuses past 8 waiting, and
+ * the home screen asks for every project's cover at once: the rest wait here.
+ */
+const uiFrames = new Semaphore(4);
+
 async function framePng(context: Context): Promise<Response> {
   const { app, params } = context;
   const text = params.frame!.replace(/(\.png)+$/, "");
@@ -733,14 +739,18 @@ async function framePng(context: Context): Promise<Response> {
       live.rev,
       () => jsonForSerde(live.project),
       (project) =>
-        app.native.renderFrames({ project, frames: [frame], maxSide: max ?? 0, priority: "ui", encode: "png" }),
+        uiFrames.with(() => app.native.renderFrames({ project, frames: [frame], maxSide: max ?? 0, priority: "ui", encode: "png" })),
     );
   } catch (error) {
     throw new ApiError(500, diag.messageOf(error));
   }
   const image = images[0];
   if (image === undefined) throw new ApiError(500, "the frame didn't render");
-  return new Response(image.data, { headers: { "content-type": "image/png" } });
+  // `v` names the project's version (the home screen's covers pass its
+  // modified time): a picture of it can be kept, so a revisit renders nothing.
+  const headers: Record<string, string> = { "content-type": "image/png" };
+  if (context.query.has("v")) headers["cache-control"] = "private, max-age=86400";
+  return new Response(image.data, { headers });
 }
 
 async function startExport(context: Context): Promise<Response> {

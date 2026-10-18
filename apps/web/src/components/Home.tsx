@@ -203,7 +203,7 @@ function ProjectCard({
             </div>
           ) : project.duration_frames > 0 ? (
             <img
-              src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=480`}
+              src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=480&v=${project.modified_ms}`}
               loading="lazy"
               alt=""
               className="max-h-full max-w-full opacity-0 transition-opacity duration-300"

@@ -60,70 +60,42 @@ function age(path: string, now: number): number {
   }
 }
 
-/** Every saved project's media paths. */
-function projectPaths(app: App): Set<string> {
-  const out = new Set<string>();
-  const dir = join(app.store.home, "projects");
-  let names: string[] = [];
-  try {
-    names = fs.readdirSync(dir).filter((name) => name.endsWith(".json"));
-  } catch {
-    names = [];
-  }
-  for (const name of names) {
-    try {
-      const value = JSON.parse(fs.readFileSync(join(dir, name), "utf8")) as { media?: { path?: unknown }[] };
-      for (const item of value.media ?? []) if (typeof item.path === "string") out.add(item.path);
-    } catch {
-      // Unreadable: its files aren't known, so nothing downloaded is removed.
-      return new Set(["*"]);
-    }
-  }
-  return out;
-}
-
 /**
- * The media keys of everything a saved project uses (`mediaKey` of each
- * media's path), read from the project files (not loaded as live projects:
- * no memory kept, no media work started).
+ * Every saved project's media paths and their media keys (`mediaKey`), read
+ * from the project files (not loaded as live projects: no memory kept, no
+ * media work started). Null when a project file won't read: then nothing it
+ * might use is known, so everything counts as used.
  */
-export function usedKeys(app: App): Set<string> {
-  const used = new Set<string>();
+function used(app: App): { paths: Set<string>; keys: Set<string> } | null {
+  const paths = new Set<string>();
+  const keys = new Set<string>();
   const dir = join(app.store.home, "projects");
-  let names: string[] = [];
-  try {
-    names = fs.readdirSync(dir).filter((name) => name.endsWith(".json"));
-  } catch {
-    names = [];
-  }
-  for (const name of names) {
+  for (const name of safeList(dir).filter((name) => name.endsWith(".json"))) {
     let media: { path?: unknown }[] = [];
     try {
       const value = JSON.parse(fs.readFileSync(join(dir, name), "utf8")) as { media?: { path?: unknown }[] };
       media = Array.isArray(value.media) ? value.media : [];
     } catch {
-      // A project that won't read: its media are kept as if used.
-      return new Set(["*"]);
+      return null;
     }
     for (const item of media) {
       if (typeof item.path !== "string") continue;
+      paths.add(item.path);
       try {
-        used.add(app.native.mediaKey(item.path));
+        keys.add(app.native.mediaKey(item.path));
       } catch {
         // A path the addon can't key: nothing of it is touched either way.
       }
     }
   }
-  return used;
+  return { paths, keys };
 }
 
 /** Cleans the cache as the module notes say; with `dryRun`, only says what would go. */
 export function cleanCache(app: App, dryRun: boolean, now = Date.now()): CleanReport {
   const cache = app.store.cacheDir();
-  const used = usedKeys(app);
+  const inUse = used(app);
   const report: CleanReport = { folders: 0, files: 0, bytes: 0, removed: [] };
-  // A project file that wouldn't read: everything counts as used.
-  const all = used.has("*");
   const remove = (path: string) => {
     const bytes = size(path);
     if (!dryRun) {
@@ -147,12 +119,11 @@ export function cleanCache(app: App, dryRun: boolean, now = Date.now()): CleanRe
   // Footage Edit downloaded from Drive (drive_import.ts) whose original is in
   // the cloud: the copy only speeds exports up, so it goes once unused a while.
   const known = readLocalOriginals(cache);
-  const paths = projectPaths(app);
   let dropped = false;
   for (const [key, entry] of Object.entries(known)) {
     const downloaded = entry.path.startsWith(`${app.store.home}/`) || entry.path.includes("/uploads/");
     if (!downloaded || !/\/drive\/[A-Za-z0-9_-]{10,}\//.test(entry.path)) continue;
-    if (paths.has("*") || paths.has(entry.path) || now - (entry.used_ms ?? entry.mtime_ms) < DOWNLOADED) continue;
+    if (inUse === null || inUse.paths.has(entry.path) || now - (entry.used_ms ?? entry.mtime_ms) < DOWNLOADED) continue;
     remove(entry.path);
     if (!dryRun) {
       delete known[key];
@@ -179,7 +150,7 @@ export function cleanCache(app: App, dryRun: boolean, now = Date.now()): CleanRe
     } catch {
       continue;
     }
-    const unused = !all && !used.has(name);
+    const unused = inUse !== null && !inUse.keys.has(name);
     let touched = false;
     for (const entry of entries) {
       const path = join(dir, entry);

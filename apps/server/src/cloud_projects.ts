@@ -38,7 +38,7 @@ import { crashed, isBug } from "./guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
 import type { Project } from "./model.ts";
-import { join } from "./paths.ts";
+import { isFile, join } from "./paths.ts";
 import { duration } from "./project.ts";
 import * as relay from "./relay.ts";
 import { byteLength, isWhitespace, serdeParse, takeChars } from "./rust.ts";
@@ -1345,6 +1345,15 @@ export async function open(app: App, id: string, client: string): Promise<Record
       cloudProjects.persist();
       cloudProjects.emit(id);
     }
+  }
+  // Footage this machine no longer has (its cache cleared, a project last
+  // edited elsewhere) comes back too, not only after a pull: Mom Leaves 5
+  // Kids' proxies were gone from the cache and opening it fetched nothing.
+  const live = app.store.get(id);
+  if (live !== null && live.project.media.some((media) => media.cloud != null && !isFile(media.path))) {
+    cloudProjects.with(id, (entry) => {
+      entry.wantMedia = true;
+    });
   }
   cloudMedia.backfillSoon(app, id);
   return cloudProjects.status(id);

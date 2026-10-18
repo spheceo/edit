@@ -11,6 +11,7 @@ import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import { isBug, panicResponse } from "../guard.ts";
 import * as mcp from "../mcp/index.ts";
+import * as patches from "../patch.ts";
 import { staticAsset } from "./assets.ts";
 import { compressed } from "./compress.ts";
 import { ApiError, notFound, text } from "./errors.ts";
@@ -19,6 +20,8 @@ import { Router, withPosition, type RouteContext } from "./router.ts";
 
 interface Socket {
   unsubscribe: (() => void) | null;
+  /** Asked for project changes as patches (`/api/ws?patches=1`, patch.ts) rather than whole. */
+  patches: boolean;
   /** Events were dropped while it couldn't keep up: it's told to resync once it drains. */
   lagged: boolean;
 }
@@ -33,9 +36,31 @@ export function baseRouter(): Router<App> {
 }
 
 function websocket(context: RouteContext<App>): Response | undefined {
-  const socket: Socket = { unsubscribe: null, lagged: false };
+  const socket: Socket = { unsubscribe: null, lagged: false, patches: context.query.get("patches") === "1" };
   if (context.upgrade(socket)) return undefined;
   return text("Connection header did not include 'upgrade'", 400);
+}
+
+/** Each project event's patch text, made once however many connections take it. */
+const patchTexts = new WeakMap<object, string | null>();
+
+/** A project event as a patch against what it was (store.ts `before`), or null to send it whole. */
+function patchText(event: Record<string, unknown>): string | null {
+  if (event.type !== "project") return null;
+  const cached = patchTexts.get(event);
+  if (cached !== undefined) return cached;
+  const before = (event as { before?: { rev: number; project: Record<string, unknown> } }).before;
+  let made: string | null = null;
+  if (before !== undefined) {
+    try {
+      const patch = patches.diff(before.project, event.project as Record<string, unknown>);
+      made = JSON.stringify({ type: "project", id: event.id, rev: event.rev, base_rev: before.rev, origin: event.origin, patch });
+    } catch (error) {
+      diag.warn("store", `a project change as a patch: ${diag.messageOf(error)}`);
+    }
+  }
+  patchTexts.set(event, made);
+  return made;
 }
 
 function font(context: RouteContext<App>): Response {
@@ -154,9 +179,10 @@ export function listen(app: App, router: Router<App>, hostname: string, port: nu
       // Every commit sends the whole project (a couple of MB): compressed, a tenth of that.
       perMessageDeflate: true,
       open(ws: ServerWebSocket<Socket>) {
-        ws.data.unsubscribe = app.store.subscribe((_event, text) => {
+        ws.data.unsubscribe = app.store.subscribe((event, text) => {
           if (ws.data.lagged) return;
-          if (ws.send(text()) === 0) ws.data.lagged = true;
+          const sent = (ws.data.patches && patchText(event)) || text();
+          if (ws.send(sent) === 0) ws.data.lagged = true;
         });
       },
       drain(ws: ServerWebSocket<Socket>) {

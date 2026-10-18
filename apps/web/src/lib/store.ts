@@ -6,6 +6,7 @@ import { api, ApiError, useConnection } from "./api";
 import { readOnly, type CloudStatus } from "./cloud";
 import { addContext, note } from "./diagnostics";
 import { validateProject } from "./edit";
+import * as patches from "./patch";
 import { shareProject } from "./project-sharing";
 import { forgetSetting, readSetting, writeSetting } from "./storage";
 import type { MediaStatus, Project, ScriptJob } from "./types";
@@ -101,6 +102,17 @@ interface EditorState {
 
 let toastId = 0;
 let editorSession = 0;
+
+/**
+ * The open project as the server last had it (its revision and content):
+ * changes come as patches against it and saves send patches from it
+ * (speed-plan 5.1). Never what's on screen, which may have unsaved edits.
+ */
+let server: { rev: number; project: Project } | null = null;
+
+function remember(rev: number, project: Project) {
+  if (server === null || server.project.id !== project.id || rev >= server.rev) server = { rev, project };
+}
 let readOnlySaid = 0;
 
 /** A cloud project someone else is editing can't be changed here: says so (now and then) and refuses. */
@@ -141,11 +153,13 @@ export const useEditor = create<EditorState>((set, get) => ({
   load: (rev, project) => {
     editorSession++;
     clearTimeout(saveTimer);
+    server = { rev, project };
     set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, driveState: null, media: {}, scriptJob: null });
   },
   close: () => {
     editorSession++;
     clearTimeout(saveTimer);
+    server = null;
     set({ project: null, rev: 0, past: [], future: [], gestureBase: null, dirty: false, saving: false, selection: [], media: {}, cloud: null });
   },
 
@@ -212,6 +226,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (get().gestureBase) get().endGesture();
     const { project, past } = get();
     if (!project || next.id !== project.id || rev < get().rev) return;
+    remember(rev, next);
     // The live event for our own change can land first: it bumps rev but leaves the project
     // to this response. Another client's event may instead have brought the change already.
     if (rev === get().rev && JSON.stringify(project) === JSON.stringify(next)) return;
@@ -289,14 +304,19 @@ async function saveProject(state: EditorState) {
   const session = editorSession;
   useEditor.setState({ saving: true });
   try {
-    const { rev } = await api.saveProject(project.id, state.rev, project, clientId);
+    const base = server !== null && server.project.id === project.id && server.rev === state.rev ? server.project : null;
+    const { rev } = base !== null
+      ? await api.saveChanges(project.id, state.rev, patches.diff(base, project), clientId)
+      : await api.saveProject(project.id, state.rev, project, clientId);
     if (session !== editorSession) return;
+    remember(rev, project);
     const current = useEditor.getState();
     useEditor.setState({ rev: Math.max(rev, current.rev), dirty: current.project !== project });
   } catch (error) {
     if (session !== editorSession) return;
     if (error instanceof ApiError && error.status === 409) {
       const body = error.body as { rev: number; project: Project };
+      remember(body.rev, body.project);
       const current = useEditor.getState();
       useEditor.setState({ project: shareProject(current.project ?? project, body.project), rev: body.rev, dirty: false, gestureBase: null, past: [...current.past.slice(-HISTORY_LIMIT), current.project ?? project], future: [] });
       useEditor.getState().toast("The project changed elsewhere; showing the latest version.", "info");
@@ -305,7 +325,10 @@ async function saveProject(state: EditorState) {
       useEditor.getState().toast(error.message, "error");
       try {
         const live = await api.project(project.id);
-        if (session === editorSession) useEditor.setState({ project: live.project, rev: live.rev, dirty: false, gestureBase: null });
+        if (session === editorSession) {
+          remember(live.rev, live.project);
+          useEditor.setState({ project: live.project, rev: live.rev, dirty: false, gestureBase: null });
+        }
       } catch {
         // Offline: keep what's on screen.
       }
@@ -314,7 +337,10 @@ async function saveProject(state: EditorState) {
       useEditor.getState().toast(`That change couldn't be saved (${error.message}); restored the last saved version.`, "error");
       try {
         const live = await api.project(project.id);
-        if (session === editorSession) useEditor.setState({ project: live.project, rev: live.rev, dirty: false });
+        if (session === editorSession) {
+          remember(live.rev, live.project);
+          useEditor.setState({ project: live.project, rev: live.rev, dirty: false });
+        }
       } catch {
         // Offline: keep what's on screen; the next save retries.
       }
@@ -371,6 +397,7 @@ function catchUp() {
     .project(project.id)
     .then(({ rev, project: fresh }) => {
       const now = useEditor.getState();
+      if (now.project?.id === fresh.id) remember(rev, fresh);
       if (now.project?.id === fresh.id && !now.dirty && rev > now.rev) useEditor.setState({ rev, project: shareProject(now.project, fresh) });
     })
     .catch(() => {});
@@ -384,7 +411,7 @@ function catchUp() {
 
 export function connectEvents() {
   if (socket && socket.readyState <= WebSocket.OPEN) return;
-  const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`;
+  const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws?patches=1`;
   socket = new WebSocket(url);
   socket.onopen = () => {
     clearTimeout(downTimer);
@@ -397,13 +424,31 @@ export function connectEvents() {
     const state = useEditor.getState();
     const project = state.project;
     if (event.type === "project" && project && event.id === project.id) {
+      // A change as a patch against the server's last version (patch.ts); one
+      // that doesn't follow on from ours (missed, or out of order) fetches it whole.
+      let full: Project | undefined = event.project;
+      if (full === undefined && event.patch !== undefined) {
+        if (server !== null && server.project.id === event.id && server.rev === event.base_rev) {
+          try {
+            full = patches.apply(server.project, event.patch);
+          } catch {
+            full = undefined;
+          }
+        }
+        if (full === undefined) {
+          if (event.rev > (server?.rev ?? state.rev)) catchUp();
+          return;
+        }
+      }
+      if (full === undefined) return;
+      remember(event.rev, full);
       if (event.origin === clientId) {
         if (event.rev > state.rev) useEditor.setState({ rev: event.rev });
         return;
       }
       if (event.rev <= state.rev) return;
       clearTimeout(saveTimer);
-      const next = shareProject(project, event.project);
+      const next = shareProject(project, full);
       useEditor.setState({
         project: next,
         rev: event.rev,
@@ -411,7 +456,7 @@ export function connectEvents() {
         gestureBase: null,
         past: next === project ? state.past : [...state.past.slice(-HISTORY_LIMIT), project],
         future: [],
-        selection: state.selection.filter((id) => event.project.clips.some((clip: { id: string }) => clip.id === id)),
+        selection: state.selection.filter((id) => full.clips.some((clip) => clip.id === id)),
       });
       if (event.origin === "agent") {
         clearTimeout(agentTimer);

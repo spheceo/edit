@@ -102,6 +102,14 @@ test("projects: create, read, replace with a stale rev, delete; refusals as serv
     expect(stale.status).toBe(409);
     expect(await stale.json()).toMatchObject({ error: "conflict", rev: 2, project: { name: "Renamed" } });
     expect((await send(`/api/projects/nope`, jsonBody("PUT", { project: renamed }))).status).toBe(404);
+    // Only what changed (patch.ts), against the revision it changes.
+    const patch = { set: { name: "Patched" }, unset: [], lists: {} };
+    expect(await (await send(`/api/projects/${project.id}`, jsonBody("PUT", { base_rev: 2, patch }))).json()).toEqual({ rev: 3 });
+    expect(((await (await send(`/api/projects/${project.id}`)).json()) as { project: { name: string } }).project.name).toBe("Patched");
+    const late = await send(`/api/projects/${project.id}`, jsonBody("PUT", { base_rev: 2, patch }));
+    expect([late.status, ((await late.json()) as { rev: number }).rev]).toEqual([409, 3]);
+    const misfit = { set: {}, unset: [], lists: { clips: { put: [{ no: "id" }], remove: [] } } };
+    expect((await send(`/api/projects/${project.id}`, jsonBody("PUT", { base_rev: 3, patch: misfit }))).status).toBe(400);
     expect(await (await send(`/api/projects/nope`)).json()).toEqual({ error: "no such project" });
     const empty = await send(`/api/projects/${project.id}/import`, jsonBody("POST", { paths: [] }));
     expect([empty.status, await empty.json()]).toEqual([400, { error: "no paths" }]);

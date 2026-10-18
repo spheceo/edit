@@ -3,6 +3,7 @@ import { create } from "zustand";
 
 import { note, recordTiming, routeOf } from "./diagnostics";
 import type { Encoders, ExportOptions } from "./exporting";
+import type { Patch } from "./patch";
 import type { DriveFile, MediaStatus, Project, ProjectSummary, ScriptJob, Style, Transcript } from "./types";
 
 export class ApiError extends Error {
@@ -152,6 +153,9 @@ export const api = {
   project: (id: string) => request<Live>("GET", `/api/projects/${id}`),
   saveProject: (id: string, baseRev: number, project: Project, origin: string) =>
     request<{ rev: number }>("PUT", `/api/projects/${id}`, { base_rev: baseRev, project, origin }),
+  /** Saves only what changed since `baseRev` (patch.ts). */
+  saveChanges: (id: string, baseRev: number, patch: Patch, origin: string) =>
+    request<{ rev: number }>("PUT", `/api/projects/${id}`, { base_rev: baseRev, patch, origin }),
   deleteProject: (id: string) => request<{ ok: boolean }>("DELETE", `/api/projects/${id}`),
   importMedia: (id: string, paths: string[], place: boolean, origin: string) =>
     request<{ rev: number; added: string[]; errors: string[]; project: Project }>("POST", `/api/projects/${id}/import`, {

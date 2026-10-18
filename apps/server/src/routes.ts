@@ -21,6 +21,7 @@ import { check as checkDrive, status as driveStatus } from "./media_drive/layout
 import { isMediaPath } from "./media.ts";
 import type { ExportOptions, Project, Style } from "./model.ts";
 import { withProjectAsync } from "./native/index.ts";
+import * as patches from "./patch.ts";
 import { canonical, expandHome, extension, fileName, fileStem, isFile, join, parent } from "./paths.ts";
 import { DEFAULT_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
@@ -378,6 +379,18 @@ function getProject({ app, params }: Context): Response {
 async function putProject(context: Context): Promise<Response> {
   const given = await body(context);
   const baseRev = field<number>(given, "base_rev", "u64");
+  // The UI sends what changed (patch.ts) against the revision it has.
+  if (given.project === undefined && given.patch !== undefined) {
+    const live = liveOr404(context.app, context.params.id!);
+    if (baseRev !== null && live.rev !== baseRev) {
+      return json({ error: "conflict", rev: live.rev, project: live.project }, 409);
+    }
+    try {
+      given.project = patches.apply(live.project, given.patch as patches.Patch);
+    } catch (error) {
+      throw bad(`that change doesn't fit the project: ${diag.messageOf(error)}`);
+    }
+  }
   if (given.project === undefined) throw badShape("missing field `project`");
   if (typeof given.project !== "object" || given.project === null || Array.isArray(given.project)) {
     throw badShape(`project: invalid type: ${kindOf(given.project)}, expected struct Project`);

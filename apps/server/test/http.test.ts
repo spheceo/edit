@@ -189,15 +189,27 @@ test("/api/ws streams the store's events", async () => {
   const { app, store, cleanup } = fixtureHome("http-ws");
   const server = listen(app, router(), "127.0.0.1", 0);
   try {
-    const socket = new WebSocket(`ws://127.0.0.1:${server.port}/api/ws`, { headers: { host: "localhost" } } as unknown as string[]);
+    const open = async (path: string) => {
+      const socket = new WebSocket(`ws://127.0.0.1:${server.port}${path}`, { headers: { host: "localhost" } } as unknown as string[]);
+      await new Promise<void>((resolve, reject) => {
+        socket.onopen = () => resolve();
+        socket.onerror = () => reject(new Error("websocket failed"));
+      });
+      return socket;
+    };
+    const socket = await open("/api/ws");
+    const patched = await open("/api/ws?patches=1");
     const received: unknown[] = [];
-    await new Promise<void>((resolve, reject) => {
-      socket.onopen = () => resolve();
-      socket.onerror = () => reject(new Error("websocket failed"));
-    });
     const got = new Promise<void>((resolve) => {
       socket.onmessage = (message) => {
         received.push(JSON.parse(String(message.data)));
+        resolve();
+      };
+    });
+    const asPatch: unknown[] = [];
+    const gotPatch = new Promise<void>((resolve) => {
+      patched.onmessage = (message) => {
+        asPatch.push(JSON.parse(String(message.data)));
         resolve();
       };
     });
@@ -208,6 +220,17 @@ test("/api/ws streams the store's events", async () => {
     await got;
     expect(received[0]).toMatchObject({ type: "project", id: live.project.id, rev: 2, origin: "ui" });
     socket.close();
+    // Asked for patches: only what changed, against the revision before.
+    await gotPatch;
+    expect(asPatch[0]).toEqual({
+      type: "project",
+      id: live.project.id,
+      rev: 2,
+      base_rev: 1,
+      origin: "ui",
+      patch: { set: { name: "heard" }, unset: [], lists: {} },
+    });
+    patched.close();
     // Through the real server too: a JSON-RPC ping.
     const ping = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
       method: "POST",

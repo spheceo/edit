@@ -488,7 +488,10 @@ export class Store {
     }
     const live: Live = { rev: rev + 1, project: deepFreeze(JSON.parse(prepared.json) as Project) };
     this.projects.set(id, live);
-    this.emit({ type: "project", id, rev: live.rev, origin, project: live.project });
+    const event: Event = { type: "project", id, rev: live.rev, origin, project: live.project };
+    // What it was before, for connections that take patches (http/server.ts); not sent as it is.
+    Object.defineProperty(event, "before", { value: { rev, project: current.project }, enumerable: false });
+    this.emit(event);
     return live;
   }
 

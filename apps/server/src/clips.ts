@@ -116,6 +116,7 @@ export const TEXT_STYLE = struct("TextStyle", [
   optional("label", { struct: TEXT_LABEL }),
   optional("leader", { struct: LEADER }),
   field("align", enumOf("TextAlign", ["left", "center", "right"]), "center", (value) => value === "center"),
+  field("uppercase", "bool", false, (value) => value === false),
 ]);
 
 export const TEXT_ANIMATION = struct("TextAnimation", [
@@ -136,6 +137,8 @@ const GRADE = struct("Grade", [
   field("vignette_aspect", "f32", 1, isOne),
   field("focus_exposure", "f32", 0, isZero),
   field("vignette_saturation", "f32", 0, isZero),
+  field("leak", "f32", 0, isZero),
+  field("leak_x", "f32", 0, isZero),
 ]);
 
 const SHAKE = struct("Shake", [

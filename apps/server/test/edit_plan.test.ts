@@ -405,6 +405,19 @@ test("a_style_s_own_transition_is_built_and_heard_but_never_called_repetitive", 
   expect(kinds(p, "silent_transition").length).toBe(6);
 });
 
+test("capitals_and_a_still_light_leak_survive_a_plan", () => {
+  const p = project("plan");
+  apply(p, [
+    { op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 60, fill: [0, 0, 0, 1] } },
+    { op: "add", clip: { type: "text", track: "new", name: "Words", start: 0, duration: 60, text: "Is that clear?", style: { uppercase: true } } },
+    { op: "add", clip: { type: "adjustment", track: "new", name: "Glow", start: 0, duration: 60, grade: { leak: 0.8, leak_x: -1 } } },
+  ]);
+  const words = clipNamed(p, "Words");
+  expect(words.type === "text" && words.style.uppercase).toBe(true);
+  const glow = clipNamed(p, "Glow");
+  expect(glow.type === "adjustment" && [glow.grade.leak, glow.grade.leak_x]).toEqual([0.8, -1]);
+});
+
 test("unresolved_reference_and_bad_final_state_fail", () => {
   const p = project("plan");
   expect(() => apply(p, [{ op: "delete", select: { ids: [{ $ref: "missing" }] } }])).toThrow(

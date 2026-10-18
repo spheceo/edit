@@ -232,7 +232,7 @@ export function textNotSaid(project: Project, transcripts: Map<string, Transcrip
  * stopped before "Yeah, there it is. Goddamn it.": "It is really important
  * that we ensure that the intro and all clips in the video are exactly
  * according to the script"): each range's first and last words found again in
- * the transcript, and more than a quarter second of it not played by any
+ * the transcript, and more than 0.4 s of it not played by any
  * clip of that media on the footage track (realign_script fixes the cut).
  */
 export function offScript(project: Project, transcripts: Map<string, Transcript>): unknown[] {
@@ -246,15 +246,25 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
     const offset = block.media_start ?? 0;
     const [cutIn, cutOut] = seams.script.align(transcript.words, null, block.words, block.start - offset, block.end - offset);
     if (cutIn === null || cutOut === null) continue;
-    const played = project.clips
-      .filter((clip) => clip.type === "video" && clip.track === base && clip.media === block.media)
-      .map((clip): [number, number] => {
-        const from = clip.type === "video" ? clip.source_in : 0;
-        const speed = clip.type === "video" ? clip.speed : 1;
-        return [from, from + (clip.duration / fps) * speed];
-      })
-      .filter(([from, to]) => to > cutIn && from < cutOut)
-      .sort((a, b) => a[0] - b[0]);
+    // The range's clip and the footage clips that carry it on, butted on the
+    // timeline (a cut for B-roll over it), each picking up within a second of
+    // where the last left off: the same moment played elsewhere doesn't count.
+    const footage = project.clips.filter((clip) => clip.type === "video" && clip.track === base && clip.media === block.media);
+    const span = (clip: Clip): [number, number] => {
+      const from = clip.type === "video" ? clip.source_in : 0;
+      const speed = clip.type === "video" ? clip.speed : 1;
+      return [from, from + (clip.duration / fps) * speed];
+    };
+    let current = footage.find((clip) => clip.id === block.clip);
+    if (current === undefined) continue;
+    const played: [number, number][] = [];
+    while (current !== undefined) {
+      played.push(span(current));
+      const [, ends] = span(current);
+      const after: Clip = current;
+      current = footage.find((clip) => clip.start === clipEnd(after) && Math.abs(span(clip)[0] - ends) < 1);
+    }
+    played.sort((a, b) => a[0] - b[0]);
     let at = cutIn;
     let missing = 0;
     for (const [from, to] of played) {
@@ -262,7 +272,7 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
       at = Math.max(at, to);
     }
     missing += Math.max(cutOut - at, 0);
-    if (missing > 0.25) {
+    if (missing > 0.4) {
       issues.push({
         kind: "off_script",
         range: block.label,

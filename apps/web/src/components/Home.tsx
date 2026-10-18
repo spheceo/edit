@@ -449,7 +449,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big =
         >
           {picture ? (
             <img
-              src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=${big ? 960 : 640}&v=${project.modified_ms}`}
+              src={`/api/projects/${project.id}/cover/${coverFrame(project)}.jpg?max=${big ? 1280 : 720}&v=${project.modified_ms}`}
               loading="lazy"
               alt=""
               className="absolute inset-0 size-full object-cover opacity-0 transition-[opacity,transform] duration-500 group-hover:scale-[1.03]"
@@ -459,7 +459,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big =
             <div className="absolute inset-0" style={{ background: wash(project.style) }} />
           )}
           {/* The black gradient the title sits on. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black via-black/70 to-transparent" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[78%] bg-gradient-to-t from-black via-black/85 via-45% to-transparent" />
           <div className={cx("absolute inset-x-0 bottom-0", big ? "p-5" : "p-3.5")}>
             {card.nameInput ?? (
               <div className={cx("line-clamp-2 font-semibold tracking-[-0.01em] text-white drop-shadow", big ? "text-[19px] leading-tight" : "text-[14px] leading-snug")}>
@@ -518,7 +518,7 @@ function ProjectRow({ project, onChanged, cloudOn, status, remote }: CardProps) 
       <div onClick={card.open} className="group flex h-14 cursor-pointer items-center gap-3 border-t border-line px-3 first:border-t-0 hover:bg-hover">
         <div className="flex h-9 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-panel">
           {picture ? (
-            <img src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=160&v=${project.modified_ms}`} loading="lazy" alt="" className="size-full object-cover" />
+            <img src={`/api/projects/${project.id}/cover/${coverFrame(project)}.jpg?max=192&v=${project.modified_ms}`} loading="lazy" alt="" className="size-full object-cover" />
           ) : (
             <div className="size-full" style={{ background: wash(project.style) }} />
           )}
@@ -645,7 +645,7 @@ function CloudCard({ project, index, onChanged }: { project: CloudProject; index
       >
         <div className="relative aspect-video overflow-hidden rounded-xl border border-line bg-panel transition-[border-color] duration-200 group-hover:border-line-strong">
           <div className="absolute inset-0" style={{ background: wash((summary.style as Style | undefined) ?? "bodycam") }} />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black via-black/70 to-transparent" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[78%] bg-gradient-to-t from-black via-black/85 via-45% to-transparent" />
           <div className="absolute inset-x-0 bottom-0 p-3.5">
             <div className="line-clamp-2 text-[14px] leading-snug font-semibold tracking-[-0.01em] text-white drop-shadow">{project.name}</div>
             <div className="mt-1 truncate text-[12px] text-white/70 tabular">

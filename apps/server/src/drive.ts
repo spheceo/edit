@@ -82,9 +82,14 @@ export function uploadName(project: string, ext: string): string {
  * named for their person), or it's only footage and subtitles.
  */
 export function subtitleVideo(project: Project): boolean {
+  // An edit (narration, voice-overs) is never one, Repack-style subtitles or
+  // not: the interrogation demo (an edit with repack_subtitles) started
+  // uploading its 7.7 GB export to the team's Subtitles folder.
+  const edit =
+    (project.script?.blocks ?? []).some((block) => block.kind === "narration") || project.clips.some((clip) => clip.name === "Voice-over");
   return (
     isSubtitled(project) ||
-    project.clips.some((clip) => clip.type === "text" && (clip.name ?? "").startsWith("Subtitle · ") && clip.style.label == null)
+    (!edit && project.clips.some((clip) => clip.type === "text" && (clip.name ?? "").startsWith("Subtitle · ") && clip.style.label == null))
   );
 }
 

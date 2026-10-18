@@ -118,6 +118,22 @@ test("uploads_whole_videos_only", () => {
     expect(wanted(project, OPTIONS, plan(0, 100))).toBe(false);
     expect(wanted(project, { ...OPTIONS, format: "gif" }, whole)).toBe(false);
     expect(wanted(project, { ...OPTIONS, format: "prores" }, whole)).toBe(true);
+    // An edit with Repack-style subtitles in it (narration, a voice-over) is still an edit: it stays off Drive.
+    project.clips.push({
+      id: "c3",
+      track: project.tracks[1]!.id,
+      start: 0,
+      duration: 60,
+      color: "pink",
+      name: "Subtitle · Stephanie (Suspect)",
+      fade_in: 0,
+      fade_out: 0,
+      type: "text",
+      text: "No.",
+      style: { color: [0.92, 0.16, 0.16, 1] },
+    } as never);
+    project.clips.push({ id: "c4", track, start: 300, duration: 60, color: "green", name: "Voice-over", fade_in: 0, fade_out: 0, type: "solid", fill: [0, 0, 0, 1] } as never);
+    expect(wanted(project, OPTIONS, plan(0, duration(project)))).toBe(false);
   } finally {
     cleanup();
   }

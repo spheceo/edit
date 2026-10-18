@@ -156,6 +156,21 @@ test("the_palette_stands_apart_and_more_people_share_far_apart_in_time", () => {
   }
 });
 
+test("each_case_s_person_questioned_keeps_red_when_they_never_meet", () => {
+  // Three cases ten minutes apart, each suspect recoloured red on purpose;
+  // a detective beside the first suspect is red too, and must move.
+  const red = "#eb2929";
+  const clips: TextClip[] = [];
+  for (const [index, who] of ["Stephanie", "Grant", "Trey"].entries()) {
+    for (let line = 0; line < 20; line++) clips.push(subtitle(`${who}-${line}`, index * 18000 + line * 60, who, `${who}:`, red));
+  }
+  for (let line = 0; line < 5; line++) clips.push(subtitle(`det-${line}`, 30 + line * 60, "Detective", "Detective:", red));
+  const edit = project(clips);
+  oneColourPerPerson(edit);
+  for (const who of ["Stephanie", "Grant", "Trey"]) expect(labelColour(edit, `${who}-0`)).toBe(red);
+  expect(labelColour(edit, "det-0")).not.toBe(red);
+});
+
 // The TS side's own.
 
 test("the summary lists each label's lines, colours and voices", () => {

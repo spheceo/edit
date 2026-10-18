@@ -23,7 +23,7 @@
 
 import { hex, subtitleName } from "./captions_core.ts";
 import type { Clip, Person as CastPerson, Project, Rgba } from "./model.ts";
-import { CAPTION_PREFIX, clipEnd } from "./project.ts";
+import { CAPTION_PREFIX, clipEnd, fps as fpsOf } from "./project.ts";
 import { f32, round, trim } from "./rust.ts";
 import * as speakers from "./speakers.ts";
 import { compareKeys } from "./stable.ts";
@@ -238,7 +238,7 @@ export function oneColourPerPerson(project: Project): unknown {
     delete project.people;
     return [];
   }
-  const colours = assign(people);
+  const colours = assign(people, fpsOf(project));
   // Every line of theirs in it.
   const changed = new Map<string, number>();
   for (const clip of project.clips) {
@@ -356,18 +356,23 @@ function roleOf(key: string, person: Person): string {
  * the palette, someone (the fewest lines come last) shares the colour of
  * whoever is on screen furthest away in time from them.
  */
-function assign(people: Map<string, Person>): Map<string, string> {
+function assign(people: Map<string, Person>, fps: number): Map<string, string> {
   const order = sorted(people).sort((a, b) => b[1].lines - a[1].lines);
   const taken: [string, Person][] = [];
   const out = new Map<string, string>();
-  // Apart from everyone's, and never pink for an official.
-  const free = (role: string, colour: string) =>
-    speakers.allowed(role, colour) && taken.every(([other]) => speakers.apart(colour, other) >= APART);
+  // Apart from everyone's, and never pink for an official. A colour someone
+  // already has (chosen on purpose: each case's person questioned in red in
+  // a compilation) may match people never on screen within APART_IN_TIME of
+  // them; newcomers still take colours apart from everyone's.
+  const far = (a: Person, b: Person) => gapBetween(a.spans, b.spans) >= APART_IN_TIME * fps;
+  const free = (role: string, colour: string, person: Person, kept = false) =>
+    speakers.allowed(role, colour) &&
+    taken.every(([other, holder]) => speakers.apart(colour, other) >= APART || (kept && far(person, holder)));
   // First everyone who keeps their own colour (most lines first), so a
   // newcomer never takes the colour someone already has and moves them on.
   for (const [key, person] of order) {
     const own = sorted(person.colours).sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (own !== undefined && !whitish(own) && free(roleOf(key, person), own)) {
+    if (own !== undefined && !whitish(own) && free(roleOf(key, person), own, person, true)) {
       taken.push([own, person]);
       out.set(key, own);
     }
@@ -377,8 +382,8 @@ function assign(people: Map<string, Person>): Map<string, string> {
     const role = roleOf(key, person);
     const fromRole = roleColour(role);
     const colour =
-      (fromRole !== null && free(role, fromRole) ? fromRole : undefined) ??
-      PALETTE.find((candidate) => free(role, candidate)) ??
+      (fromRole !== null && free(role, fromRole, person) ? fromRole : undefined) ??
+      PALETTE.find((candidate) => free(role, candidate, person)) ??
       furthestInTime(person, taken);
     taken.push([colour, person]);
     out.set(key, colour);
@@ -412,14 +417,20 @@ export function whitish(hexColour: string): boolean {
  * furthest (in time) from `person`, so a shared colour is never seen twice
  * in the same scene.
  */
+/** Seconds two people's lines must be apart for them to share a colour. */
+const APART_IN_TIME = 120;
+
+/** The least gap (frames) between two people's lines on the timeline. */
+function gapBetween(a: [number, number][], b: [number, number][]): number {
+  let least = Number.POSITIVE_INFINITY;
+  for (const [s1, e1] of a) {
+    for (const [s2, e2] of b) least = Math.min(least, Math.max(s2 - e1, s1 - e2, 0));
+  }
+  return least;
+}
+
 function furthestInTime(person: Person, taken: [string, Person][]): string {
-  const gap = (a: [number, number][], b: [number, number][]) => {
-    let least = Number.POSITIVE_INFINITY;
-    for (const [s1, e1] of a) {
-      for (const [s2, e2] of b) least = Math.min(least, Math.max(s2 - e1, s1 - e2, 0));
-    }
-    return least;
-  };
+  const gap = gapBetween;
   let best: [string, number, number] | undefined;
   for (const colour of PALETTE) {
     const holders = taken.filter(([own]) => own === colour).map(([, holder]) => holder);

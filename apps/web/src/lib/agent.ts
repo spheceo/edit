@@ -1,5 +1,5 @@
 import { readSetting, writeSetting } from "./storage";
-// The agent chat: Codex through Edit's server (crates/edit/src/agent.rs).
+// The agent chat: Codex through Edit's server (apps/server/src/agent.ts).
 
 import { create } from "zustand";
 

@@ -1,6 +1,5 @@
 // Where Edit's direct calls to Google (Drive, Docs, sign-in) and to the AI
-// Gateway go: the real services, or a stand-in for parity runs and tests
-// (endpoints.rs).
+// Gateway go: the real services, or a stand-in for tests.
 //
 // - `EDIT_GOOGLE_API_URL=http://127.0.0.1:7900` sends `https://<host>/<path>`
 //   for every Google host to `http://127.0.0.1:7900/<host>/<path>` (one mock
@@ -8,8 +7,8 @@
 // - `EDIT_AI_GATEWAY_URL=http://127.0.0.1:7901` posts chat completions to
 //   `http://127.0.0.1:7901/v1/chat/completions`.
 //
-// Unset (always, outside tests and parity runs), nothing changes. A stand-in
-// over plain http is allowed only while one is set.
+// Unset (always, outside tests), nothing changes. A stand-in over plain http
+// is allowed only while one is set.
 
 /** The Vercel AI Gateway Edit asks models through (watch, seats). */
 const GATEWAY = "https://ai-gateway.vercel.sh";
@@ -43,11 +42,6 @@ export function gateway(): string {
 
 export function gatewayThrough(stand: string | null): string {
   return `${stand ?? GATEWAY}/v1/chat/completions`;
-}
-
-/** `--proto` for the gateway. */
-export function gatewayProto(): string {
-  return protocols(base(process.env.EDIT_AI_GATEWAY_URL));
 }
 
 export function protocols(stand: string | null): string {

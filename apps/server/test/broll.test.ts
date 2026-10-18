@@ -59,11 +59,9 @@ test("whole_frames_are_resumed_from", () => {
   }
 });
 
-test("the map page is the Rust server's, as text", async () => {
+test("the map page takes its config", () => {
   expect(typeof broll.MAP_PAGE).toBe("string");
   expect(broll.MAP_PAGE).toContain("const C = __CONFIG__;");
-  const rust = Bun.file(`${import.meta.dir}/../../../crates/edit/src/map_page.html`);
-  if (await rust.exists()) expect(broll.MAP_PAGE).toBe(await rust.text());
 });
 
 test("map configs are written as serde_json writes them (their files are named by it)", () => {

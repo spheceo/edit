@@ -78,7 +78,7 @@ export class Router<C> {
     return this.route("DELETE", pattern, handler, options);
   }
 
-  /** Every registered route, as "METHOD /pattern" (the parity test compares them with server.rs's). */
+  /** Every registered route, as "METHOD /pattern". */
   list(): string[] {
     return this.routes.map((route) => `${route.method} ${route.pattern}`);
   }
@@ -228,11 +228,6 @@ export function withPosition(error: ApiError, request: Request): ApiError {
   }
   const column = new TextEncoder().encode(text.slice(start, end)).length;
   return new ApiError(error.status, `${error.message} at line ${line} column ${column}`, error.plain);
-}
-
-/** The text of the JSON body `readJson` read for `request`, if it did. */
-export function bodyText(request: Request): string | undefined {
-  return bodies.get(request);
 }
 
 /**

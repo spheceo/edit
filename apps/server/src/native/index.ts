@@ -1,13 +1,12 @@
 // The native addon (crates/edit-native, one napi-rs `.node`): the hot paths
-// that stay in Rust. This file is the contract of docs/rewrite-plan.md §1.3
-// as TS types, the loader, and a thin wrapper that keeps the conventions of
-// §1.2 on this side:
+// that stay in Rust. This file is the addon's contract as TS types, the
+// loader, and a thin wrapper that keeps these conventions on this side:
 // - a native failure is a thrown Error (or rejected promise) with the Rust
 //   message text, which agents read, so it's passed on untouched except that
-//   presigned URLs are scrubbed out (native errors can carry them, media.rs:968);
+//   presigned URLs are scrubbed out (native errors can carry them);
 // - native log lines go to `diag` (native never writes edit.log itself).
 //
-// Until the real addon is built (WP0), and in tests, `stub.ts` stands in.
+// Until the addon is built (`just native`), and in tests, `stub.ts` stands in.
 
 import * as fs from "node:fs";
 import * as nodePath from "node:path";
@@ -150,7 +149,7 @@ export interface ExportJobClass {
   start(job: ExportStart, onProgress: (progress: number) => void): ExportJob;
 }
 
-/** The addon's API (plan §1.3). S: sync, microseconds to a few ms; A: async; T: with progress; BG: fire and forget. */
+/** The addon's API. S: sync, microseconds to a few ms; A: async; T: with progress; BG: fire and forget. */
 export interface Native {
   // Lifecycle and process
   init(config: InitConfig): void; // S
@@ -233,7 +232,7 @@ export interface Native {
    * The laid-out size [width, height] of `text` in the bundled Geist at `px`
    * (left-aligned, still, 2 px pad), as the renderer lays it out: desktop.rs
    * `text_block` (edit_render::text::rasterize's block). WP7 needs it for the
-   * desktop profile's notes; not in plan §1.3 (a contract addition).
+   * desktop profile's notes; a contract addition.
    */
   textBlock(text: string, px: number, weight: number, lineHeight: number): [number, number]; // S
 }
@@ -313,7 +312,7 @@ function load(path: string): Native {
 }
 
 /**
- * The addon with §1.2's conventions applied on this side: every function's
+ * The addon with the conventions above applied on this side: every function's
  * error has presigned URLs scrubbed out (its text otherwise as native wrote it).
  */
 export function wrap(raw: Native): Native {

@@ -1,7 +1,6 @@
-// The skills' text (skills.rs SKILLS), taken from the Rust source by
-// scripts/dump-skills.ts. Edit the Rust original while it's the parity
-// reference, then dump again. Keep the wording the team's: these rules were
-// learnt edit by edit.
+// The skills' text: the house style beyond the core, loaded by the agent with
+// the `skill` tool. Keep the wording the team's: these rules were learnt edit
+// by edit.
 
 export const SKILL_TEXT: { name: string; body: string }[] = [
   {

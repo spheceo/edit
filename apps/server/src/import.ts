@@ -11,7 +11,7 @@ import * as diag from "./diag.ts";
 import * as media from "./media.ts";
 import type { Clip, ClipColor, Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
-import { canonical, expandHome, fileName, join } from "./paths.ts";
+import { fileName, join } from "./paths.ts";
 import { duration, fps, freshId, mediaOf } from "./project.ts";
 import { cloudEnabled } from "./relay.ts";
 import * as seams from "./seams.ts";
@@ -19,7 +19,7 @@ import * as seams from "./seams.ts";
 export { expandHome } from "./paths.ts";
 export type { Made } from "./seams.ts";
 
-/** How import hands a file to the cloud (`cloud_media.importLocal`); a seam until WP3 lands, replaceable in tests. */
+/** How import hands a file to the cloud (`cloud_media.importLocal`); replaceable in tests. */
 export const hooks = {
   importLocal: (cache: string, path: string, probe: media.Probe, name: string): Promise<seams.Made> =>
     seams.cloudMedia.importLocal(cache, path, probe, name),
@@ -303,9 +303,4 @@ function isFile(path: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** A path as typed (`~/…` is the user's home), made absolute and real where it exists. */
-export function realPath(path: string): string {
-  return canonical(expandHome(path));
 }

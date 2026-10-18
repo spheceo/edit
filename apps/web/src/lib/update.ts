@@ -1,6 +1,6 @@
 // Self-update. The server asks the relay for new releases; one click has it
 // download the new version and restart into it, and this page reloads once
-// the new version answers (see crates/edit/src/update.rs).
+// the new version answers (see apps/server/src/update.ts).
 
 import { create } from "zustand";
 

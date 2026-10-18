@@ -1,6 +1,6 @@
-// The MCP server's instructions (mcp.rs INSTRUCTIONS), taken from the Rust server by
-// scripts/dump-tools.ts: the core house style every agent gets at initialize.
-// Edit the Rust original while it's the parity reference, then dump again.
+// The MCP server's instructions: the core house style every agent gets at
+// initialize. Only what every part of the edit needs goes here; the rest goes
+// in its skill (skills_text.ts).
 
 export const INSTRUCTIONS = `Edit is a local video editor. Tools edit the project the user has open (pass project_id to target another). Changes appear live in their UI and are undoable there.
 

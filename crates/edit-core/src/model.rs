@@ -141,7 +141,7 @@ pub struct TimelineMarker {
 }
 
 /// The kind of video a project is. Each gets its own teaching for the agent
-/// (`crates/edit/src/styles.rs`); projects from before styles are bodycam.
+/// (`apps/server/src/styles.ts`); projects from before styles are bodycam.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "lowercase")]

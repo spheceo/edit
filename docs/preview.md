@@ -4,7 +4,7 @@
 presentation. The WASM engine still evaluates and draws through the same renderer
 as native export. No project model or exported media is changed by preview decoding.
 
-The server makes two preview files per source (`crates/edit/src/media.rs`):
+The server makes two preview files per source (`apps/server/src/media.ts`):
 `preview.mp4`, H.264 at most 1080p with a keyframe every half second and no
 B-frames (a few Mbit/s, where the old all-intra proxies ran at 15–85), and
 `preview.m4a`, AAC. Picture and sound are fetched separately, so decoding sound

@@ -11,12 +11,6 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      server:
-        description: "Which server the test build ships (ts: apps/server on Bun; rust: crates/edit)"
-        type: choice
-        options: [ts, rust]
-        default: ts
 
 permissions:
   contents: write
@@ -26,10 +20,6 @@ env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   GH_REPO: ${{ github.repository }}
   RELEASE: ${{ github.event_name == 'push' }}
-  # What a tagged release ships: `rust` (crates/edit) until the switch-over
-  # (docs/rewrite-plan.md §5.7), then `ts` (apps/server compiled with Bun, the
-  # addon, the window helper and the UI inside). Test builds pick it by hand.
-  SERVER: ${{ github.event.inputs.server || 'rust' }}
 
 jobs:
   prepare:
@@ -94,20 +84,12 @@ jobs:
         with:
           name: web-dist
           path: apps/web/dist
-      # EDIT_RELEASE turns on self-update (crates/edit/src/update.rs).
-      - name: Build (Rust server)
-        if: env.SERVER == 'rust'
-        run: |
-          EDIT_RELEASE=1 cargo build --release --locked -p edit --target ${{ matrix.target }}
-          mkdir package
-          cp "target/${{ matrix.target }}/release/edit" package/
       - uses: oven-sh/setup-bun@v2
-        if: env.SERVER == 'ts'
       # The addon and the window helper, then everything embedded in one `edit`
       # (apps/server/scripts/embed.ts); `bun build --compile` leaves the
       # signature invalid, so every binary is signed again (ad hoc).
-      - name: Build (Bun server)
-        if: env.SERVER == 'ts'
+      # EDIT_RELEASE turns on self-update (apps/server/src/update.ts).
+      - name: Build
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
@@ -128,8 +110,8 @@ jobs:
             --define EDIT_VERSION="\"$version\"" --define EDIT_RELEASE=true --outfile package/edit
           codesign -s - -f package/edit
       # The runner is Apple Silicon: the arm64 build runs here (no GPU renders: no Metal on hosted runners).
-      - name: Smoke test (Bun server)
-        if: env.SERVER == 'ts' && matrix.target == 'aarch64-apple-darwin'
+      - name: Smoke test
+        if: matrix.target == 'aarch64-apple-darwin'
         run: |
           set -euo pipefail
           package/edit --version

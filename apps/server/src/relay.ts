@@ -44,8 +44,8 @@ export function setSavedToken(value: string | null): void {
 
 /**
  * Whether cloud calls can work: a relay token is set (`EDIT_RELAY_TOKEN`, else
- * the one saved in Settings → Cloud). Cloud is always on with one (cloud.rs
- * `enabled`, here because the store and import ask it before WP3 lands).
+ * the one saved in Settings → Cloud). Cloud is always on with one (here,
+ * not in cloud.ts, because the store and import ask it).
  */
 export function cloudEnabled(): boolean {
   return token() !== null;

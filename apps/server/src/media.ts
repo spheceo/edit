@@ -67,8 +67,6 @@ export const backgroundSlots = new Semaphore(1);
  */
 const imageSlots = new Semaphore(1);
 
-export const PROXY_MAX_WIDTH = 1920;
-export const PROXY_MAX_HEIGHT = 1080;
 /** Waveform resolution. */
 export const PEAKS_PER_SECOND = 100;
 export const THUMB_HEIGHT = 72;
@@ -136,8 +134,8 @@ function shown(status: MediaStatus): MediaStatus {
 
 /**
  * Whether `path` is one of this machine's copies of cloud files (a proxy,
- * which then is a preview already). cloud_media.rs's; here because the
- * processor needs it before WP3 lands.
+ * which then is a preview already). Here, not in cloud_media.ts, because the
+ * processor needs it.
  */
 export function isLocalCopy(cache: string, path: string): boolean {
   return startsWith(path, join(cache, "cloud")) || startsWith(path, join(canonical(cache), "cloud"));

@@ -196,11 +196,6 @@ async function putRecord(fields: Record<string, unknown>): Promise<void> {
   await cloud.mutation("edit:putMedia", fields);
 }
 
-/** Forgets a source (tests clean up with it). */
-export async function deleteRecord(source: string): Promise<void> {
-  await cloud.mutation("edit:deleteMedia", { source });
-}
-
 // ---------------------------------------------------------------------------
 // Sources, keys and local copies.
 

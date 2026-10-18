@@ -1,7 +1,6 @@
-// The MCP tools: their declarations come from tools.json (dumped from the Rust
-// server, so names, descriptions and schemas match by construction), and each
-// package registers the handlers for its tools here. A declared tool nobody
-// has registered yet answers that it isn't ported.
+// The MCP tools: their declarations (names, descriptions, schemas) are
+// tools.json, and each package registers the handlers for its tools here. A
+// declared tool nobody has registered answers that it isn't ported.
 
 import type { App } from "../app.ts";
 import declared from "./tools.json" with { type: "json" };

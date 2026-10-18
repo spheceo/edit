@@ -1,6 +1,6 @@
 // STUB: an in-memory stand-in for the native addon, with the contract's exact
-// signatures (index.ts), for tests and for running the TS server before WP0's
-// addon lands. It is not the engine:
+// signatures (index.ts), for tests and for running the server without the
+// addon built. It is not the engine:
 // - projectLoad / projectValidate / projectCommit check only the structure
 //   and the commonest rules of Project::validate (same messages), and don't
 //   fill serde defaults or round f32 fields; `pretty` is JSON.stringify's.

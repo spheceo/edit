@@ -320,7 +320,7 @@ export function addElement(project: Project, element: Element, frame: number, on
       };
       break;
     case "subtitle": {
-      // The subtitle look after the intro (crates/edit/src/captions.rs subtitle_style), authored at 1080p:
+      // The subtitle look after the intro (apps/server/src/captions.ts subtitle_style), authored at 1080p:
       // Edits use a first-name label without glow; subtitle projects use glow without a label.
       const subtitled = subtitleProject;
       const { width, height } = project.settings;
@@ -354,7 +354,7 @@ export function addElement(project: Project, element: Element, frame: number, on
       break;
     }
     case "cutin": {
-      // Repack's cut-in: a black card with the narration on it (crates/edit/src/script.rs lays out the same).
+      // Repack's cut-in: a black card with the narration on it (apps/server/src/script.ts lays out the same).
       const { width, height } = project.settings;
       const text = "cut in";
       const link = freshId(project, "l");
@@ -939,7 +939,7 @@ const SOUND_EFFECT_SECONDS = 3;
 
 /** A sound effect (a bundled sound, one from the team's library, or any very short audio): heard, never transcribed. */
 export function isSoundEffect(media: Media) {
-  // Bundled sounds live in <Edit's home>/sfx (crates/edit/src/sfx.rs), the
+  // Bundled sounds live in <Edit's home>/sfx (apps/server/src/sfx.ts), the
   // library's in <Edit's home>/library/<music|sfx>/<checksum> (library.rs).
   return (
     media.kind === "audio" &&

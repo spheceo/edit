@@ -10,7 +10,6 @@ import * as diag from "../diag.ts";
 import { isBug, crashed } from "../guard.ts";
 import { empty, json, text as plain } from "../http/errors.ts";
 import { readJson, type RouteContext } from "../http/router.ts";
-import { stableStringify } from "../stable.ts";
 import { VERSION } from "../version.ts";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { handlerFor, registerTool, text, TOOLS, type Content } from "./registry.ts";
@@ -131,8 +130,3 @@ export async function call(
 
 // list_projects answers before any project is resolved (it works with none).
 registerTool("list_projects", ({ app }) => text(JSON.stringify(app.store.list(), null, 2)), { noProject: true });
-
-/** JSON-as-text tool output with sorted keys, as the Rust server's `json!` values read. */
-export function jsonText(value: unknown): Content[] {
-  return text(stableStringify(value));
-}

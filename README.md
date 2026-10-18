@@ -1,107 +1,40 @@
 <h1 align="center">Edit</h1>
 
-Edit is a local, agent-driven video editor. A Rust binary opens the editor in its own window (a Tauri webview onto the same server it can run headless for a browser); projects and media never leave your machine. Codex or Claude Code connect over MCP and edit the same project you're looking at — their changes appear live and undo with ⌘Z.
+Edit is a local, agent-driven video editor for macOS. The editor runs in its own window (or any WebGPU browser); Codex or Claude Code connect over MCP and edit the project you're looking at — their changes appear live and undo with ⌘Z.
+
+## Install
 
 ```sh
-just app              # build everything, open the desktop app
-just serve            # build everything, serve on http://localhost:7700 (no window)
-edit mcp              # how to connect Claude Code / Codex
+curl -fsSL https://raw.githubusercontent.com/spheceo/edit/main/install.sh | sh
+edit          # open the editor
+edit mcp      # how to connect Claude Code / Codex
 ```
 
-Requirements to build: Rust, Bun, FFmpeg on `PATH` for dev builds (releases ship their own: `scripts/ffmpeg.sh`), `wasm-bindgen-cli` matching `crates/edit-wasm` (`cargo install wasm-bindgen-cli --version 0.2.129`), and macOS 26+ for WebGPU in the app's window (or a WebGPU browser: Chrome, Edge, Arc, Safari 26+).
-
-## How it fits together
-
-```text
-crates/edit-core     project model + frame evaluation (shared, compiles to WASM)
-crates/edit-render   wgpu compositor: video, text, glow, grade, solids
-crates/edit-wasm     the compositor in the browser (WebGPU)
-crates/edit          `edit` (the window) / `edit serve`: API, media jobs, native render + export, MCP
-apps/web             React UI (Vite, Tailwind, motion)
-apps/relay           Cloudflare Worker holding API keys (transcription)
-```
-
-- **Exact effects.** The preview runs `edit-render` as WASM on WebGPU; export and agent frame grabs run the same crate natively. Text is rasterized on the CPU by shared code, so a frame renders to identical pixels in both.
-- **Clean scrubbing.** Imports get a light H.264 preview proxy (≤1080p, a keyframe every half second, no B-frames, tagged BT.709) plus a separate AAC sound file, so the preview streams comfortably over Wi-Fi. Scrubbing coalesces requests and displays decoded pictures; playback keeps one decoder running and cues upcoming cuts. The playhead is remembered per project in this browser. Export always reads the originals.
-- **Built-in agent.** The Codex panel drives `codex app-server` with the user's own `codex login`. Edit injects its MCP server per chat (`/mcp?project=<id>`, tools pre-approved) and turns off the user's other MCP servers, apps and plugins; the sandbox is read-only, so the agent can only change the edit. Models are cached in `~/.edit/agent/models.json` (refreshed daily), chats in `~/.edit/agent/chats/`.
-- **Agents.** Begin with `get_edit_context`, apply a whole stage with `apply_edit_plan`, then use `review_edit` for structural checks, cached subtitle coverage and a contact sheet. A plan validates and saves once, is one undo step, and rejects stale revisions without partial changes. Existing per-clip tools and `batch` remain available. See `crates/edit/src/mcp.rs` for the model description agents receive.
-- **Native Mac video.** Standard hardware H.264/HEVC exports and preview video transcoding use AVFoundation, VideoToolbox and bounded pixel-buffer pools. Photos use ImageIO and remain images. The compositor is still shared with the browser; FFmpeg handles audio, compatibility formats and custom output settings. Slowed clips use source-frame sampling by default; expensive optical-flow interpolation is opt-in, serialized and limited to 120 seconds per render. Export normally takes the current timeline snapshot immediately.
-
-## Transcription
-
-Edit never holds API keys. It extracts mono 32 kbps Opus (~14 MB/hour) and
-posts it to `apps/relay/`, a Cloudflare Worker that forwards to ElevenLabs Scribe v2
-(word timings + voice numbers) and streams the answer back. The relay caps
-requests with a burst limit and atomic daily byte reservations per IP and across
-everyone. Byte quotas are a proxy for duration; they are not a guaranteed monetary
-cap for arbitrary uploaded audio.
-Transcripts are cached per source file in `~/.edit/cache`, so footage is paid
-for once. `EDIT_RELAY_URL` points Edit at another relay.
-
-```sh
-cd relay && bunx wrangler deploy
-bunx wrangler secret put ELEVENLABS_API_KEY   # once
-```
-
-For a private relay, also set the Worker secret `CLIENT_TOKEN` and set the same
-value as `EDIT_RELAY_TOKEN` in the environment running Edit. The shared public
-relay needs duration verification and an upstream spending limit before its byte
-quotas can be treated as a hard spending guarantee.
-
-## Remote use
-
-`edit serve` binds `127.0.0.1` and this machine's Tailscale IP. WebGPU only runs on secure pages, so from another device use Tailscale Serve:
-
-```sh
-tailscale serve --bg http://127.0.0.1:7700   # then open https://<machine>.<tailnet>.ts.net
-```
+Later versions install themselves from the editor. The built-in agent panel needs [Codex](https://github.com/openai/codex) (signed in); maps and research need Chrome.
 
 ## Development
 
-```sh
-just dev     # server on :7700 + Vite hot reload on :5173
-just bundle  # Edit.app in target/release/bundle/macos
-just check   # fmt, clippy, tests, typecheck
-```
-
-Data lives in `~/.edit` (`EDIT_HOME` overrides): `projects/*.json` and `cache/` (proxies, thumbnails, waveforms). Exports default to `~/Movies/Edit/`.
-
-## Performance checks
-
-Build baseline and candidate binaries in separate checkouts, then compare them
-without changing real projects or calling paid APIs:
+Requirements: Rust, Bun, FFmpeg on `PATH`, `wasm-bindgen-cli` matching `crates/edit-wasm` (`cargo install wasm-bindgen-cli --version 0.2.129`), and macOS 26+ for WebGPU in the window.
 
 ```sh
-python3 scripts/benchmark.py --baseline /path/to/baseline/edit --candidate target/debug/edit
-# Optional: use a read-only copy of a real project instead of the generated fixture.
-python3 scripts/benchmark.py --baseline /path/to/baseline/edit --candidate target/debug/edit --project /path/to/project.json
-bun scripts/benchmark-history.ts /path/to/project.json baseline
-bun scripts/benchmark-history.ts /path/to/project.json shared
+just dev      # server on :7700 + Vite hot reload on :5173
+just app      # build everything, open the desktop app
+just check    # fmt, clippy, tests, typecheck
+just publish  # release the next patch version
 ```
 
-The first script starts isolated servers, measures a 15-second export, process-tree
-RSS, contact sheets, revisions (including the legacy batch route), context size and
-repeated audio measurements. It writes logs, files and JSON results under
-`target/performance/`. Run it with other CPU-heavy work stopped. The history check
-measures retained JavaScriptCore heap for 200 revisions; unchanged clip objects now
-share storage across undo entries. Whole-browser/GPU memory and shared macOS codec
-services are outside those measurements. These component benchmarks do not prove
-a cold, research-to-finished-video agent run meets a ten-minute target.
-The measured run and verification details are in
-[`docs/performance-results.json`](docs/performance-results.json).
+```text
+apps/server          the server (Bun): API, media jobs, export, MCP, agent
+apps/web             React UI
+apps/relay           Cloudflare Worker holding API keys
+crates/edit-core     project model + frame evaluation (native and WASM)
+crates/edit-render   wgpu compositor shared by preview and export
+crates/edit-engine   native media, render and export engine
+crates/edit-native   the engine as a Bun addon (napi-rs)
+crates/edit-wasm     the compositor in the browser
+crates/edit-window   the desktop window (Tauri)
+```
 
-## Sound library
+Data lives in `~/.edit` (`EDIT_HOME` overrides); exports default to `~/Movies/Edit/`. From another device, `tailscale serve --bg http://127.0.0.1:7700` (WebGPU needs HTTPS).
 
-Music and sound effects come from the team's "Music & SFX Library" folder in Google Drive ([03] Media / Repack): a folder per mood or kind, an index of notes per file and a usage guide the agent reads. Edit downloads a sound the first time it's used (Library tab, or the agent's `add_from_library`). `just dev` reads the Google sign-in from Infisical. To add a sound, put it in the right folder in Drive and give it a note in the index.
-
-Still missing, taken out of the guide and index until there's a real file (12 Oct 2026):
-
-- **Gunshot:** there was only a YouTube reference (no audio). Needs a licensed pistol shot, for when the narration describes a shooting.
-- **Typewriter:** listed, never added.
-- **Upbeat music:** nearly every track is dark or tense, so lighter cases have little to choose from.
-
-The guide's "Pulse" link was a touchscreen-tapping sound, not a heartbeat. It now sits under Clicks as "Touchscreen taps".
-
-## Test cases to revisit
-
-- **911 audio waveform:** [this Doc](https://docs.google.com/document/d/1kQewvwefZeotaWWz1g78VDYVoI3ku8TrJDL2p-4EQlo/edit?tab=t.0) has a 911 call to test the glowing waveform against. It should lie almost flat when the sound is low, with a little movement, and spike on speech and loud sounds.
+[AGENTS.md](AGENTS.md) has the details.

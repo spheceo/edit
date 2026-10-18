@@ -1,7 +1,5 @@
 # One subtitles system for edits and subtitle videos
 
-Implementation review: [speed and subtitles audit](speed-subtitles-audit.md) (Oct 17). It expands the timing fix to both subtitle modes and proposes versioned source evidence, project-pinned casts, and fixtures before migration; agreement and image similarity must not be treated as identity certainty.
-
 Status: steps 1–4 and the timing fixes are in (Oct 18, `apps/server`, `edit-core`); see *Done* below. Steps 5 (checks against the sound, the footage's frame rate) and 6 (fixtures as tests) are still to do; the offline harness in `/tmp/subsrun/harness` is the start of 6.
 
 ## What must never happen
@@ -15,7 +13,7 @@ Today each of these is avoided by heuristics in two separate systems, not ruled 
 
 ## How it works today, and why it can go wrong
 
-| | Subtitle videos (`repack_subtitles`, `crates/edit/src/subtitles.rs`) | Edits (`add_subtitles`, `crates/edit/src/captions.rs`) |
+| | Subtitle videos (`repack_subtitles`, `apps/server/src/subtitles.ts`) | Edits (`add_subtitles`, `apps/server/src/captions.ts`) |
 |---|---|---|
 | Who a person is | A transcript voice key (`<media>/speaker_N`), merged by comparing name strings (`same_person`) | A subtitle label's text and the clip name "Subtitle · <name>" (`people.rs`) |
 | Colours | `speakers::distinct`, ΔE 20 apart | `people::one_colour_per_person`, palette of 20, ΔE 28 apart |

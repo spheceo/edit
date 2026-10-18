@@ -7,7 +7,6 @@ members = [
     "crates/edit-engine",
     "crates/edit-native",
     "crates/edit-window",
-    "crates/edit",
 ]
 
 [workspace.package]
@@ -49,7 +48,7 @@ opt-level = 1
 
 # Frame evaluation and the compositor run for every frame of an export and
 # every agent render; they're small, so optimising them costs little build
-# time. The big `edit` crate stays at 1 so `just dev` rebuilds quickly (its
+# time. The engine stays at 1 so `just dev` rebuilds the addon quickly (its
 # heavy per-frame work is in AVFoundation, Accelerate and the GPU).
 [profile.dev.package.edit-core]
 opt-level = 3
@@ -61,12 +60,12 @@ opt-level = 3
 lto = "thin"
 strip = true
 
-# The dev server's build (`just serve-build`): release speed where it matters,
+# The dev server's addon (`just serve-build`): release speed where it matters,
 # minutes less to link. No LTO and many codegen units with incremental
-# compilation, so a one-line change in `edit` rebuilds just that crate's
-# changed units. Every crate still builds at opt-level 3 (edit-core and
-# edit-render run per frame; `edit` mixes sound and drives the export
-# pipeline). Releases (`[profile.release]`, `just publish`) are unchanged.
+# compilation, so a one-line change rebuilds just that crate's changed units.
+# Every crate still builds at opt-level 3 (edit-core and edit-render run per
+# frame; the engine mixes sound and drives the export pipeline). Releases
+# (`[profile.release]`, `just publish`) are unchanged.
 [profile.serve]
 inherits = "release"
 lto = "off"

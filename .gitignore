@@ -17,7 +17,6 @@ node_modules/
 *.tsbuildinfo
 
 # Tauri build output
-/crates/edit/gen/
 /crates/edit-window/gen/
 
 # The release binary's entry (apps/server/scripts/embed.ts writes it)

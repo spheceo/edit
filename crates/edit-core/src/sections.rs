@@ -289,7 +289,7 @@ impl Media {
     }
 }
 
-/// Bundled sounds are written to `<Edit's home>/sfx/` (crates/edit/src/sfx.rs),
+/// Bundled sounds are written to `<Edit's home>/sfx/` (apps/server/src/sfx.ts),
 /// the team library's sounds and music to `<Edit's home>/library/<music|sfx>/<checksum>/`
 /// (library.rs).
 fn in_sfx_folder(path: &str) -> bool {

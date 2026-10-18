@@ -1,10 +1,10 @@
 //! Edit's native addon: `edit-engine` and `edit-core` for the TypeScript
-//! server, through napi-rs (`docs/rewrite-plan.md` section 1). Bindings only:
+//! server, through napi-rs. Bindings only:
 //! every function here converts its arguments, calls the engine, and turns a
 //! `Result<T, String>` into a value or an `Error` with the same message (the
 //! agent reads these strings).
 //!
-//! How each call runs (plan 1.2): sync calls take microseconds to a few
+//! How each call runs: sync calls take microseconds to a few
 //! milliseconds; async ones run on napi's tokio runtime in `spawn_blocking`;
 //! long jobs report through an unref'd `ThreadsafeFunction`. Every entry
 //! point contains panics (`edit_engine::util::catch`): a crash becomes

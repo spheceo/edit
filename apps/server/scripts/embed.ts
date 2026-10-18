@@ -1,5 +1,5 @@
-// Writes apps/server/src/embedded.gen.ts, the entry of the release binary
-// (plan §4): it imports every file the binary carries `with { type: "file" }`
+// Writes apps/server/src/embedded.gen.ts, the entry of the release binary:
+// it imports every file the binary carries `with { type: "file" }`
 // (so `bun build --compile` puts them inside it), registers them, loads the
 // addon from inside the binary, then runs main.ts. Sound effects and other
 // assets a module imports itself `with { type: "file" }` come along anyway.

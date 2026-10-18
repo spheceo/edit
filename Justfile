@@ -70,13 +70,6 @@ window profile="debug":
     set -euo pipefail
     if [ "{{profile}}" = release ]; then cargo build -p edit-window --release; else cargo build -p edit-window; fi
 
-# The Rust server (crates/edit), the parity reference until the switch-over
-serve-rust: web
-    cargo run -p edit -- serve
-
-app-rust: web
-    cargo run -p edit -- app
-
 # Edit.app (target/release/bundle/macos): the window helper (crates/edit-window)
 # is the app, with the Bun `edit` and FFmpeg in its Resources; opened, it runs
 # `Resources/edit serve`. Like `release`, it doesn't update itself.
@@ -92,15 +85,6 @@ bundle: web ffmpeg (native "release")
     # FFmpeg goes into Edit.app/Contents/Resources beside edit (apps/server/src/tools.ts).
     cd crates/edit-window && bunx @tauri-apps/cli@2 build --bundles app \
         --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\",\"$edit\":\"edit\"}}}"
-
-# The Rust server's Edit.app (until the switch-over)
-bundle-rust: web ffmpeg
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir="$PWD/target/ffmpeg/$(rustc -vV | sed -n 's/^host: //p')"
-    # FFmpeg goes into Edit.app/Contents/Resources (crates/edit/src/tools.rs).
-    cd crates/edit && bunx @tauri-apps/cli@2 build --bundles app \
-        --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\"}}}"
 
 # The FFmpeg Edit ships with, for this Mac (target/ffmpeg/<target>)
 ffmpeg:
@@ -119,10 +103,6 @@ release: web (native "release") (window "release")
     bun build apps/server/src/embedded.gen.ts --compile --outfile package/edit
     codesign -s - -f package/edit
     echo "built package/edit"
-
-# The Rust server's release binary (until the switch-over)
-release-rust: web
-    cargo build -p edit --release
 
 # The dev server's binary: the Bun server compiled with the UI and the addon
 # embedded (the addon in `[profile.serve]`: release speed, no LTO,
@@ -145,23 +125,6 @@ serve-build-bin:
     mkdir -p "$(dirname "$dest")"
     bun build apps/server/src/embedded.gen.ts --compile --outfile "$dest.new"
     codesign -s - -f "$dest.new"
-    mv -f "$dest.new" "$dest"
-    echo "built $dest in $((SECONDS - start)) s; restart the server to run it"
-
-# The Rust server's dev binary (the parity reference until the switch-over);
-# `just serve-build-rust-bin` skips the UI rebuild.
-serve-build-rust: web serve-build-rust-bin
-
-serve-build-rust-bin:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir="${EDIT_BUILD_DIR:-$HOME/edit-build}"
-    export CARGO_TARGET_DIR="$dir/target" CARGO_BUILD_BUILD_DIR="$dir/build"
-    start=$SECONDS
-    cargo build --profile serve -p edit --no-default-features
-    dest="${EDIT_SERVE_BIN:-/tmp/run/edit}"
-    mkdir -p "$(dirname "$dest")"
-    cp "$CARGO_TARGET_DIR/serve/edit" "$dest.new"
     mv -f "$dest.new" "$dest"
     echo "built $dest in $((SECONDS - start)) s; restart the server to run it"
 
@@ -218,30 +181,6 @@ dev: wasm web-install (native "debug")
     cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-wasm -s 'just wasm' &
     ENGINE=$!
     trap 'kill $SERVER $NATIVE $ENGINE 2>/dev/null || true' EXIT INT TERM
-    bun run --cwd apps/web dev
-
-# The Rust server (rebuilt and restarted on Rust changes) plus Vite, as `dev`
-# was before the Bun server (the parity reference until the switch-over)
-dev-rust: wasm web-install
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p apps/web/dist
-    # The sound library reads Google Drive and the watcher calls the AI
-    # Gateway; while testing they borrow Repack's keys from Infisical (just
-    # these four, not the rest of Repack's secrets).
-    if command -v infisical >/dev/null; then
-        for name in GOOGLE_DRIVE_CLIENT_ID GOOGLE_DRIVE_CLIENT_SECRET GOOGLE_DOCS_REFRESH_TOKEN AI_GATEWAY_API_KEY; do
-            if [ -z "${!name:-}" ] && value="$(infisical secrets get "$name" --projectId=cdf4a0c5-eca4-4415-af3a-40871af285f3 --env=dev --plain --silent 2>/dev/null)"; then
-                export "$name=$value"
-            fi
-        done
-    fi
-    cargo watch -q -w crates/edit -w crates/edit-core -w crates/edit-render -x 'run -q -p edit -- serve' &
-    SERVER=$!
-    # The browser engine shares edit-core/edit-render: rebuild it too (Vite reloads it).
-    cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-wasm -s 'just wasm' &
-    ENGINE=$!
-    trap 'kill $SERVER $ENGINE 2>/dev/null || true; pkill -f "target/debug/edit serve" 2>/dev/null || true' EXIT INT TERM
     bun run --cwd apps/web dev
 
 # Format, lint and test

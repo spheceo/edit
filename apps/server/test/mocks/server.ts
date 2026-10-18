@@ -7,8 +7,7 @@
 // `useEnv()` points the server at it: EDIT_RELAY_URL (the relay's base),
 // EDIT_AI_GATEWAY_URL (the gateway's base: chat completions go to <base>/v1/chat/completions) and
 // EDIT_GOOGLE_API_URL (standing in for https://www.googleapis.com, OAuth's
-// token endpoint included as /token), the overrides WP0 adds to the Rust server
-// too, so both run against the same mock in the parity harness.
+// token endpoint included as /token).
 
 import type { Server } from "bun";
 

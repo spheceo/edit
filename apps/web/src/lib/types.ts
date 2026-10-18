@@ -520,7 +520,7 @@ export type ScriptBlock =
       voiceover?: string;
     };
 
-/** A script import's footage downloads (crates/edit/src/script.rs `Job`). */
+/** A script import's footage downloads (apps/server/src/script.ts `Job`). */
 export interface ScriptJob {
   state: "downloading" | "transcribing" | "placing" | "voicing" | "done" | "failed";
   error?: string;

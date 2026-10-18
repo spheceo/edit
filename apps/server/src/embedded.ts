@@ -1,4 +1,4 @@
-// What the release binary carries inside it (plan §4): the web UI, the window
+// What the release binary carries inside it: the web UI, the window
 // helper, and (registered straight with the native loader) the addon.
 // `scripts/embed.ts` writes `src/embedded.gen.ts`, the compile's entry, which
 // imports each file `with { type: "file" }` (a path inside the binary), hands

@@ -1,24 +1,16 @@
-// The seams between work packages (docs/rewrite-plan.md §3): every symbol one
-// package's Rust module uses from another package's, as a TS signature, taken
-// from the cross-module trace of crates/edit/src (tests excluded). Until the
-// owning package lands, each is a stub that throws "not ported".
-//
-// How a package fills its seam: write the module (e.g. `src/subtitles.ts`),
-// then replace the stub object here with it, typed by the same interface, so
-// the compiler holds the module to what its callers were promised:
-//
-//     import * as real from "./subtitles.ts";
-//     export const subtitles: SubtitlesSeam = real;
+// The seams between the server's packages: every symbol one package uses from
+// another's, as a TS signature, filled by the module that owns it (typed by
+// the interface, so the compiler holds the module to what its callers were
+// promised). Services `App` carries that a test doesn't provide are stubs that
+// throw "not ported".
 //
 // Callers always go through these objects (`seams.subtitles.footageSound(…)`),
-// never import another package's module directly, so packages can land in any
-// order. Names are the Rust names in camelCase; `Result<T, String>` is a
-// thrown Error with the same text; `async fn` is a Promise; Rust `&mut Project`
-// arguments are changed in place, as there.
+// never import another package's module directly, which keeps import cycles
+// out. A failure is a thrown Error; a project passed in is changed in place.
 //
-// What WP1 owns itself (store, media, relay, diag, layout, import, project
-// helpers, `isSubtitled`, `isLocalCopy`, `scrub`, `cloudEnabled`, CAPTION_PREFIX)
-// isn't here: call it directly.
+// The foundation (store, media, relay, diag, layout, import, project helpers,
+// `isSubtitled`, `isLocalCopy`, `scrub`, `cloudEnabled`, CAPTION_PREFIX) isn't
+// here: call it directly.
 
 import type { App } from "./app.ts";
 import type { Router } from "./http/router.ts";

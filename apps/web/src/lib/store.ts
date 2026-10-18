@@ -32,7 +32,7 @@ export interface ExportState {
   drive?: boolean;
 }
 
-/** The upload of an export to Drive (`drive` events from crates/edit/src/drive.rs). */
+/** The upload of an export to Drive (`drive` events from apps/server/src/drive.ts). */
 export interface DriveState {
   state: "uploading" | "done" | "failed";
   progress?: number;
@@ -75,7 +75,7 @@ interface EditorState {
   timelineHeight: number;
   toasts: Toast[];
   agentActive: number;
-  /** The open project's cloud state (crates/edit/src/cloud_projects.rs); null for none. */
+  /** The open project's cloud state (apps/server/src/cloud_projects.ts); null for none. */
   cloud: CloudStatus | null;
 
   load(rev: number, project: Project): void;

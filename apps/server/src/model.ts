@@ -1,7 +1,7 @@
-// The project model, as the server sees it. Interim: a copy of the UI's
-// hand-written mirror of crates/edit-core/src/model.rs (apps/web/src/lib/types.ts)
-// until WP0's ts-rs types land in packages/edit-types; then this file becomes
-// `export * from "@edit/types"` plus the server-only types below the line.
+// The project model, as the server sees it: a hand-written mirror of
+// crates/edit-core/src/model.rs, like the UI's apps/web/src/lib/types.ts.
+// packages/edit-types has the generated (ts-rs) types; moving to them would
+// leave only the server-only types below the line here.
 // Timeline times are integer frames; source_in is seconds.
 
 export type Rgba = [number, number, number, number];
@@ -101,13 +101,6 @@ export interface Glow {
   strength: number;
 }
 
-export const HOUSE_GLOW: Glow = {
-  enabled: true,
-  color: null,
-  radius: 46,
-  strength: 0.5,
-};
-
 export interface TextStyle {
   font: string;
   weight: number;
@@ -170,21 +163,6 @@ export interface TextShadow {
   size: number;
   blur: number;
 }
-
-export const HOUSE_BOX: TextBox = {
-  color: [0, 0, 0, 1],
-  opacity: 0.75,
-  pad_x: 12,
-  pad_y: 8,
-};
-export const HOUSE_SHADOW: TextShadow = {
-  color: [0, 0, 0, 1],
-  opacity: 0.65,
-  distance: 3,
-  angle: 112,
-  size: 6,
-  blur: 8,
-};
 
 export type TextPreset = "none" | "fade" | "rise" | "pop" | "typewriter" | "words" | "word";
 
@@ -263,33 +241,6 @@ export interface Shake {
   edges?: ShakeEdges;
   /** Random jolts, or a whip through a cut at the clip's middle (down / right; a negative amount goes up / left). */
   motion?: ShakeMotion;
-}
-
-export type ShakeSettings = Required<Omit<Shake, "preset">>;
-
-/** Mirrors edit-core `ShakePreset::settings`. */
-export const SHAKE_PRESETS: Record<ShakePreset, ShakeSettings & { label: string }> = {
-  none: { label: "None", amount: 0, frequency: 8, rotation: 0, direction: "both", envelope: "steady", motion_blur: 1, edges: "mirror", motion: "wiggle" },
-  handheld: { label: "Handheld", amount: 8, frequency: 1.2, rotation: 0.4, direction: "both", envelope: "steady", motion_blur: 0, edges: "zoom", motion: "wiggle" },
-  vertical: { label: "Vertical drop", amount: 540, frequency: 0, rotation: 0, direction: "vertical", envelope: "steady", motion_blur: 2, edges: "mirror", motion: "drop" },
-  horizontal: { label: "Horizontal whip", amount: 540, frequency: 0, rotation: 0, direction: "horizontal", envelope: "steady", motion_blur: 2, edges: "mirror", motion: "drop" },
-  impact: { label: "Impact", amount: 160, frequency: 30, rotation: 3, direction: "both", envelope: "hit", motion_blur: 1.5, edges: "mirror", motion: "wiggle" },
-  earthquake: { label: "Earthquake", amount: 60, frequency: 16, rotation: 1.5, direction: "both", envelope: "steady", motion_blur: 1, edges: "mirror", motion: "wiggle" },
-};
-
-/** Every number of a shake: the preset's unless given. */
-export function resolvedShake(shake: Shake | undefined): ShakeSettings {
-  const { label: _label, ...preset } = SHAKE_PRESETS[shake?.preset ?? "none"];
-  return {
-    amount: shake?.amount ?? preset.amount,
-    frequency: shake?.frequency ?? preset.frequency,
-    rotation: shake?.rotation ?? preset.rotation,
-    direction: shake?.direction ?? preset.direction,
-    envelope: shake?.envelope ?? preset.envelope,
-    motion_blur: shake?.motion_blur ?? preset.motion_blur,
-    edges: shake?.edges ?? preset.edges,
-    motion: shake?.motion ?? preset.motion,
-  };
 }
 
 interface ClipBase {
@@ -513,7 +464,7 @@ export type ScriptBlock =
       voiceover?: string;
     };
 
-/** A script import's footage downloads (crates/edit/src/script.rs `Job`). */
+/** A script import's footage downloads (apps/server/src/script.ts `Job`). */
 export interface ScriptJob {
   state: "downloading" | "transcribing" | "placing" | "voicing" | "done" | "failed";
   error?: string;
@@ -612,8 +563,8 @@ export interface Sections {
 }
 
 // ---------------------------------------------------------------------------
-// Engine types (crates/edit-engine; ts-rs generates them in WP0). Until then,
-// written down from export.rs, media.rs and edit-core's timeline.rs.
+// Engine types (crates/edit-engine), written down from export.rs, media.rs and
+// edit-core's timeline.rs (ts-rs generates them too, into packages/edit-types).
 
 /** What a ripple edit did (edit_core::Rippled). */
 export interface Rippled {

@@ -1,4 +1,4 @@
-// Cloud projects (crates/edit/src/cloud_projects.rs): projects kept in the
+// Cloud projects (apps/server/src/cloud_projects.ts): projects kept in the
 // team's cloud so a teammate can carry on where someone stopped; one machine
 // edits a project at a time (it holds the lock, everyone else is read-only).
 

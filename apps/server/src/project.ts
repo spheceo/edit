@@ -1,7 +1,6 @@
 // The small edit-core helpers the server calls per item, ported rather than
-// called across the native boundary (plan §1.3: they run in tight loops), plus
-// the edit primitives other packages use from mcp.rs. Each is pinned against
-// edit-core by a parity test once the addon lands (`sampleKeyframes` etc.).
+// called across the native boundary (they run in tight loops), plus
+// the edit primitives other packages use.
 //
 // edit-core keeps keyframes in f32; `sample` and its helpers round every step
 // to f32 (Math.fround), so they give the same numbers the renderer does.

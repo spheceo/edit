@@ -152,11 +152,6 @@ export function display(x: number): string {
   return plain(String(x));
 }
 
-/** Rust's `{}` of an f32. */
-export function display32(x: number): string {
-  return display(f32(x));
-}
-
 /** A JS number's text without an exponent ("1e-7" → "0.0000001"). */
 function plain(text: string): string {
   const match = /^(-?)(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(text);

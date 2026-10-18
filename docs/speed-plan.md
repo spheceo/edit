@@ -2,17 +2,13 @@
 
 Cloud functionality remains required for every project. [New cloud-first opportunities](cloud-first-opportunities.md) explores independent ways to reduce work, move cloud transfers off the Mac, share source-time artifacts, compact subtitles and overlap delivery with rendering.
 
-Implementation review: [speed and subtitles audit](speed-subtitles-audit.md) (Oct 17). Read its corrections and revised order alongside this proposal: some items already exist, and several performance explanations and targets still need controlled measurements.
-
 Changes to make Edit much faster from import to export, more reliable, lighter on RAM and disk, and good over Tailscale. Numbers come from `~/.edit/logs/edit.log` (Oct 15–17) unless noted.
 
-Status: proposed; Workers Paid is now available (confirmed by the user). **Desktop/server changes start after the TS rewrite (`apps/server`) is done.** The cloud rollout in section 7 can establish its relay foundation and isolated transfer tests independently; desktop integration lands in `apps/server`. Engine items land in `crates/edit-engine` (the Rust that stays); nothing new goes into `crates/edit`. Cloud items land in `apps/relay`, reusing R2 and the existing Convex registry.
+Status: in progress (see *Progress*); Workers Paid is available. Server items land in `apps/server`, engine items in `crates/edit-engine`, cloud items in `apps/relay` (reusing R2 and the existing Convex registry). File references in the tables are to the code as it was when the plan was written.
 
 ## Progress (Oct 18)
 
 Landed on `main` after the rewrite. **Measured end to end on Young Actress** (29 min, the same steps as the Oct 17 baseline, the file remuxed so nothing came from cache): link on Drive **2185 s → 1096 s** (36.4 → 18.3 min), correct subtitles 1229 s → 696 s. Download 174 → 161, import 466 → 265, transcription 73 → 40, watch 101 → 56 (+4 s for who is who), subtitles 219 + 196 (a second run to fix the cast by hand) → 170, export 864 → 306 (sound 211 → 34, picture 558 → 256, join 95 → 11), Drive 92 → 94. Numbers in `/tmp/subsrun/baseline.json` and `rerun.json`.
-
-
 
 - **0.1 done.** Media back on the internal disk: 53 files copied with their exact modification times (so every cache still matches), `edit media off`. The LaCie copies were checked against the internal ones and deleted on Oct 18 (1.9 GB).
 - **1.1, first part.** Background FFmpeg gives way to exports: previews and proxies (`media::run_background`) and smoothing are stopped while an export runs and continued after. Smoothing has its own lane, so imports never wait behind it. Not yet: priorities across lanes, RAM budgets.

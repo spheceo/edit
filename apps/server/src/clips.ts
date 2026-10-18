@@ -263,11 +263,6 @@ export function clipFrom(value: unknown): Clip {
   return { ...own, type: tag, ...content } as unknown as Clip;
 }
 
-/** A clip as plain JSON (what Rust's `serde_json::to_value(&clip)` gave), to patch. */
-export function clipValue(clip: Clip): Record<string, unknown> {
-  return structuredClone(clip) as unknown as Record<string, unknown>;
-}
-
 /** `Vec<Keyframe>` from JSON. */
 export function keyframesFrom(value: unknown): Keyframe[] {
   return read({ vec: { struct: KEYFRAME } }, value) as Keyframe[];

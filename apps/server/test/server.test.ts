@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
-import * as nodePath from "node:path";
 
 import type { App } from "../src/app.ts";
 import { ExportRegistry } from "../src/exports.ts";
@@ -15,41 +14,12 @@ import { bindAddresses, parseSocketAddr, showAddress } from "../src/serve.ts";
 import { defaultExportPath } from "../src/server_seam.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 
-const ROOT = nodePath.join(import.meta.dir, "../../..");
-const SERVER_RS = `${ROOT}/crates/edit/src/server.rs`;
-const CLOUD_RS = `${ROOT}/crates/edit/src/cloud_projects.rs`;
-
-/** "METHOD /path" for every `.route(...)` in a Rust router's source. */
-function rustRoutes(source: string): string[] {
-  const out: string[] = [];
-  const starts = [...source.matchAll(/\.route\(\s*"([^"]+)"/g)];
-  for (const [index, start] of starts.entries()) {
-    const from = start.index! + start[0].length;
-    const next = starts[index + 1]?.index ?? source.length;
-    let segment = source.slice(from, next);
-    const stop = segment.search(/\.merge\(|\.fallback\(|\n\}/);
-    if (stop >= 0) segment = segment.slice(0, stop);
-    for (const method of segment.matchAll(/(?:^|[\s(.,])(get|post|put|delete)\(/g)) {
-      out.push(`${method[1]!.toUpperCase()} ${start[1]}`);
-    }
+test("the router serves the API's routes", () => {
+  const served = buildRouter().list();
+  expect(served.length).toBeGreaterThan(70);
+  for (const route of ["GET /api/health", "GET /api/projects/{id}", "PUT /api/projects/{id}", "POST /mcp", "POST /api/projects/{id}/cloud/open"]) {
+    expect(served).toContain(route);
   }
-  return out;
-}
-
-test.skipIf(!fs.existsSync(SERVER_RS))("every route in server.rs's router is served", async () => {
-  const server = await Bun.file(SERVER_RS).text();
-  const router = server.slice(server.indexOf("pub fn router("), server.indexOf("async fn log_requests"));
-  const cloud = await Bun.file(CLOUD_RS).text();
-  const cloudRouter = cloud.slice(cloud.indexOf("pub fn routes()"));
-  const expected = [...rustRoutes(router), ...rustRoutes(cloudRouter.slice(0, cloudRouter.indexOf("\n}\n") + 3))];
-  expect(expected.length).toBeGreaterThan(70);
-  // Routes added after the switch-over to this server, which server.rs never had.
-  const sinceRust = ["GET /api/projects/{id}/exports", "POST /api/projects/{id}/exports/delete", "POST /api/cache/clean", "POST /api/projects/{id}/import-drive"];
-  const served = buildRouter()
-    .list()
-    .filter((route) => !sinceRust.includes(route));
-  expect(served.filter((route) => !expected.includes(route))).toEqual([]);
-  expect(expected.filter((route) => !served.includes(route))).toEqual([]);
 });
 
 test("concurrent_uploads_reserve_different_names", async () => {

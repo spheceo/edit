@@ -1,4 +1,4 @@
-// The export dialog's model: options (as crates/edit/src/export.rs reads
+// The export dialog's model: options (as apps/server/src/exports.ts reads
 // them), presets, chapters from the script, and what an export will make.
 
 import type { Project, Sections } from "./types";

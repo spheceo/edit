@@ -237,9 +237,6 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
   ["map_view", mapView],
 ];
 
-/** The names of the tools this package answers. */
-export const MEDIA_TOOLS = TOOLS.map(([name]) => name);
-
 /** Registers WP8's tools with the MCP server (once; later calls do nothing). */
 export function registerMediaTools(): void {
   for (const [name, handler] of TOOLS) {

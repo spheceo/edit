@@ -21,7 +21,7 @@ import * as mediaDrive from "./media_drive/layout.ts";
 import type { Clip, DriveFile, Project, ProjectSummary, Settings, Style } from "./model.ts";
 import { native, type Prepared } from "./native/index.ts";
 import { extension, fileStem, join } from "./paths.ts";
-import { duration, mediaOf, newProject } from "./project.ts";
+import { clipEnd, duration, mediaOf, newProject } from "./project.ts";
 import { asSerdeRead, jsonForSerde } from "./rust.ts";
 
 export { nextFileId, nowMs, writeAtomic } from "./files.ts";
@@ -646,7 +646,72 @@ function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
   if (missing.length > 0) summary.missing = missing.length;
   const remote = usedMedia(project).filter((media) => media.cloud !== undefined && media.cloud !== null && !isRegularFile(media.path)).length;
   if (remote > 0) summary.remote = remote;
+  summary.cover_frame = coverFrame(project, `${project.id}:${modifiedMs}`);
   return summary;
+}
+
+/**
+ * The frame a project's card shows: picked at random (by `seed`, so the same
+ * until the project changes) from the stretches where the footage is simply
+ * running: footage on screen whose file is on this machine (a frame of
+ * missing footage is black), no narration playing (a cut-in's B-roll), no
+ * card, picture, map or transition (a short adjustment; long ones, a
+ * redaction or a grade, are part of the footage's look), and at least a
+ * second from any cut. Null when there's no such stretch.
+ */
+export function coverFrame(project: Project, seed: string): number | null {
+  const fps = project.settings.fps;
+  const visible = new Set(project.tracks.filter((track) => !track.hidden).map((track) => track.id));
+  const here = new Map<string, boolean>();
+  const footage = (mediaId: string) => {
+    if (!here.has(mediaId)) {
+      const media = mediaOf(project, mediaId);
+      // A map shot is a graphic, not the footage.
+      here.set(mediaId, media !== undefined && media.kind === "video" && !media.name.startsWith("map-") && isRegularFile(media.path));
+    }
+    return here.get(mediaId)!;
+  };
+  // [start, end, footage step, busy step] for every clip that matters, and every cut.
+  const spans: [number, number, number, number][] = [];
+  const cuts: number[] = [];
+  for (const clip of project.clips) {
+    if (!visible.has(clip.track)) continue;
+    const [start, end] = [clip.start, clipEnd(clip)];
+    if (clip.type === "audio") {
+      if (clip.name === "Voice-over") spans.push([start, end, 0, 1]);
+    } else if (clip.type === "video") {
+      cuts.push(start, end);
+      spans.push([start, end, footage(clip.media) ? 1 : 0, footage(clip.media) ? 0 : 1]);
+    } else if (clip.type === "solid" || clip.type === "waveform" || (clip.type === "adjustment" && end - start <= 3 * fps)) {
+      cuts.push(start, end);
+      spans.push([start, end, 0, 1]);
+    }
+  }
+  const events = spans.flatMap(([start, end, shown, busy]): [number, number, number][] => [
+    [start, shown, busy],
+    [end, -shown, -busy],
+  ]);
+  for (const at of cuts) events.push([at, 0, 0]);
+  events.sort((a, b) => a[0] - b[0]);
+  const plain: [number, number][] = [];
+  let [shown, busy] = [0, 0];
+  for (const [index, [at, shownStep, busyStep]] of events.entries()) {
+    shown += shownStep;
+    busy += busyStep;
+    const next = events[index + 1]?.[0];
+    if (next === undefined || next === at) continue;
+    if (shown > 0 && busy === 0 && next - at > 2 * fps) plain.push([at + fps, next - fps]);
+  }
+  const total = plain.reduce((sum, [from, to]) => sum + (to - from), 0);
+  if (total <= 0) return null;
+  let hash = 2166136261;
+  for (const c of seed) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619) >>> 0;
+  let at = hash % total;
+  for (const [from, to] of plain) {
+    if (at < to - from) return from + at;
+    at -= to - from;
+  }
+  return null;
 }
 
 /** The media the timeline plays (a clip uses them). */

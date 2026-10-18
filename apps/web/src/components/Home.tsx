@@ -26,7 +26,7 @@ export function Home() {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>("all");
   const [style, setStyle] = useState<Style | null>(null);
-  const [subtitledOpen, setSubtitledOpen] = useState(() => localStorage.getItem(SUBTITLED_OPEN) !== "0");
+  const [subtitledOpen, setSubtitledOpen] = useState(() => localStorage.getItem(SUBTITLED_OPEN) === "1");
   const toast = useEditor((state) => state.toast);
 
   const refresh = () => {
@@ -198,12 +198,16 @@ export function Home() {
 
             {showSubtitled && subtitled.length > 0 && (
               <section className="mt-9">
-                <button onClick={toggleSubtitled} className="group/title mb-3 flex items-center gap-1.5">
-                  <ChevronRight size={14} className={cx("text-muted transition-transform", subtitledOpen && "rotate-90")} />
-                  <span className="text-[12px] font-medium tracking-wide text-muted uppercase group-hover/title:text-fg">Subtitled videos</span>
-                  <span className="text-[12px] text-faint tabular">{subtitled.length}</span>
-                </button>
-                {subtitledOpen && (
+                {kind === "subtitled" ? (
+                  <SectionTitle count={subtitled.length}>Subtitled videos</SectionTitle>
+                ) : (
+                  <button onClick={toggleSubtitled} className="group/title mb-3 flex items-center gap-1.5">
+                    <ChevronRight size={14} className={cx("text-muted transition-transform", subtitledOpen && "rotate-90")} />
+                    <span className="text-[12px] font-medium tracking-wide text-muted uppercase group-hover/title:text-fg">Subtitled videos</span>
+                    <span className="text-[12px] text-faint tabular">{subtitled.length}</span>
+                  </button>
+                )}
+                {(subtitledOpen || kind === "subtitled") && (
                   <div className="overflow-hidden rounded-xl border border-line">
                     {subtitled.map((project) => (
                       <ProjectRow key={project.id} {...cardProps(project)} />
@@ -242,17 +246,42 @@ function SectionTitle({ children, count }: { children: React.ReactNode; count?: 
 }
 
 /**
- * The card's picture: a frame picked at random from the body of the edit
- * (between 10% and 85% of the way, past the intro's dips), the same one until
- * the project changes, so the home screen doesn't reshuffle on every visit.
+ * The card's picture: the server's pick (plain footage running, no cut-in,
+ * graphic or cut on screen, its file here; the same until the project
+ * changes), null when it has none.
  */
-function coverFrame(project: ProjectSummary) {
-  const total = project.duration_frames;
-  const from = Math.min(total - 1, Math.max(Math.round(total * 0.1), Math.round(project.fps)));
-  const to = Math.max(from, Math.round(total * 0.85));
-  let hash = 2166136261;
-  for (const c of `${project.id}:${project.modified_ms}`) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619) >>> 0;
-  return from + (hash % (to - from + 1));
+function coverFrame(project: ProjectSummary): number | null {
+  if (project.duration_frames <= 0) return null;
+  return project.cover_frame ?? null;
+}
+
+/** A card with no picture: a dark wash of its style's colour. */
+function wash(style: Style): string {
+  const colour = STYLE_COLOURS[style] ?? STYLE_COLOURS.bodycam;
+  return `radial-gradient(120% 90% at 20% 0%, ${colour}33 0%, transparent 60%), radial-gradient(90% 80% at 100% 100%, ${colour}1f 0%, transparent 55%), #0b0b0b`;
+}
+
+interface NoticeProps {
+  tone: "warn" | "bad" | "info";
+  text: string;
+  title: string;
+}
+
+/** A small chip on a card saying what's off: footage missing, footage still in the cloud. */
+function Notice({ tone, text, title }: NoticeProps) {
+  const Icon = tone === "info" ? CloudDownload : TriangleAlert;
+  return (
+    <span
+      title={title}
+      className={cx(
+        "flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium",
+        tone === "info" ? "text-fg" : tone === "bad" ? "text-red-300" : "text-amber-300",
+      )}
+    >
+      <Icon size={12} />
+      {text}
+    </span>
+  );
 }
 
 /** What a project's card says about it, and what can be done to it (rename, delete, move to cloud). */
@@ -371,7 +400,19 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
       <MoveToCloud project={project} open={moving} onClose={() => setMoving(false)} onMoved={onChanged} />
     </>
   );
-  return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, open, menu, driveMenu, nameInput, dialogs };
+  // What's worth a word on the card, as a chip beside "On Drive".
+  const notice: NoticeProps | null = project.problem
+    ? { tone: "bad", text: "Can't be opened", title: project.problem }
+    : missing > 0
+      ? {
+          tone: "warn",
+          text: mostlyMissing ? "Footage missing" : `${missing} ${missing === 1 ? "file" : "files"} missing`,
+          title: `${missing} of ${used} footage files the edit plays aren't on this Mac (deleted, or on a drive that isn't plugged in)`,
+        }
+      : mostlyRemote
+        ? { tone: "info", text: "In the cloud", title: "Its footage downloads when you open it" }
+        : null;
+  return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, notice, open, menu, driveMenu, nameInput, dialogs };
 }
 
 interface CardProps {
@@ -390,7 +431,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big =
   const card = useProject(project, onChanged, cloudOn, status, remote);
   const seconds = project.duration_frames / project.fps;
   const styleLabel = STYLES.find((option) => option.value === project.style)?.label ?? "Bodycam";
-  const picture = !project.problem && !card.mostlyMissing && !card.mostlyRemote && project.duration_frames > 0;
+  const picture = !project.problem && coverFrame(project) !== null;
   return (
     <>
       <motion.div
@@ -415,36 +456,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big =
               onLoad={(event) => event.currentTarget.classList.remove("opacity-0")}
             />
           ) : (
-            <div className="absolute inset-x-0 top-0 flex h-[58%] flex-col items-center justify-center gap-1.5 px-6 text-center">
-              {project.problem ? (
-                <>
-                  <TriangleAlert size={20} className="text-amber-400" />
-                  <span className="text-[12.5px] font-medium text-fg">Can't be opened</span>
-                </>
-              ) : card.mostlyMissing ? (
-                <>
-                  <TriangleAlert size={20} className="text-amber-400" />
-                  <span className="text-[12.5px] font-medium text-fg" title={`${card.missing} of ${card.used} files aren't on this Mac`}>
-                    Footage missing
-                  </span>
-                  {big && (
-                    <span className="text-[11.5px] text-muted tabular">
-                      {card.missing} of {card.used} files aren't on this Mac
-                    </span>
-                  )}
-                </>
-              ) : card.mostlyRemote ? (
-                <>
-                  <CloudDownload size={20} className="text-muted" />
-                  <span className="text-[12.5px] font-medium text-fg" title="Downloads when you open it">
-                    Footage in the cloud
-                  </span>
-                  {big && <span className="text-[11.5px] text-muted">Downloads when you open it</span>}
-                </>
-              ) : (
-                <Mark size={36} cut="#0a0a0a" />
-              )}
-            </div>
+            <div className="absolute inset-0" style={{ background: wash(project.style) }} />
           )}
           {/* The black gradient the title sits on. */}
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black via-black/70 to-transparent" />
@@ -463,18 +475,13 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big =
               ) : (
                 <span className="truncate">
                   {styleLabel} · {shortDuration(seconds)} · {ago(project.modified_ms)}
-                  {card.missing > 0 && (!card.mostlyMissing || !big) && (
-                    <span className="text-amber-300">
-                      {" "}
-                      · {card.missing} {card.missing === 1 ? "file" : "files"} missing
-                    </span>
-                  )}
                 </span>
               )}
             </div>
           </div>
-          {(card.cloudNews || card.drive) && (
+          {(card.cloudNews || card.drive || card.notice) && (
             <div className="absolute top-2.5 left-2.5 flex gap-1">
+              {card.notice && <Notice {...card.notice} />}
               {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
               {card.drive && (
                 <button
@@ -505,26 +512,21 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big =
 function ProjectRow({ project, onChanged, cloudOn, status, remote }: CardProps) {
   const card = useProject(project, onChanged, cloudOn, status, remote);
   const seconds = project.duration_frames / project.fps;
-  const picture = !project.problem && !card.mostlyMissing && !card.mostlyRemote && project.duration_frames > 0;
+  const picture = !project.problem && coverFrame(project) !== null;
   return (
     <>
       <div onClick={card.open} className="group flex h-14 cursor-pointer items-center gap-3 border-t border-line px-3 first:border-t-0 hover:bg-hover">
         <div className="flex h-9 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-panel">
           {picture ? (
             <img src={`/api/projects/${project.id}/frame/${coverFrame(project)}.png?max=160&v=${project.modified_ms}`} loading="lazy" alt="" className="size-full object-cover" />
-          ) : card.mostlyRemote ? (
-            <CloudDownload size={14} className="text-muted" />
           ) : (
-            <TriangleAlert size={14} className="text-amber-400" />
+            <div className="size-full" style={{ background: wash(project.style) }} />
           )}
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           {card.nameInput ?? <div className="truncate font-medium">{project.name}</div>}
-          {(project.problem || card.missing > 0 || card.cloudNews) && (
-            <div className="truncate text-[11.5px] text-amber-300/90">
-              {project.problem ?? (card.missing > 0 ? `${card.missing} of ${card.used} files missing` : card.editor ? `${card.editor} is editing` : "Not synced")}
-            </div>
-          )}
+          {card.notice && <Notice {...card.notice} />}
+          {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
         </div>
         <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{shortDuration(seconds)}</span>
         <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.modified_ms)}</span>
@@ -641,11 +643,18 @@ function CloudCard({ project, index, onChanged }: { project: CloudProject; index
         className="group cursor-pointer"
         onClick={() => navigate(`/p/${project.id}`)}
       >
-        <div className="relative flex aspect-video flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-dashed border-line bg-panel text-[12px] text-muted transition-[border-color] duration-200 group-hover:border-line-strong">
-          <CloudDownload size={22} />
-          Open to download
-          <div className="absolute top-2 left-2 flex gap-1">
-            <CloudBadge editor={project.holder} />
+        <div className="relative aspect-video overflow-hidden rounded-xl border border-line bg-panel transition-[border-color] duration-200 group-hover:border-line-strong">
+          <div className="absolute inset-0" style={{ background: wash((summary.style as Style | undefined) ?? "bodycam") }} />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black via-black/70 to-transparent" />
+          <div className="absolute inset-x-0 bottom-0 p-3.5">
+            <div className="line-clamp-2 text-[14px] leading-snug font-semibold tracking-[-0.01em] text-white drop-shadow">{project.name}</div>
+            <div className="mt-1 truncate text-[12px] text-white/70 tabular">
+              {[style, seconds !== null ? shortDuration(seconds) : null, `${ago(project.updated_ms)} by ${project.updated_by}`].filter(Boolean).join(" · ")}
+            </div>
+          </div>
+          <div className="absolute top-2.5 left-2.5 flex gap-1">
+            <Notice tone="info" text="In the cloud" title="Not on this Mac yet: opening it downloads it" />
+            {project.holder && <CloudBadge editor={project.holder} />}
           </div>
           <button
             title="More"
@@ -653,16 +662,10 @@ function CloudCard({ project, index, onChanged }: { project: CloudProject; index
               event.stopPropagation();
               toggleMenu(event.currentTarget, [{ label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) }], { width: 160 });
             }}
-            className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-md bg-black/70 text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-fg"
+            className="absolute top-2.5 right-2.5 flex size-7 items-center justify-center rounded-md bg-black/70 text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-fg"
           >
             <Ellipsis size={15} />
           </button>
-        </div>
-        <div className="mt-2.5 px-0.5">
-          <div className="truncate font-medium">{project.name}</div>
-          <div className="mt-0.5 truncate text-[12px] text-muted tabular">
-            {[style, seconds !== null ? shortDuration(seconds) : null, `${ago(project.updated_ms)} by ${project.updated_by}`].filter(Boolean).join(" · ")}
-          </div>
         </div>
       </motion.div>
       <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>

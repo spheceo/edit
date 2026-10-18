@@ -107,6 +107,8 @@ export interface ProjectSummary {
   missing?: number;
   /** Media in the cloud not fetched to this machine yet (they come when it opens). */
   remote?: number;
+  /** The frame its card shows: plain footage running (no cut-in, graphic or transition on screen) whose file is here; null when there's none. */
+  cover_frame?: number | null;
 }
 
 export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";

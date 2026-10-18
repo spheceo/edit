@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import type { Project } from "../src/model.ts";
-import { Store, UpdateError, isSubtitled, type CloudHook } from "../src/store.ts";
+import { Store, UpdateError, coverFrame, isSubtitled, type CloudHook } from "../src/store.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
 const SETTINGS = { width: 1920, height: 1080, fps: 30 };
@@ -324,6 +324,51 @@ test("a project's summary counts the footage it plays that's gone", async () => 
     });
     const summary = store.list().find((one) => one.id === id)!;
     expect([summary.media_used, summary.missing, summary.remote]).toEqual([3, 1, 1]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a card's frame is plain footage running, never a cut-in, a graphic or a cut", async () => {
+  const { home, cleanup } = fixtureHome("cover-frame");
+  try {
+    const footage = `${home}/f.mp4`;
+    fs.writeFileSync(footage, "x");
+    const project = {
+      settings: { width: 1920, height: 1080, fps: 30 },
+      tracks: [
+        { id: "v1", kind: "video" },
+        { id: "v2", kind: "video" },
+        { id: "v3", kind: "video" },
+        { id: "a1", kind: "audio" },
+      ],
+      media: [
+        { id: "f", path: footage, kind: "video" },
+        { id: "gone", path: "/Volumes/Gone/g.mp4", kind: "video" },
+      ],
+      clips: [
+        // 0–300 footage with a cut-in card over 100–200; 300–600 missing footage; 600–900 footage, a subtitle over it,
+        // a redaction blur over all of it and a 12-frame flash at 760.
+        { type: "video", track: "v1", start: 0, duration: 300, media: "f" },
+        { type: "solid", track: "v2", start: 100, duration: 100 },
+        { type: "video", track: "v1", start: 300, duration: 300, media: "gone" },
+        { type: "video", track: "v1", start: 600, duration: 300, media: "f" },
+        { type: "text", track: "v2", start: 650, duration: 60 },
+        { type: "adjustment", track: "v2", start: 600, duration: 300 },
+        { type: "adjustment", track: "v3", start: 754, duration: 12 },
+        // Narration over 820–900: a cut-in.
+        { type: "audio", track: "a1", name: "Voice-over", start: 820, duration: 80 },
+      ],
+    } as unknown as Project;
+    project.media.forEach((media) => Object.assign(media, { name: media.id }));
+    const allowed = (frame: number) => (frame >= 30 && frame <= 70) || (frame >= 230 && frame <= 270) || (frame >= 630 && frame <= 724) || (frame >= 796 && frame <= 790);
+    for (const seed of ["a", "b", "c", "d", "e", "f", "g", "h"]) {
+      const frame = coverFrame(project, seed)!;
+      expect(allowed(frame), `${seed}: ${frame}`).toBe(true);
+    }
+    // Nothing plain: no cover.
+    project.clips = [project.clips[2]!];
+    expect(coverFrame(project, "a")).toBeNull();
   } finally {
     cleanup();
   }

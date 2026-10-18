@@ -135,32 +135,49 @@ pub fn analyse_in_background(cache: PathBuf, source: PathBuf) {
 
 pub fn analyse(cache: &Path, source: &Path) -> Result<Vec<u8>, String> {
     let light = crate::media::light_preview(cache, source);
-    let mut command = Command::new(crate::util::ffmpeg());
-    command.args(["-hide_banner", "-loglevel", "error"]);
-    // The light preview has a keyframe every half second: only those are decoded.
-    if light.is_some() {
-        command.args(["-skip_frame", "nokey"]);
-    }
-    command
-        .arg("-i")
-        .arg(light.as_deref().unwrap_or(source))
-        .args([
-            "-map",
-            "0:v:0",
-            "-vf",
-            &format!("fps=1,scale={WIDE}:{HIGH},format=gray"),
-            "-f",
-            "rawvideo",
-            "pipe:1",
-        ]);
-    // Background work: it waits while an export runs (now that imports start it).
-    let frames = crate::media::run_background(&mut command)?;
+    // A light preview that won't decode (one cut short) is no reason to skip
+    // the file: the original is read instead.
+    let frames = match light.as_deref().map(|light| grey_seconds(light, true)) {
+        Some(Ok(frames)) => frames,
+        Some(Err(error)) => {
+            crate::log::warn(
+                "media",
+                format!(
+                    "{}: its light preview won't decode ({error}); checking the original",
+                    source.display()
+                ),
+            );
+            grey_seconds(source, false)?
+        }
+        None => grey_seconds(source, false)?,
+    };
     Ok(frames
         .as_chunks::<{ WIDE * HIGH }>()
         .0
         .iter()
         .map(|frame| u8::from(censored(frame)))
         .collect())
+}
+
+/// A 128×72 grey frame a second of `file` (only its keyframes when `keyframes`:
+/// the light preview has one every half second). Background work: it waits
+/// while an export runs.
+fn grey_seconds(file: &Path, keyframes: bool) -> Result<Vec<u8>, String> {
+    let mut command = Command::new(crate::util::ffmpeg());
+    command.args(["-hide_banner", "-loglevel", "error"]);
+    if keyframes {
+        command.args(["-skip_frame", "nokey"]);
+    }
+    command.arg("-i").arg(file).args([
+        "-map",
+        "0:v:0",
+        "-vf",
+        &format!("fps=1,scale={WIDE}:{HIGH},format=gray"),
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]);
+    crate::media::run_background(&mut command)
 }
 
 /// B-roll (video above the footage track) that's mostly censored, from the

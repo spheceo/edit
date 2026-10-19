@@ -80,3 +80,14 @@ new_sqlite_classes = ["TranscriptionBudget"]
 name = "edit-drive-to-r2"
 binding = "DRIVE_TO_R2"
 class_name = "DriveToR2"
+
+# Independent of the existing Drive Workflow and transcription budget.
+# Disabled until MODAL_EXPORT_URL, MODAL_RENDER_VERSION, MODAL_WORKER_TOKEN
+# and an explicit MODAL_DAILY_BUDGET_USD are configured. MODAL_GPU=L4 by default.
+[[durable_objects.bindings]]
+name = "EXPORT_JOBS"
+class_name = "ExportJobs"
+
+[[migrations]]
+tag = "v2-export-jobs"
+new_sqlite_classes = ["ExportJobs"]

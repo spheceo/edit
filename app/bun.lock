@@ -7,6 +7,9 @@
     },
     "apps/relay": {
       "name": "edit-relay",
+      "dependencies": {
+        "@edit/types": "workspace:*",
+      },
       "devDependencies": {
         "wrangler": "^4.151.1",
       },

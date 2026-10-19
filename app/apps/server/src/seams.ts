@@ -19,6 +19,7 @@ import * as brollModule from "./broll.ts";
 import * as captionsModule from "./captions.ts";
 import * as cloudModule from "./cloud.ts";
 import * as cloudMediaModule from "./cloud_media.ts";
+import * as cloudExportsModule from "./cloud_exports.ts";
 import * as cloudProjectsModule from "./cloud_projects.ts";
 import * as driveModule from "./drive.ts";
 import * as editReviewModule from "./edit_review.ts";
@@ -94,11 +95,13 @@ export function isUnavailable(error: unknown): boolean {
 /** One export at a time; what was exported since the server started (exports.ts). */
 export interface Exports {
   /** Starts exporting `project` to `path` (or its default); returns where it goes. */
-  start(store: Store, library: Library, project: Project, options: ExportOptions, path: string | null): Promise<string>;
+  start(store: Store, library: Library, project: Project, options: ExportOptions, path: string | null, backend?: "cloud" | "local", cloudRequest?: string, cloudJob?: string): Promise<string>;
   /** Cancels project `id`'s export; whether one was running. */
   cancel(id: string): boolean;
   /** Whether any export is running (an update waits for it). */
   running(): boolean;
+  /** Local hardware contention only: cloud renders leave imports/analysis running. */
+  localRunning?(): boolean;
   /** Whether `path` is a file exported since the server started (only those are handed out). */
   exported(path: string): boolean;
 }
@@ -168,6 +171,7 @@ export interface CloudMediaSeam {
   driveOriginal(file: string, scratch: string, progress: (bytes: number, total: number | null, name: string) => void): Promise<Original>;
   /** `project` as an export of frames start..end reads it: cloud media pointing at their originals (presigned URLs). */
   forExport(project: Project, start: number, end: number, cache: string): Promise<[Project, Originals]>;
+  forWorker(project: Project, start: number, end: number): Promise<{ project: Project; assets: import("@edit/types/worker").WorkerAsset[] }>;
   /** Puts a file from this machine in the cloud (deduplicated by content) and returns the media to add; footage's uploads finish in the background. */
   importLocal(cache: string, path: string, probe: Probe, name: string): Promise<Made>;
   /** Resolves once the background uploads importing `file` are done: whether they all went up. */
@@ -211,6 +215,7 @@ export interface CloudSeam {
 
 // cloud.ts, cloud_projects.ts and cloud_media.ts.
 export const cloudMedia: CloudMediaSeam = cloudMediaModule;
+export const cloudExports = cloudExportsModule;
 export const cloudProjects: CloudProjectsSeam = {
   delete: (app, id) => cloudProjectsModule.remove(app, id),
   routes: (router) => cloudProjectsModule.routes(router),

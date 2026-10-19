@@ -10,7 +10,7 @@ import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
 import { catchBugsAsync } from "./guard.ts";
 import type { ExportOptions, Project } from "./model.ts";
-import { native, type ExportJob } from "./native/index.ts";
+import { native } from "./native/index.ts";
 import { canonical, fileName, join, parent } from "./paths.ts";
 import { duration } from "./project.ts";
 import { fixed, jsonForSerde } from "./rust.ts";
@@ -25,7 +25,10 @@ interface Running {
   /** Its entry in the jobs a restart resumes. */
   key: string;
   cancelled: boolean;
-  job: ExportJob | null;
+  job: { cancel(): void } | null;
+  remote: boolean;
+  cloudRequest: string;
+  cloudJob?: string;
   /** The timeline kept for a restart (`snapshotFile`), removed when it ends. */
   snapshot: string | null;
 }
@@ -145,6 +148,10 @@ export class ExportRegistry implements seams.Exports {
     return this.jobs.size > 0;
   }
 
+  localRunning(): boolean {
+    return [...this.jobs.values()].some(job => !job.remote);
+  }
+
   cancel(project: string): boolean {
     const running = this.jobs.get(project);
     if (running === undefined) return false;
@@ -164,6 +171,9 @@ export class ExportRegistry implements seams.Exports {
     project: Project,
     options: ExportOptions,
     output: string,
+    backend?: "cloud" | "local",
+    cloudRequest: string = crypto.randomUUID(),
+    cloudJob?: string,
   ): Promise<string> {
     const addon = native();
     const { plan } = addon.exportPlan({ json: jsonForSerde(project) }, options);
@@ -192,9 +202,12 @@ export class ExportRegistry implements seams.Exports {
         throw new Error("export would overwrite source footage; choose another file");
       }
     }
-    if (this.jobs.size > 0) {
+    const remote = backend === "cloud" || (backend !== "local" && seams.cloudExports.enabled());
+    if (!remote && this.localRunning()) {
       throw new Error("an export is already running; wait for it or cancel it before starting another");
     }
+    if (this.jobs.has(project.id)) throw new Error("this project already has an export running");
+    if ([...this.jobs.values()].some(job => job.output === path)) throw new Error("another export is writing this output path");
     let snapshot: string | null = null;
     if (this.home !== null) {
       snapshot = snapshotFile(this.home, project.id);
@@ -206,8 +219,9 @@ export class ExportRegistry implements seams.Exports {
         snapshot = null;
       }
     }
-    const key = jobs.begin(this.home, "export", project.id, snapshot === null ? { options, output: path } : { options, output: path, snapshot });
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot };
+    const args = { options, output: path, backend: remote ? "cloud" : "local", cloudRequest, ...(cloudJob === undefined ? {} : { cloudJob }), ...(snapshot === null ? {} : { snapshot }) };
+    const key = jobs.begin(this.home, "export", project.id, args);
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, remote, cloudRequest, cloudJob };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -243,6 +257,13 @@ export class ExportRegistry implements seams.Exports {
     let result: { ok: true } | { ok: false; error: string };
     try {
       await catchBugsAsync("the export", async () => {
+        if (running.remote) {
+          await seams.cloudExports.run(project, options, plan, output, () => running.cancelled, progress => emit("running", progress), running.cloudRequest, {
+            id: running.cloudJob,
+            accepted: id => { running.cloudJob = id; jobs.patch(this.home, running.key, { cloudJob: id }); },
+          });
+          return;
+        }
         // Cloud footage: the originals, not the proxies (read from R2 for the export).
         let exported = project;
         let originals: seams.Originals | null = null;

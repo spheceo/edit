@@ -158,7 +158,7 @@ export function start(home: string, host: string | null, port: number): { app: A
     services: { exports: new ExportRegistry(home), updater: new update.Updater(home) },
   });
   // Smoothing waits while an export runs (previews and proxies do in the addon).
-  pauseForExports(() => app.exports.running());
+  pauseForExports(() => app.exports.localRunning?.() ?? app.exports.running());
   // Slowed cut-in shots are smoothed unless asked not to, where it takes seconds.
   setSmoothByDefault(app.native.smoothSupported());
   // The cache kept to what's used.
@@ -228,11 +228,11 @@ function resumeJobs(app: App): void {
   };
   void jobs.resume(app.store.home, {
     export: async (job) => {
-      const { options, output } = job.args as { options: ExportOptions; output: string };
+      const { options, output, backend, cloudRequest, cloudJob } = job.args as { options: ExportOptions; output: string; backend?: "cloud" | "local"; cloudRequest?: string; cloudJob?: string };
       // The timeline it was started with, not edits made since.
       const current = project(job.project);
       const asked = resumeSnapshot(app.store.home, job.project, job.args) ?? current;
-      await app.exports.start(app.store, app.library, asked, options, output);
+      await app.exports.start(app.store, app.library, asked, options, output, backend, cloudRequest, cloudJob);
     },
     drive: (job) => {
       const { path } = job.args as { path: string };

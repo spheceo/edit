@@ -32,6 +32,11 @@ pub fn new_renderer(width: u32, height: u32) -> Result<Renderer, String> {
         ..Default::default()
     }))
     .map_err(|error| format!("no GPU available: {error}"))?;
+    if std::env::var("EDIT_REQUIRE_GPU").as_deref() == Ok("1")
+        && adapter.get_info().device_type == wgpu::DeviceType::Cpu
+    {
+        return Err("the cloud worker has no hardware graphics adapter".to_owned());
+    }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("edit native"),
         ..Default::default()
@@ -181,11 +186,15 @@ impl VideoReader {
             ])
             .args(crate::util::url_args(&self.source.key.path))
             // A cloud original read from R2: decoded on the Mac's media engine.
-            .args(if crate::util::is_url(&self.source.key.path) {
-                &["-hwaccel", "videotoolbox"][..]
-            } else {
-                &[]
-            })
+            .args(
+                if !self.source.still && std::env::var("EDIT_NVDEC").as_deref() == Ok("1") {
+                    &["-hwaccel", "cuda"][..]
+                } else if cfg!(target_os = "macos") && crate::util::is_url(&self.source.key.path) {
+                    &["-hwaccel", "videotoolbox"][..]
+                } else {
+                    &[]
+                },
+            )
             .arg("-i")
             .arg(&self.source.key.path)
             .args([
@@ -1242,7 +1251,10 @@ pub fn export_file(
     let settings = native_options(project, options, plan, false)?;
     #[cfg(not(target_os = "macos"))]
     let settings: Option<()> = None;
+    #[cfg(target_os = "macos")]
     let mut made = None;
+    #[cfg(not(target_os = "macos"))]
+    let made: Option<(Vec<crate::chunks::Chunk>, Option<String>)> = None;
     if let Some(settings) = settings {
         #[cfg(target_os = "macos")]
         match export_chunked(
@@ -2079,14 +2091,14 @@ enum Sink {
 
 impl Sink {
     /// Timeline frame `frame` (RGBA, rows `stride` bytes apart).
-    fn write(&mut self, frame: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
+    fn write(&mut self, _frame: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
         match self {
             #[cfg(target_os = "macos")]
             Sink::Native { writer, first } => {
-                writer.frame(frame - *first, pixels, stride, Order::Rgba)
+                writer.frame(_frame - *first, pixels, stride, Order::Rgba)
             }
             #[cfg(target_os = "macos")]
-            Sink::Chunks(chunks) => chunks.write(frame, pixels, stride),
+            Sink::Chunks(chunks) => chunks.write(_frame, pixels, stride),
             Sink::Pipe {
                 stdin,
                 width,
@@ -2103,10 +2115,10 @@ impl Sink {
         }
     }
 
-    fn finish(self, frames: i64) -> Result<(), String> {
+    fn finish(self, _frames: i64) -> Result<(), String> {
         match self {
             #[cfg(target_os = "macos")]
-            Sink::Native { mut writer, .. } => writer.finish(frames),
+            Sink::Native { mut writer, .. } => writer.finish(_frames),
             #[cfg(target_os = "macos")]
             Sink::Chunks(chunks) => chunks.finish(),
             Sink::Pipe { mut stdin, .. } => stdin

@@ -1384,6 +1384,12 @@ function isSome<T>(value: T | null | undefined): value is T {
 export const RESEARCH =
   "The script is imported and laid out. Research the case now (RESEARCH in your house style): start from the script and the transcripts, find the news articles about this case, check each matches and save it, then collect images of the scene, the people involved and the vehicles, and weed out anything off-target so only real candidates wait for review. Don't change the timeline. Finish with a short summary: the key facts the articles add, how many articles you saved and how many images are waiting.";
 
+// Transfer slots are independent from local media work and cloud exports.
+// Across projects, at most three Drive→R2 jobs are followed at once. Local
+// excerpt encodes keep a lane of their own rather than fighting for the Mac.
+const cloudDownloads = new mediaModule.Semaphore(3);
+const cloudExcerptLane = new mediaModule.Semaphore(1);
+
 /**
  * Downloads the script's footage and lays the edit out. Safe to call again:
  * finished downloads are reused and placed blocks are skipped. Returns the
@@ -1402,8 +1408,8 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
   const work = async () => {
     // As tokio::spawn: the job runs after the caller has answered with it (files still queued).
     await Promise.resolve();
-    const done: [string, Excerpt[]][] = [];
-    for (const [index, file] of files.entries()) {
+    const fetched: ([string, Excerpt[]] | undefined)[] = new Array(files.length);
+    const fetchOne = async (index: number, file: string) => {
       setFileState(app, id, index, "downloading");
       try {
         const [bytes, name, cut] = cloudEnabled()
@@ -1418,7 +1424,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
           if (name === null) delete entry.name;
           else entry.name = name;
         });
-        done.push([file, cut]);
+        fetched[index] = [file, cut];
       } catch (error) {
         if (isBug(error)) throw error;
         app.scripts.set(app, id, (job) => {
@@ -1428,7 +1434,13 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
           entry.error = diag.messageOf(error);
         });
       }
+    };
+    if (cloudEnabled() && process.env.EDIT_PARALLEL_DOWNLOADS === "1") {
+      await Promise.all(files.map((file, index) => cloudDownloads.with(() => fetchOne(index, file))));
+    } else {
+      for (const [index, file] of files.entries()) await fetchOne(index, file);
     }
+    const done = fetched.filter((file): file is [string, Excerpt[]] => file !== undefined);
     app.scripts.set(app, id, (job) => {
       job.state = "placing";
     });
@@ -1562,7 +1574,7 @@ async function footageToCloud(app: App, id: string, index: number, file: string)
     const ranges = live === null ? [] : fileRanges(live.project, file);
     const cache = app.store.cacheDir();
     const cutUp = await diag.timeOnAsync("script", "script: cloud excerpts", original.key, () =>
-      seams.cloudMedia.driveExcerpts(cache, original, ranges, local),
+      cloudExcerptLane.with(() => seams.cloudMedia.driveExcerpts(cache, original, ranges, local)),
     );
     return [original.size, original.name, cutUp];
   } finally {

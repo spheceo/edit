@@ -1,6 +1,7 @@
 import { cloud, type CloudEnv } from "./cloud";
 
 export { DriveToR2 } from "./jobs";
+export { ExportJobs } from "./exports";
 
 declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> } };
 

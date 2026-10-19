@@ -1301,6 +1301,38 @@ export async function forExport(project: Project, start: number, end: number, ca
   return [out, originals];
 }
 
+/** Freeze only the assets this export plays. Cloud footage stays in R2;
+ * local graphics/sounds are content-addressed once, three files at a time.
+ * ETags pin originals that another import might replace during the export.
+ */
+export async function forWorker(project: Project, start: number, end: number): Promise<{ project: Project; assets: import("@edit/types/worker").WorkerAsset[] }> {
+  const out = structuredClone(project) as Project;
+  const used = usedMedia(project, start, end);
+  const assets: import("@edit/types/worker").WorkerAsset[] = [];
+  for (let first = 0; first < used.length; first += 3) {
+    const batch = await Promise.all(used.slice(first, first + 3).map(async id => {
+      const media = project.media.find(m => m.id === id);
+      if (!media) throw new Error(`missing export media ${id}`);
+      let key = media.cloud?.original;
+      if (!key) {
+        if (!isFile(media.path)) throw new Error(`${media.name} must finish uploading before a cloud export`);
+        const digest = await sha256File(media.path);
+        key = `edit/exports/assets/${digest}.${extensionOf(media.path).replace(/^\./, "") || "bin"}`;
+        if (await cloud.head(key) === null) await cloud.uploadFile(media.path, key);
+        // A file being rendered/replaced while it uploads isn't a snapshot.
+        if (await sha256File(media.path) !== digest) throw new Error(`${media.name} changed while preparing the cloud export; try again`);
+      }
+      const head = await cloud.head(key);
+      if (!head || !head.etag || head.size <= 0) throw new Error(`${media.name} has not finished uploading to the cloud`);
+      return { media: id, key, size: head.size, etag: head.etag };
+    }));
+    assets.push(...batch);
+  }
+  // No workstation paths or expiring links are persisted in the manifest.
+  for (const media of out.media) media.path = `asset:${media.id}`;
+  return { project: out, assets };
+}
+
 // ---------------------------------------------------------------------------
 // Sound copies (speed-plan 4.1): an export of footage that's only in the
 // cloud decoded its sound over the network, clip by clip (11 minutes of a

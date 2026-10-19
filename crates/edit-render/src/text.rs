@@ -346,7 +346,27 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
         }
     }
     let block = [block_width, line_advance * lines.len() as f32];
-    let shown_box = match spec.shown_glyphs {
+    // A box grows with the glyphs a typewriter has put up so far, never ahead
+    // of them (word reveals come as `shown_glyphs` already): a typed tag's
+    // black box ran the whole line from its first letter ("*UNDER OATH*", an
+    // interrogation intro's hook lines). Glyphs come up in order, so it's the
+    // run revealed.
+    let revealed = placed
+        .iter()
+        .filter(|glyph| !glyph.ch.is_whitespace())
+        .take_while(|glyph| glyph_reveal(spec.animation, spec.local_frame, glyph.index, px).0 > 0.0)
+        .count();
+    let total = placed
+        .iter()
+        .filter(|glyph| !glyph.ch.is_whitespace())
+        .count();
+    let growing = spec.animation.preset == edit_core::TextPreset::Typewriter && revealed < total;
+    let shown_glyphs = match (spec.shown_glyphs, growing) {
+        (Some(shown), true) => Some(shown.min(revealed)),
+        (None, true) => Some(revealed),
+        (given, false) => given,
+    };
+    let shown_box = match shown_glyphs {
         None => [0.0, 0.0, block[0], block[1]],
         Some(shown) => {
             // Each line from its start to the end of its last glyph shown (all
@@ -469,5 +489,70 @@ fn line_offset(align: edit_core::TextAlign, block: f32, line: f32) -> f32 {
         edit_core::TextAlign::Left => 0.0,
         edit_core::TextAlign::Center => (block - line) / 2.0,
         edit_core::TextAlign::Right => block - line,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn geist() -> FontBook {
+        let mut book = FontBook::default();
+        book.add("Geist", 700, include_bytes!("../fonts/Geist-Bold.ttf"))
+            .unwrap();
+        book
+    }
+
+    fn spec<'a>(text: &'a str, animation: &'a TextAnimation, local_frame: f32) -> TextSpec<'a> {
+        TextSpec {
+            text,
+            align: edit_core::TextAlign::default(),
+            family: "Geist",
+            weight: 700,
+            px: 44.0,
+            color: Rgba([1.0, 1.0, 1.0, 1.0]),
+            tracking: 0.0,
+            line_height: 1.15,
+            animation,
+            local_frame,
+            shown_glyphs: None,
+            pad: 8.0,
+            max_width: None,
+            label: None,
+        }
+    }
+
+    #[test]
+    fn a_typed_line_s_box_grows_with_its_letters() {
+        let book = geist();
+        let mut cache = GlyphCache::default();
+        let typed = TextAnimation {
+            preset: edit_core::TextPreset::Typewriter,
+            duration: 1.0,
+            stagger: 1.0,
+        };
+        let mut width = |frame: f32| {
+            rasterize(&book, &mut cache, &spec("*UNDER OATH*", &typed, frame))
+                .unwrap()
+                .shown_box[2]
+        };
+        // Nothing typed yet: no box; a few letters: a short one; all of them: the whole line.
+        assert_eq!(width(-1.0), 0.0);
+        let (early, late, all) = (width(2.0), width(6.0), width(40.0));
+        assert!(
+            0.0 < early && early < late && late < all,
+            "{early} {late} {all}"
+        );
+        let still = TextAnimation {
+            preset: edit_core::TextPreset::None,
+            duration: 1.0,
+            stagger: 1.0,
+        };
+        assert_eq!(
+            rasterize(&book, &mut cache, &spec("*UNDER OATH*", &still, 0.0))
+                .unwrap()
+                .shown_box[2],
+            all
+        );
     }
 }

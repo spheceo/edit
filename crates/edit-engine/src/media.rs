@@ -924,6 +924,20 @@ fn hardware_video(
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn native_proxy(
+    _source: &Path,
+    _output: &Path,
+    _probe: &Probe,
+    _max_w: u32,
+    _max_h: u32,
+    _bitrate: u64,
+    _progress: impl FnMut(f32),
+) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
 pub fn native_proxy(
     source: &Path,
     output: &Path,

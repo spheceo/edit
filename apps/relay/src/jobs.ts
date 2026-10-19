@@ -219,6 +219,7 @@ export class DriveToR2 extends WorkflowEntrypoint<JobsEnv, DriveParams> {
     const env = (this as unknown as { env: JobsEnv }).env;
     const r2 = r2Of(env);
     const retries = { retries: { limit: 6, delay: "15 seconds", backoff: "exponential" }, timeout: "30 minutes" };
+    let ownedUpload: string | null = null;
     try {
       const unchanged = await step.do("check the file", retries, async () => {
         const meta = await driveMeta(params.file, await googleToken(env));
@@ -231,6 +232,7 @@ export class DriveToR2 extends WorkflowEntrypoint<JobsEnv, DriveParams> {
         return { key: params.key, size: params.size, name: params.name };
       }
       const upload = await step.do("start the upload", retries, () => createUpload(r2, params.key));
+      ownedUpload = upload;
       const parts = Math.ceil(params.size / (params.part ?? PART));
       const etags: string[] = new Array(parts);
       for (let first = 1; first <= parts; first += AT_ONCE) {
@@ -241,6 +243,11 @@ export class DriveToR2 extends WorkflowEntrypoint<JobsEnv, DriveParams> {
           }),
         );
       }
+      const stillSame = await step.do("verify the source version", retries, async () => {
+        const meta = await driveMeta(params.file, await googleToken(env));
+        return meta.version === params.version && meta.size === params.size;
+      });
+      if (!stillSame) throw new NonRetryableError("The Drive file changed during its copy; ask again.");
       const size = await step.do("finish the upload", retries, () => completeUpload(r2, params.key, upload, etags));
       if (size !== params.size) throw new NonRetryableError(`R2 has ${size} bytes, not the file's ${params.size}`);
       await step.do("register", retries, () => register(env, params, size));
@@ -248,7 +255,9 @@ export class DriveToR2 extends WorkflowEntrypoint<JobsEnv, DriveParams> {
     } catch (error) {
       // Nothing half-written stays in R2.
       await step.do("abort", async () => {
-        await abortUploads(r2, params.key);
+        // Another project may be copying the same file. Never sweep its
+        // upload while cleaning up this attempt's failure.
+        if (ownedUpload !== null) await r2Fetch(r2, "DELETE", params.key, { uploadId: ownedUpload }, { allow404: true });
         return true;
       });
       throw error;
@@ -291,8 +300,14 @@ export async function driveJob(body: Record<string, unknown>, env: JobsEnv, r2: 
     const id = attempt === 0 ? base : `${base.slice(0, 95)}-r${attempt}`;
     const found = await instance(env, id);
     if (found === null) {
-      await abortUploads(r2, key);
-      await workflow(env).create({ id, params });
+      try {
+        await workflow(env).create({ id, params });
+      } catch (error) {
+        // Two projects can discover a missing original together. Creating
+        // the same durable id is a join, not a failed cloud copy or a reason
+        // to stream a second original through the Mac.
+        if (await instance(env, id) === null) throw error;
+      }
       return { id, status: "queued", total: meta.size, name: meta.name };
     }
     const status = await found.status();

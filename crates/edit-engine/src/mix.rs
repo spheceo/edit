@@ -11,6 +11,7 @@
 //! normalisation measures the whole mix (EBU R128) and applies one gain kept
 //! under a -1 dBTP true peak. FFmpeg encodes the result once.
 
+#[cfg(target_os = "macos")]
 use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -18,7 +19,9 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use edit_core::{mute_gain, AudioSegment, Mute, MUTE_FADE_SECONDS};
+#[cfg(any(target_os = "macos", test))]
+use edit_core::{mute_gain, Mute};
+use edit_core::{AudioSegment, MUTE_FADE_SECONDS};
 
 pub const RATE: usize = 48_000;
 /// Frames mixed at a time (4 s: 1.5 MB of stereo float).

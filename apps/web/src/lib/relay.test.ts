@@ -137,6 +137,29 @@ describe("relay cloud endpoints", () => {
 });
 
 describe("relay cloud jobs: Drive → R2", () => {
+  it("joins concurrent imports of the same Drive version without aborting another upload", async () => {
+    const { driveJob } = await import("../../../relay/src/jobs");
+    const r2 = { host: "acct.r2.cloudflarestorage.com", bucket: "bucket", accessKeyId: "key", secret: "secret" };
+    let found: { id: string; status(): Promise<{ status: string }>; terminate(): Promise<void> } | null = null;
+    let starts = 0;
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "t" });
+      if (url.hostname === "www.googleapis.com") return Response.json({ name: "a.mp4", size: "10", md5Checksum: "version1" });
+      throw new Error("starting a shared copy must not sweep R2 multipart uploads");
+    });
+    const env = { GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r", DRIVE_TO_R2: {
+      async get() { if (!found) throw new Error("not found"); return found; },
+      async create({ id }: { id: string }) { starts++; if (found) throw new Error("already exists"); found = { id, status: async () => ({ status: "queued" }), terminate: async () => {} }; return found; },
+    } };
+    try {
+      const results = await Promise.all([driveJob({ file: "FILEabcdefgh", key: "edit/test/a.mp4" }, env, r2), driveJob({ file: "FILEabcdefgh", key: "edit/test/a.mp4" }, env, r2)]);
+      expect(results[0].id).toBe(results[1].id);
+      expect(starts).toBeGreaterThanOrEqual(1);
+      expect(results.every(result => result.status === "queued")).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   afterEach(() => { vi.unstubAllGlobals(); });
 
   it("copies a Drive file part by part into an R2 multipart upload, checks its size and registers it", async () => {
@@ -182,7 +205,7 @@ describe("relay cloud jobs: Drive → R2", () => {
     const job = new Job({}, env);
     const done = await job.run({ payload: { file: "FILEabcdefgh", key: "edit/originals/drive/FILEabcdefgh/a.mp4", name: "a.mp4", size: 25, version: "v1", part: 10 } }, step as never);
     expect(done).toEqual({ key: "edit/originals/drive/FILEabcdefgh/a.mp4", size: 25, name: "a.mp4" });
-    expect(steps).toEqual(["check the file", "look for a finished copy", "start the upload", "part 1 of 3", "part 2 of 3", "part 3 of 3", "finish the upload", "register"]);
+    expect(steps).toEqual(["check the file", "look for a finished copy", "start the upload", "part 1 of 3", "part 2 of 3", "part 3 of 3", "verify the source version", "finish the upload", "register"]);
     expect([...parts.keys()].sort()).toEqual([1, 2, 3]);
     expect(Array.from(parts.get(3)!)).toEqual([20, 21, 22, 23, 24]);
     expect(registered).toMatchObject({ path: "edit:putMedia", args: { source: "drive:FILEabcdefgh", originalKey: "edit/originals/drive/FILEabcdefgh/a.mp4", size: 25, originalReady: true, token: "svc" } });

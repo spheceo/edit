@@ -26,8 +26,9 @@
  *                                   AI_GATEWAY_API_KEY (the footage watcher); the gateway's answer as it is
  */
 import { cancelJob, driveJob, googleSignIn, jobStatus, type JobsEnv } from "./jobs";
+import { exportRoute, type ModalEnv } from "./exports";
 
-export interface CloudEnv extends JobsEnv {
+export interface CloudEnv extends JobsEnv, ModalEnv {
   /** Edit's bearer token for /v1/cloud/* (EDIT_RELAY_TOKEN on the app side). */
   CLOUD_TOKEN?: string;
   R2_ACCOUNT_ID?: string;
@@ -57,6 +58,7 @@ const AI_GATEWAY = "https://ai-gateway.vercel.sh/v1/chat/completions";
 const CONVEX_PATH = /^edit:[A-Za-z_][A-Za-z0-9_]*$/;
 
 export async function cloud(request: Request, url: URL, env: CloudEnv): Promise<Response> {
+  if (url.pathname.startsWith("/v1/cloud/exports/")) return exportRoute(request, url, env);
   if (!(await cloudAuthorized(request, env))) return json(401, { error: "This relay needs Edit's cloud token." });
   if (request.method !== "POST") return json(405, { error: `POST JSON to ${url.pathname}` });
   if (url.pathname === "/v1/cloud/ai/chat") return aiChat(request, env);

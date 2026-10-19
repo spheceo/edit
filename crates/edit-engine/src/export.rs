@@ -392,11 +392,27 @@ pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
             * scale)
             .round() as u64
     };
-    let hardware = options.hardware && encoders().videotoolbox;
+    // A cloud worker explicitly requests NVENC. Never silently pay for a GPU
+    // while encoding on the CPU; a missing encoder/driver fails the job.
+    let nvenc = std::env::var("EDIT_NVENC").as_deref() == Ok("1");
+    let hardware = options.hardware && encoders().videotoolbox && !nvenc;
     match format {
         Format::H264 | Format::Hevc => {
             let hevc = format == Format::Hevc;
-            if hardware {
+            if nvenc {
+                let rate = target.unwrap_or_else(|| quality_rate(if hevc { 0.6 } else { 1.0 }));
+                push(&["-c:v", if hevc { "hevc_nvenc" } else { "h264_nvenc" }]);
+                push(&[
+                    "-preset",
+                    "p5",
+                    "-tune",
+                    "hq",
+                    "-rc",
+                    "vbr",
+                    "-b:v",
+                    &rate.to_string(),
+                ]);
+            } else if hardware {
                 let rate = target.unwrap_or_else(|| quality_rate(if hevc { 0.6 } else { 1.0 }));
                 push(&[
                     "-c:v",

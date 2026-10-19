@@ -34,3 +34,7 @@ node_modules/
 
 # Release output (`just release`)
 /package/
+
+# Python worker tooling
+__pycache__/
+/apps/worker/.venv/

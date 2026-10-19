@@ -80,6 +80,16 @@ export function end(home: string | null, key: string): void {
   if (left.length !== jobs.length) write(home, left);
 }
 
+/** Add a durable remote receipt without resetting a job's resume counter. */
+export function patch(home: string | null, key: string, args: Record<string, unknown>): void {
+  if (home === null) return;
+  const jobs = read(home);
+  const job = jobs.find(job => job.key === key);
+  if (job === undefined) return;
+  Object.assign(job.args, args);
+  write(home, jobs);
+}
+
 /**
  * The jobs the last run left unfinished, to start again (each counted as a
  * resume), and the list emptied; those resumed too often are dropped, said.

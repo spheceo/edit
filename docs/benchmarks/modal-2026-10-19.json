@@ -1,0 +1,62 @@
+{
+  "build": "b2111a6a9fff12e25635fa406c5d7e741dcbfc71d38df4aee8b672552734ef93",
+  "relay": "https://edit-relay-modal-pilot.sphe-g-personal.workers.dev",
+  "modal_app": "edit-exports-pilot",
+  "jobs": [
+    {
+      "id": "export-6a46904568091ebc918af8452e8bce47891b959a7bd9f94f74080c94b28d19c5",
+      "status": "done",
+      "progress": 1,
+      "reservedUsd": 0.05,
+      "gpu": "L4",
+      "build": "b2111a6a9fff12e25635fa406c5d7e741dcbfc71d38df4aee8b672552734ef93",
+      "deadline": 1792412180588,
+      "started": 1792412041108,
+      "finished": 1792412060056,
+      "workerSeconds": 19.83856675,
+      "estimatedComputeUsd": 0.006148368607159999,
+      "output": {
+        "key": "edit/exports/results/export-6a46904568091ebc918af8452e8bce47891b959a7bd9f94f74080c94b28d19c5.mp4",
+        "size": 2601519
+      }
+    },
+    {
+      "id": "export-3d0856f5d212855c88e0fd77196205dea2f048aceaba59a0a7cd6adfb85de648",
+      "status": "done",
+      "progress": 1,
+      "reservedUsd": 0.05,
+      "gpu": "L4",
+      "build": "b2111a6a9fff12e25635fa406c5d7e741dcbfc71d38df4aee8b672552734ef93",
+      "deadline": 1792412181742,
+      "started": 1792412040705,
+      "finished": 1792412060677,
+      "workerSeconds": 20.454968076,
+      "estimatedComputeUsd": 0.0063394037061139195,
+      "output": {
+        "key": "edit/exports/results/export-3d0856f5d212855c88e0fd77196205dea2f048aceaba59a0a7cd6adfb85de648.mp4",
+        "size": 2602315
+      }
+    },
+    {
+      "id": "export-fab4149e056de2f2af1b17f2460ccd7cb86765f6f173b6ed3960883354f66696",
+      "status": "done",
+      "progress": 1,
+      "reservedUsd": 0.05,
+      "gpu": "L4",
+      "build": "b2111a6a9fff12e25635fa406c5d7e741dcbfc71d38df4aee8b672552734ef93",
+      "deadline": 1792412182968,
+      "started": 1792412040937,
+      "finished": 1792412063284,
+      "workerSeconds": 23.057551497000002,
+      "estimatedComputeUsd": 0.0071459963599502406,
+      "output": {
+        "key": "edit/exports/results/export-fab4149e056de2f2af1b17f2460ccd7cb86765f6f173b6ed3960883354f66696.mp4",
+        "size": 2602291
+      }
+    }
+  ],
+  "peak_admitted": 3,
+  "three_exports_seconds": 38.601349709089845,
+  "notes": "Synthetic 30s 640x360 exports; runtime compute estimates exclude cold start, gateway and image builds.",
+  "peak_rendering": 3
+}

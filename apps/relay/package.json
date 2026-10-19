@@ -2,6 +2,9 @@
   "name": "edit-relay",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@edit/types": "workspace:*"
+  },
   "scripts": {
     "deploy": "cf deploy"
   },

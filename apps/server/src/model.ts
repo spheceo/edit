@@ -147,6 +147,12 @@ export interface Transcript {
   roles?: Record<string, string>;
   /** Each voice's colour ("#00e5c7"), from its role. */
   colors?: Record<string, string>;
+  /**
+   * How each voice's person looks and where they sit, as the watch saw them
+   * across the whole video (cast.ts), so the seats find that face rather
+   * than guess who is who again.
+   */
+  looks?: Record<string, string>;
 }
 
 export const ANIMATABLE: Record<ClipType, string[]> = {

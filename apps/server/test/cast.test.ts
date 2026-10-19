@@ -61,6 +61,9 @@ test("one person, one name: split voices joined, a voice that's two people split
   // The door officer's words at the start leave speaker_3 for a voice of his own.
   expect(plan.moves).toEqual([{ voice: "speaker_3", from: 0, to: 240, to_voice: "speaker_3.3" }]);
   expect(plan.names.get("speaker_3.3")).toEqual(["Officer", "officer"]);
+  // Each voice carries its person's fullest description, for the seats.
+  expect(plan.looks.get("speaker_4")).toBe("bald, later black polo; standing");
+  expect(plan.looks.get("speaker_3.3")).toBe("deputy at the door; doorway");
   void W;
 });
 

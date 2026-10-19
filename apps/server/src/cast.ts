@@ -57,6 +57,8 @@ export interface CastPlan {
   moves: { voice: string; from: number; to: number; to_voice: string }[];
   /** Each voice's name and role. */
   names: Map<string, [label: string, role: string]>;
+  /** How each voice's person looks and where they are (the fullest description of them in this file). */
+  looks: Map<string, string>;
 }
 
 const MODEL = "google/gemini-3.8-flash";
@@ -210,6 +212,16 @@ export function checked(value: unknown, seen: Seen[]): CastPerson[] | null {
   return out;
 }
 
+/** One person's look and place: the fullest of their windows' descriptions ("" when none says). */
+export function described(items: Seen[]): string {
+  let best = "";
+  for (const item of items) {
+    const text = [trim(item.look), trim(item.place)].filter((part) => part !== "").join("; ");
+    if (text.length > best.length) best = text;
+  }
+  return best;
+}
+
 /** "Name (Title)", or the title; unique across `taken` ("Agent", then "Agent 2"). */
 function labelFor(person: CastPerson, taken: Set<string>): string {
   const base = person.name !== null ? `${person.name} (${person.title})` : person.title;
@@ -255,7 +267,7 @@ export function planCast(seen: Seen[], people: CastPerson[], words: Map<string, 
   const plans = new Map<string, CastPlan>();
   const plan = (media: string) => {
     let found = plans.get(media);
-    if (found === undefined) plans.set(media, (found = { moves: [], names: new Map() }));
+    if (found === undefined) plans.set(media, (found = { moves: [], names: new Map(), looks: new Map() }));
     return found;
   };
   people.forEach((person, index) => {
@@ -268,13 +280,18 @@ export function planCast(seen: Seen[], people: CastPerson[], words: Map<string, 
         .filter((voice) => owner(media, voice) === index)
         .sort((a, b) => (share.get(`${media}\u0000${b}`)?.get(index) ?? 0) - (share.get(`${media}\u0000${a}`)?.get(index) ?? 0) || compareKeys(a, b));
       let main = theirs[0];
-      for (const voice of theirs) plan(media).names.set(voice, [label, person.role]);
+      const look = described(mine);
+      for (const voice of theirs) {
+        plan(media).names.set(voice, [label, person.role]);
+        if (look !== "") plan(media).looks.set(voice, look);
+      }
       for (const item of mine) {
         if (owner(media, item.voice) === index) continue;
         // Someone else's voice in this window is them here.
         if (main === undefined) {
           main = `${item.voice}.${index + 1}`;
           plan(media).names.set(main, [label, person.role]);
+          if (look !== "") plan(media).looks.set(main, look);
         }
         plan(media).moves.push({ voice: item.voice, from: item.from, to: item.to, to_voice: main });
       }

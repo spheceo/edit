@@ -1402,6 +1402,8 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
           speakers[voice] = label;
           if (was !== label) renamed.push({ voice, was: was ?? null, now: label });
         }
+        // For the seats: who to find, not who to guess.
+        transcript.looks = Object.fromEntries([...plan.looks].sort((a, b) => compareKeys(a[0], b[0])));
       }
     });
   }

@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 
 import { findAddon, native, useNative } from "../src/native/index.ts";
 import { join } from "../src/paths.ts";
-import { faces, FILE, names, Seats, seats, sightings, windows, type Dot, type Sighting } from "../src/seats.ts";
+import { described, faces, FILE, names, Seats, seats, sightings, windows, type Dot, type Sighting } from "../src/seats.ts";
 import type { Transcript } from "../src/transcribe.ts";
 import { fixtureHome, write } from "./helpers/home.ts";
 
@@ -74,6 +74,36 @@ test("each angle is watched where the most people say the most, twice at most", 
   const last = windows(scenes, 1, transcript());
   expect(last.every(([, end]) => Number.isFinite(end) && end <= 299)).toBe(true);
   expect(names(transcript())).toEqual(["Officer", "Suspect"]);
+});
+
+test("an angle with two interviews is watched until everyone who says much is in a stretch", () => {
+  // Killer Couple's room: a detective and the first suspect for 300 s, then
+  // the detective and the second suspect (busier) for 600 s.
+  const words = [];
+  for (let at = 0; at < 300; at += 3) words.push({ text: "w", start: at, end: at + 1, speaker: at % 6 === 0 ? "speaker_0" : "speaker_1" });
+  for (let at = 300; at < 900; at += 1.5) words.push({ text: "w", start: at, end: at + 1, speaker: Math.round(at / 1.5) % 2 === 0 ? "speaker_0" : "speaker_2" });
+  const t: Transcript = { model: "scribe_v2", language: null, words, speakers: { speaker_0: "Mike (Detective)", speaker_1: "Phazion Whyte (Suspect)", speaker_2: "Jasmine Jones (Suspect)" } };
+  // Far apart: the 300 s handover is never in reach of the busiest stretches.
+  const scenes: [number, number, number | null][] = [
+    [0, 280, 0],
+    [280, 320, null],
+    [320, 900, 0],
+  ];
+  const chosen = windows(scenes, 0, t);
+  expect(chosen.length).toBe(3);
+  const said = (voice: string, [start, end]: [number, number]) => words.filter((w) => w.speaker === voice && w.start >= start && w.end <= end).length;
+  for (const voice of ["speaker_0", "speaker_1", "speaker_2"]) expect(chosen.some((stretch) => said(voice, stretch) >= 5)).toBe(true);
+});
+
+test("each speaker is told with how they look and where they sit, when the cast says", () => {
+  const t: Transcript = {
+    model: "scribe_v2",
+    language: null,
+    words: [],
+    speakers: { speaker_0: "Jeff (Detective)", speaker_7: "Mike (Detective)", speaker_8: "Mike (Detective)" },
+    looks: { speaker_8: "bald, black POLICE polo; left of the table" },
+  };
+  expect(described(t)).toEqual(["Jeff (Detective)", "Mike (Detective): bald, black POLICE polo; left of the table"]);
 });
 
 test("the model's boxes become centres and heights in %; empty boxes are nobody", () => {

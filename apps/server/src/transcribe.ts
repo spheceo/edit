@@ -33,6 +33,12 @@ export interface Transcript {
   roles?: Record<string, string>;
   /** Each voice's colour ("#00e5c7"), from its role (see speakers.ts). */
   colors?: Record<string, string>;
+  /**
+   * How each voice's person looks and where they sit, as the watch saw them
+   * across the whole video (cast.ts), so the seats find that face rather
+   * than guess who is who again.
+   */
+  looks?: Record<string, string>;
 }
 
 /**
@@ -57,7 +63,7 @@ export function serialize(transcript: Transcript): string {
     return JSON.stringify(out);
   });
   let text = `{"model":${JSON.stringify(transcript.model)},"language":${JSON.stringify(transcript.language ?? null)},"words":[${words.join(",")}]`;
-  for (const field of ["speakers", "roles", "colors"] as const) {
+  for (const field of ["speakers", "roles", "colors", "looks"] as const) {
     const map = sortedMap(transcript[field]);
     if (map !== undefined) text += `,${JSON.stringify(field)}:${writeMap(map)}`;
   }

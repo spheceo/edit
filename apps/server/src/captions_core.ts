@@ -71,7 +71,7 @@ export function parseTranscript(text: string): Transcript {
     if (typeof w.end !== "number") throw new Error("missing field `end`");
     if (w.speaker === null) delete w.speaker;
   }
-  for (const field of ["speakers", "roles", "colors"] as const) {
+  for (const field of ["speakers", "roles", "colors", "looks"] as const) {
     if (object[field] === undefined || object[field] === null) object[field] = {};
   }
   return object as unknown as Transcript;

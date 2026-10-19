@@ -39,6 +39,8 @@ def main():
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--reuse-deployment", action="store_true", help="Keep the existing idle worker and its scoped credential")
     parser.add_argument("--daily-reservation-usd", type=float, required=True)
+    parser.add_argument("--gpu", choices=["L4", "L40S", "RTX-PRO-6000"], default="L4")
+    parser.add_argument("--baseline", type=Path, help="Require the exact snapshot hashes of a previous report")
     parser.add_argument("--output", type=Path, default=Path("/tmp/edit-modal-real-benchmark"))
     args = parser.parse_args()
     if not args.execute:
@@ -56,6 +58,7 @@ def main():
     report_path = output / "report.json"
     if report_path.exists():
         raise RuntimeError("Choose a fresh output directory; an existing benchmark must not be resubmitted")
+    baseline = json.loads(args.baseline.read_text()) if args.baseline else None
     projects = []
     for fixture in FIXTURES:
         path = Path.home() / ".edit/projects/history" / fixture["id"] / (fixture["snapshot"] + ".json")
@@ -68,6 +71,10 @@ def main():
             raise RuntimeError("This benchmark requires already-uploaded assets")
         projects.append(project)
         fixture["snapshot_sha256"] = hashlib.sha256(raw).hexdigest()
+        if baseline:
+            previous = next(f for f in baseline["fixtures"] if f["id"] == fixture["id"])
+            if fixture["snapshot_sha256"] != previous["snapshot_sha256"]:
+                raise RuntimeError("The fixture differs from the previous benchmark snapshot")
         (output / (fixture["id"] + ".json")).write_bytes(raw)
     config = "wrangler.modal-pilot.toml"
     base = "https://edit-relay-modal-pilot.sphe-g-personal.workers.dev"
@@ -75,7 +82,7 @@ def main():
     client_token, worker_token = secrets.token_urlsafe(48), secrets.token_urlsafe(48)
     settings = {key: os.environ[key] for key in r2}
     settings.update({"CLOUD_TOKEN": client_token, "MODAL_WORKER_TOKEN": worker_token,
-                     "MODAL_RENDER_VERSION": build, "MODAL_GPU": "L4",
+                     "MODAL_RENDER_VERSION": build, "MODAL_GPU": args.gpu,
                      "MODAL_DAILY_BUDGET_USD": str(args.daily_reservation_usd),
                      "MODAL_JOB_SECONDS": "1800", "MODAL_STARTUP_SECONDS": "300", "MODAL_SHUTDOWN_SECONDS": "60"})
     if args.reuse_deployment:
@@ -83,7 +90,7 @@ def main():
     command(["bunx", "wrangler", "secret", "bulk", "--config", config], data=json.dumps(settings))
     if not args.reuse_deployment:
         env = {**os.environ, "EDIT_MODAL_APP": app, "EDIT_RELAY_URL": base, "MODAL_WORKER_TOKEN": worker_token,
-               "EDIT_MODAL_JOB_SECONDS": "1800", "EDIT_MODAL_STARTUP_SECONDS": "300"}
+               "EDIT_MODAL_GPU": args.gpu, "EDIT_MODAL_JOB_SECONDS": "1800", "EDIT_MODAL_STARTUP_SECONDS": "300"}
         result = subprocess.run([sys.executable, str(ROOT / "apps/worker/deploy.py")], cwd=ROOT,
                                 env=env, capture_output=True, text=True)
         if result.returncode:
@@ -91,7 +98,7 @@ def main():
     gateway = modal.Function.from_name(app, "gateway", environment_name="dev").get_web_url()
     if not args.reuse_deployment:
         command(["bunx", "wrangler", "secret", "bulk", "--config", config], data=json.dumps({"MODAL_EXPORT_URL": gateway}))
-    report = {"build": build, "app": app, "gpu": "L4", "cpu_cores": 4, "memory_gib": 16,
+    report = {"build": build, "app": app, "gpu": args.gpu, "cpu_cores": 4, "memory_gib": 16,
               "fixtures": FIXTURES, "daily_reservation_usd": args.daily_reservation_usd,
               "notes": "Historical local timings, not a simultaneous Mac rerun. Cloud jobs share one GPU. All cold source transfers and worker verification are included; deployment is excluded.",
               "samples": []}
@@ -103,7 +110,7 @@ def main():
         if not args.reuse_deployment:
             health = client.post(gateway + "/health", headers={"authorization": f"Bearer {worker_token}"})
             health.raise_for_status()
-            if health.json()["build"] != build or health.json()["seconds"] != 1800:
+            if health.json()["build"] != build or health.json()["seconds"] != 1800 or health.json()["gpu"] != args.gpu:
                 raise RuntimeError("Worker and Relay configuration mismatch")
         def relay(route, body):
             for _ in range(20):
@@ -117,7 +124,7 @@ def main():
             response.raise_for_status()
             return response.json()
         configured = relay("exports/config", {})
-        if configured.get("build") != build or configured.get("gpu") != "L4":
+        if configured.get("build") != build or configured.get("gpu") != args.gpu:
             raise RuntimeError("The existing pilot deployment does not match this checkout")
         manifests = []
         for fixture, project in zip(FIXTURES, projects):

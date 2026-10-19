@@ -101,3 +101,39 @@ The full run also exposed a Linux audio bottleneck: dozens of word-mute expressi
 The benchmark never opened or saved the live projects, restarted the editor, deployed production Relay or changed Repack. The original PID 13625 remained running. Cloud exports remain opt-in. Final R2 → Drive delivery and efficient GPU/CPU data movement still need measurement before production activation.
 
 The [raw real-project run](benchmarks/modal-real-2026-10-19.json) includes immutable snapshot hashes, job/build identities, progress samples, output keys, delivery times and verification. Reproduce with `scripts/benchmark-modal.py --execute --daily-reservation-usd <explicit cumulative cap>` through process-only R2 injection; use a fresh output folder and wait for the pilot to be idle. The current branch includes the later audio fix, so another run will measure a different build.
+
+
+## RTX PRO 6000 attempt — 2026-10-19
+
+The same frozen Young Actress and Corrupt Cop revisions were submitted together
+twice to one RTX-PRO-6000, with the same four cores, 16 GiB, High H.264 settings
+and original engine revision `b5a2477`. A detached benchmark checkout deliberately
+excluded the later audio optimization so a successful run could isolate the GPU
+change. Snapshot hashes exactly matched the completed L4 run.
+
+**Neither pair produced an export.** Both attempts failed in GPU preflight with
+`GPU device: Parent device is lost`, before downloading footage. Their roughly
+six-second failure windows are not render timings. Short diagnostics separately
+passed H.264 and HEVC NVENC but reproduced `vkCreateDevice` initialization
+failure in Vulkan's own tool. The same traced image and driver libraries passed
+on one allocation (`/dev/nvidia1`) and failed on another (`/dev/nvidia4`), with
+driver 610.57.04 in both. Allocation-dependent graphics compatibility is the
+remaining blocker; the specific host/driver cause is not established.
+
+There is no RTX speedup, output quality or completed-export cost result to compare
+with L4. Its requested allocation is about $3.35/hour at
+[Modal's base rates](https://modal.com/pricing). Four failed jobs conservatively
+reserved $8.04, bringing the day's export reservations to $16.23 against $16.24;
+these are not charges. Three separate, bounded diagnostic invocations were short
+and are outside that ledger. No automatic paid retry or CPU fallback was added.
+
+The [RTX evidence](benchmarks/modal-rtx-2026-10-19.json) retains both failed pairs,
+exact fixture hashes and diagnostic outcomes. The harness now accepts `--gpu` and
+`--baseline <prior-report>` to check GPU configuration and freeze identical inputs.
+RTX remains experimental until graphics preflight and the complete pair pass.
+The live editor, production Relay and Repack remained untouched.
+
+After both attempts ended, the idle pilot was restored to the current L4 worker
+(with the audio optimization), its CPU gateway health check passed, and new
+export admission was disabled with a zero test budget. No new exports were
+started during this reset.

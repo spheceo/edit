@@ -41,7 +41,7 @@ Relay Workflow. It verifies the source version again before publishing.
 ## Limits and cost
 
 Workers request and limit CPU to four physical cores and memory to 16 GiB.
-L4 is the default; L40S is an explicit deployment choice. There is one GPU
+L4 is the default; L40S and RTX-PRO-6000 are explicit deployment choices. There is one GPU
 container with three asynchronous input slots, no automatic GPU/model fallback, a 30-minute function timeout,
 five-minute startup timeout, two-second idle window, eight concurrent input
 requests per worker (files and 32 MiB byte ranges share one pool), 128 GiB
@@ -49,9 +49,17 @@ total input and 16 GiB output limits. Every range is ETag-pinned and checked
 before a completed file becomes visible. H.264 and HEVC are
 supported. Other output formats require the existing local backend.
 
+RTX-PRO-6000 remains experimental: the 2026-10-19 real-pair attempts failed
+graphics initialization before source transfer, while short probes passed on
+one allocation and failed on another. NVENC alone passed. See the
+[RTX evidence](../../docs/benchmarks/modal-rtx-2026-10-19.json); there is no
+completed RTX export timing or cost comparison yet. Run the bounded hardware
+probe before a new GPU deployment; it reports graphics and both encoders
+separately, including driver diagnostics on a failure.
+
 Using Modal's published Function rates on 2026-10-19, compute is approximately
-$1.12/hour on L4 or $2.27/hour on L40S for this allocation. Relay conservatively
-reserves **$0.67 (L4) or $1.37 (L40S)** per accepted job, covering the full
+$1.12/hour on L4, $2.27/hour on L40S or $3.35/hour on RTX-PRO-6000 for this allocation. Relay conservatively
+reserves **$0.67 (L4), $1.37 (L40S) or $2.01 (RTX-PRO-6000)** per accepted job, covering the full
 execution/startup timeouts plus a minute of shutdown allowance. An explicit
 `MODAL_DAILY_BUDGET_USD` limits daily **reservations**; missing/zero disables
 new jobs. Reservations are never refunded on failure. This is deliberately

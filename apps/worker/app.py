@@ -16,8 +16,8 @@ from build import ROOT, build_id
 HERE = Path(__file__).resolve().parent
 BUILD = os.environ.get("EDIT_WORKER_BUILD") or build_id()
 GPU = os.environ.get("EDIT_MODAL_GPU", "L4")
-if GPU not in {"L4", "L40S"}:
-    raise ValueError("EDIT_MODAL_GPU must be L4 or L40S")
+if GPU not in {"L4", "L40S", "RTX-PRO-6000"}:
+    raise ValueError("EDIT_MODAL_GPU must be L4, L40S or RTX-PRO-6000")
 APP_NAME = os.environ.get("EDIT_MODAL_APP", "edit-exports-pilot")
 SECONDS = int(os.environ.get("EDIT_MODAL_JOB_SECONDS", "1800"))
 STARTUP = int(os.environ.get("EDIT_MODAL_STARTUP_SECONDS", "300"))

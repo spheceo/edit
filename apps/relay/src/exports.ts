@@ -2,7 +2,7 @@
  * owns computation. Desktop disconnects and repeated submissions do not
  * repeat renders. Each worker sees signed URLs for its own immutable inputs.
  */
-import { WORKER_OUTPUT_LIMIT, WORKER_INPUT_LIMIT, WORKER_RATES, WORKER_SECONDS, WORKER_STARTUP_SECONDS, type WorkerManifest } from "@edit/types/worker";
+import { WORKER_OUTPUT_LIMIT, WORKER_INPUT_LIMIT, WORKER_RATES, WORKER_SECONDS, WORKER_STARTUP_SECONDS, type WorkerManifest, type WorkerGpu } from "@edit/types/worker";
 import { BadRequest, Upstream, cloudAuthorized, escapeXml, isObject, needKey, objectUrl, r2Config, r2Fetch, xmlValue, type R2 } from "./cloud";
 
 interface Storage {
@@ -18,7 +18,7 @@ export interface ModalEnv {
   MODAL_EXPORT_URL?: string;
   MODAL_WORKER_TOKEN?: string;
   MODAL_RENDER_VERSION?: string;
-  MODAL_GPU?: "L4" | "L40S";
+  MODAL_GPU?: WorkerGpu;
   /** Conservative daily compute reservations, not storage/network billing. Unset = disabled. */
   MODAL_DAILY_BUDGET_USD?: string;
   MODAL_JOB_SECONDS?: string;
@@ -28,7 +28,7 @@ export interface ModalEnv {
 type Env = import("./cloud").CloudEnv;
 type State = "queued" | "dispatching" | "running" | "cancelling" | "done" | "failed" | "cancelled";
 interface Job {
-  id: string; manifest: string; digest: string; build: string; gpu: "L4" | "L40S";
+  id: string; manifest: string; digest: string; build: string; gpu: WorkerGpu;
   state: State; created: number; deadline: number; permit: string;
   progress: number; reservedUsd: number; output: string; bytes?: number;
   started?: number; finished?: number; workerSeconds?: number; estimatedComputeUsd?: number;

@@ -104,6 +104,15 @@ describe("durable cloud export admission", () => {
     expect([...f.values.entries()].filter(([key]) => key.startsWith("budget:"))[0]?.[1]).toBe(0.67);
   });
 
+  it("reserves the full RTX PRO 6000 allocation and dispatches that GPU", async () => {
+    const f = fixture("2.01");
+    f.env.MODAL_GPU = "RTX-PRO-6000";
+    expect(await (await f.submit("one")).json()).toMatchObject({ gpu: "RTX-PRO-6000", reservedUsd: 2.01 });
+    expect((await f.submit("two")).status).toBe(429);
+    await f.coordinator.alarm();
+    expect(f.calls[0]).toMatchObject({ gpu: "RTX-PRO-6000" });
+  });
+
   it("fences expired and wrong-version workers, without automatic paid retry", async () => {
     const f = fixture();
     await f.submit("one"); await f.coordinator.alarm();

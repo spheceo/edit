@@ -492,6 +492,18 @@ test("a courtroom video's small callouts and tags are flagged; subtitles and oth
   expect(kinds(p, "small_text").map((issue) => [issue.text, issue.size])).toEqual([["*UNDER OATH*", 44]]);
 });
 
+test("a line subtitled under a second of black is flagged; a fade to black and a line after it aren't", () => {
+  const p = project("plan");
+  apply(p, [
+    { op: "add", clip: { type: "solid", track: "new", name: "One second of black", start: 100, duration: 30, fill: [0, 0, 0, 1] } },
+    { op: "add", clip: { type: "solid", track: "new", name: "Dip", start: 200, duration: 30, fill: [0, 0, 0, 1], keyframes: { opacity: [{ frame: 0, value: 0 }, { frame: 29, value: 1 }] } } },
+    { op: "add", clip: { type: "text", track: "new", name: "Subtitle (teaser)", start: 103, duration: 27, text: "Stephanie, here's the situation." } },
+    { op: "add", clip: { type: "text", track: "new", name: "Subtitle", start: 205, duration: 20, text: "Fading out." } },
+    { op: "add", clip: { type: "text", track: "new", name: "Subtitle", start: 127, duration: 40, text: "After it." } },
+  ]);
+  expect(kinds(p, "line_under_black").map((issue) => [issue.text, issue.start, issue.end])).toEqual([["Stephanie, here's the situation.", 103, 130]]);
+});
+
 test("a_compilation_title_card_frames_its_photos_in_two_rows_around_the_title", () => {
   const p = project("plan");
   for (let index = 1; index <= 5; index++) {

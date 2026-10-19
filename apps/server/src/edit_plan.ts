@@ -1355,6 +1355,23 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   }
   const needed = Math.max(peak + 1, MOST_VIDEO_TRACKS);
   if (videoTracks.length > needed) issues.push({ kind: "too_many_tracks", video_tracks: videoTracks.length, needed, fix: "tidy_tracks" });
+  // A line said under black: an opaque black solid over the picture while a
+  // subtitle is up (the interrogation's cold open ended in a second of black
+  // with "Stephanie, here's the situation." heard and subtitled over it; the
+  // team: "this just black layer on top of the sort of teaser… I don't think
+  // it quite works"). The black is silent: a last line plays in picture.
+  for (const black of project.clips) {
+    if (black.type !== "solid" || !visible(black.track) || black.opacity < 0.95 || black.keyframes?.opacity !== undefined) continue;
+    if (Math.max(black.fill[0], black.fill[1], black.fill[2]) > 0.05 || black.fill[3] < 0.95 || black.duration < 10) continue;
+    for (const line of project.clips) {
+      if (line.type !== "text" || !visible(line.track)) continue;
+      if (!((line.name ?? "").startsWith("Subtitle") || trackOf(project, line.track)?.subtitles === true)) continue;
+      const shared = Math.min(clipEnd(black), clipEnd(line)) - Math.max(black.start, line.start);
+      if (shared >= 6) {
+        issues.push({ kind: "line_under_black", clip: black.id, subtitle: line.id, start: Math.max(black.start, line.start), end: Math.min(clipEnd(black), clipEnd(line)), text: line.text.slice(0, 40), fix: "the black is silent: play the line in picture before it (or end it before the black)" });
+      }
+    }
+  }
   // A courtroom video's words on screen are read on a phone over a busy
   // hearing: callouts, tags and labels at least SMALLEST_TEXT at 1080p
   // (Corrupt Cop's 44 px name callout and "*UNDER OATH*" tag: "text is

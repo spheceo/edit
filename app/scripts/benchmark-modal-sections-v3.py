@@ -43,8 +43,10 @@ def main():
     parser.add_argument("--smoke-frames", type=int, default=120)
     parser.add_argument("--compute-budget-usd", type=float, required=True)
     parser.add_argument("--sections", type=int, default=8)
-    parser.add_argument("--gpu-workers", type=int, choices=[4, 8], default=4)
-    parser.add_argument("--cpu-verifiers", type=int, choices=[8, 16], default=8)
+    parser.add_argument("--gpu-workers", type=int, choices=[4, 8], default=8,
+                        help="Maximum L40S workers shared across exports (default: 8)")
+    parser.add_argument("--cpu-verifiers", type=int, choices=[8, 16], default=16,
+                        help="Maximum CPU verification workers (default: 16)")
     parser.add_argument("--cache-volume", help="Explicit sections cache volume, never another app's volume")
     parser.add_argument("--keep-cache", action="store_true", help="Retain only this experiment's cache for a warm rerun")
     parser.add_argument("--skip-download", action="store_true", help="Measure verified cloud publication without local delivery")

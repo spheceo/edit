@@ -4,6 +4,13 @@ V2 and the previous benchmarks were merged into `main` as `c9cba31`, adapted
 to the code's new `app/` directory. This experiment layers v3 on that commit.
 The existing pilot, Relay, live editor and user projects remain unchanged.
 
+The selected default is **eight L40S GPU workers and sixteen CPU verification
+workers**, shared across the export batch. These are on-demand concurrency
+limits; fewer sections needing work use fewer GPUs. The four-GPU/eight-verifier
+configuration remains available explicitly. The 30–70-minute export workload
+motivates this choice, but a 70-minute export has not yet been benchmarked;
+lower elapsed time does not guarantee a lower compute bill.
+
 V3 keeps eight absolute picture ranges per video and the same native engine,
 1080p/30 H.264 High, continuous 48 kHz stereo AAC and -14 LUFS. Its changes are:
 
@@ -14,7 +21,7 @@ V3 keeps eight absolute picture ranges per video and the same native engine,
   version and GPU type. Transfer-only deployments preserve them. Audio uses
   the engine's independent sound key and encoder identity.
 - SHA-256/length/version checks on every reused encoded picture and audio file.
-- Eight CPU workers decode **every frame of the assembled finished MP4**, in
+- Parallel CPU workers decode **every frame of the assembled finished MP4**, in
   exact PTS ranges overlapping each join by two frames. A separate job decodes
   the entire continuous audio. The coordinator checks every decoded range's
   frame count plus the whole picture stream's unique CFR PTS and monotonic DTS.
@@ -47,7 +54,7 @@ cd app
 bun --no-env-file ../../repack/scripts/env.ts --path=/media -- \
   uv run --python 3.12 --with-requirements apps/worker/requirements.txt \
   --with boto3==1.40.31 python scripts/benchmark-modal-sections-v3.py \
-  --execute --sections 8 --gpu-workers 4 --compute-budget-usd 8 \
+  --execute --sections 8 --gpu-workers 8 --cpu-verifiers 16 --compute-budget-usd 8 \
   --cache-volume edit-exports-sections-v3-example --keep-cache \
   --output /tmp/edit-modal-v3-cold
 ```
@@ -60,8 +67,9 @@ changes one caption per video: source and sound should be reused, with only
 the affected picture section rendered again. A short odd-length smoke check uses
 `--smoke --smoke-frames 123`; it is not a full-export speed measurement.
 
-The fastest configuration uses `--gpu-workers 8 --cpu-verifiers 16`; the
-four-GPU and initial caption-revision measurements use eight CPU verifiers.
+The default uses the fastest measured configuration,
+`--gpu-workers 8 --cpu-verifiers 16`. To reproduce the four-GPU and initial
+caption-revision measurements, use `--gpu-workers 4 --cpu-verifiers 8`.
 The faster configuration also queues continuous-audio verification before the
 picture checks, so it cannot be held behind a burst of picture jobs. Treat
 this as a combined GPU/CPU scaling comparison, not a GPU-only experiment.

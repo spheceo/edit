@@ -9,8 +9,8 @@ from app import image, BUILD, GPU
 from build import engine_id
 
 APP = "edit-exports-sections-v3-benchmark"
-POOL = int(os.environ.get("EDIT_SECTIONS_POOL", "4"))
-CPU_POOL = int(os.environ.get("EDIT_VERIFIERS_POOL", "8"))
+POOL = int(os.environ.get("EDIT_SECTIONS_POOL", "8"))
+CPU_POOL = int(os.environ.get("EDIT_VERIFIERS_POOL", "16"))
 ENGINE = engine_id()
 if POOL not in {4, 8} or CPU_POOL not in {8, 16} or GPU != "L40S":
     raise ValueError("Use four/eight L40S workers and eight/sixteen CPU verifiers")

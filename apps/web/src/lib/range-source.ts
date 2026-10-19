@@ -16,6 +16,14 @@ const LOOKAHEAD = 6;
 /** Blocks fetched past a sequential read while playing, so playback never waits on a round trip. */
 const READAHEAD = 8;
 const RETRIES = 8;
+/**
+ * The most blocks one request fetches: neighbouring blocks a read or a
+ * read-ahead needs come in one request, not one each. Over Tailscale (50 ms
+ * a round trip) a preview played from another machine waited on eight
+ * requests for every eight blocks it read ahead and fell behind ("loading
+ * frame"); one request costs one round trip.
+ */
+const RUN = 16;
 /** A read that hasn't finished by then is abandoned and tried again: a hung
  * connection must not leave the preview waiting on a frame for good. */
 const READ_TIMEOUT_MS = 20_000;
@@ -92,25 +100,51 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
     }
   }
 
-  function block(index: number) {
-    const loading = load(index);
-    if (streaming && index === previous + 1) for (let i = 1; i <= READAHEAD && (index + i) * BLOCK < size(); i++) load(index + i);
+  /** Block `index` (with the blocks after it up to `upTo`, and while playing sequentially the read-ahead, in the same request). */
+  function block(index: number, upTo = index) {
+    const ahead = streaming && index === previous + 1 ? index + READAHEAD : index;
+    const loading = load(index, Math.max(upTo, ahead));
     previous = index;
     return loading;
   }
 
-  function load(index: number) {
+  /**
+   * Block `index`, fetched (if it isn't here) together with the missing
+   * blocks after it up to `upTo` in one request; each block is cached on its own.
+   */
+  function load(index: number, upTo = index) {
     const key = `${url}#${index}`;
-    let loading = blocks.get(key);
-    if (loading) network.cached++;
-    else {
-      loading = fetchRange(index * BLOCK, Math.min(size(), (index + 1) * BLOCK));
-      // A failed block is fetched again next time rather than cached.
-      const failed = loading;
-      failed.catch(() => { if (blocks.get(key) === failed) blocks.delete(key); });
+    const known = blocks.get(key);
+    if (known) {
+      network.cached++;
+      remember(key, known);
+      // Read-ahead still wanted past it.
+      if (upTo > index) fetchRun(index + 1, upTo);
+      return known;
     }
-    remember(key, loading);
-    return loading;
+    fetchRun(index, upTo);
+    return blocks.get(key)!;
+  }
+
+  /** The missing blocks from `from` (up to `upTo`, `RUN` at most, the file's end) in one request. */
+  function fetchRun(from: number, upTo: number) {
+    let first = from;
+    while (first <= upTo && blocks.has(`${url}#${first}`)) first++;
+    if (first > upTo || first * BLOCK >= size()) return;
+    // A file's size comes with its first read: until then, one block.
+    let last = first;
+    if (sizes.has(url)) {
+      while (last + 1 <= upTo && last + 1 - first < RUN && (last + 1) * BLOCK < size() && !blocks.has(`${url}#${last + 1}`)) last++;
+    }
+    const whole = fetchRange(first * BLOCK, Math.min(size(), (last + 1) * BLOCK));
+    for (let index = first; index <= last; index++) {
+      const key = `${url}#${index}`;
+      const offset = (index - first) * BLOCK;
+      const part = whole.then((bytes) => bytes.slice(offset, Math.min(bytes.length, offset + BLOCK)));
+      // A failed block is fetched again next time rather than cached.
+      part.catch(() => { if (blocks.get(key) === part) blocks.delete(key); });
+      remember(key, part);
+    }
   }
 
   return {
@@ -133,7 +167,9 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
       let index = first;
       return new ReadableStream<Uint8Array>({
         async pull(controller) {
-          for (let i = first + pending.length; i <= Math.min(last, index + LOOKAHEAD); i++) pending.push(block(i));
+          const upTo = Math.min(last, index + LOOKAHEAD);
+          // The blocks this read still needs come in one request with the first of them.
+          for (let i = first + pending.length; i <= upTo; i++) pending.push(block(i, upTo));
           const bytes = await pending[index - first];
           const offset = index * BLOCK;
           controller.enqueue(bytes.subarray(Math.max(0, start - offset), Math.min(bytes.length, end - offset)));

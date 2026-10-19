@@ -26,9 +26,10 @@ describe("block range reads", () => {
     const reader = rangeReader("/file", fetcher);
     expect(await reader.getSize()).toBe(file.length);
     expect(await collect(reader.read(BLOCK - 10, BLOCK * 3 + 50))).toEqual([...file.slice(BLOCK - 10, BLOCK * 3 + 50)]);
-    // The size came with the first block, which the read then reused.
+    // The size came with the first block, which the read then reused; the
+    // three blocks after it came in one request (one round trip over a slow link).
     const ranges = fetcher.mock.calls.map(([, init]) => (init.headers as Record<string, string>).Range);
-    expect(ranges).toEqual([0, 1, 2, 3].map((i) => `bytes=${i * BLOCK}-${Math.min(file.length, (i + 1) * BLOCK) - 1}`));
+    expect(ranges).toEqual([`bytes=0-${BLOCK - 1}`, `bytes=${BLOCK}-${file.length - 1}`]);
   });
 
   it("serves nearby reads from blocks already fetched", async () => {
@@ -62,8 +63,9 @@ describe("block range reads", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
     setStreaming(true);
     await collect(reader.read(BLOCK * 2 + 10, BLOCK * 2 + 20));
+    // The block read and the ones after it in one request.
     const ranges = fetcher.mock.calls.map(([, init]) => (init.headers as Record<string, string>).Range);
-    expect(ranges).toEqual([0, 1, 2, 3].map((i) => `bytes=${i * BLOCK}-${Math.min(file.length, (i + 1) * BLOCK) - 1}`));
+    expect(ranges).toEqual([`bytes=0-${BLOCK - 1}`, `bytes=${BLOCK}-${2 * BLOCK - 1}`, `bytes=${2 * BLOCK}-${file.length - 1}`]);
   });
 
   it("slices a whole-file answer from a server without range support", async () => {

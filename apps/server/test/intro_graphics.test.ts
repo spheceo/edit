@@ -48,6 +48,8 @@ test("a photo inset, a countdown, a split screen, a fast forward and a disclaime
     { op: "transition", kind: "red_flash", at: 1300 },
   ]).results;
   expect(results.length).toBe(8);
+  // Each op put its layers on new tracks; the plan packs them down to what's on screen at once (the split screen's four, over the footage).
+  expect(p.tracks.filter((track) => track.kind === "video").length).toBeLessThanOrEqual(5);
   // The inset: black and white beneath, the photo in the top-left corner, the name above it.
   const photo = clipNamed(p, "Photo inset · Michelle Williams");
   expect(photo.type === "video" && photo.transform.x < 0 && photo.transform.y < 0).toBe(true);

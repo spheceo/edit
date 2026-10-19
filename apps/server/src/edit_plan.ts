@@ -141,6 +141,10 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   }
   // No words under a blur, whatever the plan added where.
   liftTextOverBlurs(project);
+  // Every graphic op puts its layers on new tracks above everything; packed
+  // down here, a plan never leaves the edit taller than what's on screen at
+  // once needs (the interrogation intro's plans left 69 video tracks where 9 do).
+  tidyTracks(project);
   const invalid = native().projectValidate(jsonForSerde(project));
   if (invalid !== null) throw new Error(`final plan is invalid: ${invalid}; nothing saved`);
   return { results, smooth };
@@ -1066,6 +1070,9 @@ function isMusic(clip: Clip, media: Media | undefined): boolean {
  * Deterministic review catches mechanical issues without asking a model to
  * inspect dozens of pictures. Visual/factual judgment still needs a contact sheet.
  */
+/** More video tracks than this (and than the most clips on screen at once) is `too_many_tracks`. */
+const MOST_VIDEO_TRACKS = 12;
+
 /** The smallest callout, tag or label in a courtroom video, px at 1080p (`small_text`). */
 const SMALLEST_TEXT = 60;
 
@@ -1329,6 +1336,25 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     );
     if (over !== undefined) issues.push({ kind: "text_under_blur", clip: text.id, blur: over.id, start: Math.max(text.start, over.start) });
   }
+  // An edit taller than it needs: plans pack their tracks down, but tools
+  // that add their own can still pile them up (69 in an interrogation intro).
+  // Only past what the edit needs: the most clips ever on screen at once (an
+  // evidence board's photos and notes are a dozen at once, legitimately).
+  const videoTracks = project.tracks.filter((track) => track.kind === "video");
+  const videoIds = new Set(videoTracks.map((track) => track.id));
+  // One sweep over starts (+1) and ends (-1), ends first at a tie.
+  const edges = project.clips
+    .filter((clip) => videoIds.has(clip.track))
+    .flatMap((clip) => [[clip.start, 1], [clipEnd(clip), -1]] as [number, number][])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let peak = 0;
+  let open = 0;
+  for (const [, step] of edges) {
+    open += step;
+    peak = Math.max(peak, open);
+  }
+  const needed = Math.max(peak + 1, MOST_VIDEO_TRACKS);
+  if (videoTracks.length > needed) issues.push({ kind: "too_many_tracks", video_tracks: videoTracks.length, needed, fix: "tidy_tracks" });
   // A courtroom video's words on screen are read on a phone over a busy
   // hearing: callouts, tags and labels at least SMALLEST_TEXT at 1080p
   // (Corrupt Cop's 44 px name callout and "*UNDER OATH*" tag: "text is

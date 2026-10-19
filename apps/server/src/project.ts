@@ -424,12 +424,13 @@ export function tidyTracks(project: Project): [number, number] {
       // The subtitles keep their own track: nothing moves onto it or off it.
       const tracks = project.tracks
         .filter((track) => track.kind === kind && track.subtitles !== true)
-        .map((track) => [track.id, track.locked] as const);
-      // From the second track up, each onto the one below (never into the first).
+        .map((track) => [track.id, track.locked, `${track.hidden === true}/${track.muted === true}`] as const);
+      // From the second track up, each onto the one below (never into the
+      // first), only between tracks shown and heard alike.
       for (let index = 1; index + 1 < tracks.length; index++) {
-        const [below, belowLocked] = tracks[index]!;
-        const [here, hereLocked] = tracks[index + 1]!;
-        if (belowLocked || hereLocked) continue;
+        const [below, belowLocked, belowState] = tracks[index]!;
+        const [here, hereLocked, hereState] = tracks[index + 1]!;
+        if (belowLocked || hereLocked || belowState !== hereState) continue;
         const ids = project.clips.filter((clip) => clip.track === here).map((clip) => clip.id);
         for (const id of ids) {
           const clip = clipOf(project, id);

@@ -148,6 +148,41 @@ int edit_faces(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stri
     }
 }
 
+// Words in a BGRA picture (Vision's text recognition, the fast level, no
+// language correction: channel buttons and logos aren't sentences): one line
+// per piece of text, "x0 y0 x1 y1 confidence<TAB>text" (0..1 from the top
+// left), as CFData the caller releases; NULL when Vision fails. The pixels
+// are only read during the call.
+void *edit_text(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stride) {
+    @autoreleasepool {
+        if (!width || !height || stride < (size_t)width * 4) return NULL;
+        CVPixelBufferRef pixel = NULL;
+        if (CVPixelBufferCreateWithBytes(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+                (void *)bgra, stride, NULL, NULL, NULL, &pixel) != kCVReturnSuccess || !pixel) {
+            return NULL;
+        }
+        VNRecognizeTextRequest *request = [VNRecognizeTextRequest new];
+        request.recognitionLevel = VNRequestTextRecognitionLevelFast;
+        request.usesLanguageCorrection = NO;
+        VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCVPixelBuffer:pixel options:@{}];
+        NSError *problem = nil;
+        BOOL ok = [handler performRequests:@[request] error:&problem];
+        CVPixelBufferRelease(pixel);
+        if (!ok) return NULL;
+        NSMutableString *lines = [NSMutableString string];
+        for (VNRecognizedTextObservation *seen in request.results) {
+            VNRecognizedText *best = [[seen topCandidates:1] firstObject];
+            if (!best) continue;
+            NSString *text = [[best.string componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]
+                componentsJoinedByString:@" "];
+            CGRect box = seen.boundingBox;  // 0..1, origin at the bottom left
+            [lines appendFormat:@"%.4f %.4f %.4f %.4f %.3f\t%@\n", box.origin.x, 1.0 - (box.origin.y + box.size.height),
+                box.origin.x + box.size.width, 1.0 - box.origin.y, best.confidence, text];
+        }
+        return (void *)CFBridgingRetain([lines dataUsingEncoding:NSUTF8StringEncoding]);
+    }
+}
+
 // High-quality resample of a 4-channel 8-bit picture (any channel order).
 int edit_scale(const uint8_t *source, uint32_t sw, uint32_t sh, size_t sstride,
                uint8_t *dest, uint32_t dw, uint32_t dh, size_t dstride) {

@@ -216,6 +216,44 @@ export async function seats(source: string, transcript: Transcript): Promise<Sea
   return out;
 }
 
+/** The cuts in a file (seconds where one scene gives way to another), kept beside its seats. */
+const CUTS_FILE = "cuts-v1.json";
+
+/**
+ * Where the footage at `source` cuts from one picture to another (seconds),
+ * from the same small frames as the camera angles: from its cache, else found
+ * now. A court stream switches views mid-hearing (Corrupt Cop's B-roll shot
+ * jumped from the witness to a page of a document: "these images randomly
+ * pop up"), so a B-roll shot should sit between two of these.
+ */
+export async function cutsOf(source: string): Promise<number[]> {
+  const known = cachedCuts(source);
+  if (known !== null) return known;
+  const cache = tools.mediaCache(source);
+  if (cache === null) throw new Error("no media cache");
+  const frames = await framesOf(source, cache);
+  const { scenes } = await native().seatsScenes(frames);
+  const cuts = scenes.slice(1).map(([start]) => start);
+  try {
+    fs.writeFileSync(join(cache, CUTS_FILE), JSON.stringify(cuts));
+  } catch {
+    // Found again next time.
+  }
+  return cuts;
+}
+
+/** The cuts found in `source` so far (the audit), or null when it hasn't been looked at. */
+export function cachedCuts(source: string): number[] | null {
+  const cache = tools.mediaCache(source);
+  if (cache === null) return null;
+  try {
+    const value = JSON.parse(fs.readFileSync(join(cache, CUTS_FILE), "utf8")) as unknown;
+    return Array.isArray(value) && value.every((cut) => typeof cut === "number") ? (value as number[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Runs `work` over `items`, at most `limit` at a time; results in the items' order. */
 export async function atOnce<T, R>(items: T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);

@@ -478,6 +478,13 @@ export function createStub(): Stub {
       return null;
     },
     FACES_RATE: 2.0,
+    async screenTextDetect() {
+      notInStub("screenTextDetect");
+    },
+    screenTextCached() {
+      return null;
+    },
+    SCREEN_TEXT_RATE: 1.0,
     censorWarm() {},
     censorIssues() {
       return { issues: [], pending: [] };

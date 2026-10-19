@@ -89,6 +89,12 @@ export interface RawImage {
 /** A face as shares of the picture: [x0, y0, x1, y1], its corners from the picture's top left (the engine's faces.rs). */
 export type Box = [number, number, number, number];
 
+/** A piece of text on screen: its box (as a face's) and what it says (the engine's screen_text.rs). */
+export interface ScreenText {
+  b: Box;
+  t: string;
+}
+
 export interface RenderRequest {
   project: ProjectInput;
   frames: number[];
@@ -231,6 +237,9 @@ export interface Native {
   facesDetect(source: string, size: [number, number], indexes: number[]): Promise<Record<number, Box[]>>; // A
   facesCached(source: string): Record<number, Box[]> | null; // S
   readonly FACES_RATE: number;
+  screenTextDetect(source: string, size: [number, number], indexes: number[]): Promise<Record<number, ScreenText[]>>; // A
+  screenTextCached(source: string): Record<number, ScreenText[]> | null; // S
+  readonly SCREEN_TEXT_RATE: number;
   censorIssues(project: ProjectInput, start: boolean): { issues: unknown[]; pending: string[] }; // S (+BG)
   censorWarm(path: string): void; // BG
   /** Camera angles from 64×36 grey frames; TS does the FFmpeg read that makes them (the engine's seats.rs `scenes`). */

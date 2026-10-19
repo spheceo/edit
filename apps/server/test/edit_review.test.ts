@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { calloutTiming, offScript, subtitleCoverage, textNotSaid } from "../src/edit_review.ts";
+import { calloutTiming, cutMidWord, lineFrames, offScript, spokenWords, subtitleCoverage, textNotSaid } from "../src/edit_review.ts";
 import type { AudioClip, Clip, Project, TextClip } from "../src/model.ts";
 import { addTrack, newProject } from "../src/project.ts";
 import type { Transcript } from "../src/transcribe.ts";
@@ -183,4 +183,33 @@ test("a_caption_that_isnt_what_is_said_is_flagged", () => {
   p.clips.push({ ...words("right", v2, "Start us a medic right now in the backyard.", 5, 40), name: "Caption · Officer" });
   const issues = textNotSaid(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
   expect(issues.map((issue) => issue.clip)).toEqual(["wrong"]);
+});
+
+test("footage cut inside a word is flagged, with where the word ends; a cut the next clip carries on isn't", () => {
+  // Corrupt Cop's "Unintentionally, sir." cut before "sir" finished: here "baby." (274.45–274.8) is cut at 274.6.
+  const p = footageProject();
+  const sound25 = p.clips.find((clip) => clip.id === "c25") as AudioClip;
+  sound25.duration = 72;
+  const issues = cutMidWord(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
+  expect(issues).toEqual([{ kind: "cut_mid_word", clip: "c25", at: 72, side: "out", word: "baby.", word_ends: 274.8 }]);
+  // The same moment carried on by the next clip: no cut heard.
+  p.clips.push(sound("c26", sound25.track, "m7", 72, 30, { source_in: 274.6 }));
+  expect(cutMidWord(p, new Map([["m7", TEASER]]))).toEqual([]);
+  // Played past the word: nothing to say.
+  p.clips.pop();
+  sound25.duration = 80;
+  expect(cutMidWord(p, new Map([["m7", TEASER]]))).toEqual([]);
+});
+
+test("a desktop profile's lines are timed to the narration that says them, and flagged when they're off it", () => {
+  const p = footageProject();
+  const heard = spokenWords(p, new Map([["m7", TEASER]]));
+  // "medic" at 272.79 s is frame 18; "baby" at 274.62 s is frame 73; "goddamn" never comes before frame 60 in order.
+  expect(lineFrames(["- MEDIC IN THE BACKYARD", "- BABY", "- NOT SAID HERE"], heard, 0, 150)).toEqual([18, 73, null]);
+  // "sept" is heard as the start of "september" ("fired" is too short a stem to tie it).
+  expect(lineFrames(["- FIRED SEPT. 9"], [[40, "fir"], [44, "september"]], 0, 150)).toEqual([44]);
+  p.markers = [{ frame: 120, name: "desktop line", note: "- MEDIC IN THE BACKYARD" }];
+  expect(calloutTiming(p, new Map([["m7", TEASER]]))).toEqual([{ kind: "profile_line_off_speech", start: 120, said_at: 18, text: "- MEDIC IN THE BACKYARD" }]);
+  p.markers = [{ frame: 20, name: "desktop line", note: "- MEDIC IN THE BACKYARD" }];
+  expect(calloutTiming(p, new Map([["m7", TEASER]]))).toEqual([]);
 });

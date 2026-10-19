@@ -52,6 +52,7 @@ unsafe extern "C" {
         dh: u32,
         dstride: usize,
     ) -> i32;
+    fn edit_text(bgra: *const u8, width: u32, height: u32, stride: usize) -> *mut c_void;
     fn edit_faces(
         bgra: *const u8,
         width: u32,
@@ -224,6 +225,47 @@ pub fn encode_image(
         copy
     };
     Ok(bytes)
+}
+
+/// Words in a packed BGRA picture (Apple's Vision, the fast level): each piece
+/// of text with its box, x0, y0, x1, y1 (0..1 from the top left), and the
+/// recogniser's confidence.
+pub fn text(bgra: &[u8], width: u32, height: u32) -> Result<Vec<([f32; 4], f32, String)>, String> {
+    let stride = width as usize * 4;
+    if width == 0 || height == 0 || bgra.len() < stride * height as usize {
+        return Err("text picture doesn't match its size".to_owned());
+    }
+    // The bridge reads the pixels during the call only; the CFData it hands
+    // back is read, copied and released exactly once below.
+    let data = unsafe { edit_text(bgra.as_ptr(), width, height, stride) };
+    if data.is_null() {
+        return Err("Vision couldn't look for text".to_owned());
+    }
+    let bytes = unsafe {
+        let (pointer, length) = (edit_data_bytes(data), edit_data_length(data));
+        let copy = if pointer.is_null() {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(pointer, length).to_vec()
+        };
+        edit_data_release(data);
+        copy
+    };
+    Ok(String::from_utf8_lossy(&bytes)
+        .lines()
+        .filter_map(|line| {
+            let (numbers, text) = line.split_once('\t')?;
+            let values: Vec<f32> = numbers
+                .split(' ')
+                .filter_map(|value| value.parse().ok())
+                .collect();
+            let [x0, y0, x1, y1, sure] = values.as_slice() else {
+                return None;
+            };
+            Some(([*x0, *y0, *x1, *y1], *sure, text.trim().to_owned()))
+        })
+        .filter(|(_, _, text)| !text.is_empty())
+        .collect())
 }
 
 /// Faces in a packed BGRA picture (Apple's Vision): each as x0, y0, x1, y1

@@ -473,6 +473,19 @@ test("words_go_above_every_blur_and_any_left_under_one_are_flagged", () => {
   expect(kinds(p, "text_under_blur").map((issue) => issue.clip)).toEqual([words.id]);
 });
 
+test("a courtroom video's small callouts and tags are flagged; subtitles and other styles aren't", () => {
+  const p = project("plan");
+  apply(p, [
+    { op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 90, fill: [0.5, 0.5, 0.5, 1] } },
+    { op: "add", clip: { type: "text", track: "new", name: "Reaction • Oath", start: 0, duration: 60, text: "*UNDER OATH*", style: { size: 44 } } },
+    { op: "add", clip: { type: "text", track: "new", name: "Name • Joshua", start: 0, duration: 60, text: "JOSHUA MCCLUSKEY", style: { size: 64 } } },
+    { op: "add", clip: { type: "text", track: "new", name: "Subtitle", start: 0, duration: 60, text: "Unintentionally, sir.", style: { size: 48 } } },
+  ]);
+  expect(kinds(p, "small_text")).toEqual([]);
+  p.style = "courtroom";
+  expect(kinds(p, "small_text").map((issue) => [issue.text, issue.size])).toEqual([["*UNDER OATH*", 44]]);
+});
+
 test("a_compilation_title_card_frames_its_photos_in_two_rows_around_the_title", () => {
   const p = project("plan");
   for (let index = 1; index <= 5; index++) {

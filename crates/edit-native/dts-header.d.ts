@@ -19,3 +19,6 @@ export type ProjectInput = { ref: { id: string; rev: number } } | { json: string
 /** A face: [x0, y0, x1, y1] as shares of the picture from its top left. */
 export type Box = [number, number, number, number];
 
+/** A piece of text on screen: its box (as a face's) and what it says (screen_text.rs). */
+export type ScreenText = { b: Box; t: string };
+

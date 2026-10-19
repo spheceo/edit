@@ -14,6 +14,7 @@ import { clipColorFrom, clipFrom, defaultTextAnimation, defaultTextStyle, defaul
 import * as cutin from "./cutin.ts";
 import * as diag from "./diag.ts";
 import * as editPlan from "./edit_plan.ts";
+import * as onscreen from "./onscreen.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { houseMedia, houseMediaSaved, importPaths } from "./import.ts";
@@ -61,6 +62,7 @@ export const hooks = {
   peopleSummary: (project: Project): Record<string, string> => seams.people.summary(project),
   calloutTiming: (project: Project, transcripts: Map<string, Transcript>): Json[] =>
     seams.editReview.calloutTiming(project, transcripts),
+  cutMidWord: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.cutMidWord(project, transcripts),
   offScript: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.offScript(project, transcripts),
   textNotSaid: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.textNotSaid(project, transcripts),
   subtitleCoverage: (project: Project, transcripts: Map<string, Transcript>): Json =>
@@ -217,6 +219,7 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
     throw new Error(`revision conflict: expected ${base}, current ${current.rev}; nothing saved; refresh get_edit_context`);
   }
   const project = current.project;
+  timeProfileLines(app, project, operations);
   const [assets, house] = await planAssets(app, project, operations);
   const applied = diag.timeOn("agent", "plan: apply and validate", projectId, () =>
     editPlan.applyWith(project, operations, assets),
@@ -811,14 +814,21 @@ async function withReview(project: Project, input: ProjectInput, frames: number[
 export function audited(app: App, project: Project, rev: number | null): Args {
   const audit = editPlan.audit(project) as Args & { issues: Json[] };
   const heard = cachedTranscripts(app, project, false);
-  const extra = [...hooks.calloutTiming(project, heard), ...hooks.offScript(project, heard), ...hooks.textNotSaid(project, heard)];
+  const extra = [
+    ...hooks.calloutTiming(project, heard),
+    ...hooks.offScript(project, heard),
+    ...hooks.textNotSaid(project, heard),
+    ...hooks.cutMidWord(project, heard),
+  ];
   const censor = (input: ProjectInput) => native().censorIssues(input, true);
   const { issues: censored, pending } =
     rev === null
       ? censor({ json: jsonForSerde(project) })
       : withProject(project.id, rev, () => jsonForSerde(project), censor);
-  audit.issues = editPlan.sortIssues([...audit.issues, ...extra, ...censored]);
+  const picture = onscreen.issues(project);
+  audit.issues = editPlan.sortIssues([...audit.issues, ...extra, ...censored, ...(picture.issues as Json[])]);
   if (pending.length > 0) audit.censor_check_pending = pending;
+  if (picture.pending.length > 0) audit.picture_check_pending = picture.pending;
   return audit;
 }
 
@@ -1340,6 +1350,39 @@ export function timelineTranscript(app: App, project: Project): string {
  * boards' shutter, desktop profiles' wallpaper and windows) as media of the
  * plan's own copy of the project, so it all saves once or not at all.
  */
+/**
+ * A desktop profile given no line_at types each line as the narration under
+ * it says it (Corrupt Cop's lines typed one after another while the
+ * narration was elsewhere: "Text needs to be more synced overall"); lines it
+ * never says fall between their neighbours, and with none said the profile
+ * keeps its even spacing.
+ */
+export function timeProfileLines(app: App, project: Project, operations: Json[]): void {
+  const profiles = operations.map(objectOf).filter((operation) => operation.op === "desktop_profile" && operation.line_at === undefined);
+  if (profiles.length === 0) return;
+  const heard = seams.editReview.spokenWords(project, cachedTranscripts(app, project, false));
+  for (const operation of profiles) {
+    const start = typeof operation.start === "number" ? operation.start : null;
+    const end = typeof operation.duration === "number" && start !== null ? start + operation.duration : typeof operation.end === "number" ? operation.end : null;
+    const lines = Array.isArray(operation.lines) ? operation.lines.filter((line): line is string => typeof line === "string") : [];
+    if (start === null || end === null || lines.length === 0) continue;
+    const found = seams.editReview.lineFrames(lines, heard, start, end);
+    if (found.every((frame) => frame === null)) continue;
+    // Unsaid lines between the said ones around them (or a second on from the last).
+    const at: number[] = [];
+    found.forEach((frame, index) => {
+      if (frame !== null) {
+        at.push(frame);
+        return;
+      }
+      const before = at[index - 1] ?? start;
+      const next = found.slice(index + 1).find((one) => one !== null) ?? null;
+      at.push(next !== null ? Math.round((before + next) / 2) : before + Math.round(fpsOf(project)));
+    });
+    operation.line_at = at;
+  }
+}
+
 export async function planAssets(app: App, project: Project, operations: Json[]): Promise<[editPlan.Assets, seams.Made[]]> {
   const needs = editPlan.needs(operations);
   const assets: editPlan.Assets = { shutter: null, desktops: [] };

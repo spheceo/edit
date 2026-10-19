@@ -19,6 +19,9 @@ export type ProjectInput = { ref: { id: string; rev: number } } | { json: string
 /** A face: [x0, y0, x1, y1] as shares of the picture from its top left. */
 export type Box = [number, number, number, number];
 
+/** A piece of text on screen: its box (as a face's) and what it says (screen_text.rs). */
+export type ScreenText = { b: Box; t: string };
+
 /** One export, running on its own thread. */
 export declare class ExportJob {
   /** Starts exporting; progress (0–1) comes to `onProgress`. */
@@ -427,6 +430,19 @@ export interface Scenes {
   scenes: [number, number, number | null][]
   angles: number
 }
+
+/** Frames looked at per second of source when reading text on screen. */
+export declare const SCREEN_TEXT_RATE: number
+
+/** The words on screen read in `source` so far, without looking at anything new. */
+export declare function screenTextCached(source: string): Record<number, ScreenText[]> | null
+
+/**
+ * The words on screen at `indexes` (source seconds × SCREEN_TEXT_RATE) of
+ * the footage at `source`, each with its box: from its cache, the rest read
+ * now (Vision; nothing off macOS).
+ */
+export declare function screenTextDetect(source: string, size: [number, number], indexes: number[]): Promise<Record<number, ScreenText[]>>
 
 /**
  * Scenes and camera angles in small greyscale frames (64 × 36 bytes each,

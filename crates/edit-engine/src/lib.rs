@@ -23,6 +23,7 @@ pub mod media;
 pub mod mix;
 pub mod motion;
 pub mod render;
+pub mod screen_text;
 pub mod seats;
 pub mod track;
 pub mod util;

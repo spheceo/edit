@@ -628,6 +628,9 @@ export interface CaptionsSeam {
 
 export interface EditReviewSeam {
   calloutTiming(project: Project, transcripts: Map<string, Transcript>): Json[];
+  cutMidWord(project: Project, transcripts: Map<string, Transcript>): Json[];
+  spokenWords(project: Project, transcripts: Map<string, Transcript>): [number, string][];
+  lineFrames(lines: string[], heard: [number, string][], from: number, to: number): (number | null)[];
   offScript(project: Project, transcripts: Map<string, Transcript>): Json[];
   textNotSaid(project: Project, transcripts: Map<string, Transcript>): Json[];
   subtitleCoverage(project: Project, transcripts: Map<string, Transcript>): Json;

@@ -131,6 +131,48 @@ pub async fn faces_detect(
     .await
 }
 
+/// Frames looked at per second of source when reading text on screen.
+#[napi]
+pub const SCREEN_TEXT_RATE: f64 = edit_engine::screen_text::RATE;
+
+fn texts_json(texts: &edit_engine::screen_text::Texts) -> Result<serde_json::Value, String> {
+    serde_json::to_value(texts).map_err(|error| error.to_string())
+}
+
+/// The words on screen at `indexes` (source seconds × SCREEN_TEXT_RATE) of
+/// the footage at `source`, each with its box: from its cache, the rest read
+/// now (Vision; nothing off macOS).
+#[napi(
+    ts_args_type = "source: string, size: [number, number], indexes: number[]",
+    ts_return_type = "Promise<Record<number, ScreenText[]>>"
+)]
+pub async fn screen_text_detect(
+    source: String,
+    size: Vec<u32>,
+    indexes: Vec<i64>,
+) -> napi::Result<serde_json::Value> {
+    crate::blocking("reading text on screen", move || {
+        let size = pair(&size, "size")?;
+        let indexes: BTreeSet<i64> = indexes.into_iter().collect();
+        texts_json(&edit_engine::screen_text::detect(
+            Path::new(&source),
+            size,
+            &indexes,
+        )?)
+    })
+    .await
+}
+
+/// The words on screen read in `source` so far, without looking at anything new.
+#[napi(ts_return_type = "Record<number, ScreenText[]> | null")]
+pub fn screen_text_cached(source: String) -> napi::Result<Option<serde_json::Value>> {
+    crate::sync("reading text on screen", || {
+        edit_engine::screen_text::cached(Path::new(&source))
+            .map(|texts| texts_json(&texts))
+            .transpose()
+    })
+}
+
 /// The faces found in `source` so far, without looking at anything new.
 #[napi(ts_return_type = "Record<number, Box[]> | null")]
 pub fn faces_cached(source: String) -> napi::Result<Option<serde_json::Value>> {

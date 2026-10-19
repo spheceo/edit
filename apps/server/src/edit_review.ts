@@ -128,20 +128,7 @@ function isQuote(project: Project, clip: Clip): string | null {
  */
 export function calloutTiming(project: Project, transcripts: Map<string, Transcript>): unknown[] {
   const fps = fpsOf(project);
-  // Every word heard on the timeline: (frame, stem).
-  const heard: [number, string][] = [];
-  for (const clip of project.clips) {
-    if (clip.type !== "audio") continue;
-    if (trackOf(project, clip.track)?.muted === true) continue;
-    const transcript = transcripts.get(clip.media);
-    if (transcript === undefined) continue;
-    const to = clip.source_in + (clip.duration / fps) * clip.speed;
-    for (const word of transcript.words) {
-      const middle = (word.start + word.end) / 2.0;
-      if (middle < clip.source_in || middle >= to) continue;
-      heard.push([clip.start + toI64(round(((middle - clip.source_in) / clip.speed) * fps)), stem(word.text)]);
-    }
-  }
+  const heard = spokenWords(project, transcripts);
   const near = toI64(round(0.5 * fps));
   const around = toI64(round(10.0 * fps));
   const issues: unknown[] = [];
@@ -168,6 +155,117 @@ export function calloutTiming(project: Project, transcripts: Map<string, Transcr
       if (at === null || Math.abs(frame - clip.start) < Math.abs(at - clip.start)) at = frame;
     }
     if (at !== null) issues.push({ kind: "callout_off_speech", clip: clip.id, start: clip.start, said_at: at, text });
+  }
+  // A desktop profile's lines type on as the narration says them (Corrupt
+  // Cop's: "Text needs to be more synced overall"): each line's marker
+  // ("desktop line") against where its telling words are heard.
+  const slack = toI64(round(1.0 * fps));
+  for (const marker of project.markers ?? []) {
+    if (marker.name !== "desktop line") continue;
+    const telling = tellingWords(marker.note ?? "");
+    if (telling.length === 0) continue;
+    const said = heard.filter(([frame, word]) => Math.abs(frame - marker.frame) <= around && telling.some((one) => sameWord(one, word))).map(([frame]) => frame);
+    if (said.length === 0 || said.some((frame) => Math.abs(frame - marker.frame) <= slack)) continue;
+    // Where its phrase starts: the nearest of its words heard, back to the
+    // first of them said within 3 s before it.
+    const nearest = said.reduce((best, frame) => (Math.abs(frame - marker.frame) < Math.abs(best - marker.frame) ? frame : best));
+    const phrase = toI64(round(3.0 * fps));
+    const at = Math.min(...said.filter((frame) => frame <= nearest && nearest - frame <= phrase));
+    issues.push({ kind: "profile_line_off_speech", start: marker.frame, said_at: at, text: marker.note ?? "" });
+  }
+  return issues;
+}
+
+/** Every word heard on the timeline (narration and footage, not muted tracks): its frame and stem. */
+export function spokenWords(project: Project, transcripts: Map<string, Transcript>): [number, string][] {
+  const fps = fpsOf(project);
+  const heard: [number, string][] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "audio") continue;
+    if (trackOf(project, clip.track)?.muted === true) continue;
+    const transcript = transcripts.get(clip.media);
+    if (transcript === undefined) continue;
+    const to = clip.source_in + (clip.duration / fps) * clip.speed;
+    for (const word of transcript.words) {
+      const middle = (word.start + word.end) / 2.0;
+      if (middle < clip.source_in || middle >= to) continue;
+      heard.push([clip.start + toI64(round(((middle - clip.source_in) / clip.speed) * fps)), stem(word.text)]);
+    }
+  }
+  return heard.sort((a, b) => a[0] - b[0]);
+}
+
+/** A line's words that tie it to where it's said: not "like" or "a", four letters or more (or a number). */
+function tellingWords(text: string): string[] {
+  return splitWhitespace(text)
+    .filter((word) => !word.includes("*"))
+    .map(stem)
+    .filter((word) => (charCount(word) >= 4 || /^\d+$/u.test(word)) && !COMMON.includes(word));
+}
+
+/** One word heard as another: the same stem, or one the start of the other ("sept" for "september"). */
+function sameWord(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [short, long] = charCount(a) <= charCount(b) ? [a, b] : [b, a];
+  return charCount(short) >= 4 && long.startsWith(short);
+}
+
+/**
+ * The frames a desktop profile's `lines` type on, each where the narration
+ * between `from` and `to` (frames) says it, in order: the first of its
+ * telling words heard after the line before. Null for a line it never says.
+ */
+export function lineFrames(lines: string[], heard: [number, string][], from: number, to: number): (number | null)[] {
+  let after = from;
+  return lines.map((line) => {
+    const telling = tellingWords(line.replace(/^[-•]\s*/u, ""));
+    const found = heard.find(([frame, word]) => frame >= after && frame < to && telling.some((one) => sameWord(one, word)));
+    if (found === undefined) return null;
+    after = found[0] + 1;
+    return found[0];
+  });
+}
+
+/**
+ * Footage cut inside a word: a clip of a video's own sound whose in or out
+ * point falls in a word that goes on past it, unless the next clip carries
+ * the same moment on (Corrupt Cop's "Unintentionally, sir." cut before "sir"
+ * finished). Each with the second the word ends (or starts), to cut there.
+ */
+export function cutMidWord(project: Project, transcripts: Map<string, Transcript>): unknown[] {
+  const fps = fpsOf(project);
+  const margin = 0.06;
+  const issues: unknown[] = [];
+  const sounds = project.clips.filter(
+    (clip) =>
+      clip.type === "audio" &&
+      clip.volume_db > -40 &&
+      trackOf(project, clip.track)?.muted !== true &&
+      project.media.find((media) => media.id === clip.media)?.kind === "video",
+  );
+  for (const clip of sounds) {
+    if (clip.type !== "audio") continue;
+    const transcript = transcripts.get(clip.media);
+    if (transcript === undefined) continue;
+    const from = clip.source_in;
+    const to = clip.source_in + (clip.duration / fps) * clip.speed;
+    const carried = (at: number, frame: number) =>
+      sounds.some(
+        (other) =>
+          other !== clip &&
+          other.type === "audio" &&
+          other.media === clip.media &&
+          Math.abs((frame === clip.start ? clipEnd(other) : other.start) - frame) <= 1 &&
+          Math.abs((frame === clip.start ? other.source_in + (other.duration / fps) * other.speed : other.source_in) - at) <= 0.1,
+      );
+    for (const word of transcript.words) {
+      if (word.start < to - margin && word.end > to + margin && !carried(to, clipEnd(clip))) {
+        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clipEnd(clip), side: "out", word: trim(word.text), word_ends: round(word.end * 100) / 100 });
+      }
+      if (word.start < from - margin && word.end > from + margin && !carried(from, clip.start)) {
+        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clip.start, side: "in", word: trim(word.text), word_starts: round(word.start * 100) / 100 });
+      }
+    }
   }
   return issues;
 }

@@ -1036,6 +1036,9 @@ function isMusic(clip: Clip, media: Media | undefined): boolean {
  * Deterministic review catches mechanical issues without asking a model to
  * inspect dozens of pictures. Visual/factual judgment still needs a contact sheet.
  */
+/** The smallest callout, tag or label in a courtroom video, px at 1080p (`small_text`). */
+const SMALLEST_TEXT = 60;
+
 export function audit(project: Project): { issues: Json[]; frames: number; clips: number; [field: string]: unknown } {
   const fps = fpsOf(project);
   const issues: Record<string, unknown>[] = [];
@@ -1295,6 +1298,21 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       (blur) => level(blur.track) > level(text.track) && blur.start < clipEnd(text) && clipEnd(blur) > text.start,
     );
     if (over !== undefined) issues.push({ kind: "text_under_blur", clip: text.id, blur: over.id, start: Math.max(text.start, over.start) });
+  }
+  // A courtroom video's words on screen are read on a phone over a busy
+  // hearing: callouts, tags and labels at least SMALLEST_TEXT at 1080p
+  // (Corrupt Cop's 44 px name callout and "*UNDER OATH*" tag: "text is
+  // really small here, it should be bigger"). Subtitles and the desktop
+  // profile's own window text keep their sizes.
+  if (project.style === "courtroom") {
+    const scale = project.settings.height / 1080;
+    for (const text of project.clips) {
+      if (text.type !== "text" || !visible(text.track)) continue;
+      const name = text.name ?? "";
+      if (trackOf(project, text.track)?.subtitles === true || /^(Subtitle|Caption|Desktop profile)/u.test(name)) continue;
+      const size = text.style.size / scale;
+      if (size < SMALLEST_TEXT) issues.push({ kind: "small_text", clip: text.id, start: text.start, size: round(size), at_least: SMALLEST_TEXT, text: text.text.slice(0, 40) });
+    }
   }
   return { issues: sortIssues(issues), frames: total, clips: project.clips.length };
 }

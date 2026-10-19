@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--compute-budget-usd", type=float, required=True)
     parser.add_argument("--sections", type=int, default=8)
     parser.add_argument("--gpu-workers", type=int, choices=[4, 8], default=4)
+    parser.add_argument("--cpu-verifiers", type=int, choices=[8, 16], default=8)
     parser.add_argument("--cache-volume", help="Explicit sections cache volume, never another app's volume")
     parser.add_argument("--keep-cache", action="store_true", help="Retain only this experiment's cache for a warm rerun")
     parser.add_argument("--skip-download", action="store_true", help="Measure verified cloud publication without local delivery")
@@ -75,7 +76,8 @@ def main():
     volume = args.cache_volume or ("edit-exports-sections-v3-" + run)
     if not re.fullmatch(r"edit-exports-sections-v3-[a-z0-9-]+", volume):
         raise ValueError("Use this experiment's edit-exports-sections-v3-* volume")
-    env = {**os.environ, "EDIT_MODAL_GPU": "L40S", "EDIT_SECTIONS_VOLUME": volume, "EDIT_SECTIONS_POOL": str(args.gpu_workers)}
+    env = {**os.environ, "EDIT_MODAL_GPU": "L40S", "EDIT_SECTIONS_VOLUME": volume,
+           "EDIT_SECTIONS_POOL": str(args.gpu_workers), "EDIT_VERIFIERS_POOL": str(args.cpu_verifiers)}
     baseline = json.loads(args.baseline.read_text())
     fields = {"id", "snapshot", "label", "local_seconds", "local_frames", "local_note", "snapshot_sha256"}
     selected = baseline["fixtures"][args.smoke_fixture:args.smoke_fixture + 1] if args.smoke else baseline["fixtures"]
@@ -83,6 +85,7 @@ def main():
     jobs, uploads, calls = [], [], []
     report = {"build": build_id(), "app": APP, "volume": volume, "gpu": "L40S", "gpu_pool_limit": args.gpu_workers,
               "sections_per_video": args.sections, "cpu_cores_per_worker": 4, "memory_gib_per_worker": 16,
+              "cpu_verifier_pool_limit": args.cpu_verifiers,
               "fixtures": fixtures, "maximum_execution_compute_usd": maximum, "compute_allowance_usd": args.compute_budget_usd,
               "pipeline": "v3", "keep_cache": args.keep_cache, "download_requested": not args.skip_download,
               "notes": "Same frozen fixtures, dimensions, codec, loudness and section ranges as v2. Deployment and source preparation excluded; source cache checks/transfers, GPU allocation, planning, continuous audio, assembly, parallel full finished-file decode, packet checks, multipart upload and publication included. Cached picture and sound bytes are SHA-256 checked. Estimates include CPU verification but exclude image builds, startup/idle, storage and network; not an invoice.",
@@ -185,7 +188,8 @@ def main():
                         receipt = call.get(timeout=0)
                     except TimeoutError:
                         continue
-                    if receipt["build"] != report["build"] or receipt["gpu"] != "L40S":
+                    if (receipt["build"] != report["build"] or receipt["gpu"] != "L40S"
+                            or receipt["cpu_verifier_pool_limit"] != args.cpu_verifiers):
                         raise RuntimeError("Worker configuration changed")
                     fixtures[index]["receipt"] = receipt
                     s3.complete_multipart_upload(**uploads[index], MultipartUpload={"Parts": receipt["upload"]["parts"]})

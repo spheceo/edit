@@ -10,9 +10,10 @@ from build import engine_id
 
 APP = "edit-exports-sections-v3-benchmark"
 POOL = int(os.environ.get("EDIT_SECTIONS_POOL", "4"))
+CPU_POOL = int(os.environ.get("EDIT_VERIFIERS_POOL", "8"))
 ENGINE = engine_id()
-if POOL not in {4, 8} or GPU != "L40S":
-    raise ValueError("Use four or eight L40S workers")
+if POOL not in {4, 8} or CPU_POOL not in {8, 16} or GPU != "L40S":
+    raise ValueError("Use four/eight L40S workers and eight/sixteen CPU verifiers")
 VOLUME = os.environ["EDIT_SECTIONS_VOLUME"]
 if not re.fullmatch(r"edit-exports-sections-[a-z0-9-]+", VOLUME):
     raise ValueError("Use an independent sections volume")
@@ -42,7 +43,7 @@ def section(name: str, index: int, span: tuple, identity: str):
 
 
 @app.function(image=image, cpu=(4, 4), memory=(4096, 4096), volumes={root: volume},
-              max_containers=8, timeout=240, startup_timeout=300, scaledown_window=2, retries=0, serialized=True)
+              max_containers=CPU_POOL, timeout=240, startup_timeout=300, scaledown_window=2, retries=0, serialized=True)
 def verify(name: str, index: int, span: tuple, fps: int, total: int):
     from sections_v3_runtime import verify_job
     from runtime import plain
@@ -66,6 +67,6 @@ def coordinate(job: dict):
     try:
         volume.reload()
         result = run(job, volume, section, verify, root, BUILD, ENGINE, POOL)
-        return {**result, "started": started, "finished": time.time()}
+        return {**result, "started": started, "finished": time.time(), "cpu_verifier_pool_limit": CPU_POOL}
     except Exception as error:
         raise RuntimeError(plain(error)) from None

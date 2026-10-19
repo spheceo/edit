@@ -308,9 +308,9 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
             if not 0 < output.stat().st_size <= MAX_OUTPUT:
                 raise RuntimeError("Output exceeded its size limit")
             volume.commit()
-            validation = {i: submit(verify_function, name, i, span, settings["fps"], total)
-                          for i, span in enumerate(spans)}
-            validation[-1] = submit(verify_function, name, -1, (0, total), settings["fps"], total)
+            validation = {-1: submit(verify_function, name, -1, (0, total), settings["fps"], total)}
+            validation.update({i: submit(verify_function, name, i, span, settings["fps"], total)
+                               for i, span in enumerate(spans)})
             # Incomplete multipart uploads are private. The host publishes only
             # after every validation receipt, digest and part ETag has passed.
             with ThreadPoolExecutor(max_workers=2) as pool:

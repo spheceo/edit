@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--cache-volume", help="Explicit sections cache volume, never another app's volume")
     parser.add_argument("--keep-cache", action="store_true", help="Retain only this experiment's cache for a warm rerun")
     parser.add_argument("--skip-download", action="store_true", help="Measure verified cloud publication without local delivery")
+    parser.add_argument("--caption-edit", action="store_true", help="Change one caption per frozen edit to measure partial cache reuse")
     parser.add_argument("--baseline", type=Path, default=ROOT.parent / "docs/benchmarks/modal-sections-2026-10-19.json")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -103,6 +104,11 @@ def main():
                 raise RuntimeError("The frozen benchmark changed")
             project = json.loads(raw)
             (args.output / (fixture["id"] + ".json")).write_bytes(raw)
+            if args.caption_edit:
+                caption = next(c for c in project["clips"] if c["type"] == "text" and c["start"] > 1000)
+                caption["text"] += " BENCHMARK"
+                fixture["benchmark_edit"] = {"type": "caption_text", "clip": caption["id"], "at": caption["start"]}
+                fixture["edited_project_sha256"] = hashlib.sha256(json.dumps(project, sort_keys=True).encode()).hexdigest()
             if args.smoke:
                 # Exercise a genuine edit's first 4 seconds, including nonzero
                 # section starts. The full benchmark retains every frame.
@@ -120,6 +126,8 @@ def main():
                                "key": key, "url": s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=7200)})
                 media["path"] = "asset:" + media["id"]
             fixture["input_bytes"] = sum(a["size"] for a in assets)
+            fixture["source_versions"] = [{"object_key_sha256": hashlib.sha256(a["key"].encode()).hexdigest(),
+                                          "etag": a["etag"], "bytes": a["size"]} for a in assets]
             name = f"{run}-{fixture['id']}"
             key = f"edit/test/sections-v3-benchmark/{name}.mp4"
             fixture["output_key"] = key

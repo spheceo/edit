@@ -6,6 +6,8 @@ Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as t
 
 ## Layout
 
+The code and its build config (Cargo, Bun, the Justfile) are in `app/`; paths below are relative to it. The root `Justfile` forwards every recipe there. `install.sh` and `.github/` stay at the root (installs fetch `main/install.sh`).
+
 - `crates/edit-core` — project model and frame evaluation. Pure Rust, no I/O; compiles natively and to WASM. Timeline times are integer frames; `source_in` is seconds. `Project::validate` is the contract every writer (UI, MCP) must satisfy.
 - `crates/edit-render` — the wgpu compositor. The browser preview and the export both call `Renderer::render`; never add an effect to only one side. Shaders live in `src/shaders/`.
 - `crates/edit-wasm` — wasm-bindgen wrapper; `just wasm` writes `apps/web/src/engine/pkg` (generated, gitignored).

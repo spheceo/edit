@@ -1,36 +1,36 @@
 # Rust build output
-/target/
+/app/target/
 
 # Bun workspace installs (root and every app/package)
 node_modules/
 
 # Web build output and the generated WASM engine
-/apps/web/dist/
-/apps/web/src/engine/pkg
+/app/apps/web/dist/
+/app/apps/web/src/engine/pkg
 
 # macOS metadata
 .DS_Store
 
 # Local caches (Wrangler's holds Cloudflare account details)
-/apps/relay/.wrangler/
-/apps/relay/.dev.vars
+/app/apps/relay/.wrangler/
+/app/apps/relay/.dev.vars
 *.tsbuildinfo
 
 # Tauri build output
-/crates/edit-window/gen/
+/app/crates/edit-window/gen/
 
 # The release binary's entry (apps/server/scripts/embed.ts writes it)
-/apps/server/src/embedded.gen.ts
+/app/apps/server/src/embedded.gen.ts
 
 # Mood-board stills from other channels: kept locally, not published
 /docs/moodboard/shots/
 /.claude/worktrees/
-/apps/relay/node_modules/
-/packages/*/node_modules/
+/app/apps/relay/node_modules/
+/app/packages/*/node_modules/
 
 # The native addon (built by `just native`) and its tooling
-/crates/edit-native/node_modules/
-/crates/edit-native/*.node
+/app/crates/edit-native/node_modules/
+/app/crates/edit-native/*.node
 
 # Release output (`just release`)
-/package/
+/app/package/

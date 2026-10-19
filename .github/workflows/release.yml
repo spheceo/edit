@@ -15,6 +15,11 @@ on:
 permissions:
   contents: write
 
+# The code and its build config live in app/.
+defaults:
+  run:
+    working-directory: app
+
 env:
   TAG: ${{ github.ref_name }}
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -48,6 +53,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app
       - name: Install wasm-bindgen (the version in Cargo.lock)
         run: |
           version="$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
@@ -62,7 +69,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: web-dist
-          path: apps/web/dist
+          path: app/apps/web/dist
 
   build:
     needs: web
@@ -80,10 +87,11 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          workspaces: app
       - uses: actions/download-artifact@v8
         with:
           name: web-dist
-          path: apps/web/dist
+          path: app/apps/web/dist
       - uses: oven-sh/setup-bun@v2
       # The addon and the window helper, then everything embedded in one `edit`
       # (apps/server/scripts/embed.ts); `bun build --compile` leaves the
@@ -143,12 +151,16 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.NAME }}
-          path: dist
+          path: app/dist
 
   publish:
     needs: build
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # No checkout here, so no app/ to run in.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Publish the release
         run: gh release edit "$TAG" --draft=false --latest

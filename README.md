@@ -24,15 +24,16 @@ just publish  # release the next patch version
 ```
 
 ```text
-apps/server          the server (Bun): API, media jobs, export, MCP, agent
-apps/web             React UI
-apps/relay           Cloudflare Worker holding API keys
-crates/edit-core     project model + frame evaluation (native and WASM)
-crates/edit-render   wgpu compositor shared by preview and export
-crates/edit-engine   native media, render and export engine
-crates/edit-native   the engine as a Bun addon (napi-rs)
-crates/edit-wasm     the compositor in the browser
-crates/edit-window   the desktop window (Tauri)
+app/                       all the code and its build config (`just` works from the root)
+app/apps/server            the server (Bun): API, media jobs, export, MCP, agent
+app/apps/web               React UI
+app/apps/relay             Cloudflare Worker holding API keys
+app/crates/edit-core       project model + frame evaluation (native and WASM)
+app/crates/edit-render     wgpu compositor shared by preview and export
+app/crates/edit-engine     native media, render and export engine
+app/crates/edit-native     the engine as a Bun addon (napi-rs)
+app/crates/edit-wasm       the compositor in the browser
+app/crates/edit-window     the desktop window (Tauri)
 ```
 
 Data lives in `~/.edit` (`EDIT_HOME` overrides); exports default to `~/Movies/Edit/`. From another device, `tailscale serve --bg http://127.0.0.1:7700` (WebGPU needs HTTPS).

@@ -38,14 +38,24 @@ test("names the sources spell, a person's surname on its own too, and nothing th
       ["Van Nuys", "Los Angeles Police Department"],
       ARTICLE,
     ),
-  ).toEqual(["Stephanie Lazarus", "John Ruetten", "Sherri Rasmussen", "Van Nuys", "Lazarus", "Ruetten", "Rasmussen"]);
+  ).toEqual(["Stephanie Lazarus", "Lazarus", "John Ruetten", "Ruetten", "Sherri Rasmussen", "Rasmussen", "Van Nuys"]);
+});
+
+test("the case's own names come first, and a page's clutter said once is left out when there are enough", () => {
+  // Thirty case names said twice each, John Ruetten most, and the page's sidebar.
+  const cast = Array.from({ length: 30 }, (_, n) => `Person ${String.fromCharCode(65 + (n % 26))}${String.fromCharCode(97 + Math.floor(n / 26))}x`);
+  const said = `${cast.join(" ")} ${cast.join(" ")} John Ruetten John Ruetten John Ruetten Taylor Swift Pope Leo`;
+  const terms = keyTerms([...cast, "Taylor Swift", "John Ruetten", "Pope Leo"], [], said);
+  expect(terms.slice(0, 2)).toEqual(["John Ruetten", "Ruetten"]);
+  expect(terms).not.toContain("Taylor Swift");
+  expect(terms).not.toContain("Pope Leo");
 });
 
 test("at most a hundred, each under 50 characters and five words", () => {
   const many = Array.from({ length: 150 }, (_, n) => `Name${"x".repeat(n % 5)} ${String.fromCharCode(65 + (n % 26))}${String.fromCharCode(97 + Math.floor(n / 26))}`);
   const said = many.join(" ");
   expect(keyTerms(many, [], said).length).toBeLessThanOrEqual(100);
-  expect(keyTerms(["One Two Three Four Five Six"], [], "one two three four five six")).toEqual(["Six"]);
+  expect(keyTerms(["One Two Three Four Five Six"], [], "one two three four five six")).toEqual([]);
 });
 
 test("a transcript heard with some names is heard again only for ones it wasn't given", () => {
@@ -73,8 +83,8 @@ test.skipIf(ffmpeg === null)("footage heard without the case's names is heard ag
     mock.on("POST", "/v1/chat/completions", () => Response.json({ choices: [{ message: { content: JSON.stringify({ people: ["John Ruetten", "Stephanie Lazarus"], places: ["Van Nuys"] }) } }] }), 1);
     const heard = await transcriptOf(app, media, project);
     const asked = mock.calls("/v1/transcribe", "POST").slice(first);
-    expect(asked.map((call) => call.query.getAll("keyterm"))).toEqual([["John Ruetten", "Stephanie Lazarus", "Van Nuys", "Ruetten", "Lazarus"]]);
-    expect(heard.keyterms).toEqual(["John Ruetten", "Stephanie Lazarus", "Van Nuys", "Ruetten", "Lazarus"]);
+    expect(asked.map((call) => call.query.getAll("keyterm"))).toEqual([["John Ruetten", "Ruetten", "Stephanie Lazarus", "Lazarus", "Van Nuys"]]);
+    expect(heard.keyterms).toEqual(["John Ruetten", "Ruetten", "Stephanie Lazarus", "Lazarus", "Van Nuys"]);
     expect(fs.existsSync(join(app.store.home, "research", project.id, "names.json"))).toBe(true);
     // Asked again: the names are kept and the transcript has them.
     await transcriptOf(app, media, project);

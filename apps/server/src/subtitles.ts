@@ -1058,7 +1058,10 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
     });
   }
   if (!latestRun(projectId, run)) return SUPERSEDED;
+  // Per voice: lines in footage with seats that sat under the face, and that didn't.
+  const seatedLines = new Map<string, [under: number, bottom: number]>();
   const [after, [placed, skipped, outside, texts]] = await app.store.update(projectId, "agent", (edited) => {
+    seatedLines.clear();
     // Stacked lines (overlap) go on tracks of their own under the
     // subtitles' track, made as needed; a re-run removes them by name.
     const tracks: string[] = [];
@@ -1127,6 +1130,12 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
           const dot = seated.get(mediaId)?.dot(voice.name, at) ?? null;
           if (dot !== null) face = onProject(dot, size, transform, [width, height]);
         }
+      }
+      const inSeated = footage.some(([s, e]) => s <= start && start < e);
+      if (inSeated) {
+        const tally = seatedLines.get(line.speaker) ?? [0, 0];
+        tally[face === null ? 1 : 0] += 1;
+        seatedLines.set(line.speaker, tally);
       }
       const laid = (face === null ? null : underFace(face, line.text, width, height, k)) ?? (() => {
         const wrap = f32(f32(f32(width) * f32(0.8)) - f32(24.0 * k));
@@ -1198,6 +1207,13 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
       color: voice.color,
       lines: counts.get(key) ?? 0,
       shown: !hiddenRole(voice.role),
+      // On camera with others placed under their faces, this one's lines
+      // sat bottom middle: no seat under this name (a person named twice,
+      // Killer Couple's "Sergeant" and "Mike (Sergeant)"), or off camera.
+      ...(() => {
+        const [under, bottom] = seatedLines.get(key) ?? [0, 0];
+        return bottom > 0 && bottom >= under ? { not_under_face: bottom } : {};
+      })(),
     };
   });
   return {

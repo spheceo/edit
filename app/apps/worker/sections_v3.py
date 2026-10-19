@@ -21,23 +21,18 @@ for module in ["sections_runtime.py", "sections_v3_runtime.py"]:
     image = image.add_local_file(Path(__file__).with_name(module), "/opt/edit/" + module, copy=True)
 
 
-def folder(name):
-    if not re.fullmatch(r"[a-z0-9-]{1,100}", name):
-        raise ValueError("Invalid experiment identifier")
-    return root / name
-
-
 @app.function(image=image, gpu=GPU, cpu=(4, 4), memory=(16384, 16384), volumes={root: volume},
               max_containers=POOL, timeout=300, startup_timeout=300, scaledown_window=2, retries=0, serialized=True)
 def section(name: str, index: int, span: tuple, identity: str):
     from sections_v3_runtime import render_section
     from runtime import plain
-    if not 0 <= index < 8 or not re.fullmatch(r"[0-9a-f]{64}", identity):
+    if (not re.fullmatch(r"[a-z0-9-]{1,100}", name) or not 0 <= index < 8
+            or not re.fullmatch(r"[0-9a-f]{64}", identity)):
         raise ValueError("Invalid section identity")
     started = time.time()
     try:
         volume.reload()
-        result = render_section(folder(name), root / "cache-v3", index, span, identity)
+        result = render_section(root / name, root / "cache-v3", index, span, identity)
         volume.commit()
     except Exception as error:
         raise RuntimeError(plain(error)) from None
@@ -49,9 +44,13 @@ def section(name: str, index: int, span: tuple, identity: str):
 def verify(name: str, index: int, span: tuple, fps: int, total: int):
     from sections_v3_runtime import verify_job
     from runtime import plain
+    if not re.fullmatch(r"[a-z0-9-]{1,100}", name) or not -1 <= index < 8:
+        raise ValueError("Invalid verification input")
+    started = time.time()
     try:
         volume.reload()
-        return verify_job(folder(name), index, span, fps, total)
+        result = verify_job(root / name, index, span, fps, total)
+        return {**result, "started": started, "finished": time.time()}
     except Exception as error:
         raise RuntimeError(plain(error)) from None
 
@@ -61,8 +60,10 @@ def verify(name: str, index: int, span: tuple, fps: int, total: int):
 def coordinate(job: dict):
     from sections_v3_runtime import coordinate as run
     from runtime import plain
+    started = time.time()
     try:
         volume.reload()
-        return run(job, volume, section, verify, root, BUILD, POOL)
+        result = run(job, volume, section, verify, root, BUILD, POOL)
+        return {**result, "started": started, "finished": time.time()}
     except Exception as error:
         raise RuntimeError(plain(error)) from None

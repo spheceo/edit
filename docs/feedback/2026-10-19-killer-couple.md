@@ -17,3 +17,12 @@ At 11:22 the bald detective on the left (Mike) was "Mike (Sergeant)" in light bl
 ## Not fixed in code: one window's watcher gave Mike's speech to the other detective
 
 In 10:27–14:31 the watcher gave voice 0's long speech (13:24–14:30, "so basically, I just want you to know what we're investigating") to the detective in the foreground (back to the camera). It did the same at low and at medium thinking. The next window, which starts mid-speech, gives voice 0 to Mike; the seats place voice 0 under Mike; he gestures through it; and the user hears one man. Corrected by hand in the transcript (voice 0 in that window → Mike's voice). The way to catch it in code: when two windows disagree about a voice that talks across the edge between them, watch a window across that edge to decide.
+
+## Then the seats swapped the two detectives
+
+With the names joined, `repack_subtitles` worked the seats out again (new names), and put "Jeff (Detective)" on the bald man and "Mike (Detective)" on the one in the foreground: the right colours under the wrong faces. The seats guessed who is who on their own, from names and sound in two 90 s stretches, and both stretches fell in the second interrogation, so Phazion had no seat.
+
+| | |
+|---|---|
+| Code | The cast keeps each person's look and place (`transcript.looks`); the seats are told them ("Mike (Detective): bald, black POLICE polo; left side of the table") and find that face, worked out again when the looks change; an angle gets more stretches (up to six) until everyone who says much in it is in one. Run on this video: Mike on the bald man, Jeff on the foreground, Phazion seated. |
+| Tool | `not_under_face` (above) also catches a person with no seat. |

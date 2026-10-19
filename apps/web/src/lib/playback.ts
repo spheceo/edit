@@ -62,6 +62,8 @@ class Preview {
   engine: Engine | null = null;
   sections: Sections | null = null;
   error: string | null = null;
+  /** The error is the engine refusing the project (cleared when it takes one). */
+  private refused = false;
   buffering = false;
   /** Waiting on a frame for long enough that something's probably wrong. */
   stuck = false;
@@ -169,7 +171,7 @@ class Preview {
       }
       this.retire();
       this.engine = engine;
-      if (this.project) engine.setProject(projectJson(this.project));
+      if (this.project) this.sendProject(engine, this.project);
       this.engineStale = false;
       for (const [media, levels] of this.peaks) if (levels instanceof Uint8Array) engine.setPeaks(media, levels);
       this.readSections();
@@ -208,21 +210,40 @@ class Preview {
   /**
    * Runs an engine call. A Rust panic poisons the WASM instance, so a panic
    * retires this engine and builds a fresh one on the same canvas instead of
-   * letting the error escape into React. With `refusable`, an error the
-   * engine returned (a project it refuses) leaves it as it was: nothing is
-   * poisoned, and the previous project stays on screen.
+   * letting the error escape into React. A project it refuses is
+   * `sendProject`'s, which keeps the engine.
    */
-  private use<T>(call: (engine: Engine) => T, refusable = false): T | undefined {
+  /**
+   * The project into the engine. One it refuses (its model's rules: a page
+   * older than the server checks with the old ones) is said on the preview,
+   * never a black frame: a preview built before people's white bystanders
+   * were allowed showed Mom Leaves 5 Kids as black from start to end.
+   */
+  private sendProject(engine: Engine, project: Project) {
+    try {
+      engine.setProject(projectJson(project));
+    } catch (error) {
+      if (error instanceof WebAssembly.RuntimeError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      this.refused = true;
+      this.error = `The preview can't show this project: ${message}. If Edit was just updated, reload the page.`;
+      note("error", "preview", this.error);
+      this.notify();
+      return;
+    }
+    if (this.refused) {
+      this.refused = false;
+      this.error = null;
+      this.notify();
+    }
+  }
+
+  private use<T>(call: (engine: Engine) => T): T | undefined {
     const engine = this.engine;
     if (!engine) return undefined;
     try {
       return call(engine);
     } catch (error) {
-      if (refusable && !(error instanceof WebAssembly.RuntimeError)) {
-        console.warn("edit engine refused a call", error);
-        note("error", "preview", `the preview refused a change: ${error instanceof Error ? error.message : String(error)}`);
-        return undefined;
-      }
       console.warn("edit engine failed; restarting", error);
       this.engine = null;
       if (this.canvas && this.restarts < 3) {
@@ -356,7 +377,7 @@ class Preview {
     if (!this.engineStale || !this.engine || !this.project) return;
     this.engineStale = false;
     const project = this.project;
-    this.use((engine) => engine.setProject(projectJson(project)), true);
+    this.use((engine) => this.sendProject(engine, project));
     this.readSections();
     this.notify();
   }

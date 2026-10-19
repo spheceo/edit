@@ -85,6 +85,16 @@ describe("preview seeks and lifetime", () => {
   });
   afterEach(() => { preview.detach(); vi.unstubAllGlobals(); });
 
+  it("says on the preview when the engine refuses a project, and clears it when one is taken", () => {
+    // A page older than the server checks the project with older rules.
+    engine.setProject.mockImplementationOnce(() => { throw new Error("Bystander (p43) can't be white or a near-white grey"); });
+    preview.setProject(fixture(), {}); draw();
+    expect(preview.error).toContain("can't show this project: Bystander (p43)");
+    expect(preview.error).toContain("reload the page");
+    preview.setProject(fixture("p2"), {}); draw();
+    expect(preview.error).toBeNull();
+  });
+
   it("restores each project's playhead and checkpoints before leaving", () => {
     preview.setProject(fixture(), {}); preview.seek(42);
     preview.setProject(fixture("p2"), {}); expect(playhead.frame).toBe(0);

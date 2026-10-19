@@ -162,24 +162,82 @@ def download(asset, dest, client, control):
         partial.unlink(missing_ok=True)
 
 
+RANGE_BYTES = 32 * 1024 * 1024
+RANGE_THRESHOLD = 64 * 1024 * 1024
+DOWNLOAD_CONCURRENCY = 8
+
+
+def download_range(asset, descriptor, first, last, client, control):
+    headers = {"if-match": asset["etag"], "range": f"bytes={first}-{last}", "accept-encoding": "identity"}
+    with client.stream("GET", asset["url"], headers=headers, timeout=30) as response:
+        response.raise_for_status()
+        if response.headers.get("etag", "").strip('"') != asset["etag"].strip('"'):
+            raise RuntimeError("An input changed after the export snapshot")
+        if response.status_code != 206 or response.headers.get("content-range") != f"bytes {first}-{last}/{asset['size']}" or response.headers.get("content-encoding", "identity") != "identity":
+            raise RuntimeError("An input server returned the wrong byte range")
+        offset = first
+        for chunk in response.iter_bytes(1024 * 1024):
+            control.check()
+            if offset + len(chunk) > last + 1:
+                raise RuntimeError("An input range exceeded its declared size")
+            view = memoryview(chunk)
+            while view:
+                written = os.pwrite(descriptor, view, offset)
+                if written <= 0:
+                    raise RuntimeError("An input range could not be written")
+                offset += written
+                view = view[written:]
+        if offset != last + 1:
+            raise RuntimeError("An input range was truncated")
+
+
 def stage(assets, folder, client, control):
-    paths = {}
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        work = []
-        for i, asset in enumerate(assets):
-            dest = folder / f"asset-{i}"
-            paths[asset["media"]] = str(dest)
-            work.append(pool.submit(download, asset, dest, client, control))
-        while any(not item.done() for item in work):
+    """One bounded pool serves files and ranges, including a single huge source.
+
+    Each range is version/length pinned and writes to its own offset. A sparse
+    partial is never exposed as an asset until every range has succeeded.
+    """
+    started = time.monotonic()
+    paths, partials = {}, []
+    try:
+        with ThreadPoolExecutor(max_workers=DOWNLOAD_CONCURRENCY) as pool:
+            work = []
+            for i, asset in enumerate(assets):
+                dest = folder / f"asset-{i}"
+                paths[asset["media"]] = str(dest)
+                if asset["size"] < RANGE_THRESHOLD:
+                    work.append(pool.submit(download, asset, dest, client, control))
+                    continue
+                partial = dest.with_suffix(".partial")
+                descriptor = os.open(partial, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+                partials.append((partial, dest, descriptor))
+                os.ftruncate(descriptor, asset["size"])
+                for first in range(0, asset["size"], RANGE_BYTES):
+                    last = min(first + RANGE_BYTES, asset["size"]) - 1
+                    work.append(pool.submit(download_range, asset, descriptor, first, last, client, control))
             try:
-                control.heartbeat()
-            except Exception:
+                while any(not item.done() for item in work):
+                    for item in work:
+                        if item.done():
+                            item.result()
+                    control.heartbeat()
+                    time.sleep(0.25)
+                for item in work:
+                    item.result()
+            except BaseException:
                 control.stop.set()
+                for item in work:
+                    item.cancel()
                 raise
-            time.sleep(0.25)
-        for item in work:
-            item.result()
-    return paths
+        for partial, dest, _ in partials:
+            partial.replace(dest)
+        print(json.dumps({"phase": "inputs", "id": control.job["id"],
+                          "bytes": sum(a["size"] for a in assets), "seconds": time.monotonic() - started}), flush=True)
+        return paths
+    finally:
+        for partial, _, descriptor in partials:
+            os.close(descriptor)
+            partial.unlink(missing_ok=True)
 
 
 def verify(path, manifest, folder, control):

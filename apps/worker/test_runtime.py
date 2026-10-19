@@ -62,6 +62,39 @@ class RuntimeTests(unittest.TestCase):
             paths = stage(assets, Path(directory), client, control)
             self.assertEqual({key: Path(path).read_text() for key, path in paths.items()}, {str(i): str(i) for i in range(4)})
 
+    def test_one_large_file_uses_parallel_ranges_and_assembles_exact_bytes(self):
+        source = b"abcdefghijklmno"
+        barrier = threading.Barrier(4)
+        def handler(request):
+            if request.url.host == "relay.test":
+                return httpx.Response(200, json={"ok": True})
+            self.assertEqual(request.headers["if-match"], '"v1"')
+            first, last = map(int, request.headers["range"].removeprefix("bytes=").split("-"))
+            barrier.wait(timeout=2)
+            return httpx.Response(206, headers={"etag": '"v1"', "content-range": f"bytes {first}-{last}/{len(source)}"},
+                                  content=source[first:last + 1])
+        client, control = self.control(handler)
+        assets = [{"media": "m", "url": "https://r2.test/file", "etag": '"v1"', "size": len(source)}]
+        with tempfile.TemporaryDirectory() as directory, patch("runtime.RANGE_THRESHOLD", 1), patch("runtime.RANGE_BYTES", 4):
+            paths = stage(assets, Path(directory), client, control)
+            self.assertEqual(Path(paths["m"]).read_bytes(), source)
+            self.assertFalse(list(Path(directory).glob("*.partial")))
+
+    def test_bad_or_truncated_range_never_publishes_a_sparse_asset(self):
+        for status, headers, content, error in [
+            (200, {"etag": '"v1"'}, b"data", "wrong byte range"),
+            (206, {"etag": '"v1"', "content-range": "bytes 0-2/4"}, b"dat", "wrong byte range"),
+            (206, {"etag": '"v1"', "content-range": "bytes 0-3/4"}, b"da", "truncated"),
+            (206, {"etag": '"v2"', "content-range": "bytes 0-3/4"}, b"data", "changed"),
+        ]:
+            with self.subTest(error=error, headers=headers):
+                client, control = self.control(lambda request: httpx.Response(200, json={"ok": True})
+                                               if request.url.host == "relay.test" else httpx.Response(status, headers=headers, content=content))
+                with tempfile.TemporaryDirectory() as directory, patch("runtime.RANGE_THRESHOLD", 1), patch("runtime.RANGE_BYTES", 4):
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        stage([{"media": "m", "url": "https://r2.test/file", "etag": '"v1"', "size": 4}], Path(directory), client, control)
+                    self.assertFalse(list(Path(directory).iterdir()))
+
     def test_only_verified_uploaded_parts_are_completed(self):
         calls = []
         def handler(request):

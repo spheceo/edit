@@ -5,7 +5,12 @@ const decoding = vi.hoisted(() => ({
   gate: null as Promise<void> | null,
   /** Opens that fail before one succeeds. */
   failOpens: 0,
-  closed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(), audioRanges: vi.fn(), videoOpened: vi.fn(), scrubbed: vi.fn(), keyed: vi.fn(), sampled: vi.fn(),
+  closed: vi.fn(), pictureClosed: vi.fn(), disposed: vi.fn(), iteratorClosed: vi.fn(), audioRanges: vi.fn(), videoOpened: vi.fn(), scrubbed: vi.fn(), keyed: vi.fn(), sampled: vi.fn(),
+}));
+/** A decoded picture: on Windows Chrome it holds one of the hardware decoder's few surfaces until closed. */
+const picture = vi.hoisted(() => (timestamp: number) => ({
+  timestamp: timestamp * 1e6, duration: 1e6 / 30, format: "NV12", codedWidth: 4, codedHeight: 2, displayWidth: 4, displayHeight: 2,
+  visibleRect: null, colorSpace: {}, allocationSize: () => 12, copyTo: async () => [], close: () => decoding.pictureClosed(timestamp),
 }));
 vi.mock("mediabunny", () => ({
   ALL_FORMATS: [],
@@ -26,7 +31,7 @@ vi.mock("mediabunny", () => ({
     async getSample(time: number) {
       decoding.sampled(time);
       const timestamp = Math.floor(time * 30 + 1e-9) / 30;
-      return { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => ({ timestamp: timestamp * 1e6 }) };
+      return { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => picture(timestamp) };
     }
     // A 30 fps source decoded forward from the frame shown at `start`.
     async *samplesAtTimestamps(times: number[]) {
@@ -34,7 +39,7 @@ vi.mock("mediabunny", () => ({
       for (const time of times) {
         const timestamp = Math.floor(time * 30 + 1e-9) / 30;
         if (timestamp === 0 && decoding.gate) await decoding.gate;
-        yield { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => ({ timestamp: timestamp * 1e6 }) };
+        yield { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => picture(timestamp) };
       }
     }
     samples(start: number, end = Infinity) {
@@ -44,7 +49,7 @@ vi.mock("mediabunny", () => ({
           for (let frame = Math.floor(start * 30 + 1e-9); frame / 30 < end; frame++) {
             const timestamp = frame / 30;
             if (frame === 0 && decoding.gate) await decoding.gate;
-            yield { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => ({ timestamp: timestamp * 1e6 }) };
+            yield { timestamp, duration: 1 / 30, close: () => decoding.closed(timestamp), toVideoFrame: () => picture(timestamp) };
           }
         } finally { decoding.iteratorClosed(); }
       })();
@@ -189,4 +194,29 @@ describe("decoder worker scheduling and PCM boundaries", () => {
     }
   });
 
+});
+
+describe("decoder worker on Windows", () => {
+  let messages: DecodeResponse[];
+  let scope: { onmessage: ((event: MessageEvent<DecodeRequest>) => void) | null; postMessage: (data: DecodeResponse) => void };
+  class Copy { constructor(public data: unknown, public init: { timestamp: number }) {} get timestamp() { return this.init.timestamp; } }
+  beforeEach(async () => {
+    vi.resetModules(); vi.clearAllMocks(); decoding.gate = null; decoding.failOpens = 0; messages = [];
+    scope = { onmessage: null, postMessage: (data) => messages.push(data) };
+    vi.stubGlobal("self", scope);
+    vi.stubGlobal("VideoFrame", Copy);
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0" });
+    await import("./decode.worker");
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Chrome there decodes into a pool of ~9 hardware surfaces; the preview's cache held them all and playback stalled on "Loading frame".
+  it("posts a copy of each picture and gives the decoder's surface back at once", async () => {
+    scope.onmessage!({ data: { type: "video", id: 1, key: "file", url: "/file", lane: "v:clip", times: [1, 1 + 1 / 30], playing: true } } as MessageEvent<DecodeRequest>);
+    await vi.waitFor(() => expect(messages.some((m) => m.type === "done" && m.id === 1)).toBe(true));
+    const frames = messages.flatMap((m) => m.type === "video" ? [m.frame as unknown] : []);
+    expect(frames).toHaveLength(2);
+    expect(frames.every((frame) => frame instanceof Copy)).toBe(true);
+    expect(decoding.pictureClosed.mock.calls.map(([time]) => Math.round(time * 30))).toEqual([30, 31]);
+  });
 });

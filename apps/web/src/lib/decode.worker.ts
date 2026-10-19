@@ -112,6 +112,47 @@ function closeCursor(lane: Lane) {
   letGo(cursor.file);
 }
 
+/**
+ * Off macOS, a picture is copied out of the decoder before it's handed over.
+ * Chrome on Windows decodes into a small pool of GPU surfaces and decodes
+ * nothing more until one comes back; the preview keeps its pictures in a
+ * cache, so after about nine the decoder stopped for good ("loading frame" on
+ * a Windows PC, nine frames decoded and none after). macOS's pool is large
+ * enough that the copy would only cost time.
+ */
+const COPY_PICTURES =
+  typeof VideoFrame !== "undefined" && typeof navigator !== "undefined" && !/Macintosh|Mac OS X/.test(navigator.userAgent);
+
+/** A sample's picture as a frame the caller owns, never holding the decoder's surface off macOS. */
+async function owned(sample: VideoSample): Promise<VideoFrame> {
+  const frame = sample.toVideoFrame();
+  if (!COPY_PICTURES) return frame;
+  try {
+    if (frame.format !== null) {
+      const data = new Uint8Array(frame.allocationSize());
+      const layout = await frame.copyTo(data);
+      return new VideoFrame(data, {
+        format: frame.format,
+        codedWidth: frame.codedWidth,
+        codedHeight: frame.codedHeight,
+        timestamp: frame.timestamp,
+        duration: frame.duration ?? undefined,
+        layout,
+        visibleRect: frame.visibleRect ?? undefined,
+        displayWidth: frame.displayWidth,
+        displayHeight: frame.displayHeight,
+        colorSpace: frame.colorSpace,
+      });
+    }
+    // A picture the browser won't hand over as bytes: drawn once onto a canvas of our own.
+    const canvas = new OffscreenCanvas(frame.displayWidth, frame.displayHeight);
+    canvas.getContext("2d")!.drawImage(frame, 0, 0);
+    return new VideoFrame(canvas, { timestamp: frame.timestamp, duration: frame.duration ?? undefined });
+  } finally {
+    frame.close();
+  }
+}
+
 /** The decoded picture shown at `time`: the last frame starting at or before it. */
 async function pictureAt(cursor: Cursor, time: number) {
   for (;;) {
@@ -140,7 +181,7 @@ async function decodeVideo(job: Extract<DecodeJob, { type: "video" }>, file: Fil
       const sample = await pictureAt(cursor, time);
       if (lane.cancelled) break;
       if (!sample) throw new Error("No video frame at the requested source time");
-      frame = sample.toVideoFrame();
+      frame = await owned(sample);
     } else if (job.playing) {
       // Playback reads on from here until the lane is released.
       closeCursor(lane);
@@ -149,7 +190,7 @@ async function decodeVideo(job: Extract<DecodeJob, { type: "video" }>, file: Fil
       const sample = await pictureAt(lane.cursor, time);
       if (lane.cancelled) break;
       if (!sample) throw new Error("No video frame at the requested source time");
-      frame = sample.toVideoFrame();
+      frame = await owned(sample);
     } else if (job.rough) {
       // Mid-drag, the keyframe at or before the time stands in: one packet to
       // fetch and decode instead of a run of them. The exact frame follows once
@@ -160,7 +201,7 @@ async function decodeVideo(job: Extract<DecodeJob, { type: "video" }>, file: Fil
       if (!sample) throw new Error("No video frame at the requested source time");
       try {
         if (lane.cancelled) break;
-        frame = sample.toVideoFrame();
+        frame = await owned(sample);
         scope.postMessage({ type: "video", id: job.id, key: job.key, time: sample.timestamp, frame, rough: true }, [frame]);
       } finally { sample.close(); }
       continue;
@@ -172,7 +213,7 @@ async function decodeVideo(job: Extract<DecodeJob, { type: "video" }>, file: Fil
       if (!sample) throw new Error("No video frame at the requested source time");
       try {
         if (lane.cancelled) break;
-        frame = sample.toVideoFrame();
+        frame = await owned(sample);
       } finally { sample.close(); }
     }
     scope.postMessage({ type: "video", id: job.id, key: job.key, time: requested, frame }, [frame]);

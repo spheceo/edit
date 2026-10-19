@@ -1,5 +1,5 @@
-// The export dialog's model: options (as apps/server/src/exports.ts reads
-// them), presets, chapters from the script, and what an export will make.
+// The export's model: options (as apps/server/src/exports.ts reads them),
+// the house defaults, chapters from the script, and what an export will make.
 
 import type { Project, Sections } from "./types";
 
@@ -34,15 +34,7 @@ export interface ExportOptions {
   chapters: Chapter[];
 }
 
-/** Which formats and encoders this machine's FFmpeg has (GET /api/export/encoders). */
-export interface Encoders {
-  videotoolbox: boolean;
-  hevc: boolean;
-  prores: boolean;
-  mp3: boolean;
-}
-
-export const FORMATS: { value: Format; label: string; extension: string }[] = [
+const FORMATS: { value: Format; label: string; extension: string }[] = [
   { value: "h264", label: "MP4 · H.264", extension: "mp4" },
   { value: "hevc", label: "MP4 · HEVC (smaller)", extension: "mp4" },
   { value: "prores", label: "MOV · ProRes 422 HQ", extension: "mov" },
@@ -52,13 +44,9 @@ export const FORMATS: { value: Format; label: string; extension: string }[] = [
   { value: "png", label: "PNG (one frame)", extension: "png" },
 ];
 
-export const hasVideo = (format: Format) => format !== "wav" && format !== "mp3";
-export const hasAudio = (format: Format) => format !== "gif" && format !== "png";
-export const hasChapters = (format: Format) => format === "h264" || format === "hevc" || format === "prores";
-export const isMp4 = (format: Format) => format === "h264" || format === "hevc";
+const hasAudio = (format: Format) => format !== "gif" && format !== "png";
+const isMp4 = (format: Format) => format === "h264" || format === "hevc";
 export const extensionOf = (format: Format) => FORMATS.find((entry) => entry.value === format)!.extension;
-
-export type SpanChoice = "inout" | "whole" | "intro";
 
 /** What an export is unless you change it: YouTube at 1080p. */
 export const DEFAULTS: Omit<ExportOptions, "range" | "chapters"> = {
@@ -73,12 +61,6 @@ export const DEFAULTS: Omit<ExportOptions, "range" | "chapters"> = {
   audio: true,
   loudness: -14,
 };
-
-export const LOUDNESS: { value: number; label: string }[] = [
-  { value: -14, label: "−14 LUFS · YouTube, Spotify" },
-  { value: -16, label: "−16 LUFS · Apple, podcasts" },
-  { value: -23, label: "−23 LUFS · broadcast" },
-];
 
 /** Rounds down to even, at least 2 (as export.rs). */
 const even = (value: number) => Math.max(2, Math.round(value) & ~1);
@@ -146,19 +128,6 @@ function spaced(chapters: Chapter[], fps: number) {
     if (!last || (chapter.start - last.start) / fps >= LEAST_CHAPTER) kept.push(chapter);
   }
   return kept;
-}
-
-const clock = (seconds: number) => {
-  const whole = Math.floor(seconds);
-  const h = Math.floor(whole / 3600);
-  const m = Math.floor((whole % 3600) / 60);
-  const s = String(whole % 60).padStart(2, "0");
-  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
-};
-
-/** Chapters as a YouTube description list ("0:00 Intro"), timed from the span's start. */
-export function youtubeChapters(chapters: Chapter[], span: [number, number], fps: number) {
-  return chapters.map((chapter, index) => `${clock(index === 0 ? 0 : (chapter.start - span[0]) / fps)} ${chapter.title}`).join("\n");
 }
 
 /**

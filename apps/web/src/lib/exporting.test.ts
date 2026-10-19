@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chaptersInSpan, outputSize, youtubeChapters } from "./exporting";
+import { chaptersInSpan, outputSize } from "./exporting";
 
 describe("export", () => {
   it("sizes each shape from the short side, as the server does", () => {
@@ -24,9 +24,12 @@ describe("export", () => {
     ];
     const whole = chaptersInSpan(chapters, [0, 1210 * fps], fps);
     expect(whole.map((chapter) => chapter.title)).toEqual(["Intro", "On July 13, 2024, Kent police…", "The man trapped behind the wheel…"]);
-    expect(youtubeChapters(whole, [0, 1210 * fps], fps)).toBe("0:00 Intro\n0:33 On July 13, 2024, Kent police…\n2:08 The man trapped behind the wheel…");
+    expect(whole.map((chapter) => Math.round(chapter.start / fps))).toEqual([0, 33, 128]);
     // A span starting mid-chapter opens with that chapter at 0:00.
     const later = chaptersInSpan(chapters, [60 * fps, 300 * fps], fps);
-    expect(youtubeChapters(later, [60 * fps, 300 * fps], fps)).toBe("0:00 On July 13, 2024, Kent police…\n1:08 The man trapped behind the wheel…");
+    expect(later.map((chapter) => [Math.round(chapter.start / fps), chapter.title])).toEqual([
+      [60, "On July 13, 2024, Kent police…"],
+      [128, "The man trapped behind the wheel…"],
+    ]);
   });
 });

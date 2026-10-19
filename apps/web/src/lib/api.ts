@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 
 import { note, recordTiming, routeOf } from "./diagnostics";
-import type { Encoders, ExportOptions } from "./exporting";
+import type { ExportOptions } from "./exporting";
 import type { Patch } from "./patch";
 import type { DriveFile, MediaStatus, Project, ProjectSummary, ScriptJob, Style, Transcript } from "./types";
 
@@ -187,7 +187,6 @@ export const api = {
   browse: (path?: string) => request<FsListing>("GET", `/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
   exportProject: (id: string, path: string, options: ExportOptions) =>
     request<{ path: string }>("POST", `/api/projects/${id}/export`, { path, options }),
-  exportEncoders: () => request<Encoders>("GET", "/api/export/encoders"),
   /** Shows a finished export in Finder on the machine running Edit. */
   /** The project's Drive link, checked that the file is still there (null once it's gone). */
   driveLink: (id: string) => request<{ drive: DriveFile | null }>("GET", `/api/projects/${id}/drive`),

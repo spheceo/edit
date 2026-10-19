@@ -389,6 +389,12 @@ test("a_desktop_profile_builds_a_valid_animated_screen", () => {
   expect(scale(wall, 179)).toBeGreaterThan(scale(wall, 0) * 1.03);
   expect(frames(p, "desktop window opens").length).toBe(2);
   expect(issuesOf(p).every((issue) => issue.kind === "picture_gap")).toBe(true);
+  // Run again over it (retimed lines), it replaces the profile: one set of clips and markers.
+  const again = applyWith(p, [{ ...op, line_at: [340, 420] }], assets).results[0] as Record<string, unknown>;
+  expect(again.replaced).toBe(6);
+  expect(p.clips.filter((own) => (own.name ?? "").startsWith("Desktop profile ·")).length).toBe(6);
+  expect(frames(p, "desktop line")).toEqual([340, 420]);
+  expect(frames(p, "desktop window opens").length).toBe(2);
 });
 
 test("review_notes_on_screen_are_flagged", () => {

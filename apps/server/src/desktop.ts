@@ -13,7 +13,7 @@ import { clipFrom } from "./clips.ts";
 import * as markers from "./markers.ts";
 import type { Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
-import { addTrack, fps as fpsOf, freshId, mediaOf } from "./project.ts";
+import { addTrack, clipEnd, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import { asInt, round, takeChars, trim } from "./rust.ts";
 import { SerdeError } from "./serde.ts";
 
@@ -144,6 +144,20 @@ export function profile(project: Project, args: Args, art: Art): Record<string, 
     .map((line) => (line.startsWith("-") || line.startsWith("•") ? line : `- ${line}`));
   if (lines.length === 0 || lines.length > 6) {
     throw new Error("desktop_profile needs lines: 1 to 6 short lines about the person (as a source states them)");
+  }
+  // Running it again over a profile replaces that profile, so its lines are
+  // retimed or reworded in one call. Corrupt Cop's agent, asked to sync the
+  // lines, deleted the notes and typed each line as a clip of its own, and
+  // every line came out centred on the same point.
+  const replaced = project.clips.filter(
+    (clip) => (clip.name ?? "").startsWith("Desktop profile ·") && clip.start < start + duration && clipEnd(clip) > start,
+  );
+  if (replaced.length > 0) {
+    const gone = new Set(replaced.map((clip) => clip.id));
+    project.clips = project.clips.filter((clip) => !gone.has(clip.id));
+    project.markers = (project.markers ?? []).filter(
+      (marker) => !((marker.name === "desktop line" || marker.name === "desktop window opens") && marker.frame >= start && marker.frame < start + duration),
+    );
   }
   const layout = new Layout(project.settings.width, project.settings.height);
   const k = layout.k;
@@ -361,6 +375,7 @@ export function profile(project: Project, args: Args, art: Art): Record<string, 
   const linesAt = lineAt.map((at) => start + asInt(at));
   return {
     clips: made,
+    ...(replaced.length > 0 ? { replaced: replaced.length } : {}),
     end: start + duration,
     lines_at: linesAt,
     windows_open: [start + asInt(photoIn), start + asInt(notepadIn)],

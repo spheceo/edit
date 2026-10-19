@@ -112,6 +112,8 @@ def main():
                                "url": s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=7200)})
                 media["path"] = "asset:" + media["id"]
             fixture["input_bytes"] = sum(a["size"] for a in assets)
+            fixture["source_versions"] = [{"object_key_sha256": hashlib.sha256(m["cloud"]["original"].encode()).hexdigest(),
+                                          "etag": a["etag"], "bytes": a["size"]} for m, a in zip(project["media"], assets)]
             name = f"{run}-{fixture['id']}"
             key = f"edit/test/sections-benchmark/{name}.mp4"
             fixture["output_key"] = key

@@ -24,3 +24,14 @@ The user's ask: try to one-shot a subtitle video from its Drive folder, time it,
 
 ### Small slips it recovered from
 add_subtitles inside a batch (refused: it can't run in one), and an edit plan's `select.clip_ids` (the field is `ids`).
+
+## Round 2: it isn't an interrogation (with Terrified Child Secretly Calls 911 On Violent Dad)
+
+"Since this is not an interrogation video we shouldn't have subtitles be in positions under the subjects… we can keep the overlap feature but everything should be bottom middle" / "I forgot that this one is NOT the case with interrogation so both are just normal BWC footage".
+
+- The second video (Terrified Child: 25 minutes, one finished edit) one-shot in 11.5 minutes: a 5 min 17 s import, then a 6 min 08 s turn of 22 model calls (research found no article, so Scribe had no names; the watch 2 min 36 s; repack_subtitles 30 s). The agent judged the doorstep questioning an interrogation by itself and put Rowery under his face, which is what the user didn't want.
+- Cause: the skill's BODYCAM FIRST AND QUESTIONING LATER told the agent to find questioning in the segments' notes (a doorstep, a cruiser) and position it, on our reading of Cop Father's first note.
+- Teach: BOTTOM MIDDLE UNLESS THE USER SAYS INTERROGATION in the subtitle-video skill: bodycam is overlap with faces: false; faces and the `interrogation` stretches only when the user calls the video, or a stretch of it, an interrogation; never decided by the agent. The tool descriptions of faces, overlap and interrogation say the same.
+- Code kept: moving_seats.ts and `interrogation` stay for a real bodycam-to-interrogation video.
+- Found on the way: the moving seats' cache held one set of stretches, so a video's second stretch overwrote the first and every re-run paid again (now one file per set); and in both seat finders a failed model call was cached (seats-v2.json even shared to the cloud) as nobody seen (now nothing is kept when a call failed).
+- A re-run of repack_subtitles brings back the lines fixed by hand after the last one (Cop Father's agent had deleted 8 background lines and lengthened short holds; the interrogation redo lost them). The redo went through each project's agent, which redid its own fixes. Open: keep hand fixes across a re-run in code (as hand-moved subtitles are kept).

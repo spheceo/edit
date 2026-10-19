@@ -18,17 +18,14 @@ export interface Guide {
   skills: readonly Skill[];
 }
 
-const GUIDES: Record<Style, Guide> = {
-  bodycam: { notes: "", skills: [] },
-  interrogation: TEXT.interrogation,
-  courtroom: TEXT.courtroom,
-};
+/** A style with no folder in agent/styles/ has only the house style. */
+const NONE: Guide = { notes: "", skills: [] };
 
 /** Every style, in edit-core's order (Style::ALL). */
 export const ALL: readonly Style[] = STYLES.map((style) => style.value);
 
 export function guide(style: Style): Guide {
-  return GUIDES[style] ?? GUIDES.bodycam;
+  return TEXT[style] ?? NONE;
 }
 
 /** The skill called `name` for this style: its own version, else the house one. */

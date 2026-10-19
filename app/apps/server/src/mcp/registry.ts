@@ -3,6 +3,7 @@
 // declared tool nobody has registered answers that it isn't registered.
 
 import type { App } from "../app.ts";
+import { allSkillNames } from "../styles.ts";
 import declared from "./tools.json" with { type: "json" };
 
 /** One piece of a tool's answer (MCP content). */
@@ -31,6 +32,11 @@ export interface Tool {
 
 /** Every tool as tools/list declares it. */
 export const TOOLS: Tool[] = declared as unknown as Tool[];
+
+// The skill tool's choices are the skills in agent/ (agent_text.ts), so a new
+// skill file is offered without touching tools.json.
+const skillName = TOOLS.find((tool) => tool.name === "skill")?.inputSchema.properties.name;
+if (skillName !== undefined) skillName.enum = allSkillNames();
 
 interface Registered {
   handler: ToolHandler;

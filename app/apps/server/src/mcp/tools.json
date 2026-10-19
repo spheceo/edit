@@ -18,19 +18,6 @@
     "inputSchema": {
       "properties": {
         "name": {
-          "enum": [
-            "edit-workflow",
-            "research",
-            "intro",
-            "transitions",
-            "cut-ins",
-            "outro",
-            "subtitles",
-            "subtitle-video",
-            "music-and-sound",
-            "final-pass",
-            "feedback"
-          ],
           "type": "string"
         },
         "project_id": {

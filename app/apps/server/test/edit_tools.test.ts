@@ -424,7 +424,7 @@ test("the workflow skill starts the watcher; an unknown skill lists the rest", a
   expect(await said(app, "skill", { name: "final-pass" })).toContain("THE FINAL PASS");
   expect(watched).toBe(1);
   expect(await refused(app, "skill", { name: "nope" })).toBe(
-    "no skill nope; there are edit-workflow, research, intro, transitions, cut-ins, outro, subtitles, subtitle-video, music-and-sound, feedback, final-pass",
+    "no skill nope; there are edit-workflow, research, intro, transitions, cut-ins, outro, subtitles, subtitle-video, music-and-sound, final-pass, feedback",
   );
 });
 

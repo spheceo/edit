@@ -5,3 +5,10 @@ declare module "*.wav" {
   const path: string;
   export default path;
 }
+
+// Markdown imported `with { type: "text" }` (the agent's text, agent.ts):
+// Bun gives its contents, carried inside the compiled binary.
+declare module "*.md" {
+  const text: string;
+  export default text;
+}

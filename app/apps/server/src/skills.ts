@@ -5,14 +5,11 @@
 // stage, in one turn ("start the editing workflow"). Each one's one-line
 // summary is in the SKILLS list of the MCP instructions.
 
-import { SKILL_TEXT } from "./skills_text.ts";
+// Each is a file in agent/skills/ (agent_text.ts).
 
-export interface Skill {
-  name: string;
-  body: string;
-}
+import { SKILLS, type Skill } from "./agent_text.ts";
 
-export const SKILLS: readonly Skill[] = SKILL_TEXT;
+export { SKILLS, type Skill };
 
 export function get(name: string): Skill | undefined {
   return SKILLS.find((skill) => skill.name === name);

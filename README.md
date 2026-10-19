@@ -24,6 +24,7 @@ just publish  # release the next patch version
 ```
 
 ```text
+agent/                     what the agent is taught: instructions and skills, in Markdown
 app/                       all the code and its build config (`just` works from the root)
 app/apps/server            the server (Bun): API, media jobs, export, MCP, agent
 app/apps/web               React UI
@@ -38,4 +39,4 @@ app/crates/edit-window     the desktop window (Tauri)
 
 Data lives in `~/.edit` (`EDIT_HOME` overrides); exports default to `~/Movies/Edit/`. From another device, `tailscale serve --bg http://127.0.0.1:7700` (WebGPU needs HTTPS).
 
-[AGENTS.md](AGENTS.md) has the details.
+[AGENTS.md](AGENTS.md) and [app/AGENTS.md](app/AGENTS.md) have the details.

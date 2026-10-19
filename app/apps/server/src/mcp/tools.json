@@ -28,7 +28,8 @@
             "subtitles",
             "subtitle-video",
             "music-and-sound",
-            "final-pass"
+            "final-pass",
+            "feedback"
           ],
           "type": "string"
         },

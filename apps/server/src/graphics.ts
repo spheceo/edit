@@ -83,13 +83,18 @@ function textOf(args: Args): string | null {
  * a new track above everything there.
  */
 export function dateTitle(project: Project, args: Args): Record<string, unknown> {
-  const text = textOf(args);
-  if (text === null) throw new Error('date_title needs text ("July 22, 2023")');
+  const given = textOf(args);
+  if (given === null) throw new Error('date_title needs text ("July 22, 2023")');
   const [start, end] = span(args, "date_title");
   const k = project.settings.height / 1080;
+  // position "bottom": Red Thread's lower third over its top-down map, the
+  // place ("Keller, Texas") over the date in white, smaller, no darkening.
+  const bottom = args.position === "bottom";
+  const place = typeof args.place === "string" && trim(args.place) !== "" ? trim(args.place) : null;
+  const text = place === null ? given : `${place}\n${given}`;
   const made: string[] = [];
   let darken: string | null = null;
-  if (typeof args.darken === "boolean" ? args.darken : true) {
+  if (typeof args.darken === "boolean" ? args.darken : !bottom) {
     const track = addTrack(project, "video");
     darken = push(project, made, {
       type: "adjustment",
@@ -114,13 +119,14 @@ export function dateTitle(project: Project, args: Args): Record<string, unknown>
     style: {
       font: "Geist",
       weight: 600,
-      size: round(120 * k),
+      size: round((bottom ? 58 : 120) * k),
       color: [1, 1, 1, 1],
       glow: { enabled: false },
       background: null,
       shadow: dateShadow(k),
+      ...(place === null ? {} : { line_height: 1.2 }),
     },
-    transform: { x: 0, y: 0 },
+    transform: { x: 0, y: bottom ? 0.34 * project.settings.height : 0 },
     animation: { preset: "rise", duration: 14, stagger: 1.5 },
   });
   return { date, darken };

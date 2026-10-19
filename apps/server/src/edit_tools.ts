@@ -220,6 +220,7 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
   }
   const project = current.project;
   timeProfileLines(app, project, operations);
+  hearWords(app, project, operations);
   const [assets, house] = await planAssets(app, project, operations);
   const applied = diag.timeOn("agent", "plan: apply and validate", projectId, () =>
     editPlan.applyWith(project, operations, assets),
@@ -1381,6 +1382,18 @@ export function timeProfileLines(app: App, project: Project, operations: Json[])
     });
     operation.line_at = at;
   }
+}
+
+/**
+ * The frames words are heard at, for ops whose words come up as they're said
+ * (intro_captions: the teasers' subtitles; text_slam: the narration's phrase),
+ * unless the plan gives them (`heard`).
+ */
+export function hearWords(app: App, project: Project, operations: Json[]): void {
+  const wanting = operations.map(objectOf).filter((operation) => (operation.op === "intro_captions" || operation.op === "text_slam") && operation.heard === undefined);
+  if (wanting.length === 0) return;
+  const frames = seams.editReview.spokenWords(project, cachedTranscripts(app, project, false)).map(([frame]) => frame);
+  for (const operation of wanting) operation.heard = frames;
 }
 
 export async function planAssets(app: App, project: Project, operations: Json[]): Promise<[editPlan.Assets, seams.Made[]]> {

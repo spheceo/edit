@@ -7,6 +7,7 @@ import { clipFrom, keyframesFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
 import * as desktop from "./desktop.ts";
 import * as graphics from "./graphics.ts";
+import * as intro from "./intro_graphics.ts";
 import * as markers from "./markers.ts";
 import type { Clip, Keyframe, Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
@@ -323,6 +324,24 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return graphics.evidenceCard(project, args);
     case "date_title":
       return graphics.dateTitle(project, args);
+    case "intro_captions":
+      return intro.introCaptions(project, args);
+    case "photo_inset":
+      return intro.photoInset(project, args);
+    case "countdown":
+      return intro.countdown(project, args);
+    case "map_pin":
+      return intro.mapPin(project, args);
+    case "split_screen":
+      return intro.splitScreen(project, args);
+    case "fast_forward":
+      return intro.fastForward(project, args);
+    case "disclaimer":
+      return intro.disclaimer(project, args);
+    case "text_slam":
+      return intro.textSlam(project, args);
+    case "timeline_bar":
+      return intro.timelineBar(project, args);
     case "title_collage":
       return graphics.titleCollage(project, args);
     case "place_label":
@@ -331,7 +350,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return markers.edit(project, args);
     default:
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, markers, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
       );
   }
 }
@@ -364,7 +383,7 @@ export function setKeyframes(clip: Clip, keyframes: Record<string, Keyframe[]>):
  */
 function transition(project: Project, args: Args): Json {
   const kind = str(args.kind);
-  if (kind === null) throw new Error("transition needs kind: drop, flash, dip, open, light_leak or burn");
+  if (kind === null) throw new Error("transition needs kind: drop, flash, red_flash, dip, open, light_leak or burn");
   const at = int(args.at);
   const cut = () => {
     if (at === null) throw new Error(`a ${kind} needs at (the cut's frame)`);
@@ -388,6 +407,17 @@ function transition(project: Project, args: Args): Json {
         6,
         { type: "solid", fill: [1, 1, 1, 1] },
         [key(0, 1, "out"), key(5, 0, "linear")],
+      ];
+      break;
+    case "red_flash":
+      // Red Thread's: the picture flooding red for a few frames on the cut
+      // (into a mugshot, out of the cold open into black).
+      [name, start, length, content, opacity] = [
+        "Red flash",
+        cut() - 4,
+        10,
+        { type: "solid", fill: [0.82, 0.04, 0.06, 1] },
+        [key(0, 0, "in"), key(4, 0.85, "out"), key(9, 0, "linear")],
       ];
       break;
     case "dip": {
@@ -429,7 +459,7 @@ function transition(project: Project, args: Args): Json {
       };
       break;
     default:
-      throw new Error(`unknown transition ${kind}; use drop, flash, dip, open, light_leak or burn`);
+      throw new Error(`unknown transition ${kind}; use drop, flash, red_flash, dip, open, light_leak or burn`);
   }
   // Never before the start of the video: what's cut off the front goes.
   const [from, frames] = [Math.max(start, 0), length - Math.max(-start, 0)];

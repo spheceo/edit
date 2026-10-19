@@ -259,8 +259,12 @@ export function cutMidWord(project: Project, transcripts: Map<string, Transcript
           Math.abs((frame === clip.start ? other.source_in + (other.duration / fps) * other.speed : other.source_in) - at) <= 0.1,
       );
     for (const word of transcript.words) {
-      if (word.start < to - margin && word.end > to + margin && !carried(to, clipEnd(clip))) {
-        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clipEnd(clip), side: "out", word: trim(word.text), word_ends: round(word.end * 100) / 100 });
+      // The transcriber can squeeze a word to a few hundredths of a second
+      // ("sir." at 286.62–286.66): it's heard for at least ~0.2 s, longer by its letters.
+      const letters = chars(word.text).filter((c) => isAlphanumeric(c)).length;
+      const ends = word.end - word.start < 0.15 ? word.start + Math.max(0.2, 0.06 * letters) : word.end;
+      if (word.start < to - margin && ends > to + margin && !carried(to, clipEnd(clip))) {
+        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clipEnd(clip), side: "out", word: trim(word.text), word_ends: round(ends * 100) / 100 });
       }
       if (word.start < from - margin && word.end > from + margin && !carried(from, clip.start)) {
         issues.push({ kind: "cut_mid_word", clip: clip.id, at: clip.start, side: "in", word: trim(word.text), word_starts: round(word.start * 100) / 100 });

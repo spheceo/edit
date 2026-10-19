@@ -74,3 +74,30 @@ edit before deciding throughput targets or retiring Repack resources. Finished
 files still download to the desktop; existing subtitled-video Drive delivery
 continues from there. Moving that final R2 → Drive delivery fully into Relay
 is a separate remaining transfer optimization.
+
+
+## Real 1080p pair — 2026-10-19
+
+Two recently exported, frozen history revisions were submitted together to one L4 (four physical CPU cores, 16 GiB). Both used native 1920×1080/30 fps, H.264 High quality, stereo sound and a -14 LUFS target. Original assets were already in R2. Timings begin at the first job submission and include cold allocation, R2 inputs, audio, picture, join, full decode validation and R2 publication; desktop delivery is recorded separately. Deployment and manifest preparation precede the timer.
+
+- **Young Actress** (28.9 minutes): cloud result observed at **26:59**, downloaded at **28:47**. Historical full local export: **5:06**.
+- **Corrupt Cop** (19.4 minutes): cloud result observed at **15:59**, downloaded at **16:56**. Historical full local export: **13:13**.
+
+Both files were on the Mac by **28:47**, versus **18:19** for the sum of the earlier full local exports. This is a historical comparison, not a new controlled Mac rerun. Cached local re-exports (including Corrupt Cop's 35 seconds) are excluded. **This L4 configuration was slower overall.**
+
+The shared worker execution interval implies about **$0.48** at [Modal's published base rates](https://modal.com/pricing), before gateway/build/startup/storage/network costs and prior cancelled trials. This is an allocation-based estimate, not the actual invoice. Per-job estimates double-count overlapping GPU use. The daily reservation ledger reached $8.19 against $8.20, including $4.17 from the earlier synthetic trials; reservations are not charges.
+
+Picture-progress samples show an approximately **211.0-second** overlap window before either render approached completion; this is a stage estimate, not GPU kernel timing. Inspection also showed two growing picture files and GPU contexts in the same L4 container. Both outputs passed the worker's full decode, codec, dimensions, duration and frame-count checks. Local ffprobe confirmed all 51,958 / 34,987 video frames, audio starting at zero and stereo AAC at 48 kHz. Frames were checked against frozen local previews, including the desktop profile and subtitles; this is a visual spot check, not a full perceptual quality comparison between encoders.
+
+- Young Actress sound: -14.1 LUFS, true peak -0.8 dBFS.
+- Corrupt Cop sound: -14.1 LUFS, true peak -1.3 dBFS.
+
+The decoded AAC for Young Actress has a true peak 0.2 dB above the -1 dB PCM limiter ceiling; the recorded value is retained as a lossy-encoding quality limitation.
+
+The first real trial exposed a roughly 2 MB/s single-stream download for the 3.5 GB source. Both jobs were cancelled; eight bounded, ETag-pinned byte ranges then fetched that source in **39.4 seconds**. A second trial was cancelled after catching a quality-setting mismatch, before the final High-quality run. Those attempts are retained in the ledger.
+
+The full run also exposed a Linux audio bottleneck: dozens of word-mute expressions evaluated for every sample in FFmpeg. A subsequent change applies normal-speed mutes in Rust using the same cosine ramps as the native reader; nonstandard speeds still mute before atempo. Eleven audio tests, including decoder parity, passed, along with clippy and formatting. **The timing above predates this audio change.** The idle pilot was refreshed afterward without starting a new export; this does not establish its new full-export speed.
+
+The benchmark never opened or saved the live projects, restarted the editor, deployed production Relay or changed Repack. The original PID 13625 remained running. Cloud exports remain opt-in. Final R2 → Drive delivery and efficient GPU/CPU data movement still need measurement before production activation.
+
+The [raw real-project run](benchmarks/modal-real-2026-10-19.json) includes immutable snapshot hashes, job/build identities, progress samples, output keys, delivery times and verification. Reproduce with `scripts/benchmark-modal.py --execute --daily-reservation-usd <explicit cumulative cap>` through process-only R2 injection; use a fresh output folder and wait for the pilot to be idle. The current branch includes the later audio fix, so another run will measure a different build.

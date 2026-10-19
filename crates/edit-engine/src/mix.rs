@@ -19,9 +19,7 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-#[cfg(any(target_os = "macos", test))]
-use edit_core::{mute_gain, Mute};
-use edit_core::{AudioSegment, MUTE_FADE_SECONDS};
+use edit_core::{mute_gain, AudioSegment, Mute, MUTE_FADE_SECONDS};
 
 pub const RATE: usize = 48_000;
 /// Frames mixed at a time (4 s: 1.5 MB of stereo float).
@@ -125,8 +123,14 @@ fn decode_chain(segment: &AudioSegment) -> String {
         "aformat=sample_fmts=flt:sample_rates=48000:channel_layouts=stereo,atrim=duration={:.6}",
         segment.duration * segment.speed
     );
-    if let Some(mute) = mute_filter(&sought) {
-        chain.push_str(&mute);
+    // At normal speed the Rust reader applies the same sample ramps as
+    // AVFoundation. A long list of aeval expressions evaluates every mute
+    // for every sample, even minutes away from the nearest muted word.
+    // Other speeds still mute before atempo, on the source's clock.
+    if (segment.speed - 1.0).abs() > 1e-6 {
+        if let Some(mute) = mute_filter(&sought) {
+            chain.push_str(&mute);
+        }
     }
     let mut tempo = segment.speed;
     while (tempo - 1.0).abs() > 1e-6 {
@@ -142,6 +146,30 @@ trait Source {
     fn read(&mut self, out: &mut [f32]) -> Result<usize, String>;
 }
 
+fn apply_mutes(out: &mut [f32], frames: usize, mutes: &[Mute], from: f64) {
+    let to = from + frames as f64 / RATE as f64;
+    let fade = MUTE_FADE_SECONDS;
+    let near: Vec<Mute> = mutes
+        .iter()
+        .filter(|mute| mute.to + fade > from && mute.from - fade < to)
+        .copied()
+        .collect();
+    if !near.is_empty() {
+        for (index, frame) in out
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .take(frames)
+            .enumerate()
+        {
+            let gain = mute_gain(&near, from + index as f64 / RATE as f64) as f32;
+            for sample in frame {
+                *sample *= gain;
+            }
+        }
+    }
+}
+
 /// A stretch decoded by AVFoundation, its mutes applied here on the source's clock.
 #[cfg(target_os = "macos")]
 struct NativeSource {
@@ -155,29 +183,8 @@ struct NativeSource {
 impl Source for NativeSource {
     fn read(&mut self, out: &mut [f32]) -> Result<usize, String> {
         let frames = self.reader.read(out)?;
-        let (from, to) = (self.time, self.time + frames as f64 / RATE as f64);
-        let fade = MUTE_FADE_SECONDS;
-        let near: Vec<Mute> = self
-            .mutes
-            .iter()
-            .filter(|mute| mute.to + fade > from && mute.from - fade < to)
-            .copied()
-            .collect();
-        if !near.is_empty() {
-            for (index, frame) in out
-                .as_chunks_mut::<2>()
-                .0
-                .iter_mut()
-                .take(frames)
-                .enumerate()
-            {
-                let gain = mute_gain(&near, from + index as f64 / RATE as f64) as f32;
-                for sample in frame {
-                    *sample *= gain;
-                }
-            }
-        }
-        self.time = to;
+        apply_mutes(out, frames, &self.mutes, self.time);
+        self.time += frames as f64 / RATE as f64;
         Ok(frames)
     }
 }
@@ -193,6 +200,8 @@ struct FfmpegSource {
     path: PathBuf,
     ended: bool,
     bytes: Vec<u8>,
+    mutes: Vec<Mute>,
+    time: f64,
 }
 
 impl FfmpegSource {
@@ -243,6 +252,12 @@ impl FfmpegSource {
             path: path.to_owned(),
             ended: false,
             bytes: Vec::new(),
+            mutes: if (segment.speed - 1.0).abs() <= 1e-6 {
+                segment.mutes.clone()
+            } else {
+                Vec::new()
+            },
+            time: segment.source_in,
         })
     }
 
@@ -299,6 +314,8 @@ impl Source for FfmpegSource {
         {
             *sample = f32::from_le_bytes(*bytes);
         }
+        apply_mutes(out, frames, &self.mutes, self.time);
+        self.time += frames as f64 / RATE as f64;
         Ok(frames)
     }
 }
@@ -1265,7 +1282,8 @@ mod tests {
 
     #[test]
     fn the_ffmpeg_chain_mutes_like_the_mix() {
-        // The chain the FFmpeg path runs has a cosine for each mute it plays only.
+        // Normal speed applies mutes in Rust; tempo changes keep them before
+        // atempo. Both decoder paths agree on the source offset and ramps.
         let mut muted = segment(0.0, 2.5, 1.0);
         muted.mutes = vec![
             Mute { from: 2.0, to: 2.5 },
@@ -1275,6 +1293,10 @@ mod tests {
             },
         ];
         let chain = decode_chain(&muted);
+        assert_eq!(chain.matches("cos(").count(), 0, "{chain}");
+        let mut sped = muted.clone();
+        sped.speed = 2.0;
+        let chain = decode_chain(&sped);
         assert_eq!(chain.matches("cos(").count(), 2, "{chain}");
         let dir = temp_dir("chain");
         let path = ramp(&dir, "ramp.wav");

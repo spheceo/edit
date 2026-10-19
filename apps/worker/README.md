@@ -43,8 +43,10 @@ Relay Workflow. It verifies the source version again before publishing.
 Workers request and limit CPU to four physical cores and memory to 16 GiB.
 L4 is the default; L40S is an explicit deployment choice. There is one GPU
 container with three asynchronous input slots, no automatic GPU/model fallback, a 30-minute function timeout,
-five-minute startup timeout, two-second idle window, four input downloads
-per worker, 128 GiB total input and 16 GiB output limits. H.264 and HEVC are
+five-minute startup timeout, two-second idle window, eight concurrent input
+requests per worker (files and 32 MiB byte ranges share one pool), 128 GiB
+total input and 16 GiB output limits. Every range is ETag-pinned and checked
+before a completed file becomes visible. H.264 and HEVC are
 supported. Other output formats require the existing local backend.
 
 Using Modal's published Function rates on 2026-10-19, compute is approximately
@@ -63,6 +65,13 @@ summed as invoice attribution when jobs share it. Set an account-level Modal
 spending limit as well. Actual export speed
 and billed cost require representative measurements; a hardware probe alone
 does not establish either. Source: https://modal.com/pricing
+
+The [real 1080p benchmark](../../docs/modal-pilot.md#real-1080p-pair--2026-10-19)
+records a full two-video run and its historical local comparison. Its measured
+build predates the subsequent normal-speed audio optimization: word mutes
+now run in Rust on both decoder paths, while tempo changes retain FFmpeg's
+source-clock muting before atempo. Do not treat an audio parity test as a new
+full-export performance result.
 
 ## Safe pilot deployment
 

@@ -14,8 +14,9 @@
 // - a line sits under its speaker's face where they were followed at the
 //   line's start, else bottom middle.
 //
-// Kept as `moving-seats-v1.json` in the media's cache dir, for the stretches
-// and the people it was worked out for.
+// Kept as `moving-seats-v1-<hash>.json` in the media's cache dir, one per
+// set of stretches and people (a video's stretches are worked out one by one,
+// so one file for them all made every re-run pay for each again).
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -33,7 +34,12 @@ import { stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
 import type { Transcript } from "./transcribe.ts";
 
-export const FILE = "moving-seats-v1.json";
+/** The cache file for one key: `moving-seats-v1-<hash>.json`. */
+export function fileFor(key: string): string {
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(key);
+  return `moving-seats-v1-${hasher.digest("hex").slice(0, 16)}.json`;
+}
 /** Seconds between stills, and how many go to one model call. */
 const EVERY = 6.0;
 const PER_CALL = 8;
@@ -159,7 +165,7 @@ export async function movingSeats(source: string, size: [number, number], transc
   const told = described(transcript);
   const people = names(transcript);
   const key = stableStringify({ told, spans: spans.map(([s, e]) => [fixed(s, 1), fixed(e, 1)]) });
-  const file = join(cache, FILE);
+  const file = join(cache, fileFor(key));
   try {
     const known = MovingSeats.parse(fs.readFileSync(file, "utf8"));
     if (known !== null && known.key === key) return known;

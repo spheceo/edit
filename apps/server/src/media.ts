@@ -366,10 +366,15 @@ export class Processor {
     return this.transcribe(source, hasAudio);
   }
 
-  /** Transcribes `source` through the relay unless already done or running. */
-  transcribe(source: string, hasAudio: boolean): MediaStatus {
+  /**
+   * Transcribes `source` through the relay unless already done or running,
+   * listening for `keyterms` (the case's names, names.ts). `again` hears a
+   * finished one again (with names it wasn't given): the old transcript stays
+   * until the new one is in.
+   */
+  transcribe(source: string, hasAudio: boolean, keyterms: readonly string[] = [], again = false): MediaStatus {
     const current = this.entry(source);
-    if (!hasAudio || current.transcript === "working" || current.transcript === "ready") return shown(current);
+    if (!hasAudio || current.transcript === "working" || (current.transcript === "ready" && !again)) return shown(current);
     // Claimed before anything can wait: two requests cannot start the same
     // paid transcription between status() and set().
     this.set(source, (status) => {
@@ -378,19 +383,28 @@ export class Processor {
     });
     const target = this.paths(source).transcript;
     void diag
-      .timeOnAsync("media", "media: transcription", source, () => transcribe.run(source, target))
+      .timeOnAsync("media", "media: transcription", source, () => transcribe.run(source, target, keyterms))
       .then(
         () =>
           this.set(source, (status) => {
             status.transcript = "ready";
           }),
-        (error: unknown) =>
+        (error: unknown) => {
+          // Heard again for its names and failed: the transcript it had stands.
+          if (again && isFile(target)) {
+            diag.warn("media", `${source}: hearing it again with the case's names: ${diag.messageOf(error)}; the transcript it had stands`);
+            this.set(source, (status) => {
+              status.transcript = "ready";
+            });
+            return;
+          }
           this.set(source, (status) => {
             status.transcript = "failed";
             status.transcript_error = isBug(error)
               ? `transcription crashed (${crashMessage(error)}); this is a bug in Edit`
               : diag.messageOf(error);
-          }),
+          });
+        },
       );
     return this.status(source);
   }

@@ -22,3 +22,28 @@ Gemini 3.8 Flash (through the relay) watched each first five minutes with sound 
 | Teach | styles.ts INTERROGATION: THE INTRO AND THE PROLOGUE (density targets), the intro skill rewritten as the cold open and the prologue, subtitles (intro_captions after repack_subtitles), transitions (red flash in the cold open, the glitch only as fast_forward), the workflow's stages, the sounds of the new beats. |
 | Code | intro_graphics.ts: intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar; the red_flash transition; date_title position "bottom" with place; map_view pitch 0 for the top-down map (already there). |
 | Tests | test/intro_graphics.test.ts. |
+
+## Round 2: the user's notes on the rebuilt intro (Oct 19)
+
+### The teasers' captions aren't Red Thread's
+"The style of the caption isn't what Red Thread has. What we want is sort of a glow on the text, just as we do with bodycam, and we want a drop shadow on the background… the red but it's not a red background, it's the red text. We still have the glow for that as well."
+- Cause: intro_captions made small boxed lines (80% black, no glow) and put the emphasis lines on a red box; the round-1 notes read "white on black… the lines that matter in red" as boxes.
+- Teach: the intro skill and intro_captions' description say bodycam's caption look, red words for emphasis.
+- Code: intro_captions takes `captions.captionStyle` (bodycam's speaker captions: Montserrat, glow 46 at 0.5 in the text's colour, 45% box, wide soft shadow), white or `RED_TEXT` words.
+- Test: intro_graphics.test.ts checks the red is the text's, the glow and the shadow.
+
+### The text slam's glow is "too contracted"
+"Just use the normal glow style that we usually have for our text, like the bodycam."
+- Code: text_slam and timeline_bar use the house glow (radius 46, strength 0.5) instead of 14–16 at 0.35.
+
+### Names misheard: "John Rutten", "John Bruton" for John Ruetten
+"When we do subtitles, just like in Repack, we perform research and find articles. We then extract things like subject names, locations… We then send it over to Scribe so that it hears the right thing… It is unbelievably important that we do this for all subtitles."
+- Cause: Edit never told Scribe any names (Repack does: case-names.ts). The project's 14 saved articles say "Ruetten" 61 times.
+- Teach: NAMES FIRST (skills_text.ts, in the shared subtitles skill, the interrogation's own and subtitle-video): research the case and add_article before watch_footage.
+- Code: names.ts lists the case's people and places from its saved articles and script narration (Gemini Flash, each word checked against the sources, surnames too, at most 100, cached by the sources' hash); `captions_core.transcriptOf` (watch_footage, add_subtitles, repack_subtitles, house words, caption_speakers) hears a file again with the names when its transcript wasn't given them (once per set of names; the names it had are kept; a failure keeps the old transcript); script imports transcribe with them; footage imported before any research is transcribed at once but not watched in the background, since the watch would be paid twice. The relay forwards `keyterm` query params as Scribe's `keyterms` fields; a refusal is asked once without them.
+- Tool: watch_footage reports `names_heard`, or `no_case_names` with what to do.
+- Tests: names.test.ts (the filter, end to end: no research → no re-hearing; articles saved → heard again once with the names), transcribe.test.ts (names sent, refusal), relay.test.ts (forwarded as fields, bad ones refused).
+
+### The disclaimer
+"Completely remove the disclaimer… unless we, as the users, specifically ask for it."
+- Teach: the prologue's countdown now ends on its last picture; op disclaimer only when asked (the skill and the tool's description).

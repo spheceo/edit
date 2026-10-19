@@ -577,7 +577,7 @@ async function spokenLines(app: App, project: Project, clips: Clip[], from: numb
     if (media === undefined || !media.has_audio) continue;
     let transcript = transcripts.get(media.id);
     if (transcript === undefined) {
-      transcript = await transcriptOf(app, media);
+      transcript = await transcriptOf(app, media, project);
       transcripts.set(media.id, transcript);
     }
     const visibleFrom = clip.source_in + ((Math.max(from, clip.start) - clip.start) / fps) * clip.speed;

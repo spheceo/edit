@@ -24,6 +24,7 @@ import { clipFrom } from "./clips.ts";
 import type { Project } from "./model.ts";
 import { addTrack, clipEnd, clipOf, fps as fpsOf, freshId, mediaOf, trackOf } from "./project.ts";
 import { charCount, round, splitWhitespace, trim } from "./rust.ts";
+import * as seams from "./seams.ts";
 
 type Args = Record<string, unknown>;
 type Rgba = [number, number, number, number];
@@ -32,9 +33,16 @@ const int = (value: unknown): number | null => (typeof value === "number" && Num
 const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
 const str = (value: unknown): string | null => (typeof value === "string" && trim(value) !== "" ? trim(value) : null);
 
-/** The intro's red: the emphasis box, the slams, the line to the house. */
+/** The intro's red: the slams, the line to the house, the flash. */
 export const RED: Rgba = [0.82, 0.04, 0.06, 1];
 const WHITE: Rgba = [1, 1, 1, 1];
+/** Red words that glow (the teasers' emphasis): brighter than RED, which fills shapes. */
+export const RED_TEXT: Rgba = [1, 0.1, 0.1, 1];
+
+/** The house glow on text, bodycam's (its captions, Repack's subtitles): wide and soft, in the text's colour. */
+function glow(k: number): Args {
+  return { enabled: true, color: null, radius: 46 * k, strength: 0.5 };
+}
 const PAPER: Rgba = [0.97, 0.97, 0.95, 1];
 
 function push(project: Project, made: string[], fields: Args): string {
@@ -91,9 +99,12 @@ function fitted(project: Project, mediaId: unknown, what: string) {
 /**
  * The teasers' subtitles restyled as Red Thread's (`{"op":"intro_captions",
  * "start":F,"end":F,"emphasis":["c12","c15"]}`): every subtitle between start
- * and end becomes a small boxed line, white Montserrat on 80% black (the
- * clips in `emphasis`, the lines that matter, on red), its words coming up
- * one by one as they're said (`heard`: the frames words are heard at, which
+ * and end in the house caption look, bodycam's (the team: "a glow on the
+ * text, just as we do with bodycam, and a drop shadow on the background"):
+ * white Montserrat glowing, on the see-through box with its soft shadow; the
+ * clips in `emphasis`, the lines that matter, in red words with the same glow
+ * ("it's not a red background, it's the red text"). Its words come up one by
+ * one as they're said (`heard`: the frames words are heard at, which
  * apply_edit_plan fills in from the transcripts; else evenly over the first
  * 60% of the line). It names nobody: the intro isn't in the role colours.
  */
@@ -101,7 +112,7 @@ export function introCaptions(project: Project, args: Args): Record<string, unkn
   const [start, end] = span(args, "intro_captions");
   const emphasis = new Set(Array.isArray(args.emphasis) ? args.emphasis.filter((id): id is string => typeof id === "string") : []);
   const heard = (Array.isArray(args.heard) ? args.heard.filter((frame): frame is number => typeof frame === "number") : []).sort((a, b) => a - b);
-  const k = project.settings.height / 1080;
+  const look = seams.captions.captionStyle(project.settings.width, project.settings.height);
   const restyled: string[] = [];
   project.clips.forEach((clip, index) => {
     if (clip.type !== "text" || clip.start < start || clip.start >= end) return;
@@ -121,14 +132,11 @@ export function introCaptions(project: Project, args: Args): Record<string, unkn
       name: "Subtitle (teaser)",
       style: {
         ...clip.style,
-        font: "Montserrat",
-        weight: 600,
-        size: round(36 * k),
-        color: WHITE,
+        ...look,
+        color: emphasis.has(clip.id) ? RED_TEXT : WHITE,
+        max_width: clip.style.max_width,
         uppercase: false,
-        glow: { enabled: false },
         label: null,
-        background: { color: emphasis.has(clip.id) ? RED : [0, 0, 0, 1], opacity: emphasis.has(clip.id) ? 1 : 0.82, pad_x: 12 * k, pad_y: 7 * k },
       },
       animation: { preset: "words", duration: 1, stagger: 2 },
       word_times: times,
@@ -551,7 +559,8 @@ export function textSlam(project: Project, args: Args): Record<string, unknown> 
       color: rgba(args.color, RED),
       line_height: 0.95,
       max_width: round(0.8 * width),
-      glow: { enabled: true, color: null, radius: 16 * k, strength: 0.35 },
+      // The house glow, not a tight one (the team: "a bit too contracted… use the normal glow style… like the bodycam").
+      glow: glow(k),
       background: null,
       shadow: shadow(k),
     },
@@ -585,7 +594,7 @@ export function timelineBar(project: Project, args: Args): Record<string, unknow
     weight: 900,
     size: round(size),
     color: RED,
-    glow: { enabled: true, color: null, radius: 14 * k, strength: 0.35 },
+    glow: glow(k),
     background: null,
     shadow: shadow(k),
     ...(leader === null ? {} : { leader }),

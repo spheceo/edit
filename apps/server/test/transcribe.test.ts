@@ -85,3 +85,26 @@ test.skipIf(ffmpeg === null)("transcribes through the relay, asking again while 
     cleanup();
   }
 });
+
+test.skipIf(ffmpeg === null)("listens for the case's names, and asks once without them when Scribe refuses them", async () => {
+  const { dir, cleanup } = scratch("transcribe-names");
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    await run(source, `${dir}/cache/named.json`, ["John Ruetten", "Van Nuys"]);
+    const asked = mock.calls("/v1/transcribe", "POST").slice(before);
+    expect(asked.map((call) => call.query.getAll("keyterm"))).toEqual([["John Ruetten", "Van Nuys"]]);
+    expect(JSON.parse(fs.readFileSync(`${dir}/cache/named.json`, "utf8")).keyterms).toEqual(["John Ruetten", "Van Nuys"]);
+
+    mock.on("POST", "/v1/transcribe", () => Response.json({ detail: { message: "invalid keyterms" } }, { status: 422 }), 1);
+    const from = mock.calls("/v1/transcribe", "POST").length;
+    await run(source, `${dir}/cache/refused.json`, ["John Ruetten"]);
+    expect(mock.calls("/v1/transcribe", "POST").slice(from).map((call) => call.query.getAll("keyterm"))).toEqual([["John Ruetten"], []]);
+    // Kept as asked, so they aren't asked (and refused) again.
+    expect(JSON.parse(fs.readFileSync(`${dir}/cache/refused.json`, "utf8")).keyterms).toEqual(["John Ruetten"]);
+  } finally {
+    cleanup();
+  }
+});

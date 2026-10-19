@@ -981,7 +981,7 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
     if (clip.type !== "audio") continue;
     const media = mediaOf(project, clip.media);
     if (media === undefined) continue;
-    if (!transcripts.has(media.id)) transcripts.set(media.id, await transcriptOf(app, media));
+    if (!transcripts.has(media.id)) transcripts.set(media.id, await transcriptOf(app, media, project));
     const transcript = transcripts.get(media.id)!;
     const [visibleFrom, visibleTo] = visible(clip, from, to, fps);
     const words = timedWords(transcript.words, visibleFrom, visibleTo);
@@ -1341,7 +1341,7 @@ export async function houseWords(
     if (clip.type !== "audio") continue;
     const media = mediaOf(project, clip.media);
     if (media === undefined) continue;
-    if (!transcripts.has(media.id)) transcripts.set(media.id, await transcriptOf(app, media));
+    if (!transcripts.has(media.id)) transcripts.set(media.id, await transcriptOf(app, media, project));
     const transcript = transcripts.get(media.id)!;
     const [visibleFrom, visibleTo] = visible(clip, from, to, fps);
     const words = timedWords(transcript.words, visibleFrom, visibleTo);

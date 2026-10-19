@@ -221,3 +221,31 @@ describe("relay cloud: Google sign-in and the AI Gateway", () => {
     expect((await post("ai/chat", "{}", "cloud-secret", { ...env, AI_GATEWAY_API_KEY: undefined })).status).toBe(503);
   });
 });
+
+describe("relay transcription", () => {
+  const env = {
+    ELEVENLABS_API_KEY: "xi-key", MAX_UPLOAD_BYTES: "1000", DAILY_BYTES_PER_IP: "1000", DAILY_BYTES_TOTAL: "1000",
+    BURST: { limit: async () => ({ success: true }) },
+    BUDGET: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response("{}") }) },
+  } as unknown as Env;
+  const transcribe = (query: string) =>
+    relay.fetch(new Request(`https://relay.test/v1/transcribe${query}`, { method: "POST", headers: { "content-type": "audio/ogg", "content-length": "4" }, body: "OggS" }), env);
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  // The interrogation's "John Ruetten" was heard as "John Rutten" and "John Bruton" without them.
+  it("tells Scribe the case's names to listen for, each its own keyterms field", async () => {
+    vi.stubGlobal("FixedLengthStream", class extends TransformStream<Uint8Array, Uint8Array> { constructor(_length: number) { super(); } });
+    let sent = "";
+    vi.stubGlobal("fetch", async (_input: string | URL | Request, init: RequestInit = {}) => {
+      sent = await new Response(init.body).text();
+      return Response.json({ words: [] });
+    });
+    expect((await transcribe("?keyterm=John%20Ruetten&keyterm=Sherri%20Rasmussen")).status).toBe(200);
+    const fields = [...sent.matchAll(/name="keyterms"\r\n\r\n([^\r]*)\r\n/g)].map((match) => match[1]);
+    expect(fields).toEqual(["John Ruetten", "Sherri Rasmussen"]);
+    expect(sent).toContain('name="model_id"');
+    expect(sent).toContain("OggS");
+    expect((await transcribe("?keyterm=%7Bbad%7D")).status).toBe(400);
+    expect((await transcribe(`?keyterm=${"a".repeat(50)}`)).status).toBe(400);
+  });
+});

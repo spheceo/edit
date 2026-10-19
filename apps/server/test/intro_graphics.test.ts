@@ -17,7 +17,7 @@ function room(): Project {
 
 const named = (p: Project, prefix: string) => p.clips.filter((clip) => (clip.name ?? "").startsWith(prefix));
 
-test("the teasers' subtitles come up word by word, white on black, the lines that matter on red, naming nobody", () => {
+test("the teasers' subtitles come up word by word in bodycam's glowing look, the lines that matter in red words, naming nobody", () => {
   const p = room();
   apply(p, [
     { op: "add", as: "a", clip: { type: "text", track: "new", name: "Subtitle · Detective", start: 30, duration: 60, text: "Greg's deceased." } },
@@ -27,8 +27,14 @@ test("the teasers' subtitles come up word by word, white on black, the lines tha
   const result = apply(p, [{ op: "intro_captions", start: 0, end: 300, emphasis: [a!.id], heard: [34, 44, 100, 104, 110, 116, 400] }]);
   expect(result.results[0]).toEqual({ restyled: [a!.id, b!.id], emphasised: [a!.id] });
   const [ra, rb] = p.clips.filter((clip) => clip.id === a!.id || clip.id === b!.id) as TextClip[];
-  expect(ra!.style.background?.color).toEqual([0.82, 0.04, 0.06, 1]);
-  expect(rb!.style.background?.color).toEqual([0, 0, 0, 1]);
+  // Red text, not a red box ("it's not a red background, it's the red text"), both glowing over the see-through box and its shadow.
+  expect([ra!.style.color, ra!.style.background?.color, ra!.style.background?.opacity]).toEqual([[1, 0.1, 0.1, 1], [0, 0, 0, 1], expect.closeTo(0.45, 5)]);
+  expect(rb!.style.color).toEqual([1, 1, 1, 1]);
+  for (const clip of [ra!, rb!]) {
+    expect(clip.style.glow).toMatchObject({ enabled: true, radius: 46, strength: 0.5 });
+    expect(clip.style.shadow?.blur).toBe(14);
+    expect(clip.style.font).toBe("Montserrat");
+  }
   expect([ra!.name, ra!.animation.preset, ra!.word_times]).toEqual(["Subtitle (teaser)", "words", [4, 14]]);
   // Five words but four heard in it: spread over the first 60% of the line instead.
   expect(rb!.word_times).toEqual([0, 7.2, 14.4, 21.6, 28.8]);

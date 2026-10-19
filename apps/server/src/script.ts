@@ -1733,7 +1733,9 @@ async function transcripts(app: App, project: Project): Promise<Map<string, Hear
     if (block.kind === "footage" && isSome(block.media) && isSome(block.words)) used.add(block.media);
   }
   const media = project.media.filter((item) => used.has(item.id) && item.has_audio);
-  for (const item of media) app.media.transcribe(item.path, true);
+  // Listening for the case's names (names.ts: the script's narration and any research).
+  const names = await seams.research.caseNames(app, project);
+  for (const item of media) app.media.transcribe(item.path, true, names);
   const out = new Map<string, Heard>();
   const started = timing.now();
   for (const item of media) {

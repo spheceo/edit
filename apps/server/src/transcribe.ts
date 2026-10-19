@@ -39,6 +39,11 @@ export interface Transcript {
    * than guess who is who again.
    */
   looks?: Record<string, string>;
+  /**
+   * The case's names Scribe was told to listen for (names.ts), so a later ask
+   * with names it wasn't given hears the file again.
+   */
+  keyterms?: string[];
 }
 
 /**
@@ -67,6 +72,7 @@ export function serialize(transcript: Transcript): string {
     const map = sortedMap(transcript[field]);
     if (map !== undefined) text += `,${JSON.stringify(field)}:${writeMap(map)}`;
   }
+  if (transcript.keyterms !== undefined && transcript.keyterms.length > 0) text += `,"keyterms":${JSON.stringify(transcript.keyterms)}`;
   return `${text}}`;
 }
 
@@ -76,8 +82,13 @@ const BUSY_WAITS = [15, 30, 60, 60, 60, 60];
 /** How long a wait before asking again lasts (tests make it instant). */
 export const timing = { sleep: (seconds: number) => Bun.sleep(seconds * 1000) };
 
-/** Extracts audio, sends it to the relay, writes `target` (transcript JSON). */
-export async function run(source: string, target: string): Promise<void> {
+/**
+ * Extracts audio, sends it to the relay with the case's names to listen for
+ * (`keyterms`), writes `target` (transcript JSON). Names Scribe refuses (a
+ * 400 or 422: nothing heard or billed) are dropped and it's asked once
+ * without them rather than fail over a spelling aid.
+ */
+export async function run(source: string, target: string, keyterms: readonly string[] = []): Promise<void> {
   const auth = relay.authHeaders();
   const audio = withExtension(target, "ogg");
   // Asked before the media's other work has made its cache folder.
@@ -119,11 +130,13 @@ export async function run(source: string, target: string): Promise<void> {
   const waits = [...BUSY_WAITS];
   let status: number;
   let body: string;
+  let names = [...keyterms];
   try {
     for (;;) {
       let response: Response;
+      const query = names.map((name) => `keyterm=${encodeURIComponent(name)}`).join("&");
       try {
-        response = await fetch(`${relay.url()}/v1/transcribe`, {
+        response = await fetch(`${relay.url()}/v1/transcribe${query === "" ? "" : `?${query}`}`, {
           method: "POST",
           headers: { ...auth, "content-type": "audio/ogg" },
           body: Bun.file(audio),
@@ -134,6 +147,11 @@ export async function run(source: string, target: string): Promise<void> {
         throw new Error(`could not reach the transcription relay: ${diag.messageOf(error)}`);
       }
       status = response.status;
+      if ((status === 400 || status === 422) && names.length > 0) {
+        diag.warn("media", `transcription refused the case's names (${status}: ${body.trim().slice(0, 200)}); asking without them`);
+        names = [];
+        continue;
+      }
       if (status === 429) {
         const wait = waits.shift();
         if (wait !== undefined) {
@@ -167,6 +185,8 @@ export async function run(source: string, target: string): Promise<void> {
     throw new Error(`transcription failed (${status}): ${message}`);
   }
   const transcript = parseScribe(value);
+  // The names asked with, even when refused: asked again they'd be refused again.
+  if (keyterms.length > 0) transcript.keyterms = [...keyterms];
   try {
     writeAtomic(target, serialize(transcript));
   } catch (error) {

@@ -804,3 +804,4 @@ export async function reviewFound(app: App, id: string, item: string, status: st
 
 // Its routes live beside the package's other routes (script_tools.ts).
 export { researchRoutes as routes } from "./script_tools.ts";
+export { caseNames, known as knownNames } from "./names.ts";

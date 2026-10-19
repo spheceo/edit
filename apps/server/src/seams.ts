@@ -376,6 +376,10 @@ export interface WebResult {
 export interface ResearchSeam {
   addArticle(home: string, project: string, url: string, summary: string): Promise<[Article, number]>;
   articles(home: string, project: string): Article[];
+  /** The case's names for the transcriber (names.ts), listed again when its articles or script changed. */
+  caseNames(app: App, project: Project): Promise<string[]>;
+  /** The names last listed for the case, none asked for. */
+  knownNames(app: App, project: Project): string[];
   clear(home: string, project: string, status: string): number;
   collect(home: string, project: string, queries: string[], perQuery: number): Promise<[added: number, had: number, failed: number]>;
   collecting(project: string): boolean;
@@ -589,6 +593,8 @@ export const faces: FacesSeam = facesModule;
 export type Under = { kind: "auto" } | { kind: "bottom" } | { kind: "at"; x: number; y: number };
 
 export interface CaptionsSeam {
+  /** The house caption look (bodycam's speaker captions): Montserrat with a glow in its colour, a see-through box with a wide soft shadow. */
+  captionStyle(width: number, height: number): TextStyle;
   /** A caption's rough size (project pixels): wrapped at the style's width. */
   captionSize(text: string, style: TextStyle): [number, number];
   captionSpeakers(app: App, projectId: string, from: number, to: number): Promise<Json>;
@@ -617,7 +623,8 @@ export interface CaptionsSeam {
   subtitleName(name: string): string;
   subtitles(app: App, projectId: string, from: number, to: number, neglect: boolean): Promise<Json>;
   /** A media's transcript, transcribing it first if needed. */
-  transcriptOf(app: App, media: Media): Promise<Transcript>;
+  /** A media's transcript; given the project, heard with the case's names (names.ts). */
+  transcriptOf(app: App, media: Media, project?: Project): Promise<Transcript>;
   /**
    * The captions package's routes (`/api/projects/{id}/captions`, `/api/projects/{id}/watch`,
    * `/api/projects/{id}/media/{media}/transcribe`), registered on the router. Its MCP tools

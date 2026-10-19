@@ -7,8 +7,11 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import * as diag from "./diag.ts";
 import { ioMessage } from "./files.ts";
-import type { Media, Rgba, TextStyle } from "./model.ts";
+import type { Media, Project, Rgba, TextStyle } from "./model.ts";
+import { covers, joined } from "./names.ts";
+import * as seams from "./seams.ts";
 import { charCount, f32, F32_MAX, parseHex, serdeParse, splitWhitespace, trim } from "./rust.ts";
 import type { Transcript } from "./transcribe.ts";
 
@@ -21,10 +24,20 @@ export const timing = {
 /** How long `transcriptOf` waits for a transcription before giving up. */
 const TRANSCRIBE_LIMIT_MS = 20 * 60 * 1000;
 
-/** A media's transcript, transcribing it first if needed. */
-export async function transcriptOf(app: App, media: Media): Promise<Transcript> {
+/** Files heard again for a set of names in this run: a failed one isn't asked again and again. */
+const reheard = new Set<string>();
+
+/**
+ * A media's transcript, transcribing it first if needed. Given the project,
+ * Scribe listens for the case's names (names.ts: from its research and
+ * script), and a transcript heard without some of them is heard again with
+ * them (and the names it had), once: the team's interrogation subtitles said
+ * "John Rutten" and "John Bruton" for John Ruetten, who's in every article.
+ */
+export async function transcriptOf(app: App, media: Media, project?: Project): Promise<Transcript> {
   const path = media.path;
-  app.media.transcribe(path, media.has_audio);
+  const names = project === undefined || !media.has_audio ? [] : await seams.research.caseNames(app, project);
+  app.media.transcribe(path, media.has_audio, names);
   const started = timing.now();
   for (;;) {
     switch (app.media.status(path).transcript) {
@@ -35,7 +48,15 @@ export async function transcriptOf(app: App, media: Media): Promise<Transcript> 
         } catch (error) {
           throw new Error(ioMessage(error));
         }
-        return parseTranscript(text);
+        const transcript = parseTranscript(text);
+        const asked = `${path}\n${names.map((name) => name.toLowerCase()).sort().join("\n")}`;
+        if (!covers(transcript.keyterms, names) && !reheard.has(asked)) {
+          reheard.add(asked);
+          diag.info("media", `${media.name}: heard again with the case's names (${names.length})`);
+          app.media.transcribe(path, true, joined(names, transcript.keyterms ?? []), true);
+          continue;
+        }
+        return transcript;
       }
       case "failed":
         throw new Error(`${media.name} couldn't be transcribed`);
@@ -74,6 +95,7 @@ export function parseTranscript(text: string): Transcript {
   for (const field of ["speakers", "roles", "colors", "looks"] as const) {
     if (object[field] === undefined || object[field] === null) object[field] = {};
   }
+  if (!Array.isArray(object.keyterms)) delete object.keyterms;
   return object as unknown as Transcript;
 }
 

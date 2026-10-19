@@ -81,6 +81,13 @@ export default {
     }
     const language = url.searchParams.get("language");
     if (language && !/^[a-zA-Z]{2,3}$/.test(language)) return json(400, { error: "Invalid language code." });
+    // The case's names to listen for (Scribe's keyterms, a fifth more): at
+    // most 100, each under 50 characters, none of <>{}[]\ (one it refuses
+    // fails the whole request).
+    const keyterms = url.searchParams.getAll("keyterm");
+    if (keyterms.length > 100 || keyterms.some((term) => term.length < 1 || term.length >= 50 || /[<>{}[\]\\\u0000-\u001f]/.test(term))) {
+      return json(400, { error: "Invalid keyterms: at most 100, each under 50 characters." });
+    }
     const day = new Date().toISOString().slice(0, 10);
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
     const client = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -88,13 +95,14 @@ export default {
     const reserved = await budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client, size }) }));
     if (!reserved.ok) return reserved;
 
-    const form = multipart(request.body!, size, type, {
-      model_id: MODEL,
-      diarize: "true",
-      timestamps_granularity: "word",
-      tag_audio_events: "false",
-      ...(language ? { language_code: language } : {}),
-    });
+    const form = multipart(request.body!, size, type, [
+      ["model_id", MODEL],
+      ["diarize", "true"],
+      ["timestamps_granularity", "word"],
+      ["tag_audio_events", "false"],
+      ...(language ? [["language_code", language] as [string, string]] : []),
+      ...keyterms.map((term): [string, string] => ["keyterms", term]),
+    ]);
     const upstream = await fetch(SCRIBE, {
       method: "POST",
       headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": form.contentType },
@@ -300,11 +308,11 @@ function withCors(response: Response) {
  * A multipart/form-data body that streams `audio` between text fields, with an
  * exact Content-Length (FixedLengthStream) so nothing is buffered.
  */
-function multipart(audio: ReadableStream<Uint8Array>, audioSize: number, audioType: string, fields: Record<string, string>) {
+function multipart(audio: ReadableStream<Uint8Array>, audioSize: number, audioType: string, fields: [string, string][]) {
   const boundary = `edit-${crypto.randomUUID()}`;
   const encoder = new TextEncoder();
   const head = encoder.encode(
-    Object.entries(fields)
+    fields
       .map(([name, value]) => `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`)
       .join("") +
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.ogg"\r\nContent-Type: ${audioType}\r\n\r\n`,

@@ -1101,7 +1101,7 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   // waited on the transcriber ten times over.
   const wanted = [...new Set(sound.map(clipMedia).filter((id): id is string => id !== null))].sort(compareKeys);
   const medias = wanted.map((id) => mediaOf(project, id)).filter((media) => media !== undefined);
-  const fetched = await limited(medias, 4, (media) => transcriptOf(app, media));
+  const fetched = await limited(medias, 4, (media) => transcriptOf(app, media, project));
   const transcripts = new Map<string, Transcript>();
   for (let index = 0; index < medias.length; index++) {
     const result = fetched[index]!;
@@ -1585,6 +1585,8 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
     ...(castFailed === null
       ? {}
       : { cast_failed: `the people weren't joined across the windows (${castFailed}): one person may be under several names and colours; run watch_footage again before subtitling` }),
+    // The case's names the transcriber listened for (names.ts), or what to do without them.
+    ...names(app, project),
     words_moved: moved,
     doubtful,
     people,
@@ -1687,6 +1689,21 @@ export function watchedUses(project: Project): Serde {
   });
   const keyed = uses.map((use) => [serdeText(use), use] as const).sort((a, b) => compareKeys(a[0], b[0]));
   return { fps: fpsOf(project), uses: keyed.map(([, use]) => use) };
+}
+
+/**
+ * How many of the case's names the transcriber listened for; none, the
+ * research to do first (the interrogation's subtitles spelt John Ruetten two
+ * wrong ways without them).
+ */
+function names(app: App, project: Project): Record<string, unknown> {
+  const known = seams.research.knownNames(app, project);
+  if (known.length > 0) return { names_heard: known.length };
+  return {
+    names_heard: 0,
+    no_case_names:
+      "no articles or script saved for this case, so the transcriber guessed at its names: research the case (search_web, then add_article for each article about it), then run watch_footage again: the footage is heard again listening for the names before subtitling",
+  };
 }
 
 /** The receipt key of a finished watch: what it looked at and the transcripts it left. */

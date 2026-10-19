@@ -137,3 +137,26 @@ After both attempts ended, the idle pilot was restored to the current L4 worker
 (with the audio optimization), its CPU gateway health check passed, and new
 export admission was disabled with a zero test budget. No new exports were
 started during this reset.
+
+
+## L40S real 1080p pair — 2026-10-19
+
+The exact frozen Young Actress and Corrupt Cop snapshots from the completed L4 benchmark were submitted together to one L40S with the same four physical cores, 16 GiB, 1080p/30 H.264 High settings and -14 LUFS audio. A detached checkout retained the original `b5a2477` renderer, mixer and transfer runtime; the later audio optimization was excluded to preserve the comparison. L40S passed graphics and H.264/HEVC hardware preflight. No region premium or automatic paid retry was enabled.
+
+- **Young Actress**: L40S result observed in R2 at **16:20**, delivered to the Mac at **18:03**; L4 delivery was **28:47**.
+- **Corrupt Cop**: L40S result observed in R2 at **8:46**, delivered to the Mac at **9:32**; L4 delivery was **16:56**.
+
+Both outputs were delivered in **18:03**, versus **28:47** on L4 (1.59× end-to-end speedup). Shared worker execution was **16:12**, implying approximately **$0.61**, versus L4's approximately **$0.48**. These use [Modal's published requested-allocation rates](https://modal.com/pricing); they exclude gateway/build/startup outside the recorded interval, storage/network, the hardware probe and prior trials. They are estimates, not an invoice. Do not sum overlapping per-job estimates.
+
+Input staging took 26.0 seconds for Young Actress's 3.5 GB original and 6.8 seconds for Corrupt Cop's assets. Timings start at first export submission, include allocation, inputs, audio, picture, join, full decode validation and R2 publication, and separately record desktop delivery. Deployment and manifest preparation precede the timer. One cold run per GPU and differing allocations do not isolate GPU kernel speed or establish a stable performance distribution.
+
+Both outputs passed the worker full decode and local codec, dimensions, exact frame-count, stereo AAC, zero-start and duration checks. Whole-file SHA-256 checks also matched the earlier L4 files byte for byte, covering the complete video and audio output. This proves consistency with the checked L4 outputs; it is not a new perceptual comparison against the Mac encoder.
+
+- Young Actress sound: -14.1 LUFS; decoded AAC true peak -0.8 dBFS.
+- Corrupt Cop sound: -14.1 LUFS; decoded AAC true peak -1.3 dBFS.
+
+The two jobs conservatively reserved $2.74, bringing daily export reservations to $18.97 against $18.98. Reservations are not charges; the short independent hardware probe and other services are outside that ledger. The original editor PID 13625, production Relay and Repack were not restarted or changed. Cloud exports remain opt-in.
+
+The [raw L40S run](benchmarks/modal-l40s-2026-10-19.json) includes source control, immutable fixture hashes, job identities, timing samples, output metadata and verification.
+
+After the benchmark completed, the idle pilot was restored to the current L4 worker with the newer audio mixer, its gateway health check passed and new test admission was disabled. No additional exports were started during reset.

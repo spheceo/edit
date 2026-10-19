@@ -36,7 +36,10 @@ const reheard = new Set<string>();
  */
 export async function transcriptOf(app: App, media: Media, project?: Project): Promise<Transcript> {
   const path = media.path;
-  const names = project === undefined || !media.has_audio ? [] : await seams.research.caseNames(app, project);
+  // Not a voice-over: it's read from the script, whose words it already has
+  // (the interrogation's takes heard again took 11 minutes behind the relay's limit).
+  const voiceover = project !== undefined && project.clips.some((clip) => "media" in clip && clip.media === media.id && seams.voiceover.isVoiceover(project, clip));
+  const names = project === undefined || !media.has_audio || voiceover ? [] : await seams.research.caseNames(app, project);
   app.media.transcribe(path, media.has_audio, names);
   const started = timing.now();
   for (;;) {

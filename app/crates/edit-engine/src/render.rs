@@ -1763,7 +1763,7 @@ fn mix_sound(
 
 /// What a mix of `parts` sounds like, as a key: the parts (their files by
 /// content), the loudness and the codec. The same key is the same sound.
-fn sound_key(options: &ExportOptions, parts: &[crate::mix::Part], seconds: f64) -> String {
+pub fn sound_key(options: &ExportOptions, parts: &[crate::mix::Part], seconds: f64) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "sound-v2".hash(&mut hasher);

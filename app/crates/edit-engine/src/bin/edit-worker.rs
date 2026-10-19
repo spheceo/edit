@@ -9,7 +9,8 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let audio_only = args.first().map(String::as_str) == Some("--audio-only");
-    if audio_only {
+    let cloud_plan = args.first().map(String::as_str) == Some("--cloud-plan");
+    if audio_only || cloud_plan {
         args.remove(0);
     }
     let [project, options, output, cache] = args.as_slice() else {
@@ -24,6 +25,44 @@ fn run() -> Result<(), String> {
     let options: edit_engine::export::ExportOptions =
         serde_json::from_slice(&read(options)?).map_err(|error| format!("options: {error}"))?;
     let plan = edit_engine::render::export_plan(&project, &options)?;
+    if cloud_plan {
+        let count: i64 = cache.parse().map_err(|_| "invalid section count")?;
+        if !(1..=8).contains(&count) || plan.end - plan.start < count {
+            return Err("section count must be 1..8 and no greater than the frame count".into());
+        }
+        let settings = format!(
+            "cloud-v3|{}|{}x{}|{}",
+            serde_json::to_string(&options).map_err(|e| e.to_string())?,
+            plan.width,
+            plan.height,
+            project.fps()
+        );
+        let sections: Vec<_> = (0..count)
+            .map(|index| {
+                let mut section = plan.clone();
+                section.start = plan.start + (plan.end - plan.start) * index / count;
+                section.end = plan.start + (plan.end - plan.start) * (index + 1) / count;
+                let keys: Vec<_> = edit_engine::chunks::split(&project, &section, &settings)
+                    .into_iter()
+                    .map(|chunk| chunk.key)
+                    .collect();
+                serde_json::json!({"index": index, "range": [section.start, section.end], "keys": keys})
+            })
+            .collect();
+        let seconds = plan.seconds(project.fps());
+        let parts = edit_engine::mix::parts(
+            &edit_engine::render::heard_segments(&project, plan.start, plan.end),
+            |id| project.media(id).map(|media| PathBuf::from(&media.path)),
+            plan.start as f64 / project.fps(),
+            seconds,
+        );
+        let receipt = serde_json::json!({
+            "sections": sections,
+            "sound": edit_engine::render::sound_key(&options, &parts, seconds),
+        });
+        std::fs::write(output, receipt.to_string()).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
     let cache = PathBuf::from(cache);
     std::fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
     edit_engine::util::use_cache_dir(cache.clone());

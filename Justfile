@@ -118,6 +118,12 @@ serve-build-bin:
     dir="${EDIT_BUILD_DIR:-$HOME/edit-build}"
     export CARGO_TARGET_DIR="$dir/target" CARGO_BUILD_BUILD_DIR="$dir/build"
     start=$SECONDS
+    # The page's engine is edit-core and edit-render compiled to WASM: when
+    # they (or the UI) changed since the UI was built, build it again. A page
+    # checking projects with older rules than the server's showed one black.
+    if [ ! -f apps/web/dist/index.html ] || [ -n "$(find crates/edit-core/src crates/edit-render/src crates/edit-wasm/src apps/web/src -type f -newer apps/web/dist/index.html | head -1)" ]; then
+        (unset CARGO_TARGET_DIR CARGO_BUILD_BUILD_DIR; just web)
+    fi
     (cd crates/edit-native && { [ -d node_modules ] || bun install --frozen-lockfile; } \
         && bunx napi build --profile serve --dts index.d.ts && codesign -s - -f edit-native.node)
     bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node

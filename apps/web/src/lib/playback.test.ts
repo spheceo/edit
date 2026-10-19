@@ -85,6 +85,14 @@ describe("preview seeks and lifetime", () => {
   });
   afterEach(() => { preview.detach(); vi.unstubAllGlobals(); });
 
+  it("says on the preview when the page's own rules refuse a project, never a black frame", () => {
+    const white = { ...fixture(), people: [{ id: "x1", name: "Mother", label: "Mother:", role: "suspect", color: "#ffffff", names: [] }] } as unknown as Project;
+    preview.setProject(white, {}); draw();
+    expect(preview.error).toContain("can't show this project: Mother (x1) can't be white");
+    preview.setProject(fixture("p2"), {}); draw();
+    expect(preview.error).toBeNull();
+  });
+
   it("says on the preview when the engine refuses a project, and clears it when one is taken", () => {
     // A page older than the server checks the project with older rules.
     engine.setProject.mockImplementationOnce(() => { throw new Error("Bystander (p43) can't be white or a near-white grey"); });

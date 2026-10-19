@@ -37,7 +37,8 @@ function parseHex(color: string): [number, number, number] | null {
 
 /**
  * White or a near-white grey (CIELAB lightness over 85, chroma under 15):
- * never a person's colour, since the words they say are white (edit-core's `whitish`).
+ * a person's colour only for a bystander or a witness (the team's code), since
+ * everyone else's words are white (edit-core's `whitish`).
  */
 export function whitish([red, green, blue]: [number, number, number]): boolean {
   const channel = (byte: number) => {
@@ -60,7 +61,12 @@ export function peopleProblem(project: Project): string | null {
     if (person.id === "" || people.has(person.id)) return `people need distinct ids`;
     const bytes = parseHex(person.color);
     if (bytes === null) return `${person.name} needs a colour as #rrggbb`;
-    if (whitish(bytes)) return `${person.name} can't be white or a near-white grey: their words are white`;
+    // As edit-core's validate_people: the team's code gives white only to a
+    // bystander or a witness. When the two disagreed, this one refused Mom
+    // Leaves 5 Kids' white bystander and the preview stayed black.
+    if (whitish(bytes) && person.role !== "bystander" && person.role !== "witness") {
+      return `${person.name} (${person.id}) can't be white or a near-white grey: their words are white (only a bystander's or a witness's may be)`;
+    }
     people.set(person.id, { name: person.name, color: person.color, bytes });
   }
   for (const clip of project.clips) {

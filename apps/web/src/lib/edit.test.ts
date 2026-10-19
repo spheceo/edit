@@ -139,10 +139,10 @@ describe("timeline operations", () => {
 });
 
 describe("one colour per person (edit-core's validate_people)", () => {
-  const cast = (color: string, clipColor: [number, number, number, number]) =>
+  const cast = (color: string, clipColor: [number, number, number, number], role = "officer") =>
     ({
       ...project([{ id: "t1", track: "v1", type: "text", text: "Hi", start: 0, duration: 10, fade_in: 0, fade_out: 0, person: "p1", style: { color: clipColor } } as unknown as Clip]),
-      people: [{ id: "p1", name: "Officer", label: "Officer", role: "officer", color, names: [] }],
+      people: [{ id: "p1", name: "Officer", label: "Officer", role, color, names: [] }],
     }) as unknown as Project;
   it("refuses a white person and a clip out of its person's colour", () => {
     expect(validateProject(cast("#3366ff", [0.2, 0.4, 1, 1]))).toBeNull();
@@ -152,6 +152,11 @@ describe("one colour per person (edit-core's validate_people)", () => {
     const nobody = cast("#3366ff", [0.2, 0.4, 1, 1]);
     nobody.people = [];
     expect(validateProject(nobody)).toContain("isn't in the cast");
+  });
+  it("lets a bystander or a witness be white, as edit-core does (Mom Leaves 5 Kids' bystander)", () => {
+    expect(validateProject(cast("#f3ecdf", [0.953, 0.925, 0.875, 1], "bystander"))).toBeNull();
+    expect(validateProject(cast("#ffffff", [1, 1, 1, 1], "witness"))).toBeNull();
+    expect(validateProject(cast("#f3ecdf", [0.953, 0.925, 0.875, 1], "suspect"))).toContain("only a bystander's or a witness's");
   });
 });
 

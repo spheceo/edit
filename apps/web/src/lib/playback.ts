@@ -224,11 +224,7 @@ class Preview {
       engine.setProject(projectJson(project));
     } catch (error) {
       if (error instanceof WebAssembly.RuntimeError) throw error;
-      const message = error instanceof Error ? error.message : String(error);
-      this.refused = true;
-      this.error = `The preview can't show this project: ${message}. If Edit was just updated, reload the page.`;
-      note("error", "preview", this.error);
-      this.notify();
+      this.refuse(error instanceof Error ? error.message : String(error));
       return;
     }
     if (this.refused) {
@@ -236,6 +232,15 @@ class Preview {
       this.error = null;
       this.notify();
     }
+  }
+
+  /** A project the page's rules or its engine refuse: said on the preview, never a black frame. */
+  private refuse(problem: string) {
+    if (this.refused && this.error?.includes(problem)) return;
+    this.refused = true;
+    this.error = `The preview can't show this project: ${problem}. If Edit was just updated, reload the page.`;
+    note("error", "preview", this.error);
+    this.notify();
   }
 
   private use<T>(call: (engine: Engine) => T): T | undefined {
@@ -293,7 +298,13 @@ class Preview {
   }
 
   setProject(project: Project, proxyVersions: Record<string, string>) {
-    if (validateProject(project)) return;
+    const problem = validateProject(project);
+    if (problem) {
+      // A drag can pass through an invalid state: the last valid picture
+      // stays. With none of this project yet, say why there's nothing.
+      if (this.project?.id !== project.id) this.refuse(problem);
+      return;
+    }
     const previous = this.project;
     const changedSource = previous?.id !== project.id;
     if (changedSource) {
@@ -321,6 +332,7 @@ class Preview {
     for (const id of changed) this.copied.delete(id);
     this.project = project;
     this.error = null;
+    this.refused = false;
     this.renderedFrame = null;
     this.pendingScenes.clear();
     this.seekSerial++;

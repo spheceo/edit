@@ -6,9 +6,11 @@ import time
 
 import modal
 from app import image, BUILD, GPU
+from build import engine_id
 
 APP = "edit-exports-sections-v3-benchmark"
 POOL = int(os.environ.get("EDIT_SECTIONS_POOL", "4"))
+ENGINE = engine_id()
 if POOL not in {4, 8} or GPU != "L40S":
     raise ValueError("Use four or eight L40S workers")
 VOLUME = os.environ["EDIT_SECTIONS_VOLUME"]
@@ -63,7 +65,7 @@ def coordinate(job: dict):
     started = time.time()
     try:
         volume.reload()
-        result = run(job, volume, section, verify, root, BUILD, POOL)
+        result = run(job, volume, section, verify, root, BUILD, ENGINE, POOL)
         return {**result, "started": started, "finished": time.time()}
     except Exception as error:
         raise RuntimeError(plain(error)) from None

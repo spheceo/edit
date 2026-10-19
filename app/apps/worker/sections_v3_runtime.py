@@ -18,8 +18,8 @@ import time
 import uuid
 
 import httpx
-from runtime import command, stage
-from sections_runtime import LocalControl, MAX_OUTPUT, check_picture, inspect, parallel_upload, picture, ranges
+from runtime import command, stage, transfer
+from sections_runtime import LocalControl, MAX_OUTPUT, PART_BYTES, check_picture, inspect, picture, ranges
 
 VERSION = 3
 
@@ -93,7 +93,7 @@ def stage_cached(assets, folder, cache, client, control):
     if misses:
         work = folder / "downloads"
         work.mkdir()
-        downloaded = stage(misses, work, client, control)
+        downloaded = stage(misses, work, client, control, retries=2)
     for asset in misses:
         identity = identities[asset["media"]]
         dest = cache / "inputs" / identity / "asset.bin"
@@ -105,7 +105,7 @@ def stage_cached(assets, folder, cache, client, control):
                                "downloaded_bytes": sum(a["size"] for a in misses)}
 
 
-def plan_keys(project, options, identities, count, folder, control, build):
+def plan_keys(project, options, identities, count, folder, control, engine):
     model = copy.deepcopy(project)
     for media in model["media"]:
         # chunks::split and sound_key use these immutable identities rather
@@ -115,10 +115,43 @@ def plan_keys(project, options, identities, count, folder, control, build):
     command(["edit-worker", "--cloud-plan", "key-project.json", "options.json", "keys.json", str(count)],
             control, folder)
     plan = json.loads((folder / "keys.json").read_text())
+    encoder = hashlib.sha256(subprocess.check_output(["ffmpeg", "-version"], timeout=10)).hexdigest()
     for section in plan["sections"]:
-        section["key"] = key({"build": build, "picture": section.pop("keys"), "version": VERSION})
-    plan["sound"] = key({"build": build, "sound": plan["sound"], "version": VERSION})
+        section["key"] = key({"engine": engine, "encoder": encoder, "gpu": "L40S", "picture": section.pop("keys"), "version": VERSION})
+    plan["sound"] = key({"engine": engine, "encoder": encoder, "sound": plan["sound"], "version": VERSION})
     return plan
+
+
+def upload_parts(path, urls, client, control):
+    size = path.stat().st_size
+    count = (size + PART_BYTES - 1) // PART_BYTES
+    if not 0 < size <= MAX_OUTPUT or len(urls) < count:
+        raise RuntimeError("Output or presigned part count exceeded its limit")
+
+    def put(index):
+        started = time.time()
+        attempts = 0
+        with path.open("rb") as source:
+            source.seek(index * PART_BYTES)
+            data = source.read(min(PART_BYTES, size - index * PART_BYTES))
+
+        def send():
+            nonlocal attempts
+            attempts += 1
+            response = client.put(urls[index], content=data,
+                                  timeout=httpx.Timeout(connect=10, write=20, read=30, pool=10))
+            response.raise_for_status()
+            if not response.headers.get("etag"):
+                raise RuntimeError("Uploaded part has no ETag")
+            return response.headers["etag"]
+
+        etag = transfer(send, control, retries=2)
+        return {"PartNumber": index + 1, "ETag": etag}, {"part": index + 1, "attempts": attempts,
+                                                       "seconds": time.time() - started}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        parts = list(pool.map(put, range(count)))
+    return {"size": size, "parts": [p for p, _ in parts], "transfers": [r for _, r in parts]}
 
 
 def decode_frames(output, span, fps, control, folder):
@@ -175,7 +208,7 @@ def check_packets(output, frames, fps):
     return {"frames": len(pts), "max_pts_error_seconds": error, "monotonic_dts": True}
 
 
-def coordinate(job, volume, section_function, verify_function, root, build, gpu_pool):
+def coordinate(job, volume, section_function, verify_function, root, build, engine, gpu_pool):
     name = job["id"]
     if not re.fullmatch(r"[a-z0-9-]{1,100}", name):
         raise ValueError("Invalid experiment identifier")
@@ -184,6 +217,9 @@ def coordinate(job, volume, section_function, verify_function, root, build, gpu_
     folder, cache = root / name, root / "cache-v3"
     folder.mkdir(exist_ok=False)
     calls, received = [], set()
+
+    def progress(phase):
+        print(json.dumps({"phase": phase, "id": name, "seconds": time.time() - started}), flush=True)
 
     def submit(function, *args):
         call = function.spawn(*args)
@@ -222,7 +258,8 @@ def coordinate(job, volume, section_function, verify_function, root, build, gpu_
             (folder / "project.json").write_text(json.dumps(project))
             (folder / "options.json").write_text(json.dumps(options))
             staged = time.time()
-            plan = plan_keys(project, options, identities, len(spans), folder, control, build)
+            progress("staged")
+            plan = plan_keys(project, options, identities, len(spans), folder, control, engine)
             if [s["range"] for s in plan["sections"]] != [list(span) for span in spans]:
                 raise RuntimeError("Native planner and coordinator frame ranges disagree")
             sections, pending = [], {}
@@ -232,6 +269,7 @@ def coordinate(job, volume, section_function, verify_function, root, build, gpu_
                     sections.append({**section, "cached": True, "bytes": hit["bytes"], "sha256": hit["sha256"]})
             volume.commit()
             planned = time.time()
+            progress("planned")
             for section in plan["sections"]:
                 if not any(s["index"] == section["index"] for s in sections):
                     pending[section["index"]] = submit(section_function, name, section["index"], tuple(section["range"]), section["key"])
@@ -242,11 +280,13 @@ def coordinate(job, volume, section_function, verify_function, root, build, gpu_
                         control, folder)
                 remember(folder / "sound.m4a", sound, plan["sound"], move=True)
             audio_finished = time.time()
+            progress("audio_finished")
             volume.commit()
             sections.extend(collect(pending))
             sections.sort(key=lambda s: s["index"])
             volume.reload()
             picture_finished = time.time()
+            progress("picture_finished")
             for section in sections:
                 if section["range"] != list(spans[section["index"]]):
                     raise RuntimeError("Unexpected picture range")
@@ -262,6 +302,7 @@ def coordinate(job, volume, section_function, verify_function, root, build, gpu_
                      "-i", str(sound), "-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "-1", "-map_chapters", "-1",
                      "-c", "copy", "-movflags", "+faststart", str(output)], control, folder)
             assembled = time.time()
+            progress("assembled")
             found = inspect(output)
             check_picture(found, total, settings["width"], settings["height"], settings["fps"], True)
             if not 0 < output.stat().st_size <= MAX_OUTPUT:
@@ -273,7 +314,7 @@ def coordinate(job, volume, section_function, verify_function, root, build, gpu_
             # Incomplete multipart uploads are private. The host publishes only
             # after every validation receipt, digest and part ETag has passed.
             with ThreadPoolExecutor(max_workers=2) as pool:
-                upload = pool.submit(parallel_upload, output, job["upload_urls"], client, control)
+                upload = pool.submit(upload_parts, output, job["upload_urls"], client, control)
                 digest = pool.submit(sha, output)
                 packet_check = check_packets(output, total, settings["fps"])
                 verification = collect(validation)
@@ -288,18 +329,25 @@ def coordinate(job, volume, section_function, verify_function, root, build, gpu_
                         if receipt.get("range") != expected or receipt.get("frames") != expected[1] - expected[0]:
                             raise RuntimeError("Incomplete finished-file frame verification")
                 verified = time.time()
+                progress("verified")
                 uploaded, checksum = upload.result(), digest.result()
             finished = time.time()
+            progress("uploaded")
             result = {"id": name, "started": started, "staged": staged, "planned": planned,
                       "audio_finished": audio_finished, "picture_finished": picture_finished,
                       "assembled": assembled, "verified": verified, "finished": finished,
                       "sections": sections, "verification": verification, "packet_check": packet_check,
                       "input_cache": input_cache, "sound_cached": sound_cached,
                       "sha256": checksum, "frames": total, "probe": found, "upload": uploaded,
-                      "build": build, "gpu": "L40S", "gpu_pool_limit": gpu_pool, "pipeline": "v3",
+                      "build": build, "engine_build": engine, "gpu": "L40S", "gpu_pool_limit": gpu_pool, "pipeline": "v3",
                       "container": os.environ.get("MODAL_TASK_ID", "unknown")}
             write_json(folder / "receipt.json", result)
             return result
+    except Exception as error:
+        print(json.dumps({"phase": "failure", "id": name, "error_type": type(error).__name__,
+                          "staged": "staged" in locals(), "assembled": "assembled" in locals(),
+                          "verified": "verified" in locals()}), flush=True)
+        raise
     finally:
         control.stop.request()
         for call in calls:

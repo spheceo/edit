@@ -6,10 +6,11 @@ from pathlib import Path
 ROOT = Path(os.environ["EDIT_WORKER_SOURCE_ROOT"]) if "EDIT_WORKER_SOURCE_ROOT" in os.environ else Path(__file__).resolve().parents[2]
 
 
-def build_id():
+def fingerprint(worker):
     digest = hashlib.sha256()
     paths = [ROOT / "Cargo.toml", ROOT / "Cargo.lock"]
-    for folder in ["crates/edit-core", "crates/edit-render", "crates/edit-engine", "crates/edit-native", "crates/edit-wasm", "crates/edit-window", "apps/worker"]:
+    folders = ["crates/edit-core", "crates/edit-render", "crates/edit-engine", "crates/edit-native", "crates/edit-wasm", "crates/edit-window"]
+    for folder in folders + (["apps/worker"] if worker else []):
         paths.extend(path for path in (ROOT / folder).rglob("*") if path.is_file()
                      and not any(part in {"node_modules", "__pycache__", ".venv", "target"} for part in path.parts)
                      and path.suffix not in {".pyc", ".node"})
@@ -17,6 +18,19 @@ def build_id():
         digest.update(str(path.relative_to(ROOT)).encode())
         digest.update(b"\0")
         digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def build_id():
+    return fingerprint(True)
+
+
+def engine_id():
+    """Drawing/encoding dependencies, independent of transfers and deployment."""
+    digest = hashlib.sha256(fingerprint(False).encode())
+    recipe = ROOT / "apps/worker/app.py"
+    if recipe.exists():
+        digest.update(recipe.read_bytes())
     return digest.hexdigest()
 
 

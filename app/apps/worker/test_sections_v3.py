@@ -9,11 +9,86 @@ import unittest
 from unittest.mock import patch
 
 import httpx
+import build
 from sections_runtime import LocalControl
-from sections_v3_runtime import asset_identity, cached, check_packets, decode_frames, remember, stage_cached
+from runtime import transfer
+from sections_v3_runtime import asset_identity, cached, check_packets, decode_frames, remember, stage_cached, upload_parts
 
 
 class CacheTests(unittest.TestCase):
+    def test_transfer_retries_are_bounded_and_authorization_errors_are_not_retried(self):
+        attempts = []
+
+        def stalled():
+            attempts.append(1)
+            raise httpx.WriteTimeout("fixture")
+
+        with patch("runtime.time.sleep"), self.assertRaises(httpx.WriteTimeout):
+            transfer(stalled, LocalControl("test", 10), retries=2)
+        self.assertEqual(len(attempts), 3)
+        attempts.clear()
+
+        def denied():
+            attempts.append(1)
+            request = httpx.Request("PUT", "https://r2.test/part")
+            httpx.Response(403, request=request).raise_for_status()
+
+        with self.assertRaises(httpx.HTTPStatusError):
+            transfer(denied, LocalControl("test", 10), retries=2)
+        self.assertEqual(len(attempts), 1)
+
+    def test_transfer_deployments_keep_engine_cache_keys_but_engine_changes_invalidate_them(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(build, "ROOT", Path(temporary)):
+            root = Path(temporary)
+            (root / "Cargo.toml").write_text("workspace")
+            (root / "Cargo.lock").write_text("locked")
+            (root / "apps/worker").mkdir(parents=True)
+            worker = root / "apps/worker/runtime.py"
+            worker.write_text("transfer v1")
+            old, engine = build.build_id(), build.engine_id()
+            worker.write_text("transfer v2")
+            self.assertNotEqual(old, build.build_id())
+            self.assertEqual(engine, build.engine_id())
+            (root / "crates/edit-engine/src").mkdir(parents=True)
+            (root / "crates/edit-engine/src/render.rs").write_text("new compositor")
+            self.assertNotEqual(engine, build.engine_id())
+
+    def test_upload_retries_only_the_failed_idempotent_part_with_identical_bytes(self):
+        attempts, bodies = {}, {}
+
+        def respond(request):
+            part = int(request.url.path[1:])
+            attempts[part] = attempts.get(part, 0) + 1
+            bodies.setdefault(part, []).append(request.content)
+            if part == 1 and attempts[part] == 1:
+                raise httpx.WriteTimeout("fixture stalled write", request=request)
+            return httpx.Response(200, headers={"etag": str(part)})
+
+        with tempfile.TemporaryDirectory() as temporary, patch("sections_v3_runtime.PART_BYTES", 4), httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            path = Path(temporary) / "video.mp4"
+            path.write_bytes(b"abcdefghij")
+            result = upload_parts(path, [f"https://r2.test/{i}" for i in range(3)], client, LocalControl("test", 10))
+        self.assertEqual(attempts, {0: 1, 1: 2, 2: 1})
+        self.assertEqual(bodies[1], [b"efgh", b"efgh"])
+        self.assertEqual([p["PartNumber"] for p in result["parts"]], [1, 2, 3])
+        self.assertEqual(result["transfers"][1]["attempts"], 2)
+
+    def test_source_transfer_retry_preserves_the_etag_and_publishes_only_complete_bytes(self):
+        attempts = []
+
+        def respond(request):
+            attempts.append(request.headers["if-match"])
+            if len(attempts) == 1:
+                raise httpx.ReadTimeout("fixture stalled read", request=request)
+            return httpx.Response(200, headers={"etag": "one"}, content=b"data")
+
+        asset = {"media": "m", "key": "edit/originals/m.mp4", "etag": "one", "size": 4, "url": "https://r2.test/a"}
+        with tempfile.TemporaryDirectory() as temporary, httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            root = Path(temporary)
+            paths, _, _ = stage_cached([asset], root, root / "cache", client, LocalControl("test", 10))
+            self.assertEqual(Path(paths["m"]).read_bytes(), b"data")
+        self.assertEqual(attempts, ["one", "one"])
+
     def test_changed_object_version_and_size_cannot_reuse_a_source(self):
         asset = {"key": "edit/originals/a.mp4", "etag": "version-one", "size": 8, "url": "https://r2/a?old"}
         identity = asset_identity(asset)

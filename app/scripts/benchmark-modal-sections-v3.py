@@ -164,7 +164,7 @@ def main():
             (args.output / f"delivery-{index}").mkdir()
             with httpx.Client(follow_redirects=False) as client:
                 inputs = stage([{"media": "output", "url": url, "etag": head["ETag"], "size": head["ContentLength"]}],
-                               args.output / f"delivery-{index}", client, LocalControl("delivery", 900))
+                               args.output / f"delivery-{index}", client, LocalControl("delivery", 900), retries=2)
             partial = Path(inputs["output"])
             with partial.open("rb") as stream:
                 checksum = hashlib.file_digest(stream, "sha256").hexdigest()

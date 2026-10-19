@@ -49,6 +49,24 @@ def plain(error):
     return re.sub(r"https?://\S+", "[link]", str(error))[-1000:]
 
 
+def transfer(operation, control, retries=0):
+    """Only retry idempotent, version-pinned byte transfers; never paid calls."""
+    if not 0 <= retries <= 2:
+        raise ValueError("At most two transfer retries are allowed")
+    for attempt in range(retries + 1):
+        control.check()
+        try:
+            return operation()
+        except (httpx.TransportError, httpx.HTTPStatusError) as error:
+            if isinstance(error, httpx.HTTPStatusError) and error.response.status_code not in {408, 429, 500, 502, 503, 504}:
+                raise
+            if attempt == retries:
+                raise
+            print(json.dumps({"phase": "transfer_retry", "id": control.job["id"],
+                              "attempt": attempt + 2, "error_type": type(error).__name__}), flush=True)
+            time.sleep(.25 * 2 ** attempt)
+
+
 class Control:
     def __init__(self, job, build, gpu, client, stop=None):
         self.job = {**job, "build": build, "gpu": gpu}
@@ -191,7 +209,7 @@ def download_range(asset, descriptor, first, last, client, control):
             raise RuntimeError("An input range was truncated")
 
 
-def stage(assets, folder, client, control):
+def stage(assets, folder, client, control, retries=0):
     """One bounded pool serves files and ranges, including a single huge source.
 
     Each range is version/length pinned and writes to its own offset. A sparse
@@ -206,7 +224,7 @@ def stage(assets, folder, client, control):
                 dest = folder / f"asset-{i}"
                 paths[asset["media"]] = str(dest)
                 if asset["size"] < RANGE_THRESHOLD:
-                    work.append(pool.submit(download, asset, dest, client, control))
+                    work.append(pool.submit(transfer, lambda a=asset, d=dest: download(a, d, client, control), control, retries))
                     continue
                 partial = dest.with_suffix(".partial")
                 descriptor = os.open(partial, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
@@ -214,7 +232,8 @@ def stage(assets, folder, client, control):
                 os.ftruncate(descriptor, asset["size"])
                 for first in range(0, asset["size"], RANGE_BYTES):
                     last = min(first + RANGE_BYTES, asset["size"]) - 1
-                    work.append(pool.submit(download_range, asset, descriptor, first, last, client, control))
+                    work.append(pool.submit(transfer, lambda a=asset, d=descriptor, f=first, l=last:
+                                            download_range(a, d, f, l, client, control), control, retries))
             try:
                 while any(not item.done() for item in work):
                     for item in work:

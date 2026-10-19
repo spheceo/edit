@@ -130,9 +130,32 @@ registerTool("repack_subtitles", async ({ app, args, projectId }) => {
     overlap,
     faces: typeof args.faces === "boolean" ? args.faces : overlap,
   };
+  const stretches = questioning(args.interrogation, fps, from, to);
   const summary = await subtitles.repackSubtitles(app, projectId, options);
-  return text(`subtitled ${fixed(from / fps, 2)}–${fixed(to / fps, 2)}s: ${stableStringify(summary)}`);
+  if (stretches.length === 0) return text(`subtitled ${fixed(from / fps, 2)}–${fixed(to / fps, 2)}s: ${stableStringify(summary)}`);
+  // Then each questioning stretch again, the interrogation way (each run replaces only its own span).
+  const questioned: unknown[] = [];
+  for (const [start, end] of stretches) {
+    const again = await subtitles.repackSubtitles(app, projectId, { ...options, from: start, to: end, overlap: true, faces: true, moving: true });
+    questioned.push({ start: fixed(start / fps, 2), end: fixed(end / fps, 2), ...(again as Record<string, unknown>) });
+  }
+  return text(`subtitled ${fixed(from / fps, 2)}–${fixed(to / fps, 2)}s: ${stableStringify({ ...(summary as Record<string, unknown>), interrogation: questioned })}`);
 });
+
+/** The interrogation stretches ([start, end] seconds each) as frames inside `from`–`to`, sorted. */
+export function questioning(given: unknown, fps: number, from: number, to: number): [number, number][] {
+  if (given === undefined || given === null) return [];
+  if (!Array.isArray(given)) throw new Error("interrogation: a list of [start, end] seconds");
+  const out: [number, number][] = [];
+  for (const stretch of given as unknown[]) {
+    if (!Array.isArray(stretch) || stretch.length !== 2 || !stretch.every((value) => typeof value === "number" && Number.isFinite(value))) {
+      throw new Error("interrogation: each stretch is [start, end] in seconds");
+    }
+    const [start, end] = [Math.max(frameOf(stretch[0] as number, fps), from), Math.min(frameOf(stretch[1] as number, fps), to)];
+    if (end > start) out.push([start, end]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
 
 /** JSON with sorted keys (a `json!` value), as `Json(value)` answered. */
 function sortedJson(value: unknown): Response {

@@ -56,7 +56,7 @@ SKILLS: the rest of the house style is in skills, one per part of the edit. Load
 - cut-ins: Covering cut-ins with B-roll: shots timed to the narration, the date cut-in's map, introducing a person, quote callouts, claim lists, phone calls, voice-overs.
 - outro: The outro's charges screens and where the video ends.
 - subtitles: Subtitles in an edit (after the intro): watching, wording, speakers and their colours.
-- subtitle-video: A subtitled video (Repack style): subtitles for the whole video and nothing else, then export and upload.
+- subtitle-video: A subtitled video (Repack style): subtitles for the whole video and nothing else, ready for the user to review (export and upload only when asked).
 - music-and-sound: Music beds and sound effects from the team's library, and their levels.
 - final-pass: The last review of a whole edit and the fixes it finds.
 - feedback: A round of the team's notes on an export (a Frame.io link): read, sort, fix across the video, report each.`;

@@ -1911,6 +1911,18 @@
         "start": {
           "description": "Seconds on the timeline (default 0).",
           "type": "number"
+        },
+        "interrogation": {
+          "description": "A video that's bodycam first and questioning later (someone questioned at or in a cruiser, on a doorstep, on a moving camera): the stretches of that questioning, [start, end] seconds on the timeline each. After the whole span is subtitled the plain way, each stretch is subtitled again the interrogation way: people talking over each other stacked, and each speaker's lines under their face, found frame by frame (a model names the faces in stills every few seconds, the face detector follows them between); the camera's wearer and anyone off camera stay bottom middle. For a fixed interview-room camera across the whole video use overlap instead.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
         }
       },
       "required": [],

@@ -482,6 +482,11 @@ export interface SubtitleOptions {
   hold_ms: number;
   overlap: boolean;
   faces: boolean;
+  /**
+   * Faces found frame by frame (moving_seats.ts) rather than per camera
+   * angle: questioning on a moving camera (bodycam at a cruiser).
+   */
+  moving?: boolean;
 }
 
 export interface SubtitlesSeam {

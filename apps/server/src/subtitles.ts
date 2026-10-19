@@ -27,6 +27,7 @@ import {
   trackOf,
 } from "./project.ts";
 import { byteLength, charCount, chars, f32, fixed, get, isAlphabetic, isAlphanumeric, isWhitespace, lines as linesOf, round, splitWhitespace, toI64, trim } from "./rust.ts";
+import { movingSeats } from "./moving_seats.ts";
 import * as seats from "./seats.ts";
 import type {
   ClipMutes,
@@ -969,7 +970,7 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
   const run = beginRun(projectId);
   const project = live.project;
   const fps = fpsOf(project);
-  const { from, to, neglect, hold_ms: holdMs, overlap, faces } = options;
+  const { from, to, neglect, hold_ms: holdMs, overlap, faces, moving } = options;
   if (to <= from) throw new Error("the span is empty");
   const sound = footageSound(project, from, to).sort((a, b) => a.start - b.start);
   const transcripts = new Map<string, Transcript>();
@@ -1040,12 +1041,23 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
   // Where each speaker sits, per file, for lines under their face: a few
   // files at once (each is a frame scan and model calls; one after another,
   // an interrogation compilation's 70 excerpts took ~40 minutes).
-  const seated = new Map<string, seats.Seats>();
+  const seated = new Map<string, { seen(): number; dot(name: string, at: number): seats.Dot | null }>();
   if (faces) {
     await seats.atOnce([...transcripts], SEAT_FILES_AT_ONCE, async ([mediaId, transcript]) => {
       const media = mediaOf(project, mediaId);
       if (media === undefined) return;
       try {
+        if (moving === true) {
+          // A moving camera: the faces frame by frame, only over this span's stretches of the file.
+          const spans = sound
+            .filter((clip) => clip.type === "audio" && clip.media === mediaId)
+            .map((clip) => visible(clip as Clip & { type: "audio" }, from, to, fps))
+            .filter(([s, e]) => e > s);
+          // The camera's wearer is never seen: one person on camera is enough.
+          const found = await movingSeats(media.path, [media.width, media.height], transcript, spans);
+          if (found.seen() >= 1) seated.set(mediaId, found);
+          return;
+        }
         // Lines go by faces only where two or more speakers are on camera:
         // with one (the person questioned facing it, the detectives behind
         // it) their lines jumped up beside the face while everyone else's

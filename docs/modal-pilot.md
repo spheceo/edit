@@ -1,5 +1,9 @@
 # Modal export pilot — 2026-10-19
 
+Latest: the [concurrent section benchmark](modal-sections-benchmark.md) includes
+the current audio improvements. The same full 1080p pair was cloud-ready in
+6:54 and downloaded in 8:46, using a four-L40S pool with eight sections per video.
+
 Built on `feat/modal-workers` in a separate worktree. The original checkout,
 running `/tmp/run/edit` process (PID 13625), production Relay, Repack apps,
 shared project registry and user projects were not restarted, deployed over

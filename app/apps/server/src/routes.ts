@@ -255,13 +255,21 @@ async function setup({ app }: Context): Promise<Response> {
       title: "FFmpeg",
       why: "Importing footage, previews and export. Reinstalling Edit brings it back.",
     },
-    {
-      fix: loggedOut ? "codex login" : "npm install -g @openai/codex && codex login",
-      id: "codex",
-      ok: codex.ready === true,
-      title: loggedOut ? "Codex sign-in" : "Codex",
-      why: "The agent panel.",
-    },
+    codex.provider === "claude"
+      ? {
+          fix: loggedOut ? "claude auth login" : "curl -fsSL https://claude.ai/install.sh | bash && claude auth login",
+          id: "claude",
+          ok: codex.ready === true,
+          title: loggedOut ? "Claude Code sign-in" : "Claude Code",
+          why: "The agent panel (on your own Claude plan or API key).",
+        }
+      : {
+          fix: loggedOut ? "codex login" : "npm install -g @openai/codex && codex login",
+          id: "codex",
+          ok: codex.ready === true,
+          title: loggedOut ? "Codex sign-in" : "Codex",
+          why: "The agent panel.",
+        },
     {
       fix: "https://www.google.com/chrome/",
       id: "chrome",

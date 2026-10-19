@@ -1,0 +1,182 @@
+// The agent on Claude Code: its models read into the panel's, and a turn's
+// messages (shaped as a real Opus 5.5 turn sent them) mapped onto the chat,
+// with a stand-in query (no Claude Code is started).
+
+import { expect, test } from "bun:test";
+
+import { Agents } from "../src/agent.ts";
+import * as claude from "../src/claude.ts";
+import { fixtureHome } from "./helpers/home.ts";
+
+const MODELS = [
+  { value: "default", displayName: "Default (recommended)", description: "" },
+  { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", description: "Most capable", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { value: "haiku", displayName: "Haiku 5.5", description: "Fastest", supportsEffort: false },
+] as claude.ModelInfo[];
+
+test("opus is the default at medium and claude code's own default row is left out", () => {
+  const models = claude.catalog(MODELS);
+  expect(models.map((model) => model.id)).toEqual(["opus", "haiku"]);
+  expect(models[0]).toMatchObject({ is_default: true, default_effort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] });
+  expect(models[1]).toMatchObject({ is_default: false, efforts: [] });
+});
+
+test("plans and results read as the user sees them", () => {
+  expect(claude.planName("max")).toBe("Claude Max");
+  expect(claude.planName("Claude Pro")).toBe("Claude Pro");
+  expect(claude.resultError({ subtype: "success", is_error: false })).toBeNull();
+  expect(claude.resultError({ subtype: "error_during_execution", errors: ["API Error: 529 overloaded"] })).toBe("API Error: 529 overloaded");
+  expect(claude.toolName("mcp__edit__get_edit_context")).toBe("get_edit_context");
+});
+
+/** A stand-in query: the test pushes messages; interrupt ends it as stopped. */
+function fakeQuery() {
+  const queue: unknown[] = [];
+  let wake: (() => void) | null = null;
+  let ended = false;
+  let interrupted = false;
+  const push = (message: unknown) => {
+    queue.push(message);
+    wake?.();
+  };
+  const end = () => {
+    ended = true;
+    wake?.();
+  };
+  async function* messages() {
+    for (;;) {
+      while (queue.length > 0) yield queue.shift();
+      if (ended) return;
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      wake = null;
+    }
+  }
+  const generator = messages();
+  const query = Object.assign(generator, {
+    interrupt: async () => {
+      interrupted = true;
+      push({ type: "result", subtype: "error_during_execution", errors: ["interrupted"], usage: {} });
+      end();
+      return undefined;
+    },
+    close: () => end(),
+  });
+  return { query: query as unknown as claude.Query, push, end, interrupted: () => interrupted };
+}
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 10; i++) await Bun.sleep(0);
+}
+
+function agentsWith(home: ReturnType<typeof fixtureHome>) {
+  const agents = new Agents(home.store, home.home, 7700);
+  const asked: { prompt: string; options: claude.Options }[] = [];
+  const queries: ReturnType<typeof fakeQuery>[] = [];
+  agents.findClaude = async () => "/test/claude";
+  agents.listClaudeModels = async () => MODELS;
+  agents.claudeQuery = async (params) => {
+    asked.push(params);
+    const fake = fakeQuery();
+    queries.push(fake);
+    return fake.query;
+  };
+  return { agents, asked, queries };
+}
+
+const stream = (event: Record<string, unknown>) => ({ type: "stream_event", event, parent_tool_use_id: null });
+
+test("claude is the default provider and a turn streams text and edit tools onto the chat", async () => {
+  const home = fixtureHome("claude");
+  try {
+    const project = home.store.create("Claude test", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const { agents, asked, queries } = agentsWith(home);
+    expect(agents.provider()).toBe("claude");
+
+    await agents.send(project, "Tighten the intro", null, null);
+    const { prompt, options } = asked[0]!;
+    expect(prompt).toBe("Tighten the intro");
+    expect(options.model).toBe("opus");
+    expect(options.effort).toBe("medium");
+    expect(options.tools).toEqual([]);
+    expect(options.allowedTools).toEqual(["mcp__edit"]);
+    expect(options.permissionMode).toBe("dontAsk");
+    expect(options.settingSources).toEqual([]);
+    expect(options.strictMcpConfig).toBe(true);
+    expect(options.pathToClaudeCodeExecutable).toBe("/test/claude");
+    expect(options.mcpServers).toEqual({ edit: { type: "http", url: `http://127.0.0.1:7700/mcp?project=${project}` } });
+    expect(options.resume).toBeUndefined();
+    expect(String(options.systemPrompt)).toContain("call them directly");
+    expect(String(options.systemPrompt)).not.toContain("yield_time_ms");
+
+    const q = queries[0]!;
+    q.push({ type: "system", subtype: "init", session_id: "session-1" });
+    q.push(stream({ type: "message_start" }));
+    q.push(stream({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }));
+    q.push(stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Reading " } }));
+    q.push(stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "the intro." } }));
+    q.push(stream({ type: "content_block_stop", index: 0 }));
+    q.push(stream({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "mcp__edit__get_edit_context", input: {} } }));
+    q.push({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "tool_use", id: "toolu_1", name: "mcp__edit__get_edit_context", input: { section: "intro" } }] } });
+    q.push(stream({ type: "content_block_stop", index: 1 }));
+    q.push({ type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "toolu_1", content: [{ type: "text", text: "{}" }] }] } });
+    q.push(stream({ type: "message_start" }));
+    q.push(stream({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }));
+    q.push(stream({ type: "content_block_stop", index: 0 }));
+    q.push(stream({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }));
+    q.push(stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Cut 2 s at 00:04." } }));
+    q.push(stream({ type: "content_block_stop", index: 1 }));
+    await settle();
+
+    let chat = agents.withChat(project);
+    expect(chat.running).toBe(true);
+    expect(chat.provider).toBe("claude");
+    expect(chat.thread).toBe("session-1");
+    expect(chat.entries.map((item) => [item.kind, item.text, item.tool ?? null, item.status ?? null])).toEqual([
+      ["user", "Tighten the intro", null, null],
+      ["assistant", "Reading the intro.", null, null],
+      ["tool", "section: intro", "get_edit_context", "done"],
+      ["assistant", "Cut 2 s at 00:04.", null, null],
+    ]);
+
+    q.push({ type: "result", subtype: "success", is_error: false, usage: { input_tokens: 4, cache_read_input_tokens: 100, output_tokens: 20 } });
+    q.end();
+    await settle();
+    chat = agents.withChat(project);
+    expect(chat.running).toBe(false);
+    expect(chat.entries.some((item) => item.kind === "error")).toBe(false);
+
+    // The next message resumes the same session.
+    await agents.send(project, "And the outro", null, "high");
+    expect(asked[1]!.options.resume).toBe("session-1");
+    expect(asked[1]!.options.effort).toBe("high");
+  } finally {
+    home.cleanup();
+  }
+});
+
+test("a codex chat starts a new claude conversation, and stopping interrupts the query", async () => {
+  const home = fixtureHome("claude-stop");
+  try {
+    const project = home.store.create("Claude stop", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const { agents, asked, queries } = agentsWith(home);
+    const before = agents.withChat(project);
+    before.provider = "codex";
+    before.thread = "codex-thread";
+    before.model = "gpt-6";
+
+    await agents.send(project, "Go", null, null);
+    expect(asked[0]!.options.resume).toBeUndefined();
+    expect(asked[0]!.options.model).toBe("opus");
+
+    await agents.stop(project);
+    expect(queries[0]!.interrupted()).toBe(true);
+    await settle();
+    const chat = agents.withChat(project);
+    expect(chat.running).toBe(false);
+    expect(chat.entries.at(-1)?.text).toBe("Stopped.");
+  } finally {
+    home.cleanup();
+  }
+});

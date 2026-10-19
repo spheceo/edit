@@ -7,7 +7,7 @@ import { syncLabel } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
-import { OpenAIMark } from "./AgentPanel";
+import { AgentMark } from "./AgentPanel";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Mark } from "./Logo";
@@ -48,8 +48,8 @@ export function TopBar({ onExport }: { onExport: () => void }) {
 
       <div className="ml-auto flex items-center gap-1.5">
         <UpdateButton />
-        <IconButton label="Toggle Codex" active={showAgent} onClick={() => toggle("showAgent")} className="relative">
-          <OpenAIMark size={14} />
+        <IconButton label="Toggle agent" active={showAgent} onClick={() => toggle("showAgent")} className="relative">
+          <AgentMark size={14} />
           {agentActive && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-agent" />}
         </IconButton>
         <DriveButton />

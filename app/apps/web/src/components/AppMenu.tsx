@@ -4,13 +4,24 @@ import { writeSetting } from "../lib/storage";
 import { Bug, Check, Cloud, Copy, Ellipsis, Keyboard, RotateCw, Settings } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
-import { chooseEffort, chooseModel, currentEffort, currentModel, EFFORT_LABELS, useAgent, type AgentModel, type AgentStatus } from "../lib/agent";
+import {
+  chooseEffort,
+  chooseModel,
+  chooseProvider,
+  currentEffort,
+  currentModel,
+  EFFORT_LABELS,
+  useAgent,
+  type AgentModel,
+  type AgentProvider,
+  type AgentStatus,
+} from "../lib/agent";
 import { api, fetchRetrying, useMachine, type MediaDrive } from "../lib/api";
 import { cloudApi, type CloudSettings } from "../lib/cloud";
 import { closeDialog, openDialog, SHORTCUTS, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { setPreviewQuality, usePreviewQuality } from "../lib/previewQuality";
-import { OpenAIMark } from "./AgentPanel";
+import { ClaudeMark, OpenAIMark } from "./AgentPanel";
 import { toggleMenu } from "./ContextMenu";
 import { cx, IconButton, Kbd, Modal, Select } from "./ui";
 
@@ -202,19 +213,46 @@ function SettingsBody() {
   }, []);
 
   const state = status?.state ?? (status?.ready ? "ready" : status ? "missing" : undefined);
+  const provider: AgentProvider = status?.provider === "codex" ? "codex" : "claude";
+  const [switching, setSwitching] = useState(false);
+  const login = provider === "claude" ? "claude auth login" : "codex login";
+  const install = provider === "claude" ? "curl -fsSL https://claude.ai/install.sh | bash" : "npm install -g @openai/codex";
+  const [problem, setProblem] = useState<string | null>(null);
+  const pickProvider = (next: AgentProvider) => {
+    if (next === provider || switching) return;
+    setSwitching(true);
+    setProblem(null);
+    void chooseProvider(next)
+      .then((next) => setStatus(next))
+      .catch((thrown: Error) => setProblem(thrown.message))
+      .finally(() => setSwitching(false));
+  };
   return (
     <div className="flex max-h-[72vh] flex-col gap-5 overflow-y-auto px-5 pb-5">
       <Group title="Agent">
         <div className="grid grid-cols-2 gap-2">
-          <Provider icon={<OpenAIMark size={16} />} name="Codex" detail="OpenAI · runs on your Codex login" selected>
-            <StatusPill state={state} />
+          <Provider
+            icon={<ClaudeMark size={15} />}
+            name="Claude Code"
+            detail="Runs on your Claude plan or API key"
+            selected={provider === "claude"}
+            onSelect={() => pickProvider("claude")}
+          >
+            {provider === "claude" ? <StatusPill state={state} /> : <span className="text-[11px] text-faint">Switch</span>}
           </Provider>
-          <Provider icon={<span className="text-[15px] font-semibold">✳︎</span>} name="Claude Code" detail="Anthropic" disabled>
-            <span className="text-[11px] text-faint">Coming soon</span>
+          <Provider
+            icon={<OpenAIMark size={16} />}
+            name="Codex"
+            detail="OpenAI · runs on your Codex login"
+            selected={provider === "codex"}
+            onSelect={() => pickProvider("codex")}
+          >
+            {provider === "codex" ? <StatusPill state={state} /> : <span className="text-[11px] text-faint">Switch</span>}
           </Provider>
         </div>
         <div className="mt-2 rounded-xl bg-black ring-1 ring-line">
           <Line label="Machine">{machine}</Line>
+          {provider === "claude" && status?.ready && <Line label="Account">{[status.email, status.plan].filter(Boolean).join(" · ") || "Signed in"}</Line>}
           <Line label="Version">{status?.version ?? (state === "missing" ? "Not installed" : "—")}</Line>
           {status?.path && (
             <Line label="Location">
@@ -246,14 +284,15 @@ function SettingsBody() {
             )}
           </Line>
         </div>
+        {problem && <p className="mt-2 text-[12px] text-red-300">{problem}</p>}
         {state !== "ready" && status && (
           <p className="mt-2 text-[12px] leading-relaxed text-muted">
             {state === "logged_out" ? "Run " : "Install with "}
             <code className="rounded bg-raised px-1 py-0.5 font-mono text-[11px] text-fg">
-              {state === "logged_out" ? "codex login" : "npm install -g @openai/codex"}
+              {state === "logged_out" ? login : install}
             </code>
             {state === "logged_out" ? "" : ", then "}
-            {state === "logged_out" ? null : <code className="rounded bg-raised px-1 py-0.5 font-mono text-[11px] text-fg">codex login</code>} on {machine}.
+            {state === "logged_out" ? null : <code className="rounded bg-raised px-1 py-0.5 font-mono text-[11px] text-fg">{login}</code>} on {machine}.
           </p>
         )}
         <button
@@ -512,6 +551,7 @@ function Provider({
   detail,
   selected,
   disabled,
+  onSelect,
   children,
 }: {
   icon: ReactNode;
@@ -519,10 +559,24 @@ function Provider({
   detail: string;
   selected?: boolean;
   disabled?: boolean;
+  onSelect?: () => void;
   children?: ReactNode;
 }) {
   return (
-    <div className={cx("flex flex-col gap-2 rounded-xl p-3 ring-1", selected ? "bg-raised ring-line-strong" : "ring-line", disabled && "opacity-50")}>
+    <div
+      role={onSelect ? "button" : undefined}
+      tabIndex={onSelect ? 0 : undefined}
+      onClick={disabled ? undefined : onSelect}
+      onKeyDown={(event) => {
+        if (onSelect && !disabled && (event.key === "Enter" || event.key === " ")) onSelect();
+      }}
+      className={cx(
+        "flex flex-col gap-2 rounded-xl p-3 text-left ring-1",
+        selected ? "bg-raised ring-line-strong" : "ring-line",
+        onSelect && !selected && "cursor-pointer hover:bg-hover",
+        disabled && "opacity-50",
+      )}
+    >
       <div className="flex items-center gap-2">
         <span className="flex size-7 items-center justify-center rounded-lg bg-black text-fg ring-1 ring-line">{icon}</span>
         <div className="min-w-0">

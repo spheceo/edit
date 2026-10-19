@@ -781,6 +781,8 @@ export interface AgentPanel extends Agents {
   stop(project: string): Promise<void>;
   /** Forgets a project's chat (and its Codex thread). */
   reset(project: string): void;
+  /** Where new turns run: "claude" (the user's Claude Code) or "codex". */
+  setProvider(provider: "claude" | "codex"): void;
 }
 
 /** The app's agents as the panel (and the script's research turn) use them. */

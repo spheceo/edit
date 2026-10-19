@@ -20,6 +20,7 @@ import {
   Spline,
   Square,
   SquarePen,
+  SquareTerminal,
   SquarePlus,
   Trash2,
   Type,
@@ -39,6 +40,7 @@ import {
   EFFORT_LABELS,
   newChat,
   openAgent,
+  providerName,
   sendToAgent,
   stopAgent,
   useAgent,
@@ -51,6 +53,17 @@ import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { cx, IconButton } from "./ui";
 
 /** OpenAI's mark (same path phi uses). */
+/** The agent on Claude Code: a plain terminal glyph (Anthropic's marks aren't ours to use). */
+export function ClaudeMark({ size = 16 }: { size?: number }) {
+  return <SquareTerminal size={size} aria-hidden />;
+}
+
+/** The mark of the provider the agent runs on. */
+export function AgentMark({ size = 16 }: { size?: number }) {
+  const codex = useAgent((state) => state.status?.provider === "codex");
+  return codex ? <OpenAIMark size={size} /> : <ClaudeMark size={size} />;
+}
+
 export function OpenAIMark({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-label="OpenAI">
@@ -88,8 +101,8 @@ export function AgentPanel() {
   return (
     <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-1.5 pl-3.5">
-        <OpenAIMark size={15} />
-        <span className="font-medium">Codex</span>
+        <AgentMark size={15} />
+        <span className="font-medium">{providerName(status)}</span>
         {status?.ready !== false && (
           <IconButton label="New chat" className="ml-auto" disabled={busy || !entries.length} onClick={newChat}>
             <SquarePen size={14} />
@@ -106,9 +119,9 @@ export function AgentPanel() {
         className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
       >
         {!loaded ? null : status && !status.ready ? (
-          <SetupCodex />
+          status.provider === "codex" ? <SetupCodex /> : <SetupClaude />
         ) : !entries.length ? (
-          <Empty title="Edit with Codex" detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
+          <Empty title={`Edit with ${providerName(status)}`} detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
         ) : (
           <div className="flex flex-col gap-4">
             {turns.map((turn, index) => (
@@ -296,6 +309,45 @@ function ToolCall({ call }: { call: AgentEntry }) {
   );
 }
 
+/** Claude Code missing or signed out: the steps to fix it on the machine running Edit, and a re-check. */
+function SetupClaude() {
+  const status = useAgent((state) => state.status);
+  const project = useAgent((state) => state.project);
+  const machine = useMachine();
+  const [checking, setChecking] = useState(false);
+  const missing = status?.state !== "logged_out";
+  const steps = missing ? ["curl -fsSL https://claude.ai/install.sh | bash", "claude auth login"] : ["claude auth login"];
+  return (
+    <div className="flex min-h-full flex-col justify-center px-1">
+      <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-raised text-fg ring-1 ring-line">
+        <ClaudeMark size={20} />
+      </span>
+      <div className="mt-3 text-center font-medium">{missing ? "Install Claude Code to use the agent" : "Sign in to Claude Code"}</div>
+      <p className="mx-auto mt-1 max-w-[260px] text-center text-[12px] leading-relaxed text-muted">
+        Edit runs Claude Code on your own Claude plan or API key, on <span className="text-fg">{machine}</span>. Run this there:
+      </p>
+      <div className="mt-4 flex flex-col gap-1.5">
+        {steps.map((step, index) => (
+          <CopyLine key={step} index={steps.length > 1 ? index + 1 : undefined} text={step} />
+        ))}
+      </div>
+      <button
+        type="button"
+        disabled={checking || !project}
+        onClick={() => {
+          if (!project) return;
+          setChecking(true);
+          void openAgent(project).finally(() => setChecking(false));
+        }}
+        className="mx-auto mt-4 flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-medium text-muted ring-1 ring-line transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
+      >
+        <RotateCw size={12} className={checking ? "animate-spin" : undefined} />
+        {checking ? "Checking…" : "Check again"}
+      </button>
+    </div>
+  );
+}
+
 /** Codex missing or signed out: the steps to fix it on the machine running Edit, and a re-check. */
 function SetupCodex() {
   const status = useAgent((state) => state.status);
@@ -453,6 +505,7 @@ function Composer({ disabled }: { disabled: boolean }) {
   const models = useAgent((state) => state.models);
   const model = useAgent((state) => currentModel(state));
   const effort = useAgent((state) => currentEffort(state));
+  const name = useAgent((state) => providerName(state.status));
   const input = useRef<HTMLTextAreaElement>(null);
 
   const send = () => {
@@ -481,12 +534,12 @@ function Composer({ disabled }: { disabled: boolean }) {
         <textarea
           ref={input}
           name="message"
-          aria-label="Message Codex"
+          aria-label={`Message ${name}`}
           autoComplete="off"
           value={text}
           disabled={disabled}
           rows={2}
-          placeholder={running ? "Codex is working…" : "Start the editing workflow, or ask for a change…"}
+          placeholder={running ? `${name} is working…` : "Start the editing workflow, or ask for a change…"}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             event.stopPropagation();

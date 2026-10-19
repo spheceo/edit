@@ -43,6 +43,7 @@ class Fixture {
     this.cleanup = home.cleanup;
     this.project = home.store.create("Agent test", { width: 1920, height: 1080, fps: 30 }).project.id;
     this.agents = new Agents(home.store, home.home, 0);
+    this.agents.setProvider("codex");
     this.codex = new Codex(
       {
         write: (line) => {

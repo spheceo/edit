@@ -368,6 +368,15 @@ async function agentModelsRoute(context: RouteContext<App>): Promise<Response> {
   }
 }
 
+/** Which provider the agent runs on: `{provider: "claude" | "codex"}`. */
+async function agentProviderRoute(context: RouteContext<App>): Promise<Response> {
+  const given = await body(context, "AgentProvider", ["provider"]);
+  const provider = given.provider;
+  if (provider !== "claude" && provider !== "codex") throw bad("provider: expected \"claude\" or \"codex\"");
+  seams.agentPanel(context.app).setProvider(provider);
+  return agentStatusRoute(context);
+}
+
 function agentChatRoute(context: RouteContext<App>): Response {
   const id = context.params.id ?? "";
   if (context.app.store.get(id) === null) throw notFound("no such project");
@@ -439,6 +448,7 @@ export function routes(router: Router<App>): void {
   router.post("/api/projects/{id}/drive", driveUploadRoute);
   router.get("/api/agent", agentStatusRoute);
   router.get("/api/agent/models", agentModelsRoute);
+  router.post("/api/agent/provider", agentProviderRoute);
   router.get("/api/projects/{id}/agent", agentChatRoute);
   router.post("/api/projects/{id}/agent", agentSendRoute);
   router.post("/api/projects/{id}/agent/stop", agentStopRoute);

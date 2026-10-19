@@ -1,4 +1,6 @@
-// Edit's built-in agent: Codex through `codex app-server`
+// Edit's built-in agent, on one of two providers the user picks in
+// Settings: Claude Code (`claude.ts`: the user's own `claude` through
+// Anthropic's Agent SDK, on their own sign-in; the default) or Codex through `codex app-server`
 // (JSON-RPC 2.0 over newline-delimited stdio), using the user's own `codex
 // login`.
 //
@@ -12,6 +14,7 @@
 
 import * as fs from "node:fs";
 
+import * as claude from "./claude.ts";
 import * as diag from "./diag.ts";
 import { nowMs, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
@@ -21,10 +24,16 @@ import { rateText } from "./project.ts";
 import { compareStrings, takeChars, trim, charCount } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
+import type { Project } from "./model.ts";
 import type { Store } from "./store.ts";
 import { VERSION } from "./version.ts";
 
 type Json = unknown;
+
+/** Where the agent runs: the user's Claude Code (Claude) or Codex. */
+export type Provider = "claude" | "codex";
+
+export const DEFAULT_PROVIDER: Provider = "claude";
 
 /** How long a cached model list is trusted before a background refresh. */
 const MODELS_TTL_MS = 24 * 3600 * 1000;
@@ -45,6 +54,8 @@ export interface Entry {
 
 /** A project's chat: what's saved (thread, model, effort, entries) and the running turn's state. */
 export interface Chat {
+  /** The provider the thread belongs to ("codex" or "claude"); another's thread isn't resumed. */
+  provider: Provider | null;
   thread: string | null;
   model: string | null;
   effort: string | null;
@@ -76,7 +87,7 @@ interface ModelCache {
 }
 
 function freshChat(): Chat {
-  return { thread: null, model: null, effort: null, entries: [], turn: null, running: false, started: null, retries: 0, halted: false, generation: 0 };
+  return { provider: null, thread: null, model: null, effort: null, entries: [], turn: null, running: false, started: null, retries: 0, halted: false, generation: 0 };
 }
 
 function entry(fields: Partial<Entry> & { id: string; kind: string }): Entry {
@@ -178,6 +189,18 @@ export class Agents implements seams.AgentPanel {
   private asks = new Map<string, Ask>();
   /** The last "ready" status and when it was found (see `status`). */
   private ready: [number, Json] | null = null;
+  /** The provider new turns go to (Settings → Agent; `<home>/agent/provider.json`). */
+  private chosen: Provider = DEFAULT_PROVIDER;
+  /** Claude Code's models, cached a day like Codex's (`<home>/agent/claude-models.json`). */
+  private claudeCatalog: { fetched_ms: number; models: claude.ModelInfo[] } | null = null;
+  /** Each project's running Claude query, to stop it. */
+  private claudeQueries = new Map<string, claude.Query>();
+  /** The SDK's `query`, the user's `claude` and its model list (tests put stand-ins here). */
+  claudeQuery: (params: { prompt: string; options: claude.Options }) => Promise<claude.Query> = async (params) =>
+    (await claude.sdk()).query(params);
+  findClaude: () => Promise<string | null> = () => claude.findClaude();
+  listClaudeModels: (binary: string, workspace: string) => Promise<claude.ModelInfo[]> = (binary, workspace) =>
+    claude.listModels(binary, workspace);
   /** Starts Codex (tests put a stand-in here). */
   spawnCodex: (onMessage: (message: Record<string, unknown>) => void) => Promise<Codex> = (onMessage) =>
     Codex.spawn(onMessage);
@@ -201,6 +224,36 @@ export class Agents implements seams.AgentPanel {
       models = null;
     }
     this.modelCache = models;
+    try {
+      const saved = JSON.parse(fs.readFileSync(join(this.dir, "provider.json"), "utf8")) as { provider?: unknown };
+      if (saved.provider === "codex" || saved.provider === "claude") this.chosen = saved.provider;
+    } catch {
+      // Not chosen yet: the default.
+    }
+    try {
+      const value = JSON.parse(fs.readFileSync(join(this.dir, "claude-models.json"), "utf8")) as { fetched_ms?: unknown; models?: unknown };
+      if (typeof value.fetched_ms === "number" && Array.isArray(value.models)) {
+        this.claudeCatalog = { fetched_ms: value.fetched_ms, models: value.models as claude.ModelInfo[] };
+      }
+    } catch {
+      this.claudeCatalog = null;
+    }
+  }
+
+  /** The provider new turns go to. */
+  provider(): Provider {
+    return this.chosen;
+  }
+
+  /** Switches provider; each chat starts a new conversation on its next turn there. */
+  setProvider(provider: Provider): void {
+    this.chosen = provider;
+    this.ready = null;
+    try {
+      writeAtomic(join(this.dir, "provider.json"), JSON.stringify({ provider }));
+    } catch (error) {
+      diag.warn("agent", `saving the agent provider: ${diag.messageOf(error)}`);
+    }
   }
 
   /**
@@ -211,7 +264,7 @@ export class Agents implements seams.AgentPanel {
     const now = timing.now();
     const cached = stillReady(this.ready, now);
     if (cached !== null) return cached;
-    const status = await checkCodex();
+    const status = this.chosen === "claude" ? sorted(await claude.checkClaude()) : await checkCodex();
     if ((status as { ready?: unknown }).ready === true) this.ready = [now, status];
     return status;
   }
@@ -251,6 +304,10 @@ export class Agents implements seams.AgentPanel {
 
   /** Cached models, refreshed in the background once a day (or now with `refresh`). */
   async models(refresh: boolean): Promise<Json> {
+    if (this.chosen === "claude") {
+      const found = await this.claudeModels(refresh);
+      return { models: claude.catalog(found.models), fetched_ms: found.fetched_ms, provider: "claude" };
+    }
     const cached = this.modelCache;
     if (cached !== null && !refresh) {
       if (nowMs() - cached.fetched_ms > MODELS_TTL_MS) {
@@ -262,6 +319,32 @@ export class Agents implements seams.AgentPanel {
     }
     const cache = await this.fetchModels();
     return { models: withConfiguredEffort(cache.models), fetched_ms: cache.fetched_ms };
+  }
+
+  /** Claude Code's models (what the user's plan offers), cached a day like Codex's. */
+  private async claudeModels(refresh: boolean): Promise<{ fetched_ms: number; models: claude.ModelInfo[] }> {
+    const cached = this.claudeCatalog;
+    const fetch = async () => {
+      const binary = await this.findClaude();
+      if (binary === null) throw new Error("Claude Code isn't installed");
+      const workspace = join(this.dir, "workspace");
+      fs.mkdirSync(workspace, { recursive: true });
+      const found = { fetched_ms: nowMs(), models: await this.listClaudeModels(binary, workspace) };
+      this.claudeCatalog = found;
+      try {
+        fs.writeFileSync(join(this.dir, "claude-models.json"), JSON.stringify(found, null, 2));
+      } catch {
+        // Fetched again next time.
+      }
+      return found;
+    };
+    if (cached !== null && !refresh && cached.models.length > 0) {
+      if (nowMs() - cached.fetched_ms > MODELS_TTL_MS) {
+        void fetch().catch((error: unknown) => diag.warn("agent", `refreshing Claude Code's models: ${diag.messageOf(error)}`));
+      }
+      return cached;
+    }
+    return fetch();
   }
 
   private async fetchModels(): Promise<ModelCache> {
@@ -354,7 +437,7 @@ export class Agents implements seams.AgentPanel {
 
   private save(project: string): void {
     const chat = this.withChat(project);
-    const snapshot = { thread: chat.thread, model: chat.model, effort: chat.effort, entries: chat.entries.map(entryJson) };
+    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, entries: chat.entries.map(entryJson) };
     try {
       writeAtomic(this.store.chatPath(project), JSON.stringify(snapshot));
     } catch {
@@ -451,13 +534,15 @@ export class Agents implements seams.AgentPanel {
   ): Promise<void> {
     const live = this.store.get(project);
     if (live === null) throw new Error("no such project");
+    if (this.chosen === "claude") return this.claudeTurn(project, text, model, effort, generation);
     const codex = await this.codex();
     const chat = this.withChat(project);
     if (!(chat.generation === generation && !chat.halted)) throw new Error("Stopped.");
     chat.model = model ?? chat.model;
     chat.effort = effort ?? chat.effort;
-    const known = chat.thread !== null && this.threads.has(chat.thread);
-    const previous = chat.thread;
+    // A Claude conversation can't be resumed in Codex: start a new thread.
+    const previous = chat.provider === "claude" ? null : chat.thread;
+    const known = previous !== null && this.threads.has(previous);
     const workspace = join(this.dir, "workspace");
     fs.mkdirSync(workspace, { recursive: true });
     const config = {
@@ -475,14 +560,7 @@ export class Agents implements seams.AgentPanel {
         },
       },
     };
-    const { settings } = live.project;
-    const instructions =
-      `You are the agent built into Edit, a video editor. The user is watching the editor while you work: every change you make through the \`edit\` tools appears live on their timeline and can be undone with ⌘Z. ` +
-      `Edit only through the \`edit\` tools; you have no shell or files. The project is "${live.project.name}" (${settings.width}x${settings.height} at ${rateText(settings)} fps). ` +
-      "Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. " +
-      "When a tool is still running (watch_footage, map_view, export), wait for it in long blocks (yield_time_ms 30000 or more), never second by second. " +
-      "When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. For other requests, load the skill for the part you're working on (see SKILLS). " +
-      `Keep replies short: say what you changed and where (timecodes).\n\n${INSTRUCTIONS}\n\n${seams.styles.instructions(live.project.style)}\n\nThe edit tools (in exec: tools.mcp__edit__<name>({…}); their full declarations are in ALL_TOOLS, but this list is usually enough):\n${toolReference()}`;
+    const instructions = agentInstructions(live.project, "codex");
     let thread: string;
     if (previous !== null && known) {
       thread = previous;
@@ -512,7 +590,13 @@ export class Agents implements seams.AgentPanel {
     this.threads.set(thread, project);
     const now = this.withChat(project);
     if (now.generation !== generation || now.halted) throw new Error("Stopped.");
+    if (now.provider !== "codex") {
+      // Codex and Claude name models differently.
+      now.model = model;
+      now.effort = effort;
+    }
     now.thread = thread;
+    now.provider = "codex";
     const selection = { model: now.model, effort: now.effort };
     this.upsert(project, entry({ id: `user-${nowMs()}`, kind: "user", text }));
     this.save(project);
@@ -541,6 +625,217 @@ export class Agents implements seams.AgentPanel {
       throw new Error("Stopped.");
     }
     this.save(project);
+  }
+
+  /**
+   * A turn on Claude Code: one query resuming the project's session (by its
+   * id, so a restart picks it back up), Edit's MCP server its only tools and
+   * pre-approved, the instructions as its system prompt, and its messages
+   * mapped onto the chat as they stream in.
+   */
+  private async claudeTurn(project: string, text: string, model: string | null, effort: string | null, generation: number): Promise<void> {
+    const live = this.store.get(project);
+    if (live === null) throw new Error("no such project");
+    const binary = await this.findClaude();
+    if (binary === null) throw new Error("Claude Code isn't installed. Install it, then run `claude auth login`.");
+    const chat = this.withChat(project);
+    if (chat.provider !== "claude") {
+      // Codex's thread and model names mean nothing to Claude Code.
+      chat.thread = null;
+      chat.model = null;
+      chat.effort = null;
+    }
+    chat.model = model ?? chat.model;
+    chat.effort = effort ?? chat.effort;
+    const workspace = join(this.dir, "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    const options: claude.Options = {
+      ...claude.baseOptions(binary, workspace),
+      model: chat.model ?? claude.DEFAULT_MODEL,
+      // No built-in tools; Edit's own run without asking, anything else is refused.
+      tools: [],
+      allowedTools: ["mcp__edit"],
+      permissionMode: "dontAsk",
+      mcpServers: { edit: { type: "http", url: `http://127.0.0.1:${this.port}/mcp?project=${project}` } },
+      systemPrompt: agentInstructions(live.project, "claude"),
+      includePartialMessages: true,
+    };
+    const level = chat.effort ?? "medium";
+    if (claude.EFFORTS.includes(level)) options.effort = level as claude.Options["effort"];
+    if (chat.thread !== null) options.resume = chat.thread;
+    const now = this.withChat(project);
+    if (now.generation !== generation || now.halted) throw new Error("Stopped.");
+    now.provider = "claude";
+    this.upsert(project, entry({ id: `user-${nowMs()}`, kind: "user", text }));
+    this.save(project);
+    this.emit(project, { event: "status", running: true });
+    const running = await this.claudeQuery({ prompt: text, options });
+    this.claudeQueries.set(project, running);
+    void this.followClaude(project, generation, new ClaudeTurn(nowMs()), running);
+    const after = this.withChat(project);
+    // Stop can arrive while the query starts.
+    if (after.generation !== generation || after.halted) await running.interrupt().catch(() => undefined);
+  }
+
+  /** Reads a Claude query's messages until its result, then ends the turn. */
+  private async followClaude(project: string, generation: number, turn: ClaudeTurn, running: claude.Query): Promise<void> {
+    let error: string | null = null;
+    let result: Record<string, unknown> | null = null;
+    try {
+      for await (const message of running) {
+        if (message.type === "result") result = message as unknown as Record<string, unknown>;
+        try {
+          this.onClaudeMessage(project, generation, turn, message as unknown as Record<string, unknown>);
+        } catch (thrown) {
+          diag.warn("agent", `a Claude message: ${isBug(thrown) ? crashed("handling Claude", thrown) : diag.messageOf(thrown)}`);
+        }
+      }
+    } catch (thrown) {
+      error = isBug(thrown) ? crashed("the Claude turn", thrown) : diag.messageOf(thrown);
+    } finally {
+      if (this.claudeQueries.get(project) === running) this.claudeQueries.delete(project);
+      running.close();
+    }
+    if (result !== null) {
+      error = claude.resultError(result);
+      const usage = (result.usage ?? {}) as Record<string, number | undefined>;
+      const cost = typeof result.total_cost_usd === "number" ? `; $${result.total_cost_usd.toFixed(2)} at API prices` : "";
+      diag.info(
+        "agent",
+        `${project}: the Claude turn took ${diag.human(nowMs() - turn.started)} over ${turn.calls} model calls and ${turn.tools} tool calls, reading ${(usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0)} tokens (${usage.cache_read_input_tokens ?? 0} cached) and writing ${usage.output_tokens ?? 0}${cost}`,
+      );
+    } else if (error === null) {
+      error = "Claude Code stopped before the turn finished; send your message again.";
+    }
+    const chat = this.withChat(project);
+    if (chat.generation !== generation || !chat.running) return;
+    if (chat.halted && error !== null) error = "Stopped.";
+    if (error !== null && /no conversation found/i.test(error)) {
+      // Its session is gone (Claude Code's history cleared): the next message starts afresh.
+      chat.thread = null;
+      error = "The earlier conversation couldn't be picked up again; send your message again to start a new one.";
+    }
+    this.turnEnded(project, error);
+  }
+
+  /** One of a Claude query's messages, onto the chat. */
+  private onClaudeMessage(project: string, generation: number, turn: ClaudeTurn, message: Record<string, unknown>): void {
+    const chat = this.withChat(project);
+    if (chat.generation !== generation) return;
+    // A subagent's messages (none are offered, but just in case) stay out of the chat.
+    if (typeof message.parent_tool_use_id === "string") return;
+    switch (message.type) {
+      case "system": {
+        if (message.subtype === "init" && typeof message.session_id === "string" && chat.thread !== message.session_id) {
+          chat.thread = message.session_id;
+          this.save(project);
+        } else if (message.subtype === "compact_boundary") {
+          diag.info("agent", `${project}: Claude Code compacted the conversation`);
+        } else if (message.subtype === "api_retry") {
+          diag.warn("agent", `${project}: Claude's API asked for a retry: ${stableStringify(message.error ?? message.error_status ?? null)}`);
+        }
+        break;
+      }
+      case "stream_event": {
+        const event = (message.event ?? {}) as Record<string, unknown>;
+        const index = typeof event.index === "number" ? event.index : -1;
+        switch (event.type) {
+          case "message_start":
+            turn.calls += 1;
+            turn.blocks.clear();
+            break;
+          case "content_block_start": {
+            const block = (event.content_block ?? {}) as Record<string, unknown>;
+            if (block.type === "text") {
+              const id = `claude-${turn.started}-${turn.calls}-${index}`;
+              turn.blocks.set(index, { kind: "text", id });
+              this.upsert(project, entry({ id, kind: "assistant", text: typeof block.text === "string" ? block.text : "" }));
+            } else if (block.type === "thinking" || block.type === "redacted_thinking") {
+              turn.blocks.set(index, { kind: "thinking", id: null });
+              this.emit(project, { event: "thinking", active: true });
+            } else if (block.type === "tool_use" && typeof block.id === "string") {
+              const id = `claude-tool-${block.id}`;
+              const tool = claude.toolName(typeof block.name === "string" ? block.name : "tool");
+              turn.blocks.set(index, { kind: "tool", id });
+              turn.tools += 1;
+              turn.byUseId.set(block.id, { id, tool, args: {} });
+              this.upsert(project, entry({ id, kind: "tool", text: "", tool, status: "running", detail: "{}" }));
+            }
+            break;
+          }
+          case "content_block_delta": {
+            const delta = (event.delta ?? {}) as Record<string, unknown>;
+            const block = turn.blocks.get(index);
+            if (delta.type === "text_delta" && block?.kind === "text" && block.id !== null && typeof delta.text === "string") {
+              const found = chat.entries.find((item) => item.id === block.id);
+              if (found !== undefined) found.text += delta.text;
+              this.emit(project, { event: "delta", id: block.id, text: delta.text });
+            }
+            break;
+          }
+          case "content_block_stop": {
+            const block = turn.blocks.get(index);
+            if (block?.kind === "thinking") this.emit(project, { event: "thinking", active: false });
+            else if (block?.kind === "text" && block.id !== null) {
+              const found = chat.entries.find((item) => item.id === block.id);
+              if (found !== undefined) this.upsert(project, { ...found });
+              this.save(project);
+            }
+            break;
+          }
+          default:
+            break;
+        }
+        break;
+      }
+      case "assistant": {
+        // The finished call: each tool's whole arguments.
+        const content = ((message.message as { content?: unknown } | undefined)?.content ?? []) as Record<string, unknown>[];
+        for (const block of content) {
+          if (block?.type !== "tool_use" || typeof block.id !== "string") continue;
+          const known = turn.byUseId.get(block.id) ?? {
+            id: `claude-tool-${block.id}`,
+            tool: claude.toolName(typeof block.name === "string" ? block.name : "tool"),
+            args: {},
+          };
+          known.args = block.input ?? {};
+          turn.byUseId.set(block.id, known);
+          const existing = chat.entries.find((item) => item.id === known.id);
+          if (existing?.status === "done" || existing?.status === "failed") continue;
+          this.upsert(
+            project,
+            entry({ id: known.id, kind: "tool", text: summarizeArgs(known.args), tool: known.tool, status: "running", detail: stableStringify(known.args ?? null, 2) }),
+          );
+        }
+        break;
+      }
+      case "user": {
+        // Tool results.
+        const content = ((message.message as { content?: unknown } | undefined)?.content ?? []) as Record<string, unknown>[];
+        if (!Array.isArray(content)) break;
+        for (const block of content) {
+          if (block?.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+          const known = turn.byUseId.get(block.tool_use_id);
+          if (known === undefined) continue;
+          const failed = block.is_error === true;
+          this.upsert(
+            project,
+            entry({
+              id: known.id,
+              kind: "tool",
+              text: failed ? takeChars(claude.resultText(block.content) || "The tool failed", 300) : summarizeArgs(known.args),
+              tool: known.tool,
+              status: failed ? "failed" : "done",
+              detail: stableStringify(known.args ?? null, 2),
+            }),
+          );
+        }
+        this.save(project);
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   /**
@@ -641,6 +936,12 @@ export class Agents implements seams.AgentPanel {
   async stop(project: string): Promise<void> {
     const chat = this.withChat(project);
     chat.halted = true;
+    const running = this.claudeQueries.get(project);
+    if (running !== undefined) {
+      await running.interrupt();
+      return;
+    }
+    if (chat.provider === "claude") return;
     const { thread, turn } = chat;
     if (thread === null || turn === null) return;
     const codex = await this.codex();
@@ -676,6 +977,36 @@ export class Agents implements seams.AgentPanel {
     }
     this.save(project);
     this.emit(project, { event: "status", running: false });
+  }
+
+  /** A turn ended (`error` null when it finished): a busy model's turn is picked up again a few times, else the chat is done. */
+  private turnEnded(project: string, error: string | null): void {
+    const chat = this.withChat(project);
+    const { halted, generation } = chat;
+    if (error !== null && busyModel(error) && !halted) {
+      chat.retries += 1;
+      const tries = chat.retries;
+      if (tries <= MAX_RETRIES) {
+        // Wait a little longer each time, then pick the work back up.
+        const wait = 20 * tries;
+        this.finish(project, `${error} Trying again in ${wait} s (${tries} of ${MAX_RETRIES}).`);
+        const failure = error;
+        void (async () => {
+          await timing.sleep(wait * 1000);
+          // The user may have sent something else, or stopped, meanwhile.
+          const later = this.withChat(project);
+          if (later.running || later.halted || later.generation !== generation) return;
+          const text = `(Edit, automatically) Your last turn was cut off by an error ("${failure}") before you finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.`;
+          try {
+            await this.sendTurn(project, text, null, null, generation);
+          } catch (thrown) {
+            diag.warn("agent", `retrying the turn in ${project}: ${diag.messageOf(thrown)}`);
+          }
+        })();
+        return;
+      }
+    }
+    this.finish(project, error);
   }
 
   /** Codex notifications, mapped onto the chat of the project their thread belongs to. */
@@ -778,38 +1109,46 @@ export class Agents implements seams.AgentPanel {
         } else if (turn.status === "interrupted") {
           error = "Stopped.";
         }
-        const chat = this.withChat(project);
-        const { halted, generation } = chat;
-        if (error !== null && busyModel(error) && !halted) {
-          chat.retries += 1;
-          const tries = chat.retries;
-          if (tries <= MAX_RETRIES) {
-            // Wait a little longer each time, then pick the work back up.
-            const wait = 20 * tries;
-            this.finish(project, `${error} Trying again in ${wait} s (${tries} of ${MAX_RETRIES}).`);
-            const failure = error;
-            void (async () => {
-              await timing.sleep(wait * 1000);
-              // The user may have sent something else, or stopped, meanwhile.
-              const later = this.withChat(project);
-              if (later.running || later.halted || later.generation !== generation) return;
-              const text = `(Edit, automatically) Your last turn was cut off by an error ("${failure}") before you finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.`;
-              try {
-                await this.sendTurn(project, text, null, null, generation);
-              } catch (thrown) {
-                diag.warn("agent", `retrying the turn in ${project}: ${diag.messageOf(thrown)}`);
-              }
-            })();
-            return;
-          }
-        }
-        this.finish(project, error);
+        this.turnEnded(project, error);
         break;
       }
       default:
         break;
     }
   }
+}
+
+/** A Claude turn's state as its messages come in. */
+class ClaudeTurn {
+  /** The current model call's content blocks, by index: their kind and chat entry. */
+  blocks = new Map<number, { kind: string; id: string | null }>();
+  calls = 0;
+  tools = 0;
+  /** Tool calls by their tool_use id, for their results. */
+  byUseId = new Map<string, { id: string; tool: string; args: unknown }>();
+  constructor(readonly started: number) {}
+}
+
+/** The developer instructions every turn carries: who the agent is, how to work fast, the house style, every tool on one line. */
+export function agentInstructions(project: Pick<Project, "name" | "style" | "settings">, provider: Provider): string {
+  const { settings } = project;
+  const waiting =
+    provider === "codex"
+      ? "When a tool is still running (watch_footage, map_view, export), wait for it in long blocks (yield_time_ms 30000 or more), never second by second. "
+      : "Slow tools (watch_footage, caption_speakers, map_view, export) answer when they're done: start them as early as their inputs allow and never call one again to check on it. ";
+  const tools =
+    provider === "codex"
+      ? "The edit tools (in exec: tools.mcp__edit__<name>({…}); their full declarations are in ALL_TOOLS, but this list is usually enough)"
+      : "The edit tools (call them directly; every one is listed here)";
+  return (
+    `You are the agent built into Edit, a video editor. The user is watching the editor while you work: every change you make through the \`edit\` tools appears live on their timeline and can be undone with ⌘Z. ` +
+    `Edit only through the \`edit\` tools; you have no shell or files. The project is "${project.name}" (${settings.width}x${settings.height} at ${rateText(settings)} fps). ` +
+    "Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. " +
+    (provider === "claude" ? "Independent tool calls (lookups, renders) can go in one step, side by side. " : "") +
+    waiting +
+    "When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. For other requests, load the skill for the part you're working on (see SKILLS). " +
+    `Keep replies short: say what you changed and where (timecodes).\n\n${INSTRUCTIONS}\n\n${seams.styles.instructions(project.style)}\n\n${tools}:\n${toolReference()}`
+  );
 }
 
 /** A saved chat, read as serde reads `Chat` (every field defaults; a wrong type refuses the whole file). */
@@ -825,6 +1164,9 @@ export function readChat(text: string): Chat {
   };
   const chat = freshChat();
   chat.thread = option("thread");
+  const provider = option("provider");
+  // Chats saved before Claude Code were all Codex's.
+  chat.provider = provider === "claude" || provider === "codex" ? provider : chat.thread !== null ? "codex" : null;
   chat.model = option("model");
   chat.effort = option("effort");
   const entries = given.entries;

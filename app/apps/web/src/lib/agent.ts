@@ -1,5 +1,5 @@
 import { readSetting, writeSetting } from "./storage";
-// The agent chat: Codex through Edit's server (apps/server/src/agent.ts).
+// The agent chat: the user's Claude Code or Codex, through Edit's server (apps/server/src/agent.ts).
 
 import { create } from "zustand";
 
@@ -26,8 +26,15 @@ export interface AgentModel {
   is_default: boolean;
 }
 
+export type AgentProvider = "claude" | "codex";
+
 export interface AgentStatus {
   ready: boolean;
+  /** Where the agent runs: the user's Claude Code, or Codex. */
+  provider?: AgentProvider;
+  /** The Claude account signed in, and its plan ("Claude Max", "API key"). */
+  email?: string;
+  plan?: string;
   /** "missing" (not installed), "logged_out" or "ready". */
   state?: "missing" | "logged_out" | "ready";
   error?: string;
@@ -88,7 +95,35 @@ export const EFFORT_LABELS: Record<string, string> = {
   ultra: "Ultra",
 };
 
-/** The selected model, falling back to Codex's default. */
+/** The agent's name as the panel shows it. */
+export const providerName = (status: AgentStatus | null) => (status?.provider === "codex" ? "Codex" : "Claude Code");
+
+/** Fetches the models of the provider now chosen. */
+async function refreshModels() {
+  const { models } = await json<{ models: AgentModel[] }>(await fetchRetrying("/api/agent/models"));
+  writeSetting("edit.agent.models", JSON.stringify(models));
+  useAgent.setState({ models });
+}
+
+/** Switches the agent to Claude Code or Codex; the next message in each chat starts a new conversation there. */
+export async function chooseProvider(provider: AgentProvider) {
+  const status = await json<AgentStatus>(
+    await fetchRetrying("/api/agent/provider", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider }),
+    }),
+  );
+  // Each provider names its models its own way.
+  writeSetting("edit.agent.models", "[]");
+  useAgent.setState({ status, models: [], model: null, effort: null });
+  writeSetting("edit.agent.model", "");
+  writeSetting("edit.agent.effort", "");
+  if (status.ready) await refreshModels().catch(() => {});
+  return status;
+}
+
+/** The selected model, falling back to the provider's default. */
 export function currentModel(state = useAgent.getState()) {
   return state.models.find((model) => model.id === state.model) ?? state.models.find((model) => model.is_default) ?? state.models[0];
 }
@@ -138,15 +173,7 @@ export async function openAgent(project: string) {
     ...(chat.model ? { model: chat.model } : {}),
     ...(chat.effort ? { effort: chat.effort } : {}),
   });
-  if (status.ready) {
-    fetchRetrying("/api/agent/models")
-      .then((response) => json<{ models: AgentModel[] }>(response))
-      .then(({ models }) => {
-        writeSetting("edit.agent.models", JSON.stringify(models));
-        useAgent.setState({ models });
-      })
-      .catch(() => {});
-  }
+  if (status.ready) refreshModels().catch(() => {});
 }
 
 export async function sendToAgent(text: string) {

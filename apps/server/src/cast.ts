@@ -59,12 +59,15 @@ export interface CastPlan {
   names: Map<string, [label: string, role: string]>;
   /** How each voice's person looks and where they are (the fullest description of them in this file). */
   looks: Map<string, string>;
+  /** Each person's (index into the cast) main voice in this file: where words that are theirs go. */
+  mains: Map<number, string>;
 }
 
 const MODEL = "google/gemini-3.8-flash";
 /** A new prompt or answer shape is a new cache file. */
 const VERSION = "cast-v1";
 const TIMEOUT_MS = 90_000;
+const TRIES = 2;
 
 const SYSTEM = `You reconcile who is who across a video watched in windows. Each numbered item is one person as seen in one window (about four minutes) by a model that watched only that window: the letter it used, the transcriber's voice id (automatic diarisation: it can split one person into several voices, or put two people under one voice), the name and role it gave them (names are often wrong or guessed), how they look and where they are.
 
@@ -113,15 +116,15 @@ export function itemsText(seen: Seen[]): string {
 
 /**
  * The cast for `seen` (one file's or a project's windows): from the cache in
- * `dir`, else asked. Null when there's nothing to reconcile or it can't be
- * had; the answer is held together (`checked`: every item in exactly one
- * person) before it's used.
+ * `dir`, else asked (twice before it gives up, saying why: `failed`). Null
+ * when there's nothing to reconcile; the answer is held together
+ * (`checked`: every item in exactly one person) before it's used.
  */
 export async function reconcile(
   seen: Seen[],
   dir: string,
   post: (body: string) => Promise<unknown>,
-): Promise<{ people: CastPerson[]; cost: number; cached: boolean } | null> {
+): Promise<{ people: CastPerson[]; cost: number; cached: boolean } | { failed: string; cost: number } | null> {
   if (seen.length < 2) return null;
   const text = itemsText(seen);
   const hasher = new Bun.CryptoHasher("sha256");
@@ -142,41 +145,51 @@ export async function reconcile(
     response_format: { type: "json_schema", json_schema: { name: "cast", strict: true, schema: schema() } },
     reasoning: { effort: "low" },
   };
-  const scratch = join(dir, `${VERSION}-request-${process.pid}-${Date.now()}.json`);
-  let response: unknown;
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(scratch, stableStringify(request));
-    response = await Promise.race([
-      post(scratch),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the model took too long")), TIMEOUT_MS)),
-    ]);
-  } catch (error) {
-    diag.warn("watch", `who is who across the windows: ${diag.messageOf(error)}; each window's own names stand`);
-    return null;
-  } finally {
-    fs.rmSync(scratch, { force: true });
+  // Asked twice before giving up: without a cast one person stays as many as
+  // diarisation made them (two names, two colours), so a failure is never quiet.
+  let cost = 0;
+  let last = "";
+  for (let attempt = 1; attempt <= TRIES; attempt++) {
+    const scratch = join(dir, `${VERSION}-request-${process.pid}-${Date.now()}.json`);
+    let response: unknown;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(scratch, stableStringify(request));
+      response = await Promise.race([
+        post(scratch),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the model took too long")), TIMEOUT_MS)),
+      ]);
+    } catch (error) {
+      last = diag.messageOf(error);
+      diag.warn("watch", `who is who across the windows, try ${attempt}: ${last}`);
+      continue;
+    } finally {
+      fs.rmSync(scratch, { force: true });
+    }
+    const usage = (response as { usage?: { cost?: unknown } } | null)?.usage?.cost;
+    if (typeof usage === "number") cost += usage;
+    const content = (response as { choices?: { message?: { content?: unknown } }[] } | null)?.choices?.[0]?.message?.content;
+    let value: unknown = null;
+    try {
+      value = typeof content === "string" ? serdeParse(content.replace(/^```(json)?|```$/g, "").trim()) : null;
+    } catch {
+      value = null;
+    }
+    const people = checked(value, seen);
+    if (people === null) {
+      last = "the answer isn't a cast";
+      diag.warn("watch", `who is who across the windows, try ${attempt}: ${last}`);
+      continue;
+    }
+    try {
+      writeAtomic(file, JSON.stringify({ people }, null, 1));
+    } catch (error) {
+      diag.warn("watch", `couldn't keep the cast: ${ioMessage(error)}`);
+    }
+    return { people, cost, cached: false };
   }
-  const usage = (response as { usage?: { cost?: unknown } } | null)?.usage?.cost;
-  const cost = typeof usage === "number" ? usage : 0;
-  const content = (response as { choices?: { message?: { content?: unknown } }[] } | null)?.choices?.[0]?.message?.content;
-  let value: unknown = null;
-  try {
-    value = typeof content === "string" ? serdeParse(content.replace(/^```(json)?|```$/g, "").trim()) : null;
-  } catch {
-    value = null;
-  }
-  const people = checked(value, seen);
-  if (people === null) {
-    diag.warn("watch", "who is who across the windows: the answer isn't a cast; each window's own names stand");
-    return null;
-  }
-  try {
-    writeAtomic(file, JSON.stringify({ people }, null, 1));
-  } catch (error) {
-    diag.warn("watch", `couldn't keep the cast: ${ioMessage(error)}`);
-  }
-  return { people, cost, cached: false };
+  diag.warn("watch", `who is who across the windows: ${last}; each window's own names stand`);
+  return { failed: last, cost };
 }
 
 /**
@@ -267,7 +280,7 @@ export function planCast(seen: Seen[], people: CastPerson[], words: Map<string, 
   const plans = new Map<string, CastPlan>();
   const plan = (media: string) => {
     let found = plans.get(media);
-    if (found === undefined) plans.set(media, (found = { moves: [], names: new Map(), looks: new Map() }));
+    if (found === undefined) plans.set(media, (found = { moves: [], names: new Map(), looks: new Map(), mains: new Map() }));
     return found;
   };
   people.forEach((person, index) => {
@@ -295,6 +308,7 @@ export function planCast(seen: Seen[], people: CastPerson[], words: Map<string, 
         }
         plan(media).moves.push({ voice: item.voice, from: item.from, to: item.to, to_voice: main });
       }
+      if (main !== undefined) plan(media).mains.set(index, main);
     }
   });
   return plans;

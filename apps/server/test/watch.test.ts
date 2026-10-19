@@ -401,6 +401,105 @@ test("watch_footage asks the gateway once per window, corrects the transcript, s
   }
 });
 
+test("a turn two windows give to two people is watched again, and that answer decides whose it is", async () => {
+  // Killer Couple: one detective talks across the edge between two windows;
+  // the cast has the earlier window's voice as one detective and the later
+  // window's as the other. The second look says the turn is the later one's.
+  const { app, dir, cleanup } = fixtureHome("watch-bridge");
+  const bin = `${dir}/bin`;
+  write(`${bin}/ffmpeg`, '#!/bin/sh\nfor a; do out="$a"; done\nprintf x > "$out"\n');
+  fs.chmodSync(`${bin}/ffmpeg`, 0o755);
+  const before = process.env.EDIT_FFMPEG;
+  process.env.EDIT_FFMPEG = `${bin}/ffmpeg`;
+  tools.forget();
+  try {
+    const media: Media = { id: "m", name: "room", path: `${dir}/room.mp4`, kind: "video", duration: 480, width: 1920, height: 1080, fps: 30, has_audio: true };
+    write(media.path, "");
+    const words = Array.from({ length: 159 }, (_, n) => ({ text: `w${n}.`, start: 1 + n * 3, end: 1.5 + n * 3, speaker: "speaker_0" }));
+    write(app.media.paths(media.path).transcript, serialize({ model: "scribe_v2", language: "eng", words, speakers: { speaker_0: "Detective" }, roles: { speaker_0: "leader" } }));
+    const live = app.store.create("Room", { width: 1920, height: 1080, fps: 30 });
+    const project = structuredClone(live.project) as Project;
+    project.media = [media];
+    project.clips = [
+      { id: "f", track: "v1", start: 0, duration: 14400, color: "blue", fade_in: 0, fade_out: 0, type: "video", media: "m", source_in: 0, speed: 1, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1, link: "l" },
+      { id: "a", track: "a4", start: 0, duration: 14400, color: "blue", fade_in: 0, fade_out: 0, type: "audio", media: "m", source_in: 0, speed: 1, volume_db: 0, link: "l" },
+    ];
+    await app.store.replace(project.id, null, project, "test");
+    mock.gatewayAnswer = JSON.stringify({
+      people: [{ id: "A", look: "detective", where: "at the table", on_screen: true, name: "", role: "leader" }],
+      lines: Array.from({ length: 200 }, (_, n) => ({ n, who: "A", sure: "high", or: null })),
+      segments: [{ start: 0, end: 480, kind: "footage", note: "" }],
+      background: [],
+    });
+    mock.castAnswer = JSON.stringify({
+      people: [
+        { name: "Jeff", title: "Detective", role: "leader", members: [0] },
+        { name: "Mike", title: "Detective", role: "leader", members: [1] },
+      ],
+    });
+    // 1 is Jeff (the earlier window's), 2 is Mike (the later's): Mike says it all.
+    mock.bridgeAnswer = JSON.stringify({ lines: Array.from({ length: 200 }, (_, n) => ({ n, who: 2 })) });
+    const report = (await seams.watch.watchFootage(app, project.id, { force: true, segments: null })) as Record<string, unknown>;
+    expect(report.windows).toBe(2);
+    const looks = report.second_looks as { time: number; voice: string; windows_said: string[]; decided: Record<string, number> }[];
+    expect(looks.length).toBe(1);
+    expect(looks[0]!.windows_said).toEqual(["Jeff (Detective)", "Mike (Detective)"]);
+    expect(Object.keys(looks[0]!.decided)).toEqual(["Mike (Detective)"]);
+    const edge = looks[0]!.time;
+    const corrected = JSON.parse(fs.readFileSync(app.media.paths(media.path).transcript, "utf8")) as Transcript;
+    const named = (word: { speaker?: string }) => corrected.speakers?.[word.speaker ?? ""];
+    // The turn across the edge is Mike's on both sides; Jeff keeps what's long before it.
+    for (const word of corrected.words) {
+      if (word.start > edge - 115 && word.start < edge + 115) expect(named(word)).toBe("Mike (Detective)");
+      if (word.start < edge - 135) expect(named(word)).toBe("Jeff (Detective)");
+    }
+    expect(report.cast_failed).toBeUndefined();
+  } finally {
+    mock.castAnswer = null;
+    mock.bridgeAnswer = null;
+    if (before === undefined) delete process.env.EDIT_FFMPEG;
+    else process.env.EDIT_FFMPEG = before;
+    tools.forget();
+    cleanup();
+  }
+});
+
+test("a cast that can't be had is asked twice, said in the report, and leaves no receipt", async () => {
+  const { app, dir, cleanup } = fixtureHome("watch-cast-failed");
+  const bin = `${dir}/bin`;
+  write(`${bin}/ffmpeg`, '#!/bin/sh\nfor a; do out="$a"; done\nprintf x > "$out"\n');
+  fs.chmodSync(`${bin}/ffmpeg`, 0o755);
+  const before = process.env.EDIT_FFMPEG;
+  process.env.EDIT_FFMPEG = `${bin}/ffmpeg`;
+  tools.forget();
+  try {
+    const id = await subtitled(app, dir);
+    mock.gatewayAnswer = JSON.stringify({
+      people: [
+        { id: "A", look: "grey suit", where: "left", on_screen: true, name: "", role: "leader" },
+        { id: "B", look: "hoodie", where: "right", on_screen: true, name: "Tyler", role: "suspect" },
+      ],
+      lines: [
+        { n: 0, who: "A", sure: "high", or: null },
+        { n: 1, who: "B", sure: "high", or: null },
+      ],
+      segments: [{ start: 0, end: 10, kind: "footage", note: "" }],
+      background: [],
+    });
+    // The cast call gets the window's answer: not a cast.
+    const calls = mock.calls("/v1/chat/completions").length;
+    const report = (await seams.watch.watchFootage(app, id, { force: true, segments: null })) as Record<string, unknown>;
+    expect(mock.calls("/v1/chat/completions").length).toBe(calls + 3);
+    expect(String(report.cast_failed)).toContain("run watch_footage again");
+    expect(fs.existsSync(`${app.store.cacheDir()}/watch-projects/${id}.json`)).toBe(false);
+  } finally {
+    if (before === undefined) delete process.env.EDIT_FFMPEG;
+    else process.env.EDIT_FFMPEG = before;
+    tools.forget();
+    cleanup();
+  }
+});
+
 test("a gateway that refuses says why, and the window's failure is the watch's error", async () => {
   const { app, dir, cleanup } = fixtureHome("watch-refused");
   const bin = `${dir}/bin`;

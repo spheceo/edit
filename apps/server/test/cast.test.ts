@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 
+import * as fs from "node:fs";
+
 import { checked, planCast, type CastPerson, type Seen } from "../src/cast.ts";
+import { join } from "../src/paths.ts";
 import type { Word } from "../src/transcribe.ts";
 
 // Young Actress, shaped: two agents and the suspect over three windows; the
@@ -104,4 +107,19 @@ test("one person given two letters in one window (a split voice) is one person",
   expect(plan.names.get("speaker_7")).toEqual(["Mike (Detective)", "leader"]);
   expect(plan.names.get("speaker_8")).toEqual(["Mike (Detective)", "leader"]);
   expect(plan.moves).toEqual([]);
+});
+
+test("a real interrogation's cast holds: the bald detective's four voices and two letters of one window are one person", () => {
+  const fixture = JSON.parse(fs.readFileSync(join(import.meta.dir, "fixtures/cast-interrogation.json"), "utf8")) as { seen: Seen[]; answer: unknown };
+  const cast = checked(fixture.answer, fixture.seen)!;
+  expect(cast).not.toBeNull();
+  // What the old check refused it for: one person, two items of one window.
+  const bald = cast.find((person) => person.name === "Mark")!;
+  const windows = bald.members.map((n) => fixture.seen[n]!.from);
+  expect(new Set(windows).size).toBeLessThan(windows.length);
+  const words = new Map([["m", fixture.seen.map((item, n) => ({ text: "w", start: item.from + 1 + n / 100, end: item.from + 2, speaker: item.voice }))]]);
+  const plan = planCast(fixture.seen, cast, words).get("m")!;
+  const label = plan.names.get("speaker_7")?.[0];
+  expect(label?.startsWith("Mark")).toBe(true);
+  for (const voice of ["speaker_8", "speaker_11", "speaker_15"]) expect(plan.names.get(voice)?.[0]).toBe(label);
 });

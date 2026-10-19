@@ -1,0 +1,856 @@
+{
+ "note": "A 52-minute interrogation video's watch windows (names changed): the bald detective is four voices and, in two windows, two letters at once; the model's cast joined them rightly and was refused whole.",
+ "seen": [
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "A",
+   "voice": "speaker_11",
+   "name": "",
+   "role": "officer",
+   "look": "Bald white male officer in black uniform, seated left at interview room table",
+   "place": "interview room, left side"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "B",
+   "voice": "speaker_1",
+   "name": "",
+   "role": "witness",
+   "look": "Black female witness in black tank top with tattoos on arms, sitting across table",
+   "place": "interview room, far side"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "C",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "narrator",
+   "look": "Short dark hair male narrator, voice-over",
+   "place": "voiceover"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "D",
+   "voice": "speaker_3",
+   "name": "Darius Cole",
+   "role": "suspect",
+   "look": "Young Black male suspect with dreadlocks, wearing black t-shirt and red shorts",
+   "place": "interview room, far side"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "E",
+   "voice": "speaker_4",
+   "name": "",
+   "role": "officer",
+   "look": "Male police officer with bodycam",
+   "place": "gas station parking lot, holding bodycam"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "F",
+   "voice": "speaker_12",
+   "name": "",
+   "role": "witness",
+   "look": "Black male witness wearing dark t-shirt holding cellphone, speaking to officer",
+   "place": "gas station parking lot"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "G",
+   "voice": "speaker_5",
+   "name": "",
+   "role": "officer",
+   "look": "Another police officer at crime scene",
+   "place": "gas station parking lot"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "H",
+   "voice": "speaker_13",
+   "name": "",
+   "role": "victim",
+   "look": "Black male victim's father, off camera speaking distressfully",
+   "place": "gas station parking lot"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "I",
+   "voice": "speaker_6",
+   "name": "",
+   "role": "witness",
+   "look": "Female speaker sitting in front seat of car or interview area off camera talking to sergeant",
+   "place": "gas station parking lot dashcam / patrol car"
+  },
+  {
+   "media": "m",
+   "from": 0,
+   "to": 236.26999999999998,
+   "letter": "J",
+   "voice": "speaker_0",
+   "name": "",
+   "role": "officer",
+   "look": "Police officer talking off camera with female witness",
+   "place": "patrol car / crime scene"
+  },
+  {
+   "media": "m",
+   "from": 236.26999999999998,
+   "to": 417.678,
+   "letter": "A",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "narrator",
+   "look": "Off-screen voiceover, deep male voice",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 236.26999999999998,
+   "to": 417.678,
+   "letter": "B",
+   "voice": "speaker_4",
+   "name": "",
+   "role": "officer",
+   "look": "Male police officer, black uniform, speaking from behind the camera",
+   "place": "holding camera / speaking off-camera in the bar"
+  },
+  {
+   "media": "m",
+   "from": 236.26999999999998,
+   "to": 417.678,
+   "letter": "C",
+   "voice": "speaker_1",
+   "name": "",
+   "role": "witness",
+   "look": "Female employee/witness at the bar (blurred face), wearing black and white clothes",
+   "place": "standing behind the counter/door at the bar"
+  },
+  {
+   "media": "m",
+   "from": 236.26999999999998,
+   "to": 417.678,
+   "letter": "D",
+   "voice": "speaker_5",
+   "name": "",
+   "role": "officer",
+   "look": "Police officer on dashcam/radio explaining shooting angles at the scene",
+   "place": "standing near group of officers at gas station / on police radio"
+  },
+  {
+   "media": "m",
+   "from": 236.26999999999998,
+   "to": 417.678,
+   "letter": "E",
+   "voice": "speaker_0",
+   "name": "",
+   "role": "leader",
+   "look": "Police sergeant / supervisor on radio/scene discussing shooter's route",
+   "place": "standing in group of officers at gas station / on radio"
+  },
+  {
+   "media": "m",
+   "from": 236.26999999999998,
+   "to": 417.678,
+   "letter": "F",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "leader",
+   "look": "Detective / officer speaking about video download",
+   "place": "on scene / on radio"
+  },
+  {
+   "media": "m",
+   "from": 236.26999999999998,
+   "to": 417.678,
+   "letter": "G",
+   "voice": "speaker_8",
+   "name": "",
+   "role": "leader",
+   "look": "Bald detective with arm tattoos, wearing black polo shirt and dark pants",
+   "place": "seated on the left side of the interview table"
+  },
+  {
+   "media": "m",
+   "from": 236.26999999999998,
+   "to": 417.678,
+   "letter": "H",
+   "voice": "speaker_9",
+   "name": "Andre Banks",
+   "role": "witness",
+   "look": "Black male suspect/witness in orange prison jumpsuit, short dark hair",
+   "place": "seated on the right side of the interview table"
+  },
+  {
+   "media": "m",
+   "from": 417.678,
+   "to": 627.448,
+   "letter": "A",
+   "voice": "speaker_8",
+   "name": "",
+   "role": "officer",
+   "look": "Bald police detective in dark uniform seated on the left side of the table facing Malik",
+   "place": "bottom-left of table in interrogation room"
+  },
+  {
+   "media": "m",
+   "from": 417.678,
+   "to": 627.448,
+   "letter": "B",
+   "voice": "speaker_9",
+   "name": "Andre Banks",
+   "role": "witness",
+   "look": "Young Black male in orange/red jail jumpsuit seated across the table",
+   "place": "right side of table"
+  },
+  {
+   "media": "m",
+   "from": 417.678,
+   "to": 627.448,
+   "letter": "C",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "narrator",
+   "look": "",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 417.678,
+   "to": 627.448,
+   "letter": "D",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "leader",
+   "look": "Bald police detective with beard and tattoos, wearing black POLICE t-shirt",
+   "place": "left side of table"
+  },
+  {
+   "media": "m",
+   "from": 417.678,
+   "to": 627.448,
+   "letter": "E",
+   "voice": "speaker_3",
+   "name": "Darius Cole",
+   "role": "suspect",
+   "look": "Black male suspect in black t-shirt and red shorts, dreadlocks",
+   "place": "far end of table against wall"
+  },
+  {
+   "media": "m",
+   "from": 627.448,
+   "to": 871.54,
+   "letter": "A",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "officer",
+   "look": "Bald officer, black police t-shirt, tattooed arms, sitting on the left side of the table",
+   "place": "sitting on the left at the interrogation table"
+  },
+  {
+   "media": "m",
+   "from": 627.448,
+   "to": 871.54,
+   "letter": "B",
+   "voice": "speaker_3",
+   "name": "Darius Cole",
+   "role": "suspect",
+   "look": "Young Black male suspect with dreadlocks, black t-shirt and red pants, sitting across the table",
+   "place": "sitting opposite the officers at the interrogation table"
+  },
+  {
+   "media": "m",
+   "from": 627.448,
+   "to": 871.54,
+   "letter": "C",
+   "voice": "speaker_0",
+   "name": "",
+   "role": "leader",
+   "look": "Officer partially visible in foreground wearing blue jeans and short sleeve shirt",
+   "place": "sitting in the foreground next to Mark"
+  },
+  {
+   "media": "m",
+   "from": 871.54,
+   "to": 1139.922,
+   "letter": "A",
+   "voice": "speaker_3",
+   "name": "Darius Cole",
+   "role": "suspect",
+   "look": "Black male, dreadlocks, black t-shirt, red shorts",
+   "place": "interrogation room, sitting at far side of table facing camera"
+  },
+  {
+   "media": "m",
+   "from": 871.54,
+   "to": 1139.922,
+   "letter": "B",
+   "voice": "speaker_0",
+   "name": "",
+   "role": "officer",
+   "look": "bald white male officer, black police t-shirt with tattooed left arm",
+   "place": "interrogation room, sitting on the left side of table"
+  },
+  {
+   "media": "m",
+   "from": 871.54,
+   "to": 1139.922,
+   "letter": "C",
+   "voice": "speaker_14",
+   "name": "Mark",
+   "role": "leader",
+   "look": "white male officer with short brown hair, grey polo shirt, seen from back",
+   "place": "interrogation room, sitting in foreground with back to camera"
+  },
+  {
+   "media": "m",
+   "from": 871.54,
+   "to": 1139.922,
+   "letter": "D",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "narrator",
+   "look": "",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 1139.922,
+   "to": 1396.992,
+   "letter": "A",
+   "voice": "speaker_15",
+   "name": "",
+   "role": "officer",
+   "look": "Bald male officer with tattoos on arms, wearing black police shirt, seated on the left",
+   "place": "seated at table, left"
+  },
+  {
+   "media": "m",
+   "from": 1139.922,
+   "to": 1396.992,
+   "letter": "B",
+   "voice": "speaker_3",
+   "name": "Darius Cole",
+   "role": "suspect",
+   "look": "Male suspect with dreadlocks, wearing black shirt and red shorts",
+   "place": "seated across the table"
+  },
+  {
+   "media": "m",
+   "from": 1139.922,
+   "to": 1396.992,
+   "letter": "C",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "officer",
+   "look": "Male officer with short brown hair, wearing grey shirt and jeans, back to camera",
+   "place": "seated at bottom of table"
+  },
+  {
+   "media": "m",
+   "from": 1139.922,
+   "to": 1396.992,
+   "letter": "D",
+   "voice": "speaker_10",
+   "name": "Tara Cole",
+   "role": "suspect",
+   "look": "Female suspect with dark hair tied back, black tank top, tattoos",
+   "place": "seated across the table"
+  },
+  {
+   "media": "m",
+   "from": 1139.922,
+   "to": 1396.992,
+   "letter": "E",
+   "voice": "speaker_16",
+   "name": "",
+   "role": "narrator",
+   "look": "Voiceover narrator",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 1396.992,
+   "to": 1694.246,
+   "letter": "A",
+   "voice": "speaker_10",
+   "name": "Tara Cole",
+   "role": "suspect",
+   "look": "Young woman with dark hair pulled back into a bun, wearing a black tank top, sitting across the table.",
+   "place": "interrogation table, far side"
+  },
+  {
+   "media": "m",
+   "from": 1396.992,
+   "to": 1694.246,
+   "letter": "B",
+   "voice": "speaker_2",
+   "name": "Joe",
+   "role": "leader",
+   "look": "Detective in grey polo shirt and jeans, seated with back to camera, face blurred later.",
+   "place": "interrogation table, near side"
+  },
+  {
+   "media": "m",
+   "from": 1396.992,
+   "to": 1694.246,
+   "letter": "C",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "officer",
+   "look": "Police officer in black uniform with POLICE on back, bald head with tattoos on arms.",
+   "place": "interrogation table, left side"
+  },
+  {
+   "media": "m",
+   "from": 1396.992,
+   "to": 1694.246,
+   "letter": "D",
+   "voice": "speaker_16",
+   "name": "",
+   "role": "narrator",
+   "look": "Voice-over narrator",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 1694.246,
+   "to": 1885.086,
+   "letter": "A",
+   "voice": "speaker_10",
+   "name": "Tara Cole",
+   "role": "suspect",
+   "look": "female suspect, dark hair pulled back, black halter top, tattoos on right arm",
+   "place": "seated across the table facing camera"
+  },
+  {
+   "media": "m",
+   "from": 1694.246,
+   "to": 1885.086,
+   "letter": "B",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "leader",
+   "look": "police officer, bald, black POLICE t-shirt, tattooed arms",
+   "place": "seated on left side of table"
+  },
+  {
+   "media": "m",
+   "from": 1694.246,
+   "to": 1885.086,
+   "letter": "C",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "officer",
+   "look": "officer with grey t-shirt and blurred face/head",
+   "place": "seated at near side of table with back to camera"
+  },
+  {
+   "media": "m",
+   "from": 1694.246,
+   "to": 1885.086,
+   "letter": "D",
+   "voice": "speaker_16",
+   "name": "",
+   "role": "narrator",
+   "look": "",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 1885.086,
+   "to": 2186.3720000000003,
+   "letter": "A",
+   "voice": "speaker_10",
+   "name": "Tara Cole",
+   "role": "suspect",
+   "look": "Young woman with hair tied back, black tank top, tattoos on right arm",
+   "place": "seated across the table facing camera"
+  },
+  {
+   "media": "m",
+   "from": 1885.086,
+   "to": 2186.3720000000003,
+   "letter": "B",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "officer",
+   "look": "Bald officer, black 'POLICE' polo shirt, tattooed arms",
+   "place": "seated on left side of table facing suspect"
+  },
+  {
+   "media": "m",
+   "from": 1885.086,
+   "to": 2186.3720000000003,
+   "letter": "C",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "leader",
+   "look": "Male officer with short hair, grey t-shirt",
+   "place": "seated at bottom of frame with back mostly to camera"
+  },
+  {
+   "media": "m",
+   "from": 1885.086,
+   "to": 2186.3720000000003,
+   "letter": "D",
+   "voice": "speaker_16",
+   "name": "",
+   "role": "narrator",
+   "look": "",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 2186.3720000000003,
+   "to": 2399.388,
+   "letter": "A",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "leader",
+   "look": "Bald male officer wearing black POLICE polo shirt, sitting on the left side of the table",
+   "place": "table left"
+  },
+  {
+   "media": "m",
+   "from": 2186.3720000000003,
+   "to": 2399.388,
+   "letter": "B",
+   "voice": "speaker_10",
+   "name": "Tara Cole",
+   "role": "suspect",
+   "look": "Young woman with dark hair pulled back, black tank top, sitting across the table",
+   "place": "table far side"
+  },
+  {
+   "media": "m",
+   "from": 2186.3720000000003,
+   "to": 2399.388,
+   "letter": "C",
+   "voice": "speaker_0",
+   "name": "",
+   "role": "officer",
+   "look": "Male officer in grey polo shirt and jeans, sitting in the foreground with back partially to camera",
+   "place": "table foreground / right"
+  },
+  {
+   "media": "m",
+   "from": 2186.3720000000003,
+   "to": 2399.388,
+   "letter": "D",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "narrator",
+   "look": "",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 2399.388,
+   "to": 2620.1980000000003,
+   "letter": "A",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "officer",
+   "look": "Bald, goatee beard, glasses, black 'POLICE' short-sleeved shirt, heavily tattooed arms",
+   "place": "Left side of interrogation table, facing suspect"
+  },
+  {
+   "media": "m",
+   "from": 2399.388,
+   "to": 2620.1980000000003,
+   "letter": "B",
+   "voice": "speaker_10",
+   "name": "Tara Cole",
+   "role": "suspect",
+   "look": "Young woman, dark hair tied back, black tank top, sitting facing officers",
+   "place": "Far side of table, facing camera/officers"
+  },
+  {
+   "media": "m",
+   "from": 2399.388,
+   "to": 2620.1980000000003,
+   "letter": "C",
+   "voice": "speaker_0",
+   "name": "",
+   "role": "officer",
+   "look": "Short dark hair, grey polo shirt, blue jeans, seen from back",
+   "place": "Foreground right side of table, back to camera"
+  },
+  {
+   "media": "m",
+   "from": 2399.388,
+   "to": 2620.1980000000003,
+   "letter": "D",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "narrator",
+   "look": "Voice-over narrator",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 2620.1980000000003,
+   "to": 2854.608,
+   "letter": "A",
+   "voice": "speaker_0",
+   "name": "",
+   "role": "officer",
+   "look": "Bald officer wearing black polo shirt with 'POLICE' on back, tattoos on arms, seated on left side of table facing suspect",
+   "place": "left side of interrogation table"
+  },
+  {
+   "media": "m",
+   "from": 2620.1980000000003,
+   "to": 2854.608,
+   "letter": "B",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "leader",
+   "look": "Officer with short dark hair, wearing grey polo shirt and blue jeans, seated at bottom side of table facing suspect",
+   "place": "bottom of interrogation table"
+  },
+  {
+   "media": "m",
+   "from": 2620.1980000000003,
+   "to": 2854.608,
+   "letter": "C",
+   "voice": "speaker_10",
+   "name": "Tara Cole",
+   "role": "suspect",
+   "look": "Young woman with dark hair tied back, tattoos on arm, wearing black tank top and patterned pants, seated at opposite end of table",
+   "place": "right/far side of interrogation table"
+  },
+  {
+   "media": "m",
+   "from": 2620.1980000000003,
+   "to": 2854.608,
+   "letter": "D",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "narrator",
+   "look": "",
+   "place": ""
+  },
+  {
+   "media": "m",
+   "from": 2854.608,
+   "to": 3163.285125,
+   "letter": "A",
+   "voice": "speaker_10",
+   "name": "Tara Cole",
+   "role": "suspect",
+   "look": "Young woman with hair pulled back, tattoos on her arms, wearing a black tank top and shorts",
+   "place": "Sitting at the table facing the camera"
+  },
+  {
+   "media": "m",
+   "from": 2854.608,
+   "to": 3163.285125,
+   "letter": "B",
+   "voice": "speaker_7",
+   "name": "Mark",
+   "role": "leader",
+   "look": "Bald police officer with tattooed arm, wearing a black 'POLICE' polo shirt",
+   "place": "Sitting on the left side of the table"
+  },
+  {
+   "media": "m",
+   "from": 2854.608,
+   "to": 3163.285125,
+   "letter": "C",
+   "voice": "speaker_0",
+   "name": "",
+   "role": "officer",
+   "look": "Male officer wearing a grey t-shirt and blue jeans, seen from behind/above",
+   "place": "Sitting in the foreground on the bottom side of the table"
+  },
+  {
+   "media": "m",
+   "from": 2854.608,
+   "to": 3163.285125,
+   "letter": "D",
+   "voice": "speaker_2",
+   "name": "",
+   "role": "narrator",
+   "look": "Male narrator",
+   "place": ""
+  }
+ ],
+ "answer": {
+  "people": [
+   {
+    "name": "Mark",
+    "title": "Detective",
+    "role": "officer",
+    "members": [
+     0,
+     15,
+     16,
+     18,
+     21,
+     23,
+     27,
+     30,
+     37,
+     40,
+     44,
+     47,
+     51,
+     55,
+     60
+    ]
+   },
+   {
+    "name": "Tara Cole",
+    "title": "Suspect",
+    "role": "suspect",
+    "members": [
+     1,
+     33,
+     35,
+     39,
+     43,
+     48,
+     52,
+     57,
+     59
+    ]
+   },
+   {
+    "name": null,
+    "title": "Narrator",
+    "role": "narrator",
+    "members": [
+     2,
+     10,
+     20,
+     29,
+     34,
+     38,
+     42,
+     46,
+     50,
+     54,
+     58,
+     62
+    ]
+   },
+   {
+    "name": "Darius Cole",
+    "title": "Suspect",
+    "role": "suspect",
+    "members": [
+     3,
+     22,
+     24,
+     26,
+     31
+    ]
+   },
+   {
+    "name": null,
+    "title": "Officer",
+    "role": "officer",
+    "members": [
+     4,
+     11
+    ]
+   },
+   {
+    "name": null,
+    "title": "Witness",
+    "role": "witness",
+    "members": [
+     5
+    ]
+   },
+   {
+    "name": null,
+    "title": "Officer",
+    "role": "officer",
+    "members": [
+     6,
+     13
+    ]
+   },
+   {
+    "name": null,
+    "title": "Victim's Father",
+    "role": "witness",
+    "members": [
+     7
+    ]
+   },
+   {
+    "name": null,
+    "title": "Witness",
+    "role": "witness",
+    "members": [
+     8
+    ]
+   },
+   {
+    "name": null,
+    "title": "Sergeant",
+    "role": "leader",
+    "members": [
+     9,
+     14
+    ]
+   },
+   {
+    "name": null,
+    "title": "Witness",
+    "role": "witness",
+    "members": [
+     12
+    ]
+   },
+   {
+    "name": "Andre Banks",
+    "title": "Witness",
+    "role": "witness",
+    "members": [
+     17,
+     19
+    ]
+   },
+   {
+    "name": null,
+    "title": "Detective",
+    "role": "officer",
+    "members": [
+     25,
+     28,
+     32,
+     36,
+     41,
+     45,
+     49,
+     53,
+     56,
+     61
+    ]
+   }
+  ]
+ }
+}

@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import * as bridges from "./bridges.ts";
 import * as castOf from "./cast.ts";
 import { parseTranscript, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
@@ -1213,8 +1214,10 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   const disputes = new Map<string, [number, number]>();
   const seen: Segment[] = [];
   const people: unknown[] = [];
-  // Everyone each window saw, for who is who across them (cast.ts).
+  // Everyone each window saw, for who is who across them (cast.ts), and which
+  // item each window's letter is ("p/w/letter").
   const sightings: castOf.Seen[] = [];
+  const sightingOf = new Map<string, number>();
   // Lines the model only guessed at: the few worth a look.
   const doubtful: unknown[] = [];
   const ordered = [...answers.values()].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -1263,6 +1266,7 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
         look: person.look,
         where: person.place,
       });
+      sightingOf.set(`${p}/${w}/${person.id}`, sightings.length);
       sightings.push({
         media: part.media,
         from: window.start,
@@ -1309,12 +1313,103 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   }
   // Who is who across the windows: one person, one name, whatever voices
   // diarisation gave them (cast.ts).
-  const cast = await castOf.reconcile(sightings, join(app.store.cacheDir(), "watch-cast"), post);
-  if (cast !== null) cost += cast.cost;
+  const reconciled = await castOf.reconcile(sightings, join(app.store.cacheDir(), "watch-cast"), post);
+  if (reconciled !== null) cost += reconciled.cost;
+  const cast = reconciled !== null && "people" in reconciled ? reconciled : null;
+  // Never quiet: without a cast a person split by diarisation stays two people.
+  const castFailed = reconciled !== null && "failed" in reconciled ? reconciled.failed : null;
   const castPlans =
     cast === null
       ? new Map<string, castOf.CastPlan>()
       : castOf.planCast(sightings, cast.people, new Map([...transcripts].map(([id, transcript]) => [id, transcript.words])));
+  // Where two windows give one turn going on across their edge to two
+  // people, the turn watched again with the cast described (bridges.ts).
+  const secondLooks: unknown[] = [];
+  const bridged = new Map<string, [number[], string][]>();
+  if (cast !== null) {
+    const personOf = new Map<number, number>();
+    cast.people.forEach((person, index) => person.members.forEach((n) => personOf.set(n, index)));
+    const seenIn = (p: number, w: number, answer: Answer): bridges.Watched => {
+      const part = parts[p]!;
+      const window = part.windows[w]!;
+      const said = new Map(answer.lines.map((line) => [line.n, line]));
+      return {
+        lines: part.lines.slice(window.lines[0], window.lines[1]),
+        person: (n) => {
+          const line = said.get(n);
+          if (line === undefined || line.sure === "low" || answer.background.includes(n)) return null;
+          const item = sightingOf.get(`${p}/${w}/${line.who}`);
+          return item === undefined ? null : (personOf.get(item) ?? null);
+        },
+      };
+    };
+    const asks: [number, bridges.Disagreement, bridges.Candidate[]][] = [];
+    parts.forEach((part, p) => {
+      const plan = castPlans.get(part.media);
+      if (plan === undefined) return;
+      const described = (person: number): bridges.Candidate | null => {
+        const voice = plan.mains.get(person);
+        const named = voice === undefined ? undefined : plan.names.get(voice);
+        return named === undefined ? null : { person, label: named[0], look: plan.looks.get(voice!) ?? "" };
+      };
+      for (let w = 0; w + 1 < part.windows.length; w++) {
+        const earlier = answers.get(`${p}/${w}`);
+        const later = answers.get(`${p}/${w + 1}`);
+        if (earlier === undefined || later === undefined) continue;
+        for (const disputed of bridges.disagreements(part.windows[w]!.end, seenIn(p, w, earlier[2]), seenIn(p, w + 1, later[2]))) {
+          // The two people first, then everyone else either window saw.
+          const others = [...sightingOf.entries()]
+            .filter(([key]) => key.startsWith(`${p}/${w}/`) || key.startsWith(`${p}/${w + 1}/`))
+            .map(([, item]) => personOf.get(item))
+            .filter((person): person is number => person !== undefined);
+          const people = [...new Set([disputed.before, disputed.after, ...others.sort((a, b) => a - b)])];
+          const candidates = people.map(described).filter((one): one is bridges.Candidate => one !== null);
+          if (candidates.length >= 2) asks.push([p, disputed, candidates]);
+        }
+      }
+    });
+    const settled = await limited(asks, AT_ONCE, ([p, disputed, candidates]) => {
+      const part = parts[p]!;
+      const dir = join(parent(app.media.paths(part.source).transcript) ?? app.store.cacheDir(), "watch");
+      const cache = parent(dir);
+      return bridges.settle(disputed, part.lines, candidates, dir, {
+        cut: (start, end, out) => (cache !== null ? cut(part.source, cache, { lines: [0, 0], start, end }, out) : cutAt(part.source, null, { lines: [0, 0], start, end }, out, 1)),
+        post,
+        unfence,
+        model: MODEL,
+      });
+    });
+    settled.forEach((result, index) => {
+      const [p, disputed, candidates] = asks[index]!;
+      const part = parts[p]!;
+      const plan = castPlans.get(part.media)!;
+      const label = (person: number) => candidates.find((one) => one.person === person)?.label ?? "?";
+      const entry: Record<string, unknown> = {
+        time: round(onTimeline(part, disputed.edge, fps) * 100.0) / 100.0,
+        voice: disputed.voice,
+        windows_said: [label(disputed.before), label(disputed.after)],
+      };
+      if (result.status === "rejected") {
+        if (isBug(result.reason)) throw result.reason;
+        entry.decided = null;
+      } else if (result.value === null) {
+        entry.decided = null;
+      } else {
+        cost += result.value.cost;
+        const list = bridged.get(part.media) ?? [];
+        const given = new Map<number, number>();
+        for (const [words, person] of result.value.moves) {
+          const voice = plan.mains.get(person);
+          if (voice === undefined) continue;
+          list.push([words, voice]);
+          given.set(person, (given.get(person) ?? 0) + 1);
+        }
+        bridged.set(part.media, list);
+        entry.decided = Object.fromEntries([...given].map(([person, lines]) => [label(person), lines]));
+      }
+      secondLooks.push(entry);
+    });
+  }
   // The corrections, into each file's transcript.
   const examples: unknown[] = [];
   let changed = 0;
@@ -1405,6 +1500,16 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
         // For the seats: who to find, not who to guess.
         transcript.looks = Object.fromEntries([...plan.looks].sort((a, b) => compareKeys(a[0], b[0])));
       }
+      // The second looks last: they settle what two windows disagreed on.
+      for (const [words, voice] of bridged.get(mediaId) ?? []) {
+        for (const index of words) {
+          const word = transcript.words[index];
+          if (word !== undefined && word.speaker !== voice) {
+            word.speaker = voice;
+            moved += 1;
+          }
+        }
+      }
     });
   }
   let segments = setSegments ? normalize(seen, duration, toI64(round(fps))) : [];
@@ -1475,6 +1580,11 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
             role: person.role,
             voices: [...new Set(person.members.map((n) => sightings[n]!.voice))].sort(compareKeys),
           })),
+    // Who was who across a window's edge where the two windows disagreed, watched again.
+    second_looks: secondLooks,
+    ...(castFailed === null
+      ? {}
+      : { cast_failed: `the people weren't joined across the windows (${castFailed}): one person may be under several names and colours; run watch_footage again before subtitling` }),
     words_moved: moved,
     doubtful,
     people,
@@ -1486,7 +1596,9 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
       note: segment.note,
     })),
   };
-  if (failed.length === 0) {
+  // Done only when everything held: a failed cast or second look is asked again next run.
+  const unsettled = secondLooks.some((entry) => (entry as { decided?: unknown }).decided === null);
+  if (failed.length === 0 && castFailed === null && !unsettled) {
     const current = app.store.get(projectId);
     if (current !== null && sameText(watchedUses(current.project), watchedUses(project))) {
       // Use the corrected words from disk, not the pre-watch snapshots.

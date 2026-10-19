@@ -79,7 +79,7 @@ test("each angle is watched where the most people say the most, twice at most", 
 test("an angle with two interviews is watched until everyone who says much is in a stretch", () => {
   // Killer Couple's room: a detective and the first suspect for 300 s, then
   // the detective and the second suspect (busier) for 600 s.
-  const words = [];
+  const words: Transcript["words"] = [];
   for (let at = 0; at < 300; at += 3) words.push({ text: "w", start: at, end: at + 1, speaker: at % 6 === 0 ? "speaker_0" : "speaker_1" });
   for (let at = 300; at < 900; at += 1.5) words.push({ text: "w", start: at, end: at + 1, speaker: Math.round(at / 1.5) % 2 === 0 ? "speaker_0" : "speaker_2" });
   const t: Transcript = { model: "scribe_v2", language: null, words, speakers: { speaker_0: "Mike (Detective)", speaker_1: "Phazion Whyte (Suspect)", speaker_2: "Jasmine Jones (Suspect)" } };

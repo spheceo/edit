@@ -52,6 +52,8 @@ export class MockServer {
   gatewayAnswer = "{}";
   /** The answer to the watcher's who-is-who call (cast.ts), when set; else it gets `gatewayAnswer` like any call. */
   castAnswer: string | null = null;
+  /** The answer to a second look at a disputed turn (bridges.ts), when set; else it gets `gatewayAnswer`. */
+  bridgeAnswer: string | null = null;
   private routes: Route[] = [];
   private server: Server<undefined>;
 
@@ -194,7 +196,12 @@ export class MockServer {
     // The AI gateway (OpenAI-style chat completions).
     this.on("POST", "/v1/chat/completions", async (request, mock) => {
       const asked = await request.text();
-      const content = mock.castAnswer !== null && asked.includes('"name":"cast"') ? mock.castAnswer : mock.gatewayAnswer;
+      const content =
+        mock.castAnswer !== null && asked.includes('"name":"cast"')
+          ? mock.castAnswer
+          : mock.bridgeAnswer !== null && asked.includes('"name":"who"')
+            ? mock.bridgeAnswer
+            : mock.gatewayAnswer;
       return Response.json({ choices: [{ message: { role: "assistant", content } }] });
     });
     // Google.

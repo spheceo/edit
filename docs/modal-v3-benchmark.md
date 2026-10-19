@@ -1,5 +1,13 @@
 # Cloud exporter v3
 
+**In the app since Oct 19:** with `EDIT_MODAL_EXPORTS=1` the desktop sends
+each house export of a whole cloud edit to its own `edit-exports-v3` app
+(`app/apps/server/src/modal_exports.ts`, `app/apps/worker/export_v3.py`),
+several at once, with a lasting cache volume; NTSC rates are supported. A
+79-second 23.976 fps smoke of a subtitled bodycam edit, cold (deploy and the
+whole source's first transfer included), was on the Mac in 141 s at exactly
+1,900 frames, matching the preview's subtitles.
+
 V2 and the previous benchmarks were merged into `main` as `c9cba31`, adapted
 to the code's new `app/` directory. This experiment layers v3 on that commit.
 The existing pilot, Relay, live editor and user projects remain unchanged.

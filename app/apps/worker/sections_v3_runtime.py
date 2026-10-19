@@ -6,6 +6,7 @@ Output parts can upload during validation, but are never published before it.
 """
 from concurrent.futures import ThreadPoolExecutor
 import copy
+from fractions import Fraction
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ import uuid
 
 import httpx
 from runtime import command, stage, transfer
-from sections_runtime import LocalControl, MAX_OUTPUT, PART_BYTES, check_picture, inspect, picture, ranges
+from sections_runtime import LocalControl, MAX_OUTPUT, PART_BYTES, check_picture, inspect, picture, ranges, rate
 
 VERSION = 3
 
@@ -48,6 +49,8 @@ def cached(path, identity):
         receipt = json.loads(path.with_suffix(".json").read_text())
         if (receipt["version"] == VERSION and receipt["identity"] == identity
                 and path.stat().st_size == receipt["bytes"] and sha(path) == receipt["sha256"]):
+            # Used: the cache's pruning keeps it (prune).
+            os.utime(path.with_suffix(".json"))
             return receipt
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -162,10 +165,11 @@ def decode_frames(output, span, fps, control, folder):
     Packet validation separately checks the entire file's unique PTS grid.
     """
     a, b = span
+    fps = Fraction(fps)
     progress = folder / "decode-progress.txt"
     command(["ffmpeg", "-v", "error", "-xerror", "-threads", "4", "-copyts",
-             "-ss", f"{max(0, a / fps - 1):.9f}", "-i", str(output), "-map", "0:v:0", "-an",
-             "-vf", f"settb=1/{fps},trim=start_pts={a}:end_pts={b}",
+             "-ss", f"{max(0, float(a / fps) - 1):.9f}", "-i", str(output), "-map", "0:v:0", "-an",
+             "-vf", f"settb={fps.denominator}/{fps.numerator},trim=start_pts={a}:end_pts={b}",
              "-frames:v", str(b - a), "-fps_mode", "passthrough", "-progress", str(progress),
              "-nostats", "-f", "null", "-"], control, folder)
     counts = [int(line.split("=", 1)[1]) for line in progress.read_text().splitlines() if line.startswith("frame=")]
@@ -202,31 +206,56 @@ def check_packets(output, frames, fps):
         dts.append(float(values[1]))
     if len(pts) != frames or any(b <= a for a, b in zip(dts, dts[1:])):
         raise RuntimeError("Finished-file packet count or decoding timestamps are invalid")
-    error = max(abs(value - index / fps) for index, value in enumerate(sorted(pts)))
+    fps = Fraction(fps)
+    error = max(abs(value - float(index / fps)) for index, value in enumerate(sorted(pts)))
     if error > 0.00001:
         raise RuntimeError("Finished-file presentation timestamps are not an exact CFR grid")
     return {"frames": len(pts), "max_pts_error_seconds": error, "monotonic_dts": True}
 
 
-def coordinate(job, volume, section_function, verify_function, root, build, engine, gpu_pool):
+HOUSE = {"format": "h264", "audio": True, "hardware": True}
+
+
+def check_options(options, settings, total):
+    """The house export (the project's own size and rate, H.264 with sound, the
+    whole edit, no chapters); any loudness and quality. Anything else is a
+    local export's."""
+    if any(options.get(field) != value for field, value in HOUSE.items()):
+        raise ValueError("Cloud sections export H.264 with sound only")
+    if options.get("shape", "original") != "original" or options.get("fps") is not None or options.get("target_mb") is not None:
+        raise ValueError("Cloud sections export the project's own shape and rate")
+    if options.get("size") not in (None, min(settings["width"], settings["height"])):
+        raise ValueError("Cloud sections export the project's own size")
+    if options.get("range") not in (None, [0, total]) or options.get("chapters"):
+        raise ValueError("Cloud sections export the whole edit without chapters")
+    return {**options, "range": None, "chapters": []}
+
+
+def coordinate(job, volume, section_function, verify_function, root, build, engine, gpu_pool, report=None,
+               seconds=1100):
     name = job["id"]
     if not re.fullmatch(r"[a-z0-9-]{1,100}", name):
         raise ValueError("Invalid experiment identifier")
     started = time.time()
-    control = LocalControl(name, 1100)
+    control = LocalControl(name, seconds)
     folder, cache = root / name, root / "cache-v3"
     folder.mkdir(exist_ok=False)
     calls, received = [], set()
 
-    def progress(phase):
-        print(json.dumps({"phase": phase, "id": name, "seconds": time.time() - started}), flush=True)
+    def progress(phase, **extra):
+        print(json.dumps({"phase": phase, "id": name, "seconds": time.time() - started, **extra}), flush=True)
+        if report is not None:
+            try:
+                report({"phase": phase, "seconds": time.time() - started, **extra})
+            except Exception:
+                pass  # Progress is for the host's display only.
 
     def submit(function, *args):
         call = function.spawn(*args)
         calls.append(call)
         return call
 
-    def collect(pending):
+    def collect(pending, each=None):
         results = []
         while pending:
             control.check()
@@ -240,16 +269,18 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
                 received.add(call.object_id)
                 results.append(result)
                 del pending[index]
+                if each is not None:
+                    each(results)
             if pending:
                 time.sleep(0.25)
         return sorted(results, key=lambda r: r["index"])
 
     try:
-        project, options = copy.deepcopy(job["project"]), job["options"]
-        if options != {"format": "h264", "audio": True, "quality": "high", "hardware": True, "loudness": -14}:
-            raise ValueError("Unsupported section benchmark options")
+        project = copy.deepcopy(job["project"])
         settings = project["settings"]
+        fps = rate(settings)
         total = max(c["start"] + c["duration"] for c in project["clips"])
+        options = check_options(job["options"], settings, total)
         spans = ranges(0, total, job["sections"])
         with httpx.Client(follow_redirects=False) as client:
             paths, identities, input_cache = stage_cached(job["assets"], folder, cache, client, control)
@@ -269,7 +300,7 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
                     sections.append({**section, "cached": True, "bytes": hit["bytes"], "sha256": hit["sha256"]})
             volume.commit()
             planned = time.time()
-            progress("planned")
+            progress("planned", sections=len(plan["sections"]), cached=len(sections))
             for section in plan["sections"]:
                 if not any(s["index"] == section["index"] for s in sections):
                     pending[section["index"]] = submit(section_function, name, section["index"], tuple(section["range"]), section["key"])
@@ -282,7 +313,8 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
             audio_finished = time.time()
             progress("audio_finished")
             volume.commit()
-            sections.extend(collect(pending))
+            sections.extend(collect(pending, lambda done: progress(
+                "section", sections=len(plan["sections"]), cached=len(sections), rendered=len(done))))
             sections.sort(key=lambda s: s["index"])
             volume.reload()
             picture_finished = time.time()
@@ -295,7 +327,7 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
                     raise RuntimeError("A completed picture section is missing or corrupt")
             concat = folder / "concat.txt"
             concat.write_text("ffconcat version 1.0\nstream\nexact_stream_id 1\n" + "".join(
-                f"file '{cache / 'pictures' / (s['key'] + '.mp4')}'\nduration {(s['range'][1]-s['range'][0])/settings['fps']:.12f}\n"
+                f"file '{cache / 'pictures' / (s['key'] + '.mp4')}'\nduration {float((s['range'][1]-s['range'][0]) / fps):.12f}\n"
                 for s in sections))
             output = folder / "output.mp4"
             command(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
@@ -304,19 +336,19 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
             assembled = time.time()
             progress("assembled")
             found = inspect(output)
-            check_picture(found, total, settings["width"], settings["height"], settings["fps"], True)
+            check_picture(found, total, settings["width"], settings["height"], fps, True)
             if not 0 < output.stat().st_size <= MAX_OUTPUT:
                 raise RuntimeError("Output exceeded its size limit")
             volume.commit()
-            validation = {-1: submit(verify_function, name, -1, (0, total), settings["fps"], total)}
-            validation.update({i: submit(verify_function, name, i, span, settings["fps"], total)
+            validation = {-1: submit(verify_function, name, -1, (0, total), str(fps), total)}
+            validation.update({i: submit(verify_function, name, i, span, str(fps), total)
                                for i, span in enumerate(spans)})
             # Incomplete multipart uploads are private. The host publishes only
             # after every validation receipt, digest and part ETag has passed.
             with ThreadPoolExecutor(max_workers=2) as pool:
                 upload = pool.submit(upload_parts, output, job["upload_urls"], client, control)
                 digest = pool.submit(sha, output)
-                packet_check = check_packets(output, total, settings["fps"])
+                packet_check = check_packets(output, total, fps)
                 verification = collect(validation)
                 for receipt in verification:
                     index = receipt["index"]
@@ -356,8 +388,33 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
 
 
 def render_section(folder, cache, index, span, identity):
-    control = LocalControl(folder.name, 290)
+    control = LocalControl(folder.name, 590)
     receipt = picture(folder, index, span, control)
     source = folder / f"section-{index}.mp4"
     remembered = remember(source, cache / "pictures" / (identity + ".mp4"), identity, move=True)
     return {**receipt, "key": identity, "sha256": remembered["sha256"], "cached": False}
+
+
+def cleanup(root, name, days=14):
+    """A finished export's working folder (its project, sound and assembled
+    file) goes; so does every cache entry nobody has used for `days`."""
+    if not re.fullmatch(r"[a-z0-9-]{1,100}", name):
+        raise ValueError("Invalid export identifier")
+    shutil.rmtree(root / name, ignore_errors=True)
+    cutoff, removed = time.time() - days * 86400, 0
+    for entry in (root / "cache-v3").glob("**/*"):
+        if not entry.is_file() or entry.suffix == ".json":
+            continue
+        try:
+            if entry.name.endswith(".partial"):
+                stale = entry.stat().st_mtime < time.time() - 86400
+            else:
+                receipt = entry.with_suffix(".json")
+                stale = not receipt.exists() or receipt.stat().st_mtime < cutoff
+            if stale:
+                entry.unlink(missing_ok=True)
+                entry.with_suffix(".json").unlink(missing_ok=True)
+                removed += 1
+        except OSError:
+            pass
+    return {"removed": removed}

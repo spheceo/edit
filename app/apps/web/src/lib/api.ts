@@ -185,8 +185,9 @@ export const api = {
   missingFootage: (id: string) =>
     request<{ used: number; missing: { id: string; name: string; path: string }[] }>("GET", `/api/projects/${id}/missing`),
   browse: (path?: string) => request<FsListing>("GET", `/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
-  exportProject: (id: string, path: string, options: ExportOptions) =>
-    request<{ path: string }>("POST", `/api/projects/${id}/export`, { path, options }),
+  /** `drive`: upload the finished file to Drive (by default only a whole subtitled video is). */
+  exportProject: (id: string, path: string, options: ExportOptions, drive?: boolean) =>
+    request<{ path: string }>("POST", `/api/projects/${id}/export`, drive === undefined ? { path, options } : { path, options, drive }),
   /** Shows a finished export in Finder on the machine running Edit. */
   /** The project's Drive link, checked that the file is still there (null once it's gone). */
   driveLink: (id: string) => request<{ drive: DriveFile | null }>("GET", `/api/projects/${id}/drive`),

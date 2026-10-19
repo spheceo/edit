@@ -2018,7 +2018,7 @@
     "name": "track_region"
   },
   {
-    "description": "Export the project (default: the whole edit as an MP4, H.264 + AAC, at the project's size). Progress shows in the UI. Options as the export dialog: format, range (frames [start, end)), shape (vertical = 9:16 for Shorts/Reels, filled per fill: blur | crop | black), size (short side px), quality or target_mb, loudness (LUFS, e.g. -14 for YouTube), chapters. A whole subtitled video is then uploaded to the team's Subtitles folder on Drive; its link becomes the project's drive.url.",
+    "description": "Export the project (default: the whole edit as an MP4, H.264 + AAC, at the project's size). Progress shows in the UI. Options as the export dialog: format, range (frames [start, end)), shape (vertical = 9:16 for Shorts/Reels, filled per fill: blur | crop | black), size (short side px), quality or target_mb, loudness (LUFS, e.g. -14 for YouTube), chapters. A whole subtitled video is then uploaded to the team's Subtitles folder on Drive (drive false: not; drive true: any whole video export, a normal edit to Render); its link becomes the project's drive.url. A whole house export of cloud footage renders on Modal when that's on, several at once.",
     "inputSchema": {
       "properties": {
         "options": {
@@ -2100,6 +2100,10 @@
             }
           },
           "type": "object"
+        },
+        "drive": {
+          "description": "Upload the finished file to the team's Drive: by default a whole subtitled video is; false keeps it here.",
+          "type": "boolean"
         },
         "path": {
           "description": "Output path (default <name>.mp4 in the media drive's Exports folder when one is set, else ~/Movies/Edit); the extension follows the format.",

@@ -38,6 +38,12 @@ class LocalControl:
         self.check()
 
 
+def rate(settings):
+    """The timeline's real frame rate: an NTSC 24 is 24000/1001 (23.976)."""
+    fps = settings["fps"]
+    return Fraction(fps * 1000, 1001) if settings.get("ntsc") else Fraction(fps)
+
+
 def ranges(start, end, count):
     if not 1 <= count <= 8 or start < 0 or end <= start or end - start < count:
         raise ValueError("Invalid section range")
@@ -61,7 +67,7 @@ def check_picture(found, frames, width, height, fps, audio):
     if actual != (
             "h264", width, height, frames, Fraction(fps)):
         raise RuntimeError(f"Picture mismatch: found {actual}, expected h264 {width}x{height}, {frames} frames at {fps} fps")
-    if abs(float(v["duration"]) - frames / fps) > 0.001 or abs(float(v.get("start_time", 0))) > 0.001:
+    if abs(float(v["duration"]) - float(frames / Fraction(fps))) > 0.001 or abs(float(v.get("start_time", 0))) > 0.001:
         raise RuntimeError("Section picture timing mismatch")
     if len(sounds) != int(audio):
         raise RuntimeError("Unexpected sound streams")
@@ -69,7 +75,7 @@ def check_picture(found, frames, width, height, fps, audio):
         a = sounds[0]
         if (a["codec_name"], a["sample_rate"], a["channels"]) != ("aac", "48000", 2):
             raise RuntimeError("Unexpected audio format")
-        if abs(float(a.get("start_time", 0))) > 0.001 or abs(float(a["duration"]) - frames / fps) > 0.05:
+        if abs(float(a.get("start_time", 0))) > 0.001 or abs(float(a["duration"]) - float(frames / Fraction(fps))) > 0.05:
             raise RuntimeError("Sound duration or start does not match picture")
 
 
@@ -91,7 +97,7 @@ def picture(folder, index, span, control):
         render_seconds = time.monotonic() - render_started
         output = work / "output.mp4"
         check_picture(inspect(output), span[1] - span[0], project["settings"]["width"],
-                      project["settings"]["height"], project["settings"]["fps"], False)
+                      project["settings"]["height"], rate(project["settings"]), False)
         # Copy only a complete section into the shared volume; the coordinator
         # validates the entire assembled file before publishing anything.
         import shutil
@@ -189,7 +195,7 @@ def coordinate(job, volume, section_function, root):
             # MP4's movie duration is rounded to milliseconds. Letting concat
             # infer each section's length accumulates gaps and changes avg FPS.
             # Declare durations from frame counts instead, keeping exact CFR.
-            concat.write_text("".join(f"file 'section-{i}.mp4'\nduration {(b - a) / settings['fps']:.12f}\n"
+            concat.write_text("".join(f"file 'section-{i}.mp4'\nduration {float((b - a) / rate(settings)):.12f}\n"
                                       for i, (a, b) in enumerate(spans)))
             output = folder / "output.mp4"
             command(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
@@ -197,7 +203,7 @@ def coordinate(job, volume, section_function, root):
                      "-c", "copy", "-movflags", "+faststart", str(output)], control, folder)
             assembled = time.time()
             found = inspect(output)
-            check_picture(found, total, settings["width"], settings["height"], settings["fps"], True)
+            check_picture(found, total, settings["width"], settings["height"], rate(settings), True)
             # Retain the baseline's full software decode of the finished file,
             # including the joins and continuous audio, before cloud readiness.
             command(["ffmpeg", "-v", "error", "-xerror", "-threads", "4", "-i", str(output),

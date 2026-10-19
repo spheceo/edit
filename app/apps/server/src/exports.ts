@@ -1,7 +1,8 @@
-// The server's export registry : one export at a time, its
+// The server's export registry: one export at a time on this Mac and any
+// number in the cloud (Modal's sections, `modal_exports.ts`, when it's on), their
 // `export` events, the files it may hand out, and the Drive upload after a
-// subtitled video. The rendering, mixing, the partial file beside the
-// destination and its rename are the addon's (`ExportJob`).
+// subtitled video (or whenever asked). The local rendering, mixing, the partial
+// file beside the destination and its rename are the addon's (`ExportJob`).
 
 import * as fs from "node:fs";
 
@@ -20,12 +21,26 @@ import type { Store } from "./store.ts";
 /** How many finished exports are remembered (handed out, revealed). */
 const KEEP_FINISHED = 50;
 
+/** Where an export renders: this Mac, the Relay's worker (v2) or Modal's sections (v3). */
+export type Backend = "local" | "cloud" | "modal";
+
+/** How an export is started beyond its options (a restart passes back what it was). */
+export interface StartExtra {
+  backend?: Backend;
+  cloudRequest?: string;
+  cloudJob?: string;
+  /** Upload the finished file to Drive; by default only a whole subtitled video is (`drive.wanted`). */
+  drive?: boolean;
+}
+
 interface Running {
   output: string;
   /** Its entry in the jobs a restart resumes. */
   key: string;
   cancelled: boolean;
   job: { cancel(): void } | null;
+  backend: Backend;
+  /** Rendered elsewhere: no contention with this Mac's own work. */
   remote: boolean;
   cloudRequest: string;
   cloudJob?: string;
@@ -162,8 +177,10 @@ export class ExportRegistry implements seams.Exports {
 
   /**
    * Starts exporting `project` as `options` ask; returns the file it will
-   * write (`output` with the format's extension). A whole subtitled video is
-   * then uploaded to the team's Drive (`drive`).
+   * write (`output` with the format's extension). It renders on Modal when
+   * that's on and the export suits it, else here (or the Relay's worker). A
+   * whole subtitled video is then uploaded to the team's Drive unless
+   * `drive` is false; any whole video export is when it's true.
    */
   async start(
     store: Store,
@@ -171,10 +188,10 @@ export class ExportRegistry implements seams.Exports {
     project: Project,
     options: ExportOptions,
     output: string,
-    backend?: "cloud" | "local",
-    cloudRequest: string = crypto.randomUUID(),
-    cloudJob?: string,
+    extra: StartExtra = {},
   ): Promise<string> {
+    const cloudRequest = extra.cloudRequest ?? crypto.randomUUID();
+    const cloudJob = extra.cloudJob;
     const addon = native();
     const { plan } = addon.exportPlan({ json: jsonForSerde(project) }, options);
     let path = addon.withExtension(output, options.format);
@@ -202,7 +219,23 @@ export class ExportRegistry implements seams.Exports {
         throw new Error("export would overwrite source footage; choose another file");
       }
     }
-    const remote = backend === "cloud" || (backend !== "local" && seams.cloudExports.enabled());
+    let backend: Backend;
+    if (extra.backend !== undefined) {
+      backend = extra.backend;
+    } else if (seams.modalExports.enabled()) {
+      const why = seams.modalExports.unsuitable(project, options, plan);
+      if (why !== null) diag.info("export", `${project.id}: exporting on this Mac: ${why}`);
+      backend = why === null ? "modal" : seams.cloudExports.enabled() ? "cloud" : "local";
+    } else {
+      backend = seams.cloudExports.enabled() ? "cloud" : "local";
+    }
+    if (backend === "modal") {
+      const why = seams.modalExports.unsuitable(project, options, plan);
+      if (why !== null) throw new Error(`this export can't render in the cloud: ${why}`);
+    }
+    const whole = ["h264", "hevc", "prores"].includes(options.format) && plan.start === 0 && plan.end >= duration(project) && plan.end > 0;
+    if (extra.drive === true && !whole) throw new Error("only a whole video export (MP4 or MOV) uploads to Drive");
+    const remote = backend !== "local";
     if (!remote && this.localRunning()) {
       throw new Error("an export is already running; wait for it or cancel it before starting another");
     }
@@ -219,13 +252,16 @@ export class ExportRegistry implements seams.Exports {
         snapshot = null;
       }
     }
-    const args = { options, output: path, backend: remote ? "cloud" : "local", cloudRequest, ...(cloudJob === undefined ? {} : { cloudJob }), ...(snapshot === null ? {} : { snapshot }) };
+    const args = {
+      options, output: path, backend, cloudRequest,
+      ...(cloudJob === undefined ? {} : { cloudJob }), ...(extra.drive === undefined ? {} : { drive: extra.drive }), ...(snapshot === null ? {} : { snapshot }),
+    };
     const key = jobs.begin(this.home, "export", project.id, args);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, remote, cloudRequest, cloudJob };
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
-      upload = seams.drive.wanted(project, options, plan);
+      upload = extra.drive ?? seams.drive.wanted(project, options, plan);
     } catch (error) {
       if (!seams.isUnavailable(error)) {
         this.jobs.delete(project.id);
@@ -257,7 +293,11 @@ export class ExportRegistry implements seams.Exports {
     let result: { ok: true } | { ok: false; error: string };
     try {
       await catchBugsAsync("the export", async () => {
-        if (running.remote) {
+        if (running.backend === "modal") {
+          await seams.modalExports.run(this.home ?? store.home, project, options, output, () => running.cancelled, progress => emit("running", progress));
+          return;
+        }
+        if (running.backend === "cloud") {
           await seams.cloudExports.run(project, options, plan, output, () => running.cancelled, progress => emit("running", progress), running.cloudRequest, {
             id: running.cloudJob,
             accepted: id => { running.cloudJob = id; jobs.patch(this.home, running.key, { cloudJob: id }); },
@@ -325,7 +365,7 @@ export class ExportRegistry implements seams.Exports {
       } catch {
         bytes = null;
       }
-      emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload });
+      emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload, backend: running.backend });
       try {
         remember(this.home ?? store.home, id, {
           path: output,

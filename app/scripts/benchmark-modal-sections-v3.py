@@ -57,7 +57,7 @@ def main():
     if not args.execute or not 1 <= args.sections <= 8:
         raise RuntimeError("Explicit --execute and 1..8 sections are required")
     count = 1 if args.smoke else 2
-    maximum = count * args.sections * (300 + 300 + 60) * GPU_RATE + count * (1200 + 300 + 60) * CPU_RATE + count * (args.sections + 1) * (240 + 300 + 60) * VERIFY_RATE
+    maximum = count * args.sections * (600 + 300 + 60) * GPU_RATE + count * (1800 + 300 + 60) * CPU_RATE + count * (args.sections + 1) * (240 + 300 + 60) * VERIFY_RATE
     if args.compute_budget_usd < maximum:
         raise RuntimeError(f"The conservative compute allowance must be at least ${maximum:.2f}")
     args.output.mkdir(parents=True, exist_ok=True)

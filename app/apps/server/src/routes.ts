@@ -874,6 +874,7 @@ async function startExport(context: Context): Promise<Response> {
   const id = params.id!;
   const given = (await optionalBody(context)) ?? {};
   const path = field<string>(given, "path", "string");
+  const drive = field<boolean>(given, "drive", "boolean");
   const asked = given.options;
   if (asked !== undefined && (typeof asked !== "object" || asked === null || Array.isArray(asked))) {
     throw badShape(`options: invalid type: ${kindOf(asked)}, expected struct ExportOptions`);
@@ -903,7 +904,7 @@ async function startExport(context: Context): Promise<Response> {
   const output =
     path !== null && path.trim() !== "" ? expandHome(path) : defaultExportPath(app.store, live.project);
   try {
-    return json({ path: await app.exports.start(app.store, app.library, live.project, options, output) });
+    return json({ path: await app.exports.start(app.store, app.library, live.project, options, output, drive === null ? {} : { drive }) });
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

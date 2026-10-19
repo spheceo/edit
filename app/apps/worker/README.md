@@ -7,10 +7,15 @@ native process with a separate workspace and cancellation signal. Every export c
 engine and wgpu compositor, with NVIDIA decoding/encoding on Linux. Subtitles,
 edits and transfers can continue on the Mac while these exports run.
 
-The experimental [v3 section exporter](../../../docs/modal-v3-benchmark.md)
-defaults to an on-demand pool of eight L40S GPUs and sixteen CPU verification
-workers shared across exports. Its normal desktop integration remains rollout
-work; the pilot described below keeps its existing configuration.
+The [v3 section exporter](../../../docs/modal-v3-benchmark.md) uses an
+on-demand pool of eight L40S GPUs and sixteen CPU verification workers shared
+across exports. The desktop uses it directly, without Relay: with
+`EDIT_MODAL_EXPORTS=1` the server runs `export_v3.py` for each suitable export
+(the house export of a whole edit whose footage is in the cloud), several at
+once, against the lasting `edit-exports-v3` app and its
+`edit-exports-sections-v3-live` cache (see `apps/server/src/modal_exports.ts`).
+The benchmark keeps its own app and volume. The v2 pilot described below keeps
+its existing configuration.
 
 This checkout does not activate cloud exports by itself. No startup, test or
 build deploys anything. `EDIT_CLOUD_EXPORTS=1` selects the backend on a future

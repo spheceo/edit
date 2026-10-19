@@ -751,17 +751,21 @@ async function exportTool({ app, args, projectId }: ToolCall): Promise<Content[]
   const given = str(args.path);
   const path = given !== null && trim(given) !== "" ? expandHome(given) : hooks.defaultExportPath(app.store, found.project);
   const subtitled = isSubtitled(found.project);
+  const drive = bool(args.drive);
   const started = await app.exports.start(
     app.store,
     app.library,
     structuredClone(found.project) as Project,
     options,
     path,
+    drive === null ? {} : { drive },
   );
   let said = `export started → ${started}`;
-  if (subtitled) {
+  if (drive === true || (drive === null && subtitled)) {
     said +=
-      ". A whole subtitled video is uploaded to the team's Subtitles folder on Google Drive when it's done; the link is then the project's drive.url (get_edit_context).";
+      ". It's uploaded to the team's Drive when it's done (a subtitled video to Subtitles); the link is then the project's drive.url (get_edit_context).";
+  } else if (drive === false) {
+    said += ". It isn't uploaded to Drive (drive: false).";
   }
   return text(said);
 }

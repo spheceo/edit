@@ -12,7 +12,7 @@ import { startCleaning } from "./cache_cleanup.ts";
 import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
 import { registerEditingTools } from "./edit_tools.ts";
-import { ExportRegistry, resumeSnapshot } from "./exports.ts";
+import { ExportRegistry, resumeSnapshot, type StartExtra } from "./exports.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
@@ -228,11 +228,11 @@ function resumeJobs(app: App): void {
   };
   void jobs.resume(app.store.home, {
     export: async (job) => {
-      const { options, output, backend, cloudRequest, cloudJob } = job.args as { options: ExportOptions; output: string; backend?: "cloud" | "local"; cloudRequest?: string; cloudJob?: string };
+      const { options, output, backend, cloudRequest, cloudJob, drive } = job.args as unknown as { options: ExportOptions; output: string } & StartExtra;
       // The timeline it was started with, not edits made since.
       const current = project(job.project);
       const asked = resumeSnapshot(app.store.home, job.project, job.args) ?? current;
-      await app.exports.start(app.store, app.library, asked, options, output, backend, cloudRequest, cloudJob);
+      await app.exports.start(app.store, app.library, asked, options, output, { backend, cloudRequest, cloudJob, drive });
     },
     drive: (job) => {
       const { path } = job.args as { path: string };

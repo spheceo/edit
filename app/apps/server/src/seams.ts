@@ -20,6 +20,8 @@ import * as captionsModule from "./captions.ts";
 import * as cloudModule from "./cloud.ts";
 import * as cloudMediaModule from "./cloud_media.ts";
 import * as cloudExportsModule from "./cloud_exports.ts";
+import * as modalExportsModule from "./modal_exports.ts";
+import type { StartExtra } from "./exports.ts";
 import * as cloudProjectsModule from "./cloud_projects.ts";
 import * as driveModule from "./drive.ts";
 import * as editReviewModule from "./edit_review.ts";
@@ -95,7 +97,7 @@ export function isUnavailable(error: unknown): boolean {
 /** One export at a time; what was exported since the server started (exports.ts). */
 export interface Exports {
   /** Starts exporting `project` to `path` (or its default); returns where it goes. */
-  start(store: Store, library: Library, project: Project, options: ExportOptions, path: string | null, backend?: "cloud" | "local", cloudRequest?: string, cloudJob?: string): Promise<string>;
+  start(store: Store, library: Library, project: Project, options: ExportOptions, path: string | null, extra?: StartExtra): Promise<string>;
   /** Cancels project `id`'s export; whether one was running. */
   cancel(id: string): boolean;
   /** Whether any export is running (an update waits for it). */
@@ -216,6 +218,7 @@ export interface CloudSeam {
 // cloud.ts, cloud_projects.ts and cloud_media.ts.
 export const cloudMedia: CloudMediaSeam = cloudMediaModule;
 export const cloudExports = cloudExportsModule;
+export const modalExports = modalExportsModule;
 export const cloudProjects: CloudProjectsSeam = {
   delete: (app, id) => cloudProjectsModule.remove(app, id),
   routes: (router) => cloudProjectsModule.routes(router),

@@ -12,7 +12,9 @@ import httpx
 import build
 from sections_runtime import LocalControl
 from runtime import transfer
-from sections_v3_runtime import asset_identity, cached, check_packets, decode_frames, remember, stage_cached, upload_parts
+from fractions import Fraction
+from sections_runtime import rate
+from sections_v3_runtime import asset_identity, cached, check_options, check_packets, decode_frames, remember, stage_cached, upload_parts
 
 
 class CacheTests(unittest.TestCase):
@@ -138,6 +140,32 @@ class CacheTests(unittest.TestCase):
                 check_packets(Path("output.mp4"), 3, 30)
 
 
+class OptionsTests(unittest.TestCase):
+    def test_an_ntsc_timeline_runs_at_its_real_rate(self):
+        self.assertEqual(rate({"fps": 24, "ntsc": True}), Fraction(24000, 1001))
+        self.assertEqual(rate({"fps": 30}), 30)
+
+    def test_the_house_export_is_accepted_and_anything_else_is_a_local_export(self):
+        settings = {"width": 1920, "height": 1080, "fps": 24, "ntsc": True}
+        house = {"format": "h264", "shape": "original", "fill": "blur", "size": None, "fps": None, "quality": "high",
+                 "target_mb": None, "hardware": True, "wait_for_smoothing": False, "audio": True, "loudness": -14,
+                 "range": [0, 500], "chapters": []}
+        self.assertIsNone(check_options(house, settings, 500)["range"])
+        self.assertEqual(check_options({**house, "size": 1080, "loudness": None}, settings, 500)["loudness"], None)
+        for change in [{"format": "hevc"}, {"shape": "vertical"}, {"size": 720}, {"fps": 60}, {"target_mb": 50},
+                       {"range": [0, 400]}, {"audio": False}, {"chapters": [{"start": 0, "title": "One"}]}]:
+            with self.assertRaises(ValueError):
+                check_options({**house, **change}, settings, 500)
+
+    def test_ntsc_packets_lie_on_their_own_grid(self):
+        class Result:
+            stdout = "0.000000,-0.041708\n0.041708,0.000000\n0.083417,0.041708\n"
+        with patch("sections_v3_runtime.subprocess.run", return_value=Result()):
+            self.assertEqual(check_packets(Path("output.mp4"), 3, Fraction(24000, 1001))["frames"], 3)
+            with self.assertRaises(RuntimeError):
+                check_packets(Path("output.mp4"), 3, 24)
+
+
 class DecodeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -166,6 +194,17 @@ class DecodeTests(unittest.TestCase):
             for a, b in ranges(0, 123, 8):
                 expected = (max(0, a - 2), min(123, b + 2))
                 result = decode_frames(self.video, expected, 30, LocalControl("test", 10), self.root)
+                self.assertEqual(result["frames"], expected[1] - expected[0])
+
+    def test_ntsc_ranges_decode_exactly(self):
+        video = self.root / "ntsc.mp4"
+        subprocess.run([self.tools["ffmpeg"], "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=128x72:r=24000/1001:d=4.2",
+                        "-c:v", "libx264", "-g", "24", "-bf", "2", str(video)], check=True, timeout=15)
+        from sections_runtime import ranges
+        with patch("sections_v3_runtime.command", self.run_command):
+            for a, b in ranges(0, 100, 8):
+                expected = (max(0, a - 2), min(100, b + 2))
+                result = decode_frames(video, expected, "24000/1001", LocalControl("test", 10), self.root)
                 self.assertEqual(result["frames"], expected[1] - expected[0])
 
     def test_a_short_or_truncated_stream_cannot_pass_a_full_range(self):

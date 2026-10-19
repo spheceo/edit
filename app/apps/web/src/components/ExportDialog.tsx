@@ -11,7 +11,7 @@ import { preview } from "../lib/playback";
 import { flushSave, useEditor, type DriveState } from "../lib/store";
 import { shortDuration, timecode } from "../lib/time";
 import type { DriveFile } from "../lib/types";
-import { Button, Modal, Tabs } from "./ui";
+import { Button, Modal, Switch, Tabs } from "./ui";
 import { rate } from "../lib/types";
 
 /**
@@ -35,6 +35,8 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const points = useInOut();
   const machine = useMachine();
   const [spanChoice, setSpanChoice] = useState<"inout" | "whole">("whole");
+  // Upload to Drive: asked for this time, else a whole subtitled video does.
+  const [driveChoice, setDriveChoice] = useState<boolean | null>(null);
   // The media drive's Exports folder when one is set (Settings → Media drive).
   const [exportsDir, setExportsDir] = useState("~/Movies/Edit");
   const [preparing, setPreparing] = useState(false);
@@ -51,6 +53,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   useEffect(() => {
     if (!open) return;
     setSpanChoice(inOut ? "inout" : "whole");
+    setDriveChoice(null);
     void api
       .mediaDrive()
       .then((drive) => setExportsDir(drive.exports))
@@ -84,7 +87,9 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [width, height] = outputSize(HOUSE, project.settings.width, project.settings.height);
   const bytes = estimateBytes(HOUSE, width, height, seconds, project.settings.fps);
   const path = `${exportsDir}/${safeName(project.name)}.${extensionOf(HOUSE.format)}`;
-  const toDrive = uploadsToDrive(project, HOUSE.format, range, duration);
+  const whole = range[0] === 0 && range[1] >= duration && duration > 0;
+  const subtitled = uploadsToDrive(project, HOUSE.format, range, duration);
+  const toDrive = whole && (driveChoice ?? subtitled);
   const running = exportState?.state === "running";
 
   const start = async () => {
@@ -105,7 +110,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
       requested = true;
       renderStarted.current = performance.now();
       const options: ExportOptions = { ...HOUSE, range, chapters: embedding ? spanChapters : [] };
-      const { path: output } = await api.exportProject(project.id, path, options);
+      const { path: output } = await api.exportProject(project.id, path, options, whole ? toDrive : undefined);
       const current = useEditor.getState();
       if (current.project?.id === project.id && current.exportState?.state === "running") useEditor.setState({ exportState: { ...current.exportState, path: output } });
     } catch (error) {
@@ -155,10 +160,14 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
           <p className="mt-4 truncate font-mono text-[11px] text-faint" title={path}>
             Saves to {path} on {machine}
           </p>
-          {toDrive && (
-            <p className="mt-1 flex items-center gap-1.5 text-[11px] text-faint">
-              <Cloud size={12} className="shrink-0" /> Then it uploads to the team's {driveFolder(project)} folder on Drive, viewable by anyone with the link.
-            </p>
+          {whole && (
+            <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12px] text-muted">
+              <Switch checked={toDrive} onChange={setDriveChoice} />
+              <Cloud size={12} className="shrink-0" />
+              <span>
+                Then upload it to the team's {subtitled ? driveFolder(project) : "Render"} folder on Drive{toDrive ? ", viewable by anyone with the link" : ""}
+              </span>
+            </label>
           )}
         </div>
 

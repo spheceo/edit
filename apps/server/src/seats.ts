@@ -195,22 +195,28 @@ export async function seats(source: string, transcript: Transcript): Promise<Sea
   // Every angle's stretches at once: each look is a model call of a minute
   // or more, network-bound (the cuts queue in watch's own lane), so one
   // after another a six-angle interview took 18 minutes.
+  let failed = 0;
   const looks = await atOnce(stretches(scenes, middles, transcript), LOOKS_AT_ONCE, async ([angle, start, end], index) => {
     let sightings: Sighting[];
     try {
       sightings = await look(source, cache, work, transcript, wanted, told, start, end, index);
     } catch (error) {
       diag.warn("watch", `seats: angle ${angle} at ${fixed(start, 0)}s: ${diag.messageOf(error)}`);
+      failed++;
       sightings = [];
     }
     return [angle, sightings] as [number, Sighting[]];
   });
   fs.rmSync(work, { recursive: true, force: true });
   const out = new Seats(scenes, faces(middles, looks), told);
-  try {
-    fs.writeFileSync(file, out.toJson());
-  } catch {
-    // Worked out again next time.
+  // A look that failed (no sign-in, the model down) is asked again next time,
+  // never kept (and shared) as nobody in that angle.
+  if (failed === 0) {
+    try {
+      fs.writeFileSync(file, out.toJson());
+    } catch {
+      // Worked out again next time.
+    }
   }
   diag.record("watch", "seats: found", performance.now() - started, null);
   return out;

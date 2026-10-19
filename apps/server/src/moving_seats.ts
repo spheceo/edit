@@ -181,12 +181,14 @@ export async function movingSeats(source: string, size: [number, number], transc
   const batches: number[][] = [];
   for (let n = 0; n < times.length; n += PER_CALL) batches.push(times.slice(n, n + PER_CALL));
   const sightings: [number, string, Face][] = [];
+  let failed = 0;
   try {
     const answers = await atOnce(batches, AT_ONCE, async (batch, index) => {
       try {
         return await look(source, work, transcript, people, told, batch, index);
       } catch (error) {
         diag.warn("watch", `moving seats: stills from ${fixed(batch[0]!, 0)}s: ${diag.messageOf(error)}`);
+        failed++;
         return [];
       }
     });
@@ -195,10 +197,14 @@ export async function movingSeats(source: string, size: [number, number], transc
     fs.rmSync(work, { recursive: true, force: true });
   }
   const out = new MovingSeats(followed(sightings, found), key);
-  try {
-    fs.writeFileSync(file, out.toJson());
-  } catch {
-    // Worked out again next time.
+  // A call that failed (no sign-in, the model down) is asked again next time,
+  // never kept as nobody seen.
+  if (failed === 0) {
+    try {
+      fs.writeFileSync(file, out.toJson());
+    } catch {
+      // Worked out again next time.
+    }
   }
   diag.record("watch", "moving seats: found", performance.now() - started, null);
   return out;

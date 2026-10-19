@@ -64,21 +64,41 @@ test("one person, one name: split voices joined, a voice that's two people split
   void W;
 });
 
-test("an answer that doesn't hold together is refused", () => {
-  // An item twice, an item left out, two of one window as one person.
-  expect(checked({ people: [...people, { name: null, title: "X", role: "other", members: [0] }] }, seen)).toBeNull();
-  expect(checked({ people: people.slice(1) }, seen)).toBeNull();
-  expect(
-    checked(
-      {
-        people: [
-          { name: null, title: "Agent", role: "officer", members: [0, 1, 5, 7] },
-          { name: null, title: "Agent", role: "leader", members: [4] },
-          ...people.slice(2),
-        ],
-      },
-      seen,
-    ),
-  ).toBeNull();
+test("an answer is held together: an item twice stays with its first person, one left out is its own", () => {
+  const twice = checked({ people: [...people, { name: null, title: "X", role: "other", members: [0] }] }, seen)!;
+  expect(twice.map((person) => person.members)).toEqual(people.map((person) => person.members));
+  const short = checked({ people: people.slice(1) }, seen)!;
+  // The bald agent's three items, each on its own with the window's name and role.
+  expect(short.slice(3)).toEqual([
+    { name: "Travis Lawson", title: "Officer", role: "officer", members: [0] },
+    { name: null, title: "Officer", role: "officer", members: [5] },
+    { name: null, title: "Officer", role: "officer", members: [7] },
+  ]);
   expect(checked({ nope: 1 }, seen)).toBeNull();
+  expect(checked({ people: [] }, seen)).toBeNull();
+});
+
+test("one person given two letters in one window (a split voice) is one person", () => {
+  // Killer Couple: one window saw the bald detective as "Mike" (speaker_7) and
+  // "bald detective, left of the table" (speaker_8); the cast was refused whole for it.
+  const window: Seen[] = [
+    { media: "m", from: 0, to: 240, letter: "A", voice: "speaker_8", name: "", role: "leader", look: "bald detective, tattoos", place: "left of the table" },
+    { media: "m", from: 0, to: 240, letter: "B", voice: "speaker_9", name: "Malik Jones", role: "witness", look: "orange jumpsuit", place: "right of the table" },
+    { media: "m", from: 0, to: 240, letter: "D", voice: "speaker_7", name: "Mike", role: "leader", look: "bald, beard, tattoos", place: "left side" },
+    { media: "m", from: 240, to: 480, letter: "A", voice: "speaker_7", name: "Mike", role: "leader", look: "bald, black police shirt", place: "left" },
+  ];
+  const cast = checked(
+    {
+      people: [
+        { name: "Mike", title: "Detective", role: "leader", members: [0, 2, 3] },
+        { name: "Malik Jones", title: "Witness", role: "witness", members: [1] },
+      ],
+    },
+    window,
+  )!;
+  expect(cast.map((person) => person.members)).toEqual([[0, 2, 3], [1]]);
+  const plan = planCast(window, cast, new Map([["m", [...said("speaker_8", 10, 20), ...said("speaker_9", 40, 20), ...said("speaker_7", 70, 30), ...said("speaker_7", 300, 40)]]])).get("m")!;
+  expect(plan.names.get("speaker_7")).toEqual(["Mike (Detective)", "leader"]);
+  expect(plan.names.get("speaker_8")).toEqual(["Mike (Detective)", "leader"]);
+  expect(plan.moves).toEqual([]);
 });

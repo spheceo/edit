@@ -353,6 +353,10 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
     case "markers":
       return markers.edit(project, args);
     default:
+      // A transition's kind given as its own op ("red_flash" in the intro skill's words).
+      if (["drop", "flash", "red_flash", "dip", "open", "light_leak", "burn"].includes(String(op))) {
+        throw new Error(`unknown op ${op}: it's a transition, {"op": "transition", "kind": "${op}", "at": <frame>}`);
+      }
       throw new Error(
         `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
       );

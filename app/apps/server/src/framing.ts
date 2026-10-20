@@ -337,6 +337,8 @@ export function pending(project: Project): string[] {
 
 /** A teaser closer than this (its smallest scale ÷ the filled frame's) is punched in. */
 const TEASER_CLOSE = 1.5;
+/** The room under a narration reaches at least this close (÷ the filled frame) somewhere in each shot. */
+const ROOM_CLOSE = 1.25;
 /** A bridge at least this long shows pictures of what's said this share of its time. */
 const BRIDGE_SECONDS = 8;
 const BRIDGE_PICTURES = 0.4;
@@ -379,6 +381,25 @@ export function interrogationIssues(project: Project, parts: { start: number; en
       closeness_median: round(closes[Math.floor(closes.length / 2)]! * 100) / 100,
       static: wide.filter((one) => one.still).length,
       fix: "punch in close on the person questioned (1.8–2.5× the filled frame, x/y on their face, inside the picture) and move: a push across the teaser, or a harder punch-in on the line that lands",
+    });
+  }
+  // The room under a narration, held wide: "we need to be more zoomed in
+  // here" (on the prologue's room). Never closer than ROOM_CLOSE at any key.
+  const wideRoom: string[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "video" || clip.track === base || !(clip.name ?? "").includes("B-roll:")) continue;
+    const media = mediaOf(project, clip.media);
+    if (media === undefined || media.kind !== "video") continue;
+    const keys = clip.keyframes?.scale ?? [];
+    const closest = keys.length > 0 ? Math.max(...keys.map((key) => key.value)) : (clip.transform.scale ?? 1);
+    if (closest / fill(project, media).scale < ROOM_CLOSE) wideRoom.push(clip.id);
+  }
+  if (wideRoom.length > 0) {
+    out.push({
+      kind: "room_wide",
+      clips: wideRoom.length,
+      first: wideRoom.slice(0, 8),
+      fix: `the room under a narration comes closer: at least ${ROOM_CLOSE}× the filled frame by the shot's end (a push, or a punch-in on the person questioned)`,
     });
   }
   // The first hook: the first narration after the first teaser.

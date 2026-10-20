@@ -694,3 +694,47 @@ export function picturesOnFaces(project: Project): unknown[] {
   }
   return out;
 }
+
+/**
+ * Teasers punched in off the face (`punch_in_off_face`): the biggest face in
+ * a teaser's footage cut by the frame's edge or pushed into its outer bands
+ * (a punch-in that showed the person questioned at the bottom edge, her face
+ * half out of frame). `teasers`: the intro's spans; faces found so far, the
+ * nearest within five seconds.
+ */
+export function punchInsOffFace(project: Project, teasers: [number, number][]): unknown[] {
+  const fps = fpsOf(project);
+  const { width, height } = project.settings;
+  const base = project.tracks.find((track) => track.kind === "video")?.id;
+  const out: unknown[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "video" || clip.track !== base || !teasers.some(([from, to]) => clip.start >= from && clip.start < to)) continue;
+    const media = mediaOf(project, clip.media);
+    if (media === undefined || media.kind !== "video") continue;
+    const found = cached(media.path);
+    if (found === null || found.size === 0) continue;
+    const middle = Math.trunc(clip.duration / 2);
+    const time = clip.source_in + (middle / fps) * clip.speed;
+    let best: number | null = null;
+    for (const index of found.keys()) if (best === null || Math.abs(index - time * RATE) < Math.abs(best - time * RATE)) best = index;
+    if (best === null || Math.abs(best / RATE - time) > 5) continue;
+    const at = (param: string, base2: number) => {
+      const keys = clip.keyframes?.[param];
+      return (keys === undefined ? null : sample(keys, middle)) ?? base2;
+    };
+    const transform = { ...clip.transform, x: at("x", clip.transform.x), y: at("y", clip.transform.y), scale: at("scale", clip.transform.scale) };
+    // Only a punch-in (well past filling the frame) is framed on someone.
+    const [mw, mh] = [Math.max(media.width, 1), Math.max(media.height, 1)];
+    if (transform.scale < 1.2 * (Math.max(width / mw, height / mh) / Math.min(width / mw, height / mh))) continue;
+    const faces = (found.get(best) ?? []).map((given) => inFrame([media.width, media.height], transform, [width, height], given));
+    if (faces.length === 0) continue;
+    const biggest = faces.reduce((a, b) => ((a[2] - a[0]) * (a[3] - a[1]) >= (b[2] - b[0]) * (b[3] - b[1]) ? a : b));
+    const [cx, cy] = [(biggest[0] + biggest[2]) / 2, (biggest[1] + biggest[3]) / 2];
+    const cut = biggest[0] < -width / 2 || biggest[2] > width / 2 || biggest[1] < -height / 2 || biggest[3] > height / 2;
+    const edge = Math.abs(cx) > 0.36 * width || Math.abs(cy) > 0.36 * height;
+    if (cut || edge) {
+      out.push({ kind: "punch_in_off_face", clip: clip.id, start: clip.start, face_at: [round(cx), round(cy)], fix: "x/y so the face sits inside the frame, a little off centre (keep x/y inside the picture)" });
+    }
+  }
+  return out;
+}

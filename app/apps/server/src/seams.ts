@@ -592,6 +592,7 @@ export interface FacesSeam {
   /** Subtitles and intro captions on someone's face (the audit), from the cache only. */
   textOnFaces(project: Project): Json[];
   picturesOnFaces(project: Project): Json[];
+  punchInsOffFace(project: Project, teasers: [number, number][]): Json[];
 }
 
 // subtitles.ts, speakers.ts, people.ts and faces.ts (seats.ts is behind

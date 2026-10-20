@@ -888,6 +888,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...hooks.cutMidWord(project, heard),
     ...hooks.deadAir(project, heard, teasers),
     ...(framing.interrogationIssues(project, parts, (at) => editPlan.cutSounds(project, at)) as Json[]),
+    ...seams.faces.punchInsOffFace(project, teasers),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
@@ -1646,6 +1647,9 @@ type PlacedSound = seams.PlacedSound;
  * same sound already within 0.5 s of a time gives way. `given` markers are
  * given to the media if it has none yet.
  */
+/** Sounds that build into a moment rather than hit on it. */
+const RISER = /riser|rise\b|swell|build[- ]?up|reverse/iu;
+
 export async function placeSound(
   store: Store,
   id: string,
@@ -1662,9 +1666,17 @@ export async function placeSound(
     // The sound's markers come with it (kept if the user has moved them).
     if ((media.markers ?? []).length === 0) media.markers = structuredClone(given);
     const own = media.markers ?? [];
-    const hit = (own.find((marker) => marker.name === sfx.HIT) ?? own[0])?.time ?? 0;
+    // A riser builds INTO the time: it ends there, its last `seconds` played (a
+    // one-second riser's loudest moment came early, so its "hit" put the whole
+    // build after the cut it was meant to lead into).
+    const builds = RISER.test(name);
+    const hit = builds ? media.duration : ((own.find((marker) => marker.name === sfx.HIT) ?? own[0])?.time ?? 0);
     // Trimmed, a sound with a hit keeps the stretch around it.
-    const from = sound.seconds !== null && hit > 0 ? Math.max(hit - (sound.lead ?? sound.seconds / 2), 0) : 0;
+    const from = builds
+      ? Math.max(media.duration - (sound.seconds ?? media.duration), 0)
+      : sound.seconds !== null && hit > 0
+        ? Math.max(hit - (sound.lead ?? sound.seconds / 2), 0)
+        : 0;
     let length = Math.max(asInt(Math.floor((media.duration - from) * fps)), 1);
     if (sound.seconds !== null) length = Math.min(length, Math.max(asInt(round(sound.seconds * fps)), 1));
     const placed: string[] = [];

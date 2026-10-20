@@ -20,7 +20,9 @@ import httpx
 from runtime import Stop, command, stage
 
 PART_BYTES = 32 * 1024 * 1024
-MAX_OUTPUT = 4 * 1024 ** 3
+# Room for a long compilation: the 74-minute Sabrina Limon comp (the new case,
+# then the earlier video in full) came to just over 4 GiB at house quality.
+MAX_OUTPUT = 16 * 1024 ** 3
 
 
 class LocalControl:

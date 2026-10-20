@@ -46,7 +46,7 @@ APP = "edit-exports-v3"
 VOLUME = "edit-exports-sections-v3-live"
 ENVIRONMENT = "dev"
 SECTIONS = 8
-PARTS = 128  # 32 MiB each: the 4 GiB output limit.
+PARTS = 512  # 32 MiB each: the 16 GiB output limit (sections_runtime.MAX_OUTPUT).
 STATE = Path.home() / ".edit" / "modal"
 # Where each phase the coordinator reports puts the export's progress.
 PHASES = {"staged": .10, "planned": .12, "picture_finished": .74, "assembled": .78, "verified": .86, "uploaded": .90}

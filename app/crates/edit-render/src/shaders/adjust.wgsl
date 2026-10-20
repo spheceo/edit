@@ -38,7 +38,7 @@ struct Grade {
 };
 
 // A hash in 0..1 per pixel and pattern (the grain's noise).
-fn hash(p: vec2f) -> f32 {
+fn grain_hash(p: vec2f) -> f32 {
     let q = fract(p * vec2f(0.1031, 0.1030));
     let r = q + dot(q, q.yx + 33.33);
     return fract((r.x + r.y) * r.x);
@@ -158,7 +158,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     // Grain: a new fine noise every frame, strongest in the mid-tones.
     if (g.grain > 0.0) {
         let pixel = floor(in.uv * vec2f(g.height * g.aspect, g.height));
-        let n = hash(pixel + vec2f(g.seed * 17.0, g.seed * 31.0)) - 0.5;
+        let n = grain_hash(pixel + vec2f(g.seed * 17.0, g.seed * 31.0)) - 0.5;
         let mids = 1.0 - abs(dot(s, vec3f(0.333)) - 0.5) * 1.2;
         s = s + vec3f(n * g.grain * 0.22 * max(mids, 0.25));
     }

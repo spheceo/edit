@@ -320,3 +320,53 @@ test("without a sign-in of its own, Edit borrows the relay's (with the cloud tok
     put();
   }
 });
+
+test("level_footage brings the footage's speech to the voice-overs, and the audit says when it's far off", async () => {
+  const { app, cleanup, native, dir } = fixtureHome("library-level-footage");
+  try {
+    const fs = await import("node:fs");
+    const footageLevels = await import("../src/footage_levels.ts");
+    // The room is quiet (-38 LUFS where people talk), the narration -22; from 20 s in, the room's own file is silent.
+    native.loudnessSpans = async (path, spans) =>
+      spans.map((span) => (path.endsWith("vo.mp3") ? { integrated: -25, loudest: -20, peak: -3 } : { integrated: span.from >= 20 ? -80 : -38, loudest: -30, peak: -12 }));
+    const live = app.store.create("p", { width: 1920, height: 1080, fps: 30 });
+    const project = structuredClone(live.project) as Project;
+    project.media = [
+      { id: "m1", name: "room", path: `${dir}/room.mp4`, kind: "video", duration: 60, width: 640, height: 480, fps: 30, has_audio: true },
+      { id: "m2", name: "vo", path: `${dir}/vo.mp3`, kind: "audio", duration: 60, width: 0, height: 0, fps: 0, has_audio: true },
+    ];
+    const transcript = app.media.paths(`${dir}/room.mp4`).transcript;
+    fs.mkdirSync(transcript.slice(0, transcript.lastIndexOf("/")), { recursive: true });
+    fs.writeFileSync(transcript, JSON.stringify({ model: "test", words: [{ text: "Hi", start: 2.5, end: 3 }, { text: "there", start: 8, end: 9.5 }] }));
+    const audio = (id: string, track: string, media: string, start: number, sourceIn: number, name?: string): AudioClip => ({
+      id, track, start, duration: 300, color: "green", fade_in: 0, fade_out: 0, type: "audio", media, source_in: sourceIn, speed: 1, volume_db: 0,
+      ...(name === undefined ? {} : { name }),
+    });
+    const [a1, a2] = project.tracks.filter((track) => track.kind === "audio").map((track) => track.id);
+    // c1 says something (2.5–9.5 s of the file), c3 nothing (20–30 s), and the voice-over is 3 dB up (-22 as heard).
+    project.clips = [audio("c1", a1!, "m1", 0, 2), audio("c2", a2!, "m2", 300, 0, "Voice-over"), audio("c3", a1!, "m1", 600, 20)];
+    (project.clips[1] as AudioClip).volume_db = 3;
+    await app.store.replace(project.id, null, project, "test");
+    // The first look measures in the background; the next says the footage is 16 LU under.
+    expect(footageLevels.issues(app, app.store.get(project.id)!.project).pending).toBe(2);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(footageLevels.issues(app, app.store.get(project.id)!.project).issues).toEqual([
+      { kind: "footage_quiet", clips: 1, seconds: 10, typical_lu_from_voiceover: -16, first: "c1", fix: "level_footage" },
+    ]);
+    project.clips.push(audio("c4", a1!, "m1", 900, 2), audio("c5", a1!, "m1", 1200, 2));
+    await app.store.replace(project.id, null, project, "test");
+    const quiet = footageLevels.issues(app, app.store.get(project.id)!.project).issues;
+    expect(quiet).toEqual([{ kind: "footage_quiet", clips: 3, seconds: 30, typical_lu_from_voiceover: -16, first: "c1", fix: "level_footage" }]);
+    const reply = (await dispatch(app, { id: 1, method: "tools/call", params: { name: "level_footage", arguments: {} } }, null)) as {
+      result: { content: { text: string }[] };
+    };
+    expect(reply.result.content[0]!.text).toBe(
+      "footage speech to -22.0 LUFS:\nc1 -38.0 LUFS → +16.0 dB\nc3 nothing said: +16.0 dB\nc4 -38.0 LUFS → +16.0 dB\nc5 -38.0 LUFS → +16.0 dB",
+    );
+    const levelled = app.store.get(project.id)!.project;
+    expect((levelled.clips.find((clip) => clip.id === "c3") as AudioClip).volume_db).toBeCloseTo(16, 4);
+    expect(footageLevels.issues(app, levelled).issues).toEqual([]);
+  } finally {
+    cleanup();
+  }
+});

@@ -1438,6 +1438,27 @@
     "name": "set_loudness"
   },
   {
+    "description": "Bring the footage's own speech to the voice-overs' level: each footage sound clip's volume_db is set from what's said in it (first word to last, by its transcript); a clip with nothing said takes its file's nearest clip's gain. Quiet interrogation rooms played 15 LU under the narration; the export's limiter takes the peaks.",
+    "inputSchema": {
+      "properties": {
+        "loudness": {
+          "description": "LUFS (default: the voice-overs' level).",
+          "type": "number"
+        },
+        "only_untouched": {
+          "description": "Only clips still at 0 dB (keep gains set by hand).",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "level_footage"
+  },
+  {
     "description": "Cached source loudness of unmuted audio clips after static volume (does not include fades, mutes, speed processing or combined mix), over a span of the timeline, in LUFS: integrated over stretches longer than 3 s, a short sound by its loudest moment. Use it to set music under the speech and voice-overs there, and to check a mix after placing sounds.",
     "inputSchema": {
       "properties": {

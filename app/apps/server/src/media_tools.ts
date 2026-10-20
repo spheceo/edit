@@ -1,5 +1,5 @@
 // The media package's MCP tools (list_library, add_from_library, set_loudness,
-// measure_audio, smooth_slow_motion, map_view) and routes (the
+// level_footage, measure_audio, smooth_slow_motion, map_view) and routes (the
 // library, the map pages Chrome renders, the Drive link and the agent panel).
 // `registerMediaTools()` registers the tools (the server's entry point calls
 // it, as it calls registerEditingTools); `routes(router)` adds the routes.
@@ -8,6 +8,7 @@ import type { App } from "./app.ts";
 import * as broll from "./broll.ts";
 import * as diag from "./diag.ts";
 import * as drive from "./drive.ts";
+import * as footageLevels from "./footage_levels.ts";
 import { isBug } from "./guard.ts";
 import { ApiError, bad, notFound } from "./http/errors.ts";
 import { badShape, readBytes, readJson, type RouteContext, type Router } from "./http/router.ts";
@@ -133,6 +134,19 @@ async function setLoudness({ app, args, projectId }: ToolCall): Promise<Content[
   );
 }
 
+async function levelFootage({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  const project = live(app, projectId).project;
+  const { target, levels } = await footageLevels.levelFootage(app, project, num(args.loudness) ?? undefined, bool(args.only_untouched) ?? false);
+  await footageLevels.apply(app, projectId, levels, ORIGIN);
+  if (levels.length === 0) return text("no footage sound to level");
+  const said = levels.map((level) =>
+    level.speech === null
+      ? `${level.clip} nothing said: ${signed(level.volume_db, 1)} dB`
+      : `${level.clip} ${fixed(level.speech, 1)} LUFS → ${signed(level.volume_db, 1)} dB`,
+  );
+  return text(`footage speech to ${fixed(target, 1)} LUFS:\n${said.join("\n")}`);
+}
+
 async function measureAudio({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const project = live(app, projectId).project;
   const fps = fpsOf(project);
@@ -232,6 +246,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
   ["list_library", listLibrary],
   ["add_from_library", addFromLibrary],
   ["set_loudness", setLoudness],
+  ["level_footage", levelFootage],
   ["measure_audio", measureAudio],
   ["smooth_slow_motion", smoothSlowMotion],
   ["map_view", mapView],

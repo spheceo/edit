@@ -10,6 +10,7 @@ import { parseTranscript } from "./captions_core.ts";
 import { clipFrom } from "./clips.ts";
 import * as diag from "./diag.ts";
 import { copyFile, ioMessage } from "./files.ts";
+import * as footageLevels from "./footage_levels.ts";
 import { isBug } from "./guard.ts";
 import { importPaths } from "./import.ts";
 import type { Clip, Media, Project } from "./model.ts";
@@ -203,6 +204,19 @@ export async function place(app: App, id: string, given: string[] | null): Promi
       if (clip?.type === "audio") clip.volume_db = f32Saved(gain);
     }
   });
+  // And the footage's speech at theirs: a quiet interrogation room played 15 LU
+  // under the narration ("increase the audio of the footage to … match the
+  // sort of average volume for the voiceover"). Gains already set are kept.
+  try {
+    const placed = app.store.get(id);
+    if (placed !== null && gains.length > 0) {
+      const { levels } = await footageLevels.levelFootage(app, placed.project, undefined, true);
+      await footageLevels.apply(app, id, levels, "agent");
+    }
+  } catch (error) {
+    if (isBug(error)) throw error;
+    diag.warn("voiceover", `footage not levelled to the voice-overs: ${diag.messageOf(error)}`);
+  }
   return report;
 }
 

@@ -15,6 +15,7 @@ import * as cutin from "./cutin.ts";
 import { FRAME_SCALE, frameKey as screenFrameKey } from "./desktop_screen.ts";
 import * as diag from "./diag.ts";
 import * as editPlan from "./edit_plan.ts";
+import * as footageLevels from "./footage_levels.ts";
 import * as tools from "./tools.ts";
 import * as onscreen from "./onscreen.ts";
 import { ioMessage } from "./files.ts";
@@ -847,7 +848,9 @@ export function audited(app: App, project: Project, rev: number | null): Args {
       ? censor({ json: jsonForSerde(project) })
       : withProject(project.id, rev, () => jsonForSerde(project), censor);
   const picture = onscreen.issues(project);
-  audit.issues = editPlan.sortIssues([...audit.issues, ...extra, ...censored, ...(picture.issues as Json[])]);
+  const levels = footageLevels.issues(app, project);
+  audit.issues = editPlan.sortIssues([...audit.issues, ...extra, ...censored, ...(picture.issues as Json[]), ...(levels.issues as Json[])]);
+  if (levels.pending > 0) audit.footage_level_pending = levels.pending;
   if (pending.length > 0) audit.censor_check_pending = pending;
   if (picture.pending.length > 0) audit.picture_check_pending = picture.pending;
   return audit;

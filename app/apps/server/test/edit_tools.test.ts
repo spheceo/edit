@@ -348,7 +348,7 @@ test("a plan saves once, dry runs save nothing, and a stale one is refused", asy
     "revision conflict: expected 1, current 2; nothing saved; refresh get_edit_context",
   );
   expect(await refused(app, "apply_edit_plan", { base_rev: 2, operations: [{ op: "nope" }] })).toBe(
-    "operation 1: unknown op nope; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks; nothing saved",
+    "operation 1: unknown op nope; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks; nothing saved",
   );
   expect(await refused(app, "apply_edit_plan", { operations })).toBe("base_rev is required");
   expect(await refused(app, "apply_edit_plan", { base_rev: 2, operations, review_frames: [-1] })).toBe(

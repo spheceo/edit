@@ -8,6 +8,7 @@
 
 import { clipFrom } from "./clips.ts";
 import * as screen from "./desktop_screen.ts";
+import * as framing from "./framing.ts";
 import type { Project } from "./model.ts";
 import { addTrack, clipEnd, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import { display, fixed, round } from "./rust.ts";
@@ -378,7 +379,9 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
       );
     }
     const label = shot.name ?? `shot ${index + 1}`;
-    const scale = shot.scale ?? 1;
+    // Relative to filling the frame (its own black borders cropped past): never black bars.
+    const filled = framing.fill(project, media);
+    const scale = (shot.scale ?? 1) * filled.scale;
     const [from, to] = [zoomAt(start), zoomAt(start + duration - 1)];
     const id = freshId(project, "c");
     project.clips.push(
@@ -395,7 +398,7 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
         media: media.id,
         source_in: Math.max(shot.source_in, 0),
         speed,
-        transform: { x: shot.x ?? 0, y: shot.y ?? 0, scale, rotation: 0 },
+        transform: { x: shot.x ?? filled.x, y: shot.y ?? filled.y, scale, rotation: 0 },
         opacity: 1,
         keyframes: {
           scale: [

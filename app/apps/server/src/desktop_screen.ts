@@ -376,13 +376,9 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   const exits = player !== null && spec.exit && spec.next !== null;
 
   // A footage's picture shown inside a content area (contain): [x, y, w, h] on the desktop.
-  const shownIn = (window: Laid, media: Media | undefined): [number, number, number, number] => {
-    const [x, y, w, h] = window.content;
-    if (media === undefined || window.spec.app !== "video_player") return window.content;
-    const aspect = media.width / Math.max(media.height, 1);
-    const [vw, vh] = aspect > w / h ? [w, w / aspect] : [h * aspect, h];
-    return [x + (w - vw) / 2, y + (h - vh) / 2, vw, vh];
-  };
+  // A player's footage fills its screen, cropped to it, as footage fills the frame full screen
+  // (the team: "remove the black bars on the interrogation footage", in a Video Player too).
+  const shownIn = (window: Laid, _media: Media | undefined): [number, number, number, number] => window.content;
   const keep = (pose: Pose): Pose => {
     const [hw, hh] = [W / 2 / pose.z, H / 2 / pose.z];
     const x = DW > 2 * hw ? Math.min(Math.max(pose.x, hw), DW - hw) : DW / 2;
@@ -639,8 +635,9 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       const [x, y, w, h] = shownIn(window, piece.media);
       let crop: Args = {};
       let width = w;
-      if (window.spec.app === "photo_viewer") {
-        // Filling the content area (its shape is the picture's, kept within limits): a little cropped at most.
+      // Filling the content area: a photo's (its shape is the picture's, kept within limits) a little
+      // cropped at most, a player's footage cropped to the player (no black bars inside it either).
+      if (window.spec.app === "photo_viewer" || window.spec.app === "video_player") {
         const aspect = piece.media.width / Math.max(piece.media.height, 1);
         if (aspect > w / h) {
           const side = (1 - w / h / aspect) / 2;

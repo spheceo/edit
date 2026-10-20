@@ -16,8 +16,10 @@ import { FRAME_SCALE, frameKey as screenFrameKey } from "./desktop_screen.ts";
 import * as diag from "./diag.ts";
 import * as editPlan from "./edit_plan.ts";
 import * as footageLevels from "./footage_levels.ts";
+import * as framing from "./framing.ts";
 import * as tools from "./tools.ts";
 import * as onscreen from "./onscreen.ts";
+import * as watermarks from "./watermarks.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { houseMedia, houseMediaSaved, importPaths } from "./import.ts";
@@ -66,6 +68,8 @@ export const hooks = {
   calloutTiming: (project: Project, transcripts: Map<string, Transcript>): Json[] =>
     seams.editReview.calloutTiming(project, transcripts),
   cutMidWord: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.cutMidWord(project, transcripts),
+  deadAir: (project: Project, transcripts: Map<string, Transcript>, spans: [number, number][]): Json[] =>
+    seams.editReview.deadAir(project, transcripts, spans),
   offScript: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.offScript(project, transcripts),
   textNotSaid: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.textNotSaid(project, transcripts),
   subtitleCoverage: (project: Project, transcripts: Map<string, Transcript>): Json =>
@@ -873,23 +877,35 @@ async function withReview(project: Project, input: ProjectInput, frames: number[
 export function audited(app: App, project: Project, rev: number | null): Args {
   const audit = editPlan.audit(project) as Args & { issues: Json[] };
   const heard = cachedTranscripts(app, project, false);
+  const onProject = <T>(work: (input: ProjectInput) => T): T =>
+    rev === null ? work({ json: jsonForSerde(project) }) : withProject(project.id, rev, () => jsonForSerde(project), work);
+  const teasers = onProject((input) => native().sections(input))
+    .parts.filter((part) => part.kind === "intro")
+    .map((part): [number, number] => [part.start, part.end]);
   const extra = [
     ...hooks.calloutTiming(project, heard),
     ...hooks.offScript(project, heard),
     ...hooks.textNotSaid(project, heard),
     ...hooks.cutMidWord(project, heard),
+    ...hooks.deadAir(project, heard, teasers),
   ];
-  const censor = (input: ProjectInput) => native().censorIssues(input, true);
-  const { issues: censored, pending } =
-    rev === null
-      ? censor({ json: jsonForSerde(project) })
-      : withProject(project.id, rev, () => jsonForSerde(project), censor);
+  const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
+  const marks = watermarks.issues(project);
+  const borders = framing.pending(project);
   const levels = footageLevels.issues(app, project);
-  audit.issues = editPlan.sortIssues([...audit.issues, ...extra, ...censored, ...(picture.issues as Json[]), ...(levels.issues as Json[])]);
+  audit.issues = editPlan.sortIssues([
+    ...audit.issues,
+    ...extra,
+    ...censored,
+    ...(picture.issues as Json[]),
+    ...(marks.issues as Json[]),
+    ...(levels.issues as Json[]),
+  ]);
   if (levels.pending > 0) audit.footage_level_pending = levels.pending;
   if (pending.length > 0) audit.censor_check_pending = pending;
-  if (picture.pending.length > 0) audit.picture_check_pending = picture.pending;
+  const reading = [...new Set([...picture.pending, ...marks.pending, ...borders])].sort();
+  if (reading.length > 0) audit.picture_check_pending = reading;
   return audit;
 }
 

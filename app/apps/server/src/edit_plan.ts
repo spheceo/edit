@@ -7,6 +7,7 @@ import { clipFrom, keyframesFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
 import * as desktop from "./desktop.ts";
 import * as screen from "./desktop_screen.ts";
+import * as framing from "./framing.ts";
 import * as looks from "./looks.ts";
 import * as graphics from "./graphics.ts";
 import * as intro from "./intro_graphics.ts";
@@ -373,6 +374,8 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
     }
     case "film_look":
       return looks.filmLook(project, args);
+    case "fill_frame":
+      return framing.fillFrame(project, args);
     case "red_quote":
       return looks.redQuote(project, args);
     case "annotate":
@@ -418,7 +421,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
         throw new Error(`unknown op ${op}: it's a transition, {"op": "transition", "kind": "${op}", "at": <frame>}`);
       }
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
       );
   }
 }
@@ -1123,6 +1126,16 @@ export function selected(project: Project, select: unknown): string[] {
 const LONGEST_BROLL_SHOT = 4.5;
 /** Seconds of one song a bed may play before the audit asks for a change (music_bed_long). */
 const LONGEST_BED = 25;
+/**
+ * An interrogation's bed runs a whole section (the prologue, a bridge): the
+ * team, on Helpful Wife's prologue changing songs mid-sentence: "we only need
+ * to change the music if there is some switch in what we hear".
+ */
+const LONGEST_SECTION_BED = 90;
+/** A hit on the frame the tape rolls: its library names. */
+const HIT_NAME = /boom|impact|hit|thud|stinger|bass|drop|slam|sub/iu;
+/** A riser building into it. */
+const RISER_NAME = /riser|rise|swell|build|reverse|whoosh/iu;
 
 /**
  * Whether a clip plays music: the team's library's (`<home>/library/music/…`),
@@ -1379,9 +1392,10 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     (clip): clip is Extract<Clip, { type: "audio" }> =>
       visible(clip.track) && isMusic(clip, clip.type === "audio" ? mediaOf(project, clip.media) : undefined),
   );
+  const longestBed = project.style === "interrogation" ? LONGEST_SECTION_BED : LONGEST_BED;
   for (const clip of music) {
     const played = (clip.duration / fps) * (clip.speed ?? 1);
-    if (played > LONGEST_BED) {
+    if (played > longestBed) {
       issues.push({ kind: "music_bed_long", clip: clip.id, start: clip.start, seconds: round(played * 10) / 10 });
     }
   }
@@ -1408,9 +1422,51 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       issues.push({ kind: "music_stops_mid_narration", clip: clip.id, at: stop, narration_left: round(((talking[1] - stop) / fps) * 10) / 10 });
     }
   }
+  // The music changes only where what we hear changes (a cut-in starting or
+  // ending, the footage coming back, a new case, the outro), never in the
+  // middle of a narration: Helpful Wife's prologue swapped songs under one
+  // sentence ("We suddenly change the music right here. We need to do this in
+  // a cleaner way, and we only need to change the music if there is some
+  // switch in what we hear").
+  for (const clip of music) {
+    const under = voiceovers.find(([start, until]) => clip.start > start + second && clip.start < until - second);
+    if (under === undefined) continue;
+    issues.push({
+      kind: "music_change_mid_narration",
+      clip: clip.id,
+      at: clip.start,
+      narration: under,
+      fix: "keep the bed that's playing to the narration's end (or start this one on the narration's first frame, with its transition); change music only where what we hear changes",
+    });
+  }
+  // An interrogation's tape rolling is felt: a riser over the countdown's
+  // last seconds, a hit on the first frame of the tape, the prologue's music
+  // cut there, not faded on under the room ("we need to be able, as viewers,
+  // to know and feel that, 'Okay, now the video starts.'").
+  if (project.style === "interrogation") {
+    const counts = project.clips.filter((clip) => clip.type === "text" && clip.name === "Countdown" && visible(clip.track));
+    if (counts.length > 0) {
+      const tape = Math.max(...counts.map(clipEnd));
+      const sounds = project.clips.filter(
+        (clip): clip is Extract<Clip, { type: "audio" }> =>
+          clip.type === "audio" && visible(clip.track) && clip.name !== "Voice-over" && mediaOf(project, clip.media)?.kind === "audio",
+      );
+      const named = (clip: Clip) => `${clip.name ?? ""} ${clip.type === "audio" ? (mediaOf(project, clip.media)?.name ?? "") : ""}`;
+      const missing: string[] = [];
+      const hit = sounds.some((clip) => !music.includes(clip) && HIT_NAME.test(named(clip)) && clip.start <= tape + 4 && clipEnd(clip) >= tape && clip.start >= tape - 2 * second);
+      if (!hit) missing.push("a hit on the tape's first frame");
+      const riser = sounds.some((clip) => !music.includes(clip) && RISER_NAME.test(named(clip)) && clip.start < tape && clipEnd(clip) >= tape - 6);
+      if (!riser) missing.push("a riser building into it");
+      const runsOn = music.find((clip) => clip.start < tape && clipEnd(clip) > tape + idiv(second, 2));
+      if (runsOn !== undefined) missing.push(`the prologue's music (${runsOn.id}) cut on the tape's first frame`);
+      if (missing.length > 0) issues.push({ kind: "tape_start_unmarked", at: tape, missing });
+    }
+  }
   // A found photo or still as plain B-roll (letterboxed, often): pictures go
   // on screen only inside a designed graphic (an evidence card or board).
   issues.push(...graphics.bareStills(project));
+  // Footage or a photo with black bars round it.
+  issues.push(...framing.letterboxedIssues(project));
   // The date in a box or glowing: it's white with a drop shadow only.
   issues.push(...graphics.dateDrift(project));
   // A subtitle or intro caption on someone's face (faces found so far).

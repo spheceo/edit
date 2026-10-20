@@ -387,3 +387,50 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
   }
   return issues;
 }
+
+/** Seconds of nothing said inside a teaser that the audit calls dead air: between two words, and at a clip's ends. */
+const DEAD_BETWEEN = 0.9;
+const DEAD_AT_END = 0.7;
+
+/**
+ * Dead air in the teasers (`spans`: the intro's footage stretches): a pause
+ * inside a teaser clip where nothing is said (the team, on a two-second pause
+ * in Helpful Wife's first teaser: "dead space like this must be removed").
+ * Timeline frames to cut out (remove_time), each with its length.
+ */
+export function deadAir(project: Project, transcripts: Map<string, Transcript>, spans: [number, number][]): unknown[] {
+  const fps = fpsOf(project);
+  const issues: unknown[] = [];
+  const timeline = (clip: Clip & { source_in: number; speed: number }, at: number) => clip.start + toI64(round(((at - clip.source_in) / clip.speed) * fps));
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || clip.volume_db <= -40 || trackOf(project, clip.track)?.muted === true) continue;
+    if (project.media.find((media) => media.id === clip.media)?.kind !== "video") continue;
+    if (!spans.some(([start, end]) => clip.start >= start && clipEnd(clip) <= end)) continue;
+    const transcript = transcripts.get(clip.media);
+    if (transcript === undefined) continue;
+    const from = clip.source_in;
+    const to = clip.source_in + (clip.duration / fps) * clip.speed;
+    const words = transcript.words.filter((word) => word.end > from && word.start < to && trim(word.text) !== "");
+    if (words.length === 0) continue;
+    const gaps: [number, number, number][] = [];
+    const first = words[0]!;
+    const last = words[words.length - 1]!;
+    if (first.start - from >= DEAD_AT_END) gaps.push([from, first.start - 0.1, first.start - from]);
+    for (let index = 1; index < words.length; index++) {
+      const [before, after] = [words[index - 1]!, words[index]!];
+      if (after.start - before.end >= DEAD_BETWEEN) gaps.push([before.end + 0.12, after.start - 0.12, after.start - before.end]);
+    }
+    if (to - last.end >= DEAD_AT_END) gaps.push([last.end + 0.15, to, to - last.end]);
+    for (const [start, end, seconds] of gaps) {
+      issues.push({
+        kind: "dead_air",
+        clip: clip.id,
+        from: timeline(clip, start),
+        to: timeline(clip, end),
+        seconds: round(seconds * 10) / 10,
+        fix: "remove_time over it (a jump cut inside the teaser: change the punch-in on it so it reads as a cut)",
+      });
+    }
+  }
+  return issues;
+}

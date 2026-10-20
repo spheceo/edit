@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
 import { writeAtomic } from "./files.ts";
+import * as framing from "./framing.ts";
 import { isBug, message as crashMessage } from "./guard.ts";
 import type { MediaKind, Probe } from "./model.ts";
 import { native, type CachePaths } from "./native/index.ts";
@@ -350,6 +351,8 @@ export class Processor {
     // started only by the audit, Mom Leaves 5 Kids' final pass found all
     // sixteen files still pending and its blurred B-roll went out.
     if (probe.kind === "video") native().censorWarm(source);
+    // Its own black borders (a tape's edge), so footage placed later fills the frame.
+    if (probe.kind === "video" || probe.kind === "image") framing.warmBorders({ path: source, name: source, ...probe });
   }
 
   /**

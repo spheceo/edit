@@ -23,6 +23,13 @@ import * as seams from "./seams.ts";
 
 /** Footage speech this far (LU) under or over the voice-overs is flagged. */
 export const OFF_LU = 6.0;
+/**
+ * Music under a narration sits this far (LU) under it; closer than
+ * MUSIC_CLOSEST is `music_loud` (Helpful Wife's bridges played their beds
+ * 9–10 LU under the voice: "we need to turn down the music here").
+ */
+export const MUSIC_UNDER = 16.0;
+const MUSIC_CLOSEST = 12.0;
 /** The most a clip is turned up (a near-silent room boosted further is only noise) and down. */
 const MOST_UP = 24.0;
 const MOST_DOWN = -12.0;
@@ -221,6 +228,35 @@ export function issues(app: App, project: Project): { issues: Record<string, unk
     if (lufs === null || lufs === undefined) continue;
     off.push({ clip: one.clip, by: lufs + Math.fround(one.clip.volume_db) - level });
   }
+  // Music under each narration, over the stretch the narration plays.
+  const loud: Record<string, unknown>[] = [];
+  const said = project.clips.filter((clip) => clip.type === "audio" && seams.voiceover.isVoiceover(project, clip) && trackOf(project, clip.track)?.muted !== true);
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || trackOf(project, clip.track)?.muted === true || seams.voiceover.isVoiceover(project, clip)) continue;
+    const media = mediaOf(project, clip.media);
+    // Music: the library's (whose folder isSoundEffect also counts) or any sound a song long.
+    if (media === undefined || media.kind !== "audio") continue;
+    if (!(media.path.includes("/library/music/") || media.duration >= 45)) continue;
+    for (const over of said) {
+      const [from, to] = [Math.max(clip.start, over.start), Math.min(clipEnd(clip), clipEnd(over))];
+      if (to - from < 2 * fps) continue;
+      const stretch = { path: media.path, from: clip.source_in + ((from - clip.start) / fps) * clip.speed, seconds: ((to - from) / fps) * clip.speed };
+      if (!known(stretch) || level === null) continue;
+      const lufs = heard.get(keyOf(stretch));
+      if (lufs === null || lufs === undefined) continue;
+      const under = level - (lufs + Math.fround(clip.volume_db));
+      if (under < MUSIC_CLOSEST) {
+        loud.push({
+          kind: "music_loud",
+          clip: clip.id,
+          at: from,
+          lu_under_voiceover: Math.round(under * 10) / 10,
+          fix: `volume_db ${Math.round((Math.fround(clip.volume_db) - (MUSIC_UNDER - under)) * 10) / 10} (~${MUSIC_UNDER} LU under the narration)`,
+        });
+        break;
+      }
+    }
+  }
   const pending = [...new Set(wanted.map(keyOf))].length;
   if (wanted.length > 0) {
     for (const stretch of wanted) {
@@ -251,5 +287,5 @@ export function issues(app: App, project: Project): { issues: Record<string, unk
       fix: "level_footage",
     });
   }
-  return { issues: found, pending };
+  return { issues: [...found, ...loud], pending };
 }

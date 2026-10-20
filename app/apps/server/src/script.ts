@@ -16,6 +16,7 @@ import { clipFrom, textStyleFrom } from "./clips.ts";
 import * as diag from "./diag.ts";
 import * as endpoints from "./endpoints.ts";
 import { nowMs } from "./files.ts";
+import * as framing from "./framing.ts";
 import { catchBugsAsync, crashed, isBug } from "./guard.ts";
 import { importMade, importPaths } from "./import.ts";
 import * as mediaModule from "./media.ts";
@@ -1956,6 +1957,8 @@ export function layOut(project: Project): void {
           media: media.id,
           source_in: from,
           speed: 1,
+          // Filling the frame: a 3:2 tape or a 4:3 interview never sits in black bars.
+          transform: { ...framing.fill(project, media), rotation: 0 },
         }),
       );
       if (media.has_audio) {

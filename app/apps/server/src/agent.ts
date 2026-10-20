@@ -513,7 +513,9 @@ export class Agents implements seams.AgentPanel {
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
       try {
-        await this.prepareTurn(project, text, model, effort, current);
+        // A retried turn stays with the provider it ran on, whatever's chosen since.
+        const provider = generation !== null && chat.provider !== null ? chat.provider : this.chosen;
+        await this.prepareTurn(project, text, model, effort, current, provider);
       } catch (error) {
         const said = isBug(error) ? crashed("the agent turn", error) : diag.messageOf(error);
         const now = this.withChat(project);
@@ -531,10 +533,11 @@ export class Agents implements seams.AgentPanel {
     model: string | null,
     effort: string | null,
     generation: number,
+    provider: Provider,
   ): Promise<void> {
     const live = this.store.get(project);
     if (live === null) throw new Error("no such project");
-    if (this.chosen === "claude") return this.claudeTurn(project, text, model, effort, generation);
+    if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation);
     const codex = await this.codex();
     const chat = this.withChat(project);
     if (!(chat.generation === generation && !chat.halted)) throw new Error("Stopped.");

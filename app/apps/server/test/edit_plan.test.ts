@@ -15,6 +15,7 @@ beforeAll(() => {
   stubNative();
   hooks.oneColourPerPerson = () => [];
   hooks.textOnFaces = () => [];
+  hooks.picturesOnFaces = () => [];
 });
 afterAll(() => Object.assign(hooks, saved));
 

@@ -48,6 +48,7 @@ type Json = unknown;
 export const hooks = {
   oneColourPerPerson: (project: Project): Json => seams.people.oneColourPerPerson(project),
   textOnFaces: (project: Project): Json[] => seams.faces.textOnFaces(project),
+  picturesOnFaces: (project: Project): Json[] => seams.faces.picturesOnFaces(project),
 };
 
 export interface Applied {
@@ -1417,7 +1418,13 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       most = Math.max(most, run);
     }
     if (most > longest) {
-      issues.push({ kind: "long_broll_shot", clip: clip.id, start: clip.start, seconds: round((most / fps) * 10) / 10 });
+      issues.push({
+        kind: "long_broll_shot",
+        clip: clip.id,
+        start: clip.start,
+        seconds: round((most / fps) * 10) / 10,
+        fix: "a new shot every ~3–4 s (cover_cut_in again with more shots: other moments, a punch-in on a face), or a picture over the stretch",
+      });
     }
   }
   // Music: a song's good part is usually its opening (often only the first
@@ -1501,6 +1508,8 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   issues.push(...graphics.dateDrift(project));
   // A subtitle or intro caption on someone's face (faces found so far).
   issues.push(...(hooks.textOnFaces(project) as Record<string, unknown>[]));
+  // A window or inset over a face.
+  issues.push(...(hooks.picturesOnFaces(project) as Record<string, unknown>[]));
   // Words under a blur (a redaction or a title's blur on a track above
   // them) are blurred with the picture: text goes above every blur over it.
   const blurs = project.clips.filter(

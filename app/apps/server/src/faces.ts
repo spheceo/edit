@@ -632,3 +632,65 @@ export function textOnFaces(project: Project): unknown[] {
   }
   return out;
 }
+
+/** How far (seconds of the same file) a face found may stand in for one not looked for: a room's fixed camera. */
+const NEAR_FACE = 120;
+
+/**
+ * Windows and insets laid over a face (`picture_on_face`): a File Viewer or
+ * a photo inset covering the person in the footage beneath it ("nothing
+ * covering something else: a window over a face"). Faces come from what's
+ * been found so far in that file, the nearest sample within NEAR_FACE
+ * seconds (an interrogation room's camera doesn't move).
+ */
+export function picturesOnFaces(project: Project): unknown[] {
+  const fps = fpsOf(project);
+  const { width, height } = project.settings;
+  const level = (track: string) => project.tracks.findIndex((own) => own.id === track && !own.hidden);
+  const designed = (name: string) => name === "File Viewer" || /^Photo inset · /u.test(name);
+  const keyAt = (clip: Clip, param: string, local: number, base: number) => {
+    const keys = clip.keyframes?.[param];
+    return (keys === undefined ? null : sample(keys, local)) ?? base;
+  };
+  const cache = new Map<string, Faces | null>();
+  const out: unknown[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "video" || !designed(clip.name ?? "") || /black and white|· name$/u.test(clip.name ?? "")) continue;
+    const own = level(clip.track);
+    const media = mediaOf(project, clip.media);
+    if (own < 0 || media === undefined) continue;
+    const middle = clip.start + Math.trunc(clip.duration / 2);
+    const local = middle - clip.start;
+    const scale = keyAt(clip, "scale", local, clip.transform.scale);
+    const fit = Math.min(width / Math.max(media.width, 1), height / Math.max(media.height, 1)) * scale;
+    const [x, y] = [keyAt(clip, "x", local, clip.transform.x), keyAt(clip, "y", local, clip.transform.y)];
+    const [w, h] = [media.width * fit, media.height * fit];
+    const area: Face = [x - w / 2, y - h / 2, x + w / 2, y + h / 2];
+    // The footage beneath it there.
+    let under: Extract<Clip, { type: "video" }> | null = null;
+    for (const other of project.clips) {
+      if (other.type !== "video" || !clipContains(other, middle) || designed(other.name ?? "")) continue;
+      const at = level(other.track);
+      if (at < 0 || at >= own || mediaOf(project, other.media)?.kind !== "video") continue;
+      if (under === null || at >= level(under.track)) under = other;
+    }
+    if (under === null) continue;
+    const footage = mediaOf(project, under.media)!;
+    if (!cache.has(footage.path)) cache.set(footage.path, cached(footage.path));
+    const found = cache.get(footage.path);
+    if (found === null || found === undefined || found.size === 0) continue;
+    const time = under.source_in + ((middle - under.start) / fps) * under.speed;
+    let best: number | null = null;
+    for (const index of found.keys()) if (best === null || Math.abs(index - time * RATE) < Math.abs(best - time * RATE)) best = index;
+    if (best === null || Math.abs(best / RATE - time) > NEAR_FACE) continue;
+    const local2 = middle - under.start;
+    const transform = { ...under.transform, x: keyAt(under, "x", local2, under.transform.x), y: keyAt(under, "y", local2, under.transform.y), scale: keyAt(under, "scale", local2, under.transform.scale) };
+    const covered = (found.get(best) ?? []).some((given) => {
+      const face = inFrame([footage.width, footage.height], transform, [width, height], given);
+      const size = Math.max((face[2] - face[0]) * (face[3] - face[1]), 1);
+      return overlap(area, face) > 0.25 * size;
+    });
+    if (covered) out.push({ kind: "picture_on_face", clip: clip.id, start: clip.start, fix: "move it to the side away from the face (the person questioned stays in view)" });
+  }
+  return out;
+}

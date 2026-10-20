@@ -2018,7 +2018,7 @@
     "name": "track_region"
   },
   {
-    "description": "Export the project (default: the whole edit as an MP4, H.264 + AAC, at the project's size). Progress shows in the UI. Options as the export dialog: format, range (frames [start, end)), shape (vertical = 9:16 for Shorts/Reels, filled per fill: blur | crop | black), size (short side px), quality or target_mb, loudness (LUFS, e.g. -14 for YouTube), chapters. A whole subtitled video is then uploaded to the team's Subtitles folder on Drive (drive false: not; drive true: any whole video export, a normal edit to Render); its link becomes the project's drive.url. A whole house export of cloud footage renders on Modal when that's on, several at once.",
+    "description": "Export the project (default: the whole edit as an MP4, H.264 + AAC, at the project's size). Progress shows in the UI. Options as the export dialog: format, range (frames [start, end)), shape (vertical = 9:16 for Shorts/Reels, filled per fill: blur | crop | black), size (short side px), quality or target_mb, loudness (LUFS, e.g. -14 for YouTube), chapters. A whole subtitled video is then uploaded to the team's Subtitles folder on Drive (drive false: not; drive true: any whole video export, a normal edit to Render); its link becomes the project's drive.url. A whole house export of cloud footage renders on Modal when that's on and it's worth it (this Mac is exporting or busy, or the edit is long), several at once; else here.",
     "inputSchema": {
       "properties": {
         "options": {

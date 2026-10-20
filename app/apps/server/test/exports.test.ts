@@ -81,6 +81,7 @@ test("house exports of cloud footage render on Modal at once, and drive false ke
   let release!: () => void;
   const wait = new Promise<void>(resolve => { release = resolve; });
   const enabled = spyOn(seams.modalExports, "enabled").mockReturnValue(true);
+  const better = spyOn(seams.modalExports, "cloudBetter").mockReturnValue("it would take about 13 min on this Mac");
   const render = spyOn(seams.modalExports, "run").mockImplementation(async (_home, _project, _options, output) => {
     await wait;
     fs.writeFileSync(output, "modal export");
@@ -111,7 +112,7 @@ test("house exports of cloud footage render on Modal at once, and drive false ke
     expect(uploaded).toEqual(["uploaded"]);
   } finally {
     release();
-    plan.mockRestore(); render.mockRestore(); enabled.mockRestore(); wanted.mockRestore(); upload.mockRestore(); cleanup();
+    plan.mockRestore(); render.mockRestore(); enabled.mockRestore(); better.mockRestore(); wanted.mockRestore(); upload.mockRestore(); cleanup();
   }
 });
 
@@ -127,4 +128,18 @@ test("Modal takes only footage that's in the cloud", () => {
   expect(seams.modalExports.unsuitable(project, { ...house, size: 1080 }, whole)).toBeNull();
   project.clips.push({ id: "c2", type: "audio", media: "m2", start: 0, duration: 100 } as never);
   expect(seams.modalExports.unsuitable(project, house, whole)).toBe("Local.mov isn't in the cloud");
+});
+
+test("a free Mac keeps a short export or a subtitle video; a busy one or a long edit goes to Modal", () => {
+  const project = (clips: unknown[]) => ({ settings: { width: 1920, height: 1080, fps: 24, ntsc: true }, media: [], clips, script: null }) as unknown as Parameters<typeof seams.modalExports.cloudBetter>[0];
+  const plan = (end: number) => ({ start: 0, end, width: 1920, height: 1080, audio: true });
+  const footage = { id: "v", type: "video", media: "m", start: 0, duration: 41_777, name: "Bodycam" };
+  const subtitle = { id: "t", type: "text", start: 0, duration: 48, name: "Subtitle · Officer", style: {} };
+  // Cop Father's subtitles: 3:29 here, 5:05 on Modal.
+  expect(seams.modalExports.cloudBetter(project([footage, subtitle]), plan(41_777), false, 0.3)).toBeNull();
+  expect(seams.modalExports.cloudBetter(project([footage, subtitle]), plan(41_777), true, 0.3)).toBe("this Mac is already exporting");
+  expect(seams.modalExports.cloudBetter(project([footage, subtitle]), plan(41_777), false, 0.9)).toContain("busy");
+  // Corrupt Cop, an edit: 13 min here.
+  expect(seams.modalExports.cloudBetter(project([footage]), plan(34_987), false, 0.3)).toContain("13 min");
+  expect(seams.modalExports.cloudBetter(project([footage]), plan(4_600), false, 0.3)).toBeNull();
 });

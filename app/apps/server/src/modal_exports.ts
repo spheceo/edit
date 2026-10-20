@@ -11,12 +11,14 @@
  * (`EDIT_REPACK_ROOT`, default `<root>/../../repack`: its Infisical injection
  * gives the driver R2's keys for that process only); Modal is signed in on
  * the Mac. The house export of a whole edit whose footage is all in the
- * cloud goes there; anything else (another format, size or shape, a span,
+ * cloud goes there when this Mac is busy or it's long (`cloudBetter`); anything else (another format, size or shape, a span,
  * chapters, footage only on this Mac) is exported here as before.
  */
 import * as fs from "node:fs";
+import * as os from "node:os";
 
 import * as diag from "./diag.ts";
+import { subtitleVideo } from "./drive.ts";
 import { writeAtomic } from "./files.ts";
 import type { ExportOptions, Plan, Project } from "./model.ts";
 import { join } from "./paths.ts";
@@ -36,6 +38,32 @@ export function unsuitable(project: Project, options: ExportOptions, plan: Plan)
   if (project.clips.some((clip) => clip.type === "waveform")) return "waveforms are drawn here";
   const here = used(project).filter((media) => !media.cloud?.original);
   if (here.length > 0) return `${here.map((media) => media.name).join(", ")} isn't in the cloud`;
+  return null;
+}
+
+// How fast this Mac renders the house export, from its log: a subtitle video
+// (one source and its text) 150–200 frames/s, an edit 45–75 (Corrupt Cop 44,
+// 13 min). A cloud export spends 2–3 min before and after its frames
+// (planning, decoding every frame to check it, copying it back), so Cop
+// Father's subtitles took 5:05 there and 3:29 here (Oct 19).
+const MAC_FPS = { subtitles: 150, edit: 45 };
+// Longer than this here, the cloud is quicker (Killer Couple's 53 min of
+// subtitles took 8:36 here).
+const MAC_SECONDS = 6 * 60;
+// A load average per core above this leaves the Mac no room for an export.
+const MAC_LOAD = 0.75;
+
+/**
+ * Why an export Modal can take should go there rather than this Mac, or
+ * null to keep it here for free: the Mac isn't exporting, isn't loaded and
+ * would finish within about six minutes.
+ */
+export function cloudBetter(project: Project, plan: Plan, macExporting: boolean,
+  load = os.loadavg()[0]! / os.availableParallelism()): string | null {
+  if (macExporting) return "this Mac is already exporting";
+  if (load > MAC_LOAD) return `this Mac is busy (load ${load.toFixed(2)} a core)`;
+  const seconds = (plan.end - plan.start) / (subtitleVideo(project) ? MAC_FPS.subtitles : MAC_FPS.edit);
+  if (seconds > MAC_SECONDS) return `it would take about ${Math.round(seconds / 60)} min on this Mac`;
   return null;
 }
 

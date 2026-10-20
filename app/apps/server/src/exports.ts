@@ -1,5 +1,6 @@
 // The server's export registry: one export at a time on this Mac and any
-// number in the cloud (Modal's sections, `modal_exports.ts`, when it's on), their
+// number in the cloud (Modal's sections, `modal_exports.ts`, when it's on and
+// worth it), their
 // `export` events, the files it may hand out, and the Drive upload after a
 // subtitled video (or whenever asked). The local rendering, mixing, the partial
 // file beside the destination and its rename are the addon's (`ExportJob`).
@@ -223,9 +224,13 @@ export class ExportRegistry implements seams.Exports {
     if (extra.backend !== undefined) {
       backend = extra.backend;
     } else if (seams.modalExports.enabled()) {
+      // Modal when it can take the export and it's worth it (this Mac is
+      // exporting or loaded, or it's long); else here, for free.
       const why = seams.modalExports.unsuitable(project, options, plan);
-      if (why !== null) diag.info("export", `${project.id}: exporting on this Mac: ${why}`);
-      backend = why === null ? "modal" : seams.cloudExports.enabled() ? "cloud" : "local";
+      const reason = why === null ? seams.modalExports.cloudBetter(project, plan, this.localRunning()) : null;
+      if (why !== null || reason === null) diag.info("export", `${project.id}: exporting on this Mac: ${why ?? "it's free and about as quick"}`);
+      else diag.info("export", `${project.id}: exporting on Modal: ${reason}`);
+      backend = reason !== null ? "modal" : seams.cloudExports.enabled() ? "cloud" : "local";
     } else {
       backend = seams.cloudExports.enabled() ? "cloud" : "local";
     }

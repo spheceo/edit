@@ -11,7 +11,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
 // FFmpeg
@@ -222,6 +222,53 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 
+/// The file `path` is written to before it's renamed into place
+/// (`preview-light.<pid>-<n>.partial.mp4`), its own for each writer: an FFmpeg
+/// left running by a server that died kept writing the same
+/// `preview-light.partial.mp4` as the next server's, and the light preview
+/// renamed into place had its index pointing at the wrong bytes ("Decoder
+/// error." from the start to the end of the 57-minute Sabrina Limon 2nd).
+/// Ones left behind (untouched for an hour) are removed.
+pub fn partial(path: &Path, extension: &str) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let prefix = format!("{stem}.");
+    let suffix = format!("partial.{extension}");
+    let left = |entry: &std::fs::DirEntry| {
+        entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(3600))
+    };
+    if let Some(entries) = path.parent().and_then(|dir| std::fs::read_dir(dir).ok()) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let ours = name
+                .strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(&suffix))
+                .is_some_and(|tag| {
+                    tag.is_empty()
+                        || tag
+                            .trim_end_matches('.')
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || b == b'-')
+                });
+            if ours && left(&entry) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    path.with_extension(format!(
+        "{}-{}.{suffix}",
+        std::process::id(),
+        next_file_id()
+    ))
+}
+
 /// A number no other call in this process gets (temporary files, new ids).
 pub fn next_file_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -363,6 +410,51 @@ pub fn catch<T>(what: &str, work: impl FnOnce() -> T) -> Result<T, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_writer_has_its_own_partial_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "edit-partial-{}-{}",
+            std::process::id(),
+            next_file_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let light = dir.join("preview-light.mp4");
+        let (first, second) = (partial(&light, "mp4"), partial(&light, "mp4"));
+        assert_ne!(first, second);
+        let name = first.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("preview-light.") && name.ends_with(".partial.mp4"),
+            "{name}"
+        );
+        // Left behind an hour ago (the old shared name, another process's), or another file's: only the first two go.
+        let old = SystemTime::now() - Duration::from_secs(7200);
+        for file in [
+            "preview-light.partial.mp4",
+            "preview-light.1-0.partial.mp4",
+            "preview.1-0.partial.mp4",
+            "preview-light.mp4",
+        ] {
+            let file = std::fs::File::create(dir.join(file)).unwrap();
+            file.set_modified(old).unwrap();
+        }
+        std::fs::write(dir.join("preview-light.2-0.partial.mp4"), b"").unwrap();
+        partial(&light, "mp4");
+        let mut left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "preview-light.2-0.partial.mp4",
+                "preview-light.mp4",
+                "preview.1-0.partial.mp4"
+            ]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn panics_become_errors() {

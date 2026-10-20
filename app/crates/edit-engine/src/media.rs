@@ -348,7 +348,7 @@ pub fn light_preview(cache: &Path, source: &Path) -> Option<PathBuf> {
 /// preview whose picture was removed, or one made before pictures were kept),
 /// on the source's clock either way.
 pub fn make_light(source: &Path, paths: &CachePaths, probe: &Probe) -> Result<(), String> {
-    let partial = paths.light.with_extension("partial.mp4");
+    let partial = crate::util::partial(&paths.light, "mp4");
     let input = if paths.proxy.is_file() {
         paths.proxy.as_path()
     } else {
@@ -430,8 +430,8 @@ pub fn make_proxy(
 ) -> Result<(), String> {
     let _ = std::fs::remove_file(&paths.proxy_done);
     let video = probe.kind == MediaKind::Video;
-    let video_tmp = paths.proxy.with_extension("partial.mp4");
-    let audio_tmp = paths.audio.with_extension("partial.m4a");
+    let video_tmp = crate::util::partial(&paths.proxy, "mp4");
+    let audio_tmp = crate::util::partial(&paths.audio, "m4a");
     // The picture in VideoToolbox from end to end first (`hardware_video`),
     // then the native BGRA path, then libx264 below.
     #[cfg(target_os = "macos")]
@@ -633,7 +633,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     }
-    let partial = out.with_extension("partial.mp4");
+    let partial = crate::util::partial(out, "mp4");
     let picture = out.with_extension("picture.mp4");
     let _scratch = Scratch(vec![partial.clone(), picture.clone()]);
     let bitrate = cloud_proxy_bitrate(probe.width, probe.height);
@@ -758,8 +758,8 @@ pub fn preview_from_cloud_proxy(
     paths: &CachePaths,
 ) -> Result<(), String> {
     let _ = std::fs::remove_file(&paths.proxy_done);
-    let video_tmp = paths.proxy.with_extension("partial.mp4");
-    let audio_tmp = paths.audio.with_extension("partial.m4a");
+    let video_tmp = crate::util::partial(&paths.proxy, "mp4");
+    let audio_tmp = crate::util::partial(&paths.audio, "m4a");
     let _ = std::fs::remove_file(&video_tmp);
     let result = (|| {
         if std::fs::hard_link(source, &video_tmp).is_err() {
@@ -1011,7 +1011,7 @@ pub fn native_proxy(
 }
 
 pub fn make_image_thumbs(source: &Path, paths: &CachePaths) -> Result<u32, String> {
-    let partial = paths.thumbs.with_extension("partial.jpg");
+    let partial = crate::util::partial(&paths.thumbs, "jpg");
     #[cfg(target_os = "macos")]
     let result = crate::mac_media::image_thumbnail(source, &partial);
     #[cfg(not(target_os = "macos"))]

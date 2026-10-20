@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import * as tools from "../src/tools.ts";
-import { parseScribe, run, serialize, timing } from "../src/transcribe.ts";
+import { aligned, join, parseScribe, plan, run, serialize, timing, voicesFrom, type Word } from "../src/transcribe.ts";
 import { scratch } from "./helpers/home.ts";
 import { MockServer, scribeAnswer } from "./mocks/server.ts";
 
@@ -109,6 +109,63 @@ test.skipIf(ffmpeg === null)("listens for the case's names, and asks once withou
     expect(mock.calls("/v1/transcribe", "POST").slice(from).map((call) => call.query.getAll("keyterm"))).toEqual([["John Ruetten"], []]);
     // Kept as asked, so they aren't asked (and refused) again.
     expect(JSON.parse(fs.readFileSync(`${dir}/cache/refused.json`, "utf8")).keyterms).toEqual(["John Ruetten"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a long file is planned as even pieces of at most 40 s, each heard with 4 s either side", () => {
+  const pieces = plan(100);
+  expect(pieces.length).toBe(3);
+  expect(pieces[0]).toEqual({ coreFrom: 0, coreTo: 100 / 3, from: 0, to: 100 / 3 + 4 });
+  expect(pieces[2]!.to).toBe(100);
+  expect(pieces[1]!.from).toBeCloseTo(100 / 3 - 4);
+});
+
+const w = (text: string, start: number, speaker?: string): Word => ({ text, start, end: start + 0.3, ...(speaker ? { speaker } : {}) });
+
+test("pieces are joined at a word both heard at the same moment, nothing lost or heard twice", () => {
+  const pieces = [
+    { coreFrom: 0, coreTo: 10, from: 0, to: 14 },
+    { coreFrom: 10, coreTo: 20, from: 6, to: 20 },
+  ];
+  const left = [w("we", 8), w("were", 8.5), w("going", 9.6), w("to", 10.2), w("the", 10.6), w("car", 11)];
+  const right = [w("we're", 8.1), w("going", 9.65), w("to", 10.25), w("the", 10.6), w("car", 11.05), w("now", 12)];
+  expect(join(pieces, [left, right]).map((word) => word.text)).toEqual(["we", "were", "going", "to", "the", "car", "now"]);
+  // Nothing in common: handed over at the seam.
+  const quiet = join(pieces, [[w("hello", 9), w("there", 10.5)], [w("hey", 9.2), w("you", 10.6), w("again", 13)]]);
+  expect(quiet.map((word) => word.text)).toEqual(["hello", "you", "again"]);
+});
+
+test("each word takes the voice the whole file heard it in, matched by what's said", () => {
+  // The whole file's times drift by 20 s; its voices hold.
+  const whole = [w("Hey", 30, "speaker_1"), w("man,", 30.3, "speaker_1"), w("are", 30.6, "speaker_1"), w("you", 31, "speaker_1"), w("Reginald?", 31.3, "speaker_1"), w("Yes,", 33, "speaker_0"), w("I", 33.2, "speaker_0"), w("am.", 33.4, "speaker_0")];
+  const words = [w("Hey,", 10), w("man,", 10.3), w("are", 10.6), w("you", 11), w("Reginald?", 11.3), w("Uh,", 12.6), w("yes,", 13), w("I", 13.2), w("am.", 13.4)];
+  voicesFrom(words, whole);
+  expect(words.map((word) => word.speaker)).toEqual(["speaker_1", "speaker_1", "speaker_1", "speaker_1", "speaker_1", "speaker_0", "speaker_0", "speaker_0", "speaker_0"]);
+  expect(aligned(["a", "b", "c"], ["x", "a", "c"])).toEqual([[0, 1], [2, 2]]);
+});
+
+test.skipIf(ffmpeg === null)("a long file is heard whole and in pieces at once, its words from the pieces", async () => {
+  const { dir, cleanup } = scratch("transcribe-long");
+  try {
+    const source = `${dir}/long.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=100", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    await run(source, `${dir}/cache/long.json`, ["McCall"]);
+    const asked = mock.calls("/v1/transcribe", "POST").slice(before);
+    // The whole file and its three pieces, each with the case's names.
+    expect(asked.length).toBe(4);
+    expect(asked.every((call) => call.query.getAll("keyterm").join() === "McCall")).toBe(true);
+    const written = JSON.parse(fs.readFileSync(`${dir}/cache/long.json`, "utf8"));
+    // Each piece "heard" Hello there. in its first second: the second and third pieces' fall in the
+    // context before their seam, which is the piece before's, so only the first piece's are kept.
+    expect(written.words.map((word: Word) => word.text)).toEqual(["Hello", "there."]);
+    expect(written.words.map((word: Word) => word.start)).toEqual([0, 0.5]);
+    expect(written.words.every((word: Word) => word.speaker === "speaker_0")).toBe(true);
+    expect(written.keyterms).toEqual(["McCall"]);
+    expect(fs.readdirSync(`${dir}/cache`).filter((name) => name.endsWith(".ogg"))).toEqual([]);
   } finally {
     cleanup();
   }

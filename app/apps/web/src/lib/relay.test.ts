@@ -249,6 +249,7 @@ describe("relay transcription", () => {
   const env = {
     ELEVENLABS_API_KEY: "xi-key", MAX_UPLOAD_BYTES: "1000", DAILY_BYTES_PER_IP: "1000", DAILY_BYTES_TOTAL: "1000",
     BURST: { limit: async () => ({ success: true }) },
+    TRANSCRIBE_BURST: { limit: async () => ({ success: true }) },
     BUDGET: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response("{}") }) },
   } as unknown as Env;
   const transcribe = (query: string) =>

@@ -56,6 +56,17 @@ namespace_id = "7701"
 limit = 4
 period = 60
 
+# A long file is heard in ~40-second pieces, four at a time (the server's
+# transcribe.ts): 60 a minute keeps them moving; the daily byte quotas below
+# still bound the spend.
+[[ratelimits]]
+name = "TRANSCRIBE_BURST"
+namespace_id = "7703"
+
+[ratelimits.simple]
+limit = 60
+period = 60
+
 # Voice lines come in runs (generate every line): more per minute.
 [[ratelimits]]
 name = "SPEECH_BURST"

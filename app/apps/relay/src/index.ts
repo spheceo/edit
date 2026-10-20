@@ -43,6 +43,8 @@ export interface Env extends CloudEnv {
   CLIENT_TOKEN?: string;
   BUDGET: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
   BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  /** Transcriptions per IP a minute: a long file is heard in ~40-second pieces, several at once. */
+  TRANSCRIBE_BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
   DAILY_BYTES_PER_IP: string;
   DAILY_BYTES_TOTAL: string;
   MAX_UPLOAD_BYTES: string;
@@ -77,7 +79,7 @@ export default {
     if (size > Number(env.MAX_UPLOAD_BYTES)) return json(413, { error: "That recording is too long for one request." });
 
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    if (!(await env.BURST.limit({ key: ip })).success) {
+    if (!(await env.TRANSCRIBE_BURST.limit({ key: ip })).success) {
       return json(429, { error: "Too many transcriptions at once; try again in a minute." });
     }
     const language = url.searchParams.get("language");

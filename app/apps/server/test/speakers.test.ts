@@ -30,11 +30,15 @@ test("labels_roles_names_and_repeats", () => {
       { id: "speaker_1", name: null, title: "Officer", role: "officer" },
       { id: "speaker_2", name: "Jane Doe", title: "Mother", role: "witness" },
       { id: "speaker_3", name: null, title: "Officer", role: "officer" },
+      { id: "speaker_4", name: null, title: "Narrator", role: "narrator" },
+      { id: "speaker_5", name: null, title: "Narrator", role: "narrator" },
     ],
   });
   expect(out.get("speaker_0")).toBe("Suspect");
   expect(out.get("speaker_2")).toBe("Jane Doe (Mother)");
   expect(out.get("speaker_3")).toBe("Officer 2");
+  // One narrator, even split over two bodycams' footage.
+  expect(out.get("speaker_5")).toBe("Narrator");
 });
 
 const said = (voice: string): Word => ({ text: "x", start: 0.0, end: 0.1, speaker: voice });

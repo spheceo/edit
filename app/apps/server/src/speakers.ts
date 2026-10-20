@@ -257,6 +257,9 @@ export function labels(named: Named): Map<string, string> {
     let label: string;
     if (name !== null) {
       label = `${name} (${role})`;
+    } else if (speaker.role === "narrator") {
+      // A video has one narrator, even heard as two voices (over two bodycams' footage, cameras.ts).
+      label = role;
     } else {
       const count = (used.get(role.toLowerCase()) ?? 0) + 1;
       used.set(role.toLowerCase(), count);
@@ -294,6 +297,26 @@ function context(app: App, source: string): string {
     : `${out}Use this to know who the people are (who the suspect is, who is family), but label voices only from the transcript.\n\n`;
 }
 
+/**
+ * Which bodycam each voice is heard on (cameras.ts), when the file shows
+ * more than one: each is worn by one officer, so the wearer's name comes from
+ * what's said on their own camera (McCall's partner said "McCall did" on his,
+ * and was labelled McCall until the cameras were told apart).
+ */
+export function bodycams(transcript: Transcript): string {
+  const cameras = transcript.cameras ?? {};
+  const voices = Object.keys(cameras).sort(compareKeys);
+  if (new Set(voices.map((voice) => cameras[voice])).size < 2) return "";
+  const lines = voices.map((voice) => `${voice}: camera ${cameras[voice]}`).join("\n");
+  return (
+    "This file cuts between bodycams (each voice below with the camera it's heard on, read off the ID in the picture). " +
+    "Each bodycam is worn by one officer, who is off screen and the closest, loudest voice on it; two partners' cameras " +
+    "are two different officers even when they sound alike. A voice that gives its own name (\"I'm Officer McCall\") is " +
+    "that person; one that speaks of someone in the third person (\"McCall did\", \"go see if McCall needs something\") " +
+    `is not them.\n${lines}\n\n`
+  );
+}
+
 /** The model's answer as serde reads `Named` (its messages roughly serde's). */
 export function parseNamed(answer: string): Named {
   const value = serdeParse(answer) as unknown;
@@ -322,7 +345,7 @@ export function parseNamed(answer: string): Named {
 async function name(app: App, source: string, target: string): Promise<void> {
   const transcript = read(target);
   if (transcript === null) throw new Error("no transcript");
-  const about = context(app, source);
+  const about = context(app, source) + bodycams(transcript);
   const prompt = `${about}Transcript (speaker ID: words):\n\n${evidence(transcript.words)}`;
   const schema = {
     type: "object",

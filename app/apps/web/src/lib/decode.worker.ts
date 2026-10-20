@@ -284,7 +284,9 @@ async function run(job: DecodeJob, lane: Lane) {
     // nor its file for the next request at all.
     closeCursor(lane);
     if (file) retire(job.key, file);
-    if (!lane.cancelled) scope.postMessage({ type: "error", id: job.id, key: job.key, lane: job.lane, error: String(error) });
+    // Where it failed, so a report names the spot rather than only the browser's "Decoder error."
+    const at = job.type === "video" ? job.times[0] : job.chunks[0] * AUDIO_CHUNK_SECONDS;
+    if (!lane.cancelled) scope.postMessage({ type: "error", id: job.id, key: job.key, lane: job.lane, error: `${String(error)} (${job.type} at ${at.toFixed(2)} s)` });
   } finally {
     if (file) letGo(file);
     running--;

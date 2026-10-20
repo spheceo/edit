@@ -110,8 +110,10 @@ class Preview {
   private playbackStats = { videoMisses: 0, audioUnderruns: 0 };
   private loop = 0;
   private listeners = new Set<Listener>();
-  private decoder = new Decoder(() => this.invalidate(), (error) => {
-    const message = `Preview decoding failed: ${error}`;
+  private decoder = new Decoder(() => this.invalidate(), (error, key) => {
+    const media = key === undefined ? undefined : [...this.sources, ...this.sounds].find(([, url]) => url === key)?.[0];
+    const name = media === undefined ? undefined : this.media.get(media)?.name ?? media;
+    const message = `Preview decoding failed${name === undefined ? "" : ` in ${name}`}: ${error}`;
     this.error = message; note("error", "preview", this.error);
     this.pause();
     this.setBuffering(false);

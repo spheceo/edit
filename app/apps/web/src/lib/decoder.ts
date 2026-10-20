@@ -35,7 +35,8 @@ export class Decoder {
   /** Each worker's media reads so far (bytes, time waiting), for problem reports. */
   readonly network: Partial<Record<"video" | "audio", NetworkStats>> = {};
 
-  constructor(private changed: () => void, private failed: (error: string) => void) {}
+  /** `key`: the file that failed, when it's one file's. */
+  constructor(private changed: () => void, private failed: (error: string, key?: string) => void) {}
 
   private worker(kind: "video" | "audio") {
     let worker = this[kind];
@@ -93,7 +94,7 @@ export class Decoder {
       if (this.flights.get(data.lane)?.id === data.id) this.flights.delete(data.lane);
       this.changed();
     } else if (this.files.has(data.key)) {
-      this.failed(data.error);
+      this.failed(data.error, data.key);
     }
   }
 

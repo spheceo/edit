@@ -35,14 +35,40 @@ export const DEFAULT_MODEL = "opus";
 /** Edit's own default thinking level, as for Codex (agent.ts `DEFAULT_EFFORT`). */
 const DEFAULT_EFFORT = "medium";
 
-/** Whether `binary --version` runs and succeeds. */
-async function runs(binary: string): Promise<boolean> {
+/** How long a CLI's `--version` or sign-in check may take before it's taken as not working. */
+export const CHECK_MS = 20_000;
+
+/**
+ * Runs a CLI's quick check (`--version`, `auth status`) and says how it went:
+ * its exit code (null when it couldn't start or was stopped) and what it
+ * printed. Stopped after `timeoutMs`: a CLI waiting on a keychain prompt or
+ * an update would otherwise hold the setup card and the agent panel forever.
+ */
+export async function runCheck(command: string[], timeoutMs = CHECK_MS): Promise<{ code: number | null; out: string }> {
+  let child: Bun.Subprocess<"ignore", "pipe", "ignore">;
   try {
-    const child = Bun.spawn([binary, "--version"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
-    return (await child.exited) === 0;
+    child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
   } catch {
-    return false;
+    return { code: null, out: "" };
   }
+  let late = false;
+  const timer = setTimeout(() => {
+    late = true;
+    child.kill("SIGKILL");
+  }, timeoutMs);
+  try {
+    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    return { code: late ? null : code, out };
+  } catch {
+    return { code: null, out: "" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Whether `binary --version` runs and succeeds. */
+export async function runs(binary: string): Promise<boolean> {
+  return (await runCheck([binary, "--version"])).code === 0;
 }
 
 /** The user's `claude`: on PATH or where its installers put it. */
@@ -73,23 +99,16 @@ export async function checkClaude(): Promise<Record<string, unknown>> {
       error: "Claude Code isn't installed. Install it with `curl -fsSL https://claude.ai/install.sh | bash`, then `claude auth login`.",
     };
   }
+  // Both at once: each is a start-up of the CLI.
+  const [status, printed] = await Promise.all([runCheck([binary, "auth", "status"]), runCheck([binary, "--version"])]);
   let said: Record<string, unknown> = {};
   try {
-    const child = Bun.spawn([binary, "auth", "status"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-    const [out] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-    said = JSON.parse(trim(out)) as Record<string, unknown>;
+    const value = JSON.parse(trim(status.out)) as unknown;
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) said = value as Record<string, unknown>;
   } catch {
     said = {};
   }
-  const version = await (async () => {
-    try {
-      const child = Bun.spawn([binary, "--version"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-      const [out] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-      return trim(out) || null;
-    } catch {
-      return null;
-    }
-  })();
+  const version = printed.code === 0 ? trim(printed.out) || null : null;
   const out: Record<string, unknown> = { provider: "claude", path: binary, version };
   if (typeof said.email === "string") out.email = said.email;
   if (typeof said.subscriptionType === "string") out.plan = planName(said.subscriptionType);
@@ -151,6 +170,9 @@ export function catalog(models: ModelInfo[]): Model[] {
     });
 }
 
+/** How long Claude Code may take to list its models. */
+const MODELS_MS = 60_000;
+
 /** Asks Claude Code for its models without starting a conversation. */
 export async function listModels(binary: string, workspace: string): Promise<ModelInfo[]> {
   const { query } = await sdk();
@@ -163,9 +185,15 @@ export async function listModels(binary: string, workspace: string): Promise<Mod
     prompt: never,
     options: { ...baseOptions(binary, workspace), persistSession: false, tools: [], mcpServers: {}, abortController: abort },
   });
+  let timer: ReturnType<typeof setTimeout> | null = null;
   try {
-    return await probe.supportedModels();
+    // A CLI that never answers (signed out mid-way, an update prompt) mustn't hold the model list.
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Claude Code didn't list its models in time")), MODELS_MS);
+    });
+    return await Promise.race([probe.supportedModels(), late]);
   } finally {
+    if (timer !== null) clearTimeout(timer);
     abort.abort();
     probe.close();
   }

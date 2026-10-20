@@ -70,6 +70,12 @@ export interface Chat {
   halted: boolean;
   /** Identifies this work so retries cannot revive an old turn. */
   generation: number;
+  /** The provider the running turn is on (null between turns): only Codex's going away ends a Codex turn. */
+  on: Provider | null;
+  /** When the running turn last heard from its agent (`timing.now()`), to end one that stopped answering. */
+  heard: number;
+  /** Edit ended the running turn itself (stopped, stalled, quitting): a Codex turn id arriving after is interrupted. */
+  dropped: boolean;
 }
 
 export interface Model {
@@ -87,7 +93,30 @@ interface ModelCache {
 }
 
 function freshChat(): Chat {
-  return { provider: null, thread: null, model: null, effort: null, entries: [], turn: null, running: false, started: null, retries: 0, halted: false, generation: 0 };
+  return {
+    provider: null,
+    thread: null,
+    model: null,
+    effort: null,
+    entries: [],
+    turn: null,
+    running: false,
+    started: null,
+    retries: 0,
+    halted: false,
+    generation: 0,
+    on: null,
+    heard: 0,
+    dropped: false,
+  };
+}
+
+let entries = 0;
+
+/** A new entry's id: "error-<ms>-<n>" (two in one millisecond, a stall then a quit, mustn't be one entry). */
+function newId(kind: string): string {
+  entries += 1;
+  return `${kind}-${nowMs()}-${entries}`;
 }
 
 function entry(fields: Partial<Entry> & { id: string; kind: string }): Entry {
@@ -134,7 +163,45 @@ interface Ask {
 export const timing = {
   now: () => performance.now(),
   sleep: (ms: number) => Bun.sleep(ms),
+  /** Runs `work` after `ms`. */
+  later: (ms: number, work: () => void) => later(ms, work),
 };
+
+/** How long a stopped turn may take to end before Edit ends it itself (an interrupt lost, a process hung). */
+export const STOP_GRACE_MS = 15_000;
+
+/**
+ * How long a turn may go without a word from its agent before it's ended.
+ * A tool call gives up after 15 minutes (`MCP_TOOL_TIMEOUT`, Codex's
+ * `tool_timeout_sec`) and a model streams as it thinks, so a turn silent
+ * for longer is stuck: without this the panel said "working" for good.
+ */
+export const STALL_MS = 25 * 60_000;
+
+/** How often running turns are looked at for a stall. */
+const WATCH_EVERY_MS = 60_000;
+
+/** Runs `work` after `ms` without holding the process open. */
+function later(ms: number, work: () => void): void {
+  const timer = setTimeout(() => {
+    try {
+      work();
+    } catch (error) {
+      if (isBug(error)) crashed("the agent's timer", error);
+      else diag.warn("agent", diag.messageOf(error));
+    }
+  }, ms);
+  timer.unref?.();
+}
+
+/** Whether the chat's turn `generation` is still the one running, not stopped or ended by Edit. */
+function stillOn(chat: Chat, generation: number): boolean {
+  return chat.generation === generation && chat.running && !chat.halted && !chat.dropped;
+}
+
+/** The first words of a turn that starts a new Claude Code conversation because the last one's session is gone. */
+const SESSION_GONE =
+  "(Edit, automatically) The earlier conversation couldn't be picked up again (Claude Code no longer has it), so this is a new one: get_edit_context shows what's already done. My message:";
 
 /** A mutex for async work (one turn of a chat at a time). */
 class Lock {
@@ -195,6 +262,10 @@ export class Agents implements seams.AgentPanel {
   private claudeCatalog: { fetched_ms: number; models: claude.ModelInfo[] } | null = null;
   /** Each project's running Claude query, to stop it. */
   private claudeQueries = new Map<string, claude.Query>();
+  /** Codex turns Edit ended itself, whose own end is still to come (and is ignored). */
+  private abandoned = new Set<string>();
+  /** Looks for stalled turns while any runs. */
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   /** The SDK's `query`, the user's `claude` and its model list (tests put stand-ins here). */
   claudeQuery: (params: { prompt: string; options: claude.Options }) => Promise<claude.Query> = async (params) =>
     (await claude.sdk()).query(params);
@@ -275,11 +346,17 @@ export class Agents implements seams.AgentPanel {
     try {
       if (this.codexProcess !== null && this.codexProcess.alive) return this.codexProcess;
       const codex = await this.spawnCodex((message) => this.onMessage(message));
-      await codex.call(
-        "initialize",
-        { clientInfo: { name: "edit", title: "Edit", version: VERSION } },
-        20_000,
-      );
+      try {
+        await codex.call(
+          "initialize",
+          { clientInfo: { name: "edit", title: "Edit", version: VERSION } },
+          20_000,
+        );
+      } catch (error) {
+        // Never left running unused: the next turn starts another.
+        codex.kill();
+        throw error;
+      }
       codex.notify("initialized", null);
       // Threads from a previous process must be resumed before new turns.
       this.threads.clear();
@@ -412,7 +489,12 @@ export class Agents implements seams.AgentPanel {
       return freshChat();
     }
     try {
-      return readChat(text);
+      const chat = readChat(text);
+      // A turn saved mid-tool died with the Edit that ran it.
+      for (const item of chat.entries) {
+        if (item.status === "running") item.status = "stopped";
+      }
+      return chat;
     } catch (error) {
       // Never overwrite a chat we can't read: set it aside and start fresh.
       diag.warn("agent", `agent chat ${path}: ${diag.messageOf(error)}`);
@@ -452,6 +534,11 @@ export class Agents implements seams.AgentPanel {
 
   reset(project: string): void {
     const chat = this.withChat(project);
+    // A turn still running would go on editing with nothing on screen to show it.
+    if (chat.running) {
+      chat.halted = true;
+      this.abandon(project, "Stopped.");
+    }
     const thread = chat.thread;
     this.chats.set(project, freshChat());
     if (thread !== null) this.threads.delete(thread);
@@ -508,13 +595,17 @@ export class Agents implements seams.AgentPanel {
         chat.halted = false;
         chat.retries = 0;
       }
+      // A retried turn stays with the provider it ran on, whatever's chosen since.
+      const provider = generation !== null && chat.provider !== null ? chat.provider : this.chosen;
       chat.running = true;
       chat.started = timing.now();
+      chat.heard = chat.started;
+      chat.on = provider;
+      chat.dropped = false;
+      this.watch();
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
       try {
-        // A retried turn stays with the provider it ran on, whatever's chosen since.
-        const provider = generation !== null && chat.provider !== null ? chat.provider : this.chosen;
         await this.prepareTurn(project, text, model, effort, current, provider);
       } catch (error) {
         const said = isBug(error) ? crashed("the agent turn", error) : diag.messageOf(error);
@@ -540,7 +631,7 @@ export class Agents implements seams.AgentPanel {
     if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation);
     const codex = await this.codex();
     const chat = this.withChat(project);
-    if (!(chat.generation === generation && !chat.halted)) throw new Error("Stopped.");
+    if (!stillOn(chat, generation)) throw new Error("Stopped.");
     chat.model = model ?? chat.model;
     chat.effort = effort ?? chat.effort;
     // A Claude conversation can't be resumed in Codex: start a new thread.
@@ -592,7 +683,7 @@ export class Agents implements seams.AgentPanel {
     }
     this.threads.set(thread, project);
     const now = this.withChat(project);
-    if (now.generation !== generation || now.halted) throw new Error("Stopped.");
+    if (!stillOn(now, generation)) throw new Error("Stopped.");
     if (now.provider !== "codex") {
       // Codex and Claude name models differently.
       now.model = model;
@@ -601,7 +692,7 @@ export class Agents implements seams.AgentPanel {
     now.thread = thread;
     now.provider = "codex";
     const selection = { model: now.model, effort: now.effort };
-    this.upsert(project, entry({ id: `user-${nowMs()}`, kind: "user", text }));
+    this.upsert(project, entry({ id: newId("user"), kind: "user", text }));
     this.save(project);
     this.emit(project, { event: "status", running: true });
     const params: Record<string, unknown> = {
@@ -614,17 +705,23 @@ export class Agents implements seams.AgentPanel {
     // Dispatched right after the last check (nothing can run in between), so
     // a stop can't land between the check and writing the request to Codex.
     const check = this.withChat(project);
-    if (check.generation !== generation || check.halted) throw new Error("Stopped.");
+    if (!stillOn(check, generation)) throw new Error("Stopped.");
     const request = codex.request("turn/start", params);
     const turn = (await codex.response("turn/start", request, 30_000)) as { turn?: { id?: unknown } } | null;
     const id = typeof turn?.turn?.id === "string" ? turn.turn.id : null;
     const after = this.withChat(project);
     let stopped = false;
-    if (after.generation !== generation || (after.halted && after.running)) stopped = true;
+    if (after.generation !== generation || (after.halted && after.running) || after.dropped) stopped = true;
     else if (after.running) after.turn = id;
     // Stop can arrive before turn/start returns the turn id.
     if (stopped) {
-      if (id !== null) await codex.call("turn/interrupt", { threadId: thread, turnId: id }, 15_000);
+      if (id !== null) {
+        // Its end, when it comes, belongs to no turn of the chat's.
+        this.abandoned.add(id);
+        await codex.call("turn/interrupt", { threadId: thread, turnId: id }, 15_000).catch((error: unknown) => {
+          diag.warn("agent", `interrupting a stopped turn in ${project}: ${diag.messageOf(error)}`);
+        });
+      }
       throw new Error("Stopped.");
     }
     this.save(project);
@@ -667,21 +764,43 @@ export class Agents implements seams.AgentPanel {
     if (claude.EFFORTS.includes(level)) options.effort = level as claude.Options["effort"];
     if (chat.thread !== null) options.resume = chat.thread;
     const now = this.withChat(project);
-    if (now.generation !== generation || now.halted) throw new Error("Stopped.");
+    if (!stillOn(now, generation)) throw new Error("Stopped.");
     now.provider = "claude";
-    this.upsert(project, entry({ id: `user-${nowMs()}`, kind: "user", text }));
+    this.upsert(project, entry({ id: newId("user"), kind: "user", text }));
     this.save(project);
     this.emit(project, { event: "status", running: true });
+    await this.runClaude(project, generation, text, options);
+  }
+
+  /**
+   * Starts the turn's query and follows it in the background. One resuming
+   * a session Claude Code no longer has is started again once as a new
+   * conversation (`fresh`), rather than failing the turn.
+   */
+  private async runClaude(project: string, generation: number, text: string, options: claude.Options): Promise<void> {
     const running = await this.claudeQuery({ prompt: text, options });
     this.claudeQueries.set(project, running);
-    void this.followClaude(project, generation, new ClaudeTurn(nowMs()), running);
+    const fresh =
+      options.resume === undefined
+        ? null
+        : () => {
+            const { resume: _gone, ...rest } = options;
+            return this.runClaude(project, generation, `${SESSION_GONE}\n\n${text}`, rest);
+          };
+    void this.followClaude(project, generation, new ClaudeTurn(nowMs()), running, fresh);
     const after = this.withChat(project);
     // Stop can arrive while the query starts.
-    if (after.generation !== generation || after.halted) await running.interrupt().catch(() => undefined);
+    if (after.generation !== generation || after.halted || !after.running) await running.interrupt().catch(() => undefined);
   }
 
   /** Reads a Claude query's messages until its result, then ends the turn. */
-  private async followClaude(project: string, generation: number, turn: ClaudeTurn, running: claude.Query): Promise<void> {
+  private async followClaude(
+    project: string,
+    generation: number,
+    turn: ClaudeTurn,
+    running: claude.Query,
+    fresh: (() => Promise<void>) | null,
+  ): Promise<void> {
     let error: string | null = null;
     let result: Record<string, unknown> | null = null;
     try {
@@ -714,9 +833,20 @@ export class Agents implements seams.AgentPanel {
     if (chat.generation !== generation || !chat.running) return;
     if (chat.halted && error !== null) error = "Stopped.";
     if (error !== null && /no conversation found/i.test(error)) {
-      // Its session is gone (Claude Code's history cleared): the next message starts afresh.
+      // Its session is gone (Claude Code's history cleared): this turn starts a new one.
       chat.thread = null;
-      error = "The earlier conversation couldn't be picked up again; send your message again to start a new one.";
+      this.save(project);
+      if (fresh !== null && turn.calls === 0) {
+        diag.warn("agent", `${project}: Claude Code no longer has the conversation; starting a new one`);
+        try {
+          await fresh();
+          return;
+        } catch (thrown) {
+          error = isBug(thrown) ? crashed("restarting the Claude turn", thrown) : diag.messageOf(thrown);
+        }
+      } else {
+        error = "The earlier conversation couldn't be picked up again; send your message again to start a new one.";
+      }
     }
     this.turnEnded(project, error);
   }
@@ -725,6 +855,7 @@ export class Agents implements seams.AgentPanel {
   private onClaudeMessage(project: string, generation: number, turn: ClaudeTurn, message: Record<string, unknown>): void {
     const chat = this.withChat(project);
     if (chat.generation !== generation) return;
+    chat.heard = timing.now();
     // A subagent's messages (none are offered, but just in case) stay out of the chat.
     if (typeof message.parent_tool_use_id === "string") return;
     switch (message.type) {
@@ -939,16 +1070,116 @@ export class Agents implements seams.AgentPanel {
   async stop(project: string): Promise<void> {
     const chat = this.withChat(project);
     chat.halted = true;
+    if (chat.running) {
+      // Should the agent never end it (an interrupt lost, a process hung), the turn is ended here.
+      const generation = chat.generation;
+      timing.later(STOP_GRACE_MS, () => {
+        const now = this.withChat(project);
+        if (now.generation !== generation || !now.running) return;
+        diag.warn("agent", `${project}: the turn didn't end ${STOP_GRACE_MS / 1000} s after stop; ending it here`);
+        this.abandon(project, "Stopped.");
+      });
+    }
+    try {
+      const running = this.claudeQueries.get(project);
+      if (running !== undefined) {
+        // Not waited on for good: past the grace the turn is ended anyway.
+        await Promise.race([running.interrupt(), timing.sleep(STOP_GRACE_MS)]);
+        return;
+      }
+      if ((chat.on ?? chat.provider) === "claude") return;
+      const { thread, turn } = chat;
+      if (thread === null || turn === null) return;
+      const codex = this.codexProcess;
+      if (codex === null || !codex.alive) {
+        // Nothing left to tell: its Codex is gone.
+        this.abandon(project, "Stopped.");
+        return;
+      }
+      await codex.call("turn/interrupt", { threadId: thread, turnId: turn }, 15_000);
+    } catch (error) {
+      if (isBug(error)) throw error;
+      // The agent couldn't be told: end the turn here rather than leave it running on screen.
+      diag.warn("agent", `stopping the turn in ${project}: ${diag.messageOf(error)}; ending it here`);
+      this.abandon(project, "Stopped.");
+    }
+  }
+
+  /**
+   * Ends a running turn from Edit's side: its Claude query closed (the
+   * process with it), its Codex turn interrupted and its end ignored when it
+   * comes. For a stop that wasn't answered, a stalled turn or Edit quitting.
+   */
+  private abandon(project: string, error: string): void {
+    const chat = this.withChat(project);
+    if (!chat.running) return;
+    chat.dropped = true;
     const running = this.claudeQueries.get(project);
     if (running !== undefined) {
-      await running.interrupt();
-      return;
+      this.claudeQueries.delete(project);
+      try {
+        running.close();
+      } catch (thrown) {
+        diag.warn("agent", `closing Claude Code for ${project}: ${diag.messageOf(thrown)}`);
+      }
     }
-    if (chat.provider === "claude") return;
     const { thread, turn } = chat;
-    if (thread === null || turn === null) return;
-    const codex = await this.codex();
-    await codex.call("turn/interrupt", { threadId: thread, turnId: turn }, 15_000);
+    if (chat.on === "codex" && thread !== null && turn !== null) {
+      this.abandoned.add(turn);
+      const codex = this.codexProcess;
+      if (codex !== null && codex.alive) {
+        void codex.call("turn/interrupt", { threadId: thread, turnId: turn }, 15_000).catch(() => undefined);
+      }
+    }
+    this.finish(project, error);
+  }
+
+  /** Starts looking for stalled turns (once). */
+  private watch(): void {
+    if (this.watchdog !== null) return;
+    this.watchdog = setInterval(() => {
+      try {
+        this.checkStalls(timing.now());
+      } catch (error) {
+        if (isBug(error)) crashed("looking for stalled agent turns", error);
+      }
+    }, WATCH_EVERY_MS);
+    this.watchdog.unref?.();
+  }
+
+  /** Ends every running turn whose agent has said nothing for STALL_MS. */
+  checkStalls(now: number): void {
+    for (const [project, chat] of this.chats) {
+      if (!chat.running || now - chat.heard < STALL_MS) continue;
+      diag.warn("agent", `${project}: nothing from the agent for ${diag.human(now - chat.heard)}; ending the turn`);
+      this.abandon(
+        project,
+        `The agent stopped answering (nothing for ${STALL_MS / 60_000} minutes), so Edit ended the turn; send a message to carry on.`,
+      );
+    }
+  }
+
+  /** Edit is quitting: each running turn ends and says so in its chat, Claude Code is closed and Codex stopped. */
+  shutdown(): void {
+    if (this.watchdog !== null) {
+      clearInterval(this.watchdog);
+      this.watchdog = null;
+    }
+    for (const [project, chat] of this.chats) {
+      if (!chat.running) continue;
+      chat.halted = true;
+      this.abandon(project, "Edit was closed during this turn; send a message to carry on.");
+    }
+    for (const running of this.claudeQueries.values()) {
+      try {
+        running.close();
+      } catch {
+        // Going anyway.
+      }
+    }
+    this.claudeQueries.clear();
+    this.codexProcess?.kill();
+    this.codexProcess = null;
   }
 
   private finish(project: string, error: string | null): void {
@@ -968,10 +1199,11 @@ export class Agents implements seams.AgentPanel {
         `${project}: the turn took ${started === null ? "?" : diag.human(timing.now() - started)} over ${used.calls} model calls, reading ${minus("inputTokens")} tokens (${minus("cachedInputTokens")} cached) and writing ${minus("outputTokens")} (${minus("reasoningOutputTokens")} reasoning)${context}`,
       );
     }
-    if (error !== null) this.upsert(project, entry({ id: `error-${nowMs()}`, kind: "error", text: error }));
+    if (error !== null) this.upsert(project, entry({ id: newId("error"), kind: "error", text: error }));
     const now = nowMs();
     chat.running = false;
     chat.turn = null;
+    chat.on = null;
     const last = chat.entries[chat.entries.length - 1];
     if (last !== undefined) last.updated = Math.max(last.updated, now);
     // A turn that ended mid-tool leaves it unresolved; mark it.
@@ -1018,7 +1250,14 @@ export class Agents implements seams.AgentPanel {
     const params = (typeof message.params === "object" && message.params !== null ? message.params : {}) as Record<string, unknown>;
     // The process is gone: no turn of it will ever complete, so end them now.
     if (method === EXITED) {
-      const running = [...this.chats].filter(([, chat]) => chat.running).map(([project]) => project);
+      // One-off questions waiting on it fail now, not when their time is up.
+      for (const ask of this.asks.values()) {
+        const done = ask.done;
+        ask.done = null;
+        done?.({ error: "Codex stopped" });
+      }
+      // Only Codex's turns: a Claude turn running meanwhile carries on (it'd go on editing unseen if ended here).
+      const running = [...this.chats].filter(([, chat]) => chat.running && chat.on === "codex").map(([project]) => project);
       for (const project of running) {
         this.withChat(project).halted = true;
         this.finish(project, "Codex stopped unexpectedly; send your message again.");
@@ -1030,6 +1269,7 @@ export class Agents implements seams.AgentPanel {
     if (this.answer(thread, method, params)) return;
     const project = this.threads.get(thread);
     if (project === undefined) return;
+    this.withChat(project).heard = timing.now();
     switch (method) {
       case "thread/tokenUsage/updated": {
         // What the turn reads and writes, logged when it ends (speed-plan 2.1):
@@ -1098,13 +1338,18 @@ export class Agents implements seams.AgentPanel {
           const said = (params.error as { message?: unknown } | undefined)?.message;
           this.upsert(
             project,
-            entry({ id: `error-${nowMs()}`, kind: "error", text: typeof said === "string" ? said : "Codex reported an error" }),
+            entry({ id: newId("error"), kind: "error", text: typeof said === "string" ? said : "Codex reported an error" }),
           );
         }
         break;
       }
       case "turn/completed": {
         const turn = (params.turn ?? {}) as Record<string, unknown>;
+        const id = typeof turn.id === "string" ? turn.id : null;
+        // A turn Edit already ended, or another than the one running, ends nothing.
+        if (id !== null && this.abandoned.delete(id)) break;
+        const chat = this.withChat(project);
+        if (!chat.running || (chat.turn !== null && id !== null && id !== chat.turn)) break;
         let error: string | null = null;
         if (turn.status === "failed") {
           const said = (turn.error as { message?: unknown } | undefined)?.message;
@@ -1249,16 +1494,6 @@ export function tomlKey(name: string): string {
   return /^[A-Za-z0-9_-]*$/.test(name) ? name : `"${name.replaceAll('"', '\\"')}"`;
 }
 
-/** Whether `binary --version` runs and succeeds. */
-async function runs(binary: string): Promise<boolean> {
-  try {
-    const child = Bun.spawn([binary, "--version"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
-    return (await child.exited) === 0;
-  } catch {
-    return false;
-  }
-}
-
 export async function findCodex(): Promise<string | null> {
   const home = process.env.HOME ?? "";
   const candidates = [
@@ -1269,7 +1504,7 @@ export async function findCodex(): Promise<string | null> {
     join(home, ".npm-global/bin/codex"),
   ];
   for (const candidate of candidates) {
-    if (await runs(candidate)) return candidate;
+    if (await claude.runs(candidate)) return candidate;
   }
   return null;
 }
@@ -1285,25 +1520,9 @@ async function checkCodex(): Promise<Json> {
     });
   }
   // Both at once: each is a Node start-up.
-  const version = (async () => {
-    try {
-      const child = Bun.spawn([binary, "--version"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-      const [out] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-      const text = trim(out);
-      return text === "" ? null : text;
-    } catch {
-      return null;
-    }
-  })();
-  const loggedIn = (async () => {
-    try {
-      const child = Bun.spawn([binary, "login", "status"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
-      return (await child.exited) === 0;
-    } catch {
-      return false;
-    }
-  })();
-  const [said, logged] = await Promise.all([version, loggedIn]);
+  const [printed, login] = await Promise.all([claude.runCheck([binary, "--version"]), claude.runCheck([binary, "login", "status"])]);
+  const said = printed.code === 0 && trim(printed.out) !== "" ? trim(printed.out) : null;
+  const logged = login.code === 0;
   if (!logged) {
     return sorted({
       provider: "codex",
@@ -1326,9 +1545,23 @@ export const MAX_RETRIES = 3;
 /** A turn that failed because the model was busy (worth trying again), not because of anything in the request. */
 export function busyModel(error: string): boolean {
   const lower = error.replace(/[A-Z]/g, (c) => c.toLowerCase());
-  return ["at capacity", "overloaded", "temporarily unavailable", "try again later", "server_error", "503"].some((sign) =>
-    lower.includes(sign),
-  );
+  const signs = [
+    "at capacity",
+    "overloaded",
+    "temporarily unavailable",
+    "try again later",
+    "server_error",
+    "high demand",
+    // Claude Code's words for a failed API call: "API Error: 500 … api_error", a dropped connection.
+    "internal server error",
+    "api_error",
+    "connection error",
+    "request timed out",
+    "stream disconnected",
+    "econnreset",
+    "socket hang up",
+  ];
+  return signs.some((sign) => lower.includes(sign)) || /\b(500|502|503|504|529)\b/.test(lower);
 }
 
 /** Sent to `onMessage` (by Edit, not Codex) when Codex's output ends. */
@@ -1340,6 +1573,8 @@ type Reply = (result: { ok: unknown } | { error: string }) => void;
 export interface Transport {
   write(line: string): void;
   kill(): void;
+  /** The end of what it printed to stderr, to say why it stopped. */
+  said?(): string;
 }
 
 export class Codex {
@@ -1360,12 +1595,24 @@ export class Codex {
     // plugins (overrides merge into their config, so each server is disabled by name).
     const args = ["app-server", "--disable", "apps", "--disable", "plugins"];
     for (const name of userMcpServers()) args.push("-c", `mcp_servers.${tomlKey(name)}.enabled=false`);
-    let child: Bun.Subprocess<"pipe", "pipe", "ignore">;
+    let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
     try {
-      child = Bun.spawn([binary, ...args], { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+      child = Bun.spawn([binary, ...args], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     } catch (error) {
       throw new Error(`couldn't start Codex: ${diag.messageOf(error)}`);
     }
+    // Read as it comes (a full pipe would stop Codex), the last few lines kept for when it stops.
+    let tail = "";
+    void (async () => {
+      const decoder = new TextDecoder();
+      try {
+        for await (const chunk of child.stderr as unknown as AsyncIterable<Uint8Array>) {
+          tail = (tail + decoder.decode(chunk, { stream: true })).slice(-4000);
+        }
+      } catch {
+        // Gone with the process.
+      }
+    })();
     const codex = new Codex(
       {
         write: (line) => {
@@ -1377,6 +1624,7 @@ export class Codex {
           }
         },
         kill: () => child.kill(),
+        said: () => tail,
       },
       onMessage,
     );
@@ -1446,6 +1694,8 @@ export class Codex {
   /** Codex's output ended. */
   exited(): void {
     this.alive = false;
+    const said = trim(this.transport.said?.() ?? "");
+    if (said !== "") diag.warn("agent", `Codex stopped; it last said: ${takeChars(said.split("\n").slice(-6).join(" | "), 800)}`);
     for (const reply of this.pending.values()) reply({ error: "Codex stopped" });
     this.pending.clear();
     this.onMessage({ method: EXITED });

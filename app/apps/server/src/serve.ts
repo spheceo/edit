@@ -169,16 +169,29 @@ export function start(home: string, host: string | null, port: number): { app: A
   seams.speakers.watch(app);
   // Cloud projects (Settings → Cloud): sync, locks, and letting them go on the way out.
   optional("cloud", () => seams.cloudProjects.start(app));
-  process.on("SIGINT", () => {
+  let quitting = false;
+  const quit = (code: number) => {
+    // A second signal, or a cloud push that never answers, doesn't hold Edit open.
+    if (quitting) process.exit(code);
+    quitting = true;
+    setTimeout(() => process.exit(code), 20_000).unref();
+    // The agents first: a turn left running goes on editing (and spending) with no Edit to answer it.
+    try {
+      app.agents.shutdown?.();
+    } catch (error) {
+      diag.warn("agent", `on the way out: ${diag.messageOf(error)}`);
+    }
     void (async () => {
       try {
         await seams.cloudProjects.shutdown();
       } catch (error) {
         if (!seams.isUnavailable(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
       }
-      process.exit(130);
+      process.exit(code);
     })();
-  });
+  };
+  process.on("SIGINT", () => quit(130));
+  process.on("SIGTERM", () => quit(143));
   const router = buildRouter();
   const servers: Server<unknown>[] = [];
   for (const address of bindAddresses(host, port, ip)) {

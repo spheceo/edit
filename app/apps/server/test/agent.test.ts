@@ -261,7 +261,13 @@ test("tool arguments read as one short line; a busy model is tried again", () =>
   expect(summarizeArgs({ a: "x".repeat(200), b: "y".repeat(200) }).length).toBe(129);
   expect(summarizeArgs({ a: "x".repeat(200), b: "y".repeat(200), c: "z".repeat(10) })).toBe(`a: ${"x".repeat(60)} · b: ${"y".repeat(60)} · c: zzzzz…`);
   expect(busyModel("The model is at capacity")).toBe(true);
+  expect(busyModel('API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}')).toBe(true);
+  expect(busyModel("API Error: 529 overloaded_error")).toBe(true);
+  expect(busyModel("API Error: Connection error.")).toBe(true);
+  expect(busyModel("stream disconnected before completion")).toBe(true);
   expect(busyModel("Invalid request")).toBe(false);
+  expect(busyModel("Claude Code stopped: it reached its limit of turns.")).toBe(false);
+  expect(busyModel("prompt is too long: 1500000 tokens")).toBe(false);
 });
 
 test("a turn's tokens are logged when it ends: read, cached, written, reasoning, calls", async () => {
@@ -286,6 +292,59 @@ test("a turn's tokens are logged when it ends: read, cached, written, reasoning,
     fixture.complete();
     const line = diag.lines(50).map((one) => one.message).find((text) => text.includes("model calls"));
     expect(line).toContain("over 2 model calls, reading 1300 tokens (1100 cached) and writing 100 (60 reasoning); the last call read 800 of 272000");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("another turn's end doesn't end the running one", async () => {
+  const fixture = new Fixture();
+  try {
+    const started = fixture.start();
+    const request = await fixture.request("turn/start");
+    fixture.reply(request, { turn: { id: "test-turn" } });
+    await started;
+    fixture.agents.onMessage({ method: "turn/completed", params: { threadId: "test-thread", turn: { id: "old-turn", status: "interrupted" } } });
+    expect(fixture.agents.withChat(fixture.project).running).toBe(true);
+    fixture.complete();
+    expect(fixture.agents.withChat(fixture.project).running).toBe(false);
+    expect(fixture.agents.withChat(fixture.project).entries.some((item) => item.kind === "error")).toBe(false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("a turn stopped after its codex went away ends at once", async () => {
+  const fixture = new Fixture();
+  try {
+    const started = fixture.start();
+    const request = await fixture.request("turn/start");
+    fixture.reply(request, { turn: { id: "test-turn" } });
+    await started;
+    fixture.codex.alive = false;
+    await fixture.agents.stop(fixture.project);
+    const chat = fixture.agents.withChat(fixture.project);
+    expect(chat.running).toBe(false);
+    expect(chat.entries.at(-1)?.text).toBe("Stopped.");
+    // Its end, should it still come, is ignored.
+    fixture.complete();
+    expect(chat.entries.filter((item) => item.kind === "error").length).toBe(1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("a one-off question fails as soon as codex goes away", async () => {
+  const fixture = new Fixture();
+  try {
+    const asked = fixture.agents.ask("gpt-test", "low", "Name the voices.", [{ type: "text", text: "hi" }], null, 60_000);
+    fixture.reply(await fixture.request("thread/start"), { thread: { id: "ask-thread" } });
+    fixture.reply(await fixture.request("turn/start"), {});
+    await Bun.sleep(0);
+    const began = performance.now();
+    fixture.agents.onMessage({ method: EXITED });
+    await expect(asked).rejects.toThrow("Codex stopped");
+    expect(performance.now() - began).toBeLessThan(1000);
   } finally {
     fixture.cleanup();
   }

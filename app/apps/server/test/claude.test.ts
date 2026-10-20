@@ -4,7 +4,9 @@
 
 import { expect, test } from "bun:test";
 
-import { Agents } from "../src/agent.ts";
+import * as fs from "node:fs";
+
+import { Agents, EXITED, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -29,12 +31,13 @@ test("plans and results read as the user sees them", () => {
   expect(claude.toolName("mcp__edit__get_edit_context")).toBe("get_edit_context");
 });
 
-/** A stand-in query: the test pushes messages; interrupt ends it as stopped. */
-function fakeQuery() {
+/** A stand-in query: the test pushes messages; interrupt ends it as stopped (or never answers, `hangs`). */
+function fakeQuery(hangs = false) {
   const queue: unknown[] = [];
   let wake: (() => void) | null = null;
   let ended = false;
   let interrupted = false;
+  let closed = false;
   const push = (message: unknown) => {
     queue.push(message);
     wake?.();
@@ -57,20 +60,24 @@ function fakeQuery() {
   const query = Object.assign(generator, {
     interrupt: async () => {
       interrupted = true;
+      if (hangs) return new Promise<undefined>(() => {});
       push({ type: "result", subtype: "error_during_execution", errors: ["interrupted"], usage: {} });
       end();
       return undefined;
     },
-    close: () => end(),
+    close: () => {
+      closed = true;
+      end();
+    },
   });
-  return { query: query as unknown as claude.Query, push, end, interrupted: () => interrupted };
+  return { query: query as unknown as claude.Query, push, end, interrupted: () => interrupted, closed: () => closed };
 }
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 10; i++) await Bun.sleep(0);
 }
 
-function agentsWith(home: ReturnType<typeof fixtureHome>) {
+function agentsWith(home: ReturnType<typeof fixtureHome>, hangs = false) {
   const agents = new Agents(home.store, home.home, 7700);
   const asked: { prompt: string; options: claude.Options }[] = [];
   const queries: ReturnType<typeof fakeQuery>[] = [];
@@ -78,7 +85,7 @@ function agentsWith(home: ReturnType<typeof fixtureHome>) {
   agents.listClaudeModels = async () => MODELS;
   agents.claudeQuery = async (params) => {
     asked.push(params);
-    const fake = fakeQuery();
+    const fake = fakeQuery(hangs);
     queries.push(fake);
     return fake.query;
   };
@@ -176,6 +183,120 @@ test("a codex chat starts a new claude conversation, and stopping interrupts the
     const chat = agents.withChat(project);
     expect(chat.running).toBe(false);
     expect(chat.entries.at(-1)?.text).toBe("Stopped.");
+  } finally {
+    home.cleanup();
+  }
+});
+
+/** A project with the agent on Claude Code, for one test. */
+function claudeProject(name: string, hangs = false) {
+  const home = fixtureHome(name);
+  const project = home.store.create(name, { width: 1920, height: 1080, fps: 30 }).project.id;
+  return { home, project, ...agentsWith(home, hangs) };
+}
+
+test("a stop claude code never answers ends the turn after the grace, closing it", async () => {
+  const { home, project, agents, queries } = claudeProject("claude-hung", true);
+  const saved = { ...timing };
+  const timers: (() => void)[] = [];
+  timing.later = (_ms, work) => timers.push(work);
+  timing.sleep = async () => {};
+  try {
+    await agents.send(project, "Go", null, null);
+    await agents.stop(project);
+    expect(queries[0]!.interrupted()).toBe(true);
+    expect(agents.withChat(project).running).toBe(true);
+    for (const work of timers) work();
+    await settle();
+    const chat = agents.withChat(project);
+    expect(chat.running).toBe(false);
+    expect(queries[0]!.closed()).toBe(true);
+    expect(chat.entries.at(-1)?.text).toBe("Stopped.");
+  } finally {
+    Object.assign(timing, saved);
+    home.cleanup();
+  }
+});
+
+test("codex going away leaves a claude turn running", async () => {
+  const { home, project, agents, queries } = claudeProject("claude-codex-exit");
+  try {
+    await agents.send(project, "Go", null, null);
+    agents.onMessage({ method: EXITED });
+    expect(agents.withChat(project).running).toBe(true);
+    expect(queries[0]!.closed()).toBe(false);
+  } finally {
+    home.cleanup();
+  }
+});
+
+test("a turn its agent stopped answering is ended, and edit quitting ends the rest", async () => {
+  const { home, project, agents, queries } = claudeProject("claude-stall");
+  try {
+    await agents.send(project, "Go", null, null);
+    queries[0]!.push({ type: "system", subtype: "init", session_id: "session-1" });
+    await settle();
+    agents.checkStalls(timing.now() + STALL_MS / 2);
+    expect(agents.withChat(project).running).toBe(true);
+    agents.checkStalls(timing.now() + STALL_MS + 1000);
+    await settle();
+    let chat = agents.withChat(project);
+    expect(chat.running).toBe(false);
+    expect(queries[0]!.closed()).toBe(true);
+    expect(chat.entries.at(-1)?.text).toContain("The agent stopped answering");
+
+    await agents.send(project, "Carry on", null, null);
+    expect(agents.withChat(project).running).toBe(true);
+    agents.shutdown();
+    await settle();
+    chat = agents.withChat(project);
+    expect(chat.running).toBe(false);
+    expect(queries[1]!.closed()).toBe(true);
+    expect(chat.entries.at(-1)?.text).toBe("Edit was closed during this turn; send a message to carry on.");
+  } finally {
+    home.cleanup();
+  }
+});
+
+test("a session claude code no longer has is started again as a new conversation in the same turn", async () => {
+  const { home, project, agents, asked, queries } = claudeProject("claude-gone");
+  try {
+    agents.withChat(project).provider = "claude";
+    agents.withChat(project).thread = "session-gone";
+    await agents.send(project, "And the outro", null, null);
+    expect(asked[0]!.options.resume).toBe("session-gone");
+    queries[0]!.push({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["No conversation found with session ID: session-gone"], usage: {} });
+    queries[0]!.end();
+    await settle();
+    expect(asked.length).toBe(2);
+    expect(asked[1]!.options.resume).toBeUndefined();
+    expect(asked[1]!.prompt).toStartWith("(Edit, automatically) The earlier conversation couldn't be picked up again");
+    expect(asked[1]!.prompt).toEndWith("\n\nAnd the outro");
+    let chat = agents.withChat(project);
+    expect(chat.running).toBe(true);
+    expect(chat.thread).toBeNull();
+    queries[1]!.push({ type: "system", subtype: "init", session_id: "session-2" });
+    queries[1]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+    queries[1]!.end();
+    await settle();
+    chat = agents.withChat(project);
+    expect(chat.running).toBe(false);
+    expect(chat.thread).toBe("session-2");
+    expect(chat.entries.filter((item) => item.kind === "user").length).toBe(1);
+    expect(chat.entries.some((item) => item.kind === "error")).toBe(false);
+  } finally {
+    home.cleanup();
+  }
+});
+
+test("a chat saved mid-tool reads back with that tool stopped", () => {
+  const home = fixtureHome("claude-reload");
+  try {
+    const project = home.store.create("Reload", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const entries = [{ id: "t1", kind: "tool", text: "", tool: "watch_footage", status: "running", at: 1, updated: 1 }];
+    fs.writeFileSync(home.store.chatPath(project), JSON.stringify({ provider: "claude", thread: "s", model: null, effort: null, entries }));
+    const agents = new Agents(home.store, home.home, 7700);
+    expect(agents.withChat(project).entries[0]!.status).toBe("stopped");
   } finally {
     home.cleanup();
   }

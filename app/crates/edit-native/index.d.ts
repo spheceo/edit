@@ -91,6 +91,13 @@ export declare function composeSheet(images: Array<RawImage>, columns: number, e
  */
 export declare function desktopFiles(width: number, height: number, photoTitle: string, notepadTitle: string): Promise<[string, string, string]>
 
+/**
+ * A desktop window's frame (`kind`: photo_viewer, notepad or video_player)
+ * `width` × `height` pixels at scale `scale`, drawn into `<home>/graphics/`
+ * if missing: its path.
+ */
+export declare function desktopWindow(kind: string, width: number, height: number, scale: number): Promise<string>
+
 /** An encoded picture. */
 export interface EncodedImage {
   data: Buffer

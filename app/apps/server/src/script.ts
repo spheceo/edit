@@ -21,7 +21,7 @@ import { importMade, importPaths } from "./import.ts";
 import * as mediaModule from "./media.ts";
 import { cloudEnabled } from "./relay.ts";
 import type { ClipColor, Project, Script, ScriptBlock, ScriptJob, TextStyle, TrackKind } from "./model.ts";
-import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freshId, marksCut, mediaOf } from "./project.ts";
+import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freshId, marksCut, mediaOf, REUSE_LABEL } from "./project.ts";
 import { fileName, fileStem, extension as pathExtension, join, parent } from "./paths.ts";
 import { byteLength, charCount, display, f32, isAlphanumeric, isWhitespace, parseHex, round, splitWhitespace, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
@@ -496,7 +496,7 @@ function notes(refs: [number, string][], comments: Map<string, string>): string[
 }
 
 /** The label of a footage block that plays a reused video whole (a narration's "Reuse: <link>" note). */
-export const REUSE = "Reuse (the whole video)";
+export const REUSE = REUSE_LABEL;
 
 /**
  * A narration's note naming another case's script ("Edit case 2 based on

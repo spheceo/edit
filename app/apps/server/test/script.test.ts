@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 
 import type { ScriptBlock } from "../src/model.ts";
 import { native } from "../src/native/index.ts";
-import { clipEnd, fps as fpsOf } from "../src/project.ts";
+import { clipEnd, fps as fpsOf, subtitledSpans } from "../src/project.ts";
 import {
   align,
   clock,
@@ -26,6 +26,7 @@ import {
   likeness,
   parse,
   placed,
+  REUSE,
   resolve,
   safeName,
   spans,
@@ -441,4 +442,18 @@ test("excerpts_of_dvd_and_webm_files_are_mp4", () => {
   expect(excerptExtension("webm")).toBe("mp4");
   expect(excerptExtension("mov")).toBe("mov");
   expect(excerptExtension("mp4")).toBe("mp4");
+});
+
+test("a_reused_finished_video_gets_no_subtitles_whatever_the_segments_say", () => {
+  const project = newProject("Test");
+  project.media.push(media({ id: "m1", name: "a.mp4", path: "/tmp/a.mp4", kind: "video", duration: 120, width: 1920, height: 1080, fps: 30, has_audio: true }));
+  project.media.push(media({ id: "m2", name: "reuse.mp4", path: "/tmp/r.mp4", kind: "video", duration: 60, width: 1920, height: 1080, fps: 30, has_audio: true }));
+  project.script = {
+    blocks: [
+      { kind: "footage", url: "", file: "f1", start: 0, end: 10, label: "", media: "m1" },
+      { kind: "footage", url: "", file: "f2", start: 0, end: 60, label: REUSE, media: "m2" },
+    ],
+  };
+  layOut(project);
+  expect(subtitledSpans(project, 0, 2100)).toEqual([[0, 300]]);
 });

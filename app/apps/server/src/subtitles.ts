@@ -22,6 +22,7 @@ import {
   fps as fpsOf,
   freshId,
   mediaOf,
+  reusedMedia,
   subtitledSpans,
   subtitlesTrack,
   trackOf,
@@ -1244,10 +1245,13 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
  * music or sound effects) on tracks that are heard.
  */
 export function footageSound(project: Project, from: number, to: number): Clip[] {
+  // A reused finished video of ours has its own mutes already.
+  const reused = reusedMedia(project);
   return project.clips.filter((clip) => {
     const track = trackOf(project, clip.track);
     if (track === undefined || track.kind !== "audio" || track.muted) return false;
     if (!(clip.start < to && clipEnd(clip) > from) || clip.type !== "audio") return false;
+    if (reused.has(clip.media)) return false;
     const media = mediaOf(project, clip.media);
     return media !== undefined && media.kind === "video" && media.has_audio;
   });
@@ -1282,7 +1286,10 @@ const SEAT_FILES_AT_ONCE = 3;
 
 /** Writes `mutes` onto their audio clips: each clip's mutes inside the stretch looked at are replaced, the rest kept. */
 export function writeMutes(project: Project, mutes: ClipMutes): void {
+  // A reused finished video's own mutes are burned into its sound: ours never go on it.
+  const reused = reusedMedia(project);
   for (const clip of project.clips) {
+    if (clip.type === "audio" && reused.has(clip.media) && (clip.mutes ?? []).length > 0) clip.mutes = [];
     const entry = mutes.get(clip.id);
     if (entry === undefined || clip.type !== "audio") continue;
     const [visibleFrom, visibleTo, fresh] = entry;

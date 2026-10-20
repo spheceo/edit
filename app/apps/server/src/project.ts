@@ -193,11 +193,48 @@ export function inOut(project: Project): [number, number] | null {
  */
 export function subtitledSpans(project: Project, start: number, end: number): [number, number][] {
   const segments = project.segments ?? [];
-  if (segments.length === 0) return end > start ? [[start, end]] : [];
-  return segments
-    .filter((segment) => segment.kind === "footage")
-    .map((segment): [number, number] => [Math.max(segment.start, start), Math.min(segment.end, end)])
-    .filter(([from, to]) => to > from);
+  const spans: [number, number][] =
+    segments.length === 0
+      ? end > start
+        ? [[start, end]]
+        : []
+      : segments
+          .filter((segment) => segment.kind === "footage")
+          .map((segment): [number, number] => [Math.max(segment.start, start), Math.min(segment.end, end)])
+          .filter(([from, to]) => to > from);
+  // A reused finished video has its subtitles burned in, whatever the segments say.
+  const reused = reusedSpans(project);
+  if (reused.length === 0) return spans;
+  const out: [number, number][] = [];
+  for (const span of spans) {
+    let pieces: [number, number][] = [span];
+    for (const [from, to] of reused) {
+      pieces = pieces.flatMap(([a, b]): [number, number][] => (to <= a || from >= b ? [[a, b]] : ([[a, Math.min(b, from)], [Math.max(a, to), b]] as [number, number][]).filter(([x, y]) => y > x)));
+    }
+    out.push(...pieces);
+  }
+  return out;
+}
+
+/** The label of a script block that plays a finished video of ours whole (a narration's "Reuse: <link>" note). */
+export const REUSE_LABEL = "Reuse (the whole video)";
+
+/** The media of the finished videos a script reuses whole (their subtitles and mutes are burned in). */
+export function reusedMedia(project: Project): Set<string> {
+  const out = new Set<string>();
+  for (const block of project.script?.blocks ?? []) {
+    if (block.kind === "footage" && block.label === REUSE_LABEL && typeof block.media === "string") out.add(block.media);
+  }
+  return out;
+}
+
+/** Where on the timeline (frames) a reused finished video plays. */
+export function reusedSpans(project: Project): [number, number][] {
+  const media = reusedMedia(project);
+  if (media.size === 0) return [];
+  return project.clips
+    .filter((clip) => (clip.type === "video" || clip.type === "audio") && media.has(clip.media))
+    .map((clip): [number, number] => [clip.start, clipEnd(clip)]);
 }
 
 export function clipEnd(clip: Clip): number {

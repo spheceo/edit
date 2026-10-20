@@ -215,3 +215,21 @@ test("a_long_room_shot_with_a_photo_over_part_of_it_counts_only_what_shows", () 
   p.clips.push(clip({ id: "over", track: "v3", start: 100, duration: 100, type: "video", media: "photo", source_in: 0, speed: 1 }));
   expect(kinds(p, "long_broll_shot").map((issue) => issue.seconds)).toEqual([]);
 });
+
+test("wide_static_teasers_and_a_bridge_room_never_close_are_flagged", () => {
+  const p = tape();
+  p.style = "interrogation";
+  const parts = [{ start: 0, end: 300, kind: "intro" }, { start: 300, end: 700, kind: "broll" }];
+  const found = (kind: string) => (framing.interrogationIssues(p, parts, () => []) as Record<string, unknown>[]).filter((issue) => issue.kind === kind);
+  // The tape at fill, static: too wide.
+  apply(p, [{ op: "fill_frame" }]);
+  expect(found("teaser_wide")[0]).toMatchObject({ clips: 1, of: 1, static: 1 });
+  const teaser = p.clips[0] as VideoClip;
+  teaser.keyframes = { scale: [{ frame: 0, value: 2.2, ease: "linear" }, { frame: 299, value: 2.4, ease: "linear" }] };
+  expect(found("teaser_wide")).toEqual([]);
+  // A bridge's room pushing 1 → 1.1: never close; a punch-in over most of it: close.
+  p.clips.push(clip({ id: "r1", name: "Cut-in 1 · B-roll: the room", track: "v2", start: 300, duration: 400, type: "video", media: "room", source_in: 20, speed: 1, keyframes: { scale: [{ frame: 0, value: 1.19 }, { frame: 399, value: 1.31 }] } }));
+  expect(found("room_wide")[0]).toMatchObject({ bridges: ["Cut-in 1"] });
+  (p.clips.find((own) => own.id === "r1") as VideoClip).keyframes = { scale: [{ frame: 0, value: 1.6 }, { frame: 399, value: 1.8 }] };
+  expect(found("room_wide")).toEqual([]);
+});

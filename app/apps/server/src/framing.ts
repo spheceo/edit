@@ -339,6 +339,7 @@ export function pending(project: Project): string[] {
 const TEASER_CLOSE = 1.5;
 /** The room under a narration reaches at least this close (÷ the filled frame) somewhere in each shot. */
 const ROOM_CLOSE = 1.25;
+const ROOM_CLOSE_SHARE = 0.3;
 /** A bridge at least this long shows pictures of what's said this share of its time. */
 const BRIDGE_SECONDS = 8;
 const BRIDGE_PICTURES = 0.4;
@@ -384,22 +385,28 @@ export function interrogationIssues(project: Project, parts: { start: number; en
     });
   }
   // The room under a narration, held wide: "we need to be more zoomed in
-  // here" (on the prologue's room). Never closer than ROOM_CLOSE at any key.
-  const wideRoom: string[] = [];
+  // here" (on the prologue's room). Per bridge (its shots share one push):
+  // at least ROOM_CLOSE_SHARE of its room time closer than ROOM_CLOSE.
+  const rooms = new Map<string, { close: number; total: number; first: string }>();
   for (const clip of project.clips) {
     if (clip.type !== "video" || clip.track === base || !(clip.name ?? "").includes("B-roll:")) continue;
     const media = mediaOf(project, clip.media);
     if (media === undefined || media.kind !== "video") continue;
-    const keys = clip.keyframes?.scale ?? [];
-    const closest = keys.length > 0 ? Math.max(...keys.map((key) => key.value)) : (clip.transform.scale ?? 1);
-    if (closest / fill(project, media).scale < ROOM_CLOSE) wideRoom.push(clip.id);
+    const bridge = /^(Cut-in \d+)/u.exec(clip.name ?? "")?.[1] ?? clip.id;
+    const own = rooms.get(bridge) ?? { close: 0, total: 0, first: clip.id };
+    const want = ROOM_CLOSE * fill(project, media).scale;
+    for (let frame = 0; frame < clip.duration; frame += 3) {
+      own.total += 1;
+      if (at(clip.keyframes?.scale, frame, clip.transform.scale ?? 1) >= want) own.close += 1;
+    }
+    rooms.set(bridge, own);
   }
-  if (wideRoom.length > 0) {
+  const wideRooms = [...rooms.entries()].filter(([, own]) => own.total > 0 && own.close / own.total < ROOM_CLOSE_SHARE);
+  if (wideRooms.length > 0) {
     out.push({
       kind: "room_wide",
-      clips: wideRoom.length,
-      first: wideRoom.slice(0, 8),
-      fix: `the room under a narration comes closer: at least ${ROOM_CLOSE}× the filled frame by the shot's end (a push, or a punch-in on the person questioned)`,
+      bridges: wideRooms.map(([bridge]) => bridge),
+      fix: `the room under a narration comes closer than the tape: at least ${Math.round(ROOM_CLOSE_SHARE * 100)}% of each bridge's room time at ${ROOM_CLOSE}× the filled frame or more (punch-ins on the person questioned, a push that gets there)`,
     });
   }
   // The first hook: the first narration after the first teaser.

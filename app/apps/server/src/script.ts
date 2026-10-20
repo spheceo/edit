@@ -1711,9 +1711,24 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
         delete block.cut;
       }
     }
-    if (recut) clearLayout(project);
+    // A range whose file only came in now (a resumed import) would land
+    // after everything already placed: lay the whole script out again.
+    if (recut || outOfOrder(project)) clearLayout(project);
     layOut(project);
   });
+}
+
+/**
+ * Whether laying out now would put a range after blocks that follow it in the
+ * script: one ready to place (its media in) before a block already placed.
+ */
+export function outOfOrder(project: Project): boolean {
+  let waiting = false;
+  for (const block of project.script?.blocks ?? []) {
+    if (block.kind === "footage" && !isSome(block.clip) && isSome(block.media) && mediaOf(project, block.media) !== undefined) waiting = true;
+    else if (waiting && (isSome(block.clip) || (block.kind === "narration" && isSome(block.voiceover)))) return true;
+  }
+  return false;
 }
 
 /**

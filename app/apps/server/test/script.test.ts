@@ -22,6 +22,7 @@ import {
   joinCases,
   findRanges,
   layOut,
+  outOfOrder,
   likeness,
   parse,
   placed,
@@ -177,6 +178,30 @@ test("lays_out_footage_and_cut_ins_in_order", () => {
   layOut(project);
   expect(project.clips.length).toBe(count);
   expect(project.script.blocks.filter((block) => block.kind === "narration").every((block) => placed(project, block))).toBe(true);
+});
+
+test("a_resumed_import_whose_footage_comes_before_placed_blocks_is_out_of_order", () => {
+  stubNative();
+  const project = newProject("Test");
+  project.media.push(media({ id: "m1", name: "a.mp4", path: "/tmp/a.mp4", kind: "video", duration: 120, width: 1920, height: 1080, fps: 30, has_audio: true }));
+  // The first run failed the footage's file: only the narration was placed.
+  project.script = {
+    blocks: [
+      { kind: "footage", url: "", file: "f1", start: 10, end: 12, label: "" },
+      { kind: "narration", text: "Words between." },
+    ],
+  };
+  layOut(project);
+  expect(outOfOrder(project)).toBe(false);
+  // The resume brings the file in: placing it now would put it after the narration.
+  (project.script.blocks[0] as Footage).media = "m1";
+  expect(outOfOrder(project)).toBe(true);
+  // Footage placed in order is fine.
+  const fresh = newProject("Test");
+  fresh.media = project.media;
+  fresh.script = { blocks: structuredClone(project.script.blocks).map((block) => ({ ...block, clip: undefined })) };
+  layOut(fresh);
+  expect(outOfOrder(fresh)).toBe(false);
 });
 
 // Downloads a real (715 MB) Drive file; ignored in Rust too.

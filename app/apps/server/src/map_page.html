@@ -30,8 +30,15 @@ function createMapLook(width, height) {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(source, 0, 0, width, height);
     const picture = ctx.getImageData(0, 0, width, height), pixels = picture.data;
+    // The tone: natural, dark (greyer and darker) or night (dark blue).
+    const [grey, tint, dim] = C.tone === "night" ? [0.75, [0.55, 0.78, 1.0], 0.55] : C.tone === "dark" ? [0.65, [0.85, 0.92, 1.0], 0.72] : [0, [1, 1, 1], 1];
     for (let i = 0; i < pixels.length; i += 4) {
-      pixels[i] = exposure[pixels[i]]; pixels[i + 1] = exposure[pixels[i + 1]]; pixels[i + 2] = exposure[pixels[i + 2]];
+      let r = exposure[pixels[i]], g = exposure[pixels[i + 1]], b = exposure[pixels[i + 2]];
+      if (grey > 0) {
+        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        r = (r + (luma - r) * grey) * tint[0] * dim; g = (g + (luma - g) * grey) * tint[1] * dim; b = (b + (luma - b) * grey) * tint[2] * dim;
+      }
+      pixels[i] = r; pixels[i + 1] = g; pixels[i + 2] = b;
     }
     ctx.putImageData(picture, 0, 0);
     ctx.save();
@@ -58,14 +65,32 @@ async function mark(ctx, ground, opacity) {
     info.building = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map(Math.round);
   };
   const path = (points) => { ctx.beginPath(); points.forEach((p, i) => (i ? ctx.lineTo(p.x * scale, p.y * scale) : ctx.moveTo(p.x * scale, p.y * scale))); ctx.closePath(); };
+  // A glowing dot on the place (the team's map references), instead of the building.
+  if (C.marker === "dot") {
+    const at = toScreen(C.lon, C.lat, ground + 1);
+    if (!at) return;
+    const [x, y] = [at.x * scale, at.y * scale];
+    const radius = 15 * C.height / 1080;
+    const rgb = C.marker_color === "yellow" ? "255, 214, 10" : C.marker_color === "red" ? "255, 40, 40" : "20, 170, 255";
+    info.building = [x - radius, y - radius, x + radius, y + radius].map(Math.round);
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    const halo = ctx.createRadialGradient(x, y, radius * 0.6, x, y, radius * 4);
+    halo.addColorStop(0, `rgba(${rgb}, 0.45)`); halo.addColorStop(1, `rgba(${rgb}, 0)`);
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(x, y, radius * 4, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowColor = `rgba(${rgb}, 1)`; ctx.shadowBlur = radius * 2;
+    ctx.fillStyle = `rgb(${rgb})`; ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.globalAlpha = opacity;
   ctx.shadowColor = "rgba(255, 30, 30, 1)";
-  ctx.shadowBlur = 70 * C.height / 1080;
+  ctx.shadowBlur = 90 * C.height / 1080;
   ctx.lineJoin = "round";
   ctx.lineWidth = 10 * C.height / 1080;
-  ctx.strokeStyle = "rgba(255, 50, 50, 0.22)";
-  ctx.fillStyle = "rgba(255, 30, 30, 0.26)";
+  ctx.strokeStyle = "rgba(255, 50, 50, 0.16)";
+  ctx.fillStyle = "rgba(255, 30, 30, 0.16)";
   if (C.ring) {
     const middle = C.ring.reduce((sum, p) => [sum[0] + p[0] / C.ring.length, sum[1] + p[1] / C.ring.length], [0, 0]);
     // Measured once, so a moving shot's outline holds steady.

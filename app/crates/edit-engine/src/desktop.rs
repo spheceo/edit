@@ -19,7 +19,7 @@ use edit_render::text::{FontBook, GlyphCache, TextSpec};
 
 /// A new look is a new version: its files get new names, so projects using
 /// the old ones keep them.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// Where things sit at 1080p (pixels from the frame's top-left), measured
 /// off the team's reference frame.
@@ -37,7 +37,15 @@ pub enum Window {
     PhotoViewer,
     Notepad,
     VideoPlayer,
+    /// The references' floating window over a map or a scene: a thin dark
+    /// frame with "File Viewer" small in its top strip, no menus.
+    FileViewer,
 }
+
+/// The File Viewer's top strip (1080p pixels).
+pub const FILE_STRIP: f64 = 22.0;
+/// Its border.
+pub const FILE_BORDER: f64 = 3.0;
 
 /// The height of the Video Player's controls under its picture (1080p pixels).
 pub const CONTROLS: f64 = 46.0;
@@ -45,7 +53,7 @@ pub const CONTROLS: f64 = 46.0;
 impl Window {
     fn rect(self) -> [f64; 4] {
         match self {
-            Window::PhotoViewer | Window::VideoPlayer => PHOTO_VIEWER,
+            Window::PhotoViewer | Window::VideoPlayer | Window::FileViewer => PHOTO_VIEWER,
             Window::Notepad => NOTEPAD,
         }
     }
@@ -56,6 +64,7 @@ impl Window {
             Window::PhotoViewer => "Photo Viewer",
             Window::Notepad => "Notepad",
             Window::VideoPlayer => "Video Player",
+            Window::FileViewer => "File Viewer",
         }
     }
 
@@ -64,6 +73,7 @@ impl Window {
             "photo_viewer" => Some(Window::PhotoViewer),
             "notepad" => Some(Window::Notepad),
             "video_player" => Some(Window::VideoPlayer),
+            "file_viewer" => Some(Window::FileViewer),
             _ => None,
         }
     }
@@ -73,6 +83,7 @@ impl Window {
             Window::PhotoViewer => &["File", "Edit", "Image", "View", "Help"],
             Window::Notepad => &["File", "Edit", "Search", "View", "Help"],
             Window::VideoPlayer => &["File", "Edit", "Playback", "Audio", "Video", "View", "Help"],
+            Window::FileViewer => &[],
         }
     }
 
@@ -81,6 +92,7 @@ impl Window {
             Window::PhotoViewer => "photo-viewer",
             Window::Notepad => "notepad",
             Window::VideoPlayer => "video-player",
+            Window::FileViewer => "file-viewer",
         }
     }
 }
@@ -436,6 +448,10 @@ pub fn window(window: Window, title: &str, layout: &Layout) -> Result<Vec<u8>, S
 /// pixels from its top-left): under the title and menu bars, inset from the
 /// sides and bottom, and over the Video Player's controls.
 pub fn content_in(window: Window, w: f64, h: f64, k: f64) -> [f64; 4] {
+    if window == Window::FileViewer {
+        let (border, strip) = (FILE_BORDER * k, FILE_STRIP * k);
+        return [border, strip, w - 2.0 * border, h - strip - border];
+    }
     let top = (TITLE_BAR + MENU_BAR + 2.0) * k;
     let bottom = match window {
         Window::VideoPlayer => (CONTROLS + INSET) * k,
@@ -447,6 +463,14 @@ pub fn content_in(window: Window, w: f64, h: f64, k: f64) -> [f64; 4] {
 /// A window's frame of any size `w` × `h` (pixels) at scale `k`.
 pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<u8>, String> {
     let mut canvas = Canvas::new(w as usize, h as usize);
+    if window == Window::FileViewer {
+        // A thin near-black frame, the title small and grey in its top strip.
+        canvas.rect(0.0, 0.0, w, h, hex(0x161616));
+        let [cx, cy, cw, ch] = content_in(window, w, h, k);
+        canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x0b0b0b));
+        canvas.text(title, 8.0 * k, FILE_STRIP * k / 2.0, 11.0 * k, hex(0xb4b4b4));
+        return canvas.png(true);
+    }
     let body = hex(0x302f2e);
     canvas.rect(0.0, 0.0, w, h, body);
     canvas.rect(0.0, 0.0, w, (TITLE_BAR + MENU_BAR) * k, hex(0x393837));
@@ -458,6 +482,8 @@ pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<
             canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x000000));
             controls(&mut canvas, cx, cy + ch, cw, k);
         }
+        // Drawn above, whole.
+        Window::FileViewer => {}
         Window::Notepad => {
             canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x3b3937));
             // A little darker towards the bottom, as on a real screen.
@@ -514,6 +540,7 @@ pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<
                 light,
             );
         }
+        Window::FileViewer => {}
         Window::VideoPlayer => {
             // A play button in a frame.
             canvas.frame(ix, iy + icon * 0.12, ix + icon, iy + icon * 0.88, stroke, light);
@@ -597,33 +624,85 @@ pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<
 
 
 /// The Video Player's controls along the bottom of its picture: a progress
-/// bar (green, part played) over a row of buttons and a volume slider.
+/// bar (green, part played, with its knob), then play, previous, stop and next
+/// as filled glyphs, the time, and a speaker with its volume slider.
 fn controls(canvas: &mut Canvas, x: f64, y: f64, w: f64, k: f64) {
-    let grey = hex(0x9a9a9a);
-    let light = hex(0xd6d6d6);
-    let green = hex(0x36c24a);
-    // The progress bar.
-    let bar = y + 9.0 * k;
-    canvas.rect(x, bar, x + w, bar + 4.0 * k, hex(0x55524f));
-    canvas.rect(x, bar, x + w * 0.42, bar + 4.0 * k, green);
-    // Buttons: play, previous, stop, next.
-    let middle = y + 30.0 * k;
-    let size = 8.0 * k;
-    let thin = 1.6 * k;
-    let mut cx = x + 16.0 * k;
-    canvas.line((cx, middle - size), (cx + size * 1.4, middle), thin, light);
-    canvas.line((cx + size * 1.4, middle), (cx, middle + size), thin, light);
-    canvas.line((cx, middle + size), (cx, middle - size), thin, light);
-    cx += 34.0 * k;
-    for _ in 0..3 {
-        canvas.frame(cx, middle - size * 0.8, cx + size * 1.6, middle + size * 0.8, thin, grey);
-        cx += 30.0 * k;
+    let light = hex(0xe6e6e6);
+    let dim = hex(0x8c8c8c);
+    let track = hex(0x4d4a47);
+    let green = hex(0x3ccf55);
+    // The progress bar and its knob.
+    let bar = y + 10.0 * k;
+    let played = w * 0.38;
+    canvas.rect(x, bar - 1.5 * k, x + w, bar + 1.5 * k, track);
+    canvas.rect(x, bar - 1.5 * k, x + played, bar + 1.5 * k, green);
+    disc(canvas, x + played, bar, 5.0 * k, light);
+    let middle = y + 31.0 * k;
+    let size = 7.0 * k;
+    // Play: a filled triangle.
+    let px = x + 18.0 * k;
+    triangle(canvas, (px, middle - size), (px, middle + size), (px + size * 1.6, middle), light);
+    // Previous: a bar and a triangle pointing left.
+    let mut cx = px + 34.0 * k;
+    canvas.rect(cx, middle - size * 0.8, cx + 2.0 * k, middle + size * 0.8, dim);
+    triangle(canvas, (cx + size * 1.4, middle - size * 0.8), (cx + size * 1.4, middle + size * 0.8), (cx + 2.0 * k, middle), dim);
+    // Stop: a filled square.
+    cx += 28.0 * k;
+    canvas.rect(cx, middle - size * 0.75, cx + size * 1.5, middle + size * 0.75, dim);
+    // Next: a triangle pointing right and a bar.
+    cx += 26.0 * k;
+    triangle(canvas, (cx, middle - size * 0.8), (cx, middle + size * 0.8), (cx + size * 1.2, middle), dim);
+    canvas.rect(cx + size * 1.2, middle - size * 0.8, cx + size * 1.2 + 2.0 * k, middle + size * 0.8, dim);
+    // The time.
+    canvas.text("00:42 / 01:57", cx + 30.0 * k, middle, 14.0 * k, hex(0xbdbdbd));
+    // A speaker and the volume slider on the right.
+    let (vx, vw) = (x + w - 92.0 * k, 70.0 * k);
+    let sx = vx - 22.0 * k;
+    canvas.rect(sx, middle - 3.0 * k, sx + 4.0 * k, middle + 3.0 * k, dim);
+    triangle(canvas, (sx + 4.0 * k, middle - 3.0 * k), (sx + 4.0 * k, middle + 3.0 * k), (sx + 10.0 * k, middle), dim);
+    triangle(canvas, (sx + 10.0 * k, middle - 7.0 * k), (sx + 10.0 * k, middle + 7.0 * k), (sx + 4.0 * k, middle), dim);
+    canvas.rect(vx, middle - 1.5 * k, vx + vw, middle + 1.5 * k, track);
+    canvas.rect(vx, middle - 1.5 * k, vx + vw * 0.65, middle + 1.5 * k, green);
+    disc(canvas, vx + vw * 0.65, middle, 4.5 * k, light);
+}
+
+/// A filled triangle, anti-aliased (each pixel by how much of it lies inside).
+fn triangle(canvas: &mut Canvas, a: (f64, f64), b: (f64, f64), c: (f64, f64), color: [f32; 4]) {
+    let (x0, x1) = (a.0.min(b.0).min(c.0).floor() as i64, a.0.max(b.0).max(c.0).ceil() as i64);
+    let (y0, y1) = (a.1.min(b.1).min(c.1).floor() as i64, a.1.max(b.1).max(c.1).ceil() as i64);
+    let edge = |p: (f64, f64), q: (f64, f64), x: f64, y: f64| (q.0 - p.0) * (y - p.1) - (q.1 - p.1) * (x - p.0);
+    let area = edge(a, b, c.0, c.1);
+    if area.abs() < 1e-9 {
+        return;
     }
-    // The volume slider on the right.
-    let (vx, vw) = (x + w - 110.0 * k, 80.0 * k);
-    canvas.rect(vx, middle - 1.5 * k, vx + vw, middle + 1.5 * k, hex(0x55524f));
-    canvas.rect(vx, middle - 1.5 * k, vx + vw * 0.6, middle + 1.5 * k, green);
-    canvas.rect(vx + vw * 0.6 - 4.0 * k, middle - 5.0 * k, vx + vw * 0.6 + 4.0 * k, middle + 5.0 * k, light);
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let mut inside = 0;
+            for (sx, sy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                let (px, py) = (x as f64 + sx, y as f64 + sy);
+                let (w0, w1, w2) = (edge(b, c, px, py), edge(c, a, px, py), edge(a, b, px, py));
+                if (w0 * area >= 0.0) && (w1 * area >= 0.0) && (w2 * area >= 0.0) {
+                    inside += 1;
+                }
+            }
+            if inside > 0 {
+                canvas.blend(x, y, color, inside as f32 / 4.0);
+            }
+        }
+    }
+}
+
+/// A filled disc, anti-aliased.
+fn disc(canvas: &mut Canvas, cx: f64, cy: f64, r: f64, color: [f32; 4]) {
+    for y in (cy - r - 1.0).floor() as i64..=(cy + r + 1.0).ceil() as i64 {
+        for x in (cx - r - 1.0).floor() as i64..=(cx + r + 1.0).ceil() as i64 {
+            let d = (x as f64 + 0.5 - cx).hypot(y as f64 + 0.5 - cy);
+            let coverage = (r + 0.5 - d).clamp(0.0, 1.0);
+            if coverage > 0.0 {
+                canvas.blend(x, y, color, coverage as f32);
+            }
+        }
+    }
 }
 
 /// FNV-1a over a few strings, for file names.
@@ -650,7 +729,7 @@ fn ensure(path: &Path, make: impl FnOnce() -> Result<Vec<u8>, String>) -> Result
 /// A `kind` window's frame `w` × `h` pixels at scale `k` (its title the
 /// team's name for it), drawn into `<home>/graphics/` if missing.
 pub fn window_file(home: &Path, kind: &str, w: u32, h: u32, k: f64) -> Result<PathBuf, String> {
-    let window = Window::parse(kind).ok_or_else(|| format!("no window {kind}: photo_viewer, notepad or video_player"))?;
+    let window = Window::parse(kind).ok_or_else(|| format!("no window {kind}: photo_viewer, notepad, video_player or file_viewer"))?;
     if w < 40 || h < 40 || w > 8000 || h > 8000 {
         return Err(format!("a window {w} × {h} is out of range"));
     }
@@ -729,6 +808,16 @@ mod tests {
         let reader = decoder.read_info().unwrap();
         let info = reader.info();
         assert_eq!((info.width, info.height), (486, 329));
+    }
+
+    /// `EDIT_DESKTOP_SAMPLES=<dir>` writes each window at 2× for eyeballing.
+    #[test]
+    fn samples_for_eyeballing() {
+        let Ok(dir) = std::env::var("EDIT_DESKTOP_SAMPLES") else { return };
+        for (kind, w, h) in [(Window::VideoPlayer, 1600.0, 1040.0), (Window::FileViewer, 800.0, 600.0), (Window::Notepad, 1000.0, 600.0)] {
+            let png = frame(kind, kind.title(), w, h, 2.0).unwrap();
+            std::fs::write(format!("{dir}/{}.png", kind.slug()), png).unwrap();
+        }
     }
 
     #[test]

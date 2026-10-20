@@ -259,6 +259,9 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         vignette_saturation: grade.vignette_saturation,
                         leak: anim("leak", grade.leak).max(0.0),
                         leak_x: anim("leak_x", grade.leak_x),
+                        grain: grade.grain.clamp(0.0, 1.0),
+                        scanlines: grade.scanlines.clamp(0.0, 1.0),
+                        fade: grade.fade.clamp(0.0, 1.0),
                     },
                     glitch: GlitchFrame {
                         // Amounts are at 1080p.

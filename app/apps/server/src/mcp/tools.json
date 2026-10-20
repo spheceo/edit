@@ -1020,6 +1020,32 @@
         "still": {
           "description": "A still picture instead of a moving shot (30 s of footage, for a push-in).",
           "type": "boolean"
+        },
+        "marker": {
+          "type": "string",
+          "enum": [
+            "building",
+            "dot"
+          ],
+          "description": "building (default): the building glowing red; dot: a glowing dot on the place (the team's map references)."
+        },
+        "marker_color": {
+          "type": "string",
+          "enum": [
+            "blue",
+            "yellow",
+            "red"
+          ],
+          "description": "The dot's colour (default blue)."
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "natural",
+            "dark",
+            "night"
+          ],
+          "description": "natural (default), dark (darker and greyer, so windows and labels stand out) or night (dark blue)."
         }
       },
       "required": [],

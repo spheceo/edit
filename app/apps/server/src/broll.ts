@@ -958,6 +958,14 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
   const highlightFade = clamp(num(args.highlight_fade) ?? 0.0, 0.0, seconds);
   const orbit = clamp(num(args.orbit) ?? 15.0, -90.0, 90.0);
   const push = clamp(num(args.push) ?? 0.12, 0.0, 0.6);
+  // The team's map references: a glowing dot on the place instead of the
+  // building lit red, and darker or night-tinted maps.
+  const marker = typeof args.marker === "string" ? args.marker : "building";
+  if (!["building", "dot"].includes(marker)) throw new Error("marker is building (the building glowing red) or dot (a glowing dot on the place)");
+  const markerColor = typeof args.marker_color === "string" ? args.marker_color : "blue";
+  if (!["blue", "yellow", "red"].includes(markerColor)) throw new Error("marker_color is blue, yellow or red");
+  const tone = typeof args.tone === "string" ? args.tone : "natural";
+  if (!["natural", "dark", "night"].includes(tone)) throw new Error("tone is natural, dark (darker and greyer) or night (dark blue)");
   const { width, height } = project.settings;
   const fps = fpsOf(project);
   const frames = still ? 0 : Math.max(toI64(round(seconds * fps)), 0);
@@ -989,6 +997,12 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
     height,
     relay: relay.url(),
   };
+  // Only when asked, so older maps keep their cached renders.
+  if (marker !== "building") {
+    config.marker = marker;
+    config.marker_color = markerColor;
+  }
+  if (tone !== "natural") config.tone = tone;
   if (frames > 0) {
     config.frames = frames;
     config.orbit = new F64(orbit);

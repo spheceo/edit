@@ -1,19 +1,26 @@
-// The Windows screen: the team's main motion graphic (their Cut-In Guide and
-// the Oct 20 notes). A desktop on the team's wallpaper, bigger than the
+// The Windows screen: one of the team's motion graphics (their Cut-In Guide
+// and the Oct 20 notes). A desktop on the team's wallpaper, bigger than the
 // frame, holding three kinds of window, each by its own name: "Video
 // Player" (footage), "Photo Viewer" (a picture) and "Notepad" (short notes
 // typed on as the narration says them). The camera moves over it like an
-// After Effects camera over a still desktop: it can open zoomed into a
-// Video Player playing the footage the viewer was just watching (so the
-// footage zooms out into the desktop), glide to each window as it opens,
-// drift slowly in between, and end zoomed into a Video Player whose footage
-// then plays full frame. The agent places the windows (where, how big,
-// which on top) or leaves it to Edit; every desktop comes out different.
+// After Effects camera over a still desktop, slowly and smoothly: it opens
+// zoomed into a Video Player playing the footage the viewer was just
+// watching (the footage zooms out into the desktop), glides to each window
+// as it opens and drifts between, and at the end comes back to that same
+// Video Player and zooms into it; while it was off screen its footage
+// changed to what plays next, so the zoom in is the cut back to the footage
+// (the team: "move things around in such a way that the video player is out
+// of screen, and then we change the footage… and then we zoom back in").
+// Windows never overlap, and one desktop never shows the same footage or
+// picture twice ("you literally have basically two of roughly the same
+// footage overlapping here"). The agent places the windows or leaves it to
+// Edit; every desktop comes out different.
 //
 // It's all ordinary clips (the wallpaper, each window's frame drawn by the
-// engine at its size, the picture or footage in it, the notes), each moved
-// against the camera by keyframes, so the preview and the export draw it
-// alike.
+// engine at twice its size so it stays crisp under the camera's zoom, the
+// picture or footage in it, the notes), each moved against the camera by
+// keyframes thinned to what the curve needs, so the preview and the export
+// draw it alike.
 
 import { clipFrom } from "./clips.ts";
 import * as markers from "./markers.ts";
@@ -25,20 +32,33 @@ import { SerdeError } from "./serde.ts";
 
 type Args = Record<string, unknown>;
 
-export type AppKind = "video_player" | "photo_viewer" | "notepad";
+export type AppKind = "video_player" | "photo_viewer" | "notepad" | "file_viewer";
 const APPS: AppKind[] = ["video_player", "photo_viewer", "notepad"];
 
 /** The engine's window chrome at 1080p (desktop.rs): title + menu bar, inset, the Video Player's controls. */
 const TOP = 43 + 31 + 2;
 const INSET = 10;
 const CONTROLS = 46;
+/** Window frames are drawn this many times their size on screen, so the camera's zoom keeps them crisp. */
+export const FRAME_SCALE = 2;
 /** The desktop is this many frames wide and tall: room for the camera to travel. */
 const DESKTOP = 1.5;
+/** Room kept between windows and round the desktop's edge (a share of the frame's width). */
+const GAP = 0.025;
 /** Notes in the Notepad (1080p pixels). */
 const NOTE_SIZE = 40;
 const NOTE_LINE = 1.4;
 const NOTE_PAD = 18;
 const NOTE_GAP = 10;
+
+/** Footage on the timeline: what a desktop opens from or closes into. */
+export interface Footage {
+  media: string;
+  source_in: number;
+  speed: number;
+  /** Its scale there (a B-roll shot's zoom, the footage's framing). */
+  zoom: number;
+}
 
 /** One window as asked for. `at` is the timeline frame it opens. */
 export interface WindowSpec {
@@ -63,8 +83,10 @@ export interface Spec {
   windows: WindowSpec[];
   /** The Video Player the camera opens zoomed into (its index), and the scale the footage before it ended at. */
   open: { index: number; zoom: number } | null;
-  /** The Video Player the camera ends zoomed into (its index), so its footage carries on full frame. */
-  exit_into: number | null;
+  /** The footage after the desktop: the opening Video Player changes to it while off screen and the camera ends zoomed into it. */
+  next: Footage | null;
+  /** Whether to end zoomed into the Video Player (default true when it opened from footage and there's footage after). */
+  exit: boolean;
   /** Clip names start with this. */
   prefix: string;
 }
@@ -72,7 +94,7 @@ export interface Spec {
 /** A window laid out on the desktop (desktop pixels: the frame is W × H, the desktop DESKTOP times that). */
 export interface Laid {
   spec: WindowSpec;
-  /** Its frame's size in pixels (what the engine draws) and its centre on the desktop. */
+  /** Its size on the desktop and its centre. */
   w: number;
   h: number;
   cx: number;
@@ -89,8 +111,14 @@ export interface Art {
   frames: Record<string, string>;
 }
 
+/** A frame's key: its kind and its pixel size as drawn (FRAME_SCALE times its size on the desktop). */
 export function frameKey(app: AppKind, w: number, h: number): string {
   return `${app}:${w}x${h}`;
+}
+
+/** The pixel size a window `w` × `h` on the desktop is drawn at. */
+export function drawnSize(w: number, h: number): [number, number] {
+  return [Math.round(w * FRAME_SCALE), Math.round(h * FRAME_SCALE)];
 }
 
 const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
@@ -134,7 +162,7 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
     return value;
   };
   const width = num(given.width);
-  if (width !== null && (width < 0.12 || width > 0.9)) throw new Error(`${where}window ${index + 1}: width is a share of the frame's width, 0.12 to 0.9`);
+  if (width !== null && (width < 0.12 || width > 0.6)) throw new Error(`${where}window ${index + 1}: width is a share of the frame's width, 0.12 to 0.6`);
   const label = str(given.label);
   return {
     app: kind,
@@ -154,20 +182,26 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
 
 /** Reads a desktop's windows (`desktop` op or a cover_cut_in desktop shot). */
 export function readSpec(project: Project, given: Args, start: number, end: number, prefix: string, where = ""): Spec {
-  if (end - start < Math.round(1.5 * fpsOf(project))) throw new Error(`${where}a desktop needs at least 1.5 s`);
+  const fps = fpsOf(project);
+  if (end - start < Math.round(3 * fps)) throw new Error(`${where}a desktop needs at least 3 s (its camera moves slowly)`);
   const raw = Array.isArray(given.windows) ? given.windows : [];
-  if (raw.length === 0 || raw.length > 8) throw new Error(`${where}windows: 1 to 8 (video_player, photo_viewer, notepad)`);
+  if (raw.length === 0 || raw.length > 6) throw new Error(`${where}windows: 1 to 6 (video_player, photo_viewer, notepad)`);
   const windows: WindowSpec[] = [];
   raw.forEach((window, index) => {
     const read = readWindow(project, window, index, start, where, windows[index - 1]?.at ?? start);
     // Kept inside the desktop (a guessed frame past its end opens near the end).
-    if (read.at >= end) read.at = Math.max(end - Math.round(fpsOf(project)), start);
+    if (read.at >= end) read.at = Math.max(end - Math.round(fps), start);
     if (read.at < start) throw new Error(`${where}window ${index + 1} opens at ${read.at}, before the desktop starts (${start})`);
     windows.push(read);
   });
-  const exit = int(given.exit_into);
-  if (exit !== null && windows[exit]?.app !== "video_player") throw new Error(`${where}exit_into is the index (from 0) of a video_player window`);
-  return { start, end, windows, open: null, exit_into: exit, prefix };
+  // The same footage or picture twice in one desktop reads as a mistake.
+  const seen = new Set<string>();
+  for (const window of windows) {
+    if (window.media === null) continue;
+    if (seen.has(window.media)) throw new Error(`${where}${window.media} is in two windows: one desktop shows a picture or footage once`);
+    seen.add(window.media);
+  }
+  return { start, end, windows, open: null, next: null, exit: given.exit !== false, prefix };
 }
 
 /** The laid-out size [width, height] of `text` at `px` (the addon measures; Geist 400). */
@@ -195,29 +229,28 @@ function wrap(note: string, px: number, width: number): string {
 
 /** Where windows go when the agent doesn't say: spread over the desktop so the camera travels. */
 const SLOTS: [number, number][] = [
-  [0.4, 0.42],
-  [0.66, 0.36],
-  [0.38, 0.68],
-  [0.68, 0.66],
-  [0.52, 0.5],
-  [0.26, 0.56],
-  [0.76, 0.5],
-  [0.5, 0.3],
+  [0.3, 0.32],
+  [0.72, 0.3],
+  [0.3, 0.72],
+  [0.72, 0.7],
+  [0.52, 0.52],
+  [0.18, 0.52],
 ];
 
-/** Lays the windows out (sizes from their content, places as asked or spread over the desktop). */
+/** Lays the windows out (sizes from their content, places as asked or spread over the desktop), then moves them apart so none overlaps another. */
 export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [number, number] } {
   const { width: W, height: H } = project.settings;
   const k = Math.min(W / 1920, H / 1080);
   const [DW, DH] = [W * DESKTOP, H * DESKTOP];
+  const gap = GAP * W;
   // A different turn through the slots per desktop, so they don't all look alike.
-  const turn = Math.abs(spec.start) % 3;
-  const laid = spec.windows.map((window, index): Laid => {
+  const turn = Math.abs(spec.start) % 4;
+  const sized = spec.windows.map((window, index) => {
     const media = window.media === null ? undefined : mediaOf(project, window.media);
-    const fallback = window.app === "notepad" ? 0.4 : window.app === "video_player" ? 0.42 : 0.26;
+    const fallback = window.app === "notepad" ? 0.36 : window.app === "video_player" ? 0.4 : 0.24;
     const w = Math.round((window.width ?? fallback) * W);
-    let contentH: number;
     const contentW = w - 2 * INSET * k;
+    let contentH: number;
     const notes: Laid["notes"] = [];
     if (window.app === "notepad") {
       const px = NOTE_SIZE * k;
@@ -228,7 +261,7 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
         notes.push({ text, w: bw, h: bh });
         total += bh + NOTE_GAP * k;
       }
-      contentH = Math.max(total + 2 * NOTE_PAD * k, 0.16 * H);
+      contentH = Math.max(total + 2 * NOTE_PAD * k, 0.14 * H);
     } else if (window.app === "video_player") {
       contentH = (contentW * 9) / 16;
     } else {
@@ -238,28 +271,58 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
     const bottom = (window.app === "video_player" ? CONTROLS + INSET : INSET) * k;
     const h = Math.round(contentH + TOP * k + bottom);
     const slot = SLOTS[(index + turn) % SLOTS.length]!;
-    const [fx, fy] = [window.x ?? slot[0], window.y ?? slot[1]];
-    // Kept inside the desktop.
-    const cx = Math.min(Math.max(fx * DW, w / 2 + 20 * k), DW - w / 2 - 20 * k);
-    const cy = Math.min(Math.max(fy * DH, h / 2 + 20 * k), DH - h / 2 - 20 * k);
-    const left = cx - w / 2;
-    const top = cy - h / 2;
-    return {
-      spec: window,
-      w,
-      h,
-      cx,
-      cy,
-      content: [left + INSET * k, top + TOP * k, contentW, contentH],
-      notes,
-    };
+    return { window, w, h, contentW, contentH, notes, cx: (window.x ?? slot[0]) * DW, cy: (window.y ?? slot[1]) * DH };
   });
+  const keepInside = (one: (typeof sized)[number]) => {
+    one.cx = Math.min(Math.max(one.cx, one.w / 2 + gap), DW - one.w / 2 - gap);
+    one.cy = Math.min(Math.max(one.cy, one.h / 2 + gap), DH - one.h / 2 - gap);
+  };
+  sized.forEach(keepInside);
+  // Apart: each overlapping pair pushed away from each other along the
+  // axis that needs the least, the opening Video Player held still.
+  const fixed = spec.open?.index ?? -1;
+  for (let pass = 0; pass < 200; pass++) {
+    let moved = false;
+    for (let a = 0; a < sized.length; a++) {
+      for (let b = a + 1; b < sized.length; b++) {
+        const [p, q] = [sized[a]!, sized[b]!];
+        const ox = (p.w + q.w) / 2 + gap - Math.abs(p.cx - q.cx);
+        const oy = (p.h + q.h) / 2 + gap - Math.abs(p.cy - q.cy);
+        if (ox <= 0 || oy <= 0) continue;
+        moved = true;
+        const [share, other] = a === fixed ? [0, 1] : b === fixed ? [1, 0] : [0.5, 0.5];
+        if (ox < oy) {
+          const sign = p.cx <= q.cx ? -1 : 1;
+          p.cx += sign * ox * share;
+          q.cx -= sign * ox * other;
+        } else {
+          const sign = p.cy <= q.cy ? -1 : 1;
+          p.cy += sign * oy * share;
+          q.cy -= sign * oy * other;
+        }
+        keepInside(p);
+        keepInside(q);
+      }
+    }
+    if (!moved) break;
+  }
+  const laid = sized.map(
+    (one): Laid => ({
+      spec: one.window,
+      w: one.w,
+      h: one.h,
+      cx: one.cx,
+      cy: one.cy,
+      content: [one.cx - one.w / 2 + INSET * k, one.cy - one.h / 2 + TOP * k, one.contentW, one.contentH],
+      notes: one.notes,
+    }),
+  );
   return { laid, desktop: [DW, DH] };
 }
 
-/** The window frames (app, width, height) a desktop needs drawn. */
+/** The window frames (app, width, height as drawn) a desktop needs. */
 export function frameSizes(project: Project, spec: Spec): [AppKind, number, number][] {
-  return layout(project, spec).laid.map((window) => [window.spec.app, window.w, window.h]);
+  return layout(project, spec).laid.map((window) => [window.spec.app, ...drawnSize(window.w, window.h)]);
 }
 
 interface Pose {
@@ -268,14 +331,23 @@ interface Pose {
   z: number;
 }
 
-const smooth = (t: number) => {
+/** Smootherstep: no jolt at either end of a move. */
+const ease = (t: number) => {
   const u = Math.min(Math.max(t, 0), 1);
-  return u * u * (3 - 2 * u);
+  return u * u * u * (u * (u * 6 - 15) + 10);
 };
 const easeOut = (t: number) => 1 - (1 - Math.min(Math.max(t, 0), 1)) ** 3;
 
 /** The camera drifts in this much a second, so the desktop never sits still. */
-const DRIFT = 0.012;
+const DRIFT = 0.008;
+/** Frames at 30 fps: the opening hold, the zoom out of the footage, a glide to a window, the zoom back in. */
+const HOLD = 10;
+const ZOOM_OUT = 60;
+const GLIDE = 54;
+const ZOOM_IN = 54;
+/** A window pops in over this many frames, fading over this many. */
+const POP = 16;
+const FADE = 12;
 
 /**
  * Builds a desktop: its clips on new tracks (on top), its markers. `art` has
@@ -286,36 +358,30 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   const s = fps / 30;
   const { width: W, height: H } = project.settings;
   const k = Math.min(W / 1920, H / 1080);
-  const { laid, desktop } = layout(project, spec);
-  const [DW, DH] = desktop;
   const total = spec.end - spec.start;
   const rel = (frame: number) => frame - spec.start;
+  const openIndex = spec.open?.index ?? null;
   // No window opens while the camera is still zoomed into the opening Video
   // Player: it would pop up huge over the footage. They wait until the zoom
   // out is mostly done.
-  if (spec.open !== null) {
-    const earliest = spec.start + Math.round(28 * s);
-    for (const window of laid) if (window !== laid[spec.open.index] && window.spec.at < earliest) window.spec.at = Math.min(earliest, spec.end - 1);
+  if (openIndex !== null) {
+    const earliest = spec.start + Math.round((HOLD + ZOOM_OUT * 0.75) * s);
+    spec.windows.forEach((window, index) => {
+      if (index !== openIndex && window.at < earliest) window.at = Math.min(earliest, spec.end - 1);
+    });
   }
+  const { laid, desktop } = layout(project, spec);
+  const [DW, DH] = desktop;
+  const player = openIndex === null ? null : laid[openIndex]!;
+  const exits = player !== null && spec.exit && spec.next !== null;
 
-  // A window's picture shown inside its content area (contain): [x, y, w, h] on the desktop.
-  const shown = (window: Laid): [number, number, number, number] => {
+  // A footage's picture shown inside a content area (contain): [x, y, w, h] on the desktop.
+  const shownIn = (window: Laid, media: Media | undefined): [number, number, number, number] => {
     const [x, y, w, h] = window.content;
-    const media = window.spec.media === null ? undefined : mediaOf(project, window.spec.media);
-    if (media === undefined || window.spec.app === "notepad") return window.content;
+    if (media === undefined || window.spec.app !== "video_player") return window.content;
     const aspect = media.width / Math.max(media.height, 1);
-    if (window.spec.app === "photo_viewer") return window.content;
     const [vw, vh] = aspect > w / h ? [w, w / aspect] : [h * aspect, h];
     return [x + (w - vw) / 2, y + (h - vh) / 2, vw, vh];
-  };
-  // The pose framing some windows (with a margin), kept over the desktop.
-  const framing = (windows: Laid[]): Pose => {
-    const left = Math.min(...windows.map((w) => w.cx - w.w / 2));
-    const right = Math.max(...windows.map((w) => w.cx + w.w / 2));
-    const top = Math.min(...windows.map((w) => w.cy - w.h / 2));
-    const bottom = Math.max(...windows.map((w) => w.cy + w.h / 2));
-    const z = Math.min(Math.max(Math.min((W * 0.8) / (right - left), (H * 0.78) / (bottom - top)), 0.62), 1.25);
-    return keep({ x: (left + right) / 2, y: (top + bottom) / 2, z });
   };
   const keep = (pose: Pose): Pose => {
     const [hw, hh] = [W / 2 / pose.z, H / 2 / pose.z];
@@ -323,67 +389,72 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     const y = DH > 2 * hh ? Math.min(Math.max(pose.y, hh), DH - hh) : DH / 2;
     return { x, y, z: pose.z };
   };
-  // Zoomed into a Video Player so its footage fills the frame as it would full
-  // frame at `zoom` (the footage fitted to the frame, times the scale it had).
-  const into = (window: Laid, zoom: number): Pose => {
-    const media = window.spec.media === null ? undefined : mediaOf(project, window.spec.media);
-    const [x, y, w, h] = shown(window);
-    const fit = media === undefined ? W / w : Math.min(W / media.width, H / media.height) * media.width;
-    return { x: x + w / 2, y: y + h / 2, z: (fit * zoom) / w };
+  // The pose framing some windows with a margin, kept over the desktop.
+  const framing = (windows: Laid[]): Pose => {
+    const left = Math.min(...windows.map((w) => w.cx - w.w / 2));
+    const right = Math.max(...windows.map((w) => w.cx + w.w / 2));
+    const top = Math.min(...windows.map((w) => w.cy - w.h / 2));
+    const bottom = Math.max(...windows.map((w) => w.cy + w.h / 2));
+    const z = Math.min(Math.max(Math.min((W * 0.78) / (right - left), (H * 0.76) / (bottom - top)), 0.62), 1.2);
+    return keep({ x: (left + right) / 2, y: (top + bottom) / 2, z });
   };
+  // Zoomed into a Video Player so `media` fills the frame as it does full
+  // frame at `zoom` (the footage fitted to the frame, times its scale there).
+  const into = (window: Laid, media: Media | undefined, zoom: number): Pose => {
+    const [x, y, w, h] = shownIn(window, media);
+    const fitted = media === undefined ? W : Math.min(W / media.width, H / media.height) * media.width;
+    return { x: x + w / 2, y: y + h / 2, z: (fitted * zoom) / w };
+  };
+  const openMedia = player === null ? undefined : mediaOf(project, player.spec.media ?? "");
+  const nextMedia = spec.next === null ? undefined : mediaOf(project, spec.next.media);
 
-  // The camera: poses at frames (relative), smoothstep between, log zoom.
+  // The camera: poses at frames (relative), eased between, zoom on a log scale.
   const order = laid.map((_, index) => index).sort((a, b) => laid[a]!.spec.at - laid[b]!.spec.at || a - b);
   const stops: { from: number; to: number; pose: Pose }[] = [];
-  let current: Pose;
   let free = 0;
-  const openIndex = spec.open?.index ?? null;
-  if (openIndex !== null && laid[openIndex] !== undefined) {
-    current = into(laid[openIndex]!, spec.open!.zoom);
-    stops.push({ from: 0, to: 0, pose: current });
-    const hold = Math.round(6 * s);
-    const zoomOut = Math.round(34 * s);
-    const next = framing([laid[openIndex]!]);
-    stops.push({ from: hold, to: Math.min(hold + zoomOut, total - 1), pose: { ...next, z: next.z * 0.92 } });
-    free = hold + zoomOut;
-  } else {
-    const first = laid[order[0]!]!;
-    current = framing([first]);
-    current = { ...current, z: current.z * 0.94 };
-    stops.push({ from: 0, to: 0, pose: current });
+  const others = order.filter((index) => index !== openIndex).map((index) => laid[index]!);
+  if (player !== null) {
+    stops.push({ from: 0, to: 0, pose: into(player, openMedia, spec.open!.zoom) });
+    const hold = Math.round(HOLD * s);
+    const out = Math.min(Math.round(ZOOM_OUT * s), Math.max(total - hold - 1, 1));
+    // Out to the player with room round it and the first window beside it.
+    const first = others[0];
+    const wide = first === undefined ? framing([player]) : framing([player, first]);
+    stops.push({ from: hold, to: hold + out, pose: { ...wide, z: Math.min(wide.z, framing([player]).z * 0.8) } });
+    free = hold + out;
+  } else if (others[0] !== undefined) {
+    const first = framing([others[0]]);
+    stops.push({ from: 0, to: 0, pose: { ...first, z: first.z * 0.92 } });
   }
-  const exitIndex = spec.exit_into;
-  const exitAt = exitIndex === null ? total : Math.max(total - Math.round(30 * s), free);
-  let previous: Laid | null = openIndex !== null ? laid[openIndex]! : laid[order[0]!]!;
-  const opened: Laid[] = previous === null ? [] : [previous];
-  for (const index of order) {
-    const window = laid[index]!;
-    if (index === openIndex || (openIndex === null && index === order[0])) continue;
-    const opens = rel(window.spec.at);
-    const from = Math.max(free, opens - Math.round(8 * s));
-    if (from >= exitAt - Math.round(6 * s)) break;
-    const to = Math.min(from + Math.round(26 * s), exitAt - 1);
-    // Everything open so far when it fits (so a Notepad still typing stays in
-    // view), else the window with the one before it, else on its own.
+  const back = exits ? Math.round(ZOOM_IN * s) : 0;
+  const exitAt = exits ? Math.max(total - back, free) : total;
+  // To each window as it opens, with everything else open so far when it
+  // fits (so a Notepad still typing stays in view), the opening player left
+  // behind once the camera has moved on.
+  const opened: Laid[] = [];
+  for (const window of others) {
     opened.push(window);
+    if (player === null && window === others[0]) continue;
+    const opens = rel(window.spec.at);
+    const from = Math.max(free, opens - Math.round(12 * s));
+    if (from >= exitAt - Math.round(12 * s)) break;
+    const to = Math.min(from + Math.round(GLIDE * s), exitAt - 1);
     const all = framing(opened);
-    const pair = previous === null ? null : framing([previous, window]);
-    const pose = all.z > 0.6 ? all : pair !== null && pair.z > 0.66 ? pair : framing([window]);
+    const pose = all.z > 0.62 ? all : framing(opened.slice(-2)).z > 0.66 ? framing(opened.slice(-2)) : framing([window]);
     stops.push({ from, to, pose });
     free = to;
-    previous = window;
   }
   const drift = (frame: number) => 1 + (DRIFT * frame) / fps;
-  if (exitIndex !== null) {
-    const target = into(laid[exitIndex]!, 1);
+  if (exits) {
+    const target = into(player!, nextMedia, spec.next!.zoom);
     stops.push({ from: exitAt, to: total - 1, pose: { ...target, z: target.z / drift(total - 1) } });
   }
   const camera = (frame: number): Pose => {
-    let pose = stops[0]!.pose;
+    let pose = stops[0]?.pose ?? { x: DW / 2, y: DH / 2, z: 0.7 };
     for (let index = 1; index < stops.length; index++) {
       const stop = stops[index]!;
       if (frame <= stop.from) break;
-      const t = stop.to > stop.from ? smooth((frame - stop.from) / (stop.to - stop.from)) : 1;
+      const t = stop.to > stop.from ? ease((frame - stop.from) / (stop.to - stop.from)) : 1;
       pose = {
         x: pose.x + (stop.pose.x - pose.x) * t,
         y: pose.y + (stop.pose.y - pose.y) * t,
@@ -394,17 +465,43 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     return { ...pose, z: pose.z * drift(frame) };
   };
 
+  // When the opening player's footage changes to what plays next: in the
+  // longest stretch it's wholly off screen, else where least of it shows
+  // (crossfaded there).
+  let swap: { at: number; fade: number } | null = null;
+  if (exits) {
+    const visible = (frame: number) => {
+      const pose = camera(frame);
+      const [hw, hh] = [W / 2 / pose.z, H / 2 / pose.z];
+      const ox = Math.max(0, Math.min(player!.cx + player!.w / 2, pose.x + hw) - Math.max(player!.cx - player!.w / 2, pose.x - hw));
+      const oy = Math.max(0, Math.min(player!.cy + player!.h / 2, pose.y + hh) - Math.max(player!.cy - player!.h / 2, pose.y - hh));
+      return (ox * oy) / (player!.w * player!.h);
+    };
+    const from = Math.min(Math.round((HOLD + ZOOM_OUT) * s), exitAt - 1);
+    let best: [number, number] | null = null;
+    let run: number | null = null;
+    let least: [number, number] = [from, Infinity];
+    for (let frame = from; frame < exitAt; frame++) {
+      const seen = visible(frame);
+      if (seen < least[1]) least = [frame, seen];
+      if (seen <= 0) {
+        run ??= frame;
+        if (best === null || frame - run > best[1] - best[0]) best = [run, frame];
+      } else run = null;
+    }
+    swap = best !== null ? { at: Math.round((best[0] + best[1]) / 2), fade: 0 } : { at: least[0], fade: Math.round(12 * s) };
+  }
+
   // A window's own motion: popping in (scale about its centre, opacity) and, for a picture or notes, a slow float.
-  const pop = Math.round(10 * s);
-  const fadeIn = Math.round(7 * s);
+  const pop = Math.round(POP * s);
+  const fadeIn = Math.round(FADE * s);
   const motion = (window: Laid, index: number, frame: number): { s: number; o: number; dy: number } => {
-    const opens = index === openIndex ? -1e9 : rel(window.spec.at);
-    const t = frame - opens;
-    const floats = window.spec.app !== "video_player";
+    if (index === openIndex) return { s: 1, o: 1, dy: 0 };
+    const t = frame - rel(window.spec.at);
     return {
-      s: index === openIndex ? 1 : 0.94 + 0.06 * easeOut(t / pop),
-      o: index === openIndex ? 1 : easeOut(t / fadeIn),
-      dy: floats ? 2.5 * k * Math.sin((2 * Math.PI * frame) / (5 * fps) + index * 1.7) : 0,
+      s: 0.9 + 0.1 * easeOut(t / pop),
+      o: easeOut(t / fadeIn),
+      dy: window.spec.app === "video_player" ? 0 : 2 * k * Math.sin((2 * Math.PI * frame) / (6 * fps) + index * 1.7),
     };
   };
 
@@ -422,18 +519,11 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     made.push(id);
     return id;
   };
-  // The frames an element's keys go on (relative to the desktop): every few
-  // frames, every other one while its window pops in or the camera turns.
-  const keyFrames = (from: number, opens: number | null): number[] => {
-    const frames = new Set<number>([from, total - 1]);
-    for (let frame = from; frame < total; frame += Math.max(Math.round(2 * s), 1)) frames.add(frame);
-    if (opens !== null) for (let frame = opens; frame <= opens + pop + 2; frame++) if (frame >= from && frame < total) frames.add(frame);
-    for (const stop of stops) for (const frame of [stop.from, stop.to]) if (frame >= from && frame < total) frames.add(frame);
-    return [...frames].sort((a, b) => a - b);
-  };
   const HANDLE = 1 / 3;
-  // Keys for an element centred at (px, py) on the desktop with `base` scale, in window `index` (null: the wallpaper).
-  const keysFor = (px: number, py: number, base: number, index: number | null, from: number) => {
+  // Keys for an element centred at (px, py) on the desktop with `base` scale,
+  // in window `index` (null: the wallpaper), on screen from `from`: sampled
+  // every other frame with exact speeds, then thinned.
+  const keysFor = (px: number, py: number, base: number, index: number | null, from: number, until = total) => {
     const window = index === null ? null : laid[index]!;
     const at = (frame: number) => {
       const pose = camera(frame);
@@ -446,7 +536,10 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     const opens = window === null || index === openIndex ? null : rel(window.spec.at);
     const lists: Record<"x" | "y" | "scale", Args[]> = { x: [], y: [], scale: [] };
     const opacity: Args[] = [];
-    for (const frame of keyFrames(from, opens)) {
+    const frames = new Set<number>([from, until - 1]);
+    for (let frame = from; frame < until; frame += Math.max(Math.round(2 * s), 1)) frames.add(frame);
+    if (opens !== null) for (let frame = opens; frame <= opens + pop + 2; frame++) if (frame >= from && frame < until) frames.add(frame);
+    for (const frame of [...frames].sort((a, b) => a - b)) {
       const here = at(frame);
       const [before, after] = [at(frame - 0.5), at(frame + 0.5)];
       for (const key of ["x", "y", "scale"] as const) {
@@ -456,15 +549,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       if (opens !== null && frame <= opens + fadeIn) opacity.push({ frame: frame - from, value: here.o, ease: "linear" });
     }
     const first = at(from);
-    // Only the keys the curve needs (each segment a Hermite cubic through its
-    // ends' values and speeds): sampled densely, then thinned to within a
-    // fraction of a pixel. Sabrina's first desktops kept every fifth frame:
-    // 43,000 keyframes in a 9 MB project.
-    const thinned = {
-      x: thinKeys(lists.x, 0.3),
-      y: thinKeys(lists.y, 0.3),
-      scale: thinKeys(lists.scale, 0.3 / Math.max(W, 1)),
-    };
+    const thinned = { x: thinKeys(lists.x, 0.3), y: thinKeys(lists.y, 0.3), scale: thinKeys(lists.scale, 0.3 / Math.max(W, 1)) };
     return {
       transform: { x: first.x, y: first.y, scale: first.scale },
       keyframes: opacity.length > 0 ? { ...thinned, opacity } : thinned,
@@ -496,7 +581,8 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     const window = laid[index]!;
     const name = window.spec.app === "video_player" ? "Video Player" : window.spec.app === "photo_viewer" ? "Photo Viewer" : "Notepad";
     const from = index === openIndex ? 0 : rel(window.spec.at);
-    const frameMedia = art.frames[frameKey(window.spec.app, window.w, window.h)];
+    const [fw, fh] = drawnSize(window.w, window.h);
+    const frameMedia = art.frames[frameKey(window.spec.app, fw, fh)];
     const chrome = frameMedia === undefined ? undefined : mediaOf(project, frameMedia);
     if (chrome === undefined) throw new Error(`desktop: the ${name} frame wasn't prepared`);
     add({
@@ -516,7 +602,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       const px = NOTE_SIZE * k;
       window.notes.forEach((note, line) => {
         const given = window.spec.line_at?.[line];
-        const at = Math.max(given ?? window.spec.at + Math.round((10 + 36 * line) * s), window.spec.at + Math.round(6 * s));
+        const at = Math.max(given ?? window.spec.at + Math.round((14 + 40 * line) * s), window.spec.at + Math.round(8 * s));
         const textFrom = Math.min(rel(at), total - 2);
         const centre: [number, number] = [cx + NOTE_PAD * k + note.w / 2, y + note.h / 2];
         add({
@@ -537,37 +623,53 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     }
     const media = mediaOf(project, window.spec.media!);
     if (media === undefined) continue;
-    const [x, y, w, h] = shown(window);
-    let crop: Args = {};
-    let width = w;
-    if (window.spec.app === "photo_viewer") {
-      // Filling the content area (its shape is the picture's, kept within limits): a little cropped at most.
-      const aspect = media.width / Math.max(media.height, 1);
-      if (aspect > w / h) {
-        const side = (1 - w / h / aspect) / 2;
-        crop = { left: side, right: side };
-        width = h * aspect;
-      } else {
-        const side = (1 - aspect / (w / h)) / 2;
-        crop = { top: side, bottom: side };
-      }
+    // The picture or footage in its window. The opening player's footage
+    // changes to what plays next at the swap (ending exactly where the
+    // footage after the desktop starts, so the zoom in is seamless).
+    const pieces: { media: Media; source_in: number; speed: number; from: number; until: number; fade: number }[] = [];
+    if (index === openIndex && exits && swap !== null && nextMedia !== undefined) {
+      const changeAt = Math.min(Math.max(swap.at, 1), total - 2);
+      const nextFrom = Math.max(spec.next!.source_in - ((total - changeAt) / fps) * spec.next!.speed, 0);
+      pieces.push({ media, source_in: window.spec.source_in, speed: window.spec.speed, from: 0, until: Math.min(changeAt + swap.fade, total), fade: 0 });
+      pieces.push({ media: nextMedia, source_in: nextFrom, speed: spec.next!.speed, from: changeAt, until: total, fade: swap.fade });
+    } else {
+      pieces.push({ media, source_in: window.spec.source_in, speed: window.spec.speed, from, until: total, fade: 0 });
     }
-    add({
-      type: "video",
-      name: `${spec.prefix}${name} · ${media.name}`,
-      media: media.id,
-      source_in: media.kind === "video" ? window.spec.source_in : 0,
-      ...(media.kind === "video" ? { speed: window.spec.speed } : {}),
-      start: spec.start + from,
-      duration: total - from,
-      crop,
-      ...(media.kind === "image" ? { frame: { width: 0, shadow: 0 } } : {}),
-      ...keysFor(x + w / 2, y + h / 2, scaleFor(media, width), index, from),
-    });
+    for (const piece of pieces) {
+      const [x, y, w, h] = shownIn(window, piece.media);
+      let crop: Args = {};
+      let width = w;
+      if (window.spec.app === "photo_viewer") {
+        // Filling the content area (its shape is the picture's, kept within limits): a little cropped at most.
+        const aspect = piece.media.width / Math.max(piece.media.height, 1);
+        if (aspect > w / h) {
+          const side = (1 - w / h / aspect) / 2;
+          crop = { left: side, right: side };
+          width = h * aspect;
+        } else {
+          const side = (1 - aspect / (w / h)) / 2;
+          crop = { top: side, bottom: side };
+        }
+      }
+      add({
+        type: "video",
+        name: `${spec.prefix}${name} · ${piece.media.name}`,
+        media: piece.media.id,
+        source_in: piece.media.kind === "video" ? piece.source_in : 0,
+        ...(piece.media.kind === "video" ? { speed: piece.speed } : {}),
+        start: spec.start + piece.from,
+        duration: piece.until - piece.from,
+        fade_in: piece.fade,
+        crop,
+        ...(piece.media.kind === "image" ? { frame: { width: 0, shadow: 0 } } : {}),
+        ...keysFor(x + w / 2, y + h / 2, scaleFor(piece.media, width), index, piece.from, piece.until),
+      });
+    }
     if (window.spec.label !== null) {
       const text = window.spec.label.startsWith("(") ? window.spec.label : `(${window.spec.label})`;
       const size = 20 * k;
       const [lw, lh] = measure(text, size);
+      const [x, y, , h] = window.content;
       add({
         type: "text",
         name: `${spec.prefix}${name} label`,
@@ -580,7 +682,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     }
   }
   // A light look over the whole screen.
-  add({ type: "adjustment", name: `${spec.prefix}look`, start: spec.start, duration: total, grade: { vignette: 0.3, contrast: 0.04 } });
+  add({ type: "adjustment", name: `${spec.prefix}look`, start: spec.start, duration: total, grade: { vignette: 0.3, contrast: 0.04, grain: 0.15 } });
   for (const at of windowsAt) markers.addTimeline(project, at, "desktop window opens", "");
   return {
     clips: made,
@@ -588,29 +690,30 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     windows: laid.map((window, index) => ({
       app: window.spec.app,
       at: index === openIndex ? spec.start : window.spec.at,
-      centre: [round(window.cx / DW * 1000) / 1000, round(window.cy / DH * 1000) / 1000],
+      centre: [round((window.cx / DW) * 1000) / 1000, round((window.cy / DH) * 1000) / 1000],
       width: round((window.w / W) * 1000) / 1000,
     })),
     ...(linesAt.length > 0 ? { lines_at: linesAt } : {}),
-    camera: { opens_into: openIndex, exits_into: exitIndex, moves: stops.length - 1 },
+    camera: { opens_from_footage: openIndex !== null, ends_in_footage: exits, ...(swap !== null ? { footage_changes_at: spec.start + swap.at } : {}), moves: stops.length - 1 },
   };
 }
 
 /**
- * The footage playing on the timeline just before `frame` (the topmost video
- * clip on a picture track there, not a still): its media, the source second
- * it reached, its speed and its scale then. A desktop opens from it.
+ * The footage playing on the timeline at `frame` (`before`: just before it):
+ * the topmost video clip on a picture track there, not a still; its media,
+ * the source second it's at, its speed and its scale then.
  */
-export function footageBefore(project: Project, frame: number, skip: (name: string) => boolean = () => false): { media: string; source_in: number; speed: number; zoom: number } | null {
+export function footageAt(project: Project, frame: number, before: boolean, skip: (name: string) => boolean = () => false): Footage | null {
   const fps = fpsOf(project);
+  const at = before ? frame - 1 : frame;
   const order = project.tracks.filter((track) => track.kind === "video" && track.subtitles !== true).map((track) => track.id);
   const candidates = project.clips.filter(
-    (clip) => clip.type === "video" && clip.start <= frame - 1 && clipEnd(clip) >= frame && !skip(clip.name ?? "") && mediaOf(project, clip.media)?.kind === "video",
+    (clip) => clip.type === "video" && clip.start <= at && clipEnd(clip) > at && !skip(clip.name ?? "") && mediaOf(project, clip.media)?.kind === "video",
   );
   candidates.sort((a, b) => order.indexOf(b.track) - order.indexOf(a.track));
   const clip = candidates[0];
   if (clip === undefined || clip.type !== "video") return null;
-  const local = frame - clip.start;
+  const local = (before ? frame : frame) - clip.start;
   const scaleKeys = clip.keyframes?.scale ?? [];
   let zoom = clip.transform?.scale ?? 1;
   if (scaleKeys.length > 0) {
@@ -621,16 +724,23 @@ export function footageBefore(project: Project, frame: number, skip: (name: stri
   return { media: clip.media, source_in: (clip.source_in ?? 0) + (local / fps) * (clip.speed ?? 1), speed: clip.speed ?? 1, zoom };
 }
 
+/** The footage playing just before `frame` (a desktop opens from it). */
+export function footageBefore(project: Project, frame: number, skip: (name: string) => boolean = () => false): Footage | null {
+  return footageAt(project, frame, true, skip);
+}
+
 /**
  * Adds the opening Video Player to a spec: the footage before it carries on
- * in a window the camera starts zoomed into (unless its first window already
- * is a video_player opening at the start).
+ * in a window the camera starts zoomed into (one of the agent's own
+ * video_player windows when it plays that footage), and the footage after
+ * it, which that player changes to before the camera zooms back in.
  */
-export function openFrom(spec: Spec, footage: { media: string; source_in: number; speed: number; zoom: number } | null): Spec {
+export function openFrom(spec: Spec, footage: Footage | null, next: Footage | null = null): Spec {
   if (footage === null) return spec;
-  const first = spec.windows[0];
-  if (first !== undefined && first.app === "video_player" && first.at === spec.start) {
-    return { ...spec, open: { index: 0, zoom: footage.zoom } };
+  const own = spec.windows.findIndex((window) => window.app === "video_player" && window.media === footage.media);
+  if (own >= 0) {
+    const windows = spec.windows.map((window, index) => (index === own ? { ...window, at: spec.start, source_in: footage.source_in, speed: footage.speed } : window));
+    return { ...spec, windows, open: { index: own, zoom: footage.zoom }, next };
   }
   const window: WindowSpec = {
     app: "video_player",
@@ -646,12 +756,7 @@ export function openFrom(spec: Spec, footage: { media: string; source_in: number
     z: -1,
     label: null,
   };
-  return {
-    ...spec,
-    windows: [window, ...spec.windows],
-    open: { index: 0, zoom: footage.zoom },
-    exit_into: spec.exit_into === null ? null : spec.exit_into + 1,
-  };
+  return { ...spec, windows: [window, ...spec.windows], open: { index: 0, zoom: footage.zoom }, next };
 }
 
 /** A Hermite segment's value at `frame` between keys `a` and `b` (each with its speed, value units a frame). */

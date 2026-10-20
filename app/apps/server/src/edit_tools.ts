@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import { clipColorFrom, clipFrom, defaultTextAnimation, defaultTextStyle, defaultTransform, keyframesFrom, textAnimationFrom, textStyleFrom, transformFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
-import { frameKey as screenFrameKey } from "./desktop_screen.ts";
+import { FRAME_SCALE, frameKey as screenFrameKey } from "./desktop_screen.ts";
 import * as diag from "./diag.ts";
 import * as editPlan from "./edit_plan.ts";
 import * as tools from "./tools.ts";
@@ -1521,7 +1521,7 @@ export async function planAssets(app: App, project: Project, operations: Json[])
     const k = Math.min(width / 1920, height / 1080);
     const wallpaper = await diag.timeOnAsync("agent", "desktop: wallpaper", "", () => desktopWallpaper(home, width, height));
     const frames = await diag.timeOnAsync("agent", "desktop: draw windows", "", () =>
-      Promise.all(needs.screens!.map(([app, w, h]) => native().desktopWindow(app, w, h, k))),
+      Promise.all(needs.screens!.map(([app, w, h]) => native().desktopWindow(app, w, h, k * FRAME_SCALE))),
     );
     const [ids, fresh] = await houseMedia(app, project, [wallpaper, ...frames]);
     made.push(...fresh);

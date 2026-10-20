@@ -36,7 +36,7 @@ test("the_date_is_white_with_a_shadow_and_nothing_else", () => {
   valid(p);
 });
 
-test("the_place_label_is_the_house_label_pinned_above_the_building", () => {
+test("the_place_label_is_the_references_monospace_label_pinned_above_the_building", () => {
   const p = project();
   p.media.push(media({ id: "map", name: "map.mp4", path: "/x/map.mp4", kind: "video", duration: 9, width: 1920, height: 1080 }));
   p.clips.push(clip({ id: "m", track: "v2", start: 2034, duration: 267, type: "video", media: "map" }));
@@ -45,9 +45,10 @@ test("the_place_label_is_the_house_label_pinned_above_the_building", () => {
   const id = placeLabel(p, { text: "1091 Capitol Avenue", start: 2115, end: 2301, map: "m", building_track: track });
   const label = clipById(p, id) as TextClip;
   const background = label.style.background!;
-  expect([background.opacity, background.pad_x, background.border]).toEqual([1, 20, 2]);
-  expect(label.style.glow.enabled).toBe(false);
-  expect(label.style.shadow?.opacity).toBe(0.85);
+  // White Geist Mono in a black box, no border, typed on (the team's map references).
+  expect(label.style.font).toBe("Geist Mono");
+  expect([background.pad_x, background.border ?? 0]).toEqual([14, 0]);
+  expect(label.animation.preset).toBe("typewriter");
   // On its first frame: between the points at 75 and 90 frames into the map.
   expect(Math.abs(label.transform.x - 95.4)).toBeLessThan(0.01);
   expect(label.transform.y).toBeLessThan(-60 - 5.4 - 30);
@@ -130,13 +131,13 @@ test("a_picture_picked_as_a_cut_in_shot_goes_on_a_desktop_the_footage_zooms_out_
   const placed = report.shots as Record<string, unknown>[];
   const desktop = placed[2]!.desktop as Record<string, unknown>;
   expect((desktop.windows as Record<string, unknown>[]).map((window) => window.app)).toEqual(["video_player", "photo_viewer"]);
-  expect((desktop.camera as Record<string, unknown>).opens_into).toBe(0);
-  // The Video Player plays on from where the shot before it ended (40 s in, half speed, 2 s on: 41 s).
+  expect((desktop.camera as Record<string, unknown>).opens_from_footage).toBe(true);
+  // The Video Player plays on from where the shot before it ended (40 s in, at 0.8, 2 s on: 41.6 s).
   const player = p.clips.find((own) => own.name === "Cut-in 1 · Desktop · Video Player · bodycam.mp4") as VideoClip;
-  expect(Math.abs(player.source_in - 41)).toBeLessThan(1e-6);
+  expect(Math.abs(player.source_in - 41.6)).toBeLessThan(1e-6);
   const photo = p.clips.find((own) => own.name === "Cut-in 1 · Desktop · Photo Viewer · news.jpg");
-  // It opens once the zoom out of the footage is mostly done (28 frames in), never huge over the footage.
-  expect(photo?.start).toBe(478);
+  // It opens once the slow zoom out of the footage is mostly done (55 frames in), never huge over the footage.
+  expect(photo?.start).toBe(505);
   expect(p.clips.some((own) => own.type === "text" && own.text === "(actual image)")).toBe(true);
   expect(bareStills(p)).toEqual([]);
   // One zoom across the cut-in: the second shot starts where the first ended, never back at 1.

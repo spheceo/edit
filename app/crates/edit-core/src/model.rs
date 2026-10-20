@@ -1411,6 +1411,16 @@ pub struct Grade {
     /// 0 the centre, 1 the right edge (keyed to sweep it across).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub leak_x: f32,
+    /// Film grain, 0..1: a fine noise that moves every frame (the team's
+    /// overlay look on pictures and B-roll).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub grain: f32,
+    /// Faint horizontal scan lines, 0..1 (an old monitor or tape).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub scanlines: f32,
+    /// A faded print, 0..1: blacks lifted and whites dimmed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fade: f32,
 }
 
 impl Default for Grade {
@@ -1429,6 +1439,9 @@ impl Default for Grade {
             vignette_saturation: 0.0,
             leak: 0.0,
             leak_x: 0.0,
+            grain: 0.0,
+            scanlines: 0.0,
+            fade: 0.0,
         }
     }
 }

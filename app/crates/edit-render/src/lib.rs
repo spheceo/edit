@@ -79,6 +79,11 @@ struct GradeUniforms {
     /// The light leak: strength, and where it comes from (-1 left .. 1 right).
     leak: f32,
     leak_x: f32,
+    /// Film grain, scan lines, a faded print; the frame's height in pixels.
+    grain: f32,
+    scanlines: f32,
+    fade: f32,
+    height: f32,
 }
 
 #[repr(C)]
@@ -1280,6 +1285,10 @@ impl Renderer {
                         vignette_saturation: grade.vignette_saturation,
                         leak: grade.leak.max(0.0),
                         leak_x: grade.leak_x,
+                        grain: grade.grain,
+                        scanlines: grade.scanlines,
+                        fade: grade.fade,
+                        height: self.height as f32,
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));

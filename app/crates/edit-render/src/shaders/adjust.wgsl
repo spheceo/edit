@@ -30,7 +30,19 @@ struct Grade {
     // The light leak: strength, and where it comes from (-1 left .. 1 right).
     leak: f32,
     leak_x: f32,
+    // Film grain, scan lines, a faded print; the frame's height in pixels.
+    grain: f32,
+    scanlines: f32,
+    fade: f32,
+    height: f32,
 };
+
+// A hash in 0..1 per pixel and pattern (the grain's noise).
+fn hash(p: vec2f) -> f32 {
+    let q = fract(p * vec2f(0.1031, 0.1030));
+    let r = q + dot(q, q.yx + 33.33);
+    return fract((r.x + r.y) * r.x);
+}
 
 @group(0) @binding(0) var<uniform> g: Grade;
 
@@ -133,6 +145,23 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     let luma = dot(s, vec3f(0.2126, 0.7152, 0.0722));
     s = mix(vec3f(luma), s, max(1.0 + g.saturation + g.vignette_saturation * falloff, 0.0));
     s = s * (1.0 - g.vignette * falloff);
+    // A faded print: blacks lifted, whites dimmed.
+    if (g.fade > 0.0) {
+        s = mix(s, vec3f(0.07) + s * 0.82, g.fade);
+    }
+    // Scan lines: faint dark rows, about one every 3 pixels at 1080p.
+    if (g.scanlines > 0.0) {
+        let row = in.uv.y * g.height / max(g.height / 360.0, 1.0);
+        let line = 0.5 + 0.5 * cos(row * 6.2831853);
+        s = s * (1.0 - g.scanlines * 0.22 * line);
+    }
+    // Grain: a new fine noise every frame, strongest in the mid-tones.
+    if (g.grain > 0.0) {
+        let pixel = floor(in.uv * vec2f(g.height * g.aspect, g.height));
+        let n = hash(pixel + vec2f(g.seed * 17.0, g.seed * 31.0)) - 0.5;
+        let mids = 1.0 - abs(dot(s, vec3f(0.333)) - 0.5) * 1.2;
+        s = s + vec3f(n * g.grain * 0.22 * max(mids, 0.25));
+    }
     s = max(s, vec3f(0.0));
     return vec4f(mix(base.rgb, s, g.opacity), base.a);
 }

@@ -323,7 +323,7 @@ test("a plan saves once, dry runs save nothing, and a stale one is refused", asy
     "revision conflict: expected 1, current 2; nothing saved; refresh get_edit_context",
   );
   expect(await refused(app, "apply_edit_plan", { base_rev: 2, operations: [{ op: "nope" }] })).toBe(
-    "operation 1: unknown op nope; use add, update, delete, keyframes, cover_cut_in, desktop, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks; nothing saved",
+    "operation 1: unknown op nope; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks; nothing saved",
   );
   expect(await refused(app, "apply_edit_plan", { operations })).toBe("base_rev is required");
   expect(await refused(app, "apply_edit_plan", { base_rev: 2, operations, review_frames: [-1] })).toBe(
@@ -463,7 +463,7 @@ test("a cut-in is covered in one call, its card gone and its voice-over on A1", 
   expect(await refused(app, "cover_cut_in", { cut_in: 2, shots: [{ media: "m1", source_in: 0 }] })).toBe("cut_in is 1 to 1");
   expect(await refused(app, "cover_cut_in", { cut_in: 1 })).toBe("arguments: missing field `shots`");
   expect(await refused(app, "cover_cut_in", { cut_in: 1, shots: [{ media: "m1", source_in: 597 }] })).toBe(
-    "shot 1: m1 runs out at 600.00 s; from 597.00 s at 0.5× this shot needs 5.00 s of it",
+    "shot 1: m1 runs out at 600.00 s; from 597.00 s at 0.8× this shot needs 8.00 s of it",
   );
 });
 

@@ -64,6 +64,8 @@ pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
     ("Geist", 700, "Geist-Bold.ttf"),
     ("Geist", 900, "Geist-Black.ttf"),
     ("Reenie Beanie", 400, "ReenieBeanie.ttf"),
+    ("Geist Mono", 500, "GeistMono-Medium.ttf"),
+    ("Geist Mono", 600, "GeistMono-SemiBold.ttf"),
 ];
 
 #[cfg(feature = "bundled-fonts")]
@@ -76,6 +78,8 @@ pub fn bundled_font_bytes(file: &str) -> Option<&'static [u8]> {
         "Geist-Black.ttf" => include_bytes!("../fonts/Geist-Black.ttf"),
         "Montserrat-SemiBold.ttf" => include_bytes!("../fonts/Montserrat-SemiBold.ttf"),
         "ReenieBeanie.ttf" => include_bytes!("../fonts/ReenieBeanie.ttf"),
+        "GeistMono-Medium.ttf" => include_bytes!("../fonts/GeistMono-Medium.ttf"),
+        "GeistMono-SemiBold.ttf" => include_bytes!("../fonts/GeistMono-SemiBold.ttf"),
         _ => return None,
     })
 }

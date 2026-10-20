@@ -7,6 +7,7 @@ import { clipFrom, keyframesFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
 import * as desktop from "./desktop.ts";
 import * as screen from "./desktop_screen.ts";
+import * as looks from "./looks.ts";
 import * as graphics from "./graphics.ts";
 import * as intro from "./intro_graphics.ts";
 import * as markers from "./markers.ts";
@@ -103,6 +104,10 @@ export function needs(operations: Json[], project: Project | null = null): Needs
           want({ windows: [{ app: "photo_viewer", media: shot.media }] }, true);
         }
       }
+    }
+    if (operation.op === "file_viewer" && project !== null) {
+      const drawn = looks.fileViewerFrames(project, operation);
+      if (drawn !== null && !sizes.some(([app, w, h]) => app === "file_viewer" && w === drawn[0] && h === drawn[1])) sizes.push(["file_viewer", drawn[0], drawn[1]]);
     }
     if (operation.op === "evidence_board" && operation.shutters !== false) out.shutter = true;
     if (operation.op === "desktop_profile") {
@@ -362,8 +367,21 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       const end = int(args.end) ?? (int(args.duration) === null ? null : start + int(args.duration)!);
       if (end === null) throw new Error("desktop needs end or duration (frames)");
       let spec = screen.readSpec(project, args, start, end, "Desktop · ");
-      if (args.open !== false) spec = screen.openFrom(spec, screen.footageBefore(project, start, (name) => name.startsWith("Desktop · ")));
+      const skip = (name: string) => name.startsWith("Desktop · ");
+      if (args.open !== false) spec = screen.openFrom(spec, screen.footageBefore(project, start, skip), screen.footageAt(project, end, false, skip));
       return screen.build(project, spec, assets.screen);
+    }
+    case "film_look":
+      return looks.filmLook(project, args);
+    case "red_quote":
+      return looks.redQuote(project, args);
+    case "annotate":
+      return looks.annotate(project, args);
+    case "call":
+      return looks.call(project, args);
+    case "file_viewer": {
+      if (assets.screen === undefined || assets.screen === null) throw new Error("file_viewer's frame wasn't prepared (run it through apply_edit_plan)");
+      return looks.fileViewer(project, args, assets.screen.frames);
     }
     // Retired (the team, Oct 20: "abandon any sort of other way of displaying
     // images and evidence… lean toward this Windows-style thing"): pictures
@@ -400,7 +418,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
         throw new Error(`unknown op ${op}: it's a transition, {"op": "transition", "kind": "${op}", "at": <frame>}`);
       }
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
       );
   }
 }
@@ -881,6 +899,7 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
   const paper = addTrack(project, "video");
   add({ type: "solid", name: "Evidence board · paper", track: paper, start, duration: total, fill: [0.93, 0.93, 0.915, 1] });
   const opening = cameraAt(0);
+  const notesLater: (() => void)[] = [];
   items.forEach((item, index) => {
     const [x, y] = spots[index]!;
     const at = centred[index]!;
@@ -908,7 +927,7 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
       keyframes: keys(x, y, 0),
     });
     const label = str(item.label);
-    if (label !== null && trim(label) !== "") {
+    if (label !== null && trim(label) !== "") notesLater.push(() => {
       // Written as the photo comes in: starting a little before it's centred
       // (a third of the way from the last one, at most 12 frames).
       const gap = index > 0 && centred[index - 1] !== undefined ? at - centred[index - 1]! : at;
@@ -928,8 +947,10 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
         animation: { preset: "typewriter", stagger: 2, duration: 1 },
         keyframes: keys(lx, ly, from),
       });
-    }
+    });
   });
+  // Every note above every photo: a photo never covers a note (the team's board, a photo over "from the b…").
+  for (const note of notesLater) note();
   // A heading over the first photo, written on as the board comes in: whose
   // account or what record the board is ("Nevaeh's account", "Prior reports").
   const title = str(args.title);
@@ -1148,6 +1169,33 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       issues.push({ kind: "source_exhausted", clip: clip.id });
     }
   }
+  // The same picture shown in more than one place in the video (the team:
+  // "the same images again and again and again… it's just annoying").
+  // House pictures (the wallpaper, window frames) don't count.
+  const shownAt = new Map<string, [number, number][]>();
+  for (const clip of project.clips) {
+    if (clip.type !== "video" || !visible(clip.track)) continue;
+    const media = mediaOf(project, clip.media);
+    if (media === undefined || media.kind !== "image" || /[\\/]graphics[\\/]/.test(media.path)) continue;
+    const list = shownAt.get(media.id) ?? [];
+    list.push([clip.start, clipEnd(clip)]);
+    shownAt.set(media.id, list);
+  }
+  for (const [mediaId, spans] of shownAt) {
+    spans.sort((a, b) => a[0] - b[0]);
+    const places: [number, number][] = [];
+    for (const [from, to] of spans) {
+      const last = places[places.length - 1];
+      if (last !== undefined && from <= last[1] + 2 * fps) last[1] = Math.max(last[1], to);
+      else places.push([from, to]);
+    }
+    if (places.length > 1) issues.push({ kind: "repeated_picture", media: mediaId, at: places.map(([from]) => from) });
+  }
+  // The Windows screen on most cut-ins (the team: "every single cut-in is
+  // now doing this. This is not good"): about half at most, footage first.
+  const cutIns = (project.script?.blocks ?? []).filter((block) => block.kind === "narration").length;
+  const desktops = project.clips.filter((clip) => (clip.name ?? "").endsWith("Desktop · wallpaper")).length;
+  if (cutIns >= 4 && desktops > Math.max(2, Math.round(cutIns * 0.5))) issues.push({ kind: "windows_overused", desktops, cut_ins: cutIns });
   const links = new Map<string, Clip[]>();
   for (const clip of project.clips) {
     if (typeof clip.link !== "string") continue;

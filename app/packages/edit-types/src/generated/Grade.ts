@@ -57,4 +57,17 @@ leak?: number,
  * Where the leak's light comes from across the frame: -1 the left edge,
  * 0 the centre, 1 the right edge (keyed to sweep it across).
  */
-leak_x?: number, };
+leak_x?: number, 
+/**
+ * Film grain, 0..1: a fine noise that moves every frame (the team's
+ * overlay look on pictures and B-roll).
+ */
+grain?: number, 
+/**
+ * Faint horizontal scan lines, 0..1 (an old monitor or tape).
+ */
+scanlines?: number, 
+/**
+ * A faded print, 0..1: blacks lifted and whites dimmed.
+ */
+fade?: number, };

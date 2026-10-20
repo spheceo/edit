@@ -338,24 +338,23 @@ test("an_evidence_board_marks_each_photo_and_lands_a_shutter_on_it", () => {
   expect(needs([{ op: "evidence_board", shutters: false }])).toEqual({ shutter: false, desktops: [] });
 });
 
-test("a_desktop_opens_from_the_footage_types_its_notes_and_can_end_in_a_video_player", () => {
+test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_player_on_the_next_footage", () => {
   const p = project("plan");
   p.media.push(media({ id: "room", name: "room.mp4", path: "/room.mp4", kind: "video", duration: 600, width: 1280, height: 720, has_audio: true }));
+  p.media.push(media({ id: "next", name: "next.mp4", path: "/next.mp4", kind: "video", duration: 600, width: 1280, height: 720, has_audio: true }));
   p.media.push(media({ id: "mug", name: "mug", path: "/mug.png", kind: "image", duration: 30, width: 634, height: 730 }));
   p.media.push(media({ id: "wall", name: "wall", path: "/wall.png", kind: "image", duration: 30, width: 1344, height: 752 }));
   p.clips.push(clip({ id: "foot", track: "v1", start: 0, duration: 300, type: "video", media: "room", source_in: 10 }));
+  p.clips.push(clip({ id: "after", track: "v1", start: 600, duration: 300, type: "video", media: "next", source_in: 50 }));
   const op = {
     op: "desktop",
     start: 300,
     end: 600,
-    exit_into: 2,
     windows: [
       { app: "photo_viewer", media: "mug", at: 330, label: "actual image" },
       { app: "notepad", at: 380, lines: ["Charged with murder", "Held without bail"], line_at: [400, 450] },
-      { app: "video_player", media: "room", source_in: 200, at: 480 },
     ],
   };
-  // The Photo Viewer, the Notepad and one Video Player frame (both players are the same size).
   const sizes = needs([op], p).screens!;
   expect(sizes.map(([app]) => app).sort()).toEqual(["notepad", "photo_viewer", "video_player"]);
   const frames: Record<string, string> = {};
@@ -365,27 +364,36 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_can_end_in_a_video_pl
   });
   const applied = applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } });
   const result = applied.results[0] as Record<string, unknown>;
-  // It opened zoomed into a Video Player playing on from the footage (10 s + 300 frames = 20 s).
-  expect((result.camera as Record<string, unknown>).opens_into).toBe(0);
-  const players = p.clips.filter((own) => own.name === "Desktop · Video Player · room.mp4") as VideoClip[];
-  expect(players.map((own) => Math.round(own.source_in))).toEqual([20, 200]);
+  const camera = result.camera as Record<string, unknown>;
+  expect([camera.opens_from_footage, camera.ends_in_footage]).toEqual([true, true]);
+  // One Video Player: the footage before (10 s + 300 frames = 20 s), then, while it's off screen, the footage after, ending where it starts (50 s).
+  const before = p.clips.find((own) => own.name === "Desktop · Video Player · room.mp4") as VideoClip;
+  const after = p.clips.find((own) => own.name === "Desktop · Video Player · next.mp4") as VideoClip;
+  expect(Math.round(before.source_in)).toBe(20);
+  expect(Math.abs(after.source_in + ((after.duration / 30) * after.speed) - 50)).toBeLessThan(0.05);
+  expect(after.start + after.duration).toBe(600);
+  // The photo waits for the zoom out of the footage, then pops in.
+  expect(p.clips.find((own) => own.name === "Desktop · Photo Viewer · mug")!.start).toBeGreaterThanOrEqual(355);
   expect(result.lines_at).toEqual([400, 450]);
   // The notes type on, and the windows and lines are marked for their sounds.
   const notes = p.clips.filter((own) => own.name?.startsWith("Desktop · Notepad note") === true) as TextClip[];
   expect(notes.map((own) => own.text)).toEqual(["- Charged with murder", "- Held without bail"]);
   expect(notes[0]!.animation.preset).toBe("typewriter");
   const marks = (p.markers ?? []).map((marker) => `${marker.name}@${marker.frame}`);
-  expect(marks).toContain("desktop window opens@330");
   expect(marks).toContain("desktop line@450");
+  // No window overlaps another.
+  const windows = result.windows as { centre: [number, number]; width: number }[];
+  expect(windows.length).toBe(3);
   // Every clip moves against the camera: the wallpaper's scale changes.
   const wall = p.clips.find((own) => own.name === "Desktop · wallpaper")!;
   const scales = (wall.keyframes?.scale ?? []).map((key) => key.value);
   expect(Math.max(...scales) / Math.min(...scales)).toBeGreaterThan(1.3);
-  // Only the keys the camera's curve needs (it was a key every fifth frame: 43,000 in one project).
+  // Only the keys the camera's curve needs.
   const keys = p.clips.filter((own) => own.name?.startsWith("Desktop ·") === true).reduce((sum, own) => sum + Object.values(own.keyframes ?? {}).reduce((n, list) => n + list.length, 0), 0);
   expect(keys).toBeLessThan(900);
   valid(p);
-  // The old picture graphics are retired.
+  // The same picture twice in one desktop is refused; the old picture graphics are retired.
+  expect(() => applyWith(p, [{ ...op, windows: [op.windows[0], { ...op.windows[0], at: 400 }] }], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } })).toThrow(/two windows/);
   expect(() => applyWith(p, [{ op: "desktop_profile", start: 0, duration: 90, media: "mug", lines: ["x"] }], { shutter: null, desktops: [] })).toThrow(/retired/);
 });
 
@@ -586,4 +594,33 @@ test("one_plan_commits_once_and_stale_retry_cannot_duplicate_it", async () => {
   } finally {
     cleanup();
   }
+});
+
+test("the_reference_effects_build_valid_clips", () => {
+  const p = project("plan");
+  p.media.push(media({ id: "room", name: "room.mp4", path: "/room.mp4", kind: "video", duration: 600, width: 1280, height: 720, has_audio: true }));
+  p.media.push(media({ id: "mug", name: "mug", path: "/mug.png", kind: "image", duration: 30, width: 634, height: 730 }));
+  p.clips.push(clip({ id: "foot", track: "v1", start: 0, duration: 900, type: "video", media: "room", source_in: 10 }));
+  p.clips.push(clip({ id: "sub", track: "v2", start: 620, duration: 60, type: "text", name: "Subtitle · Caller", text: "We're really concerned about him" }));
+  const viewer = { op: "file_viewer", media: "mug", start: 500, end: 600, x: 300, y: -200, name: "Larry Scott" };
+  const [, w, h] = needs([viewer], p).screens![0]!;
+  p.media.push(media({ id: "fv", name: "fv", path: "/graphics/fv.png", kind: "image", duration: 30, width: w, height: h }));
+  const applied = applyWith(
+    p,
+    [
+      { op: "film_look", start: 0, end: 120, tag: "actual photo", soft_edges: true },
+      { op: "red_quote", text: "Nobody's seen her", start: 150, end: 260, face: [-200, 100] },
+      { op: "annotate", start: 300, end: 450, tag: "actual photo", notes: [{ text: "excess blood", at: 320, point: [0, 50] }, { text: "signs of trauma", at: 360, point: [100, 150] }] },
+      viewer,
+      { op: "call", start: 600, end: 720, color: "blue" },
+    ],
+    { shutter: null, desktops: [], screen: { wallpaper: "fv", frames: { [frameKey("file_viewer", w, h)]: "fv" } } },
+  );
+  expect(applied.results.length).toBe(5);
+  expect(p.clips.some((own) => own.type === "text" && own.text === "[ACTUAL PHOTO]")).toBe(true);
+  expect(p.clips.some((own) => own.type === "text" && own.text === "“Nobody's seen her”")).toBe(true);
+  expect(p.clips.some((own) => own.type === "text" && own.text === "LARRY SCOTT")).toBe(true);
+  expect(p.clips.some((own) => own.type === "waveform")).toBe(true);
+  expect(p.clips.find((own) => own.id === "sub")!.name).toBe("Call words");
+  valid(p);
 });

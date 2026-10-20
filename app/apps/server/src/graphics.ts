@@ -44,6 +44,22 @@ export function labelStyle(k: number): Record<string, unknown> {
   };
 }
 
+/**
+ * The map's label, as the team's map references have it: white Geist Mono in
+ * a black box, no border, typed on ("Custer County Sheriff's Office",
+ * "WILDERNESS AREA").
+ */
+export function mapLabelStyle(k: number): Record<string, unknown> {
+  return {
+    font: "Geist Mono",
+    weight: 600,
+    size: round(36 * k),
+    color: [1, 1, 1, 1],
+    glow: { enabled: true, color: null, radius: 10 * k, strength: 0.25 },
+    background: { color: [0, 0, 0, 1], opacity: 0.88, pad_x: 14 * k, pad_y: 7 * k },
+  };
+}
+
 function push(project: Project, made: string[], fields: Args): string {
   const id = freshId(project, "c");
   const clip = clipFrom({ ...fields, id });
@@ -153,9 +169,9 @@ export function placeLabel(project: Project, args: Args): string {
   const [width, height] = [project.settings.width, project.settings.height];
   const trackGiven = Array.isArray(args.building_track) ? (args.building_track as unknown[]) : [];
   const points: unknown[] = trackGiven.length > 0 ? trackGiven : [args.building];
-  // The box: one line of 44 px words, 12 px padding above and below.
-  const boxW = charCount(text) * 44 * k * 0.56 + 40 * k;
-  const boxH = 44 * k * 1.15 + 24 * k;
+  // The box: one line of 36 px monospace (0.6 em a character), 7 px padding above and below.
+  const boxW = charCount(text) * 36 * k * 0.6 + 28 * k;
+  const boxH = 36 * k * 1.15 + 14 * k;
   const margin = 0.04 * height;
   const keys: [number, number, number][] = [];
   for (const raw of points) {
@@ -202,10 +218,10 @@ export function placeLabel(project: Project, args: Args): string {
     duration: end - start,
     fade_out: 8,
     text,
-    style: labelStyle(k),
+    style: mapLabelStyle(k),
     transform: { x: x0, y: y0 },
     keyframes: xs.length > 1 ? { x: xs, y: ys } : {},
-    animation: { preset: "fade", duration: 12 },
+    animation: { preset: "typewriter", duration: 1, stagger: 1 },
   });
 }
 
@@ -356,7 +372,8 @@ function designedOver(project: Project, clip: Clip): boolean {
       case "solid":
         return other.gradient !== undefined && other.gradient !== null;
       case "adjustment":
-        return (other.blur?.radius ?? 0) > 0;
+        // A blur over it, or the film look (grain): a designed graphic.
+        return (other.blur?.radius ?? 0) > 0 || (other.grade?.grain ?? 0) > 0;
       default:
         return false;
     }

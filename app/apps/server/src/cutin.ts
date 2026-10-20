@@ -30,7 +30,7 @@ interface Shot {
   smooth: boolean | null;
   /** A picture's label in its Photo Viewer: "actual image" or "illustrative image". */
   label: string | null;
-  /** A Windows screen for this shot's span: {windows, exit_into, open} as the desktop op's. */
+  /** A Windows screen for this shot's span: {windows, exit, open} as the desktop op's. */
   desktop: Record<string, unknown> | null;
 }
 
@@ -269,7 +269,7 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
   const extend = args.shots.map((shot, index) => {
     const next = args.shots[index + 1];
     if (!args.dissolve || next === undefined || !video(index) || !video(index + 1)) return 0;
-    const speed = Math.min(Math.max(shot.speed ?? 0.5, 0.05), 20);
+    const speed = Math.min(Math.max(shot.speed ?? 0.8, 0.05), 20);
     const [start, end] = spans[index]!;
     const ends = shot.source_in + ((end - start) / fps) * speed;
     const sameMoment = next.media === shot.media && Math.abs(next.source_in - ends) < 2;
@@ -333,19 +333,27 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
       const asked = shot.desktop ?? { windows: [{ app: "photo_viewer", media: shot.media, label: shot.label }] };
       let spec = screen.readSpec(project, asked, start, end, `${prefix}Desktop · `, `shot ${index + 1}: `);
       if (asked.open !== false) {
+        // What plays after it: the next shot, else the footage after the cut-in.
+        const after = args.shots[index + 1];
+        const next =
+          after !== undefined && !isScreen[index + 1] && after.media !== null
+            ? { media: after.media, source_in: after.source_in, speed: Math.min(Math.max(after.speed ?? 0.8, 0.05), 20), zoom: (after.scale ?? 1) * zoomAt(end) }
+            : index === args.shots.length - 1
+              ? screen.footageAt(project, end, false, (name) => name.startsWith(prefix))
+              : null;
         const before = args.shots[index - 1];
         const previous =
           index > 0 && before !== undefined && !isScreen[index - 1] && before.media !== null
             ? {
                 media: before.media,
-                source_in: before.source_in + ((start - spans[index - 1]![0]) / fps) * Math.min(Math.max(before.speed ?? 0.5, 0.05), 20),
-                speed: Math.min(Math.max(before.speed ?? 0.5, 0.05), 20),
+                source_in: before.source_in + ((start - spans[index - 1]![0]) / fps) * Math.min(Math.max(before.speed ?? 0.8, 0.05), 20),
+                speed: Math.min(Math.max(before.speed ?? 0.8, 0.05), 20),
                 zoom: (before.scale ?? 1) * zoomAt(start - 1),
               }
             : index === 0
               ? screen.footageBefore(project, start, (name) => name.startsWith(prefix))
               : null;
-        spec = screen.openFrom(spec, previous);
+        spec = screen.openFrom(spec, previous, next);
       }
       const built = screen.build(project, spec, art);
       placed.push({ name: shot.name ?? `shot ${index + 1}`, desktop: built, start: start / fps, end: end / fps });
@@ -354,7 +362,7 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
     const media = mediaOf(project, shot.media!);
     if (media === undefined) throw new Error(`shot ${index + 1}: no media ${shot.media}`);
     if (media.kind === "audio") throw new Error(`shot ${index + 1}: ${shot.media} is audio`);
-    const speed = Math.min(Math.max(shot.speed ?? 0.5, 0.05), 20);
+    const speed = Math.min(Math.max(shot.speed ?? 0.8, 0.05), 20);
     const duration = end - start + extend[index]!;
     const upper = onUpper[index]!;
     // The upper of a dissolving pair fades: in from the shot under it, or out over the next.

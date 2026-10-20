@@ -139,6 +139,9 @@ const GRADE = struct("Grade", [
   field("vignette_saturation", "f32", 0, isZero),
   field("leak", "f32", 0, isZero),
   field("leak_x", "f32", 0, isZero),
+  field("grain", "f32", 0, isZero),
+  field("scanlines", "f32", 0, isZero),
+  field("fade", "f32", 0, isZero),
 ]);
 
 const SHAKE = struct("Shake", [

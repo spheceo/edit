@@ -618,6 +618,9 @@ test("the_reference_effects_build_valid_clips", () => {
   );
   expect(applied.results.length).toBe(5);
   expect(p.clips.some((own) => own.type === "text" && own.text === "[ACTUAL PHOTO]")).toBe(true);
+  // The film look's grain and scan lines survive the clip reader.
+  const look = p.clips.find((own) => own.name === "Film look");
+  expect(look?.type === "adjustment" && (look.grade.grain ?? 0) > 0 && (look.grade.scanlines ?? 0) > 0).toBe(true);
   expect(p.clips.some((own) => own.type === "text" && own.text === "“Nobody's seen her”")).toBe(true);
   expect(p.clips.some((own) => own.type === "text" && own.text === "LARRY SCOTT")).toBe(true);
   expect(p.clips.some((own) => own.type === "waveform")).toBe(true);

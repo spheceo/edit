@@ -6,6 +6,7 @@
 import { clipFrom, keyframesFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
 import * as desktop from "./desktop.ts";
+import * as screen from "./desktop_screen.ts";
 import * as graphics from "./graphics.ts";
 import * as intro from "./intro_graphics.ts";
 import * as markers from "./markers.ts";
@@ -62,6 +63,8 @@ export interface Assets {
   shutter: Shutter | null;
   /** The desktop profile's pictures, one set per pair of window titles. */
   desktops: desktop.Art[];
+  /** The Windows screen's wallpaper and window frames (desktop ops, cover_cut_in desktop and picture shots). */
+  screen?: screen.Art | null;
 }
 
 export interface Shutter {
@@ -77,19 +80,55 @@ export interface Needs {
   shutter: boolean;
   /** [photo viewer title, notepad title] per desktop profile. */
   desktops: [string, string][];
+  /** Window frames the Windows screens need drawn ([app, width, height]); the wallpaper with them. */
+  screens?: [screen.AppKind, number, number][];
 }
 
-export function needs(operations: Json[]): Needs {
+export function needs(operations: Json[], project: Project | null = null): Needs {
   const out: Needs = { shutter: false, desktops: [] };
+  const sizes: [screen.AppKind, number, number][] = [];
+  const want = (given: Args, open: boolean) => {
+    if (project === null) return;
+    for (const size of screenSizes(project, given, open)) {
+      if (!sizes.some(([app, w, h]) => app === size[0] && w === size[1] && h === size[2])) sizes.push(size);
+    }
+  };
   for (const raw of operations) {
     const operation = objectOf(raw);
+    if (operation.op === "desktop") want(operation, operation.open !== false);
+    if (operation.op === "cover_cut_in" && Array.isArray(operation.shots)) {
+      for (const shot of operation.shots.map(objectOf)) {
+        if (typeof shot.desktop === "object" && shot.desktop !== null) want(objectOf(shot.desktop), objectOf(shot.desktop).open !== false);
+        else if (project !== null && typeof shot.media === "string" && mediaOf(project, shot.media)?.kind === "image") {
+          want({ windows: [{ app: "photo_viewer", media: shot.media }] }, true);
+        }
+      }
+    }
     if (operation.op === "evidence_board" && operation.shutters !== false) out.shutter = true;
     if (operation.op === "desktop_profile") {
       const titles = desktop.titles(operation);
       if (!out.desktops.some(([a, b]) => a === titles[0] && b === titles[1])) out.desktops.push(titles);
     }
   }
+  if (sizes.length > 0) out.screens = sizes;
   return out;
+}
+
+/**
+ * The window frames a desktop asks for (read leniently: a bad window is the
+ * op's own error to give), with the opening Video Player's when it opens
+ * from the footage before it.
+ */
+function screenSizes(project: Project, given: Args, open: boolean): [screen.AppKind, number, number][] {
+  let spec: screen.Spec;
+  try {
+    const windows = (Array.isArray(given.windows) ? given.windows : []).map((window) => ({ ...objectOf(window), at: 1 }));
+    spec = screen.readSpec(project, { ...given, windows }, 1, 1_000_000, "");
+  } catch {
+    return [];
+  }
+  if (open) spec = screen.openFrom(spec, { media: "", source_in: 0, speed: 1, zoom: 1 });
+  return screen.frameSizes(project, spec);
 }
 
 const objectOf = (value: unknown): Args =>
@@ -304,7 +343,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return { clips: ids };
     }
     case "cover_cut_in": {
-      const [report, pending] = cutin.cover(project, args);
+      const [report, pending] = cutin.cover(project, args, assets.screen ?? null);
       smooth.push(...pending);
       return report;
     }
@@ -316,6 +355,16 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return transition(project, args);
     case "evidence_board":
       return evidenceBoard(project, args, assets.shutter);
+    case "desktop": {
+      if (assets.screen === undefined || assets.screen === null) throw new Error("desktop's pictures weren't prepared (run it through apply_edit_plan)");
+      const start = int(args.start);
+      if (start === null) throw new Error("desktop needs start (frames)");
+      const end = int(args.end) ?? (int(args.duration) === null ? null : start + int(args.duration)!);
+      if (end === null) throw new Error("desktop needs end or duration (frames)");
+      let spec = screen.readSpec(project, args, start, end, "Desktop · ");
+      if (args.open !== false) spec = screen.openFrom(spec, screen.footageBefore(project, start, (name) => name.startsWith("Desktop · ")));
+      return screen.build(project, spec, assets.screen);
+    }
     case "desktop_profile": {
       const [photoTitle, notepadTitle] = desktop.titles(args);
       const art = assets.desktops.find((art) => art.photo_title === photoTitle && art.notepad_title === notepadTitle);
@@ -358,7 +407,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
         throw new Error(`unknown op ${op}: it's a transition, {"op": "transition", "kind": "${op}", "at": <frame>}`);
       }
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
       );
   }
 }

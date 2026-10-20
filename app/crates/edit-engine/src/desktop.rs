@@ -36,13 +36,35 @@ pub const LINE_STEP: f64 = 74.0;
 pub enum Window {
     PhotoViewer,
     Notepad,
+    VideoPlayer,
 }
+
+/// The height of the Video Player's controls under its picture (1080p pixels).
+pub const CONTROLS: f64 = 46.0;
 
 impl Window {
     fn rect(self) -> [f64; 4] {
         match self {
-            Window::PhotoViewer => PHOTO_VIEWER,
+            Window::PhotoViewer | Window::VideoPlayer => PHOTO_VIEWER,
             Window::Notepad => NOTEPAD,
+        }
+    }
+
+    /// Its title, as the team names it on screen.
+    pub fn title(self) -> &'static str {
+        match self {
+            Window::PhotoViewer => "Photo Viewer",
+            Window::Notepad => "Notepad",
+            Window::VideoPlayer => "Video Player",
+        }
+    }
+
+    pub fn parse(kind: &str) -> Option<Self> {
+        match kind {
+            "photo_viewer" => Some(Window::PhotoViewer),
+            "notepad" => Some(Window::Notepad),
+            "video_player" => Some(Window::VideoPlayer),
+            _ => None,
         }
     }
 
@@ -50,6 +72,7 @@ impl Window {
         match self {
             Window::PhotoViewer => &["File", "Edit", "Image", "View", "Help"],
             Window::Notepad => &["File", "Edit", "Search", "View", "Help"],
+            Window::VideoPlayer => &["File", "Edit", "Playback", "Audio", "Video", "View", "Help"],
         }
     }
 
@@ -57,6 +80,7 @@ impl Window {
         match self {
             Window::PhotoViewer => "photo-viewer",
             Window::Notepad => "notepad",
+            Window::VideoPlayer => "video-player",
         }
     }
 }
@@ -404,19 +428,36 @@ pub fn wallpaper(width: u32, height: u32) -> Result<Vec<u8>, String> {
 /// (icon, title, minimise / maximise / close), a menu bar, a 1 px border
 /// and its content area (the photo or the lines go over it).
 pub fn window(window: Window, title: &str, layout: &Layout) -> Result<Vec<u8>, String> {
-    let k = layout.k;
     let [_, _, w, h] = layout.window(window);
-    let (w, h) = (w.round(), h.round());
+    frame(window, title, w.round(), h.round(), layout.k)
+}
+
+/// A window's content area inside a `w` × `h` frame at scale `k` (frame
+/// pixels from its top-left): under the title and menu bars, inset from the
+/// sides and bottom, and over the Video Player's controls.
+pub fn content_in(window: Window, w: f64, h: f64, k: f64) -> [f64; 4] {
+    let top = (TITLE_BAR + MENU_BAR + 2.0) * k;
+    let bottom = match window {
+        Window::VideoPlayer => (CONTROLS + INSET) * k,
+        _ => INSET * k,
+    };
+    [INSET * k, top, w - 2.0 * INSET * k, h - top - bottom]
+}
+
+/// A window's frame of any size `w` × `h` (pixels) at scale `k`.
+pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<u8>, String> {
     let mut canvas = Canvas::new(w as usize, h as usize);
     let body = hex(0x302f2e);
     canvas.rect(0.0, 0.0, w, h, body);
     canvas.rect(0.0, 0.0, w, (TITLE_BAR + MENU_BAR) * k, hex(0x393837));
     // The content area.
-    let [cx, cy, cw, ch] = layout.content(window);
-    let [wx, wy, _, _] = layout.window(window);
-    let (cx, cy) = (cx - wx, cy - wy);
+    let [cx, cy, cw, ch] = content_in(window, w, h, k);
     match window {
         Window::PhotoViewer => canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x2a2928)),
+        Window::VideoPlayer => {
+            canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x000000));
+            controls(&mut canvas, cx, cy + ch, cw, k);
+        }
         Window::Notepad => {
             canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x3b3937));
             // A little darker towards the bottom, as on a real screen.
@@ -472,6 +513,15 @@ pub fn window(window: Window, title: &str, layout: &Layout) -> Result<Vec<u8>, S
                 stroke,
                 light,
             );
+        }
+        Window::VideoPlayer => {
+            // A play button in a frame.
+            canvas.frame(ix, iy + icon * 0.12, ix + icon, iy + icon * 0.88, stroke, light);
+            let (left, right) = (ix + icon * 0.38, ix + icon * 0.68);
+            let (top, bottom) = (iy + icon * 0.32, iy + icon * 0.68);
+            canvas.line((left, top), (right, iy + icon / 2.0), stroke, light);
+            canvas.line((right, iy + icon / 2.0), (left, bottom), stroke, light);
+            canvas.line((left, bottom), (left, top), stroke, light);
         }
         Window::Notepad => {
             // A notepad: a page with lines on it.
@@ -545,6 +595,37 @@ pub fn window(window: Window, title: &str, layout: &Layout) -> Result<Vec<u8>, S
     canvas.png(true)
 }
 
+
+/// The Video Player's controls along the bottom of its picture: a progress
+/// bar (green, part played) over a row of buttons and a volume slider.
+fn controls(canvas: &mut Canvas, x: f64, y: f64, w: f64, k: f64) {
+    let grey = hex(0x9a9a9a);
+    let light = hex(0xd6d6d6);
+    let green = hex(0x36c24a);
+    // The progress bar.
+    let bar = y + 9.0 * k;
+    canvas.rect(x, bar, x + w, bar + 4.0 * k, hex(0x55524f));
+    canvas.rect(x, bar, x + w * 0.42, bar + 4.0 * k, green);
+    // Buttons: play, previous, stop, next.
+    let middle = y + 30.0 * k;
+    let size = 8.0 * k;
+    let thin = 1.6 * k;
+    let mut cx = x + 16.0 * k;
+    canvas.line((cx, middle - size), (cx + size * 1.4, middle), thin, light);
+    canvas.line((cx + size * 1.4, middle), (cx, middle + size), thin, light);
+    canvas.line((cx, middle + size), (cx, middle - size), thin, light);
+    cx += 34.0 * k;
+    for _ in 0..3 {
+        canvas.frame(cx, middle - size * 0.8, cx + size * 1.6, middle + size * 0.8, thin, grey);
+        cx += 30.0 * k;
+    }
+    // The volume slider on the right.
+    let (vx, vw) = (x + w - 110.0 * k, 80.0 * k);
+    canvas.rect(vx, middle - 1.5 * k, vx + vw, middle + 1.5 * k, hex(0x55524f));
+    canvas.rect(vx, middle - 1.5 * k, vx + vw * 0.6, middle + 1.5 * k, green);
+    canvas.rect(vx + vw * 0.6 - 4.0 * k, middle - 5.0 * k, vx + vw * 0.6 + 4.0 * k, middle + 5.0 * k, light);
+}
+
 /// FNV-1a over a few strings, for file names.
 fn hash(parts: &[&str]) -> u32 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -564,6 +645,22 @@ fn ensure(path: &Path, make: impl FnOnce() -> Result<Vec<u8>, String>) -> Result
     let dir = path.parent().ok_or("graphics folder")?;
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     crate::util::write_atomic(path, &make()?).map_err(|error| error.to_string())
+}
+
+/// A `kind` window's frame `w` × `h` pixels at scale `k` (its title the
+/// team's name for it), drawn into `<home>/graphics/` if missing.
+pub fn window_file(home: &Path, kind: &str, w: u32, h: u32, k: f64) -> Result<PathBuf, String> {
+    let window = Window::parse(kind).ok_or_else(|| format!("no window {kind}: photo_viewer, notepad or video_player"))?;
+    if w < 40 || h < 40 || w > 8000 || h > 8000 {
+        return Err(format!("a window {w} × {h} is out of range"));
+    }
+    let path = home.join("graphics").join(format!(
+        "desktop-window-{}-v{VERSION}-{w}x{h}-{:08x}.png",
+        window.slug(),
+        hash(&[&format!("{k:.4}")])
+    ));
+    ensure(&path, || frame(window, window.title(), f64::from(w), f64::from(h), k))?;
+    Ok(path)
 }
 
 /// The files a desktop profile on a `width` × `height` frame needs, made
@@ -632,5 +729,16 @@ mod tests {
         let reader = decoder.read_info().unwrap();
         let info = reader.info();
         assert_eq!((info.width, info.height), (486, 329));
+    }
+
+    #[test]
+    fn a_video_player_of_any_size_has_its_controls_under_the_picture() {
+        let png = frame(Window::VideoPlayer, "Video Player", 800.0, 520.0, 1.0).unwrap();
+        let decoder = png::Decoder::new(std::io::Cursor::new(png));
+        let reader = decoder.read_info().unwrap();
+        assert_eq!((reader.info().width, reader.info().height), (800, 520));
+        let [_, y, _, h] = content_in(Window::VideoPlayer, 800.0, 520.0, 1.0);
+        assert!((520.0 - (y + h) - (CONTROLS + INSET)).abs() < 1e-9);
+        assert_eq!(Window::parse("video_player").map(Window::title), Some("Video Player"));
     }
 }

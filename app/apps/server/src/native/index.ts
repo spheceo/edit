@@ -245,6 +245,7 @@ export interface Native {
   /** Camera angles from 64×36 grey frames; TS does the FFmpeg read that makes them (the engine's seats.rs `scenes`). */
   seatsScenes(gray64x36: Buffer): Promise<{ scenes: [number, number, number | null][]; angles: number }>; // A (the addon answers asynchronously)
   desktopFiles(width: number, height: number, photoTitle: string, notepadTitle: string): Promise<[string, string, string]>; // A
+  desktopWindow(kind: string, width: number, height: number, scale: number): Promise<string>; // A desktop window's frame (photo_viewer, notepad or video_player) of that size, drawn into <home>/graphics/ if missing.
   /**
    * The laid-out size [width, height] of `text` in the bundled Geist at `px`
    * (left-aligned, still, 2 px pad), as the renderer lays it out: desktop.rs

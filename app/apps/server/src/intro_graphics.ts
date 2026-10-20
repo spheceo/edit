@@ -106,8 +106,14 @@ function fitted(project: Project, mediaId: unknown, what: string) {
  * ("it's not a red background, it's the red text"). Its words come up one by
  * one as they're said (`heard`: the frames words are heard at, which
  * apply_edit_plan fills in from the transcripts; else evenly over the first
- * 60% of the line), flush left. It names nobody: the intro isn't in the role colours.
+ * 60% of the line), flush left, in the speaker's colour (their subtitle's
+ * label's, else its words'; white for nobody's). It names nobody.
  */
+/** A subtitle's speaker colour: its label's, else its words' (Repack's are in theirs). */
+function speakerColour(style: { color: Rgba; label?: { color: Rgba } | null }): Rgba {
+  return [...(style.label?.color ?? style.color)] as Rgba;
+}
+
 export function introCaptions(project: Project, args: Args): Record<string, unknown> {
   const [start, end] = span(args, "intro_captions");
   const emphasis = new Set(Array.isArray(args.emphasis) ? args.emphasis.filter((id): id is string => typeof id === "string") : []);
@@ -133,7 +139,9 @@ export function introCaptions(project: Project, args: Args): Record<string, unkn
       style: {
         ...clip.style,
         ...look,
-        color: emphasis.has(clip.id) ? RED_TEXT : WHITE,
+        // In the speaker's colour, as their subtitle was (the team's subtitle
+        // guide, Oct 20); the lines that land in red.
+        color: emphasis.has(clip.id) ? RED_TEXT : speakerColour(clip.style),
         // Flush left, as bodycam's captions read (the team, Oct 20).
         align: "left",
         max_width: clip.style.max_width,

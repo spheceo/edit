@@ -262,6 +262,19 @@ pub async fn desktop_files(
     .await
 }
 
+/// A desktop window's frame (`kind`: photo_viewer, notepad or video_player)
+/// `width` × `height` pixels at scale `scale`, drawn into `<home>/graphics/`
+/// if missing: its path.
+#[napi]
+pub async fn desktop_window(kind: String, width: u32, height: u32, scale: f64) -> napi::Result<String> {
+    crate::blocking("drawing a desktop window", move || {
+        let home = crate::lifecycle::home()?;
+        let path = edit_engine::desktop::window_file(&home, &kind, width, height, scale)?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+}
+
 /// The laid-out size [width, height] of `text` in Geist at `px`, as the
 /// renderer lays it out (the desktop profile's Notepad lines).
 #[napi(ts_return_type = "[number, number]")]

@@ -254,6 +254,13 @@ export function oneColourPerPerson(project: Project): unknown {
         label.color = fromHex(hexColour, label.color[3]);
         add(changed, key);
       }
+      // Interrogation subtitles have their words in the speaker's colour too
+      // (the team, Oct 20: "we do not just want to have text be white…
+      // follow the subtitle guide"); bodycam's stay white under the label.
+      if (project.style === "interrogation" && toHex(style.color) !== hexColour) {
+        style.color = fromHex(hexColour, style.color[3]);
+        add(changed, key);
+      }
     } else if (toHex(style.color) !== hexColour) {
       style.color = fromHex(hexColour, style.color[3]);
       add(changed, key);

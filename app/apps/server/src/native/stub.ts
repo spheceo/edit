@@ -495,6 +495,9 @@ export function createStub(): Stub {
     async desktopFiles() {
       notInStub("desktopFiles");
     },
+    async desktopWindow() {
+      notInStub("desktopWindow");
+    },
     textBlock(text, px, _weight, lineHeight) {
       // No font metrics here: a character-count estimate (Geist's average
       // advance is about half its size), lines × px × line height tall.

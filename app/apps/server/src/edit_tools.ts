@@ -12,8 +12,10 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import { clipColorFrom, clipFrom, defaultTextAnimation, defaultTextStyle, defaultTransform, keyframesFrom, textAnimationFrom, textStyleFrom, transformFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
+import { frameKey as screenFrameKey } from "./desktop_screen.ts";
 import * as diag from "./diag.ts";
 import * as editPlan from "./edit_plan.ts";
+import * as tools from "./tools.ts";
 import * as onscreen from "./onscreen.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
@@ -1364,8 +1366,38 @@ export function timelineTranscript(app: App, project: Project): string {
  */
 export function timeProfileLines(app: App, project: Project, operations: Json[]): void {
   const profiles = operations.map(objectOf).filter((operation) => operation.op === "desktop_profile" && operation.line_at === undefined);
-  if (profiles.length === 0) return;
+  const screens = desktopsIn(project, operations);
+  if (profiles.length === 0 && screens.length === 0) return;
   const heard = seams.editReview.spokenWords(project, cachedTranscripts(app, project, false));
+  const fps = fpsOf(project);
+  // The Windows screens' windows open on the words that name them (`said`)
+  // and their notes type on as they're said, as the profile's lines do.
+  for (const [desktop, start, end] of screens) {
+    const windows = Array.isArray(desktop.windows) ? desktop.windows.map(objectOf) : [];
+    for (const window of windows) {
+      if (window.at === undefined && typeof window.said === "string") {
+        const [frame] = seams.editReview.lineFrames([window.said], heard, start, end);
+        if (frame !== null && frame !== undefined) window.at = Math.max(frame - Math.round(fps * 0.15), start);
+      }
+      const lines = Array.isArray(window.lines) ? window.lines.filter((line): line is string => typeof line === "string") : [];
+      if (window.app !== "notepad" || window.line_at !== undefined || lines.length === 0) continue;
+      const from = typeof window.at === "number" ? window.at : start;
+      const found = seams.editReview.lineFrames(lines, heard, from, end);
+      if (found.every((frame) => frame === null)) continue;
+      const at: number[] = [];
+      found.forEach((frame, index) => {
+        if (frame !== null) {
+          at.push(Math.max(frame, from + Math.round(fps * 0.2)));
+          return;
+        }
+        const before = at[index - 1] ?? from + Math.round(fps * 0.4);
+        const next = found.slice(index + 1).find((one) => one !== null) ?? null;
+        at.push(next !== null ? Math.round((before + next) / 2) : before + Math.round(fps));
+      });
+      window.line_at = at;
+    }
+    desktop.windows = windows;
+  }
   for (const operation of profiles) {
     const start = typeof operation.start === "number" ? operation.start : null;
     const end = typeof operation.duration === "number" && start !== null ? start + operation.duration : typeof operation.end === "number" ? operation.end : null;
@@ -1388,6 +1420,35 @@ export function timeProfileLines(app: App, project: Project, operations: Json[])
   }
 }
 
+/** The Windows screens in a plan (desktop ops and cover_cut_in desktop shots) with their spans (frames), as objects to fill in. */
+function desktopsIn(project: Project, operations: Json[]): [Record<string, unknown>, number, number][] {
+  const fps = fpsOf(project);
+  const out: [Record<string, unknown>, number, number][] = [];
+  for (const operation of operations.map(objectOf)) {
+    if (operation.op === "desktop" && typeof operation.start === "number") {
+      const end = typeof operation.end === "number" ? operation.end : typeof operation.duration === "number" ? operation.start + operation.duration : operation.start + 30 * fps;
+      out.push([operation, operation.start, end]);
+    }
+    if (operation.op !== "cover_cut_in" || !Array.isArray(operation.shots)) continue;
+    let span: [number, number] | null = null;
+    try {
+      const cut = cutin.findCutIn(project, operation.cut_in);
+      span = [cut.start, cut.end];
+    } catch {
+      continue;
+    }
+    const shots = operation.shots.map(objectOf);
+    shots.forEach((shot, index) => {
+      if (typeof shot.desktop !== "object" || shot.desktop === null) return;
+      const start = typeof shot.at === "number" ? Math.round(shot.at * fps) : span![0];
+      const next = shots[index + 1];
+      const end = next !== undefined && typeof next.at === "number" ? Math.round(next.at * fps) : span![1];
+      out.push([objectOf(shot.desktop), start, end]);
+    });
+  }
+  return out;
+}
+
 /**
  * The frames words are heard at, for ops whose words come up as they're said
  * (intro_captions: the teasers' subtitles; text_slam: the narration's phrase),
@@ -1401,7 +1462,7 @@ export function hearWords(app: App, project: Project, operations: Json[]): void 
 }
 
 export async function planAssets(app: App, project: Project, operations: Json[]): Promise<[editPlan.Assets, seams.Made[]]> {
-  const needs = editPlan.needs(operations);
+  const needs = editPlan.needs(operations, project);
   const assets: editPlan.Assets = { shutter: null, desktops: [] };
   const made: seams.Made[] = [];
   const home = app.store.home;
@@ -1441,7 +1502,53 @@ export async function planAssets(app: App, project: Project, operations: Json[])
     }
     assets.desktops.push({ photo_title: photoTitle, notepad_title: notepadTitle, wallpaper, photo_viewer: photoViewer, notepad });
   }
+  if (needs.screens !== undefined && needs.screens.length > 0) {
+    const { width, height } = project.settings;
+    const k = Math.min(width / 1920, height / 1080);
+    const wallpaper = await diag.timeOnAsync("agent", "desktop: wallpaper", "", () => desktopWallpaper(home, width, height));
+    const frames = await diag.timeOnAsync("agent", "desktop: draw windows", "", () =>
+      Promise.all(needs.screens!.map(([app, w, h]) => native().desktopWindow(app, w, h, k))),
+    );
+    const [ids, fresh] = await houseMedia(app, project, [wallpaper, ...frames]);
+    made.push(...fresh);
+    const [wall, ...frameIds] = ids;
+    if (wall === undefined || frameIds.length !== frames.length) throw new Error("desktop pictures");
+    const keyed: Record<string, string> = {};
+    needs.screens.forEach(([kind, w, h], index) => {
+      keyed[screenFrameKey(kind, w, h)] = frameIds[index]!;
+    });
+    assets.screen = { wallpaper: wall, frames: keyed };
+  }
   return [assets, made];
+}
+
+/** The team's Windows wallpaper on their Drive (Oct 20): fetched once, never shipped in the app. */
+const WALLPAPER_DRIVE_ID = "1wIrgBepgL3_kwp-rZbflZCLVupLUixqQ";
+
+/**
+ * The Windows screen's wallpaper as a PNG in `<home>/graphics/`: the team's,
+ * downloaded from their Drive the first time; when that can't be had, the
+ * profile's drawn lookalike.
+ */
+async function desktopWallpaper(home: string, width: number, height: number): Promise<string> {
+  const dir = join(home, "graphics");
+  const png = join(dir, `desktop-wallpaper-drive-${WALLPAPER_DRIVE_ID}.png`);
+  if (fs.existsSync(png)) return png;
+  fs.mkdirSync(dir, { recursive: true });
+  const raw = join(dir, `.wallpaper-${process.pid}.download`);
+  try {
+    await tools.run(["curl", "-sfL", "--proto", "=https", "--max-time", "60", "-o", raw, `https://drive.google.com/uc?export=download&id=${WALLPAPER_DRIVE_ID}`]);
+    const partial = join(dir, `.wallpaper-${process.pid}.png`);
+    await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-i", raw, "-frames:v", "1", partial]);
+    fs.renameSync(partial, png);
+    return png;
+  } catch (error) {
+    diag.warn("agent", `desktop wallpaper from Drive: ${diag.messageOf(error)}; using the drawn one`);
+    const [drawn] = await native().desktopFiles(width, height, "Photo Viewer", "Notepad");
+    return drawn;
+  } finally {
+    fs.rmSync(raw, { force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------

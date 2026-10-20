@@ -207,7 +207,40 @@ function skill({ app, args, projectId }: ToolCall): Content[] {
 }
 
 function getEditContext({ app, args, projectId }: ToolCall): Content[] {
-  return text(stableStringify(editContext(app, live(app, projectId), args)));
+  return text(stableStringify(editContext(app, showAgent(live(app, projectId)), args)));
+}
+
+/**
+ * The revisions the agent was last shown, per project (a few), so a plan
+ * based on one still saves when only background work wrote since: a cloud
+ * upload, a preview or a smoothed shot swapped in changes `media` alone, and
+ * each of those turned the agent's plan into a "revision conflict" it had to
+ * read the whole context again for (19 in two days of full edits).
+ */
+const seen = new Map<string, Live[]>();
+const SEEN_KEPT = 3;
+
+/** `found`, noted as shown to the agent. */
+function showAgent(found: Live): Live {
+  const id = found.project.id;
+  const kept = (seen.get(id) ?? []).filter((one) => one.rev !== found.rev);
+  kept.push(found);
+  seen.set(id, kept.slice(-SEEN_KEPT));
+  return found;
+}
+
+/** Whether `now` is `before` with only its media's files (and the Drive link) changed: no clip, track or setting, and no media gone. */
+export function onlyMediaChanged(before: Project, now: Project): boolean {
+  const ignored = new Set(["media", "drive"]);
+  const keys = new Set([...Object.keys(before), ...Object.keys(now)]);
+  for (const key of keys) {
+    if (ignored.has(key)) continue;
+    const a = (before as unknown as Record<string, unknown>)[key];
+    const b = (now as unknown as Record<string, unknown>)[key];
+    if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) return false;
+  }
+  const still = new Set(now.media.map((media) => media.id));
+  return before.media.every((media) => still.has(media.id));
 }
 
 async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Content[]> {
@@ -219,7 +252,11 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
   const current = app.store.checkout(projectId);
   if (current === null) throw new Error("project vanished");
   if (current.rev !== base) {
-    throw new Error(`revision conflict: expected ${base}, current ${current.rev}; nothing saved; refresh get_edit_context`);
+    const was = seen.get(projectId)?.find((one) => one.rev === base);
+    if (was === undefined || !onlyMediaChanged(was.project, current.project)) {
+      throw new Error(`revision conflict: expected ${base}, current ${current.rev}; nothing saved; refresh get_edit_context`);
+    }
+    diag.info("agent", `${projectId}: the plan on rev ${base} goes on rev ${current.rev} (only media files changed between)`);
   }
   const project = current.project;
   timeProfileLines(app, project, operations);
@@ -232,10 +269,10 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
   const audit = audited(app, project, null);
   let saved: { rev: number; project: Project };
   if (dryRun) {
-    saved = { rev: base, project };
+    saved = { rev: current.rev, project };
   } else {
     try {
-      saved = await app.store.replace(projectId, base, project, ORIGIN);
+      saved = showAgent(await app.store.replace(projectId, current.rev, project, ORIGIN));
     } catch (error) {
       if (!(error instanceof UpdateError)) throw error;
       switch (error.kind) {
@@ -266,7 +303,7 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
 
 async function reviewEdit({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const frames = reviewFrames(args.frames);
-  const found = live(app, projectId);
+  const found = showAgent(live(app, projectId));
   const report = {
     rev: found.rev,
     audit: audited(app, found.project, found.rev),
@@ -283,7 +320,7 @@ async function reviewEdit({ app, args, projectId }: ToolCall): Promise<Content[]
  * says where to carry on. `start` / `end` (seconds) narrow the clips to a span.
  */
 function getProject({ app, args, projectId }: ToolCall): Content[] {
-  const found = live(app, projectId);
+  const found = showAgent(live(app, projectId));
   const project = found.project;
   const labels: Record<string, string | null> = {};
   for (const track of project.tracks) labels[track.id] = trackLabel(project, track.id);

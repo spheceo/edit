@@ -10,7 +10,7 @@ import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
 import { clipOf, newProject } from "../src/project.ts";
 import { fixtureHome, write, type Fixture } from "./helpers/home.ts";
-import { clip } from "./helpers/model.ts";
+import { clip, media } from "./helpers/model.ts";
 
 const savedHooks = { ...hooks };
 const savedPlanHooks = { ...planHooks };
@@ -303,6 +303,31 @@ test("the edit context keeps to its budget, saying how many clips it left out", 
   const narrow = JSON.parse(await said(app, "get_edit_context", { start: 0, end: 10 })) as Record<string, unknown>;
   expect((narrow.clips as string[]).length).toBe(30);
   expect(narrow.clips_cut).toBeUndefined();
+});
+
+test("a plan on a revision the agent was shown still saves over background media changes, never over a changed clip", async () => {
+  const { app, id } = setUp("tools-plan-rebase");
+  await app.store.update(id, "test", (project) => {
+    project.media.push(media({ id: "m1", name: "a.mp4", path: "/tmp/edit-test-a.mp4", kind: "video", duration: 10 }));
+  });
+  const shown = JSON.parse(await said(app, "get_edit_context")) as { rev: number };
+  // A cloud upload (or a smoothed shot) swaps a file in while the agent plans.
+  await app.store.update(id, "cloud", (project) => {
+    project.media[0]!.path = "/tmp/edit-test-b.mp4";
+  });
+  const operations = [{ op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 30, fill: [0, 0, 0, 1] } }];
+  const done = JSON.parse(await said(app, "apply_edit_plan", { base_rev: shown.rev, operations })) as Record<string, unknown>;
+  expect(done).toMatchObject({ rev: shown.rev + 2, saved: true });
+  expect(projectOf(app, id).media[0]!.path).toBe("/tmp/edit-test-b.mp4");
+  expect(projectOf(app, id).clips.length).toBe(1);
+  // Someone moved a clip meanwhile: the plan is refused as before.
+  const again = JSON.parse(await said(app, "get_edit_context")) as { rev: number };
+  await app.store.update(id, "ui", (project) => {
+    project.clips[0]!.duration = 20;
+  });
+  expect(await refused(app, "apply_edit_plan", { base_rev: again.rev, operations })).toBe(
+    `revision conflict: expected ${again.rev}, current ${again.rev + 1}; nothing saved; refresh get_edit_context`,
+  );
 });
 
 test("a plan saves once, dry runs save nothing, and a stale one is refused", async () => {

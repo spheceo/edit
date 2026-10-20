@@ -215,10 +215,13 @@ export function annotate(project: Project, args: Args): Record<string, unknown> 
     if (text === null) throw new Error(`annotate note ${index + 1}: text`);
     const target = point(note.point, `annotate note ${index + 1}: point`);
     const at = Math.min(Math.max(int(note.at) ?? start + index * Math.round(fpsOf(project)), start), end - 10);
-    const side = index % 2 === 0 ? 1 : -1;
+    // Outward from its point (toward the nearer side of the frame), above it
+    // or below it in turn, so no two lines cross and no note sits on another.
+    const side = target[0] >= 0 ? 1 : -1;
+    const up = index % 2 === 0 ? -1 : 1;
     const from = Array.isArray(note.from)
       ? point(note.from, `annotate note ${index + 1}: from`)
-      : ([Math.max(Math.min(target[0] + side * 0.16 * W, 0.4 * W), -0.4 * W), Math.max(Math.min(target[1] - 0.16 * H, 0.4 * H), -0.4 * H)] as [number, number]);
+      : ([Math.max(Math.min(target[0] + side * 0.17 * W, 0.38 * W), -0.38 * W), Math.max(Math.min(target[1] + up * 0.17 * H, 0.38 * H), -0.38 * H)] as [number, number]);
     add({
       type: "text",
       name: `Annotation · ${text}`,
@@ -229,7 +232,7 @@ export function annotate(project: Project, args: Args): Record<string, unknown> 
       style: {
         font: "Reenie Beanie",
         weight: 400,
-        size: 84 * k,
+        size: 112 * k,
         color: [0.9, 0.06, 0.1, 1],
         glow: { enabled: false },
         leader: { x: target[0], y: target[1], width: 3.5 * k, color: [0.9, 0.06, 0.1, 1], attach: "nearest", draw: 12, fade: 6 },

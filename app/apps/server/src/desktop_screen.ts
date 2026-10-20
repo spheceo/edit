@@ -98,7 +98,7 @@ const int = (value: unknown): number | null => (typeof value === "number" && Num
 const str = (value: unknown): string | null => (typeof value === "string" ? value : null);
 
 /** Reads one window. `start` is where the desktop starts (the default `at` of the first). */
-function readWindow(project: Project, raw: unknown, index: number, start: number, where: string): WindowSpec {
+function readWindow(project: Project, raw: unknown, index: number, start: number, where: string, after: number): WindowSpec {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${where}window ${index + 1}: an object`);
   const given = raw as Args;
   const app = str(given.app);
@@ -125,8 +125,8 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
   if (lineAt !== null && (lineAt.length !== lines.length || lineAt.some((frame) => frame === null))) {
     throw new Error(`${where}window ${index + 1}: line_at needs one frame per line (${lines.length})`);
   }
-  const at = int(given.at);
-  if (at === null && index > 0) throw new Error(`${where}window ${index + 1}: at (the timeline frame it opens) or said (the narration's words that name it)`);
+  // No frame (its said words weren't found): a second after the window before it.
+  const at = int(given.at) ?? (index === 0 ? start : after + Math.round(fpsOf(project)));
   const share = (key: string): number | null => {
     const value = num(given[key]);
     if (value === null) return null;
@@ -143,7 +143,7 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
     speed: Math.min(Math.max(num(given.speed) ?? 1, 0.05), 4),
     lines,
     line_at: lineAt as number[] | null,
-    at: at ?? start,
+    at,
     x: share("x"),
     y: share("y"),
     width,
@@ -157,10 +157,14 @@ export function readSpec(project: Project, given: Args, start: number, end: numb
   if (end - start < Math.round(1.5 * fpsOf(project))) throw new Error(`${where}a desktop needs at least 1.5 s`);
   const raw = Array.isArray(given.windows) ? given.windows : [];
   if (raw.length === 0 || raw.length > 8) throw new Error(`${where}windows: 1 to 8 (video_player, photo_viewer, notepad)`);
-  const windows = raw.map((window, index) => readWindow(project, window, index, start, where));
-  for (const window of windows) {
-    if (window.at < start || window.at >= end) throw new Error(`${where}a window opens at ${window.at}, outside the desktop (${start}–${end})`);
-  }
+  const windows: WindowSpec[] = [];
+  raw.forEach((window, index) => {
+    const read = readWindow(project, window, index, start, where, windows[index - 1]?.at ?? start);
+    // Kept inside the desktop (a guessed frame past its end opens near the end).
+    if (read.at >= end) read.at = Math.max(end - Math.round(fpsOf(project)), start);
+    if (read.at < start) throw new Error(`${where}window ${index + 1} opens at ${read.at}, before the desktop starts (${start})`);
+    windows.push(read);
+  });
   const exit = int(given.exit_into);
   if (exit !== null && windows[exit]?.app !== "video_player") throw new Error(`${where}exit_into is the index (from 0) of a video_player window`);
   return { start, end, windows, open: null, exit_into: exit, prefix };
@@ -411,7 +415,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   // frames, every other one while its window pops in or the camera turns.
   const keyFrames = (from: number, opens: number | null): number[] => {
     const frames = new Set<number>([from, total - 1]);
-    for (let frame = from; frame < total; frame += Math.round(5 * s)) frames.add(frame);
+    for (let frame = from; frame < total; frame += Math.max(Math.round(2 * s), 1)) frames.add(frame);
     if (opens !== null) for (let frame = opens; frame <= opens + pop + 2; frame++) if (frame >= from && frame < total) frames.add(frame);
     for (const stop of stops) for (const frame of [stop.from, stop.to]) if (frame >= from && frame < total) frames.add(frame);
     return [...frames].sort((a, b) => a - b);
@@ -441,9 +445,18 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       if (opens !== null && frame <= opens + fadeIn) opacity.push({ frame: frame - from, value: here.o, ease: "linear" });
     }
     const first = at(from);
+    // Only the keys the curve needs (each segment a Hermite cubic through its
+    // ends' values and speeds): sampled densely, then thinned to within a
+    // fraction of a pixel. Sabrina's first desktops kept every fifth frame:
+    // 43,000 keyframes in a 9 MB project.
+    const thinned = {
+      x: thinKeys(lists.x, 0.3),
+      y: thinKeys(lists.y, 0.3),
+      scale: thinKeys(lists.scale, 0.3 / Math.max(W, 1)),
+    };
     return {
       transform: { x: first.x, y: first.y, scale: first.scale },
-      keyframes: opacity.length > 0 ? { ...lists, opacity } : lists,
+      keyframes: opacity.length > 0 ? { ...thinned, opacity } : thinned,
     };
   };
   // A picture's scale so it's `width` desktop pixels wide (the renderer fits media to the frame at scale 1).
@@ -628,4 +641,52 @@ export function openFrom(spec: Spec, footage: { media: string; source_in: number
     open: { index: 0, zoom: footage.zoom },
     exit_into: spec.exit_into === null ? null : spec.exit_into + 1,
   };
+}
+
+/** A Hermite segment's value at `frame` between keys `a` and `b` (each with its speed, value units a frame). */
+function hermite(a: Args, b: Args, frame: number): number {
+  const [fa, fb] = [a.frame as number, b.frame as number];
+  const length = fb - fa;
+  const t = (frame - fa) / length;
+  const [pa, pb] = [a.value as number, b.value as number];
+  const ma = ((a.handle_out as { speed: number } | undefined)?.speed ?? 0) * length;
+  const mb = ((b.handle_in as { speed: number } | undefined)?.speed ?? 0) * length;
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * pa + (t3 - 2 * t2 + t) * ma + (-2 * t3 + 3 * t2) * pb + (t3 - t2) * mb;
+}
+
+/**
+ * Drops the keys a curve doesn't need: each key with a value and its speed
+ * (handles of influence 1/3 make every segment the Hermite cubic through its
+ * ends), kept only where leaving it out would move a dropped key by more than
+ * `tolerance`. The keys' handles stay exact, so the curve still passes through
+ * every kept key with the right speed.
+ */
+export function thinKeys(keys: Args[], tolerance: number): Args[] {
+  if (keys.length <= 2) return keys;
+  const kept: Args[] = [keys[0]!];
+  let anchor = 0;
+  let index = 2;
+  while (index < keys.length) {
+    const from = keys[anchor]!;
+    const to = keys[index]!;
+    let fits = true;
+    for (let inner = anchor + 1; inner < index; inner++) {
+      const key = keys[inner]!;
+      if (Math.abs(hermite(from, to, key.frame as number) - (key.value as number)) > tolerance) {
+        fits = false;
+        break;
+      }
+    }
+    if (fits) {
+      index++;
+      continue;
+    }
+    anchor = index - 1;
+    kept.push(keys[anchor]!);
+    index = anchor + 2;
+  }
+  kept.push(keys[keys.length - 1]!);
+  return kept;
 }

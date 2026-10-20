@@ -381,6 +381,9 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_can_end_in_a_video_pl
   const wall = p.clips.find((own) => own.name === "Desktop · wallpaper")!;
   const scales = (wall.keyframes?.scale ?? []).map((key) => key.value);
   expect(Math.max(...scales) / Math.min(...scales)).toBeGreaterThan(1.3);
+  // Only the keys the camera's curve needs (it was a key every fifth frame: 43,000 in one project).
+  const keys = p.clips.filter((own) => own.name?.startsWith("Desktop ·") === true).reduce((sum, own) => sum + Object.values(own.keyframes ?? {}).reduce((n, list) => n + list.length, 0), 0);
+  expect(keys).toBeLessThan(900);
   valid(p);
   // The old picture graphics are retired.
   expect(() => applyWith(p, [{ op: "desktop_profile", start: 0, duration: 90, media: "mug", lines: ["x"] }], { shutter: null, desktops: [] })).toThrow(/retired/);

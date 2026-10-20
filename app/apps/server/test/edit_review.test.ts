@@ -169,7 +169,7 @@ test("footage_that_stops_short_of_its_script_range_is_flagged", () => {
   } as Project["script"];
   const [issue] = offScript(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
   expect(issue).toMatchObject({ kind: "off_script", range: "4:32-4:38", clip: "c24" });
-  expect(issue!.seconds_not_played).toBeGreaterThan(1);
+  expect(issue!.seconds_not_played).toBeGreaterThan(0.5);
   // Played whole, nothing to say.
   (p.clips[0] as { duration: number }).duration = 190;
   expect(offScript(p, new Map([["m7", TEASER]]))).toEqual([]);

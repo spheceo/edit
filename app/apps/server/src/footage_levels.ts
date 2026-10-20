@@ -257,6 +257,28 @@ export function issues(app: App, project: Project): { issues: Record<string, unk
       }
     }
   }
+  // An interrogation's bridges: the library's drones are for bodycam at a
+  // scene ("this sounds like funeral music… right here, I don't feel it fits
+  // in"), its pulsing and high-pace beds for intros.
+  if (project.style === "interrogation") {
+    // Categories come from the library's listing (read once, then cached).
+    const lister = app.library as { list?: (refresh: boolean) => Promise<unknown> };
+    void lister.list?.(false).catch(() => {});
+    for (const clip of project.clips) {
+      if (clip.type !== "audio" || trackOf(project, clip.track)?.muted === true) continue;
+      const media = mediaOf(project, clip.media);
+      const category = media === undefined ? null : library.categoryOf(media.path);
+      if (category === null || !/drones|pulsing|high-pace/iu.test(category)) continue;
+      if (!said.some((over) => Math.min(clipEnd(clip), clipEnd(over)) - Math.max(clip.start, over.start) >= 2 * fps)) continue;
+      loud.push({
+        kind: "music_mood",
+        clip: clip.id,
+        at: clip.start,
+        category,
+        fix: "under an interrogation's narration: Investigative (evidence, timelines, background), Low tones (regular narration), Building tension (the build-up before a turn) or Revelation (the reveal)",
+      });
+    }
+  }
   const pending = [...new Set(wanted.map(keyOf))].length;
   if (wanted.length > 0) {
     for (const stretch of wanted) {

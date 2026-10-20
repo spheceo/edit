@@ -323,3 +323,88 @@ export function pending(project: Project): string[] {
   }
   return out;
 }
+
+/** A teaser closer than this (its smallest scale ÷ the filled frame's) is punched in. */
+const TEASER_CLOSE = 1.5;
+/** A bridge at least this long shows pictures of what's said this share of its time. */
+const BRIDGE_SECONDS = 8;
+const BRIDGE_PICTURES = 0.4;
+
+/**
+ * An interrogation's opening and bridges, from its sections' parts: teasers
+ * too wide or static (`teaser_wide`: "we must be more zoomed in", "we must
+ * also utilize zooms more"), the first hook coming in unheard
+ * (`hook_unmarked`: "a riser or something like that that suggests that we
+ * are about to start our first cut"), and bridges that are the room again
+ * instead of what's said (`bridge_unillustrated`: "we say a lot of things
+ * right here in the voiceover that we could literally show").
+ */
+export function interrogationIssues(project: Project, parts: { start: number; end: number; kind: string }[], unmarked: (at: number) => string[]): Record<string, unknown>[] {
+  if (project.style !== "interrogation") return [];
+  const out: Record<string, unknown>[] = [];
+  const fps = project.settings.fps;
+  const base = project.tracks.find((track) => track.kind === "video")?.id;
+  const intro = parts.filter((part) => part.kind === "intro");
+  // Teasers.
+  const teasers = project.clips.filter(
+    (clip): clip is VideoClip =>
+      clip.type === "video" && clip.track === base && mediaOf(project, clip.media)?.kind === "video" && intro.some((part) => clip.start >= part.start && clip.start < part.end),
+  );
+  const wide: { clip: string; close: number; still: boolean }[] = [];
+  for (const clip of teasers) {
+    const media = mediaOf(project, clip.media)!;
+    const close = smallestScale(clip) / fill(project, media).scale;
+    const values = new Set((clip.keyframes?.scale ?? []).map((key) => round(key.value * 1000)));
+    const still = values.size < 2;
+    if (close < TEASER_CLOSE || still) wide.push({ clip: clip.id, close, still });
+  }
+  if (wide.length > 0) {
+    const closes = wide.map((one) => one.close).sort((a, b) => a - b);
+    out.push({
+      kind: "teaser_wide",
+      clips: wide.length,
+      of: teasers.length,
+      first: wide.slice(0, 8).map((one) => one.clip),
+      closeness_median: round(closes[Math.floor(closes.length / 2)]! * 100) / 100,
+      static: wide.filter((one) => one.still).length,
+      fix: "punch in close on the person questioned (1.8–2.5× the filled frame, x/y on their face, inside the picture) and move: a push across the teaser, or a harder punch-in on the line that lands",
+    });
+  }
+  // The first hook: the first narration after the first teaser.
+  const firstIntro = intro[0];
+  const hook = firstIntro === undefined ? undefined : parts.find((part) => part.kind === "broll" && part.start >= firstIntro.end);
+  if (hook !== undefined) {
+    const missing = unmarked(hook.start);
+    if (missing.length > 0) out.push({ kind: "hook_unmarked", at: hook.start, missing });
+  }
+  // Bridges (every narration from the first hook on).
+  const level = (track: string) => project.tracks.findIndex((own) => own.id === track);
+  const picture = (clip: Clip): boolean => {
+    const track = trackOf(project, clip.track);
+    if (track === undefined || track.hidden) return false;
+    if (clip.type === "text") return !/^(Subtitle|Caption|Countdown|Film look · tag|Closing line)/u.test(clip.name ?? "");
+    if (clip.type !== "video") return false;
+    const media = mediaOf(project, clip.media);
+    if (media === undefined) return false;
+    return media.kind === "image" || /^map-/u.test(media.name) || /Desktop · |File Viewer/u.test(clip.name ?? "") || (clip.track !== base && level(clip.track) > 0 && media.kind === "video" && (clip.frame !== undefined && clip.frame !== null));
+  };
+  for (const part of parts) {
+    if (part.kind !== "broll" || hook === undefined || part.start < hook.start || part.end - part.start < BRIDGE_SECONDS * fps) continue;
+    const shown = new Uint8Array(part.end - part.start);
+    for (const clip of project.clips) {
+      if (!picture(clip)) continue;
+      for (let frame = Math.max(clip.start, part.start); frame < Math.min(clipEnd(clip), part.end); frame++) shown[frame - part.start] = 1;
+    }
+    const share = shown.reduce((sum, one) => sum + one, 0) / shown.length;
+    if (share < BRIDGE_PICTURES) {
+      out.push({
+        kind: "bridge_unillustrated",
+        start: part.start,
+        end: part.end,
+        pictures_share: round(share * 100) / 100,
+        fix: "show what it names as it's said: people (file_viewer with their name, photo_inset), places (map_view), records and articles, their words (red_quote); collect_images / use_found for what you don't have",
+      });
+    }
+  }
+  return out;
+}

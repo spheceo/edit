@@ -879,15 +879,15 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   const heard = cachedTranscripts(app, project, false);
   const onProject = <T>(work: (input: ProjectInput) => T): T =>
     rev === null ? work({ json: jsonForSerde(project) }) : withProject(project.id, rev, () => jsonForSerde(project), work);
-  const teasers = onProject((input) => native().sections(input))
-    .parts.filter((part) => part.kind === "intro")
-    .map((part): [number, number] => [part.start, part.end]);
+  const parts = onProject((input) => native().sections(input)).parts;
+  const teasers = parts.filter((part) => part.kind === "intro").map((part): [number, number] => [part.start, part.end]);
   const extra = [
     ...hooks.calloutTiming(project, heard),
     ...hooks.offScript(project, heard),
     ...hooks.textNotSaid(project, heard),
     ...hooks.cutMidWord(project, heard),
     ...hooks.deadAir(project, heard, teasers),
+    ...(framing.interrogationIssues(project, parts, (at) => editPlan.cutSounds(project, at)) as Json[]),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);

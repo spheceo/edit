@@ -51,6 +51,16 @@ const AUDIO = ["wav", "mp3", "m4a", "aif", "aiff", "flac", "ogg", "aac"];
 /** Longer sound effects are beds (drones, heartbeats): no hit to line up. */
 const HIT_SECONDS = 15.0;
 
+/** Each downloaded sound's folder (its checksum's start) → its category, from the last listing read. */
+const folders = new Map<string, string>();
+
+/** A library file's category ("Music / Dark ambient drones") from its path, once the library has been listed; else null. */
+export function categoryOf(path: string): string | null {
+  const parts = path.split(/[/\\]/u);
+  const at = parts.lastIndexOf("library");
+  return at < 0 || parts.length < at + 3 ? null : (folders.get(parts[at + 2]!) ?? null);
+}
+
 /** A sound as listed, with what the listing keeps to itself (its file name and checksum). */
 export interface Found extends Sound {
   file: string;
@@ -113,6 +123,7 @@ export class Library implements seams.Library {
   private async reread(): Promise<Listing> {
     const listing = await this.read();
     this.listing = [this.now(), listing];
+    for (const sound of listing.sounds) folders.set(sound.md5.length >= 12 ? sound.md5.slice(0, 12) : sound.md5, sound.category);
     return listing;
   }
 

@@ -357,6 +357,10 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
       const speed = clip.type === "video" ? clip.speed : 1;
       return [from, from + (clip.duration / fps) * speed];
     };
+    // A pause cut out of the range (dead air in a teaser) skips only silence:
+    // the next piece may pick up later as long as no word was skipped.
+    const words = transcript.words.filter((word) => word.end > cutIn + 0.02 && word.start < cutOut - 0.02 && trim(word.text) !== "");
+    const silent = (from: number, to: number) => !words.some((word) => word.end > from + 0.05 && word.start < to - 0.05);
     let current = footage.find((clip) => clip.id === block.clip);
     if (current === undefined) continue;
     const played: [number, number][] = [];
@@ -364,16 +368,30 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
       played.push(span(current));
       const [, ends] = span(current);
       const after: Clip = current;
-      current = footage.find((clip) => clip.start === clipEnd(after) && Math.abs(span(clip)[0] - ends) < 1);
+      current = footage.find((clip) => {
+        if (clip.start !== clipEnd(after)) return false;
+        const picks = span(clip)[0];
+        return Math.abs(picks - ends) < 1 || (picks > ends && picks - ends < 15 && silent(ends, picks));
+      });
     }
     played.sort((a, b) => a[0] - b[0]);
-    let at = cutIn;
+    // What's not played: the range's words (the stretch before its first and
+    // after its last word count as time, as before; pauses between don't).
     let missing = 0;
-    for (const [from, to] of played) {
-      missing += Math.max(from - at, 0);
-      at = Math.max(at, to);
+    const covered = (from: number, to: number) => played.reduce((sum, [a, b]) => sum + Math.max(Math.min(b, to) - Math.max(a, from), 0), 0);
+    if (words.length === 0) {
+      let at = cutIn;
+      for (const [from, to] of played) {
+        missing += Math.max(from - at, 0);
+        at = Math.max(at, to);
+      }
+      missing += Math.max(cutOut - at, 0);
+    } else {
+      for (const word of words) {
+        const [from, to] = [Math.max(word.start, cutIn), Math.min(word.end, cutOut)];
+        missing += Math.max(to - from - covered(from, to), 0);
+      }
     }
-    missing += Math.max(cutOut - at, 0);
     if (missing > 0.4) {
       issues.push({
         kind: "off_script",

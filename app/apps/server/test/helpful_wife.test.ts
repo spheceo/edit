@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { apply, audit, hooks } from "../src/edit_plan.ts";
-import { deadAir } from "../src/edit_review.ts";
+import { deadAir, offScript } from "../src/edit_review.ts";
 import { fill, letterboxed, parseCrop } from "../src/framing.ts";
 import type { Project, VideoClip } from "../src/model.ts";
 import type { Transcript } from "../src/transcribe.ts";
@@ -148,4 +148,36 @@ test("marks_on_a_photo_are_read_as_shares_of_the_picture", () => {
     { text: "#DATELINE", box: [0.02, 0.9, 0.2, 0.96] },
   ]);
   expect(readMarks('{"marks": []}')).toEqual([]);
+});
+
+test("a_pause_cut_out_of_a_script_range_isnt_off_script_but_a_word_cut_out_is", () => {
+  const p = tape();
+  p.clips = [];
+  // The range 10–15 s: words, a two-second pause (11–13), words.
+  const heard = new Map<string, Transcript>([
+    [
+      "room",
+      {
+        model: "test",
+        words: [
+          { text: "first", start: 10.1, end: 10.5, speaker: null },
+          { text: "words", start: 10.6, end: 11, speaker: null },
+          { text: "later", start: 13, end: 13.4, speaker: null },
+          { text: "ones", start: 14.6, end: 14.9, speaker: null },
+        ],
+      } as unknown as Transcript,
+    ],
+  ]);
+  p.script = {
+    source: "doc",
+    blocks: [{ kind: "footage", url: "u", file: "f", start: 10, end: 15, label: "0:10-0:15", notes: ["first...ones"], media: "room", words: ["first", "ones"], clip: "a" }],
+  } as Project["script"];
+  // 10.0–11.1, then 12.9–15.0: the pause is gone.
+  p.clips.push(clip({ id: "a", track: "v1", start: 0, duration: 33, type: "video", media: "room", source_in: 10, speed: 1 }));
+  p.clips.push(clip({ id: "b", track: "v1", start: 33, duration: 63, type: "video", media: "room", source_in: 12.9, speed: 1 }));
+  expect(offScript(p, heard)).toEqual([]);
+  // Cutting "later" out with it is.
+  (p.clips[1] as VideoClip).source_in = 13.5;
+  (p.clips[1] as VideoClip).duration = 45;
+  expect((offScript(p, heard) as Record<string, unknown>[]).map((issue) => issue.kind)).toEqual(["off_script"]);
 });

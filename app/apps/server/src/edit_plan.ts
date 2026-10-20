@@ -1137,6 +1137,21 @@ const HIT_NAME = /boom|impact|hit|thud|stinger|bass|drop|slam|sub/iu;
 /** A riser building into it. */
 const RISER_NAME = /riser|rise|swell|build|reverse|whoosh/iu;
 
+/** What a cut is missing to be heard as a section starting: "a hit" on it, "a riser" building into it. */
+export function cutSounds(project: Project, at: number): string[] {
+  const second = asInt(round(fpsOf(project)));
+  const visible = (track: string) => trackOf(project, track)?.hidden === false;
+  const sounds = project.clips.filter(
+    (clip): clip is Extract<Clip, { type: "audio" }> =>
+      clip.type === "audio" && visible(clip.track) && clip.name !== "Voice-over" && mediaOf(project, clip.media)?.kind === "audio" && !isMusic(clip, mediaOf(project, clip.media)),
+  );
+  const named = (clip: Extract<Clip, { type: "audio" }>) => `${clip.name ?? ""} ${mediaOf(project, clip.media)?.name ?? ""}`;
+  const missing: string[] = [];
+  if (!sounds.some((clip) => HIT_NAME.test(named(clip)) && clip.start <= at + 4 && clipEnd(clip) >= at && clip.start >= at - 2 * second)) missing.push("a hit");
+  if (!sounds.some((clip) => RISER_NAME.test(named(clip)) && clip.start < at && clipEnd(clip) >= at - 6)) missing.push("a riser");
+  return missing;
+}
+
 /**
  * Whether a clip plays music: the team's library's (`<home>/library/music/…`),
  * or on another machine's copy any sound file a song long that isn't narration.
@@ -1404,8 +1419,11 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     if (clip.type !== "audio") continue;
     songs.set(clip.media, [...(songs.get(clip.media) ?? []), clip]);
   }
+  // An interrogation keeps a bed's family across its bridges (the references
+  // do); the same song again and again is a bodycam habit to break.
+  const often = project.style === "interrogation" ? 6 : 3;
   for (const [media, clips] of songs) {
-    if (clips.length < 3) continue;
+    if (clips.length < often) continue;
     issues.push({
       kind: "music_repeated",
       media,
@@ -1447,16 +1465,7 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     const counts = project.clips.filter((clip) => clip.type === "text" && clip.name === "Countdown" && visible(clip.track));
     if (counts.length > 0) {
       const tape = Math.max(...counts.map(clipEnd));
-      const sounds = project.clips.filter(
-        (clip): clip is Extract<Clip, { type: "audio" }> =>
-          clip.type === "audio" && visible(clip.track) && clip.name !== "Voice-over" && mediaOf(project, clip.media)?.kind === "audio",
-      );
-      const named = (clip: Clip) => `${clip.name ?? ""} ${clip.type === "audio" ? (mediaOf(project, clip.media)?.name ?? "") : ""}`;
-      const missing: string[] = [];
-      const hit = sounds.some((clip) => !music.includes(clip) && HIT_NAME.test(named(clip)) && clip.start <= tape + 4 && clipEnd(clip) >= tape && clip.start >= tape - 2 * second);
-      if (!hit) missing.push("a hit on the tape's first frame");
-      const riser = sounds.some((clip) => !music.includes(clip) && RISER_NAME.test(named(clip)) && clip.start < tape && clipEnd(clip) >= tape - 6);
-      if (!riser) missing.push("a riser building into it");
+      const missing: string[] = cutSounds(project, tape).map((one) => (one === "a hit" ? "a hit on the tape's first frame" : "a riser building into it"));
       const runsOn = music.find((clip) => clip.start < tape && clipEnd(clip) > tape + idiv(second, 2));
       if (runsOn !== undefined) missing.push(`the prologue's music (${runsOn.id}) cut on the tape's first frame`);
       if (missing.length > 0) issues.push({ kind: "tape_start_unmarked", at: tape, missing });

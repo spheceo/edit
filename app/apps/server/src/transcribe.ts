@@ -152,7 +152,8 @@ export async function run(source: string, target: string, keyterms: readonly str
         names = [];
         continue;
       }
-      if (status === 429) {
+      // The day's allowance used up isn't busy: asking again only waits minutes for the same answer.
+      if (status === 429 && !/allowance/i.test(body)) {
         const wait = waits.shift();
         if (wait !== undefined) {
           diag.warn("media", `transcription busy (429): asking again in ${wait} s`);

@@ -80,6 +80,11 @@ test.skipIf(ffmpeg === null)("transcribes through the relay, asking again while 
 
     mock.on("POST", "/v1/transcribe", () => Response.json({ detail: { message: "quota exceeded" } }, { status: 402 }), 1);
     await expect(run(source, `${dir}/cache/again.json`)).rejects.toThrow("transcription failed (402): quota exceeded");
+    // The day's allowance used up: told at once, not after minutes of asking again.
+    const asked = mock.calls("/v1/transcribe", "POST").length;
+    mock.on("POST", "/v1/transcribe", () => Response.json({ error: "Today's transcription allowance for this connection is used up" }, { status: 429 }), 1);
+    await expect(run(source, `${dir}/cache/allowance.json`)).rejects.toThrow("allowance");
+    expect(mock.calls("/v1/transcribe", "POST").length).toBe(asked + 1);
     await expect(run(`${dir}/missing.wav`, `${dir}/cache/none.json`)).rejects.toThrow(/^could not extract audio: /);
   } finally {
     cleanup();

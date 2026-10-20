@@ -253,6 +253,8 @@ export interface Excerpt {
 export interface Parsed {
   title: string;
   blocks: ScriptBlock[];
+  /** A compilation's other case scripts (`script.joinCases` reads them in): each Doc goes after block `after`. */
+  cases?: { after: number; doc: string }[];
 }
 
 /** What Drive serves for a file: the last response's headers after redirects. */

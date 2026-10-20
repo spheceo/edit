@@ -18,6 +18,7 @@ import {
   durationOf,
   excerpts,
   fetchDoc,
+  joinCases,
   findRanges,
   layOut,
   likeness,
@@ -363,4 +364,48 @@ test("names and clocks", () => {
   expect(clock(3723.4)).toBe("1h02m03s");
   expect(clock(59.5)).toBe("0h01m00s");
   expect(clock(-3)).toBe("0h00m00s");
+});
+
+test("follows_a_compilations_case_scripts_after_the_narration_naming_them", async () => {
+  const link = (t: number) =>
+    `<a href="https://www.google.com/url?q=https://drive.google.com/file/d/1CaseOneFileAbc/view?t%3D${t}&amp;sa=D">00:0${t} - 00:0${t + 2}</a>`;
+  const main = `<html><body><p><span>Comp</span></p>
+<p><span>(</span>${link(1)}<span>)</span></p>
+<p><span>Eventually, she was sentenced to 15 years.</span></p>
+<p><span>&mdash;</span></p>
+<p><span>In a similar case, another young man reported the crime himself&hellip;</span><sup><a href="#cmnt1" id="cmnt_ref1">[a]</a></sup></p>
+<p><span>__</span></p>
+<p><span>Next up we have the case of a 16-year-old&hellip;</span><sup><a href="#cmnt2" id="cmnt_ref2">[b]</a></sup></p>
+<div><p><a href="#cmnt_ref1" id="cmnt1">[a]</a><span>Edit case 2 based on this script here: </span><a href="https://www.google.com/url?q=https://docs.google.com/document/d/1CaseTwoDocAbcdef/edit?usp%3Dsharing&amp;sa=D">https://docs.google.com/document/d/1CaseTwoDocAbcdef/edit?usp=sharing</a></p></div>
+<div><p><a href="#cmnt_ref2" id="cmnt2">[b]</a><span>Edit case 3 based on this script here: https://docs.google.com/document/d/1CaseThreeDocAbc/edit</span></p></div>
+</body></html>`;
+  const caseDoc = (name: string) =>
+    `<html><body><p><span>INTERRO ${name}</span></p><p><span>Total Duration: 24m</span></p>
+<p><span>(</span><a href="https://www.google.com/url?q=https://drive.google.com/file/d/1${name}FileAbcdef/view?t%3D5&amp;sa=D">00:05 - 00:09</a><span>)</span></p>
+<p><span>${name} reported his own parents missing.</span></p></body></html>`;
+  const parsed = parse(main);
+  expect(parsed.cases).toEqual([
+    { after: 2, doc: "1CaseTwoDocAbcdef" },
+    { after: 3, doc: "1CaseThreeDocAbc" },
+  ]);
+  const read: string[] = [];
+  await joinCases(parsed, async (id) => {
+    read.push(id);
+    return caseDoc(id === "1CaseTwoDocAbcdef" ? "Chandler" : "Lola");
+  });
+  expect(parsed.cases).toBeUndefined();
+  expect(read.sort()).toEqual(["1CaseThreeDocAbc", "1CaseTwoDocAbcdef"]);
+  const shape = parsed.blocks.map((block) => (block.kind === "footage" ? `footage ${block.file}` : block.text.split(/[,.…]/)[0]));
+  expect(shape).toEqual([
+    "footage 1CaseOneFileAbc",
+    // The separator line is dropped; the case 2 teaser stays with the outcome before it.
+    "Eventually",
+    "footage 1ChandlerFileAbcdef",
+    "Chandler reported his own parents missing",
+    // After a case, the next narration is a cut-in of its own.
+    "Next up we have the case of a 16-year-old",
+    "footage 1LolaFileAbcdef",
+    "Lola reported his own parents missing",
+  ]);
+  expect((parsed.blocks[1] as Narration).text).toBe("Eventually, she was sentenced to 15 years.\n\nIn a similar case, another young man reported the crime himself…");
 });

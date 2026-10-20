@@ -471,6 +471,11 @@ async function readScript(url: string): Promise<script.Parsed> {
   }
   const parsed = script.parse(html);
   if (parsed.title === "") parsed.title = title;
+  try {
+    await script.joinCases(parsed);
+  } catch (error) {
+    throw badOf(error);
+  }
   if (!parsed.blocks.some((block) => block.kind === "footage")) {
     throw bad("No footage timestamps linked to Google Drive files were found in that Doc.");
   }

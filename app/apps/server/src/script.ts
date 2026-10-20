@@ -498,6 +498,32 @@ function notes(refs: [number, string][], comments: Map<string, string>): string[
 /** The label of a footage block that plays a reused video whole (a narration's "Reuse: <link>" note). */
 export const REUSE = "Reuse (the whole video)";
 
+/**
+ * A narration's note naming another case's script ("Edit case 2 based on
+ * this script here: <Doc link>"): the Doc's id, else null.
+ */
+export function caseScript(note: string): string | null {
+  if (!/\bscript\b/i.test(note)) return null;
+  const link = /https:\/\/docs\.google\.com\/document\/d\/[\w-]+\S*/.exec(note)?.[0];
+  return link === undefined ? null : docId(link);
+}
+
+/**
+ * Reads a compilation's case scripts in, each after the narration whose note
+ * named it (that Doc's title and heading dropped, its notes on further cases
+ * not followed), and clears `cases`.
+ */
+export async function joinCases(parsed: Parsed, read: (id: string) => Promise<string> = async (id) => (await fetchDoc(id))[0]): Promise<Parsed> {
+  const cases = parsed.cases ?? [];
+  delete parsed.cases;
+  for (const { after, doc } of [...cases].reverse()) {
+    const blocks = parse(await read(doc)).blocks;
+    if (!blocks.some((block) => block.kind === "footage")) throw new Error(`The case script ${doc} has no footage timestamps linked to Google Drive or YouTube.`);
+    parsed.blocks.splice(after, 0, ...blocks);
+  }
+  return parsed;
+}
+
 /** The script file a footage link names: a Drive file id, or `youtube:<id>`. */
 export function footageFile(url: string): string | null {
   return driveFileId(url) ?? youtube.fileOf(url);
@@ -538,6 +564,7 @@ export function parse(html: string): Parsed {
   const only = new Set(files.map(([, id]) => id)).size === 1 ? (files[0] ?? null) : null;
   let last: [string, string] | null = only;
   const blocks: ScriptBlock[] = [];
+  const cases: { after: number; doc: string }[] = [];
   let seenFootage = false;
   // "Reuse: <link>" on a narration: a finished video of ours plays after it,
   // whole (its range is set to the whole file once it's downloaded).
@@ -549,12 +576,25 @@ export function parse(html: string): Parsed {
       blocks.push({ kind: "footage", url: link, file, start: 0, end: 1, label: REUSE, notes: [note] });
     }
   };
+  // "Edit case 2 based on this script here: <Doc>": that case comes next,
+  // and the narration after it is a cut-in of its own.
+  let caseBreak = false;
+  const caseNotes = (found: string[]) => {
+    for (const note of found) {
+      const doc = caseScript(note);
+      if (doc === null) continue;
+      cases.push({ after: blocks.length, doc });
+      caseBreak = true;
+    }
+  };
   // Paragraphs of narration one after another are one cut-in; narration
   // written on from ranges starts its own (`own`): a hook paragraph followed
   // by a paragraph that runs the setup on into the hearing is two cut-ins.
   const narrate = (text: string, found: string[], own = false) => {
     const previous = blocks[blocks.length - 1];
-    if (!own && previous !== undefined && previous.kind === "narration") {
+    const after = caseBreak;
+    caseBreak = false;
+    if (!own && !after && previous !== undefined && previous.kind === "narration") {
       previous.text += `\n\n${text}`;
       previous.notes = [...(previous.notes ?? []), ...found];
     } else {
@@ -567,10 +607,12 @@ export function parse(html: string): Parsed {
       const text = collapse(para.text);
       // The video opens on the first timestamp: anything before it is the
       // Doc's heading (title, "Assets:", durations), never a cut-in.
-      if (text === "" || !seenFootage) continue;
+      // A line of no words ("—", "__") only separates parts of the Doc.
+      if (text === "" || !seenFootage || !/[\p{L}\p{N}]/u.test(text)) continue;
       const found = notes(para.refs, comments);
       narrate(text, found);
       reuse(found);
+      caseNotes(found);
       continue;
     }
     // Narration written on from the ranges in the same paragraph: before,
@@ -633,9 +675,10 @@ export function parse(html: string): Parsed {
       const found = notes(para.refs.filter(([at]) => at >= after), comments);
       narrate(tail, found, true);
       reuse(found);
+      caseNotes(found);
     }
   }
-  return { title, blocks };
+  return cases.length > 0 ? { title, blocks, cases } : { title, blocks };
 }
 
 /** `str::parse::<f64>`: the whole text a decimal number (or inf/NaN), else null. */

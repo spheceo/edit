@@ -106,7 +106,7 @@ function fitted(project: Project, mediaId: unknown, what: string) {
  * ("it's not a red background, it's the red text"). Its words come up one by
  * one as they're said (`heard`: the frames words are heard at, which
  * apply_edit_plan fills in from the transcripts; else evenly over the first
- * 60% of the line). It names nobody: the intro isn't in the role colours.
+ * 60% of the line), flush left. It names nobody: the intro isn't in the role colours.
  */
 export function introCaptions(project: Project, args: Args): Record<string, unknown> {
   const [start, end] = span(args, "intro_captions");
@@ -134,6 +134,8 @@ export function introCaptions(project: Project, args: Args): Record<string, unkn
         ...clip.style,
         ...look,
         color: emphasis.has(clip.id) ? RED_TEXT : WHITE,
+        // Flush left, as bodycam's captions read (the team, Oct 20).
+        align: "left",
         max_width: clip.style.max_width,
         uppercase: false,
         label: null,

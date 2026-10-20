@@ -45,33 +45,29 @@ test("the teasers' subtitles come up word by word in bodycam's glowing look, the
   expect((ra as Clip & { person?: string }).person).toBeUndefined();
 });
 
-test("a photo inset, a countdown, a split screen, a fast forward and a disclaimer build valid clips", () => {
+test("a countdown, a fast forward and a disclaimer build valid clips; photo insets, map pins and split screens are retired", () => {
   const p = room();
   const results = apply(p, [
-    { op: "photo_inset", media: "mug", name: "Michelle Williams", start: 60, end: 180 },
     { op: "countdown", start: 300, end: 390 },
-    { op: "split_screen", left: "mug", right: "wife", tags: ["MICHELLE", "GREG"], tag_colors: [[1, 1, 0, 1], [0.9, 0.5, 0, 1]], start: 400, end: 500 },
     { op: "fast_forward", start: 600, end: 700 },
     { op: "disclaimer", start: 800, end: 900 },
     { op: "text_slam", text: "Then the case goes cold", start: 1000, end: 1090 },
     { op: "timeline_bar", from: "1986", to: "2009", start: 1100, end: 1200 },
     { op: "transition", kind: "red_flash", at: 1300 },
   ]).results;
-  expect(results.length).toBe(8);
-  // Each op put its layers on new tracks; the plan packs them down to what's on screen at once (the split screen's four, over the footage).
-  expect(p.tracks.filter((track) => track.kind === "video").length).toBeLessThanOrEqual(5);
-  // The inset: black and white beneath, the photo in the top-left corner, the name above it.
-  const photo = clipNamed(p, "Photo inset · Michelle Williams");
-  expect(photo.type === "video" && photo.transform.x < 0 && photo.transform.y < 0).toBe(true);
-  expect(clipNamed(p, "Photo inset · black and white").type).toBe("adjustment");
+  expect(results.length).toBe(6);
+  // Pictures go on the Windows screen now (the team, Oct 20).
+  for (const op of [
+    { op: "photo_inset", media: "mug", name: "Michelle Williams", start: 60, end: 180 },
+    { op: "split_screen", left: "mug", right: "wife", start: 400, end: 500 },
+    { op: "map_pin", media: "mug", name: "Michelle", start: 0, end: 60 },
+  ]) {
+    expect(() => apply(room(), [op])).toThrow(/retired/);
+  }
   // The countdown reads the time left each second, to the tape's frame.
   const ticks = named(p, "Countdown") as TextClip[];
   expect(ticks.map((tick) => tick.text)).toEqual(["INTERROGATION STARTS IN  00:03", "INTERROGATION STARTS IN  00:02", "INTERROGATION STARTS IN  00:01"]);
   expect(ticks.at(-1)!.start + ticks.at(-1)!.duration).toBe(390);
-  // Each half of the split screen fills its half: cropped, centred a quarter in.
-  const left = clipNamed(p, "Split screen · left");
-  expect(left.type === "video" && left.transform.x).toBe(-480);
-  expect(clipNamed(p, "Split screen · right tag").type).toBe("text");
   expect(clipNamed(p, "Fast forward").type).toBe("adjustment");
   expect((clipNamed(p, "Disclaimer · title") as TextClip).text).toBe("DISCLAIMER");
   expect((clipNamed(p, "Text slam") as TextClip).word_times).toEqual([0, 6, 12, 18, 24]);

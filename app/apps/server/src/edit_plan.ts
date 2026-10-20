@@ -365,28 +365,21 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       if (args.open !== false) spec = screen.openFrom(spec, screen.footageBefore(project, start, (name) => name.startsWith("Desktop · ")));
       return screen.build(project, spec, assets.screen);
     }
-    case "desktop_profile": {
-      const [photoTitle, notepadTitle] = desktop.titles(args);
-      const art = assets.desktops.find((art) => art.photo_title === photoTitle && art.notepad_title === notepadTitle);
-      if (art === undefined) {
-        throw new Error("desktop_profile's pictures weren't prepared (run it through apply_edit_plan)");
-      }
-      return desktop.profile(project, args, art);
-    }
+    // Retired (the team, Oct 20: "abandon any sort of other way of displaying
+    // images and evidence… lean toward this Windows-style thing"): pictures
+    // go on the Windows screen, evidence on an evidence board.
+    case "desktop_profile":
     case "evidence_card":
-      return graphics.evidenceCard(project, args);
+    case "photo_inset":
+    case "map_pin":
+    case "split_screen":
+      throw new Error(`${op} is retired: show pictures on the Windows screen (op desktop, or a desktop shot or picture shot in cover_cut_in), evidence on an evidence board`);
     case "date_title":
       return graphics.dateTitle(project, args);
     case "intro_captions":
       return intro.introCaptions(project, args);
-    case "photo_inset":
-      return intro.photoInset(project, args);
     case "countdown":
       return intro.countdown(project, args);
-    case "map_pin":
-      return intro.mapPin(project, args);
-    case "split_screen":
-      return intro.splitScreen(project, args);
     case "fast_forward":
       return intro.fastForward(project, args);
     case "disclaimer":

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { apply, applyWith, audit, BOARD_MARKER, BOARD_SHUTTER, hooks, needs, type Assets } from "../src/edit_plan.ts";
+import { frameKey } from "../src/desktop_screen.ts";
 import { frames } from "../src/markers.ts";
 import type { Clip, Project, TextClip, VideoClip } from "../src/model.ts";
 import { native } from "../src/native/index.ts";
@@ -337,64 +338,52 @@ test("an_evidence_board_marks_each_photo_and_lands_a_shutter_on_it", () => {
   expect(needs([{ op: "evidence_board", shutters: false }])).toEqual({ shutter: false, desktops: [] });
 });
 
-test("a_desktop_profile_builds_a_valid_animated_screen", () => {
+test("a_desktop_opens_from_the_footage_types_its_notes_and_can_end_in_a_video_player", () => {
   const p = project("plan");
-  for (const [id, width, height] of [
-    ["wall", 1920, 1080],
-    ["pv", 575, 800],
-    ["np", 972, 658],
-    ["mug", 634, 730],
-  ] as const) {
-    p.media.push(media({ id, name: id, path: `/${id}.png`, kind: "image", duration: 30, width, height }));
-  }
-  const op = { op: "desktop_profile", start: 300, duration: 180, media: "mug", lines: ["36-year-old mother", "- Charged with murder"] };
-  expect(needs([op]).desktops).toEqual([["Photo Viewer", "Notepad"]]);
-  // Without its pictures prepared it says so.
-  expect(() => apply(structuredClone(p), [op])).toThrow();
-  const assets: Assets = {
-    shutter: null,
-    desktops: [{ photo_title: "Photo Viewer", notepad_title: "Notepad", wallpaper: "wall", photo_viewer: "pv", notepad: "np" }],
+  p.media.push(media({ id: "room", name: "room.mp4", path: "/room.mp4", kind: "video", duration: 600, width: 1280, height: 720, has_audio: true }));
+  p.media.push(media({ id: "mug", name: "mug", path: "/mug.png", kind: "image", duration: 30, width: 634, height: 730 }));
+  p.media.push(media({ id: "wall", name: "wall", path: "/wall.png", kind: "image", duration: 30, width: 1344, height: 752 }));
+  p.clips.push(clip({ id: "foot", track: "v1", start: 0, duration: 300, type: "video", media: "room", source_in: 10 }));
+  const op = {
+    op: "desktop",
+    start: 300,
+    end: 600,
+    exit_into: 2,
+    windows: [
+      { app: "photo_viewer", media: "mug", at: 330, label: "actual image" },
+      { app: "notepad", at: 380, lines: ["Charged with murder", "Held without bail"], line_at: [400, 450] },
+      { app: "video_player", media: "room", source_in: 200, at: 480 },
+    ],
   };
-  const result = applyWith(p, [op], assets);
+  // The Photo Viewer, the Notepad and one Video Player frame (both players are the same size).
+  const sizes = needs([op], p).screens!;
+  expect(sizes.map(([app]) => app).sort()).toEqual(["notepad", "photo_viewer", "video_player"]);
+  const frames: Record<string, string> = {};
+  sizes.forEach(([app, w, h], index) => {
+    p.media.push(media({ id: `f${index}`, name: app, path: `/${app}${index}.png`, kind: "image", duration: 30, width: w, height: h }));
+    frames[frameKey(app, w, h)] = `f${index}`;
+  });
+  const applied = applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } });
+  const result = applied.results[0] as Record<string, unknown>;
+  // It opened zoomed into a Video Player playing on from the footage (10 s + 300 frames = 20 s).
+  expect((result.camera as Record<string, unknown>).opens_into).toBe(0);
+  const players = p.clips.filter((own) => own.name === "Desktop · Video Player · room.mp4") as VideoClip[];
+  expect(players.map((own) => Math.round(own.source_in))).toEqual([20, 200]);
+  expect(result.lines_at).toEqual([400, 450]);
+  // The notes type on, and the windows and lines are marked for their sounds.
+  const notes = p.clips.filter((own) => own.name?.startsWith("Desktop · Notepad note") === true) as TextClip[];
+  expect(notes.map((own) => own.text)).toEqual(["- Charged with murder", "- Held without bail"]);
+  expect(notes[0]!.animation.preset).toBe("typewriter");
+  const marks = (p.markers ?? []).map((marker) => `${marker.name}@${marker.frame}`);
+  expect(marks).toContain("desktop window opens@330");
+  expect(marks).toContain("desktop line@450");
+  // Every clip moves against the camera: the wallpaper's scale changes.
+  const wall = p.clips.find((own) => own.name === "Desktop · wallpaper")!;
+  const scales = (wall.keyframes?.scale ?? []).map((key) => key.value);
+  expect(Math.max(...scales) / Math.min(...scales)).toBeGreaterThan(1.3);
   valid(p);
-  const report = result.results[0] as Record<string, unknown>;
-  expect(report.end).toBe(480);
-  expect((report.clips as string[]).length).toBe(6);
-  const named = (name: string) => clipNamed(p, `Desktop profile · ${name}`);
-  // The Photo Viewer comes in first, the Notepad a few frames later, each from 96%.
-  const [viewer, notepad] = [named("photo viewer"), named("notepad")];
-  expect(viewer.start).toBeLessThan(notepad.start);
-  const scale = (own: Clip, frame: number) => sample(own.keyframes!.scale!, frame)!;
-  const opacity = (own: Clip, frame: number) => sample(own.keyframes!.opacity!, frame)!;
-  expect(Math.abs(scale(viewer, 0) / scale(viewer, 12) - 0.96)).toBeLessThan(0.01);
-  expect(opacity(viewer, 0) < 0.05 && opacity(viewer, 10) > 0.99).toBe(true);
-  // Gone by the end, the Notepad first.
-  const end = 480 - viewer.start - 1;
-  expect(opacity(viewer, end)).toBeLessThan(0.05);
-  const notepadEnd = 480 - notepad.start - 1;
-  expect(opacity(notepad, notepadEnd - 3)).toBeLessThan(opacity(viewer, end - 3));
-  // The photo fills the content area: cropped to its shape, centred in it.
-  const photo = named("photo") as VideoClip;
-  // (634 × 730 is wider than the 555 × 714 content area: its sides go.)
-  const crop = photo.crop!;
-  expect(crop.left! > 0 && Math.abs(crop.left! - crop.right!) < 1e-6 && (crop.top ?? 0) === 0).toBe(true);
-  // The lines type on word by word, the second after the first; one "- " each.
-  const notes = named("notes") as TextClip;
-  expect(notes.text).toBe("- 36-year-old mother\n- Charged with murder");
-  const times = notes.word_times!;
-  expect(times.length).toBe(7);
-  expect(times[2]! < times[3]! && times[0] === 0).toBe(true);
-  // The whole screen pushes in.
-  const wall = named("wallpaper");
-  expect(scale(wall, 179)).toBeGreaterThan(scale(wall, 0) * 1.03);
-  expect(frames(p, "desktop window opens").length).toBe(2);
-  expect(issuesOf(p).every((issue) => issue.kind === "picture_gap")).toBe(true);
-  // Run again over it (retimed lines), it replaces the profile: one set of clips and markers.
-  const again = applyWith(p, [{ ...op, line_at: [340, 420] }], assets).results[0] as Record<string, unknown>;
-  expect(again.replaced).toBe(6);
-  expect(p.clips.filter((own) => (own.name ?? "").startsWith("Desktop profile ·")).length).toBe(6);
-  expect(frames(p, "desktop line")).toEqual([340, 420]);
-  expect(frames(p, "desktop window opens").length).toBe(2);
+  // The old picture graphics are retired.
+  expect(() => applyWith(p, [{ op: "desktop_profile", start: 0, duration: 90, media: "mug", lines: ["x"] }], { shutter: null, desktops: [] })).toThrow(/retired/);
 });
 
 test("review_notes_on_screen_are_flagged", () => {

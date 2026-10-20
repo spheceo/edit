@@ -35,7 +35,7 @@ const CONTROLS = 46;
 /** The desktop is this many frames wide and tall: room for the camera to travel. */
 const DESKTOP = 1.5;
 /** Notes in the Notepad (1080p pixels). */
-const NOTE_SIZE = 36;
+const NOTE_SIZE = 40;
 const NOTE_LINE = 1.4;
 const NOTE_PAD = 18;
 const NOTE_GAP = 10;

@@ -471,7 +471,21 @@ async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[
 /** The roles a person can have (speakers.ts's, which the colour code goes by). */
 const PERSON_ROLES = ["officer", "leader", "suspect", "victim", "witness", "medic", "bystander", "other"];
 
-async function coverCutIn({ app, args, projectId }: ToolCall): Promise<Content[]> {
+async function coverCutIn(call: ToolCall): Promise<Content[]> {
+  const { app, args, projectId } = call;
+  // A desktop (or a picture, which goes on one) needs its pictures drawn and
+  // brought in first: the plan does that, as one plan of this one operation.
+  const project = live(app, projectId).project;
+  const shots = Array.isArray(args.shots) ? args.shots : [];
+  const screens = shots.some((shot) => {
+    const given = typeof shot === "object" && shot !== null ? (shot as Record<string, unknown>) : {};
+    return (typeof given.desktop === "object" && given.desktop !== null) || (typeof given.media === "string" && project.media.find((media) => media.id === given.media)?.kind === "image");
+  });
+  if (screens) {
+    const { project_id: _id, ...operation } = args;
+    void _id;
+    return applyEditPlan({ ...call, args: { base_rev: live(app, projectId).rev, operations: [{ op: "cover_cut_in", ...operation }] } });
+  }
   const [, [report, smooth]] = await app.store.update(projectId, ORIGIN, (project) => cutin.cover(project, args));
   report.smoothing_started = hooks.smoothInBackground(app, projectId, smooth);
   return text(stableStringify(report, 2));

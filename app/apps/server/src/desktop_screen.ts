@@ -290,6 +290,13 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   const [DW, DH] = desktop;
   const total = spec.end - spec.start;
   const rel = (frame: number) => frame - spec.start;
+  // No window opens while the camera is still zoomed into the opening Video
+  // Player: it would pop up huge over the footage. They wait until the zoom
+  // out is mostly done.
+  if (spec.open !== null) {
+    const earliest = spec.start + Math.round(28 * s);
+    for (const window of laid) if (window !== laid[spec.open.index] && window.spec.at < earliest) window.spec.at = Math.min(earliest, spec.end - 1);
+  }
 
   // A window's picture shown inside its content area (contain): [x, y, w, h] on the desktop.
   const shown = (window: Laid): [number, number, number, number] => {
@@ -348,6 +355,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   const exitIndex = spec.exit_into;
   const exitAt = exitIndex === null ? total : Math.max(total - Math.round(30 * s), free);
   let previous: Laid | null = openIndex !== null ? laid[openIndex]! : laid[order[0]!]!;
+  const opened: Laid[] = previous === null ? [] : [previous];
   for (const index of order) {
     const window = laid[index]!;
     if (index === openIndex || (openIndex === null && index === order[0])) continue;
@@ -355,9 +363,12 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     const from = Math.max(free, opens - Math.round(8 * s));
     if (from >= exitAt - Math.round(6 * s)) break;
     const to = Math.min(from + Math.round(26 * s), exitAt - 1);
-    // With the window before it when both fit, else on its own.
+    // Everything open so far when it fits (so a Notepad still typing stays in
+    // view), else the window with the one before it, else on its own.
+    opened.push(window);
+    const all = framing(opened);
     const pair = previous === null ? null : framing([previous, window]);
-    const pose = pair !== null && pair.z > 0.66 ? pair : framing([window]);
+    const pose = all.z > 0.6 ? all : pair !== null && pair.z > 0.66 ? pair : framing([window]);
     stops.push({ from, to, pose });
     free = to;
     previous = window;

@@ -135,7 +135,8 @@ test("a_picture_picked_as_a_cut_in_shot_goes_on_a_desktop_the_footage_zooms_out_
   const player = p.clips.find((own) => own.name === "Cut-in 1 · Desktop · Video Player · bodycam.mp4") as VideoClip;
   expect(Math.abs(player.source_in - 41)).toBeLessThan(1e-6);
   const photo = p.clips.find((own) => own.name === "Cut-in 1 · Desktop · Photo Viewer · news.jpg");
-  expect(photo?.start).toBe(450);
+  // It opens once the zoom out of the footage is mostly done (28 frames in), never huge over the footage.
+  expect(photo?.start).toBe(478);
   expect(p.clips.some((own) => own.type === "text" && own.text === "(actual image)")).toBe(true);
   expect(bareStills(p)).toEqual([]);
   // One zoom across the cut-in: the second shot starts where the first ended, never back at 1.

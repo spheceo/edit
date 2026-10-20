@@ -1291,6 +1291,15 @@ function bitsHex(value: number): string {
 let nextCut = 0;
 
 /**
+ * The extension of an excerpt cut from a file with `ext`: its own, unless its
+ * container can't hold copied picture with AAC sound (a DVD's VOB or another
+ * MPEG program stream, WebM), then MP4, which takes their picture as it is.
+ */
+export function excerptExtension(ext: string): string {
+  return ["vob", "mpg", "mpeg", "m2p", "ps", "dat", "webm", "ogv"].includes(ext.toLowerCase()) ? "mp4" : ext;
+}
+
+/**
  * Cuts the parts of `source` that `ranges` need into excerpt files beside it
  * (reused if already cut). Footage mostly used anyway stays whole. Picture is
  * copied from a keyframe; sound is re-encoded so it starts on that same
@@ -1305,7 +1314,7 @@ export async function excerpts(source: string, ranges: [number, number][]): Prom
   fs.mkdirSync(dir, { recursive: true });
   const stem = takeChars(fileStem(source) ?? "footage", 20);
   const sourceKey = mediaModule.mediaKey(source);
-  const ext = pathExtension(source) ?? "mp4";
+  const ext = excerptExtension(pathExtension(source) ?? "mp4");
   const out: Excerpt[] = [];
   for (const [from, to] of needed) {
     const start = await keyframeBefore(source, from);

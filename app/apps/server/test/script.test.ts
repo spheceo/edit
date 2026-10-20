@@ -16,6 +16,7 @@ import {
   download,
   driveFileId,
   durationOf,
+  excerptExtension,
   excerpts,
   fetchDoc,
   joinCases,
@@ -408,4 +409,11 @@ test("follows_a_compilations_case_scripts_after_the_narration_naming_them", asyn
     "Lola reported his own parents missing",
   ]);
   expect((parsed.blocks[1] as Narration).text).toBe("Eventually, she was sentenced to 15 years.\n\nIn a similar case, another young man reported the crime himself…");
+});
+
+test("excerpts_of_dvd_and_webm_files_are_mp4", () => {
+  expect(excerptExtension("VOB")).toBe("mp4");
+  expect(excerptExtension("webm")).toBe("mp4");
+  expect(excerptExtension("mov")).toBe("mov");
+  expect(excerptExtension("mp4")).toBe("mp4");
 });

@@ -282,6 +282,7 @@ export interface ScriptSeam {
   attach(project: Project, source: string, parsed: Parsed): void;
   /** "1h02m03s": a time in an excerpt's name (seconds rounded, half away from zero). */
   clock(seconds: number): string;
+  excerptExtension(ext: string): string;
   /** FFmpeg cut of `source` (a file or a presigned URL) from `start` to `to` into `out` (picture copied, sound AAC 192k). */
   cut(source: string, start: number, to: number, out: string): Promise<void>;
   docId(url: string): string | null;

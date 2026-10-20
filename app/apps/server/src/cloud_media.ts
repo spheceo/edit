@@ -87,6 +87,7 @@ const ANALYSIS_AT_ONCE = 8;
 export const scriptParts = {
   safeName: (name: string): string => seams.script.safeName(name),
   clock: (seconds: number): string => seams.script.clock(seconds),
+  excerptExtension: (ext: string): string => seams.script.excerptExtension(ext),
   resolve: (file: string, scratch: string) => seams.script.resolve(file, scratch),
   durationOf: (path: string): Promise<number> => seams.script.durationOf(path),
   keyframeBefore: (path: string, time: number): Promise<number> => seams.script.keyframeBefore(path, time),
@@ -917,7 +918,7 @@ export async function driveExcerpts(
     return [{ path: made.path, from: 0, to: duration, cloud: made }];
   }
   const stem = takeChars(fileStem(original.name) ?? "footage", 40);
-  const ext = extensionOf(original.name);
+  const ext = scriptParts.excerptExtension(extensionOf(original.name));
   const out: Excerpt[] = [];
   for (const [from, to] of spans) {
     const start = await scriptParts.keyframeBefore(url, from);

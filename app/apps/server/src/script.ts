@@ -1777,6 +1777,13 @@ export async function realign(app: App, id: string): Promise<unknown[]> {
           other.duration = length;
         } else if (other.start >= oldEnd || marksCut(other, oldEnd)) {
           other.start += delta;
+        } else if (delta < 0 && other.start >= clip.start && other.start + other.duration > oldEnd + delta) {
+          // Over a clip that got shorter (a teaser's subtitle): it ends with it,
+          // or, starting in the part cut away, moves up with what follows, so it
+          // never overlaps the next one moved up (realign once refused on that).
+          const newEnd = oldEnd + delta;
+          if (other.start >= newEnd) other.start += delta;
+          else other.duration = Math.max(newEnd - other.start, 1);
         }
       }
       changed.push({

@@ -1392,11 +1392,32 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   // B-roll that holds one shot too long: the team wants cut-ins alive, a new
   // shot on each thing the narration names (Mom Leaves 5 Kids: shots of 7–11 s
   // under narration, "we need more clips", "change clips more frequently").
+  // Only what's seen of it counts: a photo, a File Viewer or words over part
+  // of a shot break it up (the longest stretch with nothing over it).
   const longest = asInt(round(LONGEST_BROLL_SHOT * fps));
+  const over = project.clips.filter(
+    (clip) =>
+      visible(clip.track) &&
+      ((clip.type === "video" && !(clip.name ?? "").includes("B-roll:")) ||
+        (clip.type === "text" && !/^(Subtitle|Caption|Countdown|Film look · tag)/u.test(clip.name ?? "") && trackOf(project, clip.track)?.subtitles !== true)),
+  );
   for (const clip of project.clips) {
     if (clip.type !== "video" || clip.track === base || !(clip.name ?? "").includes("B-roll:")) continue;
-    if (clip.duration > longest) {
-      issues.push({ kind: "long_broll_shot", clip: clip.id, start: clip.start, seconds: round((clip.duration / fps) * 10) / 10 });
+    if (clip.duration <= longest) continue;
+    const own = level(clip.track);
+    const seen = new Uint8Array(clip.duration).fill(1);
+    for (const other of over) {
+      if (level(other.track) <= own) continue;
+      for (let frame = Math.max(other.start, clip.start); frame < Math.min(clipEnd(other), clipEnd(clip)); frame++) seen[frame - clip.start] = 0;
+    }
+    let run = 0;
+    let most = 0;
+    for (const one of seen) {
+      run = one === 1 ? run + 1 : 0;
+      most = Math.max(most, run);
+    }
+    if (most > longest) {
+      issues.push({ kind: "long_broll_shot", clip: clip.id, start: clip.start, seconds: round((most / fps) * 10) / 10 });
     }
   }
   // Music: a song's good part is usually its opening (often only the first

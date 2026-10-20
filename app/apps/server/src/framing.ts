@@ -129,9 +129,18 @@ export function fill(project: Project, media: Media, borders: Borders | null = c
   // A hair over, so a rounding pixel never shows at an edge.
   const scale = Math.max(W / (cw * fit), H / (ch * fit)) * 1.004;
   const x = -((b.left - b.right) / 2) * w * fit * scale;
-  const y = -((b.top - b.bottom) / 2) * h * fit * scale;
+  let y = -((b.top - b.bottom) / 2) * h * fit * scale;
+  // A photo taller than the frame keeps its top, where the faces are (a
+  // portrait cropped through its middle showed a man from the nose down).
+  if (media.kind === "image") {
+    const shown = ch * fit * scale;
+    y += Math.min(shown * (0.5 - FACE_HEIGHT), Math.max((shown - H) / 2, 0));
+  }
   return { scale: round(scale * 10000) / 10000, x: round(x * 10) / 10, y: round(y * 10) / 10 };
 }
+
+/** Where a photo's faces usually are: this share of its height from the top. */
+const FACE_HEIGHT = 0.35;
 
 /** The value of a keyframed parameter at `frame` (clip-relative), linear between keys. */
 function at(keys: { frame: number; value: number }[] | undefined, frame: number, still: number): number {
@@ -292,7 +301,9 @@ export function fillFrame(project: Project, args: Record<string, unknown>): Reco
       return round(Math.min(Math.max(value, -centre - room), -centre + room) * 10) / 10;
     };
     const scaleAt = (frame: number) => at(clip.keyframes?.scale, frame, clip.transform.scale ?? 1);
-    clip.transform = { ...clip.transform, x: clamp(clip.transform.x ?? 0, smallestScale(clip), "x"), y: clamp(clip.transform.y ?? 0, smallestScale(clip), "y") };
+    // A photo goes where fill puts it (its top kept); footage keeps its own framing, inside the picture.
+    const y0 = media.kind === "image" && (clip.keyframes?.y ?? []).length === 0 ? want.y : (clip.transform.y ?? 0);
+    clip.transform = { ...clip.transform, x: clamp(clip.transform.x ?? 0, smallestScale(clip), "x"), y: clamp(y0, smallestScale(clip), "y") };
     for (const axis of ["x", "y"] as const) {
       for (const key of clip.keyframes?.[axis] ?? []) key.value = clamp(key.value, scaleAt(key.frame), axis);
     }
@@ -376,6 +387,28 @@ export function interrogationIssues(project: Project, parts: { start: number; en
   if (hook !== undefined) {
     const missing = unmarked(hook.start);
     if (missing.length > 0) out.push({ kind: "hook_unmarked", at: hook.start, missing });
+  }
+  // The person questioned introduced by THE NAME CALLOUT (a small boxed
+  // name beside them), never big faint letters across the room ("we need to
+  // add her name next to her in a different way").
+  const k = project.settings.height / 1080;
+  for (const person of project.people ?? []) {
+    if (person.role !== "suspect") continue;
+    const words = person.name.split(/\s+/u).filter((word) => word.length > 2).map((word) => word.toLowerCase());
+    const naming = project.clips.filter(
+      (clip): clip is Extract<Clip, { type: "text" }> =>
+        clip.type === "text" && !/^(Subtitle|Caption)/u.test(clip.name ?? "") && trackOf(project, clip.track)?.subtitles !== true && words.some((word) => clip.text.toLowerCase().includes(word)),
+    );
+    const callout = naming.some((clip) => clip.style.size <= 44 * k && clip.style.background !== undefined && clip.style.background !== null);
+    const faint = naming.filter((clip) => clip.style.size >= 70 * k && (clip.opacity ?? 1) < 0.85 && (clip.style.background === undefined || clip.style.background === null));
+    if (!callout || faint.length > 0) {
+      out.push({
+        kind: "name_not_introduced",
+        person: person.name,
+        faint: faint.map((clip) => clip.id),
+        fix: "THE NAME CALLOUT where the narration first names them over the room: full name and age small in a black box beside their head, a thin white line from their neck (leader; give its x/y by hand if track_region can't follow the face); no big faint name",
+      });
+    }
   }
   // Bridges (every narration from the first hook on).
   const level = (track: string) => project.tracks.findIndex((own) => own.id === track);

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { apply, audit, hooks } from "../src/edit_plan.ts";
 import { deadAir, offScript } from "../src/edit_review.ts";
+import * as framing from "../src/framing.ts";
 import { fill, letterboxed, parseCrop } from "../src/framing.ts";
 import type { Project, VideoClip } from "../src/model.ts";
 import type { Transcript } from "../src/transcribe.ts";
@@ -180,4 +181,36 @@ test("a_pause_cut_out_of_a_script_range_isnt_off_script_but_a_word_cut_out_is", 
   (p.clips[1] as VideoClip).source_in = 13.5;
   (p.clips[1] as VideoClip).duration = 45;
   expect((offScript(p, heard) as Record<string, unknown>[]).map((issue) => issue.kind)).toEqual(["off_script"]);
+});
+
+test("a_portrait_photo_filled_keeps_its_top_where_the_face_is", () => {
+  const p = tape();
+  const photo = media({ id: "face", name: "Portrait", path: "/found/face.jpg", kind: "image", duration: 5, width: 600, height: 900 });
+  const filled = fill(p, photo, null);
+  // 600×900 filling 1920×1080: 2880 px tall shown, the window moved down to keep the top.
+  expect(filled.y).toBeGreaterThan(400);
+  expect(filled.y).toBeLessThanOrEqual((2880 * 1.004 - 1080) / 2 + 1);
+});
+
+test("the_person_questioned_is_introduced_by_a_boxed_name_not_big_faint_letters", () => {
+  const p = tape();
+  p.style = "interrogation";
+  p.people = [{ id: "s", name: "Sabrina Limon", label: "Sabrina", role: "suspect", color: "#f5d90a", names: [] }] as Project["people"];
+  const parts = [{ start: 0, end: 100, kind: "intro" }, { start: 100, end: 400, kind: "broll" }];
+  const issues = () => (framing.interrogationIssues(p, parts, () => []) as Record<string, unknown>[]).filter((issue) => issue.kind === "name_not_introduced");
+  p.clips.push(clip({ id: "faint", track: "v2", start: 120, duration: 60, type: "text", text: "SABRINA LIMON", opacity: 0.6, style: { font: "Geist", weight: 300, size: 90, color: [1, 1, 1, 1] } }));
+  expect(issues()[0]).toMatchObject({ person: "Sabrina Limon", faint: ["faint"] });
+  p.clips = p.clips.filter((own) => own.id !== "faint");
+  p.clips.push(clip({ id: "callout", track: "v2", start: 120, duration: 90, type: "text", text: "Sabrina Limon, 34", style: { font: "Geist", weight: 500, size: 26, color: [1, 1, 1, 1], background: { color: [0, 0, 0, 1], opacity: 0.8 } } }));
+  expect(issues()).toEqual([]);
+});
+
+test("a_long_room_shot_with_a_photo_over_part_of_it_counts_only_what_shows", () => {
+  const p = narrated("interrogation");
+  p.media.push(media({ id: "room", name: "Room.mp4", path: "/footage/room.mp4", kind: "video", duration: 600, width: 720, height: 480 }));
+  p.media.push(media({ id: "photo", name: "Photo", path: "/found/photo.jpg", kind: "image", duration: 5, width: 1920, height: 1080 }));
+  p.clips.push(clip({ id: "shot", name: "Cut-in 1 · B-roll: the room", track: "v2", start: 0, duration: 300, type: "video", media: "room", source_in: 0, speed: 1 }));
+  expect(kinds(p, "long_broll_shot").map((issue) => issue.seconds)).toEqual([10]);
+  p.clips.push(clip({ id: "over", track: "v3", start: 100, duration: 100, type: "video", media: "photo", source_in: 0, speed: 1 }));
+  expect(kinds(p, "long_broll_shot").map((issue) => issue.seconds)).toEqual([]);
 });

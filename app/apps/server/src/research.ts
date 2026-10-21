@@ -527,6 +527,25 @@ export async function collect(home: string, project: string, queries: string[], 
 /** One Bing image result: (image, page, title). */
 type Hit = [image: string, page: string, title: string];
 
+/**
+ * Stock libraries' pictures: never this case, and watermarked (the comp's
+ * round-2 edit used a dreamstime photo four times; the house never uses
+ * stock). Left out of what a search collects.
+ */
+const STOCK = /(^|\.)(dreamstime|shutterstock|alamy|gettyimages|istockphoto|depositphotos|123rf|stock\.adobe|adobestock|pond5|bigstockphoto|canstockphoto|vectorstock|freepik|pexels|unsplash|pixabay)\./iu;
+
+/** Whether a hit (its image or page) comes from a stock library. */
+export function isStock([image, page]: Hit): boolean {
+  const host = (url: string) => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return "";
+    }
+  };
+  return STOCK.test(`${host(image)}.`) || STOCK.test(`${host(page)}.`);
+}
+
 async function collectInner(home: string, project: string, queries: string[], perQuery: number): Promise<[number, number, number]> {
   const seen = new Set(items(home, project).flatMap((item) => [item.id, item.image]));
   // Queries three at a time: each is a browser search and its downloads, and
@@ -547,7 +566,7 @@ async function collectInner(home: string, project: string, queries: string[], pe
       if (hits.length === before) break;
       first += PAGE;
     }
-    const fresh = hits.slice(0, perQuery).filter(([image]) => {
+    const fresh = hits.filter((hit) => !isStock(hit)).slice(0, perQuery).filter(([image]) => {
       const isNew = !seen.has(image);
       if (!isNew) had += 1;
       return isNew;

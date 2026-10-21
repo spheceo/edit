@@ -35,3 +35,11 @@ test("a_gateway_request_becomes_gemini_and_its_answer_comes_back_as_the_gateways
     usage: { cost: 0 },
   });
 });
+
+import { isStock } from "../src/research.ts";
+
+test("stock_libraries_are_left_out_of_a_search", () => {
+  expect(isStock(["https://thumbs.dreamstime.com/b/teen.jpg", "https://www.dreamstime.com/photo", "t"])).toBe(true);
+  expect(isStock(["https://img.example.com/a.jpg", "https://www.shutterstock.com/image-photo/x", "t"])).toBe(true);
+  expect(isStock(["https://www.kitsapsun.com/a.jpg", "https://www.kitsapsun.com/story", "t"])).toBe(false);
+});

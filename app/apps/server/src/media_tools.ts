@@ -374,6 +374,11 @@ async function agentStatusRoute(context: RouteContext<App>): Promise<Response> {
   return sortedJson(status);
 }
 
+async function agentClisRoute(context: RouteContext<App>): Promise<Response> {
+  const panel = seams.agentPanel(context.app);
+  return sortedJson(panel.clis ? await panel.clis() : { claude: await panel.status() });
+}
+
 async function agentModelsRoute(context: RouteContext<App>): Promise<Response> {
   const refresh = refreshQuery(context);
   try {
@@ -462,6 +467,7 @@ export function routes(router: Router<App>): void {
   router.get("/api/projects/{id}/drive", driveLinkRoute);
   router.post("/api/projects/{id}/drive", driveUploadRoute);
   router.get("/api/agent", agentStatusRoute);
+  router.get("/api/agent/clis", agentClisRoute);
   router.get("/api/agent/models", agentModelsRoute);
   router.post("/api/agent/provider", agentProviderRoute);
   router.get("/api/projects/{id}/agent", agentChatRoute);

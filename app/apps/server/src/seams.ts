@@ -801,6 +801,8 @@ export interface AgentPanel extends Agents {
   reset(project: string): void;
   /** Where new turns run: "claude" (the user's Claude Code) or "codex". */
   setProvider(provider: "claude" | "codex"): void;
+  /** Settings: each CLI's status (`claude`, `codex`) and the `provider` chosen. */
+  clis?(): Promise<Json>;
 }
 
 /** The app's agents as the panel (and the script's research turn) use them. */

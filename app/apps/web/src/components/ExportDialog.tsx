@@ -37,7 +37,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [spanChoice, setSpanChoice] = useState<"inout" | "whole">("whole");
   // Upload to Drive: asked for this time, else a whole subtitled video does.
   const [driveChoice, setDriveChoice] = useState<boolean | null>(null);
-  // The media drive's Exports folder when one is set (Settings → Media drive).
+  // The media drive's Exports folder when one is set (when a media drive is set).
   const [exportsDir, setExportsDir] = useState("~/Movies/Edit");
   const [preparing, setPreparing] = useState(false);
   const starting = useRef(false);

@@ -1,30 +1,17 @@
-import { writeSetting } from "../lib/storage";
-// The ⋯ menu at the top (shortcuts, settings) and the dialogs it opens.
+// The ⋯ menu at the top (settings, reporting a problem) and the dialogs it opens.
 
-import { Bug, Check, Cloud, Copy, Ellipsis, Keyboard, RotateCw, Settings } from "lucide-react";
+import { Bug, Check, Copy, Ellipsis, RotateCw, Settings } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
-import {
-  chooseEffort,
-  chooseModel,
-  chooseProvider,
-  currentEffort,
-  currentModel,
-  EFFORT_LABELS,
-  useAgent,
-  type AgentModel,
-  type AgentProvider,
-  type AgentStatus,
-} from "../lib/agent";
-import { api, fetchRetrying, useMachine, type MediaDrive } from "../lib/api";
-import { cloudApi, type CloudSettings } from "../lib/cloud";
-import { closeDialog, openDialog, SHORTCUTS, useDialogs } from "../lib/dialogs";
+import { chooseProvider, useAgent, type AgentModel, type AgentProvider, type AgentStatus } from "../lib/agent";
+import { fetchRetrying } from "../lib/api";
+import { closeDialog, openDialog, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
-import { setPreviewQuality, usePreviewQuality } from "../lib/previewQuality";
+import { writeSetting } from "../lib/storage";
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
 import { ClaudeMark, OpenAIMark } from "./AgentPanel";
 import { toggleMenu } from "./ContextMenu";
-import { cx, IconButton, Kbd, Modal, Select } from "./ui";
+import { cx, IconButton, Modal, Select, Tabs } from "./ui";
 
 export function AppMenu() {
   return (
@@ -34,9 +21,7 @@ export function AppMenu() {
         toggleMenu(
           event.currentTarget,
           [
-            { label: "Keyboard shortcuts", icon: <Keyboard size={14} />, shortcut: "?", onSelect: () => openDialog("shortcuts") },
             { label: "Settings", icon: <Settings size={14} />, shortcut: "⌘,", onSelect: () => openDialog("settings") },
-            { label: "Cloud…", icon: <Cloud size={14} />, onSelect: () => openDialog("settings") },
             { label: "Report a problem…", icon: <Bug size={14} />, onSelect: () => openReport() },
           ],
           { width: 210 },
@@ -48,7 +33,7 @@ export function AppMenu() {
   );
 }
 
-/** Mount once at the root: the dialogs and their keys (? and ⌘,). */
+/** Mount once at the root: the dialogs, and ⌘, for Settings. */
 export function AppDialogs() {
   const open = useDialogs((state) => state.open);
   useEffect(() => {
@@ -58,9 +43,6 @@ export function AppDialogs() {
       if ((event.metaKey || event.ctrlKey) && event.key === ",") {
         event.preventDefault();
         openDialog("settings");
-      } else if (event.key === "?" && !document.querySelector("[role=dialog]")) {
-        event.preventDefault();
-        openDialog("shortcuts");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -68,25 +50,12 @@ export function AppDialogs() {
   }, []);
   return (
     <>
-      <Modal open={open === "shortcuts"} onClose={closeDialog} width={560}>
-        <DialogHeader title="Keyboard shortcuts" />
-        <div className="grid max-h-[70vh] grid-cols-2 gap-x-6 gap-y-4 overflow-y-auto px-5 pt-1 pb-5">
-          {SHORTCUTS.map(({ group, keys }) => (
-            <div key={group}>
-              <div className="mb-1 text-[11px] font-medium tracking-wide text-faint uppercase">{group}</div>
-              {keys.map(([key, what]) => (
-                <div key={key} className="flex h-7 items-center justify-between gap-3">
-                  <span className="truncate text-muted">{what}</span>
-                  <Kbd>{key}</Kbd>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </Modal>
-      <Modal open={open === "settings"} onClose={closeDialog} width={520}>
+      <Modal open={open === "settings"} onClose={closeDialog} width={480}>
         <DialogHeader title="Settings" />
-        <SettingsBody />
+        <div className="flex max-h-[72vh] flex-col gap-6 overflow-y-auto px-5 pb-5">
+          <ToolSettings />
+          <UpdateSettings />
+        </div>
       </Modal>
       <ReportDialog />
     </>
@@ -152,91 +121,27 @@ function ReportDialog() {
   );
 }
 
-/** Full or light preview picture (light: 720p, a quarter of the data, for watching over the internet). */
-function PreviewQualityRow() {
-  const quality = usePreviewQuality((state) => state.quality);
-  return (
-    <div className="rounded-xl bg-black ring-1 ring-line">
-      <Line label="Quality" last>
-        <div className="w-48">
-          <Select
-            value={quality}
-            options={[
-              { value: "auto", label: "Auto (light when away)" },
-              { value: "full", label: "Full quality" },
-              { value: "light", label: "Light (720p, less data)" },
-            ]}
-            onChange={setPreviewQuality}
-          />
-        </div>
-      </Line>
-    </div>
-  );
+interface Clis {
+  claude?: AgentStatus;
+  codex?: AgentStatus;
+  provider?: AgentProvider;
 }
 
-/** This build and the update channel: Nightly (every nightly as it's out) or Stable (releases only). */
-function UpdateSettings() {
-  const status = useUpdate((state) => state.status);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(watchUpdates, []);
-  const pick = (channel: UpdateChannel) => {
-    setError(null);
-    chooseChannel(channel).catch((reason: Error) => setError(reason.message));
-  };
-  return (
-    <>
-      <div className="rounded-xl bg-black ring-1 ring-line">
-        <Line label="Version">{status?.current ?? "—"}</Line>
-        <Line label="Channel" last>
-          <div className="w-48">
-            <Select
-              value={status?.channel ?? "nightly"}
-              options={[
-                { value: "nightly", label: "Nightly" },
-                { value: "stable", label: "Stable (releases only)" },
-              ]}
-              onChange={pick}
-            />
-          </div>
-        </Line>
-      </div>
-      <p className="mt-2 text-[12px] leading-relaxed text-muted">
-        {status && !status.enabled
-          ? "This is a dev build: it doesn't update itself. Pull and rebuild."
-          : status?.latest
-            ? `${status.latest} is out: update from the button at the top. Edit restarts itself; your work is saved.`
-            : status?.channel === "stable"
-              ? "Up to date. Stable moves only on a release; a nightly you're on now waits for the next one."
-              : "Up to date. Nightlies are pre-releases, out as soon as they're built; one click at the top installs a new one."}
-      </p>
-      {error && <p className="mt-2 text-[12px] text-red-300">{error}</p>}
-    </>
-  );
-}
-
-function DialogHeader({ title }: { title: string }) {
-  return (
-    <div className="flex h-12 items-center px-5">
-      <span className="text-[15px] font-semibold">{title}</span>
-    </div>
-  );
-}
-
-function SettingsBody() {
-  const machine = useMachine();
-  const [status, setStatus] = useState<AgentStatus | null>(useAgent.getState().status);
+/** The CLIs Edit drives: whether each is installed and signed in, and which one runs the agent. */
+function ToolSettings() {
+  const [clis, setClis] = useState<Clis | null>(null);
   const [checking, setChecking] = useState(false);
-  const models = useAgent((state) => state.models);
-  const model = useAgent((state) => currentModel(state));
-  const effort = useAgent((state) => currentEffort(state));
+  const [switching, setSwitching] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
 
   const check = async () => {
     setChecking(true);
     try {
-      const next = (await (await fetchRetrying("/api/agent")).json()) as AgentStatus;
-      setStatus(next);
-      useAgent.setState({ status: next });
-      if (next.ready) {
+      const next = (await (await fetchRetrying("/api/agent/clis")).json()) as Clis;
+      setClis(next);
+      const status = next.provider === "codex" ? next.codex : next.claude;
+      if (status) useAgent.setState({ status });
+      if (status?.ready) {
         const { models } = (await (await fetchRetrying("/api/agent/models")).json()) as { models: AgentModel[] };
         if (models?.length) {
           writeSetting("edit.agent.models", JSON.stringify(models));
@@ -253,384 +158,185 @@ function SettingsBody() {
     void check();
   }, []);
 
-  const state = status?.state ?? (status?.ready ? "ready" : status ? "missing" : undefined);
-  const provider: AgentProvider = status?.provider === "codex" ? "codex" : "claude";
-  const [switching, setSwitching] = useState(false);
-  const login = provider === "claude" ? "claude auth login" : "codex login";
-  const install = provider === "claude" ? "curl -fsSL https://claude.ai/install.sh | bash" : "npm install -g @openai/codex";
-  const [problem, setProblem] = useState<string | null>(null);
-  const pickProvider = (next: AgentProvider) => {
+  const provider: AgentProvider = clis?.provider === "codex" ? "codex" : "claude";
+  const pick = (next: AgentProvider) => {
     if (next === provider || switching) return;
     setSwitching(true);
     setProblem(null);
     void chooseProvider(next)
-      .then((next) => setStatus(next))
+      .then(() => setClis((current) => ({ ...current, provider: next })))
       .catch((thrown: Error) => setProblem(thrown.message))
       .finally(() => setSwitching(false));
   };
   return (
-    <div className="flex max-h-[72vh] flex-col gap-5 overflow-y-auto px-5 pb-5">
-      <Group title="Agent">
-        <div className="grid grid-cols-2 gap-2">
-          <Provider
-            icon={<ClaudeMark size={15} />}
-            name="Claude Code"
-            detail="Runs on your Claude plan or API key"
-            selected={provider === "claude"}
-            onSelect={() => pickProvider("claude")}
-          >
-            {provider === "claude" ? <StatusPill state={state} /> : <span className="text-[11px] text-faint">Switch</span>}
-          </Provider>
-          <Provider
-            icon={<OpenAIMark size={16} />}
-            name="Codex"
-            detail="OpenAI · runs on your Codex login"
-            selected={provider === "codex"}
-            onSelect={() => pickProvider("codex")}
-          >
-            {provider === "codex" ? <StatusPill state={state} /> : <span className="text-[11px] text-faint">Switch</span>}
-          </Provider>
-        </div>
-        <div className="mt-2 rounded-xl bg-black ring-1 ring-line">
-          <Line label="Machine">{machine}</Line>
-          {provider === "claude" && status?.ready && <Line label="Account">{[status.email, status.plan].filter(Boolean).join(" · ") || "Signed in"}</Line>}
-          <Line label="Version">{status?.version ?? (state === "missing" ? "Not installed" : "—")}</Line>
-          {status?.path && (
-            <Line label="Location">
-              <span className="truncate font-mono text-[11px]" title={status.path}>
-                {status.path}
-              </span>
-            </Line>
-          )}
-          <Line label="Default model">
-            {models.length ? (
-              <div className="w-40">
-                <Select value={model?.id ?? ""} options={models.map((option) => ({ value: option.id, label: option.name }))} onChange={chooseModel} />
-              </div>
-            ) : (
-              <span className="text-faint">—</span>
-            )}
-          </Line>
-          <Line label="Thinking" last>
-            {model ? (
-              <div className="w-40">
-                <Select
-                  value={effort}
-                  options={model.efforts.map((option) => ({ value: option, label: EFFORT_LABELS[option] ?? option }))}
-                  onChange={chooseEffort}
-                />
-              </div>
-            ) : (
-              <span className="text-faint">—</span>
-            )}
-          </Line>
-        </div>
-        {problem && <p className="mt-2 text-[12px] text-red-300">{problem}</p>}
-        {state !== "ready" && status && (
-          <p className="mt-2 text-[12px] leading-relaxed text-muted">
-            {state === "logged_out" ? "Run " : "Install with "}
-            <code className="rounded bg-raised px-1 py-0.5 font-mono text-[11px] text-fg">
-              {state === "logged_out" ? login : install}
-            </code>
-            {state === "logged_out" ? "" : ", then "}
-            {state === "logged_out" ? null : <code className="rounded bg-raised px-1 py-0.5 font-mono text-[11px] text-fg">{login}</code>} on {machine}.
-          </p>
-        )}
+    <Group
+      title="Tools"
+      action={
         <button
           type="button"
+          title="Check again"
           onClick={() => void check()}
           disabled={checking}
-          className="mt-2 flex h-7 items-center gap-1.5 self-start rounded-md px-2 text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
+          className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
         >
           <RotateCw size={12} className={checking ? "animate-spin" : undefined} />
-          {checking ? "Checking…" : "Check again"}
         </button>
-      </Group>
-      <Group title="Updates">
-        <UpdateSettings />
-      </Group>
-      <Group title="Preview">
-        <PreviewQualityRow />
-        <p className="mt-2 text-[12px] leading-relaxed text-muted">Light streams a 720p copy (a quarter of the data) so playback keeps up over the internet. Export always uses the originals.</p>
-      </Group>
-      <Group title="Cloud">
-        <CloudSettingsPanel />
-      </Group>
-      <Group title="Media drive">
-        <MediaDriveSettings />
-      </Group>
-      <Group title="Transcription">
-        <div className="rounded-xl bg-black ring-1 ring-line">
-          <Line label="Model">ElevenLabs Scribe v2</Line>
-          <Line label="Access" last>
-            <span className="text-muted">Through Edit's relay · no key needed</span>
-          </Line>
+      }
+    >
+      <Card>
+        <Tool
+          icon={<ClaudeMark size={15} />}
+          name="Claude Code"
+          role={provider === "claude" ? "Runs the agent" : "Not running the agent"}
+          status={clis?.claude}
+          detail={[clis?.claude?.email, clis?.claude?.plan].filter(Boolean).join(" · ")}
+          login="claude auth login"
+          install="curl -fsSL https://claude.ai/install.sh | bash"
+        />
+        <Tool
+          icon={<OpenAIMark size={16} />}
+          name="Codex"
+          role={provider === "codex" ? "Runs the agent, names speakers" : "Names speakers"}
+          status={clis?.codex}
+          login="codex login"
+          install="npm install -g @openai/codex"
+        />
+        <Line label="Agent" last>
+          <Tabs
+            id="agent-provider"
+            value={provider}
+            tabs={[
+              { value: "claude", label: "Claude Code" },
+              { value: "codex", label: "Codex" },
+            ]}
+            onChange={pick}
+          />
+        </Line>
+      </Card>
+      {problem && <p className="mt-2 text-[12px] text-red-300">{problem}</p>}
+    </Group>
+  );
+}
+
+/** One CLI: its version and sign-in, or the command that fixes it. */
+function Tool({
+  icon,
+  name,
+  role,
+  status,
+  detail,
+  login,
+  install,
+}: {
+  icon: ReactNode;
+  name: string;
+  role: string;
+  status?: AgentStatus;
+  detail?: string;
+  login: string;
+  install: string;
+}) {
+  const state = status?.state ?? (status?.ready ? "ready" : status ? "missing" : undefined);
+  const version = status?.version?.match(/\d+(\.\d+)+/)?.[0];
+  const fix = state === "logged_out" ? login : state === "missing" ? `${install} && ${login}` : null;
+  return (
+    <div className="flex flex-col gap-2 border-b border-line px-3 py-3">
+      <div className="flex items-center gap-3">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised text-fg ring-1 ring-line">{icon}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[13px] font-medium">{name}</span>
+            {version && <span className="font-mono text-[11px] text-faint">{version}</span>}
+          </div>
+          <div className="truncate text-[11px] text-muted">{[role, state === "ready" ? detail : ""].filter(Boolean).join(" · ")}</div>
         </div>
-      </Group>
+        <StatusPill state={state} />
+      </div>
+      {fix && <Fix command={fix} />}
     </div>
   );
 }
 
-/** Cloud projects: the team's token (pasted once, kept on this Mac), on/off, and whether it connects. */
-function CloudSettingsPanel() {
-  const machine = useMachine();
-  const [settings, setSettings] = useState<CloudSettings | null>(null);
-  const [token, setToken] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    cloudApi
-      .settings()
-      .then(setSettings)
-      .catch((reason) => setError((reason as Error).message));
-  }, []);
-
-  const apply = async (body: Parameters<typeof cloudApi.setSettings>[0]) => {
-    setBusy(true);
-    setError(null);
-    try {
-      setSettings(await cloudApi.setSettings(body));
-      setToken("");
-    } catch (reason) {
-      setError((reason as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!settings) return <div className="rounded-xl bg-black px-3 py-3 text-[12px] text-muted ring-1 ring-line">{error ?? "Checking…"}</div>;
-  const [label, tone] = !settings.token
-    ? ["Off · no token", "bg-hover text-muted"]
-    : settings.connected === false
-      ? ["Not connected", "bg-amber-500/15 text-amber-300"]
-      : ["On", "bg-green-500/15 text-green-300"];
-  return (
-    <>
-      <div className="rounded-xl bg-black ring-1 ring-line">
-        <Line label="Status">
-          <span className={cx("rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>
-        </Line>
-        <Line label="Token" last={!settings.token}>
-          {settings.token === "env" ? (
-            <span className="text-muted">Set by EDIT_RELAY_TOKEN</span>
-          ) : (
-            <form
-              className="flex min-w-0 items-center gap-1.5"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (token.trim()) void apply({ token: token.trim() });
-              }}
-            >
-              <input
-                type="password"
-                value={token}
-                disabled={busy}
-                onChange={(event) => setToken(event.target.value)}
-                placeholder={settings.token ? "Saved · paste a new one to replace it" : "Paste the team's cloud token"}
-                spellCheck={false}
-                autoComplete="off"
-                className="h-7 w-56 min-w-0 rounded-md border border-line bg-panel px-2 font-mono text-[11px] outline-none placeholder:font-sans placeholder:text-faint focus:border-line-strong disabled:opacity-60"
-              />
-              {token.trim() ? (
-                <button type="submit" disabled={busy} className="h-7 rounded-md bg-white px-2.5 text-[12px] font-medium text-black disabled:opacity-40">
-                  Save
-                </button>
-              ) : (
-                settings.token === "saved" && (
-                  <button type="button" disabled={busy} onClick={() => void apply({ token: null })} className="h-7 rounded-md px-2 text-[12px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40">
-                    Remove
-                  </button>
-                )
-              )}
-            </form>
-          )}
-        </Line>
-        {settings.token && (
-          <Line label="Teammates see" last>
-            <span className="truncate">{settings.holder}</span>
-          </Line>
-        )}
-      </div>
-      <p className="mt-2 text-[12px] leading-relaxed text-muted">
-        Projects are kept in the team's cloud: close one here and a teammate opens it on their Mac where you left off. One Mac edits a project at a time; the others see it read-only. The token is kept in Edit's data folder on {machine}, readable only by you.
-      </p>
-      {(error || (settings.token && settings.problem)) && (
-        <p className="mt-2 text-[12px] leading-relaxed text-amber-300">{error ?? settings.problem}</p>
-      )}
-    </>
-  );
-}
-
-const formatSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`);
-
-/** Keeps big media files (downloads, uploads, exports) in a folder on another drive. */
-function MediaDriveSettings() {
-  const machine = useMachine();
-  const [drive, setDrive] = useState<MediaDrive | null>(null);
-  const [dir, setDir] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+/** A command to run in Terminal, copied on click. */
+function Fix({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
-
-  const adopt = (next: MediaDrive) => {
-    setDrive(next);
-    setDir(next.dir ?? "");
-  };
-  const load = () =>
-    void api
-      .mediaDrive()
-      .then(adopt)
-      .catch((reason) => setError((reason as Error).message));
-  useEffect(load, []);
-
-  const apply = async (next: string | null) => {
-    setBusy(true);
-    setError(null);
-    try {
-      adopt(await api.setMediaDrive(next));
-    } catch (reason) {
-      setError((reason as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!drive) return <div className="rounded-xl bg-black px-3 py-3 text-[12px] text-muted ring-1 ring-line">{error ?? "Checking…"}</div>;
-  const [label, tone] =
-    drive.state === "connected"
-      ? ["Connected", "bg-green-500/15 text-green-300"]
-      : drive.state === "offline"
-        ? ["Not connected", "bg-amber-500/15 text-amber-300"]
-        : ["Off", "bg-hover text-muted"];
-  const changed = dir.trim() !== (drive.dir ?? "");
   return (
-    <>
-      <div className="rounded-xl bg-black ring-1 ring-line">
-        <Line label="Status">
-          <span className={cx("rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>
-        </Line>
-        <Line label="Folder" last={!drive.volumes.length || drive.env}>
-          <form
-            className="flex min-w-0 items-center gap-1.5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (changed && dir.trim()) void apply(dir.trim());
-            }}
-          >
-            <input
-              value={dir}
-              disabled={drive.env || busy}
-              onChange={(event) => setDir(event.target.value)}
-              placeholder={`Off · media stays in ${drive.home}`}
-              spellCheck={false}
-              className="h-7 w-56 min-w-0 rounded-md border border-line bg-panel px-2 font-mono text-[11px] outline-none placeholder:font-sans placeholder:text-faint focus:border-line-strong disabled:opacity-60"
-            />
-            {!drive.env && changed && dir.trim() && (
-              <button type="submit" disabled={busy} className="h-7 rounded-md bg-white px-2.5 text-[12px] font-medium text-black disabled:opacity-40">
-                Use
-              </button>
-            )}
-            {!drive.env && drive.dir && !changed && (
-              <button type="button" disabled={busy} onClick={() => void apply(null)} className="h-7 rounded-md px-2 text-[12px] text-muted hover:bg-hover hover:text-fg disabled:opacity-40">
-                Turn off
-              </button>
-            )}
-          </form>
-        </Line>
-        {!drive.env && drive.volumes.length > 0 && (
-          <Line label="Drives" last>
-            <span className="flex flex-wrap justify-end gap-1">
-              {drive.volumes.map((volume) => (
-                <button
-                  key={volume.path}
-                  type="button"
-                  onClick={() => setDir(`${volume.path}/Edit`)}
-                  className="h-6 rounded-md bg-raised px-2 text-[11px] text-muted hover:bg-hover hover:text-fg"
-                >
-                  {volume.name}
-                </button>
-              ))}
-            </span>
-          </Line>
-        )}
-      </div>
-      <p className="mt-2 text-[12px] leading-relaxed text-muted">
-        Downloads, uploads and renders made into media go to this folder on {machine}, and exports to its Exports folder. Projects, previews and the cache stay in {drive.home}. While the drive is unplugged its footage shows as missing and new media is refused rather than put on this disk.
-        {drive.env && " Set by EDIT_MEDIA_DIR."}
-      </p>
-      {(error || drive.problem) && <p className="mt-2 text-[12px] leading-relaxed text-amber-300">{error ?? drive.problem}</p>}
-      {drive.dir && drive.move_command && drive.internal_bytes > 0 && (
-        <div className="mt-2 flex flex-col gap-1.5">
-          <p className="text-[12px] leading-relaxed text-muted">
-            {formatSize(drive.internal_bytes)} of media is still in {drive.home}. To move it, quit Edit and run:
-          </p>
-          <button
-            type="button"
-            title="Copy"
-            onClick={() => void copyText(drive.move_command ?? "").then(setCopied)}
-            className="flex items-center gap-2 self-start rounded-md border border-line bg-black/40 px-2 py-1 font-mono text-[11px] text-muted hover:text-fg"
-          >
-            <span className="truncate">{drive.move_command}</span>
-            {copied ? <Check size={12} className="shrink-0 text-green-400" /> : <Copy size={12} className="shrink-0" />}
-          </button>
-        </div>
-      )}
-    </>
+    <button
+      type="button"
+      title="Copy"
+      onClick={() => void copyText(command).then(setCopied)}
+      className="ml-11 flex min-w-0 items-center gap-2 self-start rounded-md border border-line bg-black/40 px-2 py-1 font-mono text-[11px] text-muted hover:text-fg"
+    >
+      <span className="truncate">{command}</span>
+      {copied ? <Check size={12} className="shrink-0 text-green-400" /> : <Copy size={12} className="shrink-0" />}
+    </button>
   );
 }
 
-function Group({ title, children }: { title: string; children: ReactNode }) {
+/** This build and the update channel: Nightly (every nightly as it's out) or Stable (releases only). */
+function UpdateSettings() {
+  const status = useUpdate((state) => state.status);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(watchUpdates, []);
+  const pick = (channel: UpdateChannel) => {
+    setError(null);
+    chooseChannel(channel).catch((reason: Error) => setError(reason.message));
+  };
+  return (
+    <Group title="Updates">
+      <Card>
+        <Line label="Version">
+          <span className="font-mono text-[12px]">{status?.current ?? "—"}</span>
+        </Line>
+        <Line label="Channel" last>
+          <div className="w-44">
+            <Select
+              value={status?.channel ?? "nightly"}
+              options={[
+                { value: "nightly", label: "Nightly" },
+                { value: "stable", label: "Stable (releases only)" },
+              ]}
+              onChange={pick}
+            />
+          </div>
+        </Line>
+      </Card>
+      <p className="mt-2 px-1 text-[12px] leading-relaxed text-muted">
+        {status && !status.enabled
+          ? "This is a dev build: it doesn't update itself. Pull and rebuild."
+          : status?.latest
+            ? `${status.latest} is out: update from the button at the top. Edit restarts itself; your work is saved.`
+            : status?.channel === "stable"
+              ? "Up to date. Stable moves only on a release; a nightly you're on now waits for the next one."
+              : "Up to date. Nightlies are pre-releases, out as soon as they're built; one click at the top installs a new one."}
+      </p>
+      {error && <p className="mt-2 px-1 text-[12px] text-red-300">{error}</p>}
+    </Group>
+  );
+}
+
+function DialogHeader({ title }: { title: string }) {
+  return (
+    <div className="flex h-12 items-center px-5">
+      <span className="text-[15px] font-semibold">{title}</span>
+    </div>
+  );
+}
+
+function Group({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
     <section className="flex flex-col">
-      <div className="mb-2 text-[11px] font-medium tracking-wide text-faint uppercase">{title}</div>
+      <div className="mb-2 flex h-6 items-center justify-between px-1">
+        <span className="text-[11px] font-medium tracking-wide text-faint uppercase">{title}</span>
+        {action}
+      </div>
       {children}
     </section>
   );
 }
 
-function Provider({
-  icon,
-  name,
-  detail,
-  selected,
-  disabled,
-  onSelect,
-  children,
-}: {
-  icon: ReactNode;
-  name: string;
-  detail: string;
-  selected?: boolean;
-  disabled?: boolean;
-  onSelect?: () => void;
-  children?: ReactNode;
-}) {
-  return (
-    <div
-      role={onSelect ? "button" : undefined}
-      tabIndex={onSelect ? 0 : undefined}
-      onClick={disabled ? undefined : onSelect}
-      onKeyDown={(event) => {
-        if (onSelect && !disabled && (event.key === "Enter" || event.key === " ")) onSelect();
-      }}
-      className={cx(
-        "flex flex-col gap-2 rounded-xl p-3 text-left ring-1",
-        selected ? "bg-raised ring-line-strong" : "ring-line",
-        onSelect && !selected && "cursor-pointer hover:bg-hover",
-        disabled && "opacity-50",
-      )}
-    >
-      <div className="flex items-center gap-2">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-black text-fg ring-1 ring-line">{icon}</span>
-        <div className="min-w-0">
-          <div className="text-[13px] font-medium">{name}</div>
-          <div className="truncate text-[11px] text-faint">{detail}</div>
-        </div>
-      </div>
-      {children}
-    </div>
-  );
+function Card({ children }: { children: ReactNode }) {
+  return <div className="overflow-hidden rounded-xl bg-black ring-1 ring-line">{children}</div>;
 }
 
 function StatusPill({ state }: { state?: string }) {
@@ -642,12 +348,12 @@ function StatusPill({ state }: { state?: string }) {
         : state === "missing"
           ? ["Not installed", "bg-red-500/15 text-red-300"]
           : ["Checking…", "bg-hover text-muted"];
-  return <span className={cx("self-start rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>;
+  return <span className={cx("shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>;
 }
 
 function Line({ label, children, last }: { label: string; children: ReactNode; last?: boolean }) {
   return (
-    <div className={cx("flex h-10 items-center justify-between gap-4 px-3 text-[12px]", !last && "border-b border-line")}>
+    <div className={cx("flex h-11 items-center justify-between gap-4 px-3 text-[12px]", !last && "border-b border-line")}>
       <span className="shrink-0 text-muted">{label}</span>
       <span className="flex min-w-0 justify-end text-fg">{children}</span>
     </div>

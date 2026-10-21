@@ -241,7 +241,7 @@ async function setup({ app }: Context): Promise<Response> {
       ok = false;
     }
     checks.push({
-      fix: "Plug it in, or turn it off in Settings (⌘,)",
+      fix: "Plug it in, or turn it off with: edit media off",
       id: "media-drive",
       ok,
       title: `The media drive (${layout.media})`,

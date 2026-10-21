@@ -6,7 +6,7 @@ import { paramAt, projectDuration, setParam } from "../lib/edit";
 import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
 import { viewerMenu } from "../lib/menus";
 import { playhead, preview } from "../lib/playback";
-import { usePreviewQuality, wantsLight } from "../lib/previewQuality";
+import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { useEditor } from "../lib/store";
@@ -52,7 +52,7 @@ export function Viewer() {
   };
   useEffect(() => { wake(); return () => clearTimeout(idleTimer.current); }, [fullscreen]);
 
-  const light = wantsLight(usePreviewQuality((state) => state.quality));
+  const light = wantsLight;
   // The picture each media streams: the light preview once it's made (when
   // wanted), else the preview, else the original. Each with its files' stamps
   // ("light~<light>~<preview>"), so a version's URL is only ever that version.

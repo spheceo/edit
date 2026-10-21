@@ -19,11 +19,10 @@ import {
 } from "../lib/edit";
 import { recolourPerson } from "../lib/people";
 import { FONTS, playhead } from "../lib/playback";
-import { openDialog } from "../lib/dialogs";
 import { useEditor } from "../lib/store";
 import { shortDuration, timecode } from "../lib/time";
 import { changedShake, HOUSE_BOX, HOUSE_SHADOW, resolvedShake, SHAKE_PRESETS, type Clip, type Project, type Rgba, type ShakeDirection, type ShakeEdges, type ShakeEnvelope, type ShakeMotion, type ShakePreset, type TextPreset, rate } from "../lib/types";
-import { Button, ColorField, cx, Kbd, Scrub, Select, Switch } from "./ui";
+import { Button, ColorField, cx, Scrub, Select, Switch } from "./ui";
 
 const useInspectorFrame = () =>
   useSyncExternalStore(playhead.subscribe, () => (playhead.playing ? Math.floor(playhead.frame / 6) * 6 : Math.floor(playhead.frame)));
@@ -937,15 +936,6 @@ function ProjectInfo({ project }: { project: Project }) {
             <span className="px-1.5 text-[12px] tabular">{project.clips.length}</span>
           </Row>
         </Section>
-        <div className="px-3 py-2.5">
-          <button
-            onClick={() => openDialog("shortcuts")}
-            className="flex h-7 w-full items-center justify-between rounded-md px-1.5 text-muted transition-colors hover:bg-hover hover:text-fg"
-          >
-            Keyboard shortcuts
-            <Kbd>?</Kbd>
-          </button>
-        </div>
       </div>
     </>
   );

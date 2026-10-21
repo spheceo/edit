@@ -212,10 +212,8 @@ export const api = {
   scriptJob: (id: string) => request<{ job: ScriptJob | null; unfinished: boolean }>("GET", `/api/projects/${id}/script/job`),
   /** Picks up a stopped import; `recut` lays the script out again from fresh transcript cuts. */
   resumeScript: (id: string, recut = false) => request<{ job: ScriptJob | null }>("POST", `/api/projects/${id}/script/job${recut ? "?recut=true" : ""}`),
-  /** Where Edit keeps big media files (Settings → Media drive). */
+  /** Where Edit keeps big media files (the media drive, set in code or with `edit media use`). */
   mediaDrive: () => request<MediaDrive>("GET", "/api/media-drive"),
-  /** Sets the media folder; null turns the media drive off. */
-  setMediaDrive: (dir: string | null) => request<MediaDrive>("POST", "/api/media-drive", { dir }),
 };
 
 /** The media drive: an optional folder (usually on an external drive) for downloads, uploads and exports. */

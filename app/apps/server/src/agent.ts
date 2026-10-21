@@ -355,6 +355,12 @@ export class Agents implements seams.AgentPanel {
     return status;
   }
 
+  /** Settings: whether each CLI Edit drives (Claude Code, Codex for `ask`) is installed and signed in, and which runs the agent. */
+  async clis(): Promise<Json> {
+    const [claudeStatus, codexStatus] = await Promise.all([claude.checkClaude(), checkCodex()]);
+    return sorted({ claude: sorted(claudeStatus), codex: codexStatus, provider: this.chosen });
+  }
+
   /** The running app-server, started (and initialized) when there's none. */
   async codex(): Promise<Codex> {
     const release = await this.codexLock.acquire();

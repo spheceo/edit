@@ -211,7 +211,7 @@ export function checkUnder(dir: string, volumes: string): void {
   mounted(dir, volumes);
   if (!isFile(join(dir, MARKER))) {
     throw new Error(
-      notConnected(dir, `it has no ${MARKER} in it (set it again in Settings, or with \`edit media use\`)`),
+      notConnected(dir, `it has no ${MARKER} in it (set it again with \`edit media use\`)`),
     );
   }
 }

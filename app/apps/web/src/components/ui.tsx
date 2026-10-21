@@ -53,10 +53,6 @@ export function IconButton({
   );
 }
 
-export function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="rounded border border-line-strong px-1 font-mono text-[10px] text-muted">{children}</kbd>;
-}
-
 /** Number field you can drag horizontally to scrub, Premiere-style. Click to type. */
 export function Scrub({
   value,

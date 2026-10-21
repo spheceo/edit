@@ -812,6 +812,9 @@ function quietest(peaks: Uint8Array, from: number, to: number, near: number): nu
  * word; when speech runs straight on, right at the word, in the quietest
  * instant `peaks` show there). Times are in the transcript's clock.
  */
+/** How far into a range's first or last word a cut may still fall (inside the audit's 0.06 s). */
+const EDGE_SLACK = 0.05;
+
 export function align(
   words: Word[],
   peaks: Uint8Array | null,
@@ -849,7 +852,9 @@ export function align(
     } else {
       cut = Math.max(word.start - WORD_PAD, before ?? -Number.MAX_VALUE);
     }
-    cutIn = Math.max(cut, 0);
+    // Never into the word (the quietest moment can fall after it starts),
+    // give or take what transcript times are off by.
+    cutIn = Math.max(Math.min(cut, word.start + EDGE_SLACK), 0);
   }
   let cutOut: number | null = null;
   if (last !== null) {
@@ -865,6 +870,12 @@ export function align(
     } else {
       cutOut = Math.min(word.end + WORD_PAD, after ?? Number.MAX_VALUE);
     }
+    // Never before the word is over (the team: "I'm with you" clipped; the
+    // audit's cut_mid_word): a word squeezed to a few hundredths is heard
+    // for ~0.2 s, longer by its letters, as the audit hears it.
+    const letters = [...word.text].filter((char) => /[\p{L}\p{N}]/u.test(char)).length;
+    const heard = word.end - word.start < 0.15 ? word.start + Math.max(0.2, 0.06 * letters) : word.end;
+    cutOut = Math.max(cutOut, Math.min(heard - EDGE_SLACK, after ?? Number.MAX_VALUE));
   }
   // Out before in: one side matched the wrong word.
   if (cutIn !== null && cutOut !== null && cutIn >= cutOut) return [null, null];

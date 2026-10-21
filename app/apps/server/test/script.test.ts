@@ -285,6 +285,12 @@ test("cuts_at_the_first_and_last_words", () => {
   peaks[9670] = 10;
   const [, quiet] = align(words, peaks, ["A", "perhaps?"], 91.506, 97.0);
   expect(Math.abs(quiet! - 96.6)).toBeLessThan(1e-9);
+  // A dip well inside the last word (a loose transcript time) is never the cut:
+  // the word plays out ("I'm with you" clipped), within what the audit allows.
+  const inside = new Uint8Array(9800).fill(200);
+  inside[9640] = 5;
+  const [, kept] = align(words, inside, ["A", "perhaps?"], 91.506, 97.0);
+  expect(kept!).toBeGreaterThanOrEqual(96.62 - 0.05 - 1e-9);
   // A described sound can't be found in speech: that side keeps the Doc's time.
   expect(align(words, null, ["*Victim", "perhaps?"], 91.5, 97.0)[0]).toBeNull();
   // Words far from where the range is written don't count.

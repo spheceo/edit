@@ -132,3 +132,21 @@ A new project from its Doc (three cases: Ava Rae Mooring, Chandler Halderson, Lo
 What it got wrong that the trials hadn't shown: the teasers have plain subtitles instead of the coloured speaker captions, because caption_speakers failed twice ("Narrator can't be white": a news clip's narrator in a teaser became a white person the cast refused; the same failure is in the log from another project the day before). Fixed after the run: caption_speakers leaves out the narrator, radio and background talk as add_subtitles does. It also didn't run level_footage after recutting, and reused room moments across bridges (repeated_broll 31), which JJ's "the same footage for so long" may catch.
 
 Next round's test: the next new video, not this one.
+
+## After the holdout: finishing both edits, and what a look at the export caught (Oct 21)
+
+Both edits got a last in-app pass before export: Trial 4 became the Helpful Wife edit (a Tehachapi map in its prologue, the first hook's riser into the cut, long shots split), and the holdout got its teaser speaker captions, its dead air cut and its two remaining photo marks blurred. Exports: `Helpful Wife Has No Idea - v2.mp4` (74 min, the husband's interview playing out after the last narration as in the version JJ reviewed) and the comp (77 min, on Modal).
+
+A contact sheet of the comp's export showed what no audit caught: the footage came from other channels' uploads and carried their additions.
+
+### 10. The uploader's additions on the footage (the comp, no comment yet)
+
+- **What:** Ava's and Lola's tapes have their uploaders' subtitles burned in along the bottom, so ours sat on top of theirs (two subtitles at once). Lola's carries a faint "THE INTERROGATOR FILES" across the room. Chandler's carries "Rottweiler Investigations" (a credit, a dog logo) and its own small box of the overhead camera.
+- **Cause:** the core already said another outlet's mark on footage is cropped past or blurred, but nothing checked footage (watermarked_picture looked at photos only), and the screen text Edit reads off every second of footage only looked for "subscribe". The interrogation rule "the raw tape plays clean… no punch-ins" argued against the one framing that hides burned-in subtitles.
+- **Teach:** the core's fill rule: none of the uploader's additions shows, the tape is ours alone, quoting JJ's "we need to remove the previous watermark of 'Dateline'"; a mark across the people is left and reported (the tape needs a clean copy). The interrogation's raw tape: clean of the uploader too, its one fixed framing (not a punch-in) puts their subtitles below the frame. Both final passes list the new audits.
+- **Code and audit:** `burned_subtitles` (onscreen.ts) from the cached screen text: low, centred lines whose words change (not a timestamp, not a fixed credit) still on the frame, with the scale and y that put them below it. `watermarked_footage` (watermarks.ts): Gemini looks at three frames of each footage file (`footage-marks-v1.json`), the camera's own overlays left out, picture-in-picture boxes marked `inset`; a mark over a quarter of the picture says a clean copy is needed instead of a blur. Both are one issue per tape and mark.
+- **Applied:** told only "the audit has learnt new checks; fix everything new it lists", the agent reframed every tape (Ava 1.339×, Lola about 1.11×, Chandler 2.09× past the logo, credit and inset), the Video Player's Chandler shot (after a nudge) and a Snapchat photo's mark, and reported Lola's seven tapes as needing clean copies.
+
+### Open question
+
+- Lola's interrogation ("Teen Says She 'Finally Lost It'") only exists in the comp as THE INTERROGATOR FILES' upload, their watermark across the room. A clean copy (the police department's release) would need to go in the Doc; Edit has no tool to fetch footage from a link.

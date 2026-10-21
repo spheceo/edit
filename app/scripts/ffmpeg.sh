@@ -45,7 +45,8 @@ for tool in ffmpeg ffprobe; do
     ffmpeg) SHA="$FFMPEG_SHA" ;;
     ffprobe) SHA="$FFPROBE_SHA" ;;
   esac
-  curl -fSL --retry 3 --progress-bar -o "$TMP/$tool.zip" "$BASE/$tool.zip"
+  # The host has had outages (Cloudflare 521): keep trying for a few minutes.
+  curl -fSL --retry 6 --retry-delay 20 --retry-all-errors --progress-bar -o "$TMP/$tool.zip" "$BASE/$tool.zip"
   ACTUAL="$(shasum -a 256 "$TMP/$tool.zip" | cut -d' ' -f1)"
   if [ "$ACTUAL" != "$SHA" ]; then
     echo "$tool.zip checksum mismatch: expected $SHA, got $ACTUAL" >&2

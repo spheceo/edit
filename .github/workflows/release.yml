@@ -153,7 +153,12 @@ jobs:
           curl -fsS http://127.0.0.1:7799/api/health | grep -q '"name":"edit"'
           curl -fsS -X POST http://127.0.0.1:7799/mcp -H 'content-type: application/json' \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q '"serverInfo"'
-      # FFmpeg ships beside `edit` (apps/server/src/tools.ts), pinned in scripts/ffmpeg.sh.
+      # FFmpeg ships beside `edit` (apps/server/src/tools.ts), pinned in scripts/ffmpeg.sh;
+      # kept between runs so a build doesn't need its host up (ffmpeg.sh skips a matching copy).
+      - uses: actions/cache@v6
+        with:
+          path: app/ffmpeg
+          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('app/scripts/ffmpeg.sh') }}
       - name: Package
         run: |
           set -euo pipefail

@@ -794,6 +794,21 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
   const before = lines.length;
   lines = lines.filter((line) => !seams.subtitles.hiddenRole(line.role));
   const hidden = before - lines.length;
+  // A line the intro's speaker captions already show (caption_speakers'
+  // "Caption · <who>") gets no subtitle under it as well: the comp's and
+  // Helpful Wife's teasers showed every line twice, one over the other.
+  const captions = project.clips.filter((clip) => clip.type === "text" && (clip.name ?? "").startsWith("Caption ·"));
+  const shownAlready = (line: Line) => {
+    const clip = clipOf(project, line.clip);
+    if (clip === undefined || clip.type !== "audio" || captions.length === 0) return false;
+    const at = (seconds: number) => clip.start + ((seconds - clip.source_in) / clip.speed) * fps;
+    const [start, end] = [at(lineStart(line)), at(lineEnd(line))];
+    const covered = captions.reduce((sum, caption) => sum + Math.max(0, Math.min(end, clipEnd(caption)) - Math.max(start, caption.start)), 0);
+    return covered >= 0.5 * Math.max(end - start, 1);
+  };
+  const beforeCaptions = lines.length;
+  lines = lines.filter((line) => !shownAlready(line));
+  const captioned = beforeCaptions - lines.length;
   spreadColours(lines);
   const house = await seams.subtitles.houseWords(app, project, from, to, neglect);
   const texts = lines.map((line) => starredText(line, house.found));
@@ -951,6 +966,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
     off_faces: offFaces,
     lines: said,
     hidden,
+    ...(captioned > 0 ? { left_to_the_intro_captions: captioned } : {}),
     placed,
     kept_hand_adjustments: kept,
     texts_starred: starred,

@@ -11,6 +11,7 @@ import { frameName, framesHad, outlineIn, ryu, rustJson, urlencode } from "../sr
 import { baseRouter, respond } from "../src/http/server.ts";
 import { importPaths, placeAtEnd } from "../src/import.ts";
 import { isImagePath } from "../src/media.ts";
+import { addTrack } from "../src/project.ts";
 import { routes } from "../src/media_tools.ts";
 import type { Project, VideoClip } from "../src/model.ts";
 import { serialize } from "../src/transcribe.ts";
@@ -168,6 +169,52 @@ test.skipIf(ffmpeg === null || ffprobe === null)("an export starts a stuck map a
     expect(broll.resumeMap(app, "elsewhere", first)).toBe(false);
   } finally {
     mapRenders.delete("r");
+    mapsPending.delete(project);
+    cleanup();
+  }
+});
+
+/**
+ * A map drawn with an older look (Oct 21: markers off their places) is drawn
+ * again by the export itself: the same media id becomes the new drawing, and
+ * its place label moves with the building, keyframes and all.
+ */
+test.skipIf(ffmpeg === null || ffprobe === null)("an export draws a map of an older look again and moves its label", async () => {
+  const { app, cleanup } = fixtureHome("map-redo");
+  const { mapsPending, mapRedos } = broll.state;
+  const project = app.store.create("map", { width: 1920, height: 1080, fps: 30 }).project.id;
+  try {
+    const dir = `${app.store.uploadsDir(project)}/maps`;
+    fs.mkdirSync(dir, { recursive: true });
+    const config = '{"lat":1.0}';
+    write(`${dir}/map-aaa.job.json`, JSON.stringify({ key: "aaa", config, width: 1920, height: 1080, fps: 30, frames: 0, dir }));
+    // Look 0: the building measured 100 px left of where it is.
+    write(`${dir}/map-aaa.json`, JSON.stringify({ building: [800, 400, 900, 500], look: 0 }));
+    makeFile(["-f", "lavfi", "-i", "color=c=red:s=320x180", "-frames:v", "1"], `${dir}/map-aaa.png`);
+    const [, added] = await importPaths(app, project, [`${dir}/map-aaa.png`], false, "agent");
+    const media = added[0]!;
+    await app.store.update(project, "test", (edited) => {
+      placeAtEnd(edited, media);
+      edited.clips.push({ id: "label", type: "text", name: "Place label", track: addTrack(edited, "video"), start: 0, duration: 30, color: "purple", fade_in: 0, fade_out: 8, text: "1 Main St", style: {} as never, transform: { x: -110, y: -150 } as never, animation: {} as never, opacity: 1, keyframes: { x: [{ frame: 10, value: -110, ease: "linear" }] } });
+    });
+    // The new drawing, made already (no Chrome here): its building where it really is.
+    const key = (await import("../src/hash.ts")).fingerprint([config, "google-3d", broll.MAP_PAGE]);
+    const out = `${dir}/map-${key}.png`;
+    makeFile(["-f", "lavfi", "-i", "color=c=blue:s=320x180", "-frames:v", "1"], out);
+    write(`${dir}/map-${key}.json`, JSON.stringify({ building: [900, 380, 1000, 480], look: broll.MAP_LOOK }));
+    mapRedos.set(out, Promise.resolve());
+    expect(broll.lookOf(`${dir}/map-aaa.json`)).toBe(0);
+    expect(broll.redoOutdatedMaps(app, project)).toBe(1);
+    await broll.waitForMaps(app, project, 10_000);
+    const live = app.store.get(project)!.project;
+    expect(live.media.find((one) => one.id === media)!.path).toBe(fs.realpathSync(out));
+    const label = live.clips.find((clip) => clip.id === "label")!;
+    expect(label.type === "text" && [label.transform.x, label.transform.y]).toEqual([-10, -170]);
+    expect(label.keyframes!.x![0]!.value).toBe(-10);
+    // Drawn with the current look now: nothing more to do.
+    expect(broll.redoOutdatedMaps(app, project)).toBe(0);
+  } finally {
+    mapRedos.clear();
     mapsPending.delete(project);
     cleanup();
   }

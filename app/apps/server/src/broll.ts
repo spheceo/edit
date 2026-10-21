@@ -40,6 +40,18 @@ export const MAP_PAGE = mapPageText as unknown as string;
 /** Identifies Edit to the services it calls. */
 const USER_AGENT = "edit-video-editor/0.1 (+https://github.com/spheceo/edit)";
 
+/**
+ * The map drawing's version, kept with each map (`look` in its measured
+ * JSON). Raise it when a fix makes earlier maps wrong: an export draws a map
+ * of an older look again by itself and moves its place label with it, where
+ * before every project's agent had to be sent to do it (Oct 21's marker fix:
+ * eight maps over three projects, about 40 minutes of turns).
+ * 1: markers on their places.
+ */
+export const MAP_LOOK = 1;
+/** When look 1 (commit 691916c) went in: a map measured before it and not saying its look is look 0. */
+const MAP_LOOK_1_MS = 1_792_572_512_000;
+
 /** The longest moving map shot. */
 export const MAP_MOST_SECONDS = 12.0;
 
@@ -930,6 +942,7 @@ export async function waitForMaps(app: App, projectId: string, limitMs: number):
   // rather than refused (Oct 21: three exports waited on agents to call
   // map_view again for maps that had stalled or run out of allowance).
   const restarted = new Set<string>();
+  redoOutdatedMaps(app, projectId);
   let standIns: Media[];
   for (;;) {
     while (mapsRendering(projectId)) {
@@ -1098,6 +1111,8 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
   // footage made with the previous look.
   const key = fingerprint([rustJson(config), "google-3d", MAP_PAGE]);
   const out = join(dir, `map-${key}.${frames > 0 ? "mp4" : "png"}`);
+  const job: MapShotJob = { key, config, width, height, fps, frames, dir };
+  writeJob(job);
   // What the page measured is kept beside the footage, for reuse.
   const measured = withExtension(out, "json");
   let info: Json;
@@ -1141,14 +1156,13 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
       throw new Error(ioMessage(error));
     }
     try {
-      fs.writeFileSync(measured, stableStringify(measuredInfo));
+      fs.writeFileSync(measured, stableStringify(withLook(measuredInfo)));
     } catch {
       // Only for reuse.
     }
     info = measuredInfo;
     media = await importOne(app, projectId, out);
   } else {
-    const job: MapShotJob = { key, config, width, height, fps, frames, dir };
     [info, media, rendering] = await movingMap(app, projectId, job);
   }
   const record = (typeof info === "object" && info !== null ? info : {}) as Record<string, unknown>;
@@ -1238,6 +1252,31 @@ interface MapShotJob {
 const jobOut = (job: MapShotJob) => join(job.dir, `map-${job.key}.mp4`);
 /** What it was asked to make, kept so a render cut short or failed can be started again without the agent. */
 const jobFile = (job: MapShotJob) => join(job.dir, `map-${job.key}.job.json`);
+/** Keeps what a map was asked for (beside it, for good): to start it again, or draw it again with a newer look. */
+function writeJob(job: MapShotJob): void {
+  try {
+    fs.writeFileSync(jobFile(job), JSON.stringify({ ...job, config: rustJson(job.config) }));
+  } catch {
+    // Only for starting or drawing it again.
+  }
+}
+
+/** What the page measured, saying the look it was drawn with. */
+function withLook(info: Json): Json {
+  return typeof info === "object" && info !== null && !Array.isArray(info) ? { ...(info as object), look: MAP_LOOK } : info;
+}
+
+/** The look a map was drawn with, from its measured JSON (its time when it doesn't say); unknown counts as current. */
+export function lookOf(measured: string): number {
+  try {
+    const kept = serdeParse(fs.readFileSync(measured, "utf8")) as Record<string, unknown> | null;
+    if (typeof kept?.look === "number") return kept.look;
+    return fs.statSync(measured).mtimeMs >= MAP_LOOK_1_MS ? 1 : 0;
+  } catch {
+    return MAP_LOOK;
+  }
+}
+
 /** The job file of a moving shot's stand-in (`map-<key>-first.jpg`). */
 export const standInJob = (first: string) => first.replace(/-first\.jpg$/, ".job.json");
 /** Its first frame, which stands in for it until it's done. */
@@ -1250,11 +1289,6 @@ const jobShots = (job: MapShotJob) => join(job.dir, `map-${job.key}.frames`);
  * Returns what the page measured, the media, and whether it's still rendering.
  */
 async function movingMap(app: App, projectId: string, job: MapShotJob): Promise<[Json, string, boolean]> {
-  try {
-    fs.writeFileSync(jobFile(job), JSON.stringify({ ...job, config: rustJson(job.config) }));
-  } catch {
-    // Only for starting it again.
-  }
   const render = startRender(app, job, projectId);
   let timer: ReturnType<typeof setTimeout> | null = null;
   const late = new Promise<null>((resolve) => {
@@ -1397,12 +1431,11 @@ async function renderMoving(app: App, job: MapShotJob, render: MapRender): Promi
       if (measuredEarly === undefined) standIn(info);
       await framesVideo(shots, job.fps, jobOut(job));
       try {
-        fs.writeFileSync(withExtension(jobOut(job), "json"), stableStringify(info));
+        fs.writeFileSync(withExtension(jobOut(job), "json"), stableStringify(withLook(info)));
       } catch {
         // Only for reuse.
       }
       fs.rmSync(shots, { recursive: true, force: true });
-      fs.rmSync(jobFile(job), { force: true });
     } finally {
       release();
     }
@@ -1521,8 +1554,166 @@ async function framesVideo(frames: string, fps: number, out: string): Promise<vo
   }
 }
 
+/** Maps being drawn again with the current look, by their new file. */
+const mapRedos = new Map<string, Promise<void>>();
+
+/**
+ * Starts drawing again, in the background, every map on a project's timeline
+ * drawn with an older look than `MAP_LOOK` (those with a job file: made since
+ * Oct 21); exports wait for them like any map still rendering. Returns how many.
+ */
+export function redoOutdatedMaps(app: App, projectId: string): number {
+  const project = app.store.get(projectId)?.project;
+  if (project === undefined) return 0;
+  const dir = join(app.store.uploadsDir(projectId), "maps");
+  const used = new Set(project.clips.map(clipMedia).filter((id): id is string => id !== null));
+  let started = 0;
+  for (const media of project.media) {
+    const named = /^map-([0-9a-f]+)\.(mp4|png)$/.exec(media.name ?? "");
+    if (!used.has(media.id) || named === null) continue;
+    const old = join(dir, `map-${named[1]}`);
+    if (!isFile(`${old}.job.json`) || lookOf(`${old}.json`) >= MAP_LOOK) continue;
+    if (redoMap(app, projectId, media.id, `${old}.job.json`, `${old}.json`)) started++;
+  }
+  return started;
+}
+
+function redoMap(app: App, projectId: string, mediaId: string, jobPath: string, oldMeasured: string): boolean {
+  let kept: MapShotJob & { config: string };
+  try {
+    kept = JSON.parse(fs.readFileSync(jobPath, "utf8")) as MapShotJob & { config: string };
+  } catch {
+    return false;
+  }
+  // As map_view names it, so asking for the same view again finds it.
+  const key = fingerprint([kept.config, "google-3d", MAP_PAGE]);
+  if (key === kept.key) return false;
+  const job: MapShotJob = { ...kept, key, config: JSON.parse(kept.config) as Record<string, unknown> };
+  const out = job.frames > 0 ? jobOut(job) : join(job.dir, `map-${key}.png`);
+  const pendingKey = `redo:${out}`;
+  let maps = mapsPending.get(projectId);
+  if (maps === undefined) {
+    maps = new Map();
+    mapsPending.set(projectId, maps);
+  }
+  if (maps.has(pendingKey)) return false;
+  const pending: MapPending = { media: mediaId, error: null };
+  maps.set(pendingKey, pending);
+  writeJob(job);
+  let drawing = mapRedos.get(out);
+  if (drawing === undefined) {
+    const made = diag.timeAsync("agent", "map_view redraw (background)", () => drawAgain(app, job, out));
+    drawing = made;
+    mapRedos.set(out, made);
+    void made.then(
+      () => mapRedos.delete(out),
+      () => mapRedos.delete(out),
+    );
+  }
+  diag.info("agent", `map ${kept.key} in ${projectId} is drawn again with the current look (${key})`);
+  void drawing
+    .then(() => swapRedone(app, projectId, mediaId, out, oldMeasured))
+    .then(
+      () => {
+        maps.delete(pendingKey);
+        if (maps.size === 0) mapsPending.delete(projectId);
+      },
+      (error: unknown) => {
+        pending.error = diag.messageOf(error);
+        diag.warn("agent", `map ${kept.key} in ${projectId} wasn't drawn again: ${pending.error}`);
+      },
+    );
+  return true;
+}
+
+/** Draws a map again from its job (a moving shot carrying on from frames it has). */
+async function drawAgain(app: App, job: MapShotJob, out: string): Promise<void> {
+  if (isFile(out)) return;
+  const release = await mapSlot.acquire();
+  try {
+    const shots = jobShots(job);
+    fs.mkdirSync(shots, { recursive: true });
+    const config = job.frames > 0 ? { ...job.config, have: framesHad(shots, job.frames) } : job.config;
+    const [picture, info] = await renderMap(app, config, job.width, job.height, shots, null);
+    if (job.frames > 0) await framesVideo(shots, job.fps, out);
+    else fs.writeFileSync(out, picture);
+    try {
+      fs.writeFileSync(withExtension(out, "json"), stableStringify(withLook(info)));
+    } catch {
+      // Only for reuse.
+    }
+    fs.rmSync(shots, { recursive: true, force: true });
+  } finally {
+    release();
+  }
+}
+
+/** The map drawn again in place of the old one (same media id), its place labels moved with the building. */
+async function swapRedone(app: App, projectId: string, mediaId: string, out: string, oldMeasured: string): Promise<void> {
+  const probe = await probeFile(out);
+  const read = (path: string): Json => {
+    try {
+      return serdeParse(fs.readFileSync(path, "utf8"));
+    } catch {
+      return null;
+    }
+  };
+  const [before, after] = [read(oldMeasured), read(withExtension(out, "json"))];
+  const path = canonical(out);
+  const [, replaced] = await app.store.update(projectId, "agent", (project) => {
+    const media = project.media.find((one) => one.id === mediaId);
+    if (media === undefined) return false;
+    Object.assign(media, { path, name: fileName(out) ?? out, kind: probe.kind, duration: probe.duration, width: probe.width, height: probe.height, fps: probe.fps, has_audio: probe.has_audio });
+    delete media.cloud;
+    repinLabels(project, mediaId, before, after);
+    return true;
+  });
+  if (replaced) {
+    app.media.ensure(path, probe);
+    backfillSoon(app, projectId);
+  }
+}
+
+/**
+ * Moves each place label over a map by how far its building moved between two
+ * drawings of it (`before` and `after`, what each page measured), keyframes
+ * and all, so a label pinned to the old marker stays on the new one.
+ */
+export function repinLabels(project: Project, mediaId: string, before: Json, after: Json): void {
+  const fps = fpsOf(project);
+  // The building's top middle on a footage frame, in canvas pixels.
+  const at = (info: Json, frame: number): [number, number] | null => {
+    const record = (typeof info === "object" && info !== null ? info : {}) as Record<string, unknown>;
+    const track = Array.isArray(record.track) && record.track.length > 0 ? (record.track as unknown[]) : null;
+    const box = track !== null ? track[Math.min(Math.max(frame, 0), track.length - 1)] : record.building;
+    if (!Array.isArray(box)) return null;
+    const [left, top, right] = box.map(num);
+    return left == null || top == null || right == null ? null : [(left + right) / 2, top];
+  };
+  const done = new Set<string>();
+  for (const map of project.clips) {
+    if (map.type !== "video" || map.media !== mediaId) continue;
+    const [mapStart, mapEnd] = [map.start, map.start + map.duration];
+    for (const label of project.clips) {
+      if (label.type !== "text" || label.name !== "Place label" || done.has(label.id)) continue;
+      if (label.start >= mapEnd || label.start + label.duration <= mapStart) continue;
+      done.add(label.id);
+      const shift = (frame: number): [number, number] => {
+        const footage = Math.round((((label.start + frame - mapStart) / fps) * (map.speed ?? 1) + (map.source_in ?? 0)) * fps);
+        const [a, b] = [at(before, footage), at(after, footage)];
+        return a === null || b === null ? [0, 0] : [b[0] - a[0], b[1] - a[1]];
+      };
+      const [dx, dy] = shift(0);
+      label.transform.x += dx;
+      label.transform.y += dy;
+      for (const key of label.keyframes?.x ?? []) key.value += shift(key.frame)[0];
+      for (const key of label.keyframes?.y ?? []) key.value += shift(key.frame)[1];
+    }
+  }
+}
+
 /** For tests: the state of map stand-ins and smoothing. */
-export const state = { mapsPending, smoothing, mapRenders, mapJobs };
+export const state = { mapsPending, smoothing, mapRenders, mapJobs, mapRedos };
 
 /** Stringifies a map_view answer as the tool answers it (`to_string_pretty`, keys sorted). */
 export function pretty(value: Json): string {

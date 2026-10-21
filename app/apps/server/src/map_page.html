@@ -16,31 +16,33 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 // Checks often: a moving shot asks this for every frame.
 async function until(test, ms) { const end = Date.now() + ms; while (!test() && Date.now() < end) await sleep(25); return test(); }
 // Grade the imagery before the building marker is drawn, so it stays bright
-// and sharp. This is baked into every still and moving-shot frame.
-function createMapLook(width, height) {
-  const stops = -1, vignette = 0.55;
-  // Exposure in linear light, cached as an sRGB lookup rather than calculated
-  // for every pixel of every frame.
-  const exposure = Uint8Array.from({ length: 256 }, (_, i) => {
-    const s = i / 255, linear = (s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4) * 2 ** stops;
-    return Math.round(255 * (linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1 / 2.4) - 0.055));
-  });
+// and sharp. This is baked into every still and moving-shot frame. The grade
+// runs on the GPU as the scene's last stage: done in JavaScript over every
+// pixel it was 70% of a frame's time (243 ms of 355, Oct 21), more on a busy Mac.
+function createMapLook(width, height, scene) {
+  const vignette = 0.55;
+  // The tone: natural, dark (greyer and darker) or night (dark blue).
+  const [grey, tint, dim] = C.tone === "night" ? [0.75, [0.55, 0.78, 1.0], 0.55] : C.tone === "dark" ? [0.65, [0.85, 0.92, 1.0], 0.72] : [0, [1, 1, 1], 1];
+  const f = (x) => x.toFixed(4);
+  scene.postProcessStages.add(new Cesium.PostProcessStage({
+    fragmentShader: `
+      uniform sampler2D colorTexture;
+      in vec2 v_textureCoordinates;
+      vec3 toLinear(vec3 s) { return mix(s / 12.92, pow((s + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), s)); }
+      vec3 toSrgb(vec3 l) { return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), l)); }
+      void main() {
+        vec4 c = texture(colorTexture, v_textureCoordinates);
+        // One stop down, in linear light.
+        vec3 v = toSrgb(toLinear(clamp(c.rgb, 0.0, 1.0)) * 0.5);
+        float luma = dot(v, vec3(0.2126, 0.7152, 0.0722));
+        v = (v + (luma - v) * ${f(grey)}) * vec3(${tint.map(f).join(", ")}) * ${f(dim)};
+        out_FragColor = vec4(v, c.a);
+      }`,
+  }));
   return (source, ctx) => {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(source, 0, 0, width, height);
-    const picture = ctx.getImageData(0, 0, width, height), pixels = picture.data;
-    // The tone: natural, dark (greyer and darker) or night (dark blue).
-    const [grey, tint, dim] = C.tone === "night" ? [0.75, [0.55, 0.78, 1.0], 0.55] : C.tone === "dark" ? [0.65, [0.85, 0.92, 1.0], 0.72] : [0, [1, 1, 1], 1];
-    for (let i = 0; i < pixels.length; i += 4) {
-      let r = exposure[pixels[i]], g = exposure[pixels[i + 1]], b = exposure[pixels[i + 2]];
-      if (grey > 0) {
-        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        r = (r + (luma - r) * grey) * tint[0] * dim; g = (g + (luma - g) * grey) * tint[1] * dim; b = (b + (luma - b) * grey) * tint[2] * dim;
-      }
-      pixels[i] = r; pixels[i + 1] = g; pixels[i + 2] = b;
-    }
-    ctx.putImageData(picture, 0, 0);
     ctx.save();
     ctx.translate(width / 2, height / 2); ctx.scale(width / 2, height / 2);
     const shade = ctx.createRadialGradient(0, 0, 0.25, 0, 0, Math.SQRT2);
@@ -133,10 +135,13 @@ async function mark(ctx, ground, opacity) {
     navigationHelpButton: false, animation: false, timeline: false, fullscreenButton: false, infoBox: false,
     selectionIndicator: false, contextOptions: { webgl: { preserveDrawingBuffer: true } },
   }));
-  // Drawn at 1.5x and scaled down into the frame, with FXAA: a city seen from
-  // far off is thousands of small roofs, which shimmered from frame to frame
-  // and smeared at 1x (the interrogation demo's Van Nuys shot).
-  viewer.resolutionScale = 1.5;
+  // A wide view is drawn at 1.5x and scaled down into the frame, with FXAA: a
+  // city seen from far off is thousands of small roofs, which shimmered from
+  // frame to frame and smeared at 1x (the interrogation demo's Van Nuys
+  // shot). A building close up doesn't (Tarrytown PD at 170 m flickered no
+  // more at 1x, Oct 21), and 1.5x is 2.25x the pixels to draw and read back:
+  // 0.36 s a frame against 0.14.
+  viewer.resolutionScale = C.range >= 500 ? 1.5 : 1.0;
   const scene = viewer.scene;
   scene.postProcessStages.fxaa.enabled = true;
   // No camera collision: while only coarse tiles are in, it takes the camera
@@ -188,19 +193,23 @@ async function mark(ctx, ground, opacity) {
   await sleep(1500);
   const out = document.createElement("canvas");
   out.width = C.width; out.height = C.height;
-  const ctx = out.getContext("2d", { willReadFrequently: true });
-  const drawMap = createMapLook(C.width, C.height);
+  // Never read back in JavaScript, so it stays on the GPU until it's encoded.
+  const ctx = out.getContext("2d");
+  const drawMap = createMapLook(C.width, C.height, scene);
   // Measure the building even before its reveal, so labels can track it from
   // any frame. Timing is in source seconds, independent of capture speed.
+  // Where a moving shot's time goes, per stage (ms in all), sent with the answer.
+  const spent = (info.spent = { tiles: 0, render: 0, readback: 0, look: 0, mark: 0, encode: 0, send: 0 });
+  const timed = async (stage, work) => { const t0 = performance.now(); try { return await work(); } finally { spent[stage] += performance.now() - t0; } };
   const draw = async (frame = 0) => {
-    viewer.render();
+    await timed("render", () => viewer.render());
     ctx.clearRect(0, 0, C.width, C.height);
-    drawMap(scene.canvas, ctx);
-    if (C.highlight) {
+    await timed("look", () => drawMap(scene.canvas, ctx));
+    if (C.highlight) await timed("mark", async () => {
       const elapsed = frame / C.fps - C.highlight_after;
       const t = C.highlight_fade > 0 ? Math.max(0, Math.min(1, elapsed / C.highlight_fade)) : Number(elapsed >= 0);
       await mark(ctx, ground, t * t * (3 - 2 * t));
-    }
+    });
   };
   const picture = (type, quality) => new Promise((done) => out.toBlob(done, type, quality));
   if (!C.frames) {
@@ -225,7 +234,10 @@ async function mark(ctx, ground, opacity) {
   Cesium.RequestScheduler.maximumRequestsPerServer = 48;
   const capture = async (i) => {
     await draw(i);
-    const sent = await fetch(`${location.href}/frame/${i}`, { method: "POST", headers: { "content-type": "image/jpeg" }, body: await picture("image/jpeg", 0.9) });
+    // The frame off the GPU (its drawing finishing): most of a frame's time.
+    await timed("readback", () => ctx.getImageData(0, 0, 1, 1));
+    const body = await timed("encode", () => picture("image/jpeg", 0.9));
+    const sent = await timed("send", () => fetch(`${location.href}/frame/${i}`, { method: "POST", headers: { "content-type": "image/jpeg" }, body }));
     if (!sent.ok) throw new Error(`frame ${i}: ${sent.status}`);
   };
   // 1) The first frame, with all its tiles in (it stands in for the shot
@@ -265,7 +277,7 @@ async function mark(ctx, ground, opacity) {
     pose(i);
     viewer.render();
     await sleep(0);
-    if (!(await until(() => tileset.tilesLoaded, i < C.fps / 2 ? 5000 : 1000))) info.incomplete++;
+    if (!(await timed("tiles", () => until(() => tileset.tilesLoaded, i < C.fps / 2 ? 5000 : 1000)))) info.incomplete++;
     await capture(i);
   }
   info.seconds = (Date.now() - info.start) / 1000;

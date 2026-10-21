@@ -203,10 +203,13 @@ function stillOn(chat: Chat, generation: number): boolean {
 const SESSION_GONE =
   "(Edit, automatically) The earlier conversation couldn't be picked up again (Claude Code no longer has it), so this is a new one: get_edit_context shows what's already done. My message:";
 
-/** Where the turns Edit's quit cut short are noted (in `<home>/agent`). */
-const INTERRUPTED = "interrupted.json";
+/**
+ * The running turns, noted in `<home>/agent` as each starts and ends and
+ * every minute while any runs, so a quit or a crash leaves the ones it cut.
+ */
+const RUNNING = "running-turns.json";
 
-/** A quit this recent was a restart: its cut turns carry on when Edit is back. */
+/** Edit back this soon after it last noted its turns was a restart: they carry on. */
 export const RESUME_WITHIN_MS = 10 * 60_000;
 
 /** The turn that carries on one a restart cut short. */
@@ -276,6 +279,8 @@ export class Agents implements seams.AgentPanel {
   private abandoned = new Set<string>();
   /** Looks for stalled turns while any runs. */
   private watchdog: ReturnType<typeof setInterval> | null = null;
+  /** Edit is quitting: the turns it ends stay noted as running (`RUNNING`). */
+  private quitting = false;
   /** The SDK's `query`, the user's `claude` and its model list (tests put stand-ins here). */
   claudeQuery: (params: { prompt: string; options: claude.Options }) => Promise<claude.Query> = async (params) =>
     (await claude.sdk()).query(params);
@@ -612,6 +617,7 @@ export class Agents implements seams.AgentPanel {
       chat.heard = chat.started;
       chat.on = provider;
       chat.dropped = false;
+      this.noteRunning();
       this.watch();
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
@@ -1150,6 +1156,7 @@ export class Agents implements seams.AgentPanel {
     this.watchdog = setInterval(() => {
       try {
         this.checkStalls(timing.now());
+        this.noteRunning();
       } catch (error) {
         if (isBug(error)) crashed("looking for stalled agent turns", error);
       }
@@ -1169,24 +1176,30 @@ export class Agents implements seams.AgentPanel {
     }
   }
 
+  /** Notes the running turns the user hasn't stopped (`RUNNING`), or that none runs. */
+  private noteRunning(): void {
+    const path = join(this.dir, RUNNING);
+    const projects = [...this.chats].filter(([, chat]) => chat.running && !chat.halted).map(([project]) => project);
+    try {
+      if (projects.length === 0) fs.rmSync(path, { force: true });
+      else writeAtomic(path, JSON.stringify({ at: nowMs(), projects }));
+    } catch (error) {
+      diag.warn("agent", `noting the running turns: ${diag.messageOf(error)}`);
+    }
+  }
+
   /**
    * Edit is quitting: each running turn ends and says so in its chat, Claude
-   * Code is closed and Codex stopped. The turns are noted
-   * (`<home>/agent/interrupted.json`) so a restart carries them on.
+   * Code is closed and Codex stopped. The turns stay noted as running, so a
+   * restart carries them on.
    */
   shutdown(): void {
     if (this.watchdog !== null) {
       clearInterval(this.watchdog);
       this.watchdog = null;
     }
-    const cut = [...this.chats].filter(([, chat]) => chat.running && !chat.halted).map(([project]) => project);
-    if (cut.length > 0) {
-      try {
-        writeAtomic(join(this.dir, INTERRUPTED), JSON.stringify({ at: nowMs(), projects: cut }));
-      } catch (error) {
-        diag.warn("agent", `noting the turns cut short: ${diag.messageOf(error)}`);
-      }
-    }
+    this.noteRunning();
+    this.quitting = true;
     for (const [project, chat] of this.chats) {
       if (!chat.running) continue;
       chat.halted = true;
@@ -1208,13 +1221,13 @@ export class Agents implements seams.AgentPanel {
   }
 
   /**
-   * Edit is back: the turns its last quit cut short carry on, each as a new
-   * turn of the same conversation, when that quit was a restart (within
-   * RESUME_WITHIN_MS). A server restart for a code change then costs an
-   * agent its last tool call, not its whole task.
+   * Edit is back: the turns its last run left running (quit or crashed)
+   * carry on, each as a new turn of the same conversation, when it noted
+   * them within RESUME_WITHIN_MS (a restart). A server restart for a code
+   * change then costs an agent its last tool call, not its whole task.
    */
   resumeInterrupted(): void {
-    const path = join(this.dir, INTERRUPTED);
+    const path = join(this.dir, RUNNING);
     let noted: { at?: unknown; projects?: unknown };
     try {
       noted = JSON.parse(fs.readFileSync(path, "utf8")) as typeof noted;
@@ -1262,6 +1275,7 @@ export class Agents implements seams.AgentPanel {
       if (item.status === "running") item.status = "stopped";
     }
     this.save(project);
+    if (!this.quitting) this.noteRunning();
     this.emit(project, { event: "status", running: false });
   }
 

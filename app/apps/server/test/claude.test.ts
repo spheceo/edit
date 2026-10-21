@@ -266,20 +266,42 @@ test("a restart carries on the turns its quit cut short, in the same conversatio
     await settle();
     agents.shutdown();
     await settle();
-    const noted = `${home.home}/agent/interrupted.json`;
+    const noted = `${home.home}/agent/running-turns.json`;
     expect(fs.existsSync(noted)).toBe(true);
 
     // The new process: the chat read back from disk.
     const after = agentsWith(home);
     after.agents.resumeInterrupted();
     await settle();
-    expect(fs.existsSync(noted)).toBe(false);
+    // Noted again: the turn carrying on is running.
+    expect(JSON.parse(fs.readFileSync(noted, "utf8")).projects).toEqual([project]);
     expect(after.asked.length).toBe(1);
     expect(after.asked[0]!.options.resume).toBe("session-1");
     expect(after.asked[0]!.prompt).toStartWith("(Edit, automatically) Edit restarted while you were working");
     expect(after.agents.withChat(project).running).toBe(true);
     after.agents.shutdown();
     await settle();
+
+    // A crash (no shutdown) leaves the note as the turn started it.
+    const crashed = agentsWith(home);
+    await crashed.agents.send(project, "Go on", null, null);
+    expect(JSON.parse(fs.readFileSync(noted, "utf8")).projects).toEqual([project]);
+    const back = agentsWith(home);
+    back.agents.resumeInterrupted();
+    await settle();
+    expect(back.asked[0]!.prompt).toStartWith("(Edit, automatically) Edit restarted");
+    back.agents.shutdown();
+    crashed.agents.shutdown();
+    await settle();
+
+    // A turn that ended leaves nothing noted.
+    const done = agentsWith(home);
+    await done.agents.send(project, "One more", null, null);
+    done.queries[0]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+    done.queries[0]!.end();
+    await settle();
+    expect(done.agents.withChat(project).running).toBe(false);
+    expect(fs.existsSync(noted)).toBe(false);
 
     // Closed hours ago: nothing starts by itself.
     fs.writeFileSync(noted, JSON.stringify({ at: Date.now() - 3 * 3_600_000, projects: [project] }));

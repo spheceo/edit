@@ -97,6 +97,7 @@ fn run() -> Result<(), String> {
             &mut |progress| println!("{}", serde_json::json!({"progress": progress})),
         )?;
     } else {
+        make_waveform_peaks(&project, &plan, &cache);
         edit_engine::render::export_file(
             &project,
             &options,
@@ -118,6 +119,51 @@ fn run() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     println!("{}", serde_json::json!({"done": true}));
     Ok(())
+}
+
+/// The sound levels this span's waveforms read (`peaks.bin`, which the Mac's
+/// media jobs make in the background), made here from the sources: a
+/// waveform's own media, or every sound heard within its window of it.
+fn make_waveform_peaks(
+    project: &edit_core::Project,
+    plan: &edit_engine::export::Plan,
+    cache: &std::path::Path,
+) {
+    let mut wanted = std::collections::BTreeSet::new();
+    for clip in &project.clips {
+        let edit_core::ClipContent::Waveform { media, style, .. } = &clip.content else {
+            continue;
+        };
+        if clip.end() <= plan.start || clip.start >= plan.end {
+            continue;
+        }
+        if let Some(media) = media {
+            wanted.insert(media.as_str());
+            continue;
+        }
+        let pad = (f64::from(style.window) * project.fps()).ceil() as i64;
+        for other in &project.clips {
+            if other.end() > clip.start - pad && other.start < clip.end() + pad {
+                wanted.extend(other.media_id());
+            }
+        }
+    }
+    for id in wanted {
+        let Some(media) = project.media(id) else {
+            continue;
+        };
+        if media.kind == edit_core::MediaKind::Image {
+            continue;
+        }
+        let path = std::path::Path::new(&media.path);
+        let folder = cache.join(edit_engine::media::media_key(path));
+        let peaks = folder.join("peaks.bin");
+        if peaks.exists() || std::fs::create_dir_all(&folder).is_err() {
+            continue;
+        }
+        // Footage without sound has none to draw: the waveform stays flat.
+        let _ = edit_engine::media::make_peaks(path, &peaks);
+    }
 }
 
 fn main() {

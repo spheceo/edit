@@ -252,7 +252,42 @@ test("a turn its agent stopped answering is ended, and edit quitting ends the re
     chat = agents.withChat(project);
     expect(chat.running).toBe(false);
     expect(queries[1]!.closed()).toBe(true);
-    expect(chat.entries.at(-1)?.text).toBe("Edit was closed during this turn; send a message to carry on.");
+    expect(chat.entries.at(-1)?.text).toStartWith("Edit was closed during this turn. Back within 10 minutes (a restart), it carries on by itself");
+  } finally {
+    home.cleanup();
+  }
+});
+
+test("a restart carries on the turns its quit cut short, in the same conversation; a quit long ago doesn't", async () => {
+  const { home, project, agents, queries } = claudeProject("claude-restart");
+  try {
+    await agents.send(project, "Start the editing workflow", null, null);
+    queries[0]!.push({ type: "system", subtype: "init", session_id: "session-1" });
+    await settle();
+    agents.shutdown();
+    await settle();
+    const noted = `${home.home}/agent/interrupted.json`;
+    expect(fs.existsSync(noted)).toBe(true);
+
+    // The new process: the chat read back from disk.
+    const after = agentsWith(home);
+    after.agents.resumeInterrupted();
+    await settle();
+    expect(fs.existsSync(noted)).toBe(false);
+    expect(after.asked.length).toBe(1);
+    expect(after.asked[0]!.options.resume).toBe("session-1");
+    expect(after.asked[0]!.prompt).toStartWith("(Edit, automatically) Edit restarted while you were working");
+    expect(after.agents.withChat(project).running).toBe(true);
+    after.agents.shutdown();
+    await settle();
+
+    // Closed hours ago: nothing starts by itself.
+    fs.writeFileSync(noted, JSON.stringify({ at: Date.now() - 3 * 3_600_000, projects: [project] }));
+    const later = agentsWith(home);
+    later.agents.resumeInterrupted();
+    await settle();
+    expect(later.asked.length).toBe(0);
+    expect(fs.existsSync(noted)).toBe(false);
   } finally {
     home.cleanup();
   }

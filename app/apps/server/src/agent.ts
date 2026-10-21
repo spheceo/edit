@@ -203,6 +203,16 @@ function stillOn(chat: Chat, generation: number): boolean {
 const SESSION_GONE =
   "(Edit, automatically) The earlier conversation couldn't be picked up again (Claude Code no longer has it), so this is a new one: get_edit_context shows what's already done. My message:";
 
+/** Where the turns Edit's quit cut short are noted (in `<home>/agent`). */
+const INTERRUPTED = "interrupted.json";
+
+/** A quit this recent was a restart: its cut turns carry on when Edit is back. */
+export const RESUME_WITHIN_MS = 10 * 60_000;
+
+/** The turn that carries on one a restart cut short. */
+const RESUMED =
+  "(Edit, automatically) Edit restarted while you were working (a new build), which cut your last turn off; your last tool call may not have finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.";
+
 /** A mutex for async work (one turn of a chat at a time). */
 class Lock {
   private tail: Promise<void> = Promise.resolve();
@@ -1159,16 +1169,31 @@ export class Agents implements seams.AgentPanel {
     }
   }
 
-  /** Edit is quitting: each running turn ends and says so in its chat, Claude Code is closed and Codex stopped. */
+  /**
+   * Edit is quitting: each running turn ends and says so in its chat, Claude
+   * Code is closed and Codex stopped. The turns are noted
+   * (`<home>/agent/interrupted.json`) so a restart carries them on.
+   */
   shutdown(): void {
     if (this.watchdog !== null) {
       clearInterval(this.watchdog);
       this.watchdog = null;
     }
+    const cut = [...this.chats].filter(([, chat]) => chat.running && !chat.halted).map(([project]) => project);
+    if (cut.length > 0) {
+      try {
+        writeAtomic(join(this.dir, INTERRUPTED), JSON.stringify({ at: nowMs(), projects: cut }));
+      } catch (error) {
+        diag.warn("agent", `noting the turns cut short: ${diag.messageOf(error)}`);
+      }
+    }
     for (const [project, chat] of this.chats) {
       if (!chat.running) continue;
       chat.halted = true;
-      this.abandon(project, "Edit was closed during this turn; send a message to carry on.");
+      this.abandon(
+        project,
+        `Edit was closed during this turn. Back within ${RESUME_WITHIN_MS / 60_000} minutes (a restart), it carries on by itself; otherwise send a message to carry on.`,
+      );
     }
     for (const running of this.claudeQueries.values()) {
       try {
@@ -1180,6 +1205,32 @@ export class Agents implements seams.AgentPanel {
     this.claudeQueries.clear();
     this.codexProcess?.kill();
     this.codexProcess = null;
+  }
+
+  /**
+   * Edit is back: the turns its last quit cut short carry on, each as a new
+   * turn of the same conversation, when that quit was a restart (within
+   * RESUME_WITHIN_MS). A server restart for a code change then costs an
+   * agent its last tool call, not its whole task.
+   */
+  resumeInterrupted(): void {
+    const path = join(this.dir, INTERRUPTED);
+    let noted: { at?: unknown; projects?: unknown };
+    try {
+      noted = JSON.parse(fs.readFileSync(path, "utf8")) as typeof noted;
+    } catch {
+      return;
+    } finally {
+      fs.rmSync(path, { force: true });
+    }
+    if (typeof noted.at !== "number" || !Array.isArray(noted.projects) || nowMs() - noted.at > RESUME_WITHIN_MS) return;
+    for (const project of noted.projects) {
+      if (typeof project !== "string" || this.store.get(project) === null) continue;
+      diag.info("agent", `${project}: carrying on the turn the restart cut short`);
+      void this.send(project, RESUMED, null, null).catch((error: unknown) => {
+        diag.warn("agent", `carrying on the turn in ${project}: ${diag.messageOf(error)}`);
+      });
+    }
   }
 
   private finish(project: string, error: string | null): void {

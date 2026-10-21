@@ -773,8 +773,10 @@ export interface Agents {
    * `timeoutMs`. speakers.ts names voices with it.
    */
   ask(model: string, effort: string, instructions: string, input: Json[], schema: Json | null, timeoutMs: number): Promise<string>;
-  /** Edit is quitting: running turns end and say so, and the agents' processes are stopped. */
+  /** Edit is quitting: running turns end and say so (and are noted to carry on), and the agents' processes are stopped. */
   shutdown?(): void;
+  /** Edit is back: the turns its last quit cut short carry on, when that was a restart (minutes ago). */
+  resumeInterrupted?(): void;
 }
 
 /**

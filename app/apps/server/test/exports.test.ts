@@ -126,6 +126,9 @@ test("Modal takes only footage that's in the cloud", () => {
   const whole = { start: 0, end: 100, width: 1920, height: 1080, audio: true };
   expect(seams.modalExports.unsuitable(project, house, whole)).toBeNull();
   expect(seams.modalExports.unsuitable(project, { ...house, size: 1080 }, whole)).toBeNull();
+  // The worker makes a waveform's sound levels from the cloud original.
+  project.clips.push({ id: "w1", type: "waveform", start: 0, duration: 100 } as never);
+  expect(seams.modalExports.unsuitable(project, house, whole)).toBeNull();
   project.clips.push({ id: "c2", type: "audio", media: "m2", start: 0, duration: 100 } as never);
   expect(seams.modalExports.unsuitable(project, house, whole)).toBe("Local.mov isn't in the cloud");
 });

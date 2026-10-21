@@ -35,7 +35,6 @@ export function unsuitable(project: Project, options: ExportOptions, plan: Plan)
   if (options.size != null && options.size !== Math.min(width, height)) return "only the project's own size renders in the cloud";
   if (plan.start !== 0 || plan.end < duration(project)) return "only a whole edit renders in the cloud";
   if (options.chapters.length > 0) return "chapters are added here";
-  if (project.clips.some((clip) => clip.type === "waveform")) return "waveforms are drawn here";
   const here = used(project).filter((media) => !media.cloud?.original);
   if (here.length > 0) return `${here.map((media) => media.name).join(", ")} isn't in the cloud`;
   return null;

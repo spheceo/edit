@@ -208,6 +208,12 @@ export function start(home: string, host: string | null, port: number): { app: A
   if (servers.length === 0) fail(`nothing to listen on (is port ${port} taken?)`);
   console.log(`edit: data in ${home}`);
   resumeJobs(app);
+  // Once listening: the agents reach Edit's MCP on this port.
+  try {
+    app.agents.resumeInterrupted?.();
+  } catch (error) {
+    diag.warn("agent", `carrying on cut turns: ${diag.messageOf(error)}`);
+  }
   if (update.enabled()) {
     void update
       .check()

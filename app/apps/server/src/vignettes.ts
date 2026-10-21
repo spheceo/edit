@@ -22,9 +22,23 @@ function vignetted(project: Project, clip: Project["clips"][number]): clip is Ad
   return (clip.grade?.vignette ?? 0) >= LEAST && clip.duration >= SHORTEST;
 }
 
+/** Vignettes laid twice over the same stretch, the same grade (Helpful Wife's teasers had two of each): the later copies. */
+export function doubled(project: Project): string[] {
+  const looks = project.clips.filter((clip): clip is AdjustmentClip => vignetted(project, clip));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const clip of looks) {
+    const key = `${clip.start}|${clip.duration}|${JSON.stringify(clip.grade)}|${JSON.stringify(clip.blur ?? null)}`;
+    if (seen.has(key)) out.push(clip.id);
+    else seen.add(key);
+  }
+  return out;
+}
+
 /** The edges of vignettes that snap: no fade there and no other vignette carrying on across it. */
 export function snaps(project: Project): Edge[] {
-  const looks = project.clips.filter((clip): clip is AdjustmentClip => vignetted(project, clip));
+  const twice = new Set(doubled(project));
+  const looks = project.clips.filter((clip): clip is AdjustmentClip => vignetted(project, clip) && !twice.has(clip.id));
   const end = durationOf(project);
   const covered = (frame: number, self: string) => looks.some((other) => other.id !== self && other.start <= frame && clipEnd(other) > frame);
   const out: Edge[] = [];
@@ -39,13 +53,15 @@ export function snaps(project: Project): Edge[] {
 /** The audit's issue: every snapping edge in one, with op ease_vignettes to fade them all. */
 export function issues(project: Project): Record<string, unknown>[] {
   const found = snaps(project);
-  if (found.length === 0) return [];
+  const twice = doubled(project);
+  if (found.length === 0 && twice.length === 0) return [];
   return [
     {
       kind: "vignette_snaps",
       count: found.length,
       at: found.slice(0, 12).map((edge) => edge.at),
-      fix: "op ease_vignettes fades each in or out (12 frames, a quarter of a short clip) where no other vignette carries on",
+      ...(twice.length > 0 ? { doubled: twice } : {}),
+      fix: "op ease_vignettes fades each in or out (12 frames, a quarter of a short clip) where no other vignette carries on, and removes a vignette laid twice",
     },
   ];
 }
@@ -54,6 +70,8 @@ export function issues(project: Project): Record<string, unknown>[] {
 export function ease(project: Project, args: Record<string, unknown>): Record<string, unknown> {
   const from = typeof args.start === "number" ? args.start : null;
   const to = typeof args.end === "number" ? args.end : null;
+  const twice = new Set(doubled(project));
+  project.clips = project.clips.filter((clip) => !twice.has(clip.id));
   let eased = 0;
   for (const edge of snaps(project)) {
     if ((from !== null && edge.at < from) || (to !== null && edge.at > to)) continue;
@@ -64,5 +82,5 @@ export function ease(project: Project, args: Record<string, unknown>): Record<st
     else clip.fade_out = frames;
     eased += 1;
   }
-  return { eased };
+  return { eased, removed: [...twice] };
 }

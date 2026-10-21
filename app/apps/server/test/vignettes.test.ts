@@ -25,7 +25,14 @@ test("a vignette ending mid-shot with nothing after it snaps; its neighbour carr
   const p = project([look("a", 0, 157), look("b", 157, 143), look("faded", 400, 100, 0.7, [10, 10]), look("weak", 600, 100, 0.1), look("flash", 750, 6)]);
   expect(snaps(p)).toEqual([{ clip: "b", side: "out", at: 300 }]);
   expect(issues(p)).toMatchObject([{ kind: "vignette_snaps", count: 1, at: [300] }]);
-  expect(ease(p, {})).toEqual({ eased: 1 });
+  expect(ease(p, {})).toEqual({ eased: 1, removed: [] });
   expect((p.clips.find((clip) => clip.id === "b") as { fade_out: number }).fade_out).toBe(12);
   expect(snaps(p)).toEqual([]);
+});
+
+test("a vignette laid twice over the same stretch is flagged and the copy removed", () => {
+  const p = project([look("a", 100, 157, 0.7, [10, 10]), look("copy", 100, 157, 0.7, [10, 10])]);
+  expect(issues(p)).toMatchObject([{ kind: "vignette_snaps", count: 0, doubled: ["copy"] }]);
+  expect(ease(p, {})).toEqual({ eased: 0, removed: ["copy"] });
+  expect(p.clips.map((clip) => clip.id)).toEqual(["c1", "a"]);
 });

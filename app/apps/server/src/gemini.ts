@@ -8,6 +8,7 @@
 // and asks again, and a model whose day is used up hands over to the next
 // Flash model (each has its own free quota) until midnight Pacific time.
 
+import * as diag from "./diag.ts";
 import { Semaphore } from "./media.ts";
 import { serdeParse, trim } from "./rust.ts";
 
@@ -126,7 +127,10 @@ export async function post(bytes: Uint8Array): Promise<unknown> {
           await pause(2_000 * attempt);
           continue;
         }
-        if (status === 200) return answer(serdeParse(text));
+        if (status === 200) {
+          if (model !== asked) diag.info("watch", `Gemini: ${asked}'s free day is spent; ${model} answered`);
+          return answer(serdeParse(text));
+        }
         let message = text.slice(0, 300);
         try {
           const error = (serdeParse(text) as Json).error as Json | undefined;
@@ -143,6 +147,7 @@ export async function post(bytes: Uint8Array): Promise<unknown> {
         }
         // The day's quota for this model: on to the next one.
         if (status === 429 && /per ?day|PerDay|daily/iu.test(text)) {
+          diag.info("watch", `Gemini: ${model}'s free day is spent until midnight Pacific`);
           spent.set(model, nextReset());
           break;
         }

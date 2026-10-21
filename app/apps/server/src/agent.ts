@@ -212,6 +212,16 @@ const RUNNING = "running-turns.json";
 /** Edit back this soon after it last noted its turns was a restart: they carry on. */
 export const RESUME_WITHIN_MS = 10 * 60_000;
 
+/**
+ * What a whole edit left that the team would catch (the audit's fixable
+ * flags), as Edit's own follow-up message, or null when nothing's left: set
+ * where the editing tools are (edit_tools.unfinishedNote).
+ */
+export const agentHooks = {
+  unfinished: (_project: string): string | null => null,
+};
+
+
 /** The turn that carries on one a restart cut short. */
 const RESUMED =
   "(Edit, automatically) Edit restarted while you were working (a new build), which cut your last turn off; your last tool call may not have finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.";
@@ -253,6 +263,8 @@ interface TurnUsage {
 }
 
 export class Agents implements seams.AgentPanel {
+  /** The turn (generation) each project's last automatic follow-up went to: one per user message. */
+  private followedUp = new Map<string, number>();
   /** Token use of each project's running turn. */
   private usage = new Map<string, TurnUsage>();
   private dir: string;
@@ -1337,6 +1349,46 @@ export class Agents implements seams.AgentPanel {
       }
     }
     this.finish(project, error);
+    if (error === null && !halted) this.followUp(project, generation);
+  }
+
+  /**
+   * A whole edit (or its final pass) that ended with flags the team would
+   * catch still in the audit gets one follow-up from Edit: the comp's round-2
+   * agent stopped with 18 bridges unillustrated, 12 long shots and 52 marked
+   * pictures, and said so, rather than fixing them.
+   */
+  private followUp(project: string, generation: number): void {
+    if (this.followedUp.get(project) === generation) return;
+    const chat = this.withChat(project);
+    let asked = -1;
+    chat.entries.forEach((item, index) => {
+      if (item.kind === "user") asked = index;
+    });
+    const whole = chat.entries
+      .slice(asked + 1)
+      .some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
+    if (!whole) return;
+    let note: string | null;
+    try {
+      note = agentHooks.unfinished(project);
+    } catch (error) {
+      diag.warn("agent", `checking what ${project}'s edit left: ${diag.messageOf(error)}`);
+      return;
+    }
+    if (note === null) return;
+    this.followedUp.set(project, generation);
+    diag.info("agent", `${project}: the edit left flags; asking for them once more`);
+    void (async () => {
+      await timing.sleep(1000);
+      const later = this.withChat(project);
+      if (later.running || later.halted || later.generation !== generation) return;
+      try {
+        await this.sendTurn(project, note, null, null, generation);
+      } catch (thrown) {
+        diag.warn("agent", `following up ${project}: ${diag.messageOf(thrown)}`);
+      }
+    })();
   }
 
   /** Codex notifications, mapped onto the chat of the project their thread belongs to. */

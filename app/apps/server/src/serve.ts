@@ -11,7 +11,8 @@ import { pauseForExports, setListening } from "./broll.ts";
 import { startCleaning } from "./cache_cleanup.ts";
 import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
-import { registerEditingTools } from "./edit_tools.ts";
+import { agentHooks } from "./agent.ts";
+import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
 import { ExportRegistry, resumeSnapshot, type StartExtra } from "./exports.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
@@ -167,6 +168,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   // Tools register here; the subtitles' and captions' register as their modules load (through seams).
   registerEditingTools();
   registerMediaTools();
+  // A whole edit that ends with fixable flags gets one follow-up from Edit.
+  agentHooks.unfinished = (project) => unfinishedNote(app, project);
   seams.speakers.watch(app);
   // Cloud projects (on with the built-in token): sync, locks, and letting them go on the way out.
   optional("cloud", () => seams.cloudProjects.start(app));

@@ -967,6 +967,40 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   return audit;
 }
 
+/**
+ * The audit's flags the team would catch and an agent can fix, counted (not
+ * cut_mid_word or repeated_broll, which the script or a fixed camera often
+ * forces; not marks across the people, which need a clean copy).
+ */
+const FIXABLE = [
+  "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
+  "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
+  "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
+  "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
+  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "repeated_picture",
+];
+
+/**
+ * Edit's follow-up after a whole edit that left three or more fixable flags
+ * (agent.followUp), or null.
+ */
+export function unfinishedNote(app: App, projectId: string): string | null {
+  const found = app.store.get(projectId);
+  if (found === null) return null;
+  const audit = audited(app, found.project, found.rev) as { issues: Args[] };
+  const counts = new Map<string, number>();
+  for (const issue of audit.issues) {
+    const kind = String(issue.kind);
+    if (!FIXABLE.includes(kind)) continue;
+    const many = typeof issue.more === "number" ? issue.more : typeof issue.lines === "number" ? issue.lines : 1;
+    counts.set(kind, (counts.get(kind) ?? 0) + many);
+  }
+  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  if (total < 3) return null;
+  const listed = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([kind, count]) => `${count} ${kind}`).join(", ");
+  return `(Edit, automatically) The audit still lists what the team would catch: ${listed}. Fix every one you can, the final-pass skill's way (get_edit_context per stage for the issues and their fixes, one apply_edit_plan per stage, the tools a plan can't do in one batch), then mute_house_words once and finish with what you couldn't fix and why.`;
+}
+
 /** The most issues of one kind an audit lists; the rest are counted. */
 export const ISSUES_PER_KIND = 25;
 

@@ -80,3 +80,33 @@ test("footage not read yet is pending", () => {
   addon({}, null);
   expect(issues(project([video("c1", 0, 60, 10, 1, "Cut-in 1 · B-roll: shot 1")])).pending).toEqual(["hearing.mp4"]);
 });
+
+// The 18-Year-Old comp's Lola tape: its uploader's subtitles, two lines low and centred, new words every second or two; a camera timestamp and a channel credit beside them.
+const SUBTITLED: Record<number, ScreenText[]> = Object.fromEntries(
+  Array.from({ length: 12 }, (_, i) => 100 + i).map((second) => [
+    second,
+    [
+      { b: [0.4, 0.88, 0.6, 0.92], t: ["I ran away and I", "me and my mom got", "I have a one marijuana", "I don't know what the"][Math.floor(second / 3) % 4]! },
+      { b: [0.6, 0.93, 0.7, 0.97], t: `07/08/2021 18:${String(second % 60).padStart(2, "0")}` },
+      { b: [0.2, 0.9, 0.4, 0.94], t: "Rottweiler Investigations" },
+    ],
+  ]),
+);
+
+test("another channel's subtitles burned into the footage are flagged with the scale that puts them off the frame, until they're off it", () => {
+  addon(SUBTITLED, []);
+  const p = project([video("c1", 0, 300, 100)]);
+  const found = issues(p).issues.filter((one) => (one as { kind: string }).kind === "burned_subtitles");
+  expect(found).toEqual([
+    {
+      kind: "burned_subtitles", media: "hearing.mp4", start: 0, end: 300, seconds: 10, band_top: 0.88, clips: ["c1"],
+      fix: "the footage's own subtitles show under ours: scale 1.149 with y 81 puts them below the frame (the tape's one fixed framing, every clip of it; a push starts there), or crop bottom 0.13 and fill",
+    },
+  ]);
+  // Placed as the fix says: off the frame.
+  const fixed = project([{ ...video("c1", 0, 300, 100), transform: { x: 0, y: 81, scale: 1.149, rotation: 0 } } as Clip]);
+  expect(issues(fixed).issues.filter((one) => (one as { kind: string }).kind === "burned_subtitles")).toEqual([]);
+  // A timestamp and a credit alone aren't subtitles.
+  addon(Object.fromEntries(Object.entries(SUBTITLED).map(([second, lines]) => [second, lines.slice(1)])), []);
+  expect(issues(project([video("c1", 0, 300, 100)])).issues.filter((one) => (one as { kind: string }).kind === "burned_subtitles")).toEqual([]);
+});

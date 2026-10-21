@@ -1,6 +1,9 @@
 // What the audit reads off the footage's picture, from caches filled in the
 // background: another channel's calls to action burned into a re-upload
-// (`source_cta`: the engine's screen_text.rs, Vision's text recognition) and
+// (`source_cta`: the engine's screen_text.rs, Vision's text recognition),
+// another channel's subtitles burned into it (`burned_subtitles`: the 18-Year-
+// Old comp's Ava and Lola tapes showed theirs under ours, two subtitles at
+// once) and
 // B-roll shots that run across a cut in their footage (`broll_crosses_cut`:
 // seats.ts's cuts). Files not read yet start reading and are listed as
 // pending, as the censor check's are.
@@ -14,6 +17,19 @@ import * as seats from "./seats.ts";
 
 /** A channel's call to action: "SUBSCRIBE", "SUBSCRIBED", the bell, "like and subscribe". */
 export const CTA = /subscrib|notification|hit the bell|turn on the bell|like (and|&) share/iu;
+
+/** A burned-in subtitle line: low in the picture (its top below this share of the height)… */
+const SUBTITLE_TOP = 0.72;
+/** …centred (its middle within this share of the centre)… */
+const SUBTITLE_CENTRE = 0.2;
+/** …and words, not a camera's timestamp: mostly letters, two words or more. */
+function subtitleLike(text: string): boolean {
+  const letters = (text.match(/\p{L}/gu) ?? []).length;
+  return letters >= 6 && letters >= text.replace(/\s/gu, "").length * 0.6 && text.trim().split(/\s+/u).length >= 2;
+}
+/** Seconds with a subtitle line before a clip counts as subtitled, and the share of them whose words differ (a credit doesn't change). */
+const SUBTITLE_SECONDS = 3;
+const SUBTITLE_CHANGING = 0.3;
 
 /** Seconds of a shot at either end where a cut doesn't count (a frame or two of the next picture is the cut itself). */
 const EDGE = 0.3;
@@ -82,6 +98,64 @@ function blurred(project: Project, box: [number, number, number, number], frame:
   });
 }
 
+/** The clip's scale and position at its first frame (a push starts there). */
+function placed(clip: VideoClip): { scale: number; y: number } {
+  return {
+    scale: clip.keyframes?.scale?.[0]?.value ?? clip.transform.scale ?? 1,
+    y: clip.keyframes?.y?.[0]?.value ?? clip.transform.y ?? 0,
+  };
+}
+
+/**
+ * Another channel's subtitles burned into the footage the clip plays, still
+ * on the frame: lines low and centred whose words change. The fix puts the
+ * band below the frame (the scale and y that do it at the top of the
+ * picture) or crops it off.
+ */
+function burnedSubtitles(
+  project: Project,
+  clip: VideoClip,
+  media: Media,
+  text: Record<number, { t: string; b: [number, number, number, number] }[]>,
+  from: number,
+  to: number,
+): { start: number; end: number; seconds: number; band_top: number; fix: string } | null {
+  let seconds = 0;
+  let top = 1;
+  const words = new Set<string>();
+  for (let second = Math.floor(from); second < to; second++) {
+    const lines = (text[second] ?? []).filter(
+      ({ t, b }) => b[1] >= SUBTITLE_TOP && Math.abs((b[0] + b[2]) / 2 - 0.5) <= SUBTITLE_CENTRE && subtitleLike(t),
+    );
+    if (lines.length === 0) continue;
+    seconds += 1;
+    for (const line of lines) {
+      top = Math.min(top, line.b[1]);
+      words.add(line.t.toLowerCase().replace(/[^\p{L}]/gu, ""));
+    }
+  }
+  if (seconds < SUBTITLE_SECONDS || words.size < Math.max(2, seconds * SUBTITLE_CHANGING)) return null;
+  const { width, height } = project.settings;
+  const mw = media.width ?? width;
+  const mh = media.height ?? height;
+  const fit = Math.min(width / mw, height / mh);
+  const { scale, y } = placed(clip);
+  // Cropped off, or below the frame where the clip sits.
+  if ((clip.crop?.bottom ?? 0) >= 1 - top) return null;
+  if (y + (top - 0.5) * mh * fit * scale >= height / 2 - 2) return null;
+  // The least scale that puts the band's top below the frame with the picture's top at the frame's.
+  const margin = top - 0.01;
+  const needed = Math.max(scale, height / (mh * fit * margin));
+  const atTop = round((mh * fit * needed - height) / 2);
+  return {
+    start: clip.start,
+    end: clipEnd(clip),
+    seconds,
+    band_top: round(top * 1000) / 1000,
+    fix: `the footage's own subtitles show under ours: scale ${round(needed * 1000) / 1000} with y ${atTop} puts them below the frame (the tape's one fixed framing, every clip of it; a push starts there), or crop bottom ${round((1 - margin) * 1000) / 1000} and fill`,
+  };
+}
+
 /**
  * Calls to action on screen and B-roll across a cut: the issues, and the
  * files still being read (`pending`). Reads what isn't cached in the background.
@@ -109,6 +183,8 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
       warm(media, missing, cuts === null);
     }
   }
+  // Burned-in subtitles: one issue per file (a tape plays in many clips), its clips listed.
+  const subtitled = new Map<string, Record<string, unknown> & { clips: string[]; seconds: number; end: number }>();
   for (const [clip, media] of clips) {
     const [from, to] = played(project, clip);
     // Calls to action, as stretches of timeline frames with the box to blur.
@@ -145,6 +221,16 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
       }
     }
     close();
+    const burned = burnedSubtitles(project, clip, media, text, from, to);
+    if (burned !== null) {
+      const seen = subtitled.get(media.id);
+      if (seen === undefined) subtitled.set(media.id, { kind: "burned_subtitles", media: media.name, ...burned, clips: [clip.id] });
+      else {
+        seen.clips.push(clip.id);
+        seen.seconds += burned.seconds;
+        seen.end = Math.max(seen.end, burned.end);
+      }
+    }
     // A B-roll shot is one picture: none of its footage's cuts inside it.
     if (!/B-roll/u.test(clip.name ?? "")) continue;
     for (const cut of seats.cachedCuts(media.path) ?? []) {
@@ -153,5 +239,6 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
       break;
     }
   }
+  out.push(...subtitled.values());
   return { issues: out, pending: [...pending].sort() };
 }

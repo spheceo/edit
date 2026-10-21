@@ -233,3 +233,10 @@ test("wide_static_teasers_and_a_bridge_room_never_close_are_flagged", () => {
   (p.clips.find((own) => own.id === "r1") as VideoClip).keyframes = { scale: [{ frame: 0, value: 1.6, ease: "linear" }, { frame: 399, value: 1.8, ease: "linear" }] };
   expect(found("room_wide")).toEqual([]);
 });
+
+test("footage marks keep whether they're a picture in a box", () => {
+  expect(readMarks('{"marks":[{"text":"INTERROGATOR","box":[400,250,480,750]},{"text":"other footage","box":[0,0,330,330],"inset":true}]}')).toEqual([
+    { text: "INTERROGATOR", box: [0.25, 0.4, 0.75, 0.48] },
+    { text: "other footage", box: [0, 0, 0.33, 0.33], inset: true },
+  ]);
+});

@@ -63,7 +63,7 @@ dmg="$out/Edit-$human.dmg"
 "$here/make-dmg.sh" "$app" "$dmg"
 if [[ "$identity" != - ]]; then
   codesign --force --timestamp -s "$identity" "$dmg"
-  if [[ -n "${NOTARY_KEY:-}" ]]; then
+  if [[ -n "${NOTARY_KEY:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER:-}" ]]; then
     echo "==> Notarising (a few minutes)"
     print -rn -- "$NOTARY_KEY" | base64 --decode >"$work/notary.p8"
     xcrun notarytool submit "$dmg" --key "$work/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait

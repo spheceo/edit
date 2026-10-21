@@ -23,6 +23,7 @@ import * as bridges from "./bridges.ts";
 import * as castOf from "./cast.ts";
 import { parseTranscript, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
+import * as gemini from "./gemini.ts";
 import * as jobs from "./jobs.ts";
 import * as relay from "./relay.ts";
 import { ioMessage, writeAtomic } from "./files.ts";
@@ -562,13 +563,14 @@ export function gateway(): string {
 
 /** Posts `body` (a file) to the gateway. */
 export async function post(body: string): Promise<unknown> {
-  const { url, bearer } = route();
   let bytes: Uint8Array;
   try {
     bytes = fs.readFileSync(body);
   } catch (error) {
     throw new Error(`couldn't reach the AI gateway: ${ioMessage(error)}`);
   }
+  if (trim(process.env.EDIT_AI_PROVIDER ?? "") === "gemini") return gemini.post(bytes);
+  const { url, bearer } = route();
   let status: number;
   let text: string;
   try {

@@ -303,7 +303,7 @@ test("safe names keep files on every disk", () => {
 test("without a sign-in of its own, Edit borrows the relay's (with the cloud token)", async () => {
   const put = mock.useEnv({ GOOGLE_DRIVE_CLIENT_ID: undefined, GOOGLE_DRIVE_CLIENT_SECRET: undefined, GOOGLE_DOCS_REFRESH_TOKEN: undefined });
   try {
-    await expect(new library.Library().accessToken()).rejects.toThrow("paste the cloud token in Settings → Cloud");
+    await expect(new library.Library().accessToken()).rejects.toThrow("this build has no cloud token");
     const back = mock.useEnv({ EDIT_RELAY_TOKEN: "cloud-tok" });
     try {
       mock.on("POST", "/v1/cloud/google/token", () => Response.json({ access_token: "from-relay", expires_in: 3600 }));

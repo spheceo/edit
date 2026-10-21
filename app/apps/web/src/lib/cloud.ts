@@ -26,7 +26,7 @@ export interface CloudStatus {
 export interface CloudSettings {
   on: boolean;
   /** Where the token comes from (EDIT_RELAY_TOKEN, or saved here). */
-  token: "env" | "saved" | null;
+  token: "env" | "saved" | "built-in" | null;
   /** How teammates see this machine. */
   holder: string;
   relay: string;

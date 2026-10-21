@@ -168,7 +168,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   registerEditingTools();
   registerMediaTools();
   seams.speakers.watch(app);
-  // Cloud projects (Settings → Cloud): sync, locks, and letting them go on the way out.
+  // Cloud projects (on with the built-in token): sync, locks, and letting them go on the way out.
   optional("cloud", () => seams.cloudProjects.start(app));
   let quitting = false;
   const quit = (code: number) => {

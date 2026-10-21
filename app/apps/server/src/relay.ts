@@ -22,12 +22,17 @@ export function url(): string {
  */
 export const UNREACHABLE = "could not reach Edit's relay";
 
-/** The token saved in Settings → Cloud (`cloud_projects`). */
+declare const EDIT_CLOUD_TOKEN: string | undefined;
+
+/** The team's token, built into release builds (`--define EDIT_CLOUD_TOKEN`): every Edit is on the team's cloud from its first start. */
+const BUILT_IN: string | null = typeof EDIT_CLOUD_TOKEN === "string" && EDIT_CLOUD_TOKEN !== "" ? EDIT_CLOUD_TOKEN : null;
+
+/** A token saved on this Mac (`cloud_projects`, `<home>/cloud.json`; from before it was built in, or `edit cloud`). */
 let savedToken: string | null = null;
 
-/** `EDIT_RELAY_TOKEN`, when set and not empty, else the token saved in Settings → Cloud. */
+/** `EDIT_RELAY_TOKEN`, when set and not empty, else the saved token, else the built-in one. */
 export function token(): string | null {
-  return envToken() ?? savedToken;
+  return envToken() ?? savedToken ?? BUILT_IN;
 }
 
 /** `EDIT_RELAY_TOKEN`, when set and not empty (it wins over the setting). */
@@ -36,14 +41,14 @@ export function envToken(): string | null {
   return value !== undefined && value !== "" ? value : null;
 }
 
-/** The token to use when `EDIT_RELAY_TOKEN` isn't set (Settings → Cloud). */
+/** The token saved on this Mac, used when `EDIT_RELAY_TOKEN` isn't set. */
 export function setSavedToken(value: string | null): void {
   savedToken = value !== null && value !== "" ? value : null;
 }
 
 /**
- * Whether cloud calls can work: a relay token is set (`EDIT_RELAY_TOKEN`, else
- * the one saved in Settings → Cloud). Cloud is always on with one (here,
+ * Whether cloud calls can work: a relay token is set (`EDIT_RELAY_TOKEN`, a
+ * saved one, or the built-in one). Cloud is always on with one (here,
  * not in cloud.ts, because the store and import ask it).
  */
 export function cloudEnabled(): boolean {

@@ -1,5 +1,5 @@
-// Cloud projects: with cloud on (a relay token, Settings →
-// Cloud), projects are kept in Convex (Edit's `edit:` functions, through the
+// Cloud projects: with cloud on (a relay token: built into releases, so
+// always), projects are kept in Convex (Edit's `edit:` functions, through the
 // relay: `cloud.ts`), so a teammate can open one on their Mac and carry on
 // where someone else stopped. One machine edits a project at a time: it holds
 // the project's lock, a two-minute lease renewed every 45 s, and every write
@@ -72,7 +72,7 @@ export function now(): number {
   return performance.now();
 }
 
-/** Settings → Cloud, in `<home>/cloud.json`. */
+/** This Mac's cloud setting, in `<home>/cloud.json`. */
 export interface Settings {
   /** The relay's cloud token (used when `EDIT_RELAY_TOKEN` isn't set). */
   token?: string;
@@ -661,11 +661,11 @@ export class Cloud implements CloudHook {
   }
 
   // -------------------------------------------------------------------------
-  // Settings → Cloud.
+  // The cloud setting (`/api/cloud`, `edit cloud`).
 
-  /** Settings → Cloud: on, where the token comes from, the holder label. */
+  /** The cloud setting: on, where the token comes from, the holder label. */
   settingsStatus(): Record<string, unknown> {
-    const token = relay.envToken() !== null ? "env" : this.settings.token !== undefined ? "saved" : null;
+    const token = relay.envToken() !== null ? "env" : this.settings.token !== undefined ? "saved" : relay.token() !== null ? "built-in" : null;
     return { holder: this.holder(), on: this.on(), relay: relay.url(), token };
   }
 
@@ -1417,7 +1417,7 @@ export async function takeOver(app: App, id: string): Promise<Record<string, unk
 export async function moveToCloud(app: App, id: string): Promise<Record<string, unknown>> {
   const cloudProjects = cloudOf(app);
   if (cloudProjects === null) throw new Error("cloud is off");
-  if (!cloudProjects.on()) throw new Error("Turn cloud on first (Settings → Cloud).");
+  if (!cloudProjects.on()) throw new Error("Cloud is off: this build has no cloud token.");
   if (app.store.get(id) === null) throw new Error("no such project");
   cloudProjects.adopt(id);
   cloudProjects.emit(id);
@@ -1585,7 +1585,7 @@ function needCloud(app: App): Cloud {
   return cloudProjects;
 }
 
-/** Settings → Cloud, and (`?check=true`) whether the relay takes the token. */
+/** The cloud setting, and (`?check=true`) whether the relay takes the token. */
 async function getSettings({ app, query }: RouteContext<App>): Promise<Response> {
   const cloudProjects = needCloud(app);
   const check = query.get("check");

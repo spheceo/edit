@@ -1528,7 +1528,7 @@ export function backfillSoon(app: App, id: string): void {
  */
 export async function backfill(app: App, id: string): Promise<Record<string, unknown>> {
   if (app.store.get(id) === null) throw new Error("no such project");
-  if (!cloud.enabled()) throw new Error("cloud is off here (Settings → Cloud)");
+  if (!cloud.enabled()) throw new Error("cloud is off here (this build has no cloud token)");
   if (!cloudProject(app, id)) throw new Error("this isn't a cloud project (Move to cloud first)");
   return backfillSlot.with(() => backfillNow(app, id, true));
 }

@@ -1,5 +1,5 @@
 // The media drive: where Edit keeps its big media files when the Mac's own
-// disk is too small. Off unless set (Settings → Media drive, `edit media use
+// disk is too small. Off unless set (`edit media use
 // DIR`, `edit media move --to DIR`, or `EDIT_MEDIA_DIR`), and then exactly as
 // before: everything in the data folder (~/.edit).
 //
@@ -270,7 +270,7 @@ export function prepare(home: string, dir: string): string {
   if (!isFile(marker)) {
     const note = {
       about:
-        "Edit keeps its media here (Settings → Media drive). Keep this file: without it Edit takes the folder for an unplugged drive.",
+        "Edit keeps its media here (the media drive). Keep this file: without it Edit takes the folder for an unplugged drive.",
       home: root,
       created_ms: nowMs(),
     };

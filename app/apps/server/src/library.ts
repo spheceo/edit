@@ -5,8 +5,8 @@
 // Nothing is bundled with Edit.
 //
 // The folder is private, so Edit needs a Google sign-in that can read it: the
-// relay hands out a short-lived one to Edits with the cloud token (Settings →
-// Cloud), and a machine with GOOGLE_DRIVE_CLIENT_ID,
+// relay hands out a short-lived one to Edits with the cloud token (built into
+// releases), and a machine with GOOGLE_DRIVE_CLIENT_ID,
 // GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set signs in
 // itself (`just dev` reads Repack's from Infisical).
 //
@@ -233,7 +233,7 @@ export class Library implements seams.Library {
     if (id === null || secret === null || refresh === null || id === undefined || secret === undefined || refresh === undefined) {
       if (relay.token() === null) {
         throw new Error(
-          "The sound library and Google Drive need the team's sign-in: paste the cloud token in Settings → Cloud (or start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set).",
+          "The sound library and Google Drive need the team's sign-in: this build has no cloud token (use a release build, or start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set).",
         );
       }
       // The relay keeps the sign-in and hands out an access token for an hour.

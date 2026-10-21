@@ -199,7 +199,7 @@ export interface CloudProjectsSeam {
    * The server's cloud projects: attaches the store's hook and starts the push loop.
    */
   start(app: App): void;
-  /** `edit cloud …` outside a server: the relay token saved in Settings → Cloud, unless the env sets one. */
+  /** `edit cloud …` outside a server: the relay token saved on this Mac, else the built-in one, unless the env sets one. */
   useSavedToken(home: string): void;
 }
 

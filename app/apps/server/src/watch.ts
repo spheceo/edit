@@ -551,7 +551,7 @@ function route(): { url: string; bearer: string } {
   }
   const cloud = relay.token();
   if (cloud !== null) return { url: `${relay.url()}/v1/cloud/ai/chat`, bearer: cloud };
-  throw new Error("the watcher needs the cloud token (Settings → Cloud) or AI_GATEWAY_API_KEY");
+  throw new Error("the watcher needs the cloud token (built into releases) or AI_GATEWAY_API_KEY");
 }
 
 /** The AI Gateway's chat completions URL (`EDIT_AI_GATEWAY_URL` names a stand-in's base). */

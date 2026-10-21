@@ -46,7 +46,7 @@ ENV
   EDIT_HOSTS  extra Host names to accept, comma-separated
   EDIT_RELAY_URL, EDIT_RELAY_TOKEN
               another relay (default Edit's), and the token it wants (cloud needs it;
-              else the one saved in Settings → Cloud)
+              else a saved one, else the one built into releases)
   EDIT_CLOUD_HOLDER
               how teammates see this machine when it's editing a cloud project
               (default: the setting, else the machine's name)

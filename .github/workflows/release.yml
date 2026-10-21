@@ -116,7 +116,11 @@ jobs:
       # (apps/server/scripts/embed.ts); `bun build --compile` leaves the
       # signature invalid, so every binary is signed again (ad hoc).
       # EDIT_RELEASE turns on self-update (apps/server/src/update.ts).
+      # EDIT_CLOUD_TOKEN is the team's relay token, built in so every Edit is
+      # on the team's cloud from its first start (apps/server/src/relay.ts).
       - name: Build
+        env:
+          EDIT_CLOUD_TOKEN: ${{ secrets.EDIT_CLOUD_TOKEN }}
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
@@ -136,8 +140,10 @@ jobs:
           bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node \
             --window "target/${{ matrix.target }}/release/edit-window"
           mkdir package
+          cloud=()
+          if [ -n "${EDIT_CLOUD_TOKEN:-}" ]; then cloud=(--define EDIT_CLOUD_TOKEN="\"$EDIT_CLOUD_TOKEN\""); fi
           bun build apps/server/src/embedded.gen.ts --compile --target="$bun_target" \
-            --define EDIT_VERSION="\"$version\"" --define EDIT_RELEASE=true --define EDIT_NIGHTLY="$nightly" --outfile package/edit
+            --define EDIT_VERSION="\"$version\"" --define EDIT_RELEASE=true --define EDIT_NIGHTLY="$nightly" ${cloud[@]+"${cloud[@]}"} --outfile package/edit
           codesign -s - -f package/edit
       # The runner is Apple Silicon: the arm64 build runs here (no GPU renders: no Metal on hosted runners).
       - name: Smoke test

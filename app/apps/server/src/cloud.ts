@@ -6,8 +6,8 @@
 // The Rust side ran curl subprocesses; here it's fetch, with the relay token
 // only ever in a request header (never an argument, never a log line).
 // Errors are thrown Errors whose text is fit to show (agents and the UI read
-// it). Cloud calls need `EDIT_RELAY_TOKEN` (the relay's `CLOUD_TOKEN`), or
-// the one saved in Settings → Cloud; [`enabled`] says whether one is set.
+// it). Cloud calls need the relay's `CLOUD_TOKEN`: `EDIT_RELAY_TOKEN`, a saved
+// one, or the one built into releases; [`enabled`] says whether one is set.
 //
 // Keys are R2 object keys, always under `edit/` ([`validKey`]); the bucket is
 // shared with Repack, and the relay refuses anything else.
@@ -57,7 +57,7 @@ export const timing = {
 
 /**
  * Whether cloud calls can work: a relay token is set (`EDIT_RELAY_TOKEN`, else
- * the one saved in Settings → Cloud). Cloud is always on with one.
+ * a saved one, or the one built into releases). Cloud is always on with one.
  */
 export function enabled(): boolean {
   return relay.cloudEnabled();

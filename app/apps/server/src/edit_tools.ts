@@ -955,7 +955,39 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   if (pending.length > 0) audit.censor_check_pending = pending;
   const reading = [...new Set([...picture.pending, ...marks.pending, ...borders])].sort();
   if (reading.length > 0) audit.picture_check_pending = reading;
+  const subtitled = project.clips.some((clip) => clip.type === "text" && (clip.name ?? "").startsWith("Subtitle"));
+  audit.issues = capIssues(audit.issues as Args[], subtitled);
   return audit;
+}
+
+/** The most issues of one kind an audit lists; the rest are counted. */
+export const ISSUES_PER_KIND = 25;
+
+/**
+ * An audit sized to be read: a fresh import's 819 lines of unsubtitled_speech
+ * (nothing subtitled yet) made every reply ~250k characters and the agent
+ * stopped, blind. Before any subtitles, unsubtitled speech is one note (the
+ * subtitles stage covers it); after, and for every other kind, the first
+ * ISSUES_PER_KIND in time order and one line counting the rest.
+ */
+export function capIssues(issues: Args[], subtitled: boolean): Args[] {
+  const out: Args[] = [];
+  const counts = new Map<string, number>();
+  const unheard = issues.filter((issue) => issue.kind === "unsubtitled_speech").length;
+  if (!subtitled && unheard > 0) {
+    out.push({ kind: "unsubtitled_speech", lines: unheard, note: "nothing is subtitled yet: the subtitles stage covers these" });
+  }
+  for (const issue of issues) {
+    const kind = String(issue.kind);
+    if (!subtitled && kind === "unsubtitled_speech") continue;
+    const seen = (counts.get(kind) ?? 0) + 1;
+    counts.set(kind, seen);
+    if (seen <= ISSUES_PER_KIND) out.push(issue);
+  }
+  for (const [kind, count] of counts) {
+    if (count > ISSUES_PER_KIND) out.push({ kind, more: count - ISSUES_PER_KIND, note: `${count - ISSUES_PER_KIND} more ${kind} after these (fix these, then look again)` });
+  }
+  return out;
 }
 
 /** A transcript file as it reads, or null. */

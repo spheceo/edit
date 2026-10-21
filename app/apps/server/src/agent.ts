@@ -995,9 +995,10 @@ export class Agents implements seams.AgentPanel {
   }
 
   /**
-   * Asks a model one question through Codex, outside any chat and with no
-   * tools: text, images (`localImage`) and sound (`localAudio`) in, its
-   * final answer out, held to `schema` (a JSON Schema) when given.
+   * Asks a model one question, outside any chat and with no tools, its final
+   * answer out, held to `schema` (a JSON Schema) when given. A Claude model
+   * ("claude-…") goes through the user's Claude Code, text only; any other
+   * through Codex: text, images (`localImage`) and sound (`localAudio`) in.
    */
   async ask(
     model: string,
@@ -1007,6 +1008,7 @@ export class Agents implements seams.AgentPanel {
     schema: Json | null,
     timeoutMs: number,
   ): Promise<string> {
+    if (model.startsWith("claude-")) return this.askClaude(model, effort, instructions, input, schema, timeoutMs);
     const codex = await this.codex();
     const workspace = join(this.dir, "workspace");
     fs.mkdirSync(workspace, { recursive: true });
@@ -1043,6 +1045,28 @@ export class Agents implements seams.AgentPanel {
     } finally {
       this.asks.delete(thread);
     }
+  }
+
+  /** `ask` on Claude Code: the input's text items, joined. */
+  private async askClaude(
+    model: string,
+    effort: string,
+    instructions: string,
+    input: Json[],
+    schema: Json | null,
+    timeoutMs: number,
+  ): Promise<string> {
+    const texts = input.map((item) => {
+      const { type, text } = (item ?? {}) as { type?: unknown; text?: unknown };
+      if (type !== "text" || typeof text !== "string") throw new Error(`${model} through Claude Code takes text only`);
+      return text;
+    });
+    const binary = await this.findClaude();
+    if (binary === null) throw new Error("Claude Code isn't installed. Install it with `curl -fsSL https://claude.ai/install.sh | bash`, then `claude auth login`.");
+    const workspace = join(this.dir, "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    const shape = schema !== null && typeof schema === "object" && !Array.isArray(schema) ? (schema as Record<string, unknown>) : null;
+    return claude.ask(binary, workspace, model, effort, instructions, texts.join("\n\n"), shape, timeoutMs);
   }
 
   /** Routes a notification to a one-off question; true when it was one. */

@@ -187,7 +187,7 @@ function ToolSettings() {
         <Tool
           icon={<ClaudeMark size={15} />}
           name="Claude Code"
-          role={provider === "claude" ? "Runs the agent" : "Not running the agent"}
+          role={provider === "claude" ? "Runs the agent, names speakers" : "Names speakers"}
           status={clis?.claude}
           detail={[clis?.claude?.email, clis?.claude?.plan].filter(Boolean).join(" · ")}
           login="claude auth login"
@@ -196,7 +196,7 @@ function ToolSettings() {
         <Tool
           icon={<OpenAIMark size={16} />}
           name="Codex"
-          role={provider === "codex" ? "Runs the agent, names speakers" : "Names speakers"}
+          role={provider === "codex" ? "Runs the agent, checks subtitles against the footage" : "Checks subtitles against the footage"}
           status={clis?.codex}
           login="codex login"
           install="npm install -g @openai/codex"

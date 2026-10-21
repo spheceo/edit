@@ -199,6 +199,60 @@ export async function listModels(binary: string, workspace: string): Promise<Mod
   }
 }
 
+/**
+ * One question to a Claude model through the user's Claude Code, outside any
+ * chat: no tools, no session kept, `instructions` as the system prompt, the
+ * answer held to `schema` when given (returned as its JSON text); an Error
+ * after `timeoutMs`. speakers.ts names voices with it.
+ */
+export async function ask(
+  binary: string,
+  workspace: string,
+  model: string,
+  effort: string,
+  instructions: string,
+  text: string,
+  schema: Record<string, unknown> | null,
+  timeoutMs: number,
+): Promise<string> {
+  const { query } = await sdk();
+  const abort = new AbortController();
+  const options: Options = {
+    ...baseOptions(binary, workspace),
+    model,
+    systemPrompt: instructions,
+    persistSession: false,
+    tools: [],
+    mcpServers: {},
+    abortController: abort,
+  };
+  if (EFFORTS.includes(effort)) options.effort = effort as Options["effort"];
+  if (schema !== null) options.outputFormat = { type: "json_schema", schema };
+  const run = query({ prompt: text, options });
+  let late = false;
+  const timer = setTimeout(() => {
+    late = true;
+    abort.abort();
+  }, timeoutMs);
+  try {
+    for await (const message of run) {
+      if (message.type !== "result") continue;
+      const result = message as unknown as Record<string, unknown>;
+      const error = resultError(result);
+      if (error !== null) throw new Error(error);
+      if (result.structured_output !== undefined) return JSON.stringify(result.structured_output);
+      return typeof result.result === "string" ? result.result : "";
+    }
+    throw new Error("Claude Code ended without an answer");
+  } catch (error) {
+    if (late) throw new Error(`${model} didn't answer in time`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    run.close();
+  }
+}
+
 /** An Edit tool as the chat names it: `mcp__edit__get_edit_context` → `get_edit_context`. */
 export function toolName(name: string): string {
   return name.replace(/^mcp__edit__/, "");

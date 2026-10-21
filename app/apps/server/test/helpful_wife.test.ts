@@ -230,6 +230,6 @@ test("wide_static_teasers_and_a_bridge_room_never_close_are_flagged", () => {
   // A bridge's room pushing 1 → 1.1: never close; a punch-in over most of it: close.
   p.clips.push(clip({ id: "r1", name: "Cut-in 1 · B-roll: the room", track: "v2", start: 300, duration: 400, type: "video", media: "room", source_in: 20, speed: 1, keyframes: { scale: [{ frame: 0, value: 1.19 }, { frame: 399, value: 1.31 }] } }));
   expect(found("room_wide")[0]).toMatchObject({ bridges: ["Cut-in 1"] });
-  (p.clips.find((own) => own.id === "r1") as VideoClip).keyframes = { scale: [{ frame: 0, value: 1.6 }, { frame: 399, value: 1.8 }] };
+  (p.clips.find((own) => own.id === "r1") as VideoClip).keyframes = { scale: [{ frame: 0, value: 1.6, ease: "linear" }, { frame: 399, value: 1.8, ease: "linear" }] };
   expect(found("room_wide")).toEqual([]);
 });

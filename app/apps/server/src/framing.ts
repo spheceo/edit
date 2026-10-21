@@ -438,6 +438,18 @@ export function interrogationIssues(project: Project, parts: { start: number; en
       });
     }
   }
+  // Each case's prologue (the narration after its teasers, up to the tape)
+  // shows its place on a map ("Here, we need to have something else. We
+  // need to have a map"): a map_view render there, or a pending one.
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index]!;
+    if (part.kind !== "broll" || parts[index - 1]?.kind !== "intro" || parts[index + 1]?.kind === "intro") continue;
+    const mapped = project.clips.some((clip) => {
+      if (clip.type !== "video" || clipEnd(clip) <= part.start || clip.start >= part.end) return false;
+      return /^map-/u.test(mediaOf(project, clip.media)?.name ?? "");
+    });
+    if (!mapped) out.push({ kind: "prologue_without_map", start: part.start, end: part.end, fix: "map_view of the case's place (tone dark, the building glowing or a dot) with date_title (position bottom) and place_label: the intro skill's THE MAP" });
+  }
   // Bridges (every narration from the first hook on).
   const level = (track: string) => project.tracks.findIndex((own) => own.id === track);
   const picture = (clip: Clip): boolean => {

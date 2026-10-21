@@ -1214,12 +1214,20 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   }
   // The same picture shown in more than one place in the video (the team:
   // "the same images again and again and again… it's just annoying").
-  // House pictures (the wallpaper, window frames) don't count.
+  // House pictures (the wallpaper, window frames) don't count, nor a
+  // person's photo in their File Viewer or inset: each person keeps the one
+  // photo they were introduced with ("I think we should stick to one
+  // image… that'll make it a lot easier for the viewer").
+  const faces = new Set(
+    project.clips
+      .filter((clip) => clip.type === "video" && /^(File Viewer|Photo inset)/u.test(clip.name ?? ""))
+      .map((clip) => (clip as Extract<Clip, { type: "video" }>).media),
+  );
   const shownAt = new Map<string, [number, number][]>();
   for (const clip of project.clips) {
     if (clip.type !== "video" || !visible(clip.track)) continue;
     const media = mediaOf(project, clip.media);
-    if (media === undefined || media.kind !== "image" || /[\\/]graphics[\\/]/.test(media.path)) continue;
+    if (media === undefined || media.kind !== "image" || /[\\/]graphics[\\/]/.test(media.path) || faces.has(media.id)) continue;
     const list = shownAt.get(media.id) ?? [];
     list.push([clip.start, clipEnd(clip)]);
     shownAt.set(media.id, list);

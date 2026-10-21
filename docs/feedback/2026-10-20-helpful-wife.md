@@ -112,3 +112,23 @@ Six trials. Trials 4–6 cover every pattern but two, with some variance from ru
 | 4 | 0 | 2.07×, moving | 61%, 100% | fixed | callout + line | 0 | fixed | tape; hook riser misplaced (code) | 0 | allowance |
 | 5 | 0 | 1.86×, moving | 56%, 100% | fixed | callout + line | 0 | fixed | both | 0 | allowance |
 | 6 | 0 | 2.70×, 9/14 moving | 44%, 100% | fixed, wrong photos caught | callout + line | 0 | fixed | both | 0 | in a bridge, not the prologue |
+
+## The holdout: "Comp: 18-Year-Old Shoots 3 Teens", edited from scratch
+A new project from its Doc (three cases: Ava Rae Mooring, Chandler Halderson, Lola Luna; 77 minutes), imported with the final code (footage placed filled: 1.29–1.34× for the 4:3 tapes) and given only "Start the editing workflow." (Claude Code, Opus 5.5, medium). It took 42 minutes and 126 tool calls. Scored against the same patterns:
+
+| Pattern | Holdout |
+|---|---|
+| P1 bars | none |
+| P2 teasers | punched in (median 2×), 5 of 9 moving (teaser_wide left on 8 clips of the later cases) |
+| P3 bridges | 55% pictures (evidence photos, File Viewers, text slams), the room black and white with soft edges and pushes; 9 bridges flagged thin; repeated_broll 31 (room moments reused across bridges) |
+| P4 photos | watermarks blurred (Ring, FOX13, TVW, a DOC label cropped off a mugshot); a photo moved off a face |
+| P5 names | name callouts with lines for the people questioned |
+| P6 music changes | none mid-narration |
+| P7 level and mood | every bed from Investigative, Low tones, Building tension or Revelation, 16 LU under; no music under the tape |
+| P8 structure | a riser and boom into the first hook; every tape start marked |
+| P9 dead air | the teaser's 2 s pause cut |
+| P10 map | each case's prologue on a dark map with its date |
+
+What it got wrong that the trials hadn't shown: the teasers have plain subtitles instead of the coloured speaker captions, because caption_speakers failed twice ("Narrator can't be white": a news clip's narrator in a teaser became a white person the cast refused; the same failure is in the log from another project the day before). Fixed after the run: caption_speakers leaves out the narrator, radio and background talk as add_subtitles does. It also didn't run level_footage after recutting, and reused room moments across bridges (repeated_broll 31), which JJ's "the same footage for so long" may catch.
+
+Next round's test: the next new video, not this one.

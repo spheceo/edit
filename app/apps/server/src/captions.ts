@@ -1026,7 +1026,12 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
     .filter((clip): clip is VideoClip => clip.type === "video" && videoTracks.includes(clip.track) && clip.start < to && clipEnd(clip) > from)
     .sort((a, b) => a.start - b.start);
 
-  const lines = (await spokenLines(app, project, footage, from, to, false)).filter((line) => !throwaway(line));
+  // As the subtitles do: no captions for the narrator, radio or background
+  // talk (a news clip's narrator in a teaser came through as a white
+  // "Narrator" person the cast refused, and no captions were made at all).
+  const lines = (await spokenLines(app, project, footage, from, to, false)).filter(
+    (line) => !throwaway(line) && !seams.subtitles.hiddenRole(line.role),
+  );
   if (lines.length === 0) throw new Error("No speech in that part of the timeline (is the footage transcribed?).");
 
   // A still per line, for the model.

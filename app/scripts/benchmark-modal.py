@@ -42,6 +42,8 @@ def main():
     parser.add_argument("--gpu", choices=["L4", "L40S", "RTX-PRO-6000"], default="L4")
     parser.add_argument("--baseline", type=Path, help="Require the exact snapshot hashes of a previous report")
     parser.add_argument("--output", type=Path, default=Path("/tmp/edit-modal-real-benchmark"))
+    parser.add_argument("--keep-videos", action="store_true",
+                        help="Keep the downloaded exports (by default each is deleted once timed: two runs were 2.5 GB each)")
     args = parser.parse_args()
     if not args.execute:
         raise RuntimeError("--execute is required to deploy the pilot and run two paid exports")
@@ -169,8 +171,12 @@ def main():
                         sent += len(chunk)
             if sent != status["output"]["size"]:
                 raise RuntimeError("Downloaded output size mismatch")
-            partial.replace(path)
-            return {"path": str(path), "bytes": sent, "delivered_seconds": time.monotonic() - started}
+            delivered = time.monotonic() - started
+            if args.keep_videos:
+                partial.replace(path)
+            else:
+                partial.unlink()
+            return {"path": str(path) if args.keep_videos else None, "bytes": sent, "delivered_seconds": delivered}
         deadline = started + 2200
         try:
             while time.monotonic() < deadline:

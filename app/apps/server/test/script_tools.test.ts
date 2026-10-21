@@ -25,10 +25,15 @@ let footage: Uint8Array = new Uint8Array();
 let tone: Uint8Array = new Uint8Array();
 
 function make(args: string[]): Uint8Array {
-  const out = `${fs.mkdtempSync("/tmp/edit-wp4-")}/out`;
-  const made = Bun.spawnSync([ffmpeg!, "-v", "error", "-y", ...args, out], { stdin: "ignore" });
-  if (made.exitCode !== 0) throw new Error(made.stderr.toString());
-  return new Uint8Array(fs.readFileSync(out));
+  const dir = fs.mkdtempSync("/tmp/edit-wp4-");
+  try {
+    const out = `${dir}/out`;
+    const made = Bun.spawnSync([ffmpeg!, "-v", "error", "-y", ...args, out], { stdin: "ignore" });
+    if (made.exitCode !== 0) throw new Error(made.stderr.toString());
+    return new Uint8Array(fs.readFileSync(out));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 beforeAll(() => {

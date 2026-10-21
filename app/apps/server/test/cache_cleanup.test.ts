@@ -93,3 +93,48 @@ test("a Drive download goes days after its last export, never one a project uses
     cleanup();
   }
 });
+
+test("past the cache's limit or with the disk nearly full, the previews of the projects saved longest ago go, never a recent one's or paid analysis", async () => {
+  const { dir, app, store, cleanup } = fixtureHome("cache-limit");
+  try {
+    const cache = store.cacheDir();
+    const day = 24 * 3600 * 1000;
+    const projects = store.home + "/projects";
+    // Three projects, saved 9, 5 and 0 days ago, each with its own footage.
+    const keys: string[] = [];
+    for (const [name, daysAgo] of [["oldest", 9], ["older", 5], ["recent", 0]] as const) {
+      const footage = `${dir}/${name}.mp4`;
+      fs.writeFileSync(footage, name);
+      const live = store.create(name, { width: 1920, height: 1080, fps: 30 });
+      const project = structuredClone(live.project);
+      project.media = [{ id: "m1", name: `${name}.mp4`, path: footage, kind: "video", duration: 1, width: 2, height: 2, fps: 30, has_audio: false }];
+      await store.replace(project.id, null, project, "test");
+      const at = (Date.now() - daysAgo * day) / 1000;
+      fs.utimesSync(`${projects}/${project.id}.json`, at, at);
+      const key = app.native.mediaKey(footage);
+      keys.push(key);
+      fs.mkdirSync(`${cache}/${key}`, { recursive: true });
+      fs.writeFileSync(`${cache}/${key}/preview.mp4`, Buffer.alloc(1000));
+      fs.writeFileSync(`${cache}/${key}/preview.done`, "");
+      fs.writeFileSync(`${cache}/${key}/transcript.json`, Buffer.alloc(10));
+    }
+    const [oldest, older, recent] = keys as [string, string, string];
+    // Under both limits: nothing goes.
+    expect(cleanCache(app, false, Date.now(), { cacheBytes: 1e9, freeBytes: 0, free: 1e12 }).files).toBe(0);
+    // A little over the limit: only the oldest project's previews.
+    const dry = cleanCache(app, true, Date.now(), { cacheBytes: 2500, freeBytes: 0, free: 1e12 });
+    expect(dry.bytes).toBe(1000);
+    expect(fs.existsSync(`${cache}/${oldest}/preview.mp4`)).toBe(true);
+    cleanCache(app, false, Date.now(), { cacheBytes: 2500, freeBytes: 0, free: 1e12 });
+    expect(fs.existsSync(`${cache}/${oldest}/preview.mp4`)).toBe(false);
+    expect(fs.existsSync(`${cache}/${oldest}/preview.done`)).toBe(false);
+    expect(fs.existsSync(`${cache}/${oldest}/transcript.json`)).toBe(true);
+    expect(fs.existsSync(`${cache}/${older}/preview.mp4`)).toBe(true);
+    // The disk nearly full: the older one's go too, never the recent one's.
+    cleanCache(app, false, Date.now(), { cacheBytes: 1e9, freeBytes: 1e9, free: 0 });
+    expect(fs.existsSync(`${cache}/${older}/preview.mp4`)).toBe(false);
+    expect(fs.existsSync(`${cache}/${recent}/preview.mp4`)).toBe(true);
+  } finally {
+    cleanup();
+  }
+});

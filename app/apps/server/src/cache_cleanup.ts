@@ -7,8 +7,16 @@
 // censor analysis); what cost money to make (transcripts, watch answers,
 // seats, faces) stays, so a project that brings the footage back pays
 // nothing again. Half-written files a day old go wherever they are. Nothing
-// touched in the last two days is removed. Runs a little after the server
-// starts and then daily; `POST /api/cache/clean` runs it now (`dry_run`).
+// touched in the last two days is removed.
+//
+// Footage projects still use kept its previews forever, though: Oct 21 the
+// Mac's disk was full with 36 GB of cache, mostly full-size previews of
+// projects not opened for days (one comp's alone 8 GB). So the cache is kept
+// under CACHE_LIMIT, and the disk over FREE_FLOOR free: past either, the
+// previews of footage whose projects were saved longest ago go first (made
+// again when the project is opened), never those of a project saved in the
+// last two days. Runs a little after the server starts and then hourly;
+// `POST /api/cache/clean` runs it now (`dry_run`).
 
 import * as fs from "node:fs";
 
@@ -26,6 +34,19 @@ const DAY = 24 * 3600 * 1000;
 const RECENT = 2 * DAY;
 /** A Drive download (its original in the cloud) not read by an export for this long goes. */
 const DOWNLOADED = 3 * DAY;
+/** The cache's size past which old projects' previews go. */
+const CACHE_LIMIT = 25e9;
+/** The disk's free space below which old projects' previews go. */
+const FREE_FLOOR = 10e9;
+/** A preview file of a media folder (the picture, its light copy, the sound, the done mark). */
+const PREVIEW = /^preview/;
+
+/** When the cache trims used footage's previews: past `cacheBytes`, or with under `freeBytes` free (`free` overrides the disk's). */
+export interface Limits {
+  cacheBytes: number;
+  freeBytes: number;
+  free?: number;
+}
 
 export interface CleanReport {
   folders: number;
@@ -66,13 +87,17 @@ function age(path: string, now: number): number {
  * media work started). Null when a project file won't read: then nothing it
  * might use is known, so everything counts as used.
  */
-function used(app: App): { paths: Set<string>; keys: Set<string> } | null {
+function used(app: App): { paths: Set<string>; keys: Set<string>; saved: Map<string, number> } | null {
   const paths = new Set<string>();
   const keys = new Set<string>();
+  // Each key's latest save of a project using it.
+  const saved = new Map<string, number>();
   const dir = join(app.store.home, "projects");
   for (const name of safeList(dir).filter((name) => name.endsWith(".json"))) {
     let media: { path?: unknown }[] = [];
+    let at = 0;
     try {
+      at = fs.statSync(join(dir, name)).mtimeMs;
       const value = JSON.parse(fs.readFileSync(join(dir, name), "utf8")) as { media?: { path?: unknown }[] };
       media = Array.isArray(value.media) ? value.media : [];
     } catch {
@@ -82,17 +107,33 @@ function used(app: App): { paths: Set<string>; keys: Set<string> } | null {
       if (typeof item.path !== "string") continue;
       paths.add(item.path);
       try {
-        keys.add(app.native.mediaKey(item.path));
+        const key = app.native.mediaKey(item.path);
+        keys.add(key);
+        saved.set(key, Math.max(saved.get(key) ?? 0, at));
       } catch {
         // A path the addon can't key: nothing of it is touched either way.
       }
     }
   }
-  return { paths, keys };
+  return { paths, keys, saved };
+}
+
+function freeSpace(dir: string): number {
+  try {
+    const stat = fs.statfsSync(dir);
+    return stat.bavail * stat.bsize;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
 }
 
 /** Cleans the cache as the module notes say; with `dryRun`, only says what would go. */
-export function cleanCache(app: App, dryRun: boolean, now = Date.now()): CleanReport {
+export function cleanCache(
+  app: App,
+  dryRun: boolean,
+  now = Date.now(),
+  limits: Limits = { cacheBytes: CACHE_LIMIT, freeBytes: FREE_FLOOR },
+): CleanReport {
   const cache = app.store.cacheDir();
   const inUse = used(app);
   const report: CleanReport = { folders: 0, files: 0, bytes: 0, removed: [] };
@@ -162,25 +203,43 @@ export function cleanCache(app: App, dryRun: boolean, now = Date.now()): CleanRe
     }
     if (touched) report.folders += 1;
   }
+  // Over the limit (or the disk nearly full): used footage's previews, the
+  // projects saved longest ago first.
+  if (inUse !== null) {
+    const freed = report.bytes;
+    const free = limits.free !== undefined ? limits.free + freed : freeSpace(cache) + (dryRun ? freed : 0);
+    let over = Math.max(size(cache) - (dryRun ? freed : 0) - limits.cacheBytes, limits.freeBytes - free);
+    const oldest = [...inUse.saved].filter(([, at]) => now - at >= RECENT).sort((a, b) => a[1] - b[1]);
+    for (const [key] of oldest) {
+      if (over <= 0) break;
+      const dir = join(cache, key);
+      const previews = safeList(dir).filter((entry) => PREVIEW.test(entry));
+      if (previews.length === 0) continue;
+      const before = report.bytes;
+      for (const entry of previews) remove(join(dir, entry));
+      over -= report.bytes - before;
+      report.folders += 1;
+    }
+  }
   return report;
 }
 
-/** Cleans now and then: a few minutes after the start, then daily. */
+/** Cleans now and then: a few minutes after the start, then hourly (a day of imports and exports filled the disk). */
 export function startCleaning(app: App): () => void {
   const run = () => {
     try {
       const report = cleanCache(app, false);
       if (report.files > 0) {
-        diag.info("cache", `freed ${(report.bytes / 1e9).toFixed(2)} GB: ${report.files} files in ${report.folders} media folders no project uses (or left half-written)`);
+        diag.info("cache", `freed ${(report.bytes / 1e9).toFixed(2)} GB: ${report.files} files in ${report.folders} media folders (no project uses them, half-written, or old projects' previews past the cache's limit)`);
       }
     } catch (error) {
       diag.warn("cache", `cleaning the cache: ${diag.messageOf(error)}`);
     }
   };
   const first = setTimeout(run, 10 * 60 * 1000);
-  const daily = setInterval(run, DAY);
+  const hourly = setInterval(run, 3600 * 1000);
   return () => {
     clearTimeout(first);
-    clearInterval(daily);
+    clearInterval(hourly);
   };
 }

@@ -30,16 +30,16 @@ preview_urls = false
 [vars]
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
-DAILY_BYTES_PER_IP = "432000000"  # ~30 hours (raised Oct 21: a day of edits and re-runs used 10)
-DAILY_BYTES_TOTAL = "1080000000"  # ~75 hours
+DAILY_BYTES_PER_IP = "1296000000"  # ~90 hours (raised Oct 21: a day of edits and re-runs used 10; that evening a day of feedback rounds used 30, and the teaching loop's from-scratch edits hear their footage again)
+DAILY_BYTES_TOTAL = "2160000000"  # ~150 hours
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
 
 # Map stills (Google Photorealistic 3D Tiles, billed per session): a day's
 # sessions per IP and across everyone (raised Oct 21 to finish a round of map
 # re-renders). 80 a day is at most ~2,400 a month;
 # compare with Google's current free allowance before raising it.
-DAILY_MAP_SESSIONS_PER_IP = "40"
-DAILY_MAP_SESSIONS_TOTAL = "80"
+DAILY_MAP_SESSIONS_PER_IP = "120"
+DAILY_MAP_SESSIONS_TOTAL = "200"
 
 # Voice generation (text to speech, billed per character): one request's
 # limit, and a day's characters per IP and across everyone. A 10-minute

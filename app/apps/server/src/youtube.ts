@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
 import * as tools from "./tools.ts";
+import { compiled } from "./update.ts";
 import { join, parent } from "./paths.ts";
 
 /** The prefix of a script file that's a YouTube video. */
@@ -119,12 +120,22 @@ function ffmpegArgs(): string[] {
   return path === null ? [] : ["--ffmpeg-location", path];
 }
 
-/** yt-dlp's JavaScript runtime for YouTube's challenges: Deno by default; Node or Bun when that's what this Mac has. */
+/**
+ * yt-dlp's JavaScript runtime for YouTube's challenges: Deno by default; Node
+ * or Bun when that's what this Mac has; else the compiled `edit` itself, which
+ * is Bun under BUN_BE_BUN=1 (see `runtimeEnv`), so a Mac needs none installed.
+ */
 function runtimeArgs(): string[] {
   if (Bun.which("deno") !== null) return [];
   if (Bun.which("node") !== null) return ["--js-runtimes", "node"];
   if (Bun.which("bun") !== null) return ["--js-runtimes", "bun"];
+  if (compiled()) return ["--js-runtimes", `bun:${process.execPath}`];
   return [];
+}
+
+/** yt-dlp's environment: BUN_BE_BUN=1 when it runs `edit` as its Bun. */
+function runtimeEnv(args: string[]): Record<string, string | undefined> | undefined {
+  return args.some((arg) => arg.startsWith("bun:")) ? { ...process.env, BUN_BE_BUN: "1" } : undefined;
 }
 
 // H.264 (the hardware decodes it everywhere; YouTube's AV1 doesn't on an M1)
@@ -227,6 +238,7 @@ async function runYtdlp(
   proxy: string | null,
   progress: (bytes: number, total: number | null, name: string) => void,
 ): Promise<{ path: string | null; stderr: string }> {
+  const runtime = runtimeArgs();
   const command = [
     binary,
     "--no-playlist",
@@ -247,7 +259,7 @@ async function runYtdlp(
     "--merge-output-format",
     "mp4",
     ...ffmpegArgs(),
-    ...runtimeArgs(),
+    ...runtime,
     "-P",
     dir,
     "-o",
@@ -261,7 +273,7 @@ async function runYtdlp(
   ];
   let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
   try {
-    child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: runtimeEnv(runtime) });
   } catch (error) {
     return { path: null, stderr: `ERROR: yt-dlp couldn't start: ${diag.messageOf(error)}` };
   }

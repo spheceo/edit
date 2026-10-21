@@ -10,7 +10,7 @@ import { useEditor } from "./store";
 export type UpdateChannel = "nightly" | "stable";
 
 export interface UpdateStatus {
-  /** This build: "nightly-12", or the version ("0.0.0"). */
+  /** This build: "nightly-12", or "v0.0.0". */
   current: string;
   /** A newer build's tag ("v0.2.0", "nightly-13"), if there is one. */
   latest: string | null;

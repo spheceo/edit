@@ -19,8 +19,8 @@ function edit(args: string[], env: Record<string, string> = {}) {
 }
 
 test("edit --version, help, mcp and refusals print what they should", () => {
-  expect(edit(["--version"])).toEqual({ code: 0, stdout: `edit ${VERSION}\n`, stderr: "" });
-  expect(edit(["-V"]).stdout).toBe(`edit ${VERSION}\n`);
+  expect(edit(["--version"])).toEqual({ code: 0, stdout: `edit v${VERSION}\n`, stderr: "" });
+  expect(edit(["-V"]).stdout).toBe(`edit v${VERSION}\n`);
   expect(edit(["help"]).stdout).toBe(HELP);
   expect(edit(["mcp", "--port", "7701"]).stdout).toBe(`${mcpText("7701")}\n`);
   expect(mcpText("7701")).toContain("claude mcp add --transport http edit http://127.0.0.1:7701/mcp");
@@ -31,7 +31,7 @@ test("edit --version, help, mcp and refusals print what they should", () => {
     stderr: "edit: usage: edit cloud backfill <project id> [--port N]\n",
   });
   // A dev build never updates itself.
-  expect(edit(["update"]).stdout).toBe(`This build of Edit (${VERSION}) doesn't update itself; pull and rebuild.\n`);
+  expect(edit(["update"]).stdout).toBe(`This build of Edit (v${VERSION}) doesn't update itself; pull and rebuild.\n`);
 });
 
 test("edit media says where media goes, from the data folder given", () => {

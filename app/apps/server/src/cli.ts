@@ -10,7 +10,7 @@ import * as seams from "./seams.ts";
 import { fail, start } from "./serve.ts";
 import * as tools from "./tools.ts";
 import { runCli as updateCli } from "./update.ts";
-import { BUILD, VERSION } from "./version.ts";
+import { BUILD } from "./version.ts";
 import { adoptShellEnv, portTaken, runWindow, windowHelper } from "./window.ts";
 
 export const DEFAULT_PORT = 7700;
@@ -141,7 +141,7 @@ export async function main(args: string[]): Promise<void> {
     case "--version":
     case "-V":
     case "version":
-      console.log(BUILD === VERSION ? `edit ${VERSION}` : `edit ${VERSION} (${BUILD})`);
+      console.log(`edit ${BUILD}`);
       return;
     case "--help":
     case "-h":

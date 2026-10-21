@@ -74,7 +74,7 @@ export interface Release {
 export type Phase = "idle" | "downloading" | "restarting";
 
 export interface Status {
-  /** This build: "nightly-12", or the version ("0.0.0"). */
+  /** This build: "nightly-12", or "v0.0.0". */
   current: string;
   /** A newer build's tag ("v0.2.0", "nightly-13"), if there is one. */
   latest: string | null;

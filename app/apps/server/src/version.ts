@@ -17,5 +17,5 @@ export const RELEASE: boolean = typeof EDIT_RELEASE === "boolean" ? EDIT_RELEASE
 /** A nightly's number (tag `nightly-<N>`), or null for a release (built with 0) or a dev build. */
 export const NIGHTLY: number | null = typeof EDIT_NIGHTLY === "number" && EDIT_NIGHTLY > 0 ? EDIT_NIGHTLY : null;
 
-/** This build as people see it: "nightly-12", or the version ("0.0.0"). */
-export const BUILD: string = NIGHTLY !== null ? `nightly-${NIGHTLY}` : VERSION;
+/** This build as people see it, its tag: "nightly-12", or "v0.0.0". */
+export const BUILD: string = NIGHTLY !== null ? `nightly-${NIGHTLY}` : `v${VERSION}`;

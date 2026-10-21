@@ -82,7 +82,15 @@ case ":$PATH:" in
   *) echo "Add it to your PATH (e.g. in ~/.zshrc):  export PATH=\"\$PATH:$PREFIX\"" ;;
 esac
 [ -x "$PREFIX/edit-ffmpeg" ] || command -v ffmpeg >/dev/null 2>&1 || echo "Edit needs FFmpeg for importing and export: brew install ffmpeg"
-command -v codex >/dev/null 2>&1 || echo "The agent panel needs Codex: npm install -g @openai/codex, then codex login"
+# The agent panel runs on Claude Code (the default) or Codex: one of them is enough.
+if ! command -v claude >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; then
+  echo "The agent panel needs Claude Code (or Codex; pick in Settings → Agent):"
+  echo "  curl -fsSL https://claude.ai/install.sh | bash, then claude auth login"
+fi
+# Map shots and research open pages in Chrome (apps/server/src/broll.ts).
+if [ ! -d "/Applications/Google Chrome.app" ] && [ ! -d "/Applications/Chromium.app" ] && [ ! -d "/Applications/Microsoft Edge.app" ]; then
+  echo "Map shots and research need Google Chrome: https://www.google.com/chrome/"
+fi
 echo
 echo "Start it with:  edit serve"
 echo "Updates show up in the editor; one click installs and restarts."

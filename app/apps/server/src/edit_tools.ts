@@ -1715,6 +1715,20 @@ export function soundTimes(store: Store, id: string, args: Args): number[] {
     times.push(...markers.times(project, names));
   }
   if (times.length === 0) throw new Error("give times (timeline seconds) or markers (names)");
+  // Frames given as seconds (a plan's frames reused here) land minutes past
+  // the end: say so instead of placing sounds where nothing plays.
+  const project = store.get(id)?.project;
+  if (project !== undefined && project.clips.length > 0) {
+    const fps = fpsOf(project);
+    const length = durationOf(project) / fps;
+    const past = times.filter((time) => time > length + 1.0);
+    if (past.length > 0) {
+      const looksLikeFrames = past.every((time) => time / fps <= length + 1.0);
+      throw new Error(
+        `times are timeline SECONDS and the timeline is ${length.toFixed(1)} s long; ${past.slice(0, 3).join(", ")} ${looksLikeFrames ? `look like frames (${past.slice(0, 3).map((time) => (time / fps).toFixed(2)).join(", ")} s)` : "are past the end"}; nothing placed`,
+      );
+    }
+  }
   return times;
 }
 

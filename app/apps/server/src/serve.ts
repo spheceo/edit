@@ -163,6 +163,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   setSmoothByDefault(app.native.smoothSupported());
   // The cache kept to what's used.
   startCleaning(app);
+  seams.broll.stopLeftoverMaps?.();
   // Tools register here; the subtitles' and captions' register as their modules load (through seams).
   registerEditingTools();
   registerMediaTools();

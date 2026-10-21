@@ -920,6 +920,33 @@ export async function waitForMaps(app: App, projectId: string, limitMs: number):
   }
 }
 
+/**
+ * Map Chromes an Edit that crashed mid-render left running: orphans (their
+ * parent gone, so launchd's) with a map profile. One sat for two hours after
+ * Bun crashed at 09:38 on Oct 21, a gigabyte the next renders needed on an
+ * 8 GB Mac. Stopped when the server starts; another Edit's renders, still
+ * parented, are left alone.
+ */
+export function stopLeftoverMaps(): number {
+  if (process.platform === "win32") return 0;
+  const listed = Bun.spawnSync(["ps", "-Ao", "pid=,ppid=,command="], { stdout: "pipe", stderr: "ignore" });
+  const orphans: number[] = [];
+  for (const line of listed.stdout.toString().split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (match === null || match[2] !== "1" || !match[3]!.includes("--user-data-dir=") || !match[3]!.includes("edit-map-")) continue;
+    orphans.push(Number(match[1]));
+  }
+  for (const pid of orphans) {
+    try {
+      process.kill(pid);
+    } catch {
+      // Gone already.
+    }
+  }
+  if (orphans.length > 0) diag.info("agent", `stopped ${orphans.length} map renders an earlier Edit left running`);
+  return orphans.length;
+}
+
 /** One map render (a headless Chrome with the 3D map) at a time: each takes a gigabyte or so. */
 const mapSlot = new Semaphore(1);
 

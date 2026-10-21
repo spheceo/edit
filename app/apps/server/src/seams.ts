@@ -836,6 +836,7 @@ export interface BrollSeam {
   /** A still as 30 s of steady footage (off macOS, where pictures don't stay images). */
   stillVideo(image: string, dir: string): Promise<string>;
   waitForMaps(app: App, projectId: string, limitMs: number): Promise<void>;
+  stopLeftoverMaps?(): number;
   waitForSmoothing(projectId: string, limitMs: number): Promise<boolean>;
 }
 

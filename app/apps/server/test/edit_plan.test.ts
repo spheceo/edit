@@ -36,6 +36,25 @@ test("named_references_and_intermediate_overlaps", () => {
   expect(issuesOf(p)).toEqual([]);
 });
 
+test("a_clip_left_over_another_goes_onto_its_own_track_above", () => {
+  const p = project("plan");
+  apply(p, [
+    { op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 30, fill: [0, 0, 0, 1] } },
+    { op: "add", clip: { type: "solid", track: "v1", start: 30, duration: 30, fill: [1, 1, 1, 1] } },
+  ]);
+  const [first, second] = p.clips.map((one) => one.id);
+  // Lengthened over its neighbour: kept, on a track just above v1.
+  const result = apply(p, [{ op: "update", select: { ids: [first!] }, patch: { duration: 45 } }]);
+  expect(result.separated).toEqual([first!]);
+  const moved = p.clips.find((one) => one.id === first)!;
+  expect(moved.duration).toBe(45);
+  expect(moved.track).not.toBe("v1");
+  const order = p.tracks.map((track) => track.id);
+  expect(order.indexOf(moved.track)).toBe(order.indexOf("v1") + 1);
+  expect(p.clips.find((one) => one.id === second)!.track).toBe("v1");
+  valid(p);
+});
+
 test("linked_halves_move_and_go_together_and_add_needs_times", () => {
   const p = project("plan");
   apply(p, [

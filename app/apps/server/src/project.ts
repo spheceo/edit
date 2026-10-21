@@ -499,6 +499,43 @@ export function tidyTracks(project: Project): [number, number] {
 }
 
 /**
+ * Two clips a plan left overlapping on one track (a sound moved into the next,
+ * a picture lengthened over its neighbour): the one the plan placed (not in
+ * `placed`, or placed elsewhere) goes onto a new track just above its own, so
+ * it still shows over everything it was over and under everything it was
+ * under; tidyTracks packs it down after. The subtitles' track is left to
+ * fail validation. Returns the clips moved.
+ */
+export function separateOverlaps(project: Project, placed: Map<string, string>): string[] {
+  const moved: string[] = [];
+  const touched = (clip: Clip) => placed.get(clip.id) !== `${clip.track}/${clip.start}/${clip.duration}`;
+  for (let guard = 0; guard < 200; guard++) {
+    let found: Clip | null = null;
+    for (const track of project.tracks) {
+      if (track.subtitles === true) continue;
+      const here = project.clips.filter((clip) => clip.track === track.id).sort((a, b) => a.start - b.start);
+      for (let index = 1; index < here.length && found === null; index++) {
+        for (let back = index - 1; back >= 0 && found === null; back--) {
+          const a = here[back]!;
+          const b = here[index]!;
+          if (clipEnd(a) <= b.start) continue;
+          found = touched(b) ? b : touched(a) ? a : b;
+        }
+      }
+      if (found !== null) break;
+    }
+    if (found === null) break;
+    const own = project.tracks.findIndex((track) => track.id === found!.track);
+    const kind = project.tracks[own]!.kind;
+    const id = freshId(project, kind === "video" ? "v" : "a");
+    project.tracks.splice(own + 1, 0, { id, kind, hidden: project.tracks[own]!.hidden, muted: project.tracks[own]!.muted, locked: false });
+    found.track = id;
+    moved.push(found.id);
+  }
+  return moved;
+}
+
+/**
  * Lowest track of `kind` free over [start, end); adds a track when none is.
  * Text and graphics prefer tracks above the main footage.
  */

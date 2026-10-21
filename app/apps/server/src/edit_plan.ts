@@ -28,6 +28,7 @@ import {
   liftTextOverBlurs,
   mediaOf,
   mergeClip,
+  separateOverlaps,
   tidyTracks,
   touchesPeople,
   trackOf,
@@ -55,6 +56,8 @@ export const hooks = {
 export interface Applied {
   results: Json[];
   smooth: string[];
+  /** Clips the plan left overlapping another on its track, moved onto a track of their own. */
+  separated: string[];
 }
 
 /**
@@ -155,6 +158,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   const refs = new Map<string, Json>();
   const results: Json[] = [];
   const smooth: string[] = [];
+  const placed = new Map(project.clips.map((clip) => [clip.id, `${clip.track}/${clip.start}/${clip.duration}`]));
   operations.forEach((original, index) => {
     let result: Json;
     try {
@@ -186,6 +190,10 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   ) {
     hooks.oneColourPerPerson(project);
   }
+  // Two clips left on one track at once (a sound moved into the next, a
+  // shot lengthened over its neighbour) refused the whole plan: the one the
+  // plan placed goes onto a track of its own just above instead.
+  const separated = separateOverlaps(project, placed);
   // No words under a blur, whatever the plan added where.
   liftTextOverBlurs(project);
   // Every graphic op puts its layers on new tracks above everything; packed
@@ -194,7 +202,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   tidyTracks(project);
   const invalid = native().projectValidate(jsonForSerde(project));
   if (invalid !== null) throw new Error(`final plan is invalid: ${invalid}; nothing saved`);
-  return { results, smooth };
+  return { results, smooth, separated };
 }
 
 function messageOf(error: unknown): string {

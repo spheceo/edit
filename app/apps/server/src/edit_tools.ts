@@ -248,6 +248,43 @@ export function onlyMediaChanged(before: Project, now: Project): boolean {
   return before.media.every((media) => still.has(media.id));
 }
 
+/**
+ * Whether everything that changed between two versions is sound or starring:
+ * sounds placed, moved or muted (add_sound_effect, add_from_library,
+ * mute_house_words), audio tracks added, words starred in a text, markers,
+ * media. That's what an agent's own batch of sound tools does between its
+ * get_edit_context and its plan, so the plan still holds on the newer version.
+ */
+export function onlySoundChanged(before: Project, now: Project): boolean {
+  const ignored = new Set(["media", "drive", "clips", "tracks", "markers", "next_id"]);
+  const keys = new Set([...Object.keys(before), ...Object.keys(now)]);
+  for (const key of keys) {
+    if (ignored.has(key)) continue;
+    const a = (before as unknown as Record<string, unknown>)[key];
+    const b = (now as unknown as Record<string, unknown>)[key];
+    if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) return false;
+  }
+  const videoTracks = (project: Project) =>
+    JSON.stringify(project.tracks.filter((track) => track.kind === "video"));
+  if (videoTracks(before) !== videoTracks(now)) return false;
+  const was = new Map(before.clips.map((clip) => [clip.id, clip]));
+  const is = new Map(now.clips.map((clip) => [clip.id, clip]));
+  for (const id of new Set([...was.keys(), ...is.keys()])) {
+    const a = was.get(id);
+    const b = is.get(id);
+    if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) continue;
+    if ((a === undefined || a.type === "audio") && (b === undefined || b.type === "audio")) continue;
+    if (a !== undefined && b !== undefined && a.type === "text" && b.type === "text") {
+      const { text: _a, ...restA } = a as Clip & { text?: string };
+      const { text: _b, ...restB } = b as Clip & { text?: string };
+      if (JSON.stringify(restA) === JSON.stringify(restB)) continue;
+    }
+    return false;
+  }
+  const still = new Set(now.media.map((media) => media.id));
+  return before.media.every((media) => still.has(media.id));
+}
+
 async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const base = uint(args.base_rev);
   if (base === null) throw new Error("base_rev is required");
@@ -258,10 +295,14 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
   if (current === null) throw new Error("project vanished");
   if (current.rev !== base) {
     const was = seen.get(projectId)?.find((one) => one.rev === base);
-    if (was === undefined || !onlyMediaChanged(was.project, current.project)) {
+    const media = was !== undefined && onlyMediaChanged(was.project, current.project);
+    if (was === undefined || !(media || onlySoundChanged(was.project, current.project))) {
       throw new Error(`revision conflict: expected ${base}, current ${current.rev}; nothing saved; refresh get_edit_context`);
     }
-    diag.info("agent", `${projectId}: the plan on rev ${base} goes on rev ${current.rev} (only media files changed between)`);
+    diag.info(
+      "agent",
+      `${projectId}: the plan on rev ${base} goes on rev ${current.rev} (only ${media ? "media files" : "sounds and starring"} changed between)`,
+    );
   }
   const project = current.project;
   timeProfileLines(app, project, operations);
@@ -299,6 +340,9 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
     rev: saved.rev,
     saved: !dryRun,
     results: applied.results,
+    ...(applied.separated.length > 0
+      ? { moved_to_own_track: `${applied.separated.join(", ")} overlapped another clip on its track, so each went onto a track of its own just above` }
+      : {}),
     audit,
     smoothing_started: smoothing,
   };

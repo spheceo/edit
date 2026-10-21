@@ -27,7 +27,10 @@ case "$target" in
 esac
 mkdir -p "$out"
 work=$(mktemp -d)
-trap 'rm -rf "$work"; [[ -n "${keychain:-}" ]] && security delete-keychain "$keychain" 2>/dev/null || true' EXIT
+# One path per entry, spaces kept ("Application Support").
+keychains=("${(@f)$(security list-keychains -d user | sed -E 's/^[[:space:]]*"(.*)"$/\1/')}")
+# Puts the search list back as it was (on a Mac, not just CI) and removes the signing keychain.
+trap 'rm -rf "$work"; if [[ -n "${keychain:-}" ]]; then security list-keychains -d user -s "${keychains[@]}"; security delete-keychain "$keychain" 2>/dev/null; fi; true' EXIT
 
 echo "==> Edit.app ($target)"
 (cd "$root/crates/edit-window" && bunx @tauri-apps/cli@2 build --target "$target" --bundles app --config \
@@ -41,15 +44,16 @@ runtime=()
 if [[ -n "${MACOS_CERTIFICATE:-}" ]]; then
   echo "==> Signing with the Developer ID"
   keychain="$work/signing.keychain-db"
-  password=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+  # No pipes cut short here: under pipefail a reader that stops early fails the script (SIGPIPE, 141).
+  password=$(openssl rand -hex 16)
   print -rn -- "$MACOS_CERTIFICATE" | base64 --decode >"$work/certificate.p12"
   security create-keychain -p "$password" "$keychain"
   security set-keychain-settings -lut 3600 "$keychain"
   security unlock-keychain -p "$password" "$keychain"
   security import "$work/certificate.p12" -k "$keychain" -P "${MACOS_CERTIFICATE_PASSWORD:-}" -T /usr/bin/codesign
   security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
-  security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-  identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)
+  security list-keychains -d user -s "$keychain" "${keychains[@]}"
+  identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | sed -n 1p)
   [[ -n "$identity" ]] || { echo "no Developer ID Application identity in MACOS_CERTIFICATE" >&2; exit 1; }
   runtime=(--options runtime --timestamp)
 fi

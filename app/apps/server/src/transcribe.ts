@@ -142,6 +142,22 @@ export async function run(source: string, target: string, keyterms: readonly str
           }
         }),
       ]);
+      // A piece heard as gibberish (Helpful Wife's m91 at 6:39–7:16 came back
+      // in a dozen scripts, the same each time with the case's names): asked
+      // again without them, else the whole file's words for that stretch.
+      const latin = garbledShare(whole.words) < 0.2;
+      for (const [index, piece] of pieces.entries()) {
+        if (!latin || garbledShare(heard[index]!) < 0.2) continue;
+        const file = withExtension(target, `piece-${index}-again.ogg`);
+        try {
+          await encode(["-ss", fixed3(piece.from), "-t", fixed3(piece.to - piece.from), "-i", audio], file, "could not cut the audio");
+          const again = (await ask(file, [])).words.map((word) => ({ text: word.text, start: round3(word.start + piece.from), end: round3(word.end + piece.from) }));
+          heard[index] = garbledShare(again) < 0.2 ? again : whole.words.filter((word) => word.start >= piece.from && word.end <= piece.to).map((word) => ({ text: word.text, start: word.start, end: word.end }));
+          diag.warn("media", `${source}: piece ${index} (${fixed3(piece.from)}–${fixed3(piece.to)} s) came back garbled; heard again${garbledShare(again) < 0.2 ? "" : ", still garbled: the whole file's words stand"}`);
+        } finally {
+          fs.rmSync(file, { force: true });
+        }
+      }
       const words = join(pieces, heard);
       voicesFrom(words, whole.words);
       transcript = { model: whole.model, language: whole.language, words };
@@ -163,6 +179,20 @@ export async function run(source: string, target: string, keyterms: readonly str
   } catch (error) {
     throw new Error(ioMessage(error));
   }
+}
+
+/** The share of words' letters outside the Latin script (a Latin-script recording heard as gibberish is mostly not). */
+export function garbledShare(words: readonly { text: string }[]): number {
+  let letters = 0;
+  let other = 0;
+  for (const word of words) {
+    for (const char of word.text) {
+      if (!/\p{L}/u.test(char)) continue;
+      letters += 1;
+      if (!/\p{Script=Latin}/u.test(char)) other += 1;
+    }
+  }
+  return letters < 20 ? 0 : other / letters;
 }
 
 /** Mono 16 kHz Opus of what `input` (FFmpeg's input arguments) names, into `out`. */

@@ -1947,20 +1947,35 @@ export function layOut(project: Project): void {
       const link = media.has_audio ? freshId(project, "l") : null;
       const id = freshId(project, "c");
       project.clips.push(
-        clipFrom({
-          id,
-          track: lower,
-          start: cursor,
-          duration: length,
-          color,
-          ...(link !== null ? { link } : {}),
-          type: "video",
-          media: media.id,
-          source_in: from,
-          speed: 1,
-          // Filling the frame: a 3:2 tape or a 4:3 interview never sits in black bars.
-          transform: { ...framing.fill(project, media), rotation: 0 },
-        }),
+        media.kind === "audio"
+          ? // A sound-only file (a police call) has no picture: a black card
+            // holds its place for the picture made over it (the call look).
+            clipFrom({
+              id,
+              track: lower,
+              start: cursor,
+              duration: length,
+              color,
+              ...(link !== null ? { link } : {}),
+              name: `${media.name} · sound only`,
+              type: "solid",
+              fill: [0, 0, 0, 1],
+              opacity: 1,
+            })
+          : clipFrom({
+              id,
+              track: lower,
+              start: cursor,
+              duration: length,
+              color,
+              ...(link !== null ? { link } : {}),
+              type: "video",
+              media: media.id,
+              source_in: from,
+              speed: 1,
+              // Filling the frame: a 3:2 tape or a 4:3 interview never sits in black bars.
+              transform: { ...framing.fill(project, media), rotation: 0 },
+            }),
       );
       if (media.has_audio) {
         project.clips.push(

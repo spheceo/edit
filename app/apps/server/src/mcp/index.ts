@@ -10,6 +10,7 @@ import * as diag from "../diag.ts";
 import { isBug, crashed } from "../guard.ts";
 import { empty, json, text as plain } from "../http/errors.ts";
 import { readJson, type RouteContext } from "../http/router.ts";
+import { stableStringify } from "../stable.ts";
 import { VERSION } from "../version.ts";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { handlerFor, registerTool, text, TOOLS, type Content } from "./registry.ts";
@@ -125,7 +126,67 @@ export async function call(
     if (TOOLS.some((tool) => tool.name === name)) throw new Error(`${name} is not available`);
     throw new Error(`unknown tool ${name}`);
   }
-  return registered.handler({ app, args, projectId, scope });
+  if (!LONG.has(name)) return registered.handler({ app, args, projectId, scope });
+  return once(`${projectId}|${name}|${stableStringify({ ...args, project_id: null })}`, name, async () => registered.handler({ app, args, projectId, scope }));
+}
+
+/**
+ * Tools that can outlast an agent's wait for one call (~5 min): asked again
+ * after the client gave up, they ran twice over each other (Helpful Wife got
+ * a second set of 26 captions; the comp's mute_house_words never answered and
+ * was retried). So one with the same project and arguments runs once: a
+ * repeat joins the run in progress, a run past `answerAfterMs` answers that
+ * it's still working, and the result waits for the next call to collect it.
+ */
+const LONG = new Set(["caption_speakers", "mute_house_words", "add_subtitles", "repack_subtitles"]);
+
+export const longTiming = { answerAfterMs: 4 * 60 * 1000, keepMs: 15 * 60 * 1000 };
+
+type Flight = { promise: Promise<Content[]>; started: number; waiting: number; done: { at: number; content?: Content[]; error?: unknown } | null };
+
+const flights = new Map<string, Flight>();
+
+export async function once(key: string, name: string, work: () => Promise<Content[]>): Promise<Content[]> {
+  let flight = flights.get(key);
+  if (flight?.done !== null && flight?.done !== undefined) {
+    // Finished while nobody was waiting: this call collects it.
+    flights.delete(key);
+    if (Date.now() - flight.done.at < longTiming.keepMs) {
+      if (flight.done.error !== undefined) throw flight.done.error;
+      return flight.done.content!;
+    }
+    flight = undefined;
+  }
+  if (flight === undefined) {
+    const made: Flight = { promise: work(), started: Date.now(), waiting: 0, done: null };
+    made.promise.then(
+      (content) => {
+        made.done = { at: Date.now(), content };
+        if (made.waiting > 0) flights.delete(key);
+      },
+      (error: unknown) => {
+        made.done = { at: Date.now(), error };
+        if (made.waiting > 0) flights.delete(key);
+      },
+    );
+    flights.set(key, made);
+    flight = made;
+  }
+  const own = flight;
+  own.waiting += 1;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), longTiming.answerAfterMs);
+  });
+  try {
+    const answer = await Promise.race([own.promise, late]);
+    if (answer !== null) return answer;
+    const seconds = Math.round((Date.now() - own.started) / 1000);
+    return [{ type: "text", text: `${name} is still working in the background (${seconds} s so far): call ${name} again with the same arguments in a minute or two; it answers with this run's result and never runs it twice` }];
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+    own.waiting -= 1;
+  }
 }
 
 // list_projects answers before any project is resolved (it works with none).

@@ -185,6 +185,49 @@ export function calloutTiming(project: Project, transcripts: Map<string, Transcr
   return issues;
 }
 
+/** Text that isn't a graphic of its own: subtitles, captions and the countdown follow the words on their own terms. */
+const FOLLOWS_SPEECH = ["Subtitle", "Caption", "Countdown", "Film look"];
+
+/**
+ * Words on screen that come after they're said (the team, four rounds running:
+ * "Whenever we are about to say something, we need to have it visually in
+ * front of us a second before, or at least a little bit before"): a text
+ * graphic (a name, a label, a note, a quote, a date, a File Viewer's name)
+ * or a desktop line whose telling words start being heard before it shows.
+ * Words said more than 4 s before it are a recap, not this. `start_by` is
+ * where it should start: 0.7 s before its words.
+ */
+export function textLate(project: Project, transcripts: Map<string, Transcript>): unknown[] {
+  const fps = fpsOf(project);
+  const heard = spokenWords(project, transcripts);
+  const recap = toI64(round(4.0 * fps));
+  const grace = toI64(round(0.2 * fps));
+  const lead = toI64(round(0.7 * fps));
+  const issues: unknown[] = [];
+  const check = (start: number, until: number, text: string, extra: Record<string, unknown>) => {
+    const telling = tellingWords(text).slice(0, 3);
+    if (telling.length === 0) return;
+    const said = heard.filter(([frame, word]) => frame >= start - recap && frame < until && telling.some((one) => sameWord(one, word)));
+    if (said.length === 0) return;
+    const first = said[0]![0];
+    if (first >= start - grace) return;
+    if (start - first > recap) return;
+    issues.push({ kind: "text_late", ...extra, start, said_at: first, start_by: Math.max(0, first - lead), text });
+  };
+  for (const clip of project.clips) {
+    if (clip.type !== "text") continue;
+    const name = clip.name ?? "";
+    if (FOLLOWS_SPEECH.some((prefix) => name.startsWith(prefix))) continue;
+    if (trackOf(project, clip.track)?.subtitles === true) continue;
+    check(clip.start, clipEnd(clip), clip.text, { clip: clip.id });
+  }
+  for (const marker of project.markers ?? []) {
+    if (marker.name !== "desktop line") continue;
+    check(marker.frame, marker.frame + toI64(round(3.0 * fps)), marker.note ?? "", { desktop_line: true });
+  }
+  return issues;
+}
+
 /** Every word heard on the timeline (narration and footage, not muted tracks): its frame and stem. */
 export function spokenWords(project: Project, transcripts: Map<string, Transcript>): [number, string][] {
   const fps = fpsOf(project);

@@ -657,6 +657,7 @@ export interface CaptionsSeam {
 
 export interface EditReviewSeam {
   calloutTiming(project: Project, transcripts: Map<string, Transcript>): Json[];
+  textLate(project: Project, transcripts: Map<string, Transcript>): unknown[];
   cutMidWord(project: Project, transcripts: Map<string, Transcript>): Json[];
   deadAir(project: Project, transcripts: Map<string, Transcript>, spans: [number, number][]): Json[];
   spokenWords(project: Project, transcripts: Map<string, Transcript>): [number, string][];

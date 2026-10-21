@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { calloutTiming, cutMidWord, lineFrames, offScript, spokenWords, subtitleCoverage, textNotSaid, unsubtitledSpeech } from "../src/edit_review.ts";
+import { calloutTiming, cutMidWord, lineFrames, offScript, spokenWords, subtitleCoverage, textLate, textNotSaid, unsubtitledSpeech } from "../src/edit_review.ts";
 import type { AudioClip, Clip, Project, TextClip } from "../src/model.ts";
 import { addTrack, newProject } from "../src/project.ts";
 import type { Transcript } from "../src/transcribe.ts";
@@ -237,4 +237,19 @@ test("speech heard with no subtitle or caption on screen is unsubtitled_speech, 
   const end = Math.max(...p.clips.map((clip) => clip.start + clip.duration));
   p.clips.push({ ...words("all", v2, "everything", 0, end), name: "Caption · Officer" });
   expect(unsubtitledSpeech(p, new Map([["m7", TEASER]]))).toEqual([]);
+});
+
+test("words on screen after they're said are late, with where they should start; before them is right", () => {
+  // "medic" is heard at frame 18 (272.79 s); a label naming it at frame 40 comes too late.
+  const p = footageProject();
+  const v2 = addTrack(p, "video");
+  const label = (id: string, start: number, text: string, name = "Label"): TextClip =>
+    ({ id, track: v2, start, duration: 45, color: "red", fade_in: 0, fade_out: 0, keyframes: {}, type: "text", name, text, style: {}, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, animation: { preset: "none", duration: 0, stagger: 0 }, opacity: 1 }) as unknown as TextClip;
+  p.clips.push(label("t1", 40, "MEDIC CALLED"), label("t2", 0, "BACKYARD"), label("t3", 40, "medic", "Subtitle · Officer"));
+  const issues = textLate(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
+  expect(issues).toEqual([{ kind: "text_late", clip: "t1", start: 40, said_at: 18, start_by: 0, text: "MEDIC CALLED" }]);
+  // A desktop line typed after its words too.
+  p.clips = p.clips.filter((clip) => clip.type !== "text");
+  p.markers = [{ frame: 60, name: "desktop line", note: "- Baby in the backyard" }];
+  expect((textLate(p, new Map([["m7", TEASER]])) as Record<string, unknown>[]).map((issue) => issue.kind)).toEqual(["text_late"]);
 });

@@ -1474,9 +1474,15 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       visible(clip.track) && isMusic(clip, clip.type === "audio" ? mediaOf(project, clip.media) : undefined),
   );
   const longestBed = project.style === "interrogation" ? LONGEST_SECTION_BED : LONGEST_BED;
+  // A bed that covers one narration longer than that and no more can't be
+  // shorter without stopping under it (music_stops_mid_narration) or changing
+  // in it (music_change_mid_narration): Mom & Teen's 26–31 s cut-ins.
+  const narrations = project.clips.filter((clip) => clip.type === "audio" && clip.name === "Voice-over");
+  const grace = 2.5 * fps;
   for (const clip of music) {
     const played = (clip.duration / fps) * (clip.speed ?? 1);
-    if (played > longestBed) {
+    const oneNarration = narrations.some((voice) => voice.start - grace <= clip.start && clipEnd(clip) <= clipEnd(voice) + grace);
+    if (played > longestBed && !oneNarration) {
       issues.push({ kind: "music_bed_long", clip: clip.id, start: clip.start, seconds: round(played * 10) / 10 });
     }
   }

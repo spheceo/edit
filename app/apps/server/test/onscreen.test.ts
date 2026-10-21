@@ -9,7 +9,7 @@ import { useNative, wrap, type Native, type ScreenText } from "../src/native/ind
 import { createStub } from "../src/native/stub.ts";
 import { issues } from "../src/onscreen.ts";
 import { join } from "../src/paths.ts";
-import { newProject } from "../src/project.ts";
+import { newProject, REUSE_LABEL } from "../src/project.ts";
 
 const SETTINGS = { width: 1920, height: 1080, fps: 30 };
 let before: Native | null = null;
@@ -106,6 +106,10 @@ test("another channel's subtitles burned into the footage are flagged with the s
   // Placed as the fix says: off the frame.
   const fixed = project([{ ...video("c1", 0, 300, 100), transform: { x: 0, y: 81, scale: 1.149, rotation: 0 } } as Clip]);
   expect(issues(fixed).issues.filter((one) => (one as { kind: string }).kind === "burned_subtitles")).toEqual([]);
+  // A finished video of ours, reused whole, has our own subtitles burned in.
+  const reused = project([video("c1", 0, 300, 100)]);
+  reused.script = { blocks: [{ id: "b1", kind: "footage", label: REUSE_LABEL, media: "m1" }] } as unknown as Project["script"];
+  expect(issues(reused).issues.filter((one) => (one as { kind: string }).kind === "burned_subtitles")).toEqual([]);
   // A timestamp and a credit alone aren't subtitles.
   addon(Object.fromEntries(Object.entries(SUBTITLED).map(([second, lines]) => [second, lines.slice(1)])), []);
   expect(issues(project([video("c1", 0, 300, 100)])).issues.filter((one) => (one as { kind: string }).kind === "burned_subtitles")).toEqual([]);

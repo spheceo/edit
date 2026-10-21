@@ -11,7 +11,7 @@
 import * as diag from "./diag.ts";
 import type { Clip, Media, Project } from "./model.ts";
 import { native, isReal } from "./native/index.ts";
-import { clipEnd, fps as fpsOf, mediaOf, trackOf } from "./project.ts";
+import { clipEnd, fps as fpsOf, mediaOf, reusedMedia, trackOf } from "./project.ts";
 import { round } from "./rust.ts";
 import * as seats from "./seats.ts";
 
@@ -185,6 +185,8 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
   }
   // Burned-in subtitles: one issue per file (a tape plays in many clips), its clips listed.
   const subtitled = new Map<string, Record<string, unknown> & { clips: string[]; seconds: number; end: number }>();
+  // A finished video of ours plays with our own subtitles burned in (Helpful Wife's husband's interview).
+  const ours = reusedMedia(project);
   for (const [clip, media] of clips) {
     const [from, to] = played(project, clip);
     // Calls to action, as stretches of timeline frames with the box to blur.
@@ -221,7 +223,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
       }
     }
     close();
-    const burned = burnedSubtitles(project, clip, media, text, from, to);
+    const burned = ours.has(media.id) ? null : burnedSubtitles(project, clip, media, text, from, to);
     if (burned !== null) {
       const seen = subtitled.get(media.id);
       if (seen === undefined) subtitled.set(media.id, { kind: "burned_subtitles", media: media.name, ...burned, clips: [clip.id] });

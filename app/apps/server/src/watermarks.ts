@@ -19,7 +19,7 @@ import * as diag from "./diag.ts";
 import type { Clip, Media, Project } from "./model.ts";
 import { isReal } from "./native/index.ts";
 import { join } from "./paths.ts";
-import { clipEnd, mediaOf, trackOf } from "./project.ts";
+import { clipEnd, mediaOf, reusedMedia, trackOf } from "./project.ts";
 import { round } from "./rust.ts";
 import * as tools from "./tools.ts";
 import * as watch from "./watch.ts";
@@ -184,13 +184,15 @@ function blurred(project: Project, clip: VideoClip, [x, y, w, h]: [number, numbe
 export function issues(project: Project): { issues: unknown[]; pending: string[] } {
   const out: unknown[] = [];
   const pending = new Set<string>();
+  // A finished video of ours carries only our own additions.
+  const ours = reusedMedia(project);
   // Footage: one issue per file and mark (a tape plays in many clips), its clips listed.
   const onFootage = new Map<string, { kind: string; media: string; text: string; inset?: true; clips: string[]; start: number; end: number; blur_box: number[]; fix: string }>();
   for (const clip of project.clips) {
     if (clip.type !== "video" || trackOf(project, clip.track)?.hidden === true) continue;
     const media = mediaOf(project, clip.media);
     // Found photos and footage only: Edit's own pictures (desktop windows, wallpaper, frames) carry no one's mark.
-    if (media === undefined) continue;
+    if (media === undefined || ours.has(media.id)) continue;
     const footage = isFootage(media);
     if (!footage && (media.kind !== "image" || /^(desktop|map|frame|board|paper)-/u.test(media.name))) continue;
     const marks = cachedMarks(media);

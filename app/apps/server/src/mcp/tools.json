@@ -1226,7 +1226,7 @@
           "type": "array"
         },
         "under_speech": {
-          "description": "LU under the edit's speech (the footage and voice-overs): music 14, low-volume notes 16, music with nothing said over it 6, risers 8, hits 0, whooshes and shutters 3, clicks 8. Use instead of loudness; nothing to measure first.",
+          "description": "LU under the edit's speech (the footage and voice-overs): music under narration or speech 20, low-volume notes 20, music with nothing said over it 6, risers 8, hits 0, whooshes and shutters 3, clicks 8. Use instead of loudness; nothing to measure first.",
           "type": "number"
         },
         "volume_db": {

@@ -26,10 +26,11 @@ export const OFF_LU = 6.0;
 /**
  * Music under a narration sits this far (LU) under it; closer than
  * MUSIC_CLOSEST is `music_loud` (Helpful Wife's bridges played their beds
- * 9–10 LU under the voice: "we need to turn down the music here").
+ * 9–10 LU under the voice: "we need to turn down the music here"; at 16 the
+ * team still asked, round after round, to turn it down "significantly").
  */
-export const MUSIC_UNDER = 16.0;
-const MUSIC_CLOSEST = 12.0;
+export const MUSIC_UNDER = 20.0;
+const MUSIC_CLOSEST = 16.0;
 /** The most a clip is turned up (a near-silent room boosted further is only noise) and down. */
 const MOST_UP = 24.0;
 const MOST_DOWN = -12.0;

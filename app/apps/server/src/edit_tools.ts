@@ -1550,8 +1550,8 @@ export function timelineTranscript(app: App, project: Project): string {
  * plan's own copy of the project, so it all saves once or not at all.
  */
 /**
- * A desktop profile given no line_at types each line as the narration under
- * it says it (Corrupt Cop's lines typed one after another while the
+ * A desktop profile given no line_at types each line 0.7 s before the
+ * narration under it says it (Corrupt Cop's lines typed one after another while the
  * narration was elsewhere: "Text needs to be more synced overall"); lines it
  * never says fall between their neighbours, and with none said the profile
  * keeps its even spacing.
@@ -1569,7 +1569,8 @@ export function timeProfileLines(app: App, project: Project, operations: Json[])
     for (const window of windows) {
       if (window.at === undefined && typeof window.said === "string") {
         const [frame] = seams.editReview.lineFrames([window.said], heard, start, end);
-        if (frame !== null && frame !== undefined) window.at = Math.max(frame - Math.round(fps * 0.15), start);
+        // A beat before the words (the team: "we need to have it visually in front of us a second before").
+        if (frame !== null && frame !== undefined) window.at = Math.max(frame - Math.round(fps * 0.8), start);
       }
       const lines = Array.isArray(window.lines) ? window.lines.filter((line): line is string => typeof line === "string") : [];
       if (window.app !== "notepad" || window.line_at !== undefined || lines.length === 0) continue;
@@ -1579,7 +1580,7 @@ export function timeProfileLines(app: App, project: Project, operations: Json[])
       const at: number[] = [];
       found.forEach((frame, index) => {
         if (frame !== null) {
-          at.push(Math.max(frame, from + Math.round(fps * 0.2)));
+          at.push(Math.max(frame - Math.round(fps * 0.7), from + Math.round(fps * 0.2), (at[index - 1] ?? 0) + Math.round(fps * 0.3)));
           return;
         }
         const before = at[index - 1] ?? from + Math.round(fps * 0.4);
@@ -1601,7 +1602,7 @@ export function timeProfileLines(app: App, project: Project, operations: Json[])
     const at: number[] = [];
     found.forEach((frame, index) => {
       if (frame !== null) {
-        at.push(frame);
+        at.push(Math.max(frame - Math.round(fpsOf(project) * 0.7), start, (at[index - 1] ?? 0) + Math.round(fpsOf(project) * 0.3)));
         return;
       }
       const before = at[index - 1] ?? start;

@@ -1301,6 +1301,22 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     );
     if (!sounded) issues.push({ kind: "silent_transition", clip: clip.id, at: middle });
   }
+  // Every picture that pops up is heard (the team: "have a click effect
+  // here"; "a file viewer image pop-up… with a subtle click effect"): a
+  // File Viewer, photo inset, name box or pause with no short sound starting
+  // from 0.7 s before it to 0.3 s after. One per moment (a viewer's frame,
+  // picture and name open together).
+  const before = asInt(round(0.7 * fps));
+  const after = asInt(round(0.3 * fps));
+  const popped: number[] = [];
+  for (const clip of [...project.clips].sort((a, b) => a.start - b.start)) {
+    const name = clip.name ?? "";
+    if (!/^(File Viewer|Photo inset|Name callout|name box|Pause\b)/iu.test(name) || name.startsWith("Pause ·")) continue;
+    if (popped.some((at) => Math.abs(at - clip.start) <= after)) continue;
+    popped.push(clip.start);
+    const sounded = heard.some(([start, stop]) => stop - start <= short && start >= clip.start - before && start <= clip.start + after);
+    if (!sounded) issues.push({ kind: "silent_popup", clip: clip.id, at: clip.start, fix: "a soft click on it (add_from_library, ~8 LU under the speech)" });
+  }
   // A subtitle runs past the cut it's said before: into a cut-in's
   // voice-over, or over the cut into another moment of footage.
   const voiceovers = project.clips.filter((clip) => clip.name === "Voice-over").map((clip): [number, number] => [clip.start, clipEnd(clip)]);

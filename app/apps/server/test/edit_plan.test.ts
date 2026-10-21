@@ -73,6 +73,19 @@ test("a_pause_holds_the_frame_before_with_its_words_typed_small", () => {
   expect(() => apply(p, [{ op: "pause", start: 400, end: 480 }])).toThrow("no footage on the timeline at frame 399");
 });
 
+test("a_picture_popping_up_without_a_sound_is_flagged", () => {
+  const p = project("plan");
+  p.media.push(media({ id: "m1", name: "photo", path: "/p.jpg", kind: "image", duration: 5, width: 800, height: 800, has_audio: false }));
+  p.media.push(media({ id: "s1", name: "click", path: "/c.wav", kind: "audio", duration: 0.2, has_audio: true }));
+  apply(p, [
+    { op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 600, fill: [0, 0, 0, 1] } },
+    { op: "add", clip: { type: "video", track: "new", start: 100, duration: 90, media: "m1", name: "File Viewer · Ava" } },
+    { op: "add", clip: { type: "video", track: "new", start: 300, duration: 90, media: "m1", name: "File Viewer · Ava" } },
+    { op: "add", clip: { type: "audio", track: "new", start: 290, duration: 6, media: "s1", name: "Click" } },
+  ]);
+  expect(kinds(p, "silent_popup").map((issue) => issue.at)).toEqual([100]);
+});
+
 test("linked_halves_move_and_go_together_and_add_needs_times", () => {
   const p = project("plan");
   apply(p, [

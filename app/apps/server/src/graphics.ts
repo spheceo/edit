@@ -105,7 +105,9 @@ export function dateTitle(project: Project, args: Args): Record<string, unknown>
   const k = project.settings.height / 1080;
   // position "bottom": Red Thread's lower third over its top-down map, the
   // place ("Keller, Texas") over the date in white, smaller, no darkening.
-  const bottom = args.position === "bottom";
+  // An interrogation's dates go at the bottom unless asked to the middle (the
+  // team: "We can't really have this text in the middle of the screen").
+  const bottom = args.position === "bottom" || (args.position === undefined && project.style === "interrogation");
   const place = typeof args.place === "string" && trim(args.place) !== "" ? trim(args.place) : null;
   const text = place === null ? given : `${place}\n${given}`;
   const made: string[] = [];

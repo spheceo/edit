@@ -83,8 +83,9 @@ function tag(project: Project, add: (fields: Args) => string, text: string, star
  * `{"op":"film_look","start":F,"end":F,"tag":"actual photo","soft_edges":true}`:
  * the references' overlay over whatever plays beneath (a photo full frame, a
  * B-roll shot): grain, faint scan lines, a faded print, a heavy vignette and
- * a little less colour; soft_edges blurs the top and bottom like a tilt
- * shift; tag puts "[ACTUAL PHOTO]" (or "[REENACTMENT]", "[ILLUSTRATIVE]")
+ * a little less colour; soft_edges softens the top and bottom edges like a
+ * tilt shift, never as far as a punched-in face ("We can barely see her
+ * because it's blurry"); tag puts "[ACTUAL PHOTO]" (or "[REENACTMENT]", "[ILLUSTRATIVE]")
  * small in the bottom-left corner. strength "light" for footage that should
  * still read clearly.
  */
@@ -103,7 +104,7 @@ export function filmLook(project: Project, args: Args): Record<string, unknown> 
         duration: end - start,
         fade_in: 6,
         fade_out: 6,
-        blur: { radius: 16 * (H / 1080), x: 0, y: side * 0.42 * H, width: project.settings.width, height: 0.2 * H, feather: 0.16 * H, shape: "rect" },
+        blur: { radius: 9 * (H / 1080), x: 0, y: side * 0.44 * H, width: project.settings.width, height: 0.14 * H, feather: 0.12 * H, shape: "rect" },
       });
     }
   }

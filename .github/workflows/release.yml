@@ -170,9 +170,19 @@ jobs:
           tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe
           (cd dist && shasum -a 256 "$name" > "$name.sha256")
           echo "NAME=$name" >> "$GITHUB_ENV"
+      # Edit.app, the zip installed apps update from, and the disk image (scripts/package-app.sh):
+      # signed with the Developer ID and notarised when these secrets are set, ad hoc until then.
+      - name: Edit.app and its disk image
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: scripts/package-app.sh "${{ matrix.target }}" package dist
       - name: Upload to the release
         if: env.RELEASE == 'true'
-        run: gh release upload "$TAG" --clobber "dist/$NAME" "dist/$NAME.sha256"
+        run: gh release upload "$TAG" --clobber dist/*
       - name: Keep as a test build
         if: env.RELEASE != 'true'
         uses: actions/upload-artifact@v7

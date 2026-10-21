@@ -11,7 +11,8 @@ files = [app]
 # Named " ": Finder writes names in near-black over the picture, so the background draws "Applications" in white.
 symlinks = {" ": "/Applications"}
 icon = defines["icon"]
-hide_extensions = [appname]
+# No hide_extensions: it sets Finder info on Edit.app, which breaks its signature's strict check
+# (Finder hides ".app" anyway).
 
 background = defines["background"]
 # 400 pt of content plus the title bar.

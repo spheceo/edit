@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { ahead, assetTarget, enabled, latestBuild, newer, programs, readChannel, swapAll, Updater } from "../src/update.ts";
+import { ahead, appBundle, assetTarget, installApp, enabled, latestBuild, newer, programs, readChannel, swapAll, Updater } from "../src/update.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("newer_compares_numerically", () => {
@@ -108,4 +108,42 @@ test("a dev build doesn't update itself, and says so", async () => {
   const updater = new Updater("/nonexistent");
   expect(await updater.status()).toMatchObject({ latest: null, channel: "nightly", phase: "idle", progress: 0, error: null, enabled: false });
   expect(() => updater.start()).toThrow("this build doesn't update itself; pull and rebuild");
+});
+
+test("edit_inside_an_app_is_found_by_its_path", () => {
+  expect(appBundle("/Applications/Edit.app/Contents/Resources/edit")).toBe("/Applications/Edit.app");
+  expect(appBundle("/Users/a/.local/bin/edit")).toBeNull();
+  expect(appBundle("/Applications/Edit.app/Contents/MacOS/edit-window")).toBeNull();
+});
+
+/** The whole app is replaced from its zip (signature checked), and the server to restart into is at the same path. */
+test.skipIf(process.platform !== "darwin")("an_app_update_replaces_the_whole_app", () => {
+  const { dir, cleanup } = scratch("update-app");
+  try {
+    const make = (at: string, text: string) => {
+      fs.mkdirSync(`${at}/Contents/Resources`, { recursive: true });
+      fs.mkdirSync(`${at}/Contents/MacOS`, { recursive: true });
+      fs.writeFileSync(`${at}/Contents/Info.plist`, '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.spheceo.edit.test</string><key>CFBundleExecutable</key><string>w</string></dict></plist>');
+      fs.writeFileSync(`${at}/Contents/MacOS/w`, "#!/bin/sh\n", { mode: 0o755 });
+      fs.writeFileSync(`${at}/Contents/Resources/edit`, text, { mode: 0o755 });
+      expect(Bun.spawnSync(["codesign", "-s", "-", "-f", "--deep", at]).exitCode).toBe(0);
+    };
+    make(`${dir}/apps/Edit.app`, "old");
+    fs.writeFileSync(`${dir}/apps/Edit.app/Contents/Resources/leftover`, "from the old app");
+    make(`${dir}/build/Edit.app`, "new");
+    expect(Bun.spawnSync(["ditto", "-c", "-k", "--keepParent", `${dir}/build/Edit.app`, `${dir}/Edit.zip`]).exitCode).toBe(0);
+    expect(installApp(`${dir}/Edit.zip`, `${dir}/apps/Edit.app`)).toBe(`${dir}/apps/Edit.app/Contents/Resources/edit`);
+    expect(fs.readFileSync(`${dir}/apps/Edit.app/Contents/Resources/edit`, "utf8")).toBe("new");
+    expect(fs.existsSync(`${dir}/apps/Edit.app/Contents/Resources/leftover`)).toBe(false);
+    expect(fs.readdirSync(`${dir}/apps`)).toEqual(["Edit.app"]);
+    // A broken signature is refused, and the installed app is left alone.
+    make(`${dir}/bad/Edit.app`, "tampered");
+    fs.writeFileSync(`${dir}/bad/Edit.app/Contents/Resources/edit`, "changed after signing");
+    expect(Bun.spawnSync(["ditto", "-c", "-k", "--keepParent", `${dir}/bad/Edit.app`, `${dir}/Bad.zip`]).exitCode).toBe(0);
+    expect(() => installApp(`${dir}/Bad.zip`, `${dir}/apps/Edit.app`)).toThrow("signature is broken");
+    expect(fs.readFileSync(`${dir}/apps/Edit.app/Contents/Resources/edit`, "utf8")).toBe("new");
+    expect(fs.readdirSync(`${dir}/apps`)).toEqual(["Edit.app"]);
+  } finally {
+    cleanup();
+  }
 });

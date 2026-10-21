@@ -242,8 +242,23 @@ export function ahead(tag: string, version = VERSION, nightly = NIGHTLY): boolea
   return newer(tag, version);
 }
 
+/** What this install updates from: Edit.app's zip when it runs inside one, else the `edit` archive. */
 function assetName(): string {
-  return `edit-${assetTarget()}.tar.gz`;
+  return runningBundle() !== null ? `Edit-${assetTarget()}.zip` : `edit-${assetTarget()}.tar.gz`;
+}
+
+/** The Edit.app this server runs from (`…/Edit.app/Contents/Resources/edit`), or null. */
+export function appBundle(exe: string): string | null {
+  const match = /^(.+\.app)\/Contents\/Resources\/edit$/.exec(exe);
+  return match === null ? null : match[1]!;
+}
+
+function runningBundle(): string | null {
+  try {
+    return appBundle(fs.realpathSync(process.execPath));
+  } catch {
+    return null;
+  }
 }
 
 function parseJson(body: string): unknown {
@@ -329,11 +344,18 @@ export async function install(release: Release, staged: string, progress: (progr
   } catch (error) {
     throw new Error(`${staged}: ${ioMessage(error)}`);
   }
-  const archive = join(staged, "edit.tar.gz");
+  const bundle = runningBundle();
+  const archive = join(staged, bundle !== null ? "Edit.zip" : "edit.tar.gz");
   await download(release.url, archive, release.size, progress);
   const digest = await sha256(archive);
   if (digest.toLowerCase() !== release.sha256.toLowerCase()) {
     throw new Error(`the download is corrupt (SHA-256 ${digest}, expected ${release.sha256})`);
+  }
+  if (bundle !== null) {
+    const exe = installApp(archive, bundle);
+    fs.rmSync(staged, { recursive: true, force: true });
+    progress(1);
+    return exe;
   }
   const unpacked = join(staged, "unpacked");
   try {
@@ -358,6 +380,75 @@ export async function install(release: Release, staged: string, progress: (progr
   fs.rmSync(staged, { recursive: true, force: true });
   progress(1);
   return exe;
+}
+
+/**
+ * Replaces Edit.app at `bundle` with the one in `zip`, whole: a signed app
+ * can't have files swapped inside it. Unpacked beside it (same disk, so the
+ * swap is two renames), its signature checked (and, when this one is signed by
+ * a team, that it's the same team), then the old one moved aside and removed.
+ * Returns the server to restart into: the new app's, at the same path. The
+ * window stays the one running until Edit is next opened.
+ */
+export function installApp(zip: string, bundle: string): string {
+  const dir = parent(bundle);
+  if (dir === null || dir === "") throw new Error("Edit.app has no folder");
+  const name = bundle.slice(dir.length + 1);
+  const unpacked = join(dir, `.Edit-update-${process.pid}`);
+  const unwritable = (error: unknown) =>
+    new Error(`can't write to ${dir} (${ioMessage(error)}); install the new Edit from its disk image`);
+  fs.rmSync(unpacked, { recursive: true, force: true });
+  try {
+    fs.mkdirSync(unpacked);
+  } catch (error) {
+    throw unwritable(error);
+  }
+  try {
+    // ditto keeps the bundle's signature, links and attributes as zipped.
+    const unzip = run(["ditto", "-x", "-k", zip, unpacked]);
+    if (unzip.code !== 0) throw new Error(`could not unpack the update: ${unzip.stderr}`);
+    const entries = fs.readdirSync(unpacked).filter((entry) => entry.endsWith(".app"));
+    if (entries.length !== 1) throw new Error("the update has no Edit.app");
+    const fresh = join(unpacked, entries[0]!);
+    if (!fs.existsSync(join(fresh, "Contents", "Resources", "edit"))) throw new Error("the update's Edit.app has no server");
+    const verify = run(["codesign", "--verify", "--deep", "--strict", fresh]);
+    if (verify.code !== 0) throw new Error(`the update's signature is broken: ${verify.stderr}`);
+    const team = teamOf(bundle);
+    if (team !== null && teamOf(fresh) !== team) throw new Error(`the update isn't signed by ${team}, who signed this Edit`);
+    const old = join(dir, `.Edit-old-${process.pid}.app`);
+    try {
+      fs.renameSync(bundle, old);
+    } catch (error) {
+      throw unwritable(error);
+    }
+    try {
+      fs.renameSync(fresh, bundle);
+    } catch (error) {
+      fs.renameSync(old, bundle);
+      throw unwritable(error);
+    }
+    // The running server's files stay readable until it execs; they go with the folder.
+    fs.rmSync(old, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(unpacked, { recursive: true, force: true });
+  }
+  return join(dir, name, "Contents", "Resources", "edit");
+}
+
+/** The team that signed `app` (Developer ID), or null when it's signed ad hoc. */
+function teamOf(app: string): string | null {
+  const shown = run(["codesign", "-dv", app]);
+  const team = /^TeamIdentifier=(.+)$/m.exec(shown.stderr)?.[1]?.trim();
+  return team === undefined || team === "not set" ? null : team;
+}
+
+function run(command: string[]): { code: number; stderr: string } {
+  try {
+    const child = Bun.spawnSync(command, { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+    return { code: child.exitCode, stderr: child.stderr.toString().trim() };
+  } catch (error) {
+    return { code: -1, stderr: `${command[0]}: ${diag.messageOf(error)}` };
+  }
 }
 
 /**

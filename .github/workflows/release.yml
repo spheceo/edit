@@ -3,13 +3,15 @@ name: Release
 # `just publish` bumps the patch version, tags it and pushes; this builds
 # Apple Silicon and Intel Mac archives and publishes the GitHub Release once
 # both are up (a draft until then, so updaters never see a half-built one).
+# `just nightly` tags `nightly-<N>`: the same build, published as a
+# pre-release with its number in it (installs on the Nightly channel take it).
 #
 # Run it by hand (Actions → Release → Run workflow) for a test build: the
 # archives land as workflow artifacts and nothing is released.
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "nightly-*"]
   workflow_dispatch:
 
 permissions:
@@ -25,14 +27,18 @@ env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   GH_REPO: ${{ github.repository }}
   RELEASE: ${{ github.event_name == 'push' }}
+  NIGHTLY: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'nightly-') }}
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Every tag, for a nightly's notes (what changed since the build before).
+          fetch-depth: 0
       - name: Tag matches the workspace version
-        if: env.RELEASE == 'true'
+        if: env.RELEASE == 'true' && env.NIGHTLY != 'true'
         run: |
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           if [ "v$version" != "$TAG" ]; then
@@ -40,8 +46,21 @@ jobs:
             exit 1
           fi
       - name: Create the draft release
-        if: env.RELEASE == 'true'
+        if: env.RELEASE == 'true' && env.NIGHTLY != 'true'
         run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "Edit $TAG" --generate-notes
+      - name: Create the draft nightly
+        if: env.NIGHTLY == 'true'
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 && exit 0
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          previous="$(git tag --list 'nightly-*' 'v*' --sort=-creatordate --merged "$TAG^" | head -1)"
+          {
+            echo "Nightly build of Edit $version: a pre-release. Installs on the Nightly channel (the default) offer it at the top of the editor; one click installs it and restarts."
+            echo
+            git log --no-merges --format='- %s' ${previous:+$previous..}"$TAG"
+          } > notes.md
+          gh release create "$TAG" --draft --prerelease --title "Edit $TAG" --notes-file notes.md
 
   # The UI (with the WASM preview engine) is the same for every build.
   web:
@@ -101,6 +120,9 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          # A nightly carries its number (apps/server/src/version.ts): nightly-12 → 12; 0 for a release.
+          nightly=0
+          if [ "$NIGHTLY" = true ]; then nightly="${TAG#nightly-}"; fi
           case "${{ matrix.target }}" in
             aarch64-apple-darwin) bun_target=bun-darwin-arm64 ;;
             x86_64-apple-darwin) bun_target=bun-darwin-x64 ;;
@@ -115,7 +137,7 @@ jobs:
             --window "target/${{ matrix.target }}/release/edit-window"
           mkdir package
           bun build apps/server/src/embedded.gen.ts --compile --target="$bun_target" \
-            --define EDIT_VERSION="\"$version\"" --define EDIT_RELEASE=true --outfile package/edit
+            --define EDIT_VERSION="\"$version\"" --define EDIT_RELEASE=true --define EDIT_NIGHTLY="$nightly" --outfile package/edit
           codesign -s - -f package/edit
       # The runner is Apple Silicon: the arm64 build runs here (no GPU renders: no Metal on hosted runners).
       - name: Smoke test
@@ -162,5 +184,11 @@ jobs:
       run:
         working-directory: .
     steps:
+      # A nightly stays a pre-release: install.sh and Stable installs read `releases/latest`, which skips it.
       - name: Publish the release
-        run: gh release edit "$TAG" --draft=false --latest
+        run: |
+          if [ "$NIGHTLY" = true ]; then
+            gh release edit "$TAG" --draft=false
+          else
+            gh release edit "$TAG" --draft=false --latest
+          fi

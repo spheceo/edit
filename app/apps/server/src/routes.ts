@@ -28,7 +28,7 @@ import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { missingMedia, UpdateError } from "./store.ts";
 import * as tools from "./tools.ts";
-import { VERSION } from "./version.ts";
+import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
 
 type Context = RouteContext<App>;
@@ -51,6 +51,7 @@ export function buildRouter(): Router<App> {
     .post("/api/diagnostics/client", clientLog)
     .get("/api/update", updateStatus)
     .post("/api/update", updateInstall)
+    .put("/api/update/channel", updateChannel)
     .get("/api/projects", listProjects)
     .post("/api/projects", createProject)
     .get("/api/projects/{id}", getProject)
@@ -204,7 +205,7 @@ function diagnostics({ app }: Context): Response {
     os: `${diag.osName()} ${diag.archName()}`,
     timings: diag.timings(),
     uptime: diag.human(diag.uptime()),
-    version: VERSION,
+    version: BUILD,
   });
 }
 
@@ -316,6 +317,16 @@ async function clientLog(context: Context): Promise<Response> {
 
 async function updateStatus({ app }: Context): Promise<Response> {
   return json(await app.updater.status());
+}
+
+/** Nightly or Stable (Settings → Updates). */
+async function updateChannel(context: Context): Promise<Response> {
+  const channel = field<string>(await body(context), "channel", "string") ?? "";
+  try {
+    return json(await context.app.updater.setChannel(channel));
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
 }
 
 /** Downloads the newest release and restarts into it. */

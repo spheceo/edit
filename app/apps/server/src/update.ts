@@ -1,5 +1,8 @@
 // Self-update from the repo's GitHub Releases (built by the release
-// workflow). `GET /api/update` says whether a newer version is out;
+// workflow): releases (`v0.0.1`) and nightlies (`nightly-12`, pre-releases).
+// The channel (`<home>/update.json`, Settings → Updates) picks which: Nightly
+// offers whichever of the two came out last, Stable releases only.
+// `GET /api/update` says whether a newer build is out;
 // `POST /api/update` downloads it, checks its SHA-256, swaps it in for the
 // running binary and restarts in place. On Unix that's an exec
 // (`native.reexec`), so `edit serve` keeps its terminal, PID and flags, and the
@@ -16,9 +19,9 @@ import { catchBugsAsync } from "./guard.ts";
 import { native } from "./native/index.ts";
 import { join, parent } from "./paths.ts";
 import type { Updater as UpdaterSeam } from "./seams.ts";
-import { RELEASE, VERSION } from "./version.ts";
+import { BUILD, NIGHTLY, RELEASE, VERSION } from "./version.ts";
 
-export { VERSION } from "./version.ts";
+export { BUILD, VERSION } from "./version.ts";
 
 const REPO = "spheceo/edit";
 
@@ -38,6 +41,28 @@ export function assetTarget(): string {
   return "x86_64-unknown-linux-gnu";
 }
 
+/** Which builds are offered: every nightly as it's out, or releases only. */
+export type Channel = "nightly" | "stable";
+
+/** The channel set in `<home>/update.json`: nightly unless set to stable. */
+export function readChannel(home: string): Channel {
+  try {
+    const value = JSON.parse(fs.readFileSync(join(home, "update.json"), "utf8")) as { channel?: unknown };
+    return value?.channel === "stable" ? "stable" : "nightly";
+  } catch {
+    return "nightly";
+  }
+}
+
+function writeChannel(home: string, channel: Channel): void {
+  try {
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(join(home, "update.json"), `${JSON.stringify({ channel })}\n`);
+  } catch (error) {
+    throw new Error(`${join(home, "update.json")}: ${ioMessage(error)}`);
+  }
+}
+
 /** The newest release with a build for this machine. */
 export interface Release {
   tag: string;
@@ -49,9 +74,11 @@ export interface Release {
 export type Phase = "idle" | "downloading" | "restarting";
 
 export interface Status {
+  /** This build: "nightly-12", or the version ("0.0.0"). */
   current: string;
-  /** A newer version's tag ("v0.2.0"), if there is one. */
+  /** A newer build's tag ("v0.2.0", "nightly-13"), if there is one. */
   latest: string | null;
+  channel: Channel;
   phase: Phase;
   /** 0–1 while downloading. */
   progress: number;
@@ -74,9 +101,24 @@ export class Updater implements UpdaterSeam {
   private phase: Phase = "idle";
   private progress = 0;
   private error: string | null = null;
+  private channel: Channel;
 
   /** Downloads are staged in `<home>/updates`. */
-  constructor(private home: string) {}
+  constructor(private home: string) {
+    this.channel = readChannel(home);
+  }
+
+  /** Switches channel and asks GitHub again. */
+  async setChannel(channel: string): Promise<Status> {
+    if (channel !== "nightly" && channel !== "stable") throw new Error(`no such channel: ${channel} (nightly or stable)`);
+    writeChannel(this.home, channel);
+    if (channel !== this.channel) {
+      this.channel = channel;
+      this.latest = null;
+      this.checked = null;
+    }
+    return this.status();
+  }
 
   /** The current state, asking GitHub first if it's been a while. */
   async status(): Promise<Status> {
@@ -90,7 +132,7 @@ export class Updater implements UpdaterSeam {
       // Offline or a GitHub hiccup just means no update to offer; retry next time.
       let found: Release | null | undefined;
       try {
-        found = await check();
+        found = await check(this.channel);
       } catch {
         found = undefined;
       }
@@ -105,8 +147,9 @@ export class Updater implements UpdaterSeam {
 
   private snapshot(): Status {
     return {
-      current: VERSION,
+      current: BUILD,
       latest: this.latest?.tag ?? null,
+      channel: this.channel,
       phase: this.phase,
       progress: this.progress,
       error: this.error,
@@ -152,23 +195,71 @@ export class Updater implements UpdaterSeam {
 }
 
 /**
- * Asks GitHub for the newest release; null when this one is current (or the
- * newest has no build for this machine).
+ * Asks GitHub for the newest build on `channel`; null when this one is current
+ * (or the newest has no build for this machine).
  */
-export async function check(api = `https://api.github.com/repos/${REPO}/releases/latest`): Promise<Release | null> {
-  const [code, body] = await fetchText(api);
-  if (code === 404) return null; // nothing released yet
+export async function check(channel: Channel, api = `https://api.github.com/repos/${REPO}/releases`): Promise<Release | null> {
+  if (channel === "stable") {
+    const [code, body] = await fetchText(`${api}/latest`);
+    if (code === 404) return null; // nothing released yet
+    if (code !== 200) throw new Error(`GitHub answered ${code}: ${body.trim()}`);
+    const value = parseJson(body);
+    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("unexpected answer: not a release");
+    return offered(value as Record<string, unknown>);
+  }
+  const [code, body] = await fetchText(`${api}?per_page=30`);
   if (code !== 200) throw new Error(`GitHub answered ${code}: ${body.trim()}`);
-  let value: Record<string, unknown>;
+  const list = parseJson(body);
+  if (!Array.isArray(list)) throw new Error("unexpected answer: not a list of releases");
+  const newest = latestBuild(list as Record<string, unknown>[]);
+  return newest === null ? null : offered(newest);
+}
+
+/**
+ * The release or nightly published last that has a build for this machine.
+ * Going by when it came out keeps the order across both: nightly-5, then
+ * v0.0.1, then nightly-6 (built at 0.0.1).
+ */
+export function latestBuild(releases: Record<string, unknown>[]): Record<string, unknown> | null {
+  const name = assetName();
+  let newest: Record<string, unknown> | null = null;
+  for (const release of releases) {
+    if (release === null || typeof release !== "object" || release.draft === true) continue;
+    const published = release.published_at;
+    if (typeof published !== "string") continue;
+    const assets = Array.isArray(release.assets) ? (release.assets as Record<string, unknown>[]) : [];
+    if (!assets.some((asset) => asset?.name === name)) continue;
+    // ISO 8601 times in UTC compare as text.
+    if (newest === null || published > (newest.published_at as string)) newest = release;
+  }
+  return newest;
+}
+
+/** Whether `tag` ("v0.0.1", "nightly-12") is ahead of this build: a nightly by its number, a release by its version. */
+export function ahead(tag: string, version = VERSION, nightly = NIGHTLY): boolean {
+  const number = /^nightly-(\d+)$/.exec(tag);
+  if (number !== null) return nightly === null || Number(number[1]) > nightly;
+  return newer(tag, version);
+}
+
+function assetName(): string {
+  return `edit-${assetTarget()}.tar.gz`;
+}
+
+function parseJson(body: string): unknown {
   try {
-    value = JSON.parse(body) as Record<string, unknown>;
+    return JSON.parse(body);
   } catch (error) {
     throw new Error(`unexpected answer: ${diag.messageOf(error)}`);
   }
+}
+
+/** `value` (a GitHub release) as an update, when it's ahead of this build. */
+async function offered(value: Record<string, unknown>): Promise<Release | null> {
   const tag = value.tag_name;
   if (typeof tag !== "string") throw new Error("a release without a tag");
-  if (!newer(tag, VERSION)) return null;
-  const name = `edit-${assetTarget()}.tar.gz`;
+  if (!ahead(tag)) return null;
+  const name = assetName();
   const assets = Array.isArray(value.assets) ? (value.assets as Record<string, unknown>[]) : [];
   const asset = assets.find((candidate) => candidate?.name === name);
   if (asset === undefined) return null;
@@ -410,21 +501,21 @@ function restart(exe: string): never {
 /** `edit update`. */
 export async function runCli(home: string): Promise<void> {
   if (!enabled()) {
-    console.log(`This build of Edit (${VERSION}) doesn't update itself; pull and rebuild.`);
+    console.log(`This build of Edit (${BUILD}) doesn't update itself; pull and rebuild.`);
     return;
   }
   let release: Release | null;
   try {
-    release = await check();
+    release = await check(readChannel(home));
   } catch (error) {
     console.error(`edit: could not check for updates: ${diag.messageOf(error)}`);
     process.exit(1);
   }
   if (release === null) {
-    console.log(`Edit is up to date (${VERSION}).`);
+    console.log(`Edit is up to date (${BUILD}, ${readChannel(home)} channel).`);
     return;
   }
-  console.log(`Updating Edit ${VERSION} → ${release.tag}…`);
+  console.log(`Updating Edit ${BUILD} → ${release.tag}…`);
   try {
     await install(release, join(home, "updates"), () => {});
     console.log("Done. Restart `edit serve` if it's running.");

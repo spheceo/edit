@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 
 import { join } from "./paths.ts";
-import { VERSION } from "./version.ts";
+import { BUILD } from "./version.ts";
 
 /** Lines kept in memory for the report. */
 const KEEP = 2000;
@@ -65,7 +65,7 @@ export function open(home: string): void {
   } catch (error) {
     console.error(`edit: can't write ${path}: ${(error as Error).message}`);
   }
-  info("edit", `started ${VERSION} (${osName()} ${archName()})`);
+  info("edit", `started ${BUILD} (${osName()} ${archName()})`);
 }
 
 /** Rust's names for the OS and architecture (std::env::consts), so reports read the same. */

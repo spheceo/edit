@@ -217,11 +217,11 @@ export function start(home: string, host: string | null, port: number): { app: A
   }
   if (update.enabled()) {
     void update
-      .check()
+      .check(update.readChannel(home))
       .then((release) => {
         if (release !== null) {
           console.log(
-            `edit: ${release.tag} is out (this is ${update.VERSION}); update from the editor or run \`edit update\``,
+            `edit: ${release.tag} is out (this is ${update.BUILD}); update from the editor or run \`edit update\``,
           );
         }
       })

@@ -4,12 +4,18 @@
 
 import { create } from "zustand";
 
+import { request } from "./api";
 import { useEditor } from "./store";
 
+export type UpdateChannel = "nightly" | "stable";
+
 export interface UpdateStatus {
+  /** This build: "nightly-12", or the version ("0.0.0"). */
   current: string;
-  /** A newer version's tag ("v0.2.0"), if there is one. */
+  /** A newer build's tag ("v0.2.0", "nightly-13"), if there is one. */
   latest: string | null;
+  /** Nightly offers every nightly as it's out; Stable, releases only. */
+  channel: UpdateChannel;
   phase: "idle" | "downloading" | "restarting";
   /** 0–1 while downloading. */
   progress: number;
@@ -67,6 +73,11 @@ async function poll() {
 /** Mount once: keeps the update status fresh. */
 export function watchUpdates() {
   if (timer === undefined) void poll();
+}
+
+/** Switches channel; the server asks GitHub again straight away. */
+export async function chooseChannel(channel: UpdateChannel): Promise<void> {
+  useUpdate.setState({ status: await request<UpdateStatus>("PUT", "/api/update/channel", { channel }) });
 }
 
 /** Downloads the newest version; the server restarts into it and the page reloads. */

@@ -21,6 +21,7 @@ import { cloudApi, type CloudSettings } from "../lib/cloud";
 import { closeDialog, openDialog, SHORTCUTS, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { setPreviewQuality, usePreviewQuality } from "../lib/previewQuality";
+import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
 import { ClaudeMark, OpenAIMark } from "./AgentPanel";
 import { toggleMenu } from "./ContextMenu";
 import { cx, IconButton, Kbd, Modal, Select } from "./ui";
@@ -173,6 +174,46 @@ function PreviewQualityRow() {
   );
 }
 
+/** This build and the update channel: Nightly (every nightly as it's out) or Stable (releases only). */
+function UpdateSettings() {
+  const status = useUpdate((state) => state.status);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(watchUpdates, []);
+  const pick = (channel: UpdateChannel) => {
+    setError(null);
+    chooseChannel(channel).catch((reason: Error) => setError(reason.message));
+  };
+  return (
+    <>
+      <div className="rounded-xl bg-black ring-1 ring-line">
+        <Line label="Version">{status?.current ?? "—"}</Line>
+        <Line label="Channel" last>
+          <div className="w-48">
+            <Select
+              value={status?.channel ?? "nightly"}
+              options={[
+                { value: "nightly", label: "Nightly" },
+                { value: "stable", label: "Stable (releases only)" },
+              ]}
+              onChange={pick}
+            />
+          </div>
+        </Line>
+      </div>
+      <p className="mt-2 text-[12px] leading-relaxed text-muted">
+        {status && !status.enabled
+          ? "This is a dev build: it doesn't update itself. Pull and rebuild."
+          : status?.latest
+            ? `${status.latest} is out: update from the button at the top. Edit restarts itself; your work is saved.`
+            : status?.channel === "stable"
+              ? "Up to date. Stable moves only on a release; a nightly you're on now waits for the next one."
+              : "Up to date. Nightlies are pre-releases, out as soon as they're built; one click at the top installs a new one."}
+      </p>
+      {error && <p className="mt-2 text-[12px] text-red-300">{error}</p>}
+    </>
+  );
+}
+
 function DialogHeader({ title }: { title: string }) {
   return (
     <div className="flex h-12 items-center px-5">
@@ -304,6 +345,9 @@ function SettingsBody() {
           <RotateCw size={12} className={checking ? "animate-spin" : undefined} />
           {checking ? "Checking…" : "Check again"}
         </button>
+      </Group>
+      <Group title="Updates">
+        <UpdateSettings />
       </Group>
       <Group title="Preview">
         <PreviewQualityRow />

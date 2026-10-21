@@ -134,16 +134,25 @@ serve-build-bin:
     mv -f "$dest.new" "$dest"
     echo "built $dest in $((SECONDS - start)) s; restart the server to run it"
 
-# Releases go up a patch at a time (v0.0.1, v0.0.2, …). GitHub Actions
-# (.github/workflows/release.yml) builds the Apple Silicon and Intel Mac
-# archives from the tag and publishes the release.
-# Ship the next patch version: check, bump, tag, push (CI builds and publishes)
+# Releases go up a patch at a time (v0.0.0, v0.0.1, …); in between, nightlies
+# (nightly-1, nightly-2, …). GitHub Actions (.github/workflows/release.yml)
+# builds the Apple Silicon and Intel Mac archives from the tag and publishes it.
+# Ship the next patch version (the current one if it was never released): check, bump, tag, push (CI builds and publishes)
 publish: check
     #!/usr/bin/env bash
     set -euo pipefail
     [ "$(git branch --show-current)" = "main" ] || { echo "publish from main"; exit 1; }
     [ -z "$(git status --porcelain)" ] || { echo "commit your changes first"; exit 1; }
+    git fetch -q --tags origin
     current="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+    if ! git rev-parse -q --verify "refs/tags/v$current" >/dev/null && ! gh release view "v$current" >/dev/null 2>&1; then
+        # Never released (v0.0.0, the first): release it as it is.
+        git tag "v$current"
+        git push origin main "v$current"
+        echo "Pushed v$current. GitHub Actions builds and publishes it (~10 min):"
+        echo "  https://github.com/spheceo/edit/actions/workflows/release.yml"
+        exit 0
+    fi
     IFS=. read -r major minor patch <<<"$current"
     version="$major.$minor.$((patch + 1))"
     tag="v$version"
@@ -158,6 +167,22 @@ publish: check
     cargo update --workspace -q
     git commit -q -m "Release $tag" Cargo.toml Cargo.lock apps/web/package.json apps/server/package.json
     trap - ERR
+    git tag "$tag"
+    git push origin main "$tag"
+    echo "Pushed $tag. GitHub Actions builds and publishes it (~10 min):"
+    echo "  https://github.com/spheceo/edit/actions/workflows/release.yml"
+
+# CI builds the tag and publishes it as a pre-release; installs on the Nightly
+# channel (the default) offer it at the top of the editor.
+# Ship a nightly: tag main's head nightly-<N> (the next number) and push
+nightly:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$(git branch --show-current)" = "main" ] || { echo "publish from main"; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { echo "commit your changes first"; exit 1; }
+    git fetch -q --tags origin
+    last="$(git tag --list 'nightly-*' | sed 's/^nightly-//' | sort -n | tail -1)"
+    tag="nightly-$(( ${last:-0} + 1 ))"
     git tag "$tag"
     git push origin main "$tag"
     echo "Pushed $tag. GitHub Actions builds and publishes it (~10 min):"

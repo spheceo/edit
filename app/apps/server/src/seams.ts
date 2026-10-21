@@ -112,6 +112,8 @@ export interface Exports {
 export interface Updater {
   status(): Promise<Json>;
   install(): Promise<Json>;
+  /** "nightly" or "stable". */
+  setChannel(channel: string): Promise<Json>;
 }
 
 export interface ServerSeam {

@@ -8,9 +8,11 @@
 # with beside it (edit-ffmpeg, edit-ffprobe: they don't shadow your own). Later versions install themselves from
 # the editor (or `edit update`).
 #
-# A particular version (to pin one, or to go back to the one before):
+# A particular version (to pin one, or to go back to the one before), or the
+# newest nightly (pre-releases between versions; the editor offers each new one):
 #
 #   curl -fsSL https://raw.githubusercontent.com/spheceo/edit/main/install.sh | EDIT_VERSION=v0.0.12 sh
+#   curl -fsSL https://raw.githubusercontent.com/spheceo/edit/main/install.sh | EDIT_VERSION=nightly sh
 
 set -eu
 
@@ -29,9 +31,15 @@ esac
 
 ARCHIVE="edit-$TARGET.tar.gz"
 VERSION="${EDIT_VERSION:-}"
+if [ "$VERSION" = nightly ]; then
+  # Newest first; drafts aren't listed without a login.
+  VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" |
+    sed -n 's/.*"tag_name": *"\(nightly-[0-9]*\)".*/\1/p' | head -1)"
+  [ -n "$VERSION" ] || { echo "No nightly is out yet; leave EDIT_VERSION unset for the latest release." >&2; exit 1; }
+fi
 case "$VERSION" in
   "" | latest) BASE="https://github.com/$REPO/releases/latest/download" ;;
-  v*) BASE="https://github.com/$REPO/releases/download/$VERSION" ;;
+  v* | nightly-*) BASE="https://github.com/$REPO/releases/download/$VERSION" ;;
   *) BASE="https://github.com/$REPO/releases/download/v$VERSION" ;;
 esac
 TMP="$(mktemp -d)"

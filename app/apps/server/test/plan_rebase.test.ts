@@ -19,6 +19,10 @@ test("a_plan_holds_over_the_agents_own_sounds_and_starring", () => {
   // Anything else that moved is a real conflict.
   expect(onlySoundChanged(before, withClips([{ ...text("t1", "he was murdered"), start: 5 }]))).toBe(false);
   expect(onlySoundChanged(before, withClips([text("t1", "he was murdered"), text("t2", "new")]))).toBe(false);
+  // A slowed shot swapped for its smoothed render (background smoothing).
+  const shot = { id: "v1", type: "video", track: "v1", start: 0, duration: 60, media: "m1", source_in: 12, speed: 0.5 };
+  expect(onlySoundChanged(withClips([shot]), withClips([{ ...shot, media: "m9", source_in: 0, speed: 1 }]))).toBe(true);
+  expect(onlySoundChanged(withClips([shot]), withClips([{ ...shot, media: "m9", source_in: 0, speed: 1, start: 4 }]))).toBe(false);
 });
 
 import { capIssues, ISSUES_PER_KIND } from "../src/edit_tools.ts";

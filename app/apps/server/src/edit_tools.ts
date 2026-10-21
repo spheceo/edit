@@ -250,11 +250,12 @@ export function onlyMediaChanged(before: Project, now: Project): boolean {
 }
 
 /**
- * Whether everything that changed between two versions is sound or starring:
- * sounds placed, moved or muted (add_sound_effect, add_from_library,
- * mute_house_words), audio tracks added, words starred in a text, markers,
- * media. That's what an agent's own batch of sound tools does between its
- * get_edit_context and its plan, so the plan still holds on the newer version.
+ * Whether everything that changed between two versions is what goes on in
+ * the background or the agent's own batch of sound tools does between its
+ * get_edit_context and its plan: sounds placed, moved or muted
+ * (add_sound_effect, add_from_library, mute_house_words), audio tracks
+ * added, words starred in a text, a slowed shot swapped for its smoothed
+ * render, markers, media. The plan still holds on the newer version.
  */
 export function onlySoundChanged(before: Project, now: Project): boolean {
   const ignored = new Set(["media", "drive", "clips", "tracks", "markers", "next_id"]);
@@ -275,6 +276,12 @@ export function onlySoundChanged(before: Project, now: Project): boolean {
     const b = is.get(id);
     if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) continue;
     if ((a === undefined || a.type === "audio") && (b === undefined || b.type === "audio")) continue;
+    // Background smoothing swapping a slowed shot for its smoothed render.
+    if (a !== undefined && b !== undefined && a.type === "video" && b.type === "video" && a.speed < 1 && b.speed === 1) {
+      const { media: _ma, source_in: _sa, speed: _pa, ...restA } = a;
+      const { media: _mb, source_in: _sb, speed: _pb, ...restB } = b;
+      if (JSON.stringify(restA) === JSON.stringify(restB)) continue;
+    }
     if (a !== undefined && b !== undefined && a.type === "text" && b.type === "text") {
       const { text: _a, ...restA } = a as Clip & { text?: string };
       const { text: _b, ...restB } = b as Clip & { text?: string };

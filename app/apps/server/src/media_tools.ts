@@ -138,7 +138,13 @@ async function levelFootage({ app, args, projectId }: ToolCall): Promise<Content
   const project = live(app, projectId).project;
   const { target, levels } = await footageLevels.levelFootage(app, project, num(args.loudness) ?? undefined, bool(args.only_untouched) ?? false);
   await footageLevels.apply(app, projectId, levels, ORIGIN);
-  if (levels.length === 0) return text("no footage sound to level");
+  if (levels.length === 0) {
+    return text(
+      bool(args.only_untouched) === true
+        ? "every footage clip has been levelled already (only_untouched leaves those); run it without only_untouched to level them all again"
+        : "no footage sound to level",
+    );
+  }
   const said = levels.map((level) =>
     level.speech === null
       ? `${level.clip} nothing said: ${signed(level.volume_db, 1)} dB`

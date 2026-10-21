@@ -31,6 +31,18 @@ function subtitleLike(text: string): boolean {
 const SUBTITLE_SECONDS = 3;
 const SUBTITLE_CHANGING = 0.3;
 
+/**
+ * The cuts that stand alone: the scene finder samples two frames a second,
+ * and a bodycam walking into a flat changes as much every half second
+ * (Serial Predator's entry footage had a "cut" every 0.5 s, so every slowed
+ * B-roll shot of it was flagged). An edit's cut has none within LONE seconds.
+ */
+const LONE = 1.5;
+export function lone(cuts: readonly number[]): number[] {
+  const sorted = [...cuts].sort((a, b) => a - b);
+  return sorted.filter((cut, index) => (index === 0 || cut - sorted[index - 1]! > LONE) && (index === sorted.length - 1 || sorted[index + 1]! - cut > LONE));
+}
+
 /** Seconds of a shot at either end where a cut doesn't count (a frame or two of the next picture is the cut itself). */
 const EDGE = 0.3;
 
@@ -235,7 +247,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
     }
     // A B-roll shot is one picture: none of its footage's cuts inside it.
     if (!/B-roll/u.test(clip.name ?? "")) continue;
-    for (const cut of seats.cachedCuts(media.path) ?? []) {
+    for (const cut of lone(seats.cachedCuts(media.path) ?? [])) {
       if (cut <= from + EDGE || cut >= to - EDGE) continue;
       out.push({ kind: "broll_crosses_cut", clip: clip.id, at: clip.start + Math.round(((cut - from) / clip.speed) * fps), cut_seconds: cut });
       break;

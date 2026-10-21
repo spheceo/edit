@@ -71,6 +71,22 @@ import type { Excerpt, Made, Original, Originals } from "./seams.ts";
 import * as tools from "./tools.ts";
 import { stableStringify } from "./stable.ts";
 
+/**
+ * A media's cloud proxy: footage's from the addon (the preview's picture and
+ * the sound); a sound-only file's is its sound alone, 160 kbit/s AAC in an
+ * MP4 (Serial Predator's Tarrytown_PD_call.m4a failed its import: "only
+ * footage gets a cloud proxy").
+ */
+async function makeProxy(source: string, probe: Probe, out: string): Promise<void> {
+  if (probe.kind !== "audio") return native().makeCloudProxy(source, probe, out);
+  const made = await tools.run([
+    tools.ffmpeg(), "-hide_banner", "-nostdin", "-v", "error", "-y",
+    "-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source),
+    "-i", source, "-vn", "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-f", "mp4", out,
+  ]).then(() => true, (error: unknown) => { fs.rmSync(out, { force: true }); throw new Error(`the sound's proxy: ${diag.scrub(diag.messageOf(error))}`); });
+  if (!made) throw new Error("the sound's proxy wasn't made");
+}
+
 export { isLocalCopy } from "./media.ts";
 export type { Made, Original } from "./seams.ts";
 
@@ -569,7 +585,7 @@ async function publish(
       await diag.timeOnAsync("cloud", "cloud: make proxy", source, async () => {
         if (parent(local) !== null) fs.mkdirSync(parent(local)!, { recursive: true });
         try {
-          await native().makeCloudProxy(file, probe, local);
+          await makeProxy(file, probe, local);
         } catch (error) {
           fs.rmSync(local, { force: true });
           throw error;
@@ -587,7 +603,7 @@ async function publish(
       makeHere
         ? diag.timeOnAsync("cloud", "cloud: make proxy", source, async () => {
             if (parent(local) !== null) fs.mkdirSync(parent(local)!, { recursive: true });
-            await native().makeCloudProxy(file, probe, local);
+            await makeProxy(file, probe, local);
           })
         : Promise.resolve(),
     ),
@@ -944,7 +960,7 @@ async function wholeMedia(cache: string, original: Original, url: string): Promi
       if (madeHere) {
         await diag.timeOnAsync("cloud", "cloud: make proxy", original.source, async () => {
           if (parent(local) !== null) fs.mkdirSync(parent(local)!, { recursive: true });
-          await native().makeCloudProxy(url, probe, local);
+          await makeProxy(url, probe, local);
         });
       }
       await cloud.uploadFile(local, proxy);

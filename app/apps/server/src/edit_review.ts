@@ -3,23 +3,31 @@
 // callouts away from the words that point to them. No transcription or paid
 // calls: the transcripts given are the ones already made.
 
-import { intro } from "./captions.ts";
 import type { Clip, Project } from "./model.ts";
-import { clipEnd, duration as durationOf, fps as fpsOf, trackOf } from "./project.ts";
+import { clipEnd, duration as durationOf, fps as fpsOf, reusedSpans, trackOf } from "./project.ts";
 import { byteLength, charCount, chars, isAlphanumeric, round, splitWhitespace, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { compareKeys } from "./stable.ts";
 import type { Transcript } from "./transcribe.ts";
 
 export function subtitleCoverage(project: Project, transcripts: Map<string, Transcript>): unknown {
+  return coverage(project, transcripts).report;
+}
+
+type Gap = [number, number, string, string, string, string];
+
+function coverage(project: Project, transcripts: Map<string, Transcript>): { report: unknown; groups: Gap[] } {
   const fps = fpsOf(project);
-  const from = project.script !== undefined && project.script !== null ? (intro(project)?.[1] ?? 0) : 0;
+  // The intro too, its speaker captions counting: Helpful Wife's teasers,
+  // split for punch-ins, left their new halves heard with nothing on screen.
+  const from = 0;
   const sound = seams.subtitles.footageSound(project, from, durationOf(project));
   const spans = project.clips
     .filter((clip) => {
       if (clip.type !== "text") return false;
       const track = trackOf(project, clip.track);
-      return track !== undefined && track.subtitles === true && !track.hidden;
+      if (track === undefined || track.hidden) return false;
+      return track.subtitles === true || (clip.name ?? "").startsWith("Caption");
     })
     .map((clip) => [clip.start, clipEnd(clip)] as [number, number]);
   let checked = 0;
@@ -70,14 +78,15 @@ export function subtitleCoverage(project: Project, transcripts: Map<string, Tran
   }
   const missingTranscripts = [...new Set(unavailable)].sort(compareKeys);
   const examples = groups.slice(0, 20).map(([start, end, clip, media, speaker, words]) => ({ start, end, clip, media, speaker, words }));
-  return {
+  const report = {
     checked_words: checked,
     uncovered_words: count,
     uncovered_spans: groups.length,
     examples_seconds: examples,
     missing_transcripts: missingTranscripts,
-    scope: "Temporal coverage of cached, visible footage speech after the intro; does not verify subtitle wording or speaker correctness.",
+    scope: "Temporal coverage of cached, visible footage speech, the intro's captions included; does not verify subtitle wording or speaker correctness.",
   };
+  return { report, groups };
 }
 
 /** Words too common to tie a quote to the moment it's spoken. */
@@ -274,6 +283,28 @@ export function cutMidWord(project: Project, transcripts: Map<string, Transcript
   return issues;
 }
 
+/** Words the house style leaves unsubtitled (throwaway sounds). */
+const FILLER = new Set(["um", "uh", "umm", "uhh", "mm", "hmm", "mhm", "mmhmm", "uhhuh", "ah", "oh", "er", "so", "like", "huh"]);
+
+/**
+ * Footage speech heard with nothing on screen (`unsubtitled_speech`): runs
+ * of at least two real words (not fillers) under no subtitle or caption.
+ */
+export function unsubtitledSpeech(project: Project, transcripts: Map<string, Transcript>): unknown[] {
+  const fps = fpsOf(project);
+  return coverage(project, transcripts).groups
+    .filter(([, , , , , words]) => splitWhitespace(words).filter((word) => !FILLER.has(word.toLowerCase().replace(/[^a-z]/gu, ""))).length >= 2)
+    .map(([start, end, clip, , speaker, words]) => ({
+      kind: "unsubtitled_speech",
+      clip,
+      start: toI64(Math.floor(start * fps)),
+      end: toI64(Math.ceil(end * fps)),
+      speaker,
+      words,
+      fix: "heard with nothing on screen: caption it as the clips around it are (caption_speakers in the intro, add_subtitles after) over this span",
+    }));
+}
+
 /** Every word heard on the timeline from the footage's own sound: its frame and stem. */
 function heardWords(project: Project, transcripts: Map<string, Transcript>): [number, string][] {
   const fps = fpsOf(project);
@@ -303,14 +334,29 @@ function heardWords(project: Project, transcripts: Map<string, Transcript>): [nu
 export function textNotSaid(project: Project, transcripts: Map<string, Transcript>): unknown[] {
   const fps = fpsOf(project);
   const heard = heardWords(project, transcripts);
-  if (heard.length === 0) return [];
   const second = toI64(round(fps));
   const edge = toI64(round(0.15 * fps));
   const issues: unknown[] = [];
+  // Where the footage's own sound plays (B-roll under a narration plays
+  // silent): a subtitle or caption with none of it under it says words
+  // nobody hears (the comp's teaser captioned Ava over the voice-over).
+  const sound = project.clips.filter(
+    (clip) =>
+      clip.type === "audio" &&
+      trackOf(project, clip.track)?.muted !== true &&
+      project.media.find((media) => media.id === clip.media)?.kind === "video",
+  );
+  const reused = reusedSpans(project);
   for (const clip of project.clips) {
     if (clip.type !== "text") continue;
     const name = clip.name ?? "";
     if (!(name.startsWith("Caption") || name.startsWith("Subtitle"))) continue;
+    const middle = clip.start + clip.duration / 2;
+    if (!sound.some((audio) => audio.start <= middle && clipEnd(audio) > middle) && !reused.some(([from, to]) => from <= middle && to > middle)) {
+      issues.push({ kind: "subtitle_unheard", clip: clip.id, start: clip.start, text: clip.text, fix: "delete it: no footage sound plays under it (B-roll under a narration is silent; subtitles are for what's heard)" });
+      continue;
+    }
+    if (heard.length === 0) continue;
     const shown = splitWhitespace(clip.text)
       .filter((word) => !word.includes("*"))
       .map(stem)

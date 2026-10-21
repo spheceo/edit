@@ -1358,8 +1358,9 @@ export async function cut(source: string, start: number, to: number, out: string
       source,
       "-t",
       display(to - start),
+      // The picture if there is one: a police call is sound only (Tarrytown_PD_call.m4a).
       "-map",
-      "0:v:0",
+      "0:v:0?",
       "-map",
       "0:a?",
       "-c:v",

@@ -628,3 +628,27 @@ test("the_reference_effects_build_valid_clips", () => {
   expect(p.clips.find((own) => own.id === "sub")!.name).toBe("Call words");
   valid(p);
 });
+
+test("a left-aligned text reworded keeps its left edge (a Notepad line never grows over its window's edge)", () => {
+  const p = project("plan");
+  apply(p, [
+    {
+      op: "add",
+      as: "note",
+      clip: {
+        type: "text", track: "v1", start: 0, duration: 60, text: "- Nothing more?",
+        style: { font: "Geist", weight: 400, size: 40, color: [1, 1, 1, 1], line_height: 1.4, align: "left" },
+        transform: { x: 100, y: 0, scale: 0.5, rotation: 0 },
+        keyframes: { x: [{ frame: 0, value: 100, ease: "linear" }], scale: [{ frame: 0, value: 0.5, ease: "linear" }] },
+      },
+    },
+  ]);
+  const id = p.clips[0]!.id;
+  const width = (text: string) => native().textBlock(text, 40, 400, 1.4)[0];
+  const left = (own: TextClip) => own.transform.x - (width(own.text) / 2) * own.transform.scale;
+  const before = left(p.clips[0] as TextClip);
+  apply(p, [{ op: "update", select: { ids: [id] }, patch: { text: "- Nothing more to add?" } }]);
+  const after = p.clips[0] as TextClip;
+  expect(Math.abs(left(after) - before)).toBeLessThan(0.01);
+  expect(after.keyframes!.x![0]!.value).toBeCloseTo(after.transform.x, 3);
+});

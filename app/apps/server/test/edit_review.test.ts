@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { calloutTiming, cutMidWord, lineFrames, offScript, spokenWords, subtitleCoverage, textNotSaid } from "../src/edit_review.ts";
+import { calloutTiming, cutMidWord, lineFrames, offScript, spokenWords, subtitleCoverage, textNotSaid, unsubtitledSpeech } from "../src/edit_review.ts";
 import type { AudioClip, Clip, Project, TextClip } from "../src/model.ts";
 import { addTrack, newProject } from "../src/project.ts";
 import type { Transcript } from "../src/transcribe.ts";
@@ -185,6 +185,15 @@ test("a_caption_that_isnt_what_is_said_is_flagged", () => {
   expect(issues.map((issue) => issue.clip)).toEqual(["wrong"]);
 });
 
+test("a caption over silent footage (B-roll under a narration) is flagged as unheard", () => {
+  const p = footageProject();
+  const v2 = addTrack(p, "video");
+  const end = Math.max(...p.clips.map((clip) => clip.start + clip.duration));
+  p.clips.push({ ...words("over", v2, "Start us a medic right now.", end + 30, 40), name: "Caption · Officer" });
+  const issues = textNotSaid(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
+  expect(issues.map((issue) => [issue.kind, issue.clip])).toEqual([["subtitle_unheard", "over"]]);
+});
+
 test("footage cut inside a word is flagged, with where the word ends; a cut the next clip carries on isn't", () => {
   // Corrupt Cop's "Unintentionally, sir." cut before "sir" finished: here "baby." (274.45–274.8) is cut at 274.6.
   const p = footageProject();
@@ -217,4 +226,15 @@ test("a desktop profile's lines are timed to the narration that says them, and f
   expect(calloutTiming(p, new Map([["m7", TEASER]]))).toEqual([{ kind: "profile_line_off_speech", start: 120, said_at: 18, text: "- MEDIC IN THE BACKYARD" }]);
   p.markers = [{ frame: 20, name: "desktop line", note: "- MEDIC IN THE BACKYARD" }];
   expect(calloutTiming(p, new Map([["m7", TEASER]]))).toEqual([]);
+});
+
+test("speech heard with no subtitle or caption on screen is unsubtitled_speech, the intro's too; a caption over it covers it", () => {
+  const p = footageProject();
+  const found = unsubtitledSpeech(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
+  expect(found.length).toBeGreaterThan(0);
+  expect(found[0]).toMatchObject({ kind: "unsubtitled_speech" });
+  const v2 = addTrack(p, "video");
+  const end = Math.max(...p.clips.map((clip) => clip.start + clip.duration));
+  p.clips.push({ ...words("all", v2, "everything", 0, end), name: "Caption · Officer" });
+  expect(unsubtitledSpeech(p, new Map([["m7", TEASER]]))).toEqual([]);
 });

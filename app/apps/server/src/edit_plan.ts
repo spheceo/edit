@@ -8,6 +8,7 @@ import * as cutin from "./cutin.ts";
 import * as desktop from "./desktop.ts";
 import * as screen from "./desktop_screen.ts";
 import * as framing from "./framing.ts";
+import * as vignettes from "./vignettes.ts";
 import * as looks from "./looks.ts";
 import * as graphics from "./graphics.ts";
 import * as intro from "./intro_graphics.ts";
@@ -292,6 +293,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
         const value = mergeClip(structuredClone(clip) as unknown as Args, structuredClone(patch));
         value.id = clip.id;
         const next = clipOrSay(value, "clip: ");
+        keepLeftEdge(clip, next, patch);
         if (next.link !== undefined && next.link !== null && (next.start !== start || next.duration !== duration)) {
           moved.push([next.link, next.start - start, duration, next.duration]);
         }
@@ -377,6 +379,8 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return looks.filmLook(project, args);
     case "fill_frame":
       return framing.fillFrame(project, args);
+    case "ease_vignettes":
+      return vignettes.ease(project, args);
     case "red_quote":
       return looks.redQuote(project, args);
     case "annotate":
@@ -422,7 +426,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
         throw new Error(`unknown op ${op}: it's a transition, {"op": "transition", "kind": "${op}", "at": <frame>}`);
       }
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, ease_vignettes, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
       );
   }
 }
@@ -976,7 +980,7 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
   }
   // The board's vignette, over all of it.
   const shade = addTrack(project, "video");
-  add({ type: "adjustment", name: "Evidence board · vignette", track: shade, start, duration: total, grade: { vignette: 0.38 } });
+  add({ type: "adjustment", name: "Evidence board · vignette", track: shade, start, duration: total, fade_in: 12, fade_out: 12, grade: { vignette: 0.38 } });
   // Photos that aren't the case's own say so, small, in the corner, still.
   if (args.illustrative === true) {
     const track = addTrack(project, "video");
@@ -1504,6 +1508,8 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   issues.push(...graphics.bareStills(project));
   // Footage or a photo with black bars round it.
   issues.push(...framing.letterboxedIssues(project));
+  // A vignette snapping on or off.
+  issues.push(...vignettes.issues(project));
   // The date in a box or glowing: it's white with a drop shadow only.
   issues.push(...graphics.dateDrift(project));
   // A subtitle or intro caption on someone's face (faces found so far).
@@ -1585,4 +1591,25 @@ export function sortIssues<T>(issues: T[]): T[] {
     .map((issue) => [stableStringify(issue), issue] as const)
     .sort((a, b) => compareStrings(a[0], b[0]))
     .map(([, issue]) => issue);
+}
+
+/**
+ * A left-aligned text whose words change keeps its left edge (its x is its
+ * box's centre): Helpful Wife's Notepad line "- Nothing more to add?",
+ * reworded after the desktop was built, grew out of both sides and over the
+ * window's left edge. Not when the patch places it itself.
+ */
+function keepLeftEdge(before: Clip, after: Clip, patch: Args): void {
+  if (before.type !== "text" || after.type !== "text" || before.text === after.text) return;
+  if (after.style?.align !== "left" || patch.transform !== undefined || (patch.keyframes as Args | undefined)?.x !== undefined) return;
+  const style = after.style;
+  const width = (text: string) => native().textBlock(text, style.size ?? 40, style.weight ?? 400, style.line_height ?? 1.15)[0];
+  const grow = (width(after.text) - width(before.text)) / 2;
+  if (!Number.isFinite(grow) || Math.abs(grow) < 0.5) return;
+  const scaleAt = (frame: number) => after.keyframes?.scale?.find((key) => key.frame === frame)?.value ?? after.transform.scale ?? 1;
+  after.transform = { ...after.transform, x: after.transform.x + grow * (after.transform.scale ?? 1) };
+  const xs = after.keyframes?.x;
+  if (xs !== undefined && xs !== null) {
+    for (const key of xs) key.value += grow * scaleAt(key.frame);
+  }
 }

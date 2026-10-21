@@ -369,7 +369,14 @@ test("caption_speakers asks Luna who speaks and lays the intro's captions out (n
       },
     };
     // The stills are FFmpeg's; there's no footage here, so it says so.
+    // The footage on screen with its sound gone (B-roll under a narration): nothing heard, nothing captioned.
+    const silent = structuredClone(store.get(id)!.project);
+    silent.clips = silent.clips.filter((clip) => clip.type !== "audio");
+    await store.replace(id, null, silent, "test");
     let reply = await call(app, "caption_speakers", { project_id: id });
+    expect(reply).toEqual({ text: "No speech in that part of the timeline (is the footage transcribed?).", isError: true });
+    await store.replace(id, null, { ...silent, clips: structuredClone(store.get(id)!.project.clips).concat([{ id: "a", track: "a4", start: 0, duration: 900, color: "blue", fade_in: 0, fade_out: 0, type: "audio", media: "m", source_in: 0, speed: 1, volume_db: 0, link: "l1" } as never]) }, "test");
+    reply = await call(app, "caption_speakers", { project_id: id });
     expect(reply).toEqual({ text: "couldn't take a still", isError: true });
     // With stills (an FFmpeg that "takes" them), the captions go in.
     const bin = `${dir}/bin`;

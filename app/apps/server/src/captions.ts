@@ -1029,8 +1029,26 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
   // As the subtitles do: no captions for the narrator, radio or background
   // talk (a news clip's narrator in a teaser came through as a white
   // "Narrator" person the cast refused, and no captions were made at all).
+  // And only what's heard: B-roll of the footage under a narration plays
+  // silent, so its words aren't captioned (the comp's teaser had Ava's words
+  // captioned over the voice-over).
+  const sound = seams.subtitles.footageSound(project, from, to);
+  const heard = (line: Line): boolean => {
+    const clip = footage.find((one) => one.id === line.clip);
+    if (clip === undefined) return false;
+    const said = lineStart(line);
+    const at = clip.start + ((said - clip.source_in) / clip.speed) * fps;
+    return sound.some(
+      (audio) =>
+        audio.type === "audio" &&
+        audio.media === clip.media &&
+        audio.start <= at + 1 &&
+        clipEnd(audio) > at &&
+        Math.abs(audio.source_in + ((at - audio.start) / fps) * audio.speed - said) < 0.5,
+    );
+  };
   const lines = (await spokenLines(app, project, footage, from, to, false)).filter(
-    (line) => !throwaway(line) && !seams.subtitles.hiddenRole(line.role),
+    (line) => !throwaway(line) && !seams.subtitles.hiddenRole(line.role) && heard(line),
   );
   if (lines.length === 0) throw new Error("No speech in that part of the timeline (is the footage transcribed?).");
 

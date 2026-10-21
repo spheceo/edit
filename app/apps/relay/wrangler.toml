@@ -30,8 +30,8 @@ preview_urls = false
 [vars]
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
-DAILY_BYTES_PER_IP = "144000000"  # ~10 hours
-DAILY_BYTES_TOTAL = "360000000"   # ~25 hours
+DAILY_BYTES_PER_IP = "432000000"  # ~30 hours (raised Oct 21: a day of edits and re-runs used 10)
+DAILY_BYTES_TOTAL = "1080000000"  # ~75 hours
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
 
 # Map stills (Google Photorealistic 3D Tiles, billed per session): a day's

@@ -427,14 +427,21 @@ export function interrogationIssues(project: Project, parts: { start: number; en
       (clip): clip is Extract<Clip, { type: "text" }> =>
         clip.type === "text" && !/^(Subtitle|Caption)/u.test(clip.name ?? "") && trackOf(project, clip.track)?.subtitles !== true && words.some((word) => clip.text.toLowerCase().includes(word)),
     );
-    const callout = naming.some((clip) => clip.style.size <= 44 * k && clip.style.background !== undefined && clip.style.background !== null);
+    // A small boxed name beside them, or their photo in a File Viewer with the
+    // name under it ("just have the text stand right under the image and then
+    // just show the image in a file viewer").
+    const callout = naming.some(
+      (clip) =>
+        (clip.style.size <= 44 * k && clip.style.background !== undefined && clip.style.background !== null) ||
+        (clip.name ?? "").startsWith("File Viewer name"),
+    );
     const faint = naming.filter((clip) => clip.style.size >= 70 * k && (clip.opacity ?? 1) < 0.85 && (clip.style.background === undefined || clip.style.background === null));
     if (!callout || faint.length > 0) {
       out.push({
         kind: "name_not_introduced",
         person: person.name,
         faint: faint.map((clip) => clip.id),
-        fix: "THE NAME CALLOUT where the narration first names them over the room: full name and age small in a black box beside their head, a thin white line from their neck (leader; give its x/y by hand if track_region can't follow the face); no big faint name",
+        fix: "THE NAME where the narration first names them over the room: their photo in a File Viewer beside them with the name and age under it (op file_viewer name), or with no photo a small black name box beside their head with a thin line from their shoulder; no big faint name",
       });
     }
   }

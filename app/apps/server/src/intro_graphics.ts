@@ -475,6 +475,79 @@ export function fastForward(project: Project, args: Args): Record<string, unknow
 }
 
 // ---------------------------------------------------------------------------
+// pause
+
+/**
+ * The room paused to say something over it (`{"op":"pause","start":F,"end":F,
+ * "text":"June 2013"}`; `from`: the frame whose picture holds, default the one
+ * before `start`): the team's way instead of words in the middle of the
+ * screen ("pause the previous frame and then write June 2013 on that frame,
+ * and then zoom over to the Notepad"). The footage under `from` held still
+ * (speed 0.05) with a slow push, greyed and darkened a little, and the words
+ * typed on small, lower left (`side: "right"` for lower right, away from
+ * the person's face), white with the house shadow. A shutter or click on
+ * `start` is the sound's job (add_sound_effect).
+ */
+export function pause(project: Project, args: Args): Record<string, unknown> {
+  const [start, end] = span(args, "pause", 12);
+  const [width, height] = [project.settings.width, project.settings.height];
+  const k = height / 1080;
+  const fps = fpsOf(project);
+  const from = int(args.from) ?? Math.max(start - 1, 0);
+  const video = project.tracks.filter((track) => track.kind === "video" && track.subtitles !== true).map((track) => track.id);
+  // The picture showing at `from`: the highest footage clip there.
+  const under = project.clips
+    .filter((clip) => clip.type === "video" && clip.start <= from && from < clipEnd(clip) && mediaOf(project, clip.media)?.kind === "video")
+    .sort((a, b) => video.indexOf(b.track) - video.indexOf(a.track))[0];
+  if (under === undefined || under.type !== "video") throw new Error(`pause: no footage on the timeline at frame ${from} to hold`);
+  const at = under.source_in + ((from - under.start) / fps) * under.speed;
+  const scale = under.transform.scale ?? 1;
+  const duration = end - start;
+  const made: string[] = [];
+  push(project, made, {
+    type: "video",
+    name: "Pause",
+    track: addTrack(project, "video"),
+    start,
+    duration,
+    media: under.media,
+    source_in: at,
+    speed: 0.05,
+    transform: { ...under.transform },
+    crop: under.crop,
+    keyframes: { scale: [key(0, scale), key(duration - 1, scale * 1.08)] },
+  });
+  push(project, made, {
+    type: "adjustment",
+    name: "Pause · look",
+    track: addTrack(project, "video"),
+    start,
+    duration,
+    grade: { saturation: -0.7, exposure: -0.35, vignette: 0.55 },
+  });
+  const words = typeof args.text === "string" ? trim(args.text) : "";
+  if (words !== "") {
+    const size = 56 * k;
+    const lines = words.split("\n");
+    const widest = Math.max(...lines.map((line) => lineWidth(line, size)));
+    const right = args.side === "right";
+    push(project, made, {
+      type: "text",
+      name: "Pause · words",
+      track: addTrack(project, "video"),
+      start: start + 4,
+      duration: duration - 4,
+      fade_out: 6,
+      text: words,
+      style: { font: "Geist", weight: 600, size: round(size), color: [1, 1, 1, 1], glow: { enabled: false }, background: null, shadow: shadow(k), align: right ? "right" : "left" },
+      transform: { x: (right ? 1 : -1) * (width / 2 - 0.07 * width - widest / 2), y: height / 2 - 0.2 * height },
+      animation: { preset: "typewriter", duration: 1, stagger: 1 },
+    });
+  }
+  return { clips: made };
+}
+
+// ---------------------------------------------------------------------------
 // disclaimer
 
 /** The house disclaimer's words: ours, plain, short enough to read in a few seconds. */

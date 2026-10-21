@@ -416,6 +416,8 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return intro.countdown(project, args);
     case "fast_forward":
       return intro.fastForward(project, args);
+    case "pause":
+      return intro.pause(project, args);
     case "disclaimer":
       return intro.disclaimer(project, args);
     case "text_slam":

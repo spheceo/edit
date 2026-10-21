@@ -55,6 +55,24 @@ test("a_clip_left_over_another_goes_onto_its_own_track_above", () => {
   valid(p);
 });
 
+test("a_pause_holds_the_frame_before_with_its_words_typed_small", () => {
+  const p = project("plan");
+  p.media.push(media({ id: "m1", name: "room", path: "/r.mp4", kind: "video", duration: 600, width: 720, height: 480, has_audio: false }));
+  apply(p, [{ op: "add", clip: { type: "video", track: "v1", start: 0, duration: 300, media: "m1", source_in: 10, transform: { x: 0, y: 0, scale: 1.3, rotation: 0 } } }]);
+  apply(p, [{ op: "pause", start: 120, end: 210, text: "June 2013" }]);
+  const held = p.clips.find((one) => one.name === "Pause") as VideoClip;
+  // The frame before 120 (119): 10 s in + 119 frames at 30 fps.
+  expect(held.source_in).toBeCloseTo(10 + 119 / 30, 3);
+  expect(held.speed).toBe(0.05);
+  expect(held.keyframes!.scale!.at(-1)!.value).toBeCloseTo(1.3 * 1.08, 3);
+  const words = p.clips.find((one) => one.name === "Pause · words") as TextClip;
+  expect(words.text).toBe("June 2013");
+  expect(words.transform.x).toBeLessThan(0);
+  expect(words.transform.y).toBeGreaterThan(0);
+  valid(p);
+  expect(() => apply(p, [{ op: "pause", start: 400, end: 480 }])).toThrow("no footage on the timeline at frame 399");
+});
+
 test("linked_halves_move_and_go_together_and_add_needs_times", () => {
   const p = project("plan");
   apply(p, [

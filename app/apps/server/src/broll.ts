@@ -40,6 +40,9 @@ export const MAP_PAGE = mapPageText as unknown as string;
 /** Identifies Edit to the services it calls. */
 const USER_AGENT = "edit-video-editor/0.1 (+https://github.com/spheceo/edit)";
 
+/** The longest moving map shot. */
+export const MAP_MOST_SECONDS = 12.0;
+
 /** Seconds of footage a still becomes: room to hold it, push in and trim. */
 const STILL_SECONDS = 30;
 
@@ -51,8 +54,20 @@ export const timing = {
   smoothLimitMs: 120_000,
   /** How long map_view waits for a moving shot's first frame and building track before answering that it's still loading. */
   mapReadyWaitMs: 180_000,
-  /** How long a map page may take: a moving shot waits on tiles for every frame. */
-  mapRenderLimitMs: (frames: number) => (150 + 2 * frames) * 1000,
+  /**
+   * How long a map page may take in all: a moving shot waits on tiles for
+   * every frame, and a busy 8 GB Mac took 1.9 s a frame (Oct 21's 600-frame
+   * Franklin Ave shot, 1,232 s), so it's generous; stalling is what ends one.
+   */
+  mapRenderLimitMs: (frames: number) => (150 + 5 * frames) * 1000,
+  /**
+   * A map page with nothing new for this long has stalled and is stopped (its
+   * frames are kept). Slow isn't stalled: each restart costs a minute of
+   * loading and a paid map session from the day's allowance.
+   */
+  mapStallMs: 150_000,
+  /** How often a map render is looked at for progress. */
+  mapPollMs: 5_000,
 };
 
 type Json = unknown;
@@ -702,6 +717,8 @@ interface MapJob {
   /** A moving shot's first frame is in and where the building is in every frame is known: what the page measured so far. */
   ready: Once<Json> | null;
   frames: string;
+  /** When the page last sent something (a frame, the track): a page that stops sending has stalled. */
+  progress?: number;
 }
 
 const mapJobs = new Map<string, MapJob>();
@@ -715,8 +732,10 @@ export function mapPage(token: string): Response {
 
 /** `POST /api/maps/{token}/frame/{index}`: one frame of a moving shot (image/jpeg). */
 export function mapFrame(token: string, index: number, body: Uint8Array): number {
-  const dir = mapJobs.get(token)?.frames;
-  if (dir === undefined) return 404;
+  const job = mapJobs.get(token);
+  const dir = job?.frames;
+  if (job === undefined || dir === undefined) return 404;
+  job.progress = timing.now();
   // Whole frames only: an attempt cut short is resumed from what's there.
   const partial = join(dir, `frame-${String(index).padStart(5, "0")}.partial`);
   const frame = join(dir, frameName(index));
@@ -768,6 +787,7 @@ export function mapShot(token: string, headers: Headers, body: Uint8Array): numb
     const ready = job?.ready ?? null;
     if (job === undefined || ready === null) return 404;
     job.ready = null;
+    job.progress = timing.now();
     ready.send(parseOr(body));
     return 204;
   }
@@ -804,7 +824,8 @@ async function renderMap(
   const token = fingerprint([text, `${performance.now()}-${tokens++}`, String(process.pid)]);
   const done = new Once<MapShot>();
   const page = MAP_PAGE.replaceAll("__CONFIG__", () => text.replaceAll("</", "<\\/"));
-  mapJobs.set(token, { page, done, ready, frames });
+  const job: MapJob = { page, done, ready, frames, progress: timing.now() };
+  mapJobs.set(token, job);
   const profile = join(os.tmpdir(), `edit-map-${token}`);
   let answer: MapShot;
   let child: Bun.Subprocess | null = null;
@@ -830,17 +851,28 @@ async function renderMap(
     answer = { error: `chrome: ${diag.messageOf(error)}` };
   }
   if (child !== null) {
-    // A moving shot waits on tiles for every frame.
+    // A moving shot waits on tiles for every frame: given up when it stops
+    // sending frames, not for being slow.
     const count = typeof config.frames === "number" ? config.frames : 0;
-    const waitMs = timing.mapRenderLimitMs(count);
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const late = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), waitMs);
-    });
-    const got = await Promise.race([done.wait(), late]);
-    if (timer !== null) clearTimeout(timer);
+    const limitMs = timing.mapRenderLimitMs(count);
+    const started = timing.now();
+    const finished = done.wait();
+    let got: MapShot | null = null;
+    let stalled = false;
+    for (;;) {
+      const tick = await Promise.race([finished, timing.sleep(timing.mapPollMs).then(() => undefined)]);
+      if (tick !== undefined) {
+        got = tick;
+        break;
+      }
+      const now = timing.now();
+      stalled = now - (job.progress ?? started) > timing.mapStallMs;
+      if (stalled || now - started > limitMs) break;
+    }
     child.kill();
-    if (got === null) answer = { error: "the map took too long to load" };
+    if (got === null && stalled && count > 0 && framesHad(frames, count).length > 0) {
+      answer = { error: `the map stopped rendering (nothing new for ${Math.round(timing.mapStallMs / 1000)} s); its frames are kept` };
+    } else if (got === null) answer = { error: "the map took too long to load" };
     else if ("error" in got) answer = { error: `the map didn't render: ${got.error}` };
     else answer = got;
   }
@@ -894,21 +926,34 @@ export function isMapStandIn(path: string): boolean {
  */
 export async function waitForMaps(app: App, projectId: string, limitMs: number): Promise<void> {
   const started = timing.now();
-  while (mapsRendering(projectId)) {
-    if (timing.now() - started > limitMs) {
-      throw new Error(
-        "a map view is still rendering; export again in a minute (get_project's smoothing lists it until it's done)",
-      );
+  // Each stand-in left without its footage is started again once, here,
+  // rather than refused (Oct 21: three exports waited on agents to call
+  // map_view again for maps that had stalled or run out of allowance).
+  const restarted = new Set<string>();
+  let standIns: Media[];
+  for (;;) {
+    while (mapsRendering(projectId)) {
+      if (timing.now() - started > limitMs) {
+        throw new Error(
+          "a map view is still rendering; export again in a minute (get_project's smoothing lists it until it's done)",
+        );
+      }
+      await timing.sleep(500);
     }
-    await timing.sleep(500);
+    const live = app.store.get(projectId);
+    if (live === null) throw new Error("no such project");
+    const project = live.project;
+    const used = new Set(project.clips.map(clipMedia).filter((id): id is string => id !== null));
+    standIns = project.media.filter((media) => used.has(media.id) && isMapStandIn(media.path));
+    const again = standIns.filter((media) => !restarted.has(media.path) && isFile(standInJob(media.path)));
+    if (again.length === 0) break;
+    for (const media of again) {
+      restarted.add(media.path);
+      resumeMap(app, projectId, media.path);
+    }
   }
-  const live = app.store.get(projectId);
-  if (live === null) throw new Error("no such project");
-  const project = live.project;
-  const used = new Set(project.clips.map(clipMedia).filter((id): id is string => id !== null));
   const pending = mapsPending.get(projectId);
-  const stuck = project.media
-    .filter((media) => used.has(media.id) && isMapStandIn(media.path))
+  const stuck = standIns
     .map((media) => {
       const error = [...(pending?.values() ?? [])].find((map) => map.media === media.id)?.error ?? null;
       return error !== null ? `${media.id} (its render failed: ${error})` : `${media.id} (its render was cut short)`;
@@ -947,8 +992,13 @@ export function stopLeftoverMaps(): number {
   return orphans.length;
 }
 
-/** One map render (a headless Chrome with the 3D map) at a time: each takes a gigabyte or so. */
-const mapSlot = new Semaphore(1);
+/**
+ * Map renders at once: each is a headless Chrome with the 3D map, a gigabyte
+ * or so. Two on a Mac with 16 GB or more; one on 8 GB, where a second only
+ * slows both (Oct 21: ~60 MB free while one rendered beside an agent and an export).
+ */
+export const MAP_RENDERS_AT_ONCE = os.totalmem() >= 16 * 2 ** 30 ? 2 : 1;
+const mapSlot = new Semaphore(MAP_RENDERS_AT_ONCE);
 
 const num = (value: unknown): number | null => (typeof value === "number" ? value : null);
 const bool = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null);
@@ -980,7 +1030,10 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
   const heading = num(args.heading) ?? -25.0;
   const mark = bool(args.highlight) ?? true;
   const still = bool(args.still) ?? false;
-  const seconds = clamp(num(args.seconds) ?? 6.0, 1.0, 20.0);
+  // Every frame waits on tiles (0.15–1.9 s each), so a shot is only as long
+  // as its clips: Oct 21's 20-second Franklin Ave shot, 7 s of it used, held
+  // up the export for most of an hour.
+  const seconds = clamp(num(args.seconds) ?? 6.0, 1.0, MAP_MOST_SECONDS);
   const highlightAfter = clamp(num(args.highlight_after) ?? 0.0, 0.0, seconds);
   const highlightFade = clamp(num(args.highlight_fade) ?? 0.0, 0.0, seconds);
   const orbit = clamp(num(args.orbit) ?? 15.0, -90.0, 90.0);
@@ -1183,6 +1236,10 @@ interface MapShotJob {
 }
 
 const jobOut = (job: MapShotJob) => join(job.dir, `map-${job.key}.mp4`);
+/** What it was asked to make, kept so a render cut short or failed can be started again without the agent. */
+const jobFile = (job: MapShotJob) => join(job.dir, `map-${job.key}.job.json`);
+/** The job file of a moving shot's stand-in (`map-<key>-first.jpg`). */
+export const standInJob = (first: string) => first.replace(/-first\.jpg$/, ".job.json");
 /** Its first frame, which stands in for it until it's done. */
 const jobFirst = (job: MapShotJob) => join(job.dir, `map-${job.key}-first.jpg`);
 const jobShots = (job: MapShotJob) => join(job.dir, `map-${job.key}.frames`);
@@ -1193,21 +1250,12 @@ const jobShots = (job: MapShotJob) => join(job.dir, `map-${job.key}.frames`);
  * Returns what the page measured, the media, and whether it's still rendering.
  */
 async function movingMap(app: App, projectId: string, job: MapShotJob): Promise<[Json, string, boolean]> {
-  let render = mapRenders.get(job.key);
-  if (render === undefined) {
-    const made: MapRender = { ready: new Once(), projects: new Set(), failed: null };
-    render = made;
-    mapRenders.set(job.key, made);
-    void (async () => {
-      try {
-        await diag.timeAsync("agent", "map_view render (background)", () => renderMoving(app, job, made));
-      } catch {
-        // Logged by the timing; the stand-ins hear of it.
-      }
-      mapRenders.delete(job.key);
-    })();
+  try {
+    fs.writeFileSync(jobFile(job), JSON.stringify({ ...job, config: rustJson(job.config) }));
+  } catch {
+    // Only for starting it again.
   }
-  render.projects.add(projectId);
+  const render = startRender(app, job, projectId);
   let timer: ReturnType<typeof setTimeout> | null = null;
   const late = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), timing.mapReadyWaitMs);
@@ -1237,6 +1285,62 @@ async function movingMap(app: App, projectId: string, job: MapShotJob): Promise<
   // It may have finished meanwhile (its own swap found no stand-in yet).
   if (isFile(out)) await swapInMap(app, projectId, first, out);
   return [info, media, !isFile(out)];
+}
+
+/**
+ * Starts the moving shot's render in the background (or joins the one under
+ * way) for `projectId`, noted in jobs.json so a restart carries on with it.
+ */
+function startRender(app: App, job: MapShotJob, projectId: string): MapRender {
+  let render = mapRenders.get(job.key);
+  if (render === undefined) {
+    const made: MapRender = { ready: new Once(), projects: new Set(), failed: null };
+    render = made;
+    mapRenders.set(job.key, made);
+    void (async () => {
+      try {
+        await diag.timeAsync("agent", "map_view render (background)", () => renderMoving(app, job, made));
+      } catch {
+        // Logged by the timing; the stand-ins hear of it.
+      }
+      mapRenders.delete(job.key);
+      for (const project of made.projects) jobs.end(app.store.home, jobs.keyOf("map", project, job.key));
+    })();
+  }
+  if (!render.projects.has(projectId)) {
+    render.projects.add(projectId);
+    jobs.begin(app.store.home, "map", projectId, { first: jobFirst(job) }, job.key);
+  }
+  return render;
+}
+
+/**
+ * Starts again the moving shot whose stand-in is `first` in a project (its
+ * render failed, stalled or was cut short by a restart), from the frames it
+ * has, without the agent. Returns whether it's rendering: false when there's
+ * no job file for it, or the project no longer has the stand-in.
+ */
+export function resumeMap(app: App, projectId: string, first: string): boolean {
+  let job: MapShotJob;
+  try {
+    const kept = JSON.parse(fs.readFileSync(standInJob(first), "utf8")) as MapShotJob & { config: string };
+    job = { ...kept, config: JSON.parse(kept.config) as Record<string, unknown> };
+  } catch {
+    return false;
+  }
+  const standIn = canonical(jobFirst(job));
+  const media = app.store.get(projectId)?.project.media.find((one) => one.path === standIn);
+  if (media === undefined) return false;
+  const render = startRender(app, job, projectId);
+  // Keyed as the render reports back (its failure, its swap).
+  let maps = mapsPending.get(projectId);
+  if (maps === undefined) {
+    maps = new Map();
+    mapsPending.set(projectId, maps);
+  }
+  maps.set(jobFirst(job), { media: media.id, error: render.failed });
+  diag.info("agent", `map ${job.key} for ${projectId} started again from its frames`);
+  return true;
 }
 
 /**
@@ -1298,6 +1402,7 @@ async function renderMoving(app: App, job: MapShotJob, render: MapRender): Promi
         // Only for reuse.
       }
       fs.rmSync(shots, { recursive: true, force: true });
+      fs.rmSync(jobFile(job), { force: true });
     } finally {
       release();
     }

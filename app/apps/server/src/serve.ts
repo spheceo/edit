@@ -239,7 +239,7 @@ function optional(area: string, work: () => void): void {
   }
 }
 
-/** Starts again the exports, uploads, smoothing and watches a restart cut short (jobs.ts). */
+/** Starts again the exports, uploads, smoothing, watches and map renders a restart cut short (jobs.ts). */
 function resumeJobs(app: App): void {
   const project = (id: string) => {
     const live = app.store.get(id);
@@ -270,6 +270,10 @@ function resumeJobs(app: App): void {
     },
     upload: (job) => {
       seams.cloudMedia.resumeUpload(app.store.home, job.args);
+    },
+    map: (job) => {
+      const { first } = job.args as { first: string };
+      if (!seams.broll.resumeMap?.(app, job.project, first)) throw new Error("its stand-in or job file is gone");
     },
   });
 }

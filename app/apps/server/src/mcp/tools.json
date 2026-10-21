@@ -1022,7 +1022,7 @@
           "type": "number"
         },
         "seconds": {
-          "description": "Length of the moving shot: how long it's on screen (default 6).",
+          "description": "Length of the moving shot in seconds: only as long as its clips will use, plus a second (default 6, at most 12). Every frame waits on map tiles, so a longer shot holds up the export.",
           "type": "number"
         },
         "still": {

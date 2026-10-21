@@ -138,6 +138,41 @@ test.skipIf(ffmpeg === null || ffprobe === null)("map_footage_swaps_in_for_its_f
   }
 });
 
+/**
+ * An export starts a map whose render stalled, failed or was cut short again
+ * by itself (from its job file and kept frames), instead of refusing it and
+ * waiting for the agent to call map_view again (Oct 21).
+ */
+test.skipIf(ffmpeg === null || ffprobe === null)("an export starts a stuck map again by itself", async () => {
+  const { app, cleanup, home } = fixtureHome("map-resume");
+  const { mapsPending, mapRenders } = broll.state;
+  const project = app.store.create("map", { width: 1920, height: 1080, fps: 30 }).project.id;
+  try {
+    const dir = `${home}/maps`;
+    fs.mkdirSync(dir, { recursive: true });
+    const first = `${dir}/map-r-first.jpg`;
+    makeFile(["-f", "lavfi", "-i", "color=c=red:s=320x180", "-frames:v", "1"], first);
+    const [, added] = await importPaths(app, project, [first], false, "agent");
+    const media = added[0]!;
+    await app.store.update(project, "test", (edited) => placeAtEnd(edited, media));
+    // No job file: refused as before, saying what to do.
+    await expect(broll.waitForMaps(app, project, 0)).rejects.toThrow("cut short");
+    // With one, it's started again (here it joins a render already under way, so no Chrome opens).
+    expect(broll.standInJob(first)).toBe(`${dir}/map-r.job.json`);
+    write(broll.standInJob(first), JSON.stringify({ key: "r", config: '{"frames":12}', width: 1920, height: 1080, fps: 30, frames: 12, dir }));
+    mapRenders.set("r", { ready: { done: false } as never, projects: new Set(), failed: null });
+    await expect(broll.waitForMaps(app, project, 0)).rejects.toThrow("still rendering");
+    expect(mapRenders.get("r")!.projects.has(project)).toBe(true);
+    expect(broll.smoothingPending(project)).toEqual([`${media} (map view rendering)`]);
+    // Its stand-in gone from the project: nothing to start.
+    expect(broll.resumeMap(app, "elsewhere", first)).toBe(false);
+  } finally {
+    mapRenders.delete("r");
+    mapsPending.delete(project);
+    cleanup();
+  }
+});
+
 test("the map page, its frames and its picture come back through the routes", async () => {
   const { app, cleanup, dir } = fixtureHome("map-routes");
   const router = baseRouter();

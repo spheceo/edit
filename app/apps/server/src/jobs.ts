@@ -6,7 +6,8 @@
 // Each kind resumes cheaply: an export carries on from its finished chunks
 // (the engine's chunks.rs), a watch from its cached windows, smoothing per
 // shot, a Drive upload sends the finished file again, an import's cloud
-// upload sends its files again. A job that was resumed
+// upload sends its files again, a moving map shot carries on from its
+// frames. A job that was resumed
 // twice and still didn't end (it may be what brings the server down) isn't
 // started a third time.
 
@@ -16,7 +17,7 @@ import * as diag from "./diag.ts";
 import { nowMs, writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 
-export type Kind = "export" | "drive" | "smooth" | "watch" | "upload";
+export type Kind = "export" | "drive" | "smooth" | "watch" | "upload" | "map";
 
 export interface Job {
   /** One job per key: kind, project and what in it (a clip). */

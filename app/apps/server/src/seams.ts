@@ -509,6 +509,8 @@ export interface SubtitlesSeam {
   fillSegments(given: Segment[], duration: number): Segment[];
   /** The footage's own sound in the span: audio clips of video files on tracks that are heard. */
   footageSound(project: Project, from: number, to: number): Clip[];
+  lockSubtitles(project: Project, from?: number, to?: number): number;
+  movedSubtitles(project: Project, from?: number, to?: number): string[];
   /** Starts a subtitle run of project `id` (`latestRun` says whether a newer one has started since). */
   beginRun(id: string): number;
   latestRun(id: string, run: number): boolean;

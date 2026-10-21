@@ -56,6 +56,12 @@ registerTool("add_subtitles", async ({ app, args, projectId }) => {
 registerTool("place_subtitles", async ({ app, args, projectId }) => {
   const project = liveProject(app, projectId);
   const [from, to] = span(args, fpsOf(project), 0, duration(project));
+  // An edit's subtitles are locked to the bottom middle; a subtitled video's
+  // (Repack's, no script) still go under their speakers' faces.
+  if (project.script !== undefined && project.script !== null) {
+    const [, moved] = await app.store.update(projectId, "agent", (own) => subtitles.lockSubtitles(own, from, to));
+    return text(stableStringify({ moved_back_to_bottom_middle: moved }));
+  }
   const report = await faces.placeSubtitles(app, projectId, from, to);
   return text(stableStringify(report));
 });

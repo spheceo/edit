@@ -1510,6 +1510,11 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   issues.push(...framing.letterboxedIssues(project));
   // A vignette snapping on or off.
   issues.push(...vignettes.issues(project));
+  // An edit's subtitles off the bottom middle (moved to a face or a corner).
+  if (project.script !== undefined && project.script !== null) {
+    const moved = seams.subtitles.movedSubtitles(project);
+    if (moved.length > 0) issues.push({ kind: "subtitle_moved", count: moved.length, clips: moved.slice(0, 12), fix: "place_subtitles puts them all back at the bottom middle (the rest of the video's subtitles never move)" });
+  }
   // The date in a box or glowing: it's white with a drop shadow only.
   issues.push(...graphics.dateDrift(project));
   // A subtitle or intro caption on someone's face (faces found so far).

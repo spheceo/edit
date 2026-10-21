@@ -1102,6 +1102,13 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
     frames > 0
       ? "A moving shot (frames/fps seconds): the camera circles the building and closes in at a constant speed by itself, so place it as a video clip at scale 1 from source_in 0 with no scale keyframes. `building` is where the marked building sits on the first frame and `building_track` where it is every half second (frame = frames into the footage), in timeline transform coordinates: keyframe a label's x and y at those frames (ease linear) to keep it pinned. The marker can reveal after a date title using `highlight_after` and `highlight_fade` in source seconds; tracking remains available throughout."
       : "30 s of footage of the still: place it as a video clip (it fills the frame) and push in slowly with scale keyframes. `building` is where the marked building sits in the frame (timeline transform coordinates at scale 1; a push-in to s moves a point p to p*s).";
+  // The camera aims at the place, so its marker sits in the middle of the
+  // first frame: one far from it is drawn in the wrong place (the 1.5x
+  // drawing buffer bug put Tarrytown PD's outline over the station's tracks).
+  const [bx, by] = [building?.x ?? 0, ((building?.top ?? 0) + (building?.bottom ?? 0)) / 2];
+  if (building !== null && building !== undefined && (Math.abs(bx) > width * 0.15 || Math.abs(by) > height * 0.2)) {
+    note += ` CHECK: the marker sits off the middle of the frame (x ${bx}, y ${round(by)} from the centre) where the camera aims at the place: look at a frame; if it isn't on the place, call map_view again with the building's own lat/lon.`;
+  }
   if (rendering) {
     note +=
       " It's still rendering in the background: place it now (the media is its first frame until the footage is done, then the same media id is the moving shot by itself; get_edit_context lists it under smoothing until then, and exports wait for it).";

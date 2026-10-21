@@ -593,7 +593,8 @@ export function textOnFaces(project: Project): unknown[] {
     if (clip.type !== "text") continue;
     const { text, style, transform } = clip;
     const name = clip.name ?? "";
-    const subtitle = name.startsWith(SUBTITLE) && style.label != null;
+    // An edit's subtitles stay at the bottom middle whatever is under them; a subtitled video's (no script) still dodge faces.
+    const subtitle = name.startsWith(SUBTITLE) && style.label != null && (project.script === undefined || project.script === null);
     const caption = name.startsWith(CAPTION_PREFIX);
     if (!subtitle && !caption) continue;
     const middle = clip.start + Math.trunc(clip.duration / 2);

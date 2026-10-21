@@ -1244,6 +1244,43 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
  * The footage's own sound in the span: audio clips of video files (not
  * music or sound effects) on tracks that are heard.
  */
+/**
+ * The rest of the video's subtitles stay at the bottom middle, never moved
+ * to a face or a corner: the user, Oct 21, "they must be locked to the bottom
+ * middle", whether interrogation or bodycam (they had moved to the person
+ * speaking). The intro's captions keep their own places.
+ */
+export function bottomMiddle(project: Project): { x: number; y: number } {
+  return { x: 0, y: round(project.settings.height * 0.4) };
+}
+
+/** Subtitles (not captions) in `from`..`to` off the bottom middle, by id. */
+export function movedSubtitles(project: Project, from = 0, to = Number.MAX_SAFE_INTEGER): string[] {
+  const { x, y } = bottomMiddle(project);
+  return project.clips
+    .filter((clip) => clip.type === "text" && (clip.name ?? "").startsWith("Subtitle") && clip.start < to && clip.start + clip.duration > from)
+    .filter((clip) => {
+      const text = clip as Extract<Clip, { type: "text" }>;
+      return Math.abs(text.transform.x - x) > 1 || Math.abs(text.transform.y - y) > 1 || (text.keyframes?.x?.length ?? 0) > 0 || (text.keyframes?.y?.length ?? 0) > 0;
+    })
+    .map((clip) => clip.id);
+}
+
+/** Puts every subtitle in `from`..`to` back at the bottom middle; how many moved. */
+export function lockSubtitles(project: Project, from = 0, to = Number.MAX_SAFE_INTEGER): number {
+  const moved = new Set(movedSubtitles(project, from, to));
+  const { x, y } = bottomMiddle(project);
+  for (const clip of project.clips) {
+    if (!moved.has(clip.id) || clip.type !== "text") continue;
+    clip.transform = { ...clip.transform, x, y };
+    if (clip.keyframes) {
+      delete clip.keyframes.x;
+      delete clip.keyframes.y;
+    }
+  }
+  return moved.size;
+}
+
 export function footageSound(project: Project, from: number, to: number): Clip[] {
   // A reused finished video of ours has its own mutes already.
   const reused = reusedMedia(project);

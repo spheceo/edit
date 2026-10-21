@@ -58,7 +58,11 @@ let roof = null;
 async function mark(ctx, ground, opacity) {
   const scene = window.viewer.scene;
   const toScreen = (lon, lat, height) => scene.cartesianToCanvasCoordinates(Cesium.Cartesian3.fromDegrees(lon, lat, height));
-  const scale = C.width / scene.canvas.width;
+  // cartesianToCanvasCoordinates answers in CSS pixels, not the 1.5x
+  // drawing buffer's: dividing by canvas.width put every marker at two thirds
+  // of its place, up and left of its building (Serial Predator's Tarrytown
+  // PD, the comp's Academy Sports).
+  const scale = C.width / scene.canvas.clientWidth;
   info.building = null;
   const frame = (points) => {
     const xs = points.map((p) => p.x * scale), ys = points.map((p) => p.y * scale);

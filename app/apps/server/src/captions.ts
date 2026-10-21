@@ -935,10 +935,12 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
     liftTextOverBlurs(project);
     return [placed, carriedOver, starred, people] as const;
   });
-  // Then off the faces under them (bottom middle unless one is there).
+  // All at the bottom middle, none moved to a face (the user, Oct 21: "they
+  // must be locked to the bottom middle"), a hand-moved one put back too.
   let offFaces: unknown;
   try {
-    offFaces = await seams.faces.placeSubtitles(app, projectId, from, to);
+    const [, locked] = await app.store.update(projectId, "agent", (project) => seams.subtitles.lockSubtitles(project, from, to));
+    offFaces = { kept_bottom_middle: true, moved_back: locked };
   } catch (error) {
     if (isBug(error)) throw error;
     offFaces = { error: diag.messageOf(error) };

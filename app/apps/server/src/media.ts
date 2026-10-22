@@ -423,14 +423,17 @@ export class Processor {
 export const mediaHooks: { wholeTranscript: ((source: string, target: string) => Promise<boolean>) | null } = { wholeTranscript: null };
 
 /**
- * The cloud excerpt a proxy in this machine's cache is (`<cache>/cloud/proxies/<drive|youtube>/<id>/<start>-<end>.mp4`
- * is `<kind>:<id>#<start>-<end>`, cloud_media's layout), or null.
+ * The cloud source a proxy in this machine's cache is (`<cache>/cloud/proxies/<drive|youtube>/<id>/<start>-<end>.mp4`
+ * is the excerpt `<kind>:<id>#<start>-<end>`, `…/<id>.mp4` the whole recording: cloud_media's layout), or null.
  */
 export function sharedSourceOf(cache: string, path: string): string | null {
   const root = join(cache, "cloud", "proxies");
   if (!path.startsWith(`${root}/`)) return null;
-  const found = /^(drive|youtube)\/([^/]+)\/(\d+)-(\d+)\.mp4$/u.exec(path.slice(root.length + 1));
-  return found === null ? null : `${found[1]}:${found[2]}#${found[3]}-${found[4]}`;
+  const rest = path.slice(root.length + 1);
+  const excerpt = /^(drive|youtube)\/([^/]+)\/(\d+)-(\d+)\.mp4$/u.exec(rest);
+  if (excerpt !== null) return `${excerpt[1]}:${excerpt[2]}#${excerpt[3]}-${excerpt[4]}`;
+  const whole = /^(drive|youtube)\/([^/]+)\.mp4$/u.exec(rest);
+  return whole === null ? null : `${whole[1]}:${whole[2]}`;
 }
 
 function isFile(path: string): boolean {

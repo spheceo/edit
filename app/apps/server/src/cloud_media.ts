@@ -1824,9 +1824,10 @@ export async function shareAnalysis(app: App, id: string): Promise<number> {
  */
 export async function wholeTranscript(source: string, target: string, scratch: string): Promise<boolean> {
   if (!cloud.enabled() || fs.existsSync(target)) return false;
-  const found = /^(drive|youtube):([^#]+)#(\d+)-(\d+)$/u.exec(source);
+  // An excerpt, or the whole recording (its words as they are).
+  const found = /^(drive|youtube):([^#]+)(?:#(\d+)-(\d+))?$/u.exec(source);
   if (found === null) return false;
-  const [, kind, id, from, to] = found;
+  const [, kind, id, from = "0", to] = found;
   const prefix = analysisPrefix(`${kind}:${id}`);
   if (prefix === null) return false;
   const copy = join(scratch, `whole-${kind}-${id}-${process.pid}.json`);
@@ -1841,7 +1842,7 @@ export async function wholeTranscript(source: string, target: string, scratch: s
     fs.rmSync(cloud.partialPath(copy), { force: true });
   }
   if (!Array.isArray(whole.words)) return false;
-  const [start, end] = [Number(from) / 1000, Number(to) / 1000];
+  const [start, end] = [Number(from) / 1000, to === undefined ? Number.POSITIVE_INFINITY : Number(to) / 1000];
   const words = whole.words
     .filter((word) => word.end > start && word.start < end)
     .map((word) => ({ ...word, start: Math.max(word.start - start, 0), end: Math.max(word.end - start, 0) }));

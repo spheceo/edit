@@ -58,10 +58,14 @@ test("at most a hundred, each under 50 characters and five words", () => {
   expect(keyTerms(["One Two Three Four Five Six"], [], "one two three four five six")).toEqual([]);
 });
 
-test("a transcript heard with some names is heard again only for ones it wasn't given", () => {
+test("a transcript is heard again for names only when it was given none or most of them are new", () => {
   expect(covers(["John Ruetten", "Van Nuys"], ["john ruetten"])).toBe(true);
   expect(covers(undefined, [])).toBe(true);
   expect(covers(["Van Nuys"], ["John Ruetten"])).toBe(false);
+  expect(covers(undefined, ["John Ruetten"])).toBe(false);
+  // A list a little different from the one heard with isn't worth hearing it all again for.
+  expect(covers(["John Ruetten", "Van Nuys", "Sherri Rasmussen"], ["John Ruetten", "Van Nuys", "Stephanie Lazarus"])).toBe(true);
+  expect(covers(["John Ruetten"], ["John Ruetten", "Van Nuys", "Stephanie Lazarus"])).toBe(false);
   expect(joined(["John Ruetten"], ["Van Nuys", "john ruetten"])).toEqual(["John Ruetten", "Van Nuys"]);
 });
 

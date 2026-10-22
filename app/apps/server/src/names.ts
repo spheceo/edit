@@ -208,8 +208,17 @@ export function joined(given: readonly string[], more: readonly string[]): strin
   return [...out.values()].slice(0, MOST_TERMS);
 }
 
-/** Whether a transcript asked with `heard` already listened for every one of `names`. */
+/**
+ * Whether a transcript asked with `heard` listened for `names` well enough
+ * not to be heard again: it was given names, and at most half of these are
+ * new. The names are a model's list, a little different each time the
+ * research changes, and one new name heard everything again: the teaching
+ * loop's rounds heard each excerpt nine times in a night.
+ */
 export function covers(heard: readonly string[] | undefined, names: readonly string[]): boolean {
+  if (names.length === 0) return true;
   const had = new Set((heard ?? []).map((name) => name.toLowerCase()));
-  return names.every((name) => had.has(name.toLowerCase()));
+  if (had.size === 0) return false;
+  const missing = names.filter((name) => !had.has(name.toLowerCase())).length;
+  return missing * 2 <= names.length;
 }

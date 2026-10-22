@@ -16,6 +16,7 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import * as archive from "./archive.ts";
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import { ApiError } from "./http/errors.ts";
@@ -648,11 +649,14 @@ function sorted(value: unknown, status = 200): Response {
 /** Each project's state for the home screen: open feedback, a finished edit, and whether its current timeline is exported. */
 const statusCache = new Map<string, { rev: number; exportsAt: number; exported: boolean }>();
 
-export function projectStatus(app: App): Record<string, { feedback: number; complete: boolean; exported: boolean; approved: number | null }> {
+type Status = { feedback: number; complete: boolean; exported: boolean; approved: number | null; archived: { restoring: boolean; error: string | null } | null };
+
+export function projectStatus(app: App): Record<string, Status> {
   const home = app.store.home;
   const open = openCounts(home);
   const shared = read(home).shared;
-  const out: Record<string, { feedback: number; complete: boolean; exported: boolean; approved: number | null }> = {};
+  const here = archive.archived(home);
+  const out: Record<string, Status> = {};
   for (const summary of app.store.list()) {
     if (summary.problem !== undefined) continue;
     const live = app.store.get(summary.id);
@@ -665,7 +669,9 @@ export function projectStatus(app: App): Record<string, { feedback: number; comp
       cached = { rev: live.rev, exportsAt: newest, exported: listed.some((one) => one.timeline === now) };
       statusCache.set(summary.id, cached);
     }
-    out[summary.id] = { feedback: open[summary.id] ?? 0, complete: finished(app, summary.id), exported: cached.exported, approved: shared[summary.id]?.approved?.version ?? null };
+    out[summary.id] = { feedback: open[summary.id] ?? 0, complete: finished(app, summary.id), exported: cached.exported, approved: shared[summary.id]?.approved?.version ?? null,
+      archived: here[summary.id] === undefined ? null : { restoring: here[summary.id]!.restoring === true, error: here[summary.id]!.error ?? null },
+    };
   }
   return out;
 }

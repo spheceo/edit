@@ -223,6 +223,8 @@ export const api = {
     request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/review/share`, path === undefined ? {} : { path }),
   /** Approves the latest shared version: the review closes and the other versions' files (and their exports here) are deleted. */
   approveReview: (id: string) => request<{ version: number; deleted: string[] }>("POST", `/api/projects/${id}/review/approve`),
+  /** Brings an archived project's footage back from Drive and YouTube. */
+  restoreProject: (id: string) => request<{ started: boolean }>("POST", `/api/projects/${id}/restore`),
   setAutoFix: (on: boolean) => request<{ autoFix: boolean }>("POST", "/api/reviews/settings", { autoFix: on }),
   /** Writer's scripts in the cloud, newest first, each with the project made from it here. */
   writerScripts: () => request<{ scripts: WriterScriptRow[] }>("GET", "/api/writer/scripts"),
@@ -247,6 +249,8 @@ export interface ProjectStatus {
   exported: boolean;
   /** The version approved on its review (the others' files deleted), or null. */
   approved: number | null;
+  /** Archived on Repack (its big files freed), with a restore under way or failed. */
+  archived: { restoring: boolean; error: string | null } | null;
 }
 
 /** A note on a project's Repack review, as Edit has it. */

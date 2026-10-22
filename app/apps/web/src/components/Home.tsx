@@ -1,4 +1,4 @@
-import { Check, ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
+import { Archive, Check, ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -488,8 +488,36 @@ function FromWriter({ scripts, onChanged }: { scripts: WriterScriptRow[]; onChan
 }
 
 /** Chips for a project's review notes waiting and a finished edit not exported as it is now. */
-function StateChips({ state }: { state?: ProjectStatus }) {
+function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; projectId?: string; onChanged?: () => void }) {
+  const toast = useEditor((store) => store.toast);
   if (state === undefined) return null;
+  if (state.archived !== null) {
+    const restore = (event: React.MouseEvent) => {
+      event.stopPropagation();
+      if (projectId === undefined) return;
+      void api
+        .restoreProject(projectId)
+        .then(() => {
+          toast("Restoring: its footage is downloading again", "info");
+          onChanged?.();
+        })
+        .catch((error) => toast((error as Error).message, "error"));
+    };
+    return (
+      <span
+        title={state.archived.error ?? "Archived on Repack: its footage and exports were freed; the project and its transcripts are kept"}
+        className="flex h-6 shrink-0 items-center gap-1.5 rounded-md bg-black/75 px-2 text-[11px] font-medium text-muted"
+      >
+        <Archive size={12} />
+        {state.archived.restoring ? "Restoring…" : "Archived"}
+        {!state.archived.restoring && (
+          <button onClick={restore} className="text-sky-300 hover:text-sky-200">
+            Restore
+          </button>
+        )}
+      </span>
+    );
+  }
   return (
     <>
       {state.approved !== null && (
@@ -570,10 +598,10 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index
               )}
             </div>
           </div>
-          {(card.cloudNews || card.drive || card.notice || (state && (state.approved !== null || state.feedback > 0 || (state.complete && !state.exported)))) && (
+          {(card.cloudNews || card.drive || card.notice || (state && (state.archived !== null || state.approved !== null || state.feedback > 0 || (state.complete && !state.exported)))) && (
             <div className="absolute top-2.5 left-2.5 flex gap-1">
               {card.notice && <Notice {...card.notice} />}
-              <StateChips state={state} />
+              <StateChips state={state} projectId={project.id} onChanged={onChanged} />
               {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
               {card.drive && (
                 <button
@@ -618,7 +646,7 @@ function ProjectRow({ project, onChanged, cloudOn, status, remote, state }: Card
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {card.nameInput ?? <div className="truncate font-medium">{project.name}</div>}
           {card.notice && <Notice {...card.notice} />}
-          <StateChips state={state} />
+          <StateChips state={state} projectId={project.id} onChanged={onChanged} />
           {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
         </div>
         <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{shortDuration(seconds)}</span>

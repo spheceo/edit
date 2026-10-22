@@ -27,6 +27,7 @@ import { DEFAULT_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { missingMedia, UpdateError } from "./store.ts";
+import * as archive from "./archive.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
@@ -51,6 +52,7 @@ export function buildRouter(): Router<App> {
   // Before /api/projects/{id}: /api/projects/status is its own.
   reviews.routes(router);
   writerHandoff.routes(router);
+  archive.routes(router);
   seams.voice.routes(router);
   router
     .post("/api/diagnostics/client", clientLog)

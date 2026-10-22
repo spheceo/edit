@@ -1028,6 +1028,113 @@ async function excerptMedia(
 }
 
 // ---------------------------------------------------------------------------
+// Archived projects (docs/plans/2026-10-22-archive-projects.md): their big
+// files freed, and brought back from their sources on restore.
+
+/** What a media's cache folder keeps when its project is archived: the analysis (it cost money, and makes a restore free). */
+const keptOnArchive = (name: string) =>
+  ANALYSIS.includes(name) || name === "watch" || name === WATCH_KEYS || ["cloud-shared.json", "text-v1.json", "cuts-v1.json", "censor-v1.bin", "loudness-v1.bin"].includes(name);
+
+/**
+ * Frees project `id`'s footage on this machine once it's archived: its
+ * proxies and downloads in Edit's own folders (never a user's file outside
+ * them) and the previews made from them, unless another project here that
+ * isn't archived uses the same file; the analysis stays. Returns the bytes freed.
+ */
+export function archiveHere(app: App, id: string, archived: Set<string>): number {
+  const live = app.store.get(id);
+  if (live === null) return 0;
+  const home = app.store.home;
+  const ours = [app.store.cacheDir(), join(home, "media"), join(home, "uploads")].map((dir) => `${dir}/`);
+  const elsewhere = new Set<string>();
+  for (const summary of app.store.list()) {
+    if (summary.id === id || archived.has(summary.id)) continue;
+    for (const media of app.store.get(summary.id)?.project.media ?? []) elsewhere.add(media.path);
+  }
+  let freed = 0;
+  const remove = (path: string) => {
+    try {
+      const stat = fs.statSync(path);
+      fs.rmSync(path, { recursive: true, force: true });
+      freed += stat.isDirectory() ? 0 : stat.size;
+    } catch {
+      // Gone already.
+    }
+  };
+  for (const media of live.project.media) {
+    if (media.kind === "image" || elsewhere.has(media.path) || !ours.some((dir) => media.path.startsWith(dir))) continue;
+    // Its previews, thumbnails and peaks go (found by the file, so before it goes); what was heard and seen stays.
+    const dir = parent(app.media.paths(media.path).transcript);
+    remove(media.path);
+    if (dir === null) continue;
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      names = [];
+    }
+    for (const name of names) if (!keptOnArchive(name)) remove(join(dir, name));
+  }
+  setNoFootage(home, id, true);
+  diag.info("cloud", `${id}: archived here, ${Math.round(freed / 1e6)} MB freed`);
+  return freed;
+}
+
+/**
+ * Brings an archived project's cloud footage back from where it came from:
+ * each Drive or YouTube recording downloaded to R2 again (the registry says
+ * it isn't there), and each excerpt cut at the same bounds, so its keys, its
+ * proxy here and the project's media are what they were. Media that came
+ * from a disk can't come back and are returned, by name.
+ */
+export async function restoreHere(app: App, id: string, progress: (bytes: number, total: number | null, name: string) => void = () => {}): Promise<string[]> {
+  const live = app.store.get(id);
+  if (live === null) throw new Error("no such project");
+  const home = app.store.home;
+  const cache = app.store.cacheDir();
+  const scratch = scratchDir(cache);
+  const lost: string[] = [];
+  const originals = new Map<string, Promise<[Original, string | null]>>();
+  const originalOf = (file: string) => {
+    let found = originals.get(file);
+    if (found === undefined) {
+      found = youtube.idOf(file) !== null ? youtubeOriginal(home, file, scratch, progress) : driveOriginal(file, scratch, progress).then((one): [Original, null] => [one, null]);
+      originals.set(file, found);
+    }
+    return found;
+  };
+  try {
+    for (const media of live.project.media) {
+      const source = media.cloud?.source;
+      if (source === undefined || isFile(media.path)) continue;
+      const found = /^(drive|youtube):([^#]+)(?:#(\d+)-(\d+))?$/u.exec(source);
+      if (found === null) {
+        lost.push(media.name);
+        continue;
+      }
+      const [, kind, fileId, from, to] = found;
+      const file = kind === "youtube" ? `youtube:${fileId}` : fileId!;
+      const [original, local] = await originalOf(file);
+      const url = local ?? (await getUrl(original.key, 6 * HOUR));
+      if (from === undefined || to === undefined) {
+        await wholeMedia(cache, original, url);
+      } else {
+        const ext = extension(media.cloud!.original) ?? "mp4";
+        await excerptMedia(cache, original, url, Number(from) / 1000, Number(to) / 1000, takeChars(fileStem(original.name) ?? "footage", 40), ext);
+      }
+    }
+  } finally {
+    // A YouTube download is on R2 again: its copy here goes.
+    for (const pending of originals.values()) {
+      const [, local] = await pending.catch((): [null, null] => [null, null]);
+      if (local !== null) fs.rmSync(parent(local) ?? local, { recursive: true, force: true });
+    }
+  }
+  setNoFootage(home, id, false);
+  return lost;
+}
+
+// ---------------------------------------------------------------------------
 // Opening a cloud project here.
 
 /**

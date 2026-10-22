@@ -369,15 +369,6 @@ export class Processor {
     return this.transcribe(source, hasAudio);
   }
 
-  /** Takes a transcript written into the cache by hand (a shared one) as done. */
-  transcribed(source: string): void {
-    if (!isFile(this.paths(source).transcript)) return;
-    this.set(source, (status) => {
-      status.transcript = "ready";
-      delete status.transcript_error;
-    });
-  }
-
   /**
    * Transcribes `source` through the relay unless already done or running,
    * listening for `keyterms` (the case's names, names.ts). `again` hears a
@@ -394,8 +385,14 @@ export class Processor {
       delete status.transcript_error;
     });
     const target = this.paths(source).transcript;
+    // A cloud excerpt whose whole recording was heard already (Writer shares its words) takes its words from there.
+    const shared = again ? null : sharedSourceOf(this.store.cacheDir(), source);
+    const hear = async () => {
+      if (shared !== null && mediaHooks.wholeTranscript !== null && (await mediaHooks.wholeTranscript(shared, target).catch(() => false))) return;
+      await transcribe.run(source, target, keyterms);
+    };
     void diag
-      .timeOnAsync("media", "media: transcription", source, () => transcribe.run(source, target, keyterms))
+      .timeOnAsync("media", "media: transcription", source, hear)
       .then(
         () =>
           this.set(source, (status) => {
@@ -420,6 +417,20 @@ export class Processor {
       );
     return this.status(source);
   }
+}
+
+/** What media.ts reaches without importing it: cloud_media's shared transcripts (set as it loads). */
+export const mediaHooks: { wholeTranscript: ((source: string, target: string) => Promise<boolean>) | null } = { wholeTranscript: null };
+
+/**
+ * The cloud excerpt a proxy in this machine's cache is (`<cache>/cloud/proxies/<drive|youtube>/<id>/<start>-<end>.mp4`
+ * is `<kind>:<id>#<start>-<end>`, cloud_media's layout), or null.
+ */
+export function sharedSourceOf(cache: string, path: string): string | null {
+  const root = join(cache, "cloud", "proxies");
+  if (!path.startsWith(`${root}/`)) return null;
+  const found = /^(drive|youtube)\/([^/]+)\/(\d+)-(\d+)\.mp4$/u.exec(path.slice(root.length + 1));
+  return found === null ? null : `${found[1]}:${found[2]}#${found[3]}-${found[4]}`;
 }
 
 function isFile(path: string): boolean {

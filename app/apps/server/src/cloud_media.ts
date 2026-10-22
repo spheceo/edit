@@ -59,7 +59,7 @@ import * as endpoints from "./endpoints.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
 import * as jobs from "./jobs.ts";
-import { mediaKey, Semaphore } from "./media.ts";
+import { mediaHooks, mediaKey, Semaphore } from "./media.ts";
 import * as youtube from "./youtube.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
 import { native } from "./native/index.ts";
@@ -1850,6 +1850,8 @@ export async function wholeTranscript(source: string, target: string, scratch: s
   diag.info("cloud", `${source}: ${words.length} words from its recording's shared transcript (not heard again)`);
   return true;
 }
+
+mediaHooks.wholeTranscript = (source, target) => wholeTranscript(source, target, parent(target) ?? ".");
 
 /** When each source's shared analysis was last looked for. *//** When each source's shared analysis was last looked for. */
 const checked = new Map<string, number>();

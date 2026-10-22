@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as cloud from "../src/cloud.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
 import { testCloud } from "../src/cloud_projects.ts";
-import { mediaKey } from "../src/media.ts";
+import { mediaKey, sharedSourceOf } from "../src/media.ts";
 import type { Media, Probe, Project } from "../src/model.ts";
 import { useNative, wrap } from "../src/native/index.ts";
 import { createStub } from "../src/native/stub.ts";
@@ -614,5 +614,9 @@ test("an excerpt takes its words from its recording's shared transcript instead 
   expect(await cloudMedia.wholeTranscript("youtube:OVITtAlFG6M#10000-20000", target, dir)).toBe(false);
   expect(await cloudMedia.wholeTranscript("youtube:OVITtAlFG6M", `${dir}/b.json`, dir)).toBe(false);
   expect(await cloudMedia.wholeTranscript("drive:1AbCdEfGhIjKlMnOpQrStUvWxYz0123#0-5000", `${dir}/c.json`, dir)).toBe(false);
+  // Every transcription finds it: a cloud excerpt's proxy here names its source.
+  expect(sharedSourceOf("/c", "/c/cloud/proxies/youtube/OVITtAlFG6M/10000-20000.mp4")).toBe("youtube:OVITtAlFG6M#10000-20000");
+  expect(sharedSourceOf("/c", "/c/cloud/proxies/sha256/ab.mp4")).toBeNull();
+  expect(sharedSourceOf("/c", "/elsewhere/a.mp4")).toBeNull();
   fs.rmSync(dir, { recursive: true, force: true });
 });

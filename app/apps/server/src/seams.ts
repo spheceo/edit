@@ -186,8 +186,6 @@ export interface CloudMediaSeam {
   resumeUpload(home: string, args: Record<string, unknown>): void;
   /** `<cache>/cloud/tmp`, for files on their way up (old leftovers removed). */
   scratchDir(cache: string): string;
-  /** An excerpt's words from its recording's shared transcript (Writer's), written to `target`: whether it was. */
-  wholeTranscript(source: string, target: string, scratch: string): Promise<boolean>;
 }
 
 export interface CloudProjectsSeam {

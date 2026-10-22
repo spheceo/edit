@@ -11,7 +11,14 @@
 // whose voice numbers hold from start to end (`voicesFrom`). Then
 // cameras.ts splits a voice heard on two bodycams (two officers Scribe heard
 // as one), and speakers.ts names the voices.
+//
+// What's heard is kept as it comes in (`saved`): each piece beside the
+// transcript until the file is done, so a run cut short (the day's allowance,
+// a restart) pays only for the pieces it hadn't heard; and the whole file's
+// hearing for good, so hearing it again for the case's names asks only for
+// the pieces (voices don't change with the names).
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
 import * as cameras from "./cameras.ts";
@@ -128,19 +135,25 @@ export async function run(source: string, target: string, keyterms: readonly str
       transcript = await ask(audio, keyterms);
     } else {
       const pieces = plan(seconds);
+      const piecesDir = withExtension(target, "pieces");
+      const names = createHash("sha256").update(keyterms.join("\n")).digest("hex").slice(0, 12);
       const [whole, heard] = await Promise.all([
-        ask(audio, keyterms),
-        limited(pieces, PIECES_AT_ONCE, async (piece, index) => {
-          const file = withExtension(target, `piece-${index}.ogg`);
-          try {
-            await encode(["-ss", fixed3(piece.from), "-t", fixed3(piece.to - piece.from), "-i", audio], file, "could not cut the audio");
-            const part = await ask(file, keyterms);
+        // Any earlier hearing of the whole file will do: only its voices are used.
+        saved(withExtension(target, "whole.json"), fixed3(seconds), () => ask(audio, keyterms)),
+        limited(pieces, PIECES_AT_ONCE, (piece, index) =>
+          saved(`${piecesDir}/${names}-${index}-${fixed3(piece.from)}-${fixed3(piece.to)}.json`, "", async () => {
+            const file = withExtension(target, `piece-${index}.ogg`);
+            try {
+              await encode(["-ss", fixed3(piece.from), "-t", fixed3(piece.to - piece.from), "-i", audio], file, "could not cut the audio");
+              return await ask(file, keyterms);
+            } finally {
+              fs.rmSync(file, { force: true });
+            }
+          }).then((part) =>
             // Times into the file, not the piece.
-            return part.words.map((word) => ({ text: word.text, start: round3(word.start + piece.from), end: round3(word.end + piece.from) }));
-          } finally {
-            fs.rmSync(file, { force: true });
-          }
-        }),
+            part.words.map((word) => ({ text: word.text, start: round3(word.start + piece.from), end: round3(word.end + piece.from) })),
+          ),
+        ),
       ]);
       // A piece heard as gibberish (Helpful Wife's m91 at 6:39–7:16 came back
       // in a dozen scripts, the same each time with the case's names): asked
@@ -161,6 +174,7 @@ export async function run(source: string, target: string, keyterms: readonly str
       const words = join(pieces, heard);
       voicesFrom(words, whole.words);
       transcript = { model: whole.model, language: whole.language, words };
+      fs.rmSync(piecesDir, { recursive: true, force: true });
       diag.info("media", `${source}: heard in ${pieces.length} pieces for its words and whole for its voices (${words.length} words)`);
     }
   } finally {
@@ -179,6 +193,28 @@ export async function run(source: string, target: string, keyterms: readonly str
   } catch (error) {
     throw new Error(ioMessage(error));
   }
+}
+
+/**
+ * What `hear` answers, kept in `file` once heard (with `tag`: what it must
+ * match to be used again, the audio's length for the whole file), so a later
+ * run reads it rather than paying for it again.
+ */
+async function saved(file: string, tag: string, hear: () => Promise<Transcript>): Promise<Transcript> {
+  try {
+    const kept = JSON.parse(fs.readFileSync(file, "utf8")) as { tag?: unknown; transcript?: Transcript };
+    if (kept.tag === tag && kept.transcript !== undefined && Array.isArray(kept.transcript.words)) return kept.transcript;
+  } catch {
+    // Not heard yet.
+  }
+  const transcript = await hear();
+  try {
+    fs.mkdirSync(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+    writeAtomic(file, JSON.stringify({ tag, transcript }));
+  } catch (error) {
+    diag.warn("media", `keeping what was heard in ${file}: ${ioMessage(error)}`);
+  }
+  return transcript;
 }
 
 /** The share of words' letters outside the Latin script (a Latin-script recording heard as gibberish is mostly not). */
@@ -487,16 +523,22 @@ export function aligned(a: readonly string[], b: readonly string[]): [number, nu
   return pairs.reverse();
 }
 
-/** `work` over `items`, at most `count` at a time, answers in order. */
+/** `work` over `items`, at most `count` at a time, answers in order; none started after one fails. */
 async function limited<T, R>(items: readonly T[], count: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
+  let failed = false;
   const workers = Array.from({ length: Math.min(count, items.length) }, async () => {
     for (;;) {
       const index = next;
       next += 1;
-      if (index >= items.length) return;
-      out[index] = await work(items[index]!, index);
+      if (index >= items.length || failed) return;
+      try {
+        out[index] = await work(items[index]!, index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   });
   await Promise.all(workers);

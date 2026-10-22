@@ -72,8 +72,9 @@ test.skipIf(ffmpeg === null || ffprobe === null)("importing probes, adds once, p
     expect(project.clips.map((clip) => clip.type)).toEqual(["video", "audio"]);
     // The first footage into an empty project sets its rate.
     expect(project.settings.fps).toBe(footageRate(project.media[0]!.fps).fps);
-    // Footage in a project with no script starts its transcript straight away.
-    expect(["working", "ready"]).toContain(app.media.status(footage).transcript);
+    // Footage in a project with no script and no case names yet waits for
+    // them: heard now, it would be heard again when the research comes.
+    expect(app.media.status(footage).transcript).toBe("pending");
     // The same file again is the same media.
     const [, again] = await importPaths(app, id, [footage], false, "ui");
     expect(again).toEqual(["m6"]);

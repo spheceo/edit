@@ -197,12 +197,15 @@ async function addMedia(
   });
   // Footage brought into a project with no script is a subtitled video in
   // the making: its transcript is the first thing it needs, so the
-  // transcriber starts now instead of when the watcher first asks for it.
+  // transcriber starts now instead of when the watcher first asks for it,
+  // but only once the case's names are in (names.ts): heard without them,
+  // it's heard again, whole and in pieces, when the research comes, which
+  // made Oct 21's 13.5 hours of footage cost 62 hours of Scribe.
   // (A script's import transcribes its own footage; voice-overs have theirs.)
-  const transcribe = (live.project.script === undefined || live.project.script === null) && origin !== "voice" && origin !== "script";
+  const noScript = (live.project.script === undefined || live.project.script === null) && origin !== "voice" && origin !== "script";
+  const names = noScript ? seams.research.knownNames(app, live.project) : [];
+  const transcribe = noScript && names.length > 0;
   const transcribing: string[] = [];
-  // With the case's names when its research came first (names.ts).
-  const names = transcribe ? seams.research.knownNames(app, live.project) : [];
   for (const { path, probe } of items) {
     if (transcribe && probe.kind === "video" && probe.has_audio) {
       app.media.transcribe(path, true, names);
@@ -212,10 +215,10 @@ async function addMedia(
     if (probe.has_audio) native().loudnessWarm(path);
     app.media.ensure(path, probe);
   }
-  // Without the case's names the words will be heard again once its research
-  // is in (names.ts), and the watch with them: watching now would be paid twice.
-  if (transcribing.length > 0 && names.length === 0) diag.info("watch", `${id}: no research for the case's names yet; the watch waits for the subtitles`);
-  if (transcribing.length > 0 && names.length > 0) {
+  if (noScript && names.length === 0 && items.some(({ probe }) => probe.kind === "video" && probe.has_audio)) {
+    diag.info("media", `${id}: no research for the case's names yet; its footage is heard when the subtitles ask, with them`);
+  }
+  if (transcribing.length > 0) {
     // Then the watcher, in the background, once the words are in: asking for
     // the subtitles later finds its answers cached.
     void (async () => {

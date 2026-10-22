@@ -66,9 +66,7 @@ export default {
     if (url.pathname !== "/v1/transcribe") return json(404, { error: "not found" });
     if (request.method !== "POST") return json(405, { error: "POST audio to /v1/transcribe" });
 
-    if (env.CLIENT_TOKEN && request.headers.get("authorization") !== `Bearer ${env.CLIENT_TOKEN}`) {
-      return json(401, { error: "This relay needs a client token." });
-    }
+    if (!authorized(request, env)) return json(401, { error: "This relay needs a client token." });
     if (!env.ELEVENLABS_API_KEY) return json(503, { error: "Transcription is not configured on the relay yet." });
 
     const type = request.headers.get("content-type") ?? "";
@@ -201,8 +199,17 @@ async function elevenError(answer: Response): Promise<Response> {
   return json(answer.status, { error: `ElevenLabs: ${message}` });
 }
 
+/**
+ * Whether a paid call (transcription, voices) comes from an Edit: it carries
+ * the client token or the cloud token, which every release has built in. Open
+ * only on a relay with neither (a local `wrangler dev`): Oct 21's 62 hours of
+ * Scribe were Edit's own, but nothing stopped anyone else's.
+ */
 function authorized(request: Request, env: Env) {
-  return !env.CLIENT_TOKEN || request.headers.get("authorization") === `Bearer ${env.CLIENT_TOKEN}`;
+  const tokens = [env.CLIENT_TOKEN, env.CLOUD_TOKEN].filter((token): token is string => Boolean(token));
+  if (tokens.length === 0) return true;
+  const given = request.headers.get("authorization");
+  return tokens.some((token) => given === `Bearer ${token}`);
 }
 
 /** The account's voices, trimmed to what Edit shows (cheap; no budget). */

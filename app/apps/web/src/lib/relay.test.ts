@@ -252,9 +252,19 @@ describe("relay transcription", () => {
     TRANSCRIBE_BURST: { limit: async () => ({ success: true }) },
     BUDGET: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response("{}") }) },
   } as unknown as Env;
-  const transcribe = (query: string) =>
-    relay.fetch(new Request(`https://relay.test/v1/transcribe${query}`, { method: "POST", headers: { "content-type": "audio/ogg", "content-length": "4" }, body: "OggS" }), env);
+  const transcribe = (query: string, given: Env = env, token: string | null = null) =>
+    relay.fetch(new Request(`https://relay.test/v1/transcribe${query}`, { method: "POST", headers: { "content-type": "audio/ogg", "content-length": "4", ...(token === null ? {} : { authorization: `Bearer ${token}` }) }, body: "OggS" }), given);
   afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("needs the cloud token (every release has it) once the relay has one", async () => {
+    vi.stubGlobal("FixedLengthStream", class extends TransformStream<Uint8Array, Uint8Array> { constructor(_length: number) { super(); } });
+    vi.stubGlobal("fetch", async () => Response.json({ words: [] }));
+    const locked = { ...env, CLOUD_TOKEN: "cloud-secret" } as Env;
+    expect((await transcribe("", locked)).status).toBe(401);
+    expect((await transcribe("", locked, "wrong")).status).toBe(401);
+    expect((await transcribe("", locked, "cloud-secret")).status).toBe(200);
+    expect((await transcribe("", { ...locked, CLIENT_TOKEN: "client" } as Env, "client")).status).toBe(200);
+  });
 
   // The interrogation's "John Ruetten" was heard as "John Rutten" and "John Bruton" without them.
   it("tells Scribe the case's names to listen for, each its own keyterms field", async () => {

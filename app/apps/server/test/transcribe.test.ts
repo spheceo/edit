@@ -91,6 +91,31 @@ test.skipIf(ffmpeg === null)("transcribes through the relay, asking again while 
   }
 });
 
+test.skipIf(ffmpeg === null)("what was heard is kept: a run cut short pays only for the rest, and hearing it again for names asks only for the pieces", async () => {
+  const { dir, cleanup } = scratch("transcribe-kept");
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=100", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    const target = `${dir}/cache/transcript.json`;
+    // 100 s: three pieces and the whole file, four requests; the first one asked fails.
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    mock.on("POST", "/v1/transcribe", () => Response.json({ detail: { message: "quota exceeded" } }, { status: 402 }), 1);
+    await expect(run(source, target)).rejects.toThrow("quota exceeded");
+    await run(source, target);
+    expect(mock.calls("/v1/transcribe", "POST").length - before).toBe(5);
+    expect(fs.existsSync(`${dir}/cache/transcript.pieces`)).toBe(false);
+    expect(fs.existsSync(`${dir}/cache/transcript.whole.json`)).toBe(true);
+    // With the case's names: the pieces again, not the whole file.
+    const from = mock.calls("/v1/transcribe", "POST").length;
+    await run(source, target, ["John Ruetten"]);
+    const asked = mock.calls("/v1/transcribe", "POST").slice(from);
+    expect(asked.map((call) => call.query.getAll("keyterm"))).toEqual([["John Ruetten"], ["John Ruetten"], ["John Ruetten"]]);
+  } finally {
+    cleanup();
+  }
+});
+
 test.skipIf(ffmpeg === null)("listens for the case's names, and asks once without them when Scribe refuses them", async () => {
   const { dir, cleanup } = scratch("transcribe-names");
   try {

@@ -30,8 +30,8 @@ preview_urls = false
 [vars]
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
-DAILY_BYTES_PER_IP = "1296000000"  # ~90 hours (raised Oct 21: a day of edits and re-runs used 10; that evening a day of feedback rounds used 30, and the teaching loop's from-scratch edits hear their footage again)
-DAILY_BYTES_TOTAL = "2160000000"  # ~150 hours
+DAILY_BYTES_PER_IP = "288000000"   # ~20 hours (lowered Oct 22 from ~90: Oct 19–21 used ~195k credits, 13.5 hours of footage costing 62 hours of Scribe; Edit now hears a file once per set of names and keeps what it heard)
+DAILY_BYTES_TOTAL = "288000000"    # ~20 hours (~16.6k credits a day at most)
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
 
 # Map stills (Google Photorealistic 3D Tiles, billed per session): a day's

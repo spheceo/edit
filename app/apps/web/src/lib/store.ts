@@ -466,8 +466,8 @@ export async function syncScriptJob(id: string) {
   try {
     const { job, unfinished } = await api.scriptJob(id);
     if (useEditor.getState().project?.id !== id) return;
-    useEditor.setState({ scriptJob: job });
     const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing" || job.state === "voicing");
+    useEditor.setState(running ? { scriptJob: job, sideTab: "downloads" } : { scriptJob: job });
     // A failed run waits for Retry; an import that stopped part-way (blocks never
     // placed) carries on by itself. A placed block whose clip is gone was removed
     // on purpose (a cut-in card replaced by B-roll): never put it back.

@@ -922,6 +922,7 @@ export async function driveExcerpts(
   original: Original,
   ranges: [number, number][],
   input: string | null = null,
+  onCut: (done: number, total: number) => void = () => {},
 ): Promise<Excerpt[]> {
   // A copy still on this disk (a YouTube download on its way up) is cut from here.
   const url = input ?? (await getUrl(original.key, 6 * HOUR));
@@ -936,14 +937,29 @@ export async function driveExcerpts(
   }
   const stem = takeChars(fileStem(original.name) ?? "footage", 40);
   const ext = scriptParts.excerptExtension(extensionOf(original.name));
-  const out: Excerpt[] = [];
-  for (const [from, to] of spans) {
-    const start = await scriptParts.keyframeBefore(url, from);
-    const made = await excerptMedia(cache, original, url, start, to, stem, ext);
-    out.push({ path: made.path, from: start, to, cloud: made });
-  }
+  // A few at once: each is mostly waiting on R2 (a keyframe, the cut, two uploads), then a short proxy encode.
+  const out: Excerpt[] = new Array(spans.length);
+  let next = 0;
+  let done = 0;
+  onCut(0, spans.length);
+  const worker = async () => {
+    while (next < spans.length) {
+      const index = next++;
+      const [from, to] = spans[index]!;
+      const start = await scriptParts.keyframeBefore(url, from);
+      const made = await diag.timeOnAsync("cloud", "cloud: excerpt", `${original.name} ${scriptParts.clock(start)}–${scriptParts.clock(to)}`, () =>
+        excerptMedia(cache, original, url, start, to, stem, ext),
+      );
+      out[index] = { path: made.path, from: start, to, cloud: made };
+      onCut(++done, spans.length);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(EXCERPTS_AT_ONCE, spans.length) }, worker));
   return out;
 }
+
+/** Excerpts of one file made at once. */
+const EXCERPTS_AT_ONCE = 3;
 
 /** The whole Drive file as one media: its proxy made straight from R2. */
 async function wholeMedia(cache: string, original: Original, url: string): Promise<Made> {

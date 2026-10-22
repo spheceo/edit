@@ -157,7 +157,7 @@ export const STYLES: { value: Style; label: string }[] = [
 export interface ScriptJob {
   state: "downloading" | "transcribing" | "placing" | "voicing" | "done" | "failed";
   error?: string;
-  files: { file: string; name?: string; bytes: number; total?: number; state: "queued" | "downloading" | "cutting" | "done" | "failed"; error?: string }[];
+  files: { file: string; name?: string; bytes: number; total?: number; state: "queued" | "downloading" | "cutting" | "done" | "failed"; error?: string; cut?: { done: number; total: number } }[];
 }
 
 export interface ProjectSummary {

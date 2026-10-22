@@ -46,6 +46,15 @@ export function buildRouter(): Router<App> {
   const router = baseRouter()
     .get("/api/health", health)
     .get("/api/diagnostics", diagnostics)
+    // The Logs window: the lines after `since` (ms), and the log file shown in Finder.
+    .get("/api/logs", ({ query }) => {
+      const since = Number(query.get("since") ?? 0) || 0;
+      return json({ lines: diag.lines(2000).filter((line) => line.at > since) });
+    })
+    .post("/api/logs/reveal", ({ app }) => {
+      Bun.spawn(["open", "-R", join(app.store.home, "logs", "edit.log")], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+      return json({ ok: true });
+    })
     .get("/api/setup", setup)
     .get("/api/media-drive", mediaDrive)
     .post("/api/media-drive", setMediaDrive);

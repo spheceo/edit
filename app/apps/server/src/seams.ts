@@ -163,7 +163,7 @@ export interface CloudMediaSeam {
   /** Starts a backfill of cloud project `id` in the background. */
   backfillSoon(app: App, id: string): void;
   /** The media a script plays from Drive file `original`: an excerpt per span the `ranges` need. */
-  driveExcerpts(cache: string, original: Original, ranges: [number, number][], input?: string | null): Promise<Excerpt[]>;
+  driveExcerpts(cache: string, original: Original, ranges: [number, number][], input?: string | null, onCut?: (done: number, total: number) => void): Promise<Excerpt[]>;
   /** Puts YouTube video `file` (`youtube:<id>`) on R2 unless the registry has it; the download it was cut from here, for the caller to remove. */
   youtubeOriginal(
     home: string,

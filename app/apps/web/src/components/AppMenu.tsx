@@ -1,7 +1,7 @@
 // The ⋯ menu at the top (settings, reporting a problem) and the dialogs it opens.
 
-import { Bug, Check, Copy, Ellipsis, RotateCw, Settings } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Bug, Check, Copy, Ellipsis, RotateCw, ScrollText, Settings } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { chooseProvider, useAgent, type AgentModel, type AgentProvider, type AgentStatus } from "../lib/agent";
 import { fetchRetrying } from "../lib/api";
@@ -22,6 +22,7 @@ export function AppMenu() {
           event.currentTarget,
           [
             { label: "Settings", icon: <Settings size={14} />, shortcut: "⌘,", onSelect: () => openDialog("settings") },
+            { label: "Logs", icon: <ScrollText size={14} />, onSelect: () => openDialog("logs") },
             { label: "Report a problem…", icon: <Bug size={14} />, onSelect: () => openReport() },
           ],
           { width: 210 },
@@ -57,8 +58,119 @@ export function AppDialogs() {
           <UpdateSettings />
         </div>
       </Modal>
+      <Modal open={open === "logs"} onClose={closeDialog} width={920}>
+        <DialogHeader title="Logs" />
+        <LogsView />
+      </Modal>
       <ReportDialog />
     </>
+  );
+}
+
+interface LogLine {
+  at: number;
+  level: "info" | "warn" | "error";
+  area: string;
+  message: string;
+}
+
+/** Edit's log as it happens: what it's doing (downloads, cuts, the agent, exports) and what went wrong, newest at the bottom. */
+function LogsView() {
+  const [lines, setLines] = useState<LogLine[]>([]);
+  const [problems, setProblems] = useState(false);
+  const [area, setArea] = useState("all");
+  const [words, setWords] = useState("");
+  const [copied, setCopied] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const stuck = useRef(true);
+  useEffect(() => {
+    let since = 0;
+    let alive = true;
+    const pull = async () => {
+      try {
+        const answer = (await (await fetch(`/api/logs?since=${since}`)).json()) as { lines: LogLine[] };
+        if (!alive || answer.lines.length === 0) return;
+        since = answer.lines.at(-1)!.at;
+        setLines((old) => [...old, ...answer.lines].slice(-2000));
+      } catch {
+        // The server restarting: the next look catches up.
+      }
+    };
+    void pull();
+    const timer = setInterval(() => void pull(), 1500);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+  const areas = useMemo(() => ["all", ...[...new Set(lines.map((line) => line.area))].sort()], [lines]);
+  const shown = lines.filter(
+    (line) => (!problems || line.level !== "info") && (area === "all" || line.area === area) && (words === "" || line.message.toLowerCase().includes(words.toLowerCase())),
+  );
+  // Follows the newest line unless scrolled up to read.
+  useEffect(() => {
+    if (stuck.current && box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [shown.length]);
+  const time = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const copy = async () => {
+    const text = shown.map((line) => `${new Date(line.at).toISOString()} ${line.level.toUpperCase()} [${line.area}] ${line.message}`).join("\n");
+    setCopied(await copyText(text));
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="flex flex-col gap-3 px-5 pb-5">
+      <div className="flex items-center gap-2">
+        <input
+          value={words}
+          onChange={(event) => setWords(event.target.value)}
+          placeholder="Search the log"
+          className="h-8 flex-1 rounded-lg border border-line bg-panel px-2.5 text-[13px] outline-none placeholder:text-faint focus:border-line-strong"
+        />
+        <Select value={area} onChange={setArea} options={areas.map((one) => ({ value: one, label: one === "all" ? "Everything" : one }))} />
+        <Tabs<"all" | "problems">
+          id="log-level"
+          value={problems ? "problems" : "all"}
+          onChange={(value) => setProblems(value === "problems")}
+          tabs={[
+            { value: "all", label: "All" },
+            { value: "problems", label: "Problems" },
+          ]}
+        />
+      </div>
+      <div
+        ref={box}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
+        className="h-[460px] overflow-y-auto rounded-lg border border-line bg-black/40 py-1.5 font-mono text-[11px] leading-[1.6]"
+      >
+        {shown.length === 0 ? (
+          <div className="px-3 py-2 text-faint">{lines.length === 0 ? "Reading the log…" : "Nothing matches."}</div>
+        ) : (
+          shown.map((line, index) => (
+            <div key={`${line.at}-${index}`} className="flex gap-3 px-3 hover:bg-white/[0.03]">
+              <span className="shrink-0 text-faint tabular">{time(line.at)}</span>
+              <span className={cx("w-14 shrink-0 truncate", line.level === "error" ? "text-red-300" : line.level === "warn" ? "text-amber-300" : "text-muted")}>{line.area}</span>
+              <span className={cx("min-w-0 flex-1 break-words whitespace-pre-wrap", line.level === "error" ? "text-red-200" : line.level === "warn" ? "text-amber-100" : "text-fg/85")}>{line.message}</span>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="flex items-center justify-between text-[12px] text-faint">
+        <span>
+          {shown.length} of {lines.length} lines · the full log is kept in Edit's data folder
+        </span>
+        <div className="flex gap-2">
+          <button className="h-8 rounded-lg px-3 text-[13px] text-muted hover:text-fg" onClick={() => void fetch("/api/logs/reveal", { method: "POST" })}>
+            Show in Finder
+          </button>
+          <button className="h-8 rounded-lg bg-white px-3 text-[13px] font-medium text-black" onClick={() => void copy()}>
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

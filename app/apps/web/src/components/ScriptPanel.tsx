@@ -246,7 +246,7 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
       <div className="flex flex-col gap-2">
         {job.files.map((file) => {
           const info = labels.get(file.file);
-          const progress = file.state === "done" ? 1 : file.total ? file.bytes / file.total : 0;
+          const progress = file.state === "done" ? 1 : file.state === "cutting" ? (file.cut && file.cut.total > 0 ? file.cut.done / file.cut.total : 0) : file.total ? file.bytes / file.total : 0;
           return (
             <div key={file.file}>
               <div className="flex items-center gap-2 text-[11px]">
@@ -259,7 +259,9 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
                   {file.state === "queued"
                     ? "Waiting"
                     : file.state === "cutting"
-                      ? "Cutting excerpts…"
+                      ? file.cut
+                        ? `Cutting excerpts · ${file.cut.done} of ${file.cut.total}`
+                        : "Cutting excerpts…"
                       : file.state === "done"
                         ? "Done"
                         : file.state === "failed"

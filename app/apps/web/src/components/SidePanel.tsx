@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef } from "react";
 
+import { importProgress } from "../lib/import_progress";
 import { useEditor, type SideTab } from "../lib/store";
 import { Inspector } from "./Inspector";
 import { Library } from "./Library";
@@ -43,7 +44,7 @@ export function SidePanel() {
             { value: "library", label: "Library" },
             { value: "transcript", label: "Transcript" },
             { value: "script", label: "Script" },
-            ...(downloading ? [{ value: "downloads" as const, label: "Downloads" }] : []),
+            ...(downloading && job ? [{ value: "downloads" as const, label: job.state === "failed" ? "Downloads ⚠" : `Downloads ${Math.round(importProgress(job).fraction * 100)}%` }] : []),
           ]}
         />
       </div>

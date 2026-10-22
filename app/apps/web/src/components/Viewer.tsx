@@ -9,6 +9,7 @@ import { playhead, preview } from "../lib/playback";
 import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
+import { importProgress } from "../lib/import_progress";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { cx, IconButton } from "./ui";
@@ -98,6 +99,8 @@ export function Viewer() {
   }, []);
 
   const empty = project && project.clips.length === 0;
+  const job = useEditor((state) => state.scriptJob);
+  const importing = job !== null && job.state !== "done" ? importProgress(job) : null;
 
   const hidden = fullscreen && idle;
   return (
@@ -135,7 +138,19 @@ export function Viewer() {
             Stuck? Report it
           </button>
         )}
-        {!error && empty && (
+        {!error && empty && importing !== null && (
+          <button
+            onClick={() => useEditor.getState().setSideTab("downloads")}
+            className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[13px]"
+          >
+            <span className={cx("text-muted", job?.state !== "failed" && "shimmer")}>{importing.line}</span>
+            <span className="h-1 w-56 overflow-hidden rounded-full bg-white/10">
+              <span className={cx("block h-full rounded-full transition-[width] duration-500", job?.state === "failed" ? "bg-red-400" : "bg-white/70")} style={{ width: `${Math.max(2, Math.round(importing.fraction * 100))}%` }} />
+            </span>
+            <span className="text-[11px] text-faint tabular">{Math.round(importing.fraction * 100)}% · the edit appears here as soon as it's laid out</span>
+          </button>
+        )}
+        {!error && empty && importing === null && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[13px] text-faint">
             Import footage or add a title to start
           </div>

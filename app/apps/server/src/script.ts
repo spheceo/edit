@@ -1317,7 +1317,7 @@ export function excerptExtension(ext: string): string {
  * copied from a keyframe; sound is re-encoded so it starts on that same
  * instant (copied audio would begin earlier and shift everything).
  */
-export async function excerpts(source: string, ranges: [number, number][]): Promise<Excerpt[]> {
+export async function excerpts(source: string, ranges: [number, number][], onCut: (done: number, total: number) => void = () => {}): Promise<Excerpt[]> {
   const duration = await durationOf(source);
   const needed = spans(ranges, duration);
   const used = needed.reduce((total, [from, to]) => total + (to - from), 0);
@@ -1328,6 +1328,7 @@ export async function excerpts(source: string, ranges: [number, number][]): Prom
   const sourceKey = mediaModule.mediaKey(source);
   const ext = excerptExtension(pathExtension(source) ?? "mp4");
   const out: Excerpt[] = [];
+  onCut(0, needed.length);
   for (const [from, to] of needed) {
     const start = await keyframeBefore(source, from);
     const path = join(dir, `${stem} ${clock(start)}-${clock(to)}-${sourceKey}-${bitsHex(start)}-${bitsHex(to)}.${ext}`);
@@ -1342,6 +1343,7 @@ export async function excerpts(source: string, ranges: [number, number][]): Prom
       }
     }
     out.push({ path, from: start, to, cloud: null });
+    onCut(out.length, needed.length);
   }
   return out;
 }
@@ -1473,9 +1475,13 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
   const work = async () => {
     // As tokio::spawn: the job runs after the caller has answered with it (files still queued).
     await Promise.resolve();
+    const began = timing.now();
+    const title = app.store.get(id)?.project.name ?? id;
+    diag.info("script", `${title}: getting ${files.length} footage ${files.length === 1 ? "file" : "files"} ready (${cloudEnabled() ? "from the cloud" : "to this Mac"})`);
     const fetched: ([string, Excerpt[]] | undefined)[] = new Array(files.length);
     const fetchOne = async (index: number, file: string) => {
       setFileState(app, id, index, "downloading");
+      const fileBegan = timing.now();
       try {
         const [bytes, name, cut] = cloudEnabled()
           ? await footageToCloud(app, id, index, file)
@@ -1490,8 +1496,10 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
           else entry.name = name;
         });
         fetched[index] = [file, cut];
+        diag.info("script", `${title}: file ${index + 1} of ${files.length} ready (${name ?? file}, ${cut.length} ${cut.length === 1 ? "piece" : "excerpts"}, ${diag.human(timing.now() - fileBegan)})`);
       } catch (error) {
         if (isBug(error)) throw error;
+        diag.warn("script", `${title}: file ${index + 1} of ${files.length} (${file}) failed after ${diag.human(timing.now() - fileBegan)}: ${diag.messageOf(error)}`);
         app.scripts.set(app, id, (job) => {
           const entry = job.files[index];
           if (entry === undefined) return;
@@ -1538,6 +1546,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       const error = result ?? (failed > 0 ? `${failed} of ${job.files.length} files couldn't be downloaded.` : null);
       if (error === null) delete job.error;
       else job.error = error;
+      diag.log(job.state === "done" ? "info" : "warn", "script", `${title}: import ${job.state === "done" ? "done" : `stopped: ${error}`} in ${diag.human(timing.now() - began)}`);
     });
     // A new edit starts with the case's research, so the articles and images
     // are waiting by the time the editing gets to them.
@@ -1577,6 +1586,15 @@ function fileProgress(app: App, id: string, index: number): (bytes: number, tota
   };
 }
 
+/** Says how many of a file's excerpts are cut. */
+function cutProgress(app: App, id: string, index: number): (done: number, total: number) => void {
+  return (done, total) =>
+    app.scripts.set(app, id, (job) => {
+      const entry = job.files[index];
+      if (entry !== undefined) entry.cut = { done, total };
+    });
+}
+
 function setFileState(app: App, id: string, index: number, state: FileJob["state"]): void {
   app.scripts.set(app, id, (job) => {
     const entry = job.files[index];
@@ -1604,7 +1622,7 @@ async function footageToDisk(app: App, id: string, index: number, file: string):
   setFileState(app, id, index, "cutting");
   const live = app.store.get(id);
   const ranges = live === null ? [] : fileRanges(live.project, file);
-  const cutUp = await diag.timeOnAsync("script", "script: cut excerpts", path, () => excerpts(path, ranges));
+  const cutUp = await diag.timeOnAsync("script", "script: cut excerpts", path, () => excerpts(path, ranges, cutProgress(app, id, index)));
   let bytes = 0;
   try {
     bytes = fs.statSync(path).size;
@@ -1639,7 +1657,7 @@ async function footageToCloud(app: App, id: string, index: number, file: string)
     const ranges = live === null ? [] : fileRanges(live.project, file);
     const cache = app.store.cacheDir();
     const cutUp = await diag.timeOnAsync("script", "script: cloud excerpts", original.key, () =>
-      cloudExcerptLane.with(() => seams.cloudMedia.driveExcerpts(cache, original, ranges, local)),
+      cloudExcerptLane.with(() => seams.cloudMedia.driveExcerpts(cache, original, ranges, local, cutProgress(app, id, index))),
     );
     return [original.size, original.name, cutUp];
   } finally {

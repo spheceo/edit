@@ -845,6 +845,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
     setStarting(one.id);
     try {
       const { project } = await api.importWriter(one.id);
+      useEditor.getState().setSideTab("downloads");
       onClose();
       navigate(`/p/${project}`);
     } catch (error) {

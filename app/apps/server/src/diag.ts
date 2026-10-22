@@ -80,7 +80,7 @@ export function archName(): string {
 export function log(level: Level, area: string, message: string): void {
   const line: Line = { at: Date.now(), level, area, message };
   // Problems still show in the terminal running Edit.
-  if (level !== "info") console.error(`edit: ${line.area}: ${line.message}`);
+  if (level !== "info") console.error(`${stamp(line.at)} edit: ${line.area}: ${line.message}`);
   writeFile(line);
   if (state.lines.length >= KEEP) state.lines.shift();
   state.lines.push(line);
@@ -98,12 +98,19 @@ export function error(area: string, message: string): void {
   log("error", area, message);
 }
 
+/** A moment as this Mac's local time, to the millisecond: 2026-10-22 21:23:05.123. */
+export function stamp(at: number): string {
+  const date = new Date(at);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}`;
+}
+
 function writeFile(line: Line): void {
   const file = state.file;
   if (file === null) return;
   const level = line.level === "info" ? "INFO" : line.level === "warn" ? "WARN" : "ERROR";
   try {
-    fs.writeSync(file.fd, `${line.at} ${level} [${line.area}] ${line.message}\n`);
+    fs.writeSync(file.fd, `${stamp(line.at)} ${level} [${line.area}] ${line.message}\n`);
     if (fs.fstatSync(file.fd).size > ROTATE_BYTES) {
       fs.renameSync(file.path, `${file.path}.1`);
       const fresh = fs.openSync(file.path, "a");

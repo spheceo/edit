@@ -245,6 +245,8 @@ export interface WriterScriptRow {
   clips: number;
   durationMs: number;
   built: boolean;
+  /** Its kind of video, when Writer says. */
+  style: Style | null;
 }
 
 export interface ProjectStatus {

@@ -233,7 +233,7 @@ export function Home() {
           </>
         )}
       </div>
-      <NewProject open={creating} onClose={() => setCreating(false)} />
+      <NewProject open={creating} onClose={() => setCreating(false)} only={style} />
     </div>
   );
 }
@@ -805,7 +805,8 @@ type Preview = Awaited<ReturnType<typeof api.scriptPreview>>;
 const DOC = /docs\.google\.com\/document\/d\//;
 
 /** One field (a name for a blank project, or a Google Doc link to start from its script) and the kind of video. */
-function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** `only`: the kind of video Home is filtered to: its Writer scripts are the ones listed, and a new project is that kind. */
+function NewProject({ open, onClose, only = null }: { open: boolean; onClose: () => void; only?: Style | null }) {
   const [text, setText] = useState("");
   const [style, setStyle] = useState<Style>("bodycam");
   const [busy, setBusy] = useState(false);
@@ -821,6 +822,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
     if (!open) return;
     setText("");
     setPreview(null);
+    if (only !== null) setStyle(only);
     let alive = true;
     api
       .writerScripts()
@@ -835,6 +837,8 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
   const words = script ? "" : url.toLowerCase();
   const fromWriter = (scripts ?? [])
     .filter((one) => one.built && (words === "" || one.title.toLowerCase().includes(words)))
+    // Home filtered to a kind of video: that kind's scripts (and any Writer hasn't said).
+    .filter((one) => only === null || one.style === null || one.style === only)
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const startScript = async (one: WriterScriptRow) => {
     if (one.project !== null) {
@@ -938,6 +942,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
                   className="group flex h-11 w-full items-center gap-3 rounded-lg px-2 text-left transition-colors hover:bg-hover disabled:opacity-60"
                 >
                   <img src="/writer-mark.svg" alt="" className="size-[18px] shrink-0" />
+                  {one.style !== null && <span title={STYLES.find((option) => option.value === one.style)?.label} className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[one.style] }} />}
                   <span className="min-w-0 flex-1 truncate text-[13px]">{one.title}</span>
                   <span className="shrink-0 text-[12px] text-faint tabular group-hover:hidden">
                     {one.durationMs > 0 ? `${shortDuration(one.durationMs / 1000)} · ` : ""}

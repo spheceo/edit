@@ -4,8 +4,11 @@
 import { expect, test } from "bun:test";
 
 import type { Project } from "../src/model.ts";
-import { changes, fixMessage, frameNow, heard, read, waiting, type Note, type Version } from "../src/reviews.ts";
+import * as fs from "node:fs";
+
+import { changes, clearOthers, fixMessage, frameNow, heard, read, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
+import { fixtureHome } from "./helpers/home.ts";
 import { clip, media, project as newProject } from "./helpers/model.ts";
 
 function edit(): Project {
@@ -87,4 +90,28 @@ test("a fix's changes are the clips added, removed or changed, not the ones a ri
   const found = changes(before, after);
   expect(found.clips.sort()).toEqual(["a", "sa"]);
   expect(found.ranges).toEqual([[0, 315]]);
+});
+
+test("approving a version deletes the exports shared as the others, never the approved one's", () => {
+  const { app, fixture, id } = (() => {
+    const fixture = fixtureHome("approve");
+    const id = fixture.store.create("approve", { width: 1920, height: 1080, fps: 30 }).project.id;
+    return { app: fixture.app, fixture, id };
+  })();
+  try {
+    const home = fixture.home;
+    const files = [1, 2, 3].map((n) => `${home}/exports/v${n}.mp4`);
+    fs.mkdirSync(`${home}/exports`, { recursive: true });
+    for (const file of files) fs.writeFileSync(file, "x");
+    const record = (path: string) => ({ path, name: path, finished_ms: 1, seconds: 1, bytes: 1, frames: 30, whole: true, format: "h264" });
+    fs.writeFileSync(`${home}/exports.json`, JSON.stringify({ [id]: files.map(record) }));
+    const versions = files.map((path, index) => ({ n: index + 1, timeline: `t${index}`, path, fps: 30, durationMs: 1000, clips: [] }));
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, autoFix: true, shared: { [id]: { reviewId: "r", url: "u", versions } }, notes: {} }));
+    expect(clearOthers(app, id, 3).sort()).toEqual([files[0], files[1]]);
+    expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, true]);
+    // Again: nothing more to delete.
+    expect(clearOthers(app, id, 3)).toEqual([]);
+  } finally {
+    fixture.cleanup();
+  }
 });

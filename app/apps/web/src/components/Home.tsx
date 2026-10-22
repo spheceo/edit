@@ -1,4 +1,4 @@
-import { ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
+import { Check, ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -492,7 +492,13 @@ function StateChips({ state }: { state?: ProjectStatus }) {
   if (state === undefined) return null;
   return (
     <>
-      {state.feedback > 0 && (
+      {state.approved !== null && (
+        <span title={`Version ${state.approved} was approved on its review`} className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-green-300">
+          <Check size={12} />
+          Approved v{state.approved}
+        </span>
+      )}
+      {state.approved === null && state.feedback > 0 && (
         <span
           title={`${state.feedback} open note${state.feedback === 1 ? "" : "s"} on its Repack review`}
           className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-sky-300"
@@ -564,7 +570,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index
               )}
             </div>
           </div>
-          {(card.cloudNews || card.drive || card.notice || (state && (state.feedback > 0 || (state.complete && !state.exported)))) && (
+          {(card.cloudNews || card.drive || card.notice || (state && (state.approved !== null || state.feedback > 0 || (state.complete && !state.exported)))) && (
             <div className="absolute top-2.5 left-2.5 flex gap-1">
               {card.notice && <Notice {...card.notice} />}
               <StateChips state={state} />

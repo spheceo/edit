@@ -20,7 +20,7 @@ import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
-import { clipMap, listExports, mapFile, timelineHash } from "./exports.ts";
+import { clipMap, deleteExport, listExports, mapFile, timelineHash } from "./exports.ts";
 import { writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, Project } from "./model.ts";
@@ -83,6 +83,8 @@ export interface Shared {
   reviewId: string;
   url: string;
   versions: Version[];
+  /** Approved: which version, by whom, when (the other versions' files deleted). */
+  approved?: { version: number; by: string; at: number } | null;
 }
 
 interface State {
@@ -383,6 +385,49 @@ export async function unfixed(app: App, projectId: string, noteId: string, reaso
 }
 
 // ---------------------------------------------------------------------------
+// Approval: the version the team signed off, the others' files deleted
+
+/**
+ * Approves the project's latest shared version: Repack closes the review to
+ * new notes and deletes the other versions' files on R2 (their notes stay,
+ * the record of every round), and the exports here shared as those versions
+ * are deleted (where most of the space is).
+ */
+export async function approve(app: App, projectId: string): Promise<{ version: number; deleted: string[] }> {
+  const shared = read(app.store.home).shared[projectId];
+  if (shared === undefined || shared.versions.length === 0) throw new Error("this project hasn't been shared for review");
+  const version = Math.max(...shared.versions.map((one) => one.n));
+  const answer = (await cloud.mutation("reviews:approve", { sourceId: projectId, version, by: app.machine })) as { approved: NonNullable<Shared["approved"]> };
+  update(app.store.home, (state) => {
+    if (state.shared[projectId] !== undefined) state.shared[projectId]!.approved = answer.approved;
+  });
+  return { version, deleted: clearOthers(app, projectId, version) };
+}
+
+/** Deletes the exports shared as versions other than `kept` (never the one it is), and the review copies here. */
+export function clearOthers(app: App, projectId: string, kept: number): string[] {
+  const home = app.store.home;
+  const shared = read(home).shared[projectId];
+  if (shared === undefined) return [];
+  const keep = shared.versions.find((one) => one.n === kept)?.path ?? null;
+  const deleted: string[] = [];
+  for (const one of shared.versions) {
+    if (one.n === kept || one.path === keep) continue;
+    try {
+      deleteExport(home, projectId, one.path);
+      deleted.push(one.path);
+    } catch (error) {
+      // Gone already, or not on this Mac's list.
+      diag.info("review", `v${one.n}'s export ${one.path}: ${diag.messageOf(error)}`);
+    }
+  }
+  // The versions stay listed here (their clip maps still place their notes); only their files go.
+  fs.rmSync(join(home, "cache", "reviews", projectId), { recursive: true, force: true });
+  if (deleted.length > 0) diag.info("review", `${projectId}: v${kept} approved; deleted ${deleted.length} older export(s)`);
+  return deleted;
+}
+
+// ---------------------------------------------------------------------------
 // Following Repack while Edit runs
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -422,6 +467,19 @@ export async function poll(app: App, now = Date.now()): Promise<void> {
   }
   for (const project of fresh) lastHeard.set(project, now);
   if (fresh.size > 0) app.store.emit({ type: "reviews", projects: [...fresh] });
+  // Approvals (on Repack's page or another Mac): the other versions' exports here go too.
+  const rows = (await cloud.query("reviews:open", {})) as { sourceId?: string; approved?: Shared["approved"] }[];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (typeof row.sourceId !== "string") continue;
+    const was = read(home).shared[row.sourceId];
+    if (was === undefined) continue;
+    const approved = row.approved ?? null;
+    if ((was.approved?.version ?? null) === (approved?.version ?? null)) continue;
+    update(home, (state) => {
+      if (state.shared[row.sourceId!] !== undefined) state.shared[row.sourceId!]!.approved = approved;
+    });
+    if (approved !== null) clearOthers(app, row.sourceId, approved.version);
+  }
   await fixSettled(app, now);
 }
 
@@ -435,6 +493,8 @@ export async function fixSettled(app: App, now = Date.now()): Promise<string[]> 
   for (const project of projects) {
     const live = app.store.get(project);
     if (live === null) continue;
+    // Approved: nothing more to fix.
+    if (state.shared[project]?.approved) continue;
     const notes = waiting(state, project, now);
     if (notes.length === 0) continue;
     const newest = Math.max(...notes.map((note) => note.createdAt), lastHeard.get(project) ?? 0);
@@ -491,7 +551,7 @@ export function view(app: App, projectId: string): unknown {
   return {
     sharing: sharing.get(projectId) ?? null,
     autoFix: state.autoFix,
-    review: shared === undefined ? null : { url: shared.url, versions: shared.versions.map((one) => ({ n: one.n, path: one.path })) },
+    review: shared === undefined ? null : { url: shared.url, versions: shared.versions.map((one) => ({ n: one.n, path: one.path })), approved: shared.approved ?? null },
     notes: notes.map((note) => {
       const version = shared?.versions.find((one) => one.n === note.version);
       const frame = live === null || note.ms === null ? null : frameNow(live.project, version, note.ms);
@@ -588,10 +648,11 @@ function sorted(value: unknown, status = 200): Response {
 /** Each project's state for the home screen: open feedback, a finished edit, and whether its current timeline is exported. */
 const statusCache = new Map<string, { rev: number; exportsAt: number; exported: boolean }>();
 
-export function projectStatus(app: App): Record<string, { feedback: number; complete: boolean; exported: boolean }> {
+export function projectStatus(app: App): Record<string, { feedback: number; complete: boolean; exported: boolean; approved: number | null }> {
   const home = app.store.home;
   const open = openCounts(home);
-  const out: Record<string, { feedback: number; complete: boolean; exported: boolean }> = {};
+  const shared = read(home).shared;
+  const out: Record<string, { feedback: number; complete: boolean; exported: boolean; approved: number | null }> = {};
   for (const summary of app.store.list()) {
     if (summary.problem !== undefined) continue;
     const live = app.store.get(summary.id);
@@ -604,7 +665,7 @@ export function projectStatus(app: App): Record<string, { feedback: number; comp
       cached = { rev: live.rev, exportsAt: newest, exported: listed.some((one) => one.timeline === now) };
       statusCache.set(summary.id, cached);
     }
-    out[summary.id] = { feedback: open[summary.id] ?? 0, complete: finished(app, summary.id), exported: cached.exported };
+    out[summary.id] = { feedback: open[summary.id] ?? 0, complete: finished(app, summary.id), exported: cached.exported, approved: shared[summary.id]?.approved?.version ?? null };
   }
   return out;
 }
@@ -635,6 +696,13 @@ export function routes(router: Router<App>): void {
       throw new ApiError(400, diag.messageOf(error));
     });
     return sorted(first === null ? { started: true } : first.done);
+  });
+  router.post("/api/projects/{id}/review/approve", async ({ app, params }) => {
+    try {
+      return sorted(await approve(app, params.id ?? ""));
+    } catch (error) {
+      throw new ApiError(400, diag.messageOf(error));
+    }
   });
   router.post("/api/reviews/settings", async (context) => {
     const given = (await readJson<unknown>(context)) as Record<string, unknown>;

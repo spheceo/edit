@@ -221,6 +221,8 @@ export const api = {
   /** Shares a whole export for review (the newest without `path`); `started` while it uploads. */
   shareReview: (id: string, path?: string) =>
     request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/review/share`, path === undefined ? {} : { path }),
+  /** Approves the latest shared version: the review closes and the other versions' files (and their exports here) are deleted. */
+  approveReview: (id: string) => request<{ version: number; deleted: string[] }>("POST", `/api/projects/${id}/review/approve`),
   setAutoFix: (on: boolean) => request<{ autoFix: boolean }>("POST", "/api/reviews/settings", { autoFix: on }),
   /** Writer's scripts in the cloud, newest first, each with the project made from it here. */
   writerScripts: () => request<{ scripts: WriterScriptRow[] }>("GET", "/api/writer/scripts"),
@@ -243,6 +245,8 @@ export interface ProjectStatus {
   feedback: number;
   complete: boolean;
   exported: boolean;
+  /** The version approved on its review (the others' files deleted), or null. */
+  approved: number | null;
 }
 
 /** A note on a project's Repack review, as Edit has it. */
@@ -264,7 +268,7 @@ export interface ReviewNote {
 export interface Review {
   sharing: string | null;
   autoFix: boolean;
-  review: { url: string; versions: { n: number; path: string }[] } | null;
+  review: { url: string; versions: { n: number; path: string }[]; approved: { version: number; by: string; at: number } | null } | null;
   notes: ReviewNote[];
 }
 

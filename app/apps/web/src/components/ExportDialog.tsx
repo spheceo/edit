@@ -2,7 +2,7 @@ import { Check, CircleAlert, Cloud, CloudUpload, Copy, Download, ExternalLink, F
 import { motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { api, useMachine, type ExportRecord } from "../lib/api";
+import { api, type Review, useMachine, type ExportRecord } from "../lib/api";
 import { copyDriveLink, driveFolder, openDrive, uploadsToDrive, useDriveLink } from "../lib/drive";
 import { projectDuration } from "../lib/edit";
 import { chaptersInSpan, DEFAULTS, estimateBytes, extensionOf, formatBytes, outputSize, scriptChapters, type ExportOptions } from "../lib/exporting";
@@ -255,7 +255,33 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
     };
   }, [projectId, finished]);
   const [sharing, setSharing] = useState<string | null>(null);
+  const [review, setReview] = useState<Review["review"]>(null);
+  const [approving, setApproving] = useState(false);
+  useEffect(() => {
+    void api
+      .review(projectId)
+      .then((given) => setReview(given.review))
+      .catch(() => setReview(null));
+  }, [projectId, finished, sharing]);
   const shown = (list ?? []).filter((one) => !one.missing);
+  const latest = review === null || review.versions.length === 0 ? null : Math.max(...review.versions.map((one) => one.n));
+  // Approves the latest version: two clicks, as it deletes the others' files for good.
+  const approve = async () => {
+    if (!approving) {
+      setApproving(true);
+      return;
+    }
+    try {
+      const done = await api.approveReview(projectId);
+      toast(`Approved v${done.version}${done.deleted.length > 0 ? `; deleted ${done.deleted.length} older export${done.deleted.length === 1 ? "" : "s"}` : ""}`, "info");
+      setReview((await api.review(projectId)).review);
+      setList(await api.exports(projectId));
+    } catch (error) {
+      toast((error as Error).message, "error");
+    } finally {
+      setApproving(false);
+    }
+  };
   // Shares an export to a Repack link (a review copy, uploaded); the link is copied once it's up.
   const share = async (path: string) => {
     setSharing("Starting");
@@ -283,6 +309,22 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
   if (shown.length === 0) return null;
   return (
     <div className="border-t border-line px-6 py-3">
+      {review !== null && latest !== null && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-[12px]">
+          <span className="min-w-0 flex-1 truncate">
+            Review v{latest}
+            {review.approved !== null ? <span className="text-green-300"> · approved v{review.approved.version} by {review.approved.by}</span> : null}
+          </span>
+          <Button size="sm" variant="ghost" title="Copy the review's link" onClick={() => void navigator.clipboard?.writeText(review.url).then(() => toast("Review link copied", "info"))}>
+            <Copy size={13} />
+          </Button>
+          {review.approved === null && (
+            <Button size="sm" variant={approving ? "danger" : "ghost"} onClick={() => void approve()} title="The team signed it off: the review closes, and the other versions' files and their exports here are deleted (their notes stay)">
+              {approving ? `Approve v${latest} and delete the others` : `Approve v${latest}`}
+            </Button>
+          )}
+        </div>
+      )}
       <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">Exports on {machine}</div>
       <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
         {shown.map((one) => (

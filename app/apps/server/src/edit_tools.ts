@@ -1037,6 +1037,24 @@ async function withReview(project: Project, input: ProjectInput, frames: number[
   return content;
 }
 
+/** A bodycam intro runs at most this long (s): about 30 s of the strongest moments. */
+const LONGEST_INTRO = 40;
+
+/**
+ * A bodycam intro (its teasers and the cut-ins between them) longer than
+ * LONGEST_INTRO (`intro_long`: the team wanted ~30 s of the strongest
+ * emotional moments ending on the arrest, "change our intro clips… so they
+ * look a bit more like this video", over our ~60 s with calm room shots).
+ */
+export function introLong(project: Project, teasers: [number, number][]): Json[] {
+  if (project.style !== "bodycam" || teasers.length === 0) return [];
+  const fps = project.settings.fps;
+  const [start, end] = [Math.min(...teasers.map(([from]) => from)), Math.max(...teasers.map(([, to]) => to))];
+  const seconds = (end - start) / fps;
+  if (seconds <= LONGEST_INTRO) return [];
+  return [{ kind: "intro_long", start, end, seconds: Math.round(seconds), at_most: LONGEST_INTRO, fix: "keep ~30 s of the strongest emotional moments, mostly the suspect, ending on the arrest: cut calm lines, small talk and third parties from the teasers (remove_time)" }];
+}
+
 /**
  * The plan's mechanical audit, plus what it needs the media cache for: B-roll
  * that's mostly pixelated or blurred (files not read yet start reading and
@@ -1060,6 +1078,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...hooks.deadAir(project, heard, teasers),
     ...(framing.interrogationIssues(project, parts, (at) => editPlan.cutSounds(project, at)) as Json[]),
     ...seams.faces.punchInsOffFace(project, teasers),
+    ...introLong(project, teasers),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
@@ -1093,7 +1112,7 @@ const FIXABLE = [
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
-  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window",
+  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long",
 ];
 
 /**

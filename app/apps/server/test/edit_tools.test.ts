@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 
 import type { App } from "../src/app.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
-import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, lineSeconds, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
+import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, lineSeconds, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
@@ -556,4 +556,13 @@ test("extend_clip plays a clipped word to its end and on to the pause, and the r
   expect([clipOf(project, "pb")!.start, clipOf(project, "sb")!.start]).toEqual([290, 290]);
   expect(reply.then).toContain("add_subtitles over each span (6.30–");
   expect(await said(app, "extend_clip")).toBe("no cut clips a word");
+});
+
+test("a bodycam intro past 40 s is flagged; an interrogation's isn't", () => {
+  const p = newProject("p", "t", { width: 1920, height: 1080, fps: 30 });
+  p.style = "bodycam";
+  expect(introLong(p, [[0, 30 * 30], [36 * 30, 68 * 30]]).map((issue) => (issue as { seconds: number }).seconds)).toEqual([68]);
+  expect(introLong(p, [[0, 28 * 30]])).toEqual([]);
+  p.style = "interrogation";
+  expect(introLong(p, [[0, 90 * 30]])).toEqual([]);
 });

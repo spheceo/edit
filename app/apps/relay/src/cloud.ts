@@ -141,6 +141,11 @@ export async function cloudAuthorized(request: Request, env: CloudEnv): Promise<
   return difference === 0;
 }
 
+/** A Writer script's key Edit may read (`writer/scripts/…`), with the same rules as `validKey`. */
+export function writerReadable(key: unknown): key is string {
+  return typeof key === "string" && key.startsWith("writer/scripts/") && validKey(`edit/${key.slice("writer/".length)}`);
+}
+
 /** A key Edit may touch: under `edit/`, no empty, `.` or `..` segments, no control characters. */
 export function validKey(key: unknown): key is string {
   if (typeof key !== "string" || key.length > 1024 || !key.startsWith("edit/")) return false;
@@ -169,9 +174,10 @@ export class Upstream extends Error {}
 
 const R2_ROUTES: Record<string, (body: Record<string, unknown>, r2: R2) => Promise<Response>> = {
   async url(body, r2) {
-    const key = needKey(body.key);
     const method = body.method === undefined ? "GET" : body.method;
     if (method !== "GET" && method !== "PUT" && method !== "HEAD") throw new BadRequest("method must be GET, PUT or HEAD.");
+    // Writer's scripts (bodies and their files) are read for the handoff, never written.
+    const key = method !== "PUT" && writerReadable(body.key) ? body.key : needKey(body.key);
     let expires = DEFAULT_EXPIRES[method];
     if (body.expires !== undefined) {
       if (typeof body.expires !== "number" || !Number.isInteger(body.expires) || body.expires <= 0) throw new BadRequest("expires must be a whole number of seconds.");

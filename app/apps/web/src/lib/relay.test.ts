@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { presign, validKey, validPrefix } from "../../../relay/src/cloud";
+import { presign, validKey, validPrefix, writerReadable } from "../../../relay/src/cloud";
 import relay, { TranscriptionBudget, type Env } from "../../../relay/src/index";
 
 describe("relay atomic spend reservations", () => {
@@ -59,6 +59,21 @@ describe("relay cloud endpoints", () => {
     expect((await call("r2/constructor", body)).status).toBe(404);
     expect((await call("r2/head", { key: "edit/a" }, { env: { ...env, R2_BUCKET: undefined } })).status).toBe(503);
     expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("reads Writer's scripts for the handoff, never writes them, and calls only edit:, reviews: and Writer's two reads", async () => {
+    const upstream = vi.fn(async () => new Response(JSON.stringify({ status: "success", value: 1 }))); vi.stubGlobal("fetch", upstream);
+    expect(writerReadable("writer/scripts/abc/body/3-ff.json")).toBe(true);
+    for (const key of ["writer/lessons.json", "writer/scripts/../x", "writer/scripts/a//b", "repack/scripts/a"]) expect(writerReadable(key)).toBe(false);
+    expect((await call("r2/url", { key: "writer/scripts/abc/body/3-ff.json" })).status).toBe(200);
+    expect((await call("r2/url", { key: "writer/scripts/abc/body/3-ff.json", method: "PUT" })).status).toBe(400);
+    expect((await call("convex", { kind: "query", path: "writer:getScript", args: {} })).status).toBe(200);
+    expect((await call("convex", { kind: "mutation", path: "writer:commitScript", args: {} })).status).toBe(403);
+    expect((await call("convex", { kind: "mutation", path: "records:anything", args: {} })).status).toBe(403);
+    // A review call is always Edit's, whatever it says.
+    expect((await call("convex", { kind: "mutation", path: "reviews:publish", args: { app: "writer" } })).status).toBe(200);
+    const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).args.app).toBe("edit");
   });
 
   it("only touches keys under edit/", async () => {

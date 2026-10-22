@@ -844,6 +844,15 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
       .filter((clip) => old.has(clip.id))
       .map((clip) => adjusted(clip, style, transform, [width, height]))
       .filter((one): one is Adjusted => one !== null);
+    // Lines relabelled one by one (Mom & Teen's two "Female Sergeant:" lines
+    // under the officer's voice: "think this should be called 'female
+    // sergeant' and then make her pink"): a re-run over them keeps them.
+    const oneOffs = project.clips.flatMap((clip) => {
+      if (!old.has(clip.id) || clip.type !== "text" || clip.style.label === undefined || clip.style.label === null) return [];
+      const who = (clip.name ?? "").slice(`${SUBTITLE} · `.length);
+      if (relabelled.get(who)?.[0] === clip.style.label.text) return [];
+      return [{ who, start: clip.start, end: clipEnd(clip), label: clip.style.label.text, color: [...clip.style.label.color] as Rgba, person: clip.person }];
+    });
     project.clips = project.clips.filter((clip) => !old.has(clip.id));
     seams.subtitles.writeMutes(project, house.mutes);
     const snap = toI64(round(SNAP * fps));
@@ -914,7 +923,8 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
       if (end <= start) continue;
       freeFrom = end;
       const who = line.name ?? line.voice ?? "Speaker";
-      const [label, color] = relabelled.get(who) ?? [
+      const oneOff = oneOffs.find((own) => own.who === who && Math.min(own.end, end) - Math.max(own.start, start) >= 0.5 * Math.min(own.end - own.start, end - start));
+      const [label, color] = oneOff !== undefined ? [oneOff.label, oneOff.color] : relabelled.get(who) ?? [
         `${subtitleName(who)}:`,
         (line.color === null ? null : hex(line.color)) ?? [...WHITE],
       ];
@@ -954,6 +964,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
         animation: { preset: "none", duration: 12.0, stagger: 1.5 },
         opacity: 1.0,
         word_times: [],
+        ...(oneOff?.person !== undefined && oneOff.person !== null ? { person: oneOff.person } : {}),
       };
       project.clips.push(clip);
       placed += 1;

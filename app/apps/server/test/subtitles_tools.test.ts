@@ -372,3 +372,44 @@ test("add_subtitles over a span makes a subtitle across its edge again whole rat
     cleanup();
   }
 });
+
+test("add_subtitles keeps a line relabelled on its own when it runs over it again", async () => {
+  // Mom & Teen: two of the officer voice's lines are the female sergeant's ("make her pink").
+  const { app, dir, store, cleanup } = fixtureHome("one-off");
+  try {
+    const id = await footage(app, dir);
+    write(
+      app.media.paths(bodycam(dir).path).transcript,
+      serialize({
+        ...TRANSCRIPT,
+        words: [
+          { text: "Stop", start: 1.0, end: 1.3, speaker: "speaker_0" },
+          { text: "moving.", start: 1.35, end: 1.7, speaker: "speaker_0" },
+          { text: "Get", start: 6.0, end: 6.3, speaker: "speaker_0" },
+          { text: "down.", start: 6.35, end: 6.7, speaker: "speaker_0" },
+          { text: "Hands", start: 12.0, end: 12.3, speaker: "speaker_0" },
+          { text: "up.", start: 12.35, end: 12.7, speaker: "speaker_0" },
+        ],
+      }),
+    );
+    expect((await call(app, "add_subtitles", { project_id: id })).isError).toBe(false);
+    const pink: [number, number, number, number] = [1, 0.4, 0.8, 1];
+    await store.update(id, "test", (project) => {
+      const line = project.clips.find((clip): clip is TextClip => clip.type === "text" && clip.text === "Get down.")!;
+      line.style.label = { ...line.style.label!, text: "Female Sergeant:", color: pink };
+    });
+    expect((await call(app, "add_subtitles", { project_id: id })).isError).toBe(false);
+    const labels = store
+      .get(id)!
+      .project.clips.filter((clip): clip is TextClip => clip.type === "text")
+      .sort((a, b) => a.start - b.start)
+      .map((clip) => [clip.text, clip.style.label?.text]);
+    expect(labels).toEqual([
+      ["Stop moving.", "Officer:"],
+      ["Get down.", "Female Sergeant:"],
+      ["Hands up.", "Officer:"],
+    ]);
+  } finally {
+    cleanup();
+  }
+});

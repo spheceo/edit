@@ -29,3 +29,18 @@ Decided:
   - When a script is archived, Writer deletes its local footage (keeping script.json, transcripts and the rest of the small files) and shows it archived with Restore.
   - Restore downloads again from the sources' links (registering in the shared registry as it already does).
   - Every script is fully cloud: footage from disk is registered as `sha256:` on import, not only when sent to Edit.
+
+## Where it stands (Oct 22, 16:40 SAST)
+- **Repack:**
+  - Live on Convex: `projectsPage:*`, the row fields, and `edit:` / `writer:clearRestore` (each clears `restore` and `archived`).
+  - The Projects page, the archive (keys worked out from the bodies, references counted across both apps, analysis never deleted) and a daily size refresh are committed locally, not deployed: Railway's Hobby builds are paused.
+  - Today 56 projects use 117 GB on R2.
+- **Edit:**
+  - `archive.ts` follows archives and restores on the cloud's list. Archiving frees the exports, footage and previews here, keeping the analysis. Restore cuts each excerpt again at its recorded start and end, so its keys match.
+  - The card shows Archived with Restore.
+  - All 27 projects here are cloud projects; the six old ones went up as JSON only.
+- **Writer:**
+  - Archive (a local purge, read-only with a banner) and restore (from Edit's originals or the source links).
+  - A background backfill puts older scripts' footage in the registry.
+  - 14 scripts imported from disk files can't be backfilled: their files are gone from this Mac.
+- **Tested** on throwaway rows only; nothing real was archived.

@@ -222,7 +222,20 @@ export const api = {
   shareReview: (id: string, path?: string) =>
     request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/review/share`, path === undefined ? {} : { path }),
   setAutoFix: (on: boolean) => request<{ autoFix: boolean }>("POST", "/api/reviews/settings", { autoFix: on }),
+  /** Writer's scripts in the cloud, newest first, each with the project made from it here. */
+  writerScripts: () => request<{ scripts: WriterScriptRow[] }>("GET", "/api/writer/scripts"),
+  /** Makes an Edit project from a Writer script and starts its import. */
+  importWriter: (id: string) => request<{ project: string }>("POST", `/api/writer/scripts/${id}/import`),
 };
+
+export interface WriterScriptRow {
+  id: string;
+  title: string;
+  rev: number;
+  updatedAt: number;
+  updatedBy: string | null;
+  project: string | null;
+}
 
 export interface ProjectStatus {
   feedback: number;

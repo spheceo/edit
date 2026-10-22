@@ -2,7 +2,7 @@ import { ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpl
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
-import { api, type ProjectStatus } from "../lib/api";
+import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
@@ -23,6 +23,7 @@ export function Home() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [cloud, setCloud] = useState<CloudList | null>(null);
   const [statuses, setStatuses] = useState<Record<string, ProjectStatus>>({});
+  const [writer, setWriter] = useState<WriterScriptRow[]>([]);
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>("all");
@@ -41,6 +42,11 @@ export function Home() {
       .projectStatus()
       .then(setStatuses)
       .catch(() => {});
+    // Scripts written in Writer, ready to edit.
+    void api
+      .writerScripts()
+      .then(({ scripts }) => setWriter(scripts))
+      .catch(() => setWriter([]));
     return api
       .projects()
       .then(({ projects }) => setProjects(projects))
@@ -188,6 +194,8 @@ export function Home() {
                 </div>
               </section>
             )}
+
+            {showEdits && !narrowed && writer.some((one) => one.project === null) && <FromWriter scripts={writer.filter((one) => one.project === null).slice(0, 6)} onChanged={refresh} />}
 
             {showEdits && (rest.length > 0 || cloudEdits.length > 0) && (
               <section className="mt-9">
@@ -433,6 +441,44 @@ interface CardProps {
   remote?: CloudProject;
   /** Its feedback and export state. */
   state?: ProjectStatus;
+}
+
+/** Writer's newest scripts not edited here yet: one click makes the project and starts its import (footage from the shared registry). */
+function FromWriter({ scripts, onChanged }: { scripts: WriterScriptRow[]; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const toast = useEditor((state) => state.toast);
+  const start = async (one: WriterScriptRow) => {
+    setBusy(one.id);
+    try {
+      const { project } = await api.importWriter(one.id);
+      onChanged();
+      navigate(`/p/${project}`);
+    } catch (error) {
+      toast((error as Error).message, "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <section className="mt-9">
+      <SectionTitle count={scripts.length}>From Writer</SectionTitle>
+      <div className="overflow-hidden rounded-xl border border-line">
+        {scripts.map((one) => (
+          <div key={one.id} className="flex h-12 items-center gap-3 border-t border-line px-3 first:border-t-0">
+            <img src="/writer-mark.svg" alt="Writer" className="size-5 shrink-0" />
+            <div className="min-w-0 flex-1 truncate font-medium">{one.title}</div>
+            <span className="shrink-0 text-[12px] text-faint">
+              {one.updatedBy ? `${one.updatedBy} · ` : ""}
+              {ago(one.updatedAt)}
+            </span>
+            <Button size="sm" disabled={busy !== null} onClick={() => void start(one)}>
+              {busy === one.id ? "Starting…" : "Edit it"}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 /** Chips for a project's review notes waiting and a finished edit not exported as it is now. */

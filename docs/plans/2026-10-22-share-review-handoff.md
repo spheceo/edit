@@ -96,3 +96,28 @@ The user's decisions:
 2. **Edit and Writer, in parallel:** sharing, polling, auto-fixing and the change bands. Edit's dashboard. Relay rights (Edit deploys its relay, Writer its own).
 3. **Handoff:** the shared registry and transcripts (Writer), and the "From Writer" import (Edit). Then "edit:" comments end to end.
 4. **The test:** a Writer script shared, commented, fixed and handed to Edit; Edit edits it, follows an `edit:` note, and shares a video; a note on the video is fixed by Edit's agent, and the band shows it.
+
+## Where it stands (Oct 22, 15:15 SAST)
+- **Repack:**
+  - `reviews:*` (publish, open, changes by cursor, get, claim, release, resolve, reply, setAccess) and `reviewPage:*` (the guest page's writes, the dashboard list, deleting notes) are live on Convex.
+  - `writer:setHandoff` is live.
+  - `/r/[token]` (video and script, Edit's and Writer's marks, notes, replies, versions) and Home → Reviews are committed locally (`1619ea2`, `2dee2b5`, `90c6730`), not pushed: Railway builds were paused for Hobby workspaces (SPHE is on Hobby) throughout the hour's checks.
+- **Edit:**
+  - **Reviews:** `reviews.ts`: share (a 720p copy), poll by cursor, auto-fix two minutes after the last note, `feedback_done` / `feedback_unfixed` with each fix's changed clips, deleted and reopened notes.
+  - **UI:** home chips (open notes; finished but not exported), Share in the export list, note dots and fix bands on the ruler with the note on hover.
+  - **Handoff:** "From Writer" on the home screen (sent scripts first). `writer_handoff.ts` turns Writer's clips into script blocks.
+  - **Shared transcripts:** every transcription of a cloud excerpt or recording takes its words from the shared transcript when there is one.
+  - **Rules:** "edit:" notes are a core rule.
+  - **Relay:** deployed.
+- **Writer:**
+  - Share, polling, auto-revise per note with green bands and hover, and `edit:` notes.
+  - Edit's transcription ported (pieces and whole-file voices, the names on the same Gemini model), and the shared registry and transcripts on.
+  - Send to Edit, and YouTube in Edit's format.
+  - Relay deployed.
+- **Tried live:**
+  - Mom & Teen v6 shared (`/r/Ug9oMabqU-UkchweyTq9Eg`): it plays from R2 on Repack's local server, and a guest note was heard by Edit.
+  - Writer's Trooper script imported into Edit with no download and no hearing (3,410 words from Writer's transcript).
+- **Left:**
+  - Railway's deploy (push Repack's `main` when Hobby builds are back).
+  - A joined Drive case through the handoff.
+  - Writer's voice names in the shared transcript.

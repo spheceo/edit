@@ -1627,6 +1627,16 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       if (size < SMALLEST_TEXT) issues.push({ kind: "small_text", clip: text.id, start: text.start, size: round(size), at_least: SMALLEST_TEXT, text: text.text.slice(0, 40) });
     }
   }
+  // The house's subtitles have white words (who says them is the name label's
+  // colour), and a courtroom video's, with no label, never change by speaker
+  // (the team: "for courtroom videos we have the text for subtitles be white
+  // and not change by subject"). A Repack-style line's words carry its colour.
+  for (const text of project.clips) {
+    if (text.type !== "text" || !visible(text.track) || !/^Subtitle/u.test(text.name ?? "")) continue;
+    if (text.style.label == null && project.style !== "courtroom") continue;
+    const [r, g, b] = text.style.color;
+    if (Math.min(r, g, b) < 0.95) issues.push({ kind: "subtitle_coloured", clip: text.id, start: text.start, text: text.text.slice(0, 40), fix: "update_clips on the subtitles track: style.color [1,1,1,1]" });
+  }
   return { issues: sortIssues(issues), frames: total, clips: project.clips.length };
 }
 

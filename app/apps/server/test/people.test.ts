@@ -281,3 +281,12 @@ test("a_relabelled_line_moves_to_the_person_its_label_names", () => {
   expect(labelColour(p, "c")).toBe(officer.color);
   expect(p.people!.find((one) => one.label === "Tabitha:")!.id).toBe(tabitha.id);
 });
+
+test("a courtroom video's unlabelled subtitles keep their words white", () => {
+  // "for courtroom videos we have the text for subtitles be white and not change by subject"
+  const edit = project([subtitle("j1", 0, "Judge", "Judge:", "#ffd166"), subtitle("t1", 40, "Trooper", "Trooper:", "#7aa2ff")]);
+  for (const clip of edit.clips) if (clip.type === "text") delete clip.style.label;
+  edit.style = "courtroom";
+  oneColourPerPerson(edit);
+  for (const clip of edit.clips) if (clip.type === "text") expect(toHex(clip.style.color)).toBe("#ffffff");
+});

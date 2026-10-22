@@ -732,3 +732,16 @@ test("a left-aligned text reworded keeps its left edge (a Notepad line never gro
   expect(Math.abs(left(after) - before)).toBeLessThan(0.01);
   expect(after.keyframes!.x![0]!.value).toBeCloseTo(after.transform.x, 3);
 });
+
+test("a courtroom video's subtitle whose words aren't white is flagged", () => {
+  const p = project("plan");
+  apply(p, [
+    { op: "add", clip: { type: "text", track: "new", name: "Subtitle · Judge", start: 0, duration: 60, text: "Sit down.", style: { size: 48 } } },
+    { op: "add", clip: { type: "text", track: "new", name: "Subtitle · Trooper", start: 60, duration: 60, text: "Yes, sir.", style: { size: 48, color: [0.4, 0.6, 1, 1] } } },
+    { op: "add", clip: { type: "text", track: "new", name: "Reaction • Oath", start: 0, duration: 60, text: "*UNDER OATH*", style: { size: 64, color: [1, 0.2, 0.2, 1] } } },
+  ]);
+  // Unlabelled, it's a Repack-style line whose words carry its colour; in a courtroom video they're white.
+  expect(kinds(p, "subtitle_coloured")).toEqual([]);
+  p.style = "courtroom";
+  expect(kinds(p, "subtitle_coloured").map((issue) => issue.text)).toEqual(["Yes, sir."]);
+});

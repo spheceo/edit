@@ -56,6 +56,10 @@ const MAX_AI_BODY = 32 * 1024 * 1024;
 const AI_GATEWAY = "https://ai-gateway.vercel.sh/v1/chat/completions";
 /** Only Edit's module: the relay must not reach Repack's other functions. */
 const CONVEX_PATH = /^edit:[A-Za-z_][A-Za-z0-9_]*$/;
+/** Repack's reviews (always as Edit) and Writer's scripts, read only (the handoff). */
+const REVIEWS_PATH = /^reviews:[A-Za-z_][A-Za-z0-9_]*$/;
+const WRITER_READS = new Set(["writer:listScripts", "writer:getScript"]);
+const callable = (path: string, kind: string) => CONVEX_PATH.test(path) || REVIEWS_PATH.test(path) || (WRITER_READS.has(path) && kind === "query");
 
 export async function cloud(request: Request, url: URL, env: CloudEnv): Promise<Response> {
   if (url.pathname.startsWith("/v1/cloud/exports/")) return exportRoute(request, url, env);
@@ -352,12 +356,19 @@ export const unescapeXml = (text: string) => text
 
 // --- Convex ---------------------------------------------------------------------
 
-/** Calls an `edit:` function with the service token added to its args. */
+/**
+ * Calls an `edit:` function (or a `reviews:` one, as Edit, or one of
+ * Writer's script reads) with the service token added to its args.
+ */
 async function convex(body: Record<string, unknown>, env: CloudEnv): Promise<Response> {
   const kind = body.kind;
   if (typeof kind !== "string" || !CONVEX_KINDS.has(kind)) return json(400, { error: "kind must be query, mutation or action." });
-  if (typeof body.path !== "string" || !CONVEX_PATH.test(body.path)) return json(403, { error: "Only edit: functions can be called." });
+  if (typeof body.path !== "string" || !callable(body.path, kind)) {
+    return json(403, { error: "Only edit: and reviews: functions, and Writer's script reads, can be called." });
+  }
   if (body.args !== undefined && !isObject(body.args)) return json(400, { error: "args must be an object." });
+  // A review is always Edit's from here, whatever the caller says.
+  if (REVIEWS_PATH.test(body.path)) body.args = { ...(body.args as object | undefined), app: "edit" };
   if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) return json(503, { error: "Convex is not configured on the relay yet." });
   let answer: Response;
   try {

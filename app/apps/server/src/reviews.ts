@@ -225,7 +225,7 @@ async function probe(path: string): Promise<Record<string, unknown>> {
 async function describe(app: App, project: Project, exported: string, copy: string, prefix: string, clips: [string, number, number][]): Promise<Record<string, unknown>> {
   const fps = fpsOf(project);
   const ms = (frame: number) => Math.round((frame / fps) * 1000);
-  const out: Record<string, unknown> = { export: { renderedAt: Date.now(), ...(await probe(exported)) }, review: await probe(copy), clips };
+  const out: Record<string, unknown> = { export: { renderedAt: Date.now(), ...(await probe(exported)) }, review: await probe(copy), clipMap: clips };
   // Chapters: the intro, each cut-in, the story, the outro.
   try {
     const parts = native().sections({ json: jsonForSerde(project) }).parts;

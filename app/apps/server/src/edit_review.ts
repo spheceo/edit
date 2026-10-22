@@ -284,6 +284,11 @@ export function lineFrames(lines: string[], heard: [number, string][], from: num
   });
 }
 
+/** Longer than this, a word's times are the transcriber's mistake. */
+const LONGEST_WORD = 2.0;
+
+const EXTEND = "extend_clip (no arguments fixes every one: the word plays to its end and the rest of the timeline moves on)";
+
 /**
  * Footage cut inside a word: a clip of a video's own sound whose in or out
  * point falls in a word that goes on past it, unless the next clip carries
@@ -317,15 +322,18 @@ export function cutMidWord(project: Project, transcripts: Map<string, Transcript
           Math.abs((frame === clip.start ? other.source_in + (other.duration / fps) * other.speed : other.source_in) - at) <= 0.1,
       );
     for (const word of transcript.words) {
+      // A "word" of several seconds is the transcriber's times gone wrong
+      // (Mom Leaves 5 Kids' "picked" over 17 s), not one a cut clips.
+      if (word.end - word.start > LONGEST_WORD) continue;
       // The transcriber can squeeze a word to a few hundredths of a second
       // ("sir." at 286.62–286.66): it's heard for at least ~0.2 s, longer by its letters.
       const letters = chars(word.text).filter((c) => isAlphanumeric(c)).length;
       const ends = word.end - word.start < 0.15 ? word.start + Math.max(0.2, 0.06 * letters) : word.end;
       if (word.start < to - margin && ends > to + margin && !carried(to, clipEnd(clip))) {
-        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clipEnd(clip), side: "out", word: trim(word.text), word_ends: round(ends * 100) / 100 });
+        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clipEnd(clip), side: "out", word: trim(word.text), word_ends: round(ends * 100) / 100, fix: EXTEND });
       }
       if (word.start < from - margin && word.end > from + margin && !carried(from, clip.start)) {
-        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clip.start, side: "in", word: trim(word.text), word_starts: round(word.start * 100) / 100 });
+        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clip.start, side: "in", word: trim(word.text), word_starts: round(word.start * 100) / 100, fix: EXTEND });
       }
     }
   }

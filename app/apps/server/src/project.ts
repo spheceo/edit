@@ -535,6 +535,97 @@ export function separateOverlaps(project: Project, placed: Map<string, string>):
   return moved;
 }
 
+/** What insertTime did. */
+export interface Inserted {
+  /** Clips that moved right. */
+  moved: number;
+  /** Clips that play longer across it (the clipped ones, beds, B-roll, subtitles). */
+  lengthened: number;
+}
+
+/**
+ * Puts `frames` more frames into the timeline at `at`, on every track (the
+ * reverse of remove_time): what starts at or after it moves right, what plays
+ * across it plays on longer (its keyframes and words past `at` moving with
+ * the rest). For a cut that clips a word: the clips in `lengthen` end at `at`
+ * and play on into the new frames (the out point that cut "sir." short), so
+ * the cut moves to `at + frames` and the subtitles ending on it, and a flash,
+ * dip or whoosh across it, go with it; the clips in `early` start at `at` and
+ * start that much sooner in their source (an in point that cut into a word),
+ * the cut staying at `at` with the subtitles starting on it. A bed or a shot
+ * whose source runs out ends where it did.
+ */
+export function insertTime(project: Project, at: number, frames: number, lengthen: Set<string>, early: Set<string>): Inserted {
+  const done: Inserted = { moved: 0, lengthened: 0 };
+  if (frames <= 0) return done;
+  const fps = project.settings.fps;
+  const cutMoves = lengthen.size > 0;
+  const subtitles = new Set(project.tracks.filter((track) => track.subtitles === true).map((track) => track.id));
+  const short = Math.round(2 * fps);
+  const shift = (keys: Record<string, Keyframe[]> | undefined, from: number) => {
+    for (const list of Object.values(keys ?? {})) for (const key of list) if (key.frame >= from) key.frame += frames;
+  };
+  const shiftWords = (clip: Clip, from: number) => {
+    if (clip.type === "text" && clip.word_times !== undefined) clip.word_times = clip.word_times.map((time) => (time >= from ? time + frames : time));
+  };
+  // Seconds of source left after the clip's end (media without a length: plenty).
+  const sourceLeft = (clip: Clip) => {
+    if (clip.type !== "video" && clip.type !== "audio") return Number.POSITIVE_INFINITY;
+    const media = mediaOf(project, clip.media);
+    if (media === undefined || media.kind === "image" || !(media.duration > 0)) return Number.POSITIVE_INFINITY;
+    return media.duration - (clip.source_in + (clip.duration / fps) * clip.speed);
+  };
+  for (const clip of project.clips) {
+    const end = clipEnd(clip);
+    const speed = clip.type === "video" || clip.type === "audio" ? clip.speed : 1;
+    if (lengthen.has(clip.id) && end === at) {
+      clip.duration += frames;
+      done.lengthened++;
+    } else if (early.has(clip.id) && clip.start === at) {
+      if (clip.type === "video" || clip.type === "audio") clip.source_in = Math.max(clip.source_in - (frames / fps) * speed, 0);
+      clip.duration += frames;
+      shift(clip.keyframes, 0);
+      done.lengthened++;
+    } else if (subtitles.has(clip.track) && cutMoves && clip.start < at && Math.abs(end - at) <= 1) {
+      // The subtitle of the word that now finishes.
+      clip.duration += frames;
+      done.lengthened++;
+    } else if (subtitles.has(clip.track) && !cutMoves && Math.abs(clip.start - at) <= 1) {
+      clip.start = Math.min(clip.start, at);
+      clip.duration += frames;
+      shiftWords(clip, 1);
+      done.lengthened++;
+    } else if (clip.start >= at) {
+      clip.start += frames;
+      done.moved++;
+    } else if (end > at) {
+      const own = at - clip.start;
+      const sound = clip.type === "audio" && mediaOf(project, clip.media)?.kind === "audio";
+      const mark = clip.type !== "video" && (clip.type !== "audio" || sound) && !subtitles.has(clip.track) && clip.duration <= short;
+      if (mark) {
+        // A flash, a dip, a whoosh across the cut: with the cut.
+        if (cutMoves) {
+          clip.start += frames;
+          done.moved++;
+        }
+      } else if (sourceLeft(clip) >= (frames / fps) * speed) {
+        clip.duration += frames;
+        shift(clip.keyframes, own);
+        shiftWords(clip, own);
+        done.lengthened++;
+      }
+    }
+  }
+  if (project.mark_in !== undefined && project.mark_in !== null && project.mark_in >= at) project.mark_in += frames;
+  if (project.mark_out !== undefined && project.mark_out !== null && project.mark_out >= at) project.mark_out += frames;
+  for (const segment of project.segments ?? []) {
+    if (segment.start >= at) segment.start += frames;
+    if (segment.end > at) segment.end += frames;
+  }
+  for (const marker of project.markers ?? []) if (marker.frame >= at) marker.frame += frames;
+  return done;
+}
+
 /**
  * Lowest track of `kind` free over [start, end); adds a track when none is.
  * Text and graphics prefer tracks above the main footage.

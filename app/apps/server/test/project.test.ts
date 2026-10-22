@@ -10,6 +10,7 @@ import {
   ease,
   freshId,
   inOut,
+  insertTime,
   isDateCard,
   isSoundEffect,
   marksCut,
@@ -202,4 +203,39 @@ test("tracks, labels, in and out, subtitled spans and cuts", () => {
   expect(marksCut(dip, 50)).toBe(true);
   expect(marksCut(dip, 45)).toBe(false);
   expect(marksCut({ ...solid("t", "v2", 40, 20), type: "text" } as unknown as Clip, 60)).toBe(false);
+});
+
+test("insert_time lengthens a cut that clips a word and moves the rest on", () => {
+  const p = newProject("p", "t", SETTINGS);
+  p.media.push({ id: "m", name: "bodycam", path: "/tmp/b.mp4", kind: "video", duration: 600, width: 1920, height: 1080, fps: 30, has_audio: true, markers: [] } as Media);
+  p.media.push({ id: "song", name: "bed", path: "/tmp/s.mp3", kind: "audio", duration: 300, width: 0, height: 0, fps: 0, has_audio: true, markers: [] } as Media);
+  p.media.push({ id: "whoosh", name: "whoosh", path: "/tmp/w.wav", kind: "audio", duration: 1, width: 0, height: 0, fps: 0, has_audio: true, markers: [] } as Media);
+  const [v1, , , a1, a2] = p.tracks.map((track) => track.id) as [string, string, string, string, string];
+  const subs = subtitlesTrack(p);
+  const media = (id: string, type: "video" | "audio", track: string, start: number, duration: number, source: string, source_in: number, link?: string): Clip =>
+    ({ id, track, start, duration, color: "blue", fade_in: 0, fade_out: 0, type, media: source, source_in, speed: 1, ...(link ? { link } : {}), ...(type === "audio" ? { volume_db: 0 } : { opacity: 1 }) }) as unknown as Clip;
+  p.clips.push(
+    media("pa", "video", v1, 0, 100, "m", 10, "la"),
+    media("sa", "audio", a1, 0, 100, "m", 10, "la"),
+    media("pb", "video", v1, 100, 50, "m", 200, "lb"),
+    media("sb", "audio", a1, 100, 50, "m", 200, "lb"),
+    { ...media("bed", "audio", a2, 0, 200, "song", 0), keyframes: { volume_db: [{ frame: 50, value: -20, ease: "linear" }, { frame: 120, value: -30, ease: "linear" }] } } as Clip,
+    { id: "sub", track: subs, start: 80, duration: 20, color: "blue", fade_in: 0, fade_out: 0, type: "text", text: "Unintentionally, sir." } as unknown as Clip,
+    { id: "next", track: subs, start: 100, duration: 20, color: "blue", fade_in: 0, fade_out: 0, type: "text", text: "Okay." } as unknown as Clip,
+    solid("flash", "v3", 97, 6),
+  );
+  p.markers = [{ frame: 120, name: "hit" }];
+  // "sir." runs 6 frames past the cut at 100.
+  expect(insertTime(p, 100, 6, new Set(["pa", "sa"]), new Set())).toEqual({ moved: 4, lengthened: 4 });
+  const at = (id: string) => [clipOf(p, id)!.start, clipOf(p, id)!.duration];
+  expect([at("pa"), at("sa"), at("pb"), at("sb")]).toEqual([[0, 106], [0, 106], [106, 50], [106, 50]]);
+  // The bed plays on, its ducking after the cut moving with the speech; the subtitle holds to the word; the flash goes with the cut.
+  expect(at("bed")).toEqual([0, 206]);
+  expect(clipOf(p, "bed")!.keyframes!.volume_db!.map((key) => key.frame)).toEqual([50, 126]);
+  expect([at("sub"), at("next"), at("flash")]).toEqual([[80, 26], [106, 20], [103, 6]]);
+  expect(p.markers[0]!.frame).toBe(126);
+  // An in point that cut into a word starts sooner in its source; the cut stays.
+  insertTime(p, 106, 3, new Set(), new Set(["pb", "sb"]));
+  expect([at("pb"), at("sb"), at("next")]).toEqual([[106, 53], [106, 53], [106, 23]]);
+  expect((clipOf(p, "sb") as Extract<Clip, { type: "audio" }>).source_in).toBeCloseTo(199.9, 6);
 });

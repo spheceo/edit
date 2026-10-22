@@ -200,7 +200,7 @@ test("footage cut inside a word is flagged, with where the word ends; a cut the 
   const sound25 = p.clips.find((clip) => clip.id === "c25") as AudioClip;
   sound25.duration = 72;
   const issues = cutMidWord(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
-  expect(issues).toEqual([{ kind: "cut_mid_word", clip: "c25", at: 72, side: "out", word: "baby.", word_ends: 274.8 }]);
+  expect(issues).toEqual([{ kind: "cut_mid_word", clip: "c25", at: 72, side: "out", word: "baby.", word_ends: 274.8, fix: expect.stringContaining("extend_clip") }]);
   // The same moment carried on by the next clip: no cut heard.
   p.clips.push(sound("c26", sound25.track, "m7", 72, 30, { source_in: 274.6 }));
   expect(cutMidWord(p, new Map([["m7", TEASER]]))).toEqual([]);
@@ -208,7 +208,7 @@ test("footage cut inside a word is flagged, with where the word ends; a cut the 
   const squeezed = bodycam([["Unintentionally,", 285.84, 286.56], ["sir.", 286.62, 286.66]]);
   const short = footageProject();
   Object.assign(short.clips.find((clip) => clip.id === "c25")!, { source_in: 285.0, duration: 51 });
-  expect(cutMidWord(short, new Map([["m7", squeezed]]))).toEqual([{ kind: "cut_mid_word", clip: "c25", at: 51, side: "out", word: "sir.", word_ends: 286.82 }]);
+  expect(cutMidWord(short, new Map([["m7", squeezed]]))).toEqual([{ kind: "cut_mid_word", clip: "c25", at: 51, side: "out", word: "sir.", word_ends: 286.82, fix: expect.stringContaining("extend_clip") }]);
   // Played past the word: nothing to say.
   p.clips.pop();
   sound25.duration = 80;

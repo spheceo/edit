@@ -39,6 +39,7 @@ import {
   freeTrackFrom,
   freshId,
   inOut,
+  insertTime,
   merge,
   mergeClip,
   tidyTracks,
@@ -174,6 +175,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]> | Content[]][] = [
   ["markers", markersTool],
   ["add_sound_effect", addSoundEffect],
   ["remove_time", removeTime],
+  ["extend_clip", extendClip],
   ["tidy_tracks", tidyTracksTool],
   ["render_frame", renderFrame],
   ["contact_sheet", contactSheet],
@@ -731,6 +733,90 @@ async function removeTime({ app, args, projectId }: ToolCall): Promise<Content[]
   );
 }
 
+/** The most a word's cut is lengthened by: past it, the transcriber's word times are wrong, not the cut. */
+const MOST_ADDED = 1.0;
+
+/**
+ * Lengthens footage cut inside a word (the audit's cut_mid_word) by putting
+ * time into the timeline there (insertTime): an out point plays on to the end
+ * of the word, an in point starts before it, its linked picture or sound with
+ * it, and everything after moves on (subtitles, B-roll, the narration, the
+ * music). The agent could only cut time: "the editing tools have no way to
+ * insert time", and the holdout kept 7 clipped words.
+ */
+async function extendClip({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  const found = live(app, projectId);
+  const fps = fpsOf(found.project);
+  const given = Array.isArray(args.clips) ? args.clips.filter((one): one is string => typeof one === "string") : str(args.clip) !== null ? [str(args.clip)!] : null;
+  const side = str(args.side);
+  if (side !== null && side !== "in" && side !== "out") throw new Error("side is in or out");
+  const seconds = num(args.seconds);
+  if (seconds !== null && !(seconds > 0 && seconds <= MOST_ADDED)) throw new Error(`seconds: more than 0, at most ${MOST_ADDED}`);
+  const heard = cachedTranscripts(app, found.project, false);
+  // Each cut to lengthen: the clip, its side and the source second to reach.
+  const flagged = (hooks.cutMidWord(found.project, heard) as Args[]).filter((issue) => typeof issue.clip === "string");
+  const wanted = new Map<string, { clip: string; side: "in" | "out"; to: number | null }>();
+  for (const issue of flagged) {
+    const clip = issue.clip as string;
+    const own = issue.side === "in" ? "in" : "out";
+    if (given !== null && !given.includes(clip) && !given.some((id) => linkedWith(found.project, id).includes(clip))) continue;
+    if (side !== null && side !== own) continue;
+    const to = own === "out" ? num(issue.word_ends) : num(issue.word_starts);
+    const key = `${clip}|${own}`;
+    const was = wanted.get(key);
+    const reach = to === null ? null : own === "out" ? Math.max(to, was?.to ?? to) : Math.min(to, was?.to ?? to);
+    wanted.set(key, { clip, side: own, to: reach });
+  }
+  for (const id of given ?? []) {
+    const clip = clipOf(found.project, id);
+    if (clip === undefined) throw new Error(`no clip ${id}`);
+    const sound = clip.type === "audio" ? clip : linkedWith(found.project, id).map((other) => clipOf(found.project, other)).find((other) => other?.type === "audio");
+    const own = side ?? "out";
+    if (sound !== undefined && seconds !== null && !wanted.has(`${sound.id}|${own}`)) wanted.set(`${sound.id}|${own}`, { clip: sound.id, side: own, to: null });
+  }
+  if (wanted.size === 0) return text(given === null ? "no cut clips a word" : "no cut of those clips clips a word (give seconds to lengthen one anyway)");
+  const [, report] = await app.store.update(projectId, ORIGIN, (project) => {
+    const done: Args[] = [];
+    // Latest first: putting time in later never moves an earlier cut.
+    const cuts = [...wanted.values()]
+      .map((want) => ({ ...want, own: clipOf(project, want.clip) }))
+      .filter((want): want is typeof want & { own: Extract<Clip, { type: "audio" }> } => want.own?.type === "audio")
+      .sort((a, b) => (b.side === "out" ? clipEnd(b.own) : b.own.start) - (a.side === "out" ? clipEnd(a.own) : a.own.start));
+    for (const cut of cuts) {
+      const clip = cut.own;
+      const media = project.media.find((one) => one.id === clip.media);
+      const sourceEnd = clip.source_in + (clip.duration / fps) * clip.speed;
+      // A beat past the word's last sound (or before its first).
+      const needed = seconds ?? (cut.to === null ? 0 : cut.side === "out" ? cut.to + 0.05 - sourceEnd : clip.source_in - (cut.to - 0.05));
+      const room = cut.side === "out" ? (media?.duration ?? Number.POSITIVE_INFINITY) - sourceEnd : clip.source_in;
+      const add = Math.min(needed, room);
+      if (needed > MOST_ADDED) {
+        done.push({ clip: clip.id, side: cut.side, skipped: `the word runs ${fixed(needed, 2)}s past the cut: its times are off, not the cut` });
+        continue;
+      }
+      const frames = Math.ceil((add / clip.speed) * fps);
+      if (frames <= 0) {
+        done.push({ clip: clip.id, side: cut.side, skipped: "no source left past the cut" });
+        continue;
+      }
+      const pair = new Set([clip.id, ...linkedWith(project, clip.id)]);
+      const at = cut.side === "out" ? clipEnd(clip) : clip.start;
+      const result = insertTime(project, at, frames, cut.side === "out" ? pair : new Set(), cut.side === "in" ? pair : new Set());
+      done.push({ clip: clip.id, side: cut.side, at: fixed(at / fps, 2), added_seconds: fixed(frames / fps, 2), moved: result.moved, lengthened: result.lengthened });
+    }
+    return done;
+  });
+  const added = report.reduce((sum, one) => sum + (typeof one.added_seconds === "string" ? Number(one.added_seconds) : 0), 0);
+  return text(stableStringify({ cuts: report, timeline_longer_by_seconds: fixed(added, 2) }));
+}
+
+/** The clips linked with `id` (its picture or sound), not itself. */
+function linkedWith(project: Project, id: string): string[] {
+  const link = clipOf(project, id)?.link;
+  if (link === undefined || link === null) return [];
+  return project.clips.filter((clip) => clip.link === link && clip.id !== id).map((clip) => clip.id);
+}
+
 async function tidyTracksTool({ app, projectId }: ToolCall): Promise<Content[]> {
   const [, [moved, removed]] = await app.store.update(projectId, ORIGIN, (project) => tidyTracks(project));
   return text(`moved ${moved} clip(s) down, removed ${removed} empty track(s)`);
@@ -969,11 +1055,11 @@ export function audited(app: App, project: Project, rev: number | null): Args {
 
 /**
  * The audit's flags the team would catch and an agent can fix, counted (not
- * cut_mid_word or repeated_broll, which the script or a fixed camera often
- * forces; not marks across the people, which need a clean copy).
+ * repeated_broll, which a fixed camera often forces; not marks across the
+ * people, which need a clean copy). cut_mid_word is one extend_clip.
  */
 const FIXABLE = [
-  "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
+  "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",

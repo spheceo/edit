@@ -1570,6 +1570,42 @@
     "name": "remove_time"
   },
   {
+    "description": "Lengthens footage cut inside a word (the audit's cut_mid_word) by putting time into the whole timeline at the cut (a ripple insert, the reverse of remove_time): an out point plays on to the end of the word, an in point starts before it, its linked picture or sound with it; everything after moves right (the narration, B-roll, subtitles, markers), what plays across the cut (a music bed, a B-roll shot) plays on longer with its keyframes after the cut moving on, the subtitle ending on the cut holds to the word and a flash or whoosh on the cut goes with it. With no arguments it fixes every cut_mid_word the audit lists. Returns each cut, the seconds added and the timeline's new length.",
+    "inputSchema": {
+      "properties": {
+        "clip": {
+          "description": "One clip whose cut clips a word (its picture or its sound). Default: every cut the audit flags.",
+          "type": "string"
+        },
+        "clips": {
+          "description": "Several such clips.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "seconds": {
+          "description": "How much to add (at most 1), for a clip the audit doesn't flag. Default: to the flagged word's end (or start) and a beat.",
+          "type": "number"
+        },
+        "side": {
+          "description": "out (the clip's end, default) or in (its start).",
+          "enum": [
+            "in",
+            "out"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "extend_clip"
+  },
+  {
     "description": "Shortens the long pauses inside voice-overs: each silence between two words longer than max_pause (from the recording's word times) is cut down to keep, by taking the rest out of the timeline (remove_time at that spot), so the B-roll over it and everything after follow. Never touches the silence before a voice-over clip's first word or after its last, never cuts into a word, and leaves a pause where the footage's own sound is heard over it. Run it with dry_run first on a stretch that drags. Returns each pause (timeline seconds, the words either side, its length, how much went) and the total removed.",
     "inputSchema": {
       "properties": {

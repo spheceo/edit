@@ -786,6 +786,13 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
   const run = seams.subtitles.beginRun(projectId);
   const project = live.project;
   const fps = fpsOf(project);
+  // A subtitle across either edge of the span is made again whole: replaced
+  // but not remade, it was lost (extend_clip's spans dropped the line over each edge).
+  for (const clip of project.clips) {
+    if ((clip.name ?? null)?.startsWith(SUBTITLE) !== true) continue;
+    if (clip.start < from && clipEnd(clip) > from) from = clip.start;
+    if (clip.start < to && clipEnd(clip) > to) to = clipEnd(clip);
+  }
   // The footage's own sound: audio clips of video files (not sound effects or music).
   const sound = [...seams.subtitles.footageSound(project, from, to)].sort((a, b) => a.start - b.start);
   let lines = await spokenLines(app, project, sound, from, to, true);

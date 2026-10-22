@@ -356,3 +356,19 @@ test("add_subtitles gives a short line squeezed by the next one a lead into the 
     cleanup();
   }
 });
+
+test("add_subtitles over a span makes a subtitle across its edge again whole rather than dropping it", async () => {
+  const { app, dir, store, cleanup } = fixtureHome("edges");
+  try {
+    const id = await footage(app, dir);
+    expect((await call(app, "add_subtitles", { project_id: id })).isError).toBe(false);
+    const texts = () => store.get(id)!.project.clips.filter((clip): clip is TextClip => clip.type === "text").map((clip) => clip.text).sort();
+    const whole = texts();
+    expect(whole.length).toBe(2);
+    // From the middle of the first line: it was replaced and never made again.
+    expect((await call(app, "add_subtitles", { project_id: id, start: 1.5, end: 10 })).isError).toBe(false);
+    expect(texts()).toEqual(whole);
+  } finally {
+    cleanup();
+  }
+});

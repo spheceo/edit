@@ -107,7 +107,7 @@ test("approving a version deletes the exports shared as the others, never the ap
     fs.writeFileSync(`${home}/exports.json`, JSON.stringify({ [id]: files.map(record) }));
     const versions = files.map((path, index) => ({ n: index + 1, timeline: `t${index}`, path, fps: 30, durationMs: 1000, clips: [] }));
     fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, autoFix: true, shared: { [id]: { reviewId: "r", url: "u", versions } }, notes: {} }));
-    expect(clearOthers(app, id, 3).sort()).toEqual([files[0], files[1]]);
+    expect(clearOthers(app, id, 3).sort()).toEqual(files.slice(0, 2));
     expect(files.map((file) => fs.existsSync(file))).toEqual([false, false, true]);
     // Again: nothing more to delete.
     expect(clearOthers(app, id, 3)).toEqual([]);

@@ -1414,11 +1414,13 @@ export async function takeOver(app: App, id: string): Promise<Record<string, unk
  * Moves a project only on this machine to the cloud; its media follow in the
  * background after the first push (`cloud_media.backfillSoon`).
  */
-export async function moveToCloud(app: App, id: string): Promise<Record<string, unknown>> {
+export async function moveToCloud(app: App, id: string, footage = true): Promise<Record<string, unknown>> {
   const cloudProjects = cloudOf(app);
   if (cloudProjects === null) throw new Error("cloud is off");
   if (!cloudProjects.on()) throw new Error("Cloud is off: this build has no cloud token.");
   if (app.store.get(id) === null) throw new Error("no such project");
+  // Only the project (to list and archive it from Repack), not its footage.
+  if (!footage) cloudMedia.setNoFootage(app.store.home, id, true);
   cloudProjects.adopt(id);
   cloudProjects.emit(id);
   return cloudProjects.status(id);
@@ -1565,7 +1567,10 @@ export function routes(router: Router<App>): void {
   router.post("/api/projects/{id}/cloud/open", postOpen);
   router.post("/api/projects/{id}/cloud/close", postClose);
   router.post("/api/projects/{id}/cloud/takeover", async ({ app, params }) => sorted(await refusing(409, () => takeOver(app, params.id ?? ""))));
-  router.post("/api/projects/{id}/cloud/upload", async ({ app, params }) => sorted(await refusing(400, () => moveToCloud(app, params.id ?? ""))));
+  router.post("/api/projects/{id}/cloud/upload", async (context) => {
+    const given = context.request.headers.get("content-type") === null ? {} : await body(context, "MoveToCloud");
+    return sorted(await refusing(400, () => moveToCloud(context.app, context.params.id ?? "", given.footage !== false)));
+  });
   router.post("/api/projects/{id}/cloud/backfill", async ({ app, params }) => sorted(await refusing(400, () => cloudMedia.backfill(app, params.id ?? ""))));
 }
 

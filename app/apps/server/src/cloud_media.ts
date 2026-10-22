@@ -1507,8 +1507,29 @@ const backfillSlot = new Semaphore(1);
  * shots, map renders), so whatever a cloud project uses ends up in the
  * cloud. Nothing happens for a project only on this machine.
  */
+/**
+ * Cloud projects whose footage isn't to go up (`<home>/cloud/no-footage.json`):
+ * old projects moved to the cloud only so they can be listed and archived
+ * (uploading their footage to delete it was the waste), and archived ones.
+ */
+export function noFootage(home: string): Set<string> {
+  try {
+    return new Set(JSON.parse(fs.readFileSync(join(home, "cloud", "no-footage.json"), "utf8")) as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
+export function setNoFootage(home: string, id: string, on: boolean): void {
+  const ids = noFootage(home);
+  if (on) ids.add(id);
+  else ids.delete(id);
+  fs.mkdirSync(join(home, "cloud"), { recursive: true });
+  writeAtomic(join(home, "cloud", "no-footage.json"), JSON.stringify([...ids].sort()));
+}
+
 export function backfillSoon(app: App, id: string): void {
-  if (!cloudProject(app, id) || backfills.queued.has(id)) return;
+  if (!cloudProject(app, id) || backfills.queued.has(id) || noFootage(app.store.home).has(id)) return;
   backfills.queued.add(id);
   void (async () => {
     const release = await backfillSlot.acquire();

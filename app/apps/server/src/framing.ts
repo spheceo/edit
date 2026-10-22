@@ -422,6 +422,8 @@ export function interrogationIssues(project: Project, parts: { start: number; en
   const k = project.settings.height / 1080;
   for (const person of project.people ?? []) {
     if (person.role !== "suspect") continue;
+    // A voice the transcriber only knows by its role ("Suspect", "Suspect 2") isn't anyone to introduce.
+    if (/^(suspect|man|woman|young (man|woman)|unknown|speaker[ _]?\d*)( \d+)?$/iu.test(person.name.trim())) continue;
     const words = person.name.split(/\s+/u).filter((word) => word.length > 2).map((word) => word.toLowerCase());
     const naming = project.clips.filter(
       (clip): clip is Extract<Clip, { type: "text" }> =>

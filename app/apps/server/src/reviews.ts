@@ -313,7 +313,7 @@ async function describe(app: App, project: Project, exported: string, copy: stri
   return out;
 }
 
-/** A review copy of an export:/** A review copy of an export: 720p H.264 at ~3 Mbit/s on Video Toolbox (a 30-minute edit in a minute or two), x264 without it. */
+/** A review copy of an export: 720p H.264 at ~3 Mbit/s on Video Toolbox (a 30-minute edit in a minute or two), x264 without it. */
 async function reviewCopy(source: string, dest: string): Promise<void> {
   const partial = `${dest}.partial.mp4`;
   const common = ["-v", "error", "-nostdin", "-y", "-i", source, "-vf", "scale=-2:720", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"];
@@ -407,7 +407,7 @@ export function waiting(state: State, project: string, now: number): Note[] {
 }
 
 /** The message that sets the agent on a project's notes. */
-export function fixMessage(project: Project, shared: Shared | undefined, notes: Note[], replies: Note[] = []): string {
+export function fixMessage(project: Project, shared: Shared | undefined, notes: Note[], replies: Note[] = [], stills: Record<string, string> = {}): string {
   const fps = fpsOf(project);
   const lines = notes.map((note) => {
     // What the team said under it since (a "not fixed", more detail), not the agent's own replies.
@@ -433,6 +433,7 @@ export function fixMessage(project: Project, shared: Shared | undefined, notes: 
       const { width, height } = project.settings;
       const box = asks.box;
       said.push(`the area they boxed: centre ${Math.round((box.x + box.w / 2 - 0.5) * width)}, ${Math.round((box.y + box.h / 2 - 0.5) * height)} px from the frame's centre, ${Math.round(box.w * width)}×${Math.round(box.h * height)} px`);
+      if (stills[note.id] !== undefined) said.push(`the frame with their box drawn in red: ${stills[note.id]}`);
     }
     if (asks.pin?.words) said.push(`said there: "${asks.pin.words}"`);
     if (asks.pin?.source) said.push(`footage: ${asks.pin.source}${asks.pin.sourceMs === undefined ? "" : ` @${fixed(asks.pin.sourceMs / 1000, 2)}s`}`);
@@ -635,6 +636,32 @@ export async function poll(app: App, now = Date.now()): Promise<void> {
   await fixSettled(app, now);
 }
 
+/**
+ * For each boxed note, the reviewer's frame with their box drawn on it
+ * (`<home>/reviews/boxes/<note>.jpg`): the agent sees the face or card they
+ * meant, not just numbers. From the export while it's here, else the review
+ * copy on R2. A note it can't draw goes without.
+ */
+export async function boxStills(home: string, projectId: string, shared: Shared | undefined, notes: Note[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const note of notes) {
+    const box = note.asks?.box;
+    const version = shared?.versions.find((one) => one.n === note.version);
+    if (box === undefined || note.ms === null || version === undefined) continue;
+    const dest = join(home, "reviews", "boxes", `${note.id}.jpg`);
+    try {
+      fs.mkdirSync(join(home, "reviews", "boxes"), { recursive: true });
+      const input = fs.existsSync(version.path) ? version.path : await cloud.presign(`edit/reviews/${projectId}/${version.timeline}/video.mp4`, "GET");
+      const draw = `drawbox=x=iw*${fixed(box.x, 4)}:y=ih*${fixed(box.y, 4)}:w=iw*${fixed(box.w, 4)}:h=ih*${fixed(box.h, 4)}:color=red@0.9:t=6`;
+      await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(note.ms / 1000, 3), "-i", input, "-frames:v", "1", "-vf", `${draw},scale=1280:-2`, "-q:v", "3", dest]);
+      out[note.id] = dest;
+    } catch (error) {
+      diag.warn("review", `the boxed frame for ${note.id}: ${diag.messageOf(error)}`);
+    }
+  }
+  return out;
+}
+
 /** Sets the agent on each project whose open notes have settled, one project's turn at a time. */
 export async function fixSettled(app: App, now = Date.now()): Promise<string[]> {
   const home = app.store.home;
@@ -675,7 +702,8 @@ export async function fixSettled(app: App, now = Date.now()): Promise<string[]> 
     checkpoints.set(project, structuredClone(live.project));
     try {
       const replies = Object.values(state.notes).filter((note) => note.project === project && note.parentId !== null);
-      await seams.agentPanel(app).send(project, fixMessage(live.project, state.shared[project], mine, replies), null, null);
+      const stills = await boxStills(home, project, state.shared[project], mine);
+      await seams.agentPanel(app).send(project, fixMessage(live.project, state.shared[project], mine, replies, stills), null, null);
       started.push(project);
       diag.info("review", `${live.project.name}: the agent is fixing ${mine.length} note(s)`);
     } catch (error) {

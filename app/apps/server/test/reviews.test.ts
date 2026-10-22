@@ -6,9 +6,10 @@ import { expect, test } from "bun:test";
 import type { Project } from "../src/model.ts";
 import * as fs from "node:fs";
 
-import { changes, clearOthers, fixMessage, frameNow, heard, posterSecond, read, waiting, type Note, type Version } from "../src/reviews.ts";
+import { boxStills, changes, clearOthers, fixMessage, frameNow, heard, posterSecond, read, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
-import { fixtureHome } from "./helpers/home.ts";
+import { fixtureHome, scratch } from "./helpers/home.ts";
+import * as tools from "../src/tools.ts";
 import { clip, media, project as newProject } from "./helpers/model.ts";
 
 function edit(): Project {
@@ -129,4 +130,20 @@ test("a review's poster is plain footage: not under a blur or a card", () => {
   p.clips.push(clip({ id: "blur", track: v2, start: 0, duration: 120, type: "adjustment", blur: { radius: 30 } }));
   p.clips.push(clip({ id: "card", track: v2, start: 120, duration: 60, type: "solid", name: "Cut-in 1 · card", fill: [0, 0, 0, 1] }));
   expect(posterSecond(p, 20)).toBe(6);
+});
+
+test("a boxed note comes to the agent with its frame, the box drawn on it", async () => {
+  const dir = scratch("box");
+  try {
+    const video = `${dir.dir}/export.mp4`;
+    await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=2", "-pix_fmt", "yuv420p", video]);
+    const shared = { reviewId: "r", url: "u", versions: [{ n: 1, timeline: "t", path: video, fps: 30, durationMs: 2000, clips: [] }] };
+    const note = { id: "n1", reviewId: "r", project: "p", version: 1, ms: 1000, endMs: null, text: "blur this", author: "JJ", status: "open", parentId: null, createdAt: 0, updatedAt: 0, asks: { box: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } } } satisfies Note;
+    const stills = await boxStills(dir.dir, "p", shared, [note, { ...note, id: "n2", asks: {} }]);
+    expect(Object.keys(stills)).toEqual(["n1"]);
+    expect(fs.statSync(stills.n1!).size).toBeGreaterThan(1000);
+    expect(fixMessage(edit(), shared, [note], [], stills)).toContain(`box drawn in red: ${stills.n1}`);
+  } finally {
+    dir.cleanup();
+  }
 });

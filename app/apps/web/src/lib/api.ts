@@ -235,6 +235,8 @@ export interface WriterScriptRow {
   updatedAt: number;
   updatedBy: string | null;
   project: string | null;
+  /** Sent to Edit from Writer ("Send to Edit"): when, by whom, and whether the script changed since. */
+  handoff: { at: number; by: string | null; changed: boolean } | null;
 }
 
 export interface ProjectStatus {

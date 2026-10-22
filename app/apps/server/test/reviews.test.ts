@@ -58,6 +58,9 @@ test("notes heard are kept, the new open ones name their project, and settled on
   expect(heard(state, again, new Set(["p1"]))).toEqual(["p1"]);
   expect(state.notes.n1!.fix).toBeUndefined();
   expect(waiting(state, "p1", 2000).map((note) => note.id)).toEqual(["n1"]);
+  // Deleted by its guest: gone.
+  expect(heard(state, [{ ...notes[0]!, deleted: true, updatedAt: 30 }], new Set(["p1"]))).toEqual([]);
+  expect(state.notes.n1).toBeUndefined();
 });
 
 test("the agent's message names each note with its moment, its place on the timeline and what's there", () => {

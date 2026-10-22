@@ -467,9 +467,15 @@ function FromWriter({ scripts, onChanged }: { scripts: WriterScriptRow[]; onChan
           <div key={one.id} className="flex h-12 items-center gap-3 border-t border-line px-3 first:border-t-0">
             <img src="/writer-mark.svg" alt="Writer" className="size-5 shrink-0" />
             <div className="min-w-0 flex-1 truncate font-medium">{one.title}</div>
+            {one.handoff !== null && (
+              <span className="shrink-0 rounded-md bg-sky-400/15 px-2 py-0.5 text-[11px] font-medium text-sky-300" title={one.handoff.changed ? "Changed in Writer since it was sent" : undefined}>
+                Sent to Edit{one.handoff.by ? ` by ${one.handoff.by}` : ""}
+                {one.handoff.changed ? " · changed since" : ""}
+              </span>
+            )}
             <span className="shrink-0 text-[12px] text-faint">
               {one.updatedBy ? `${one.updatedBy} · ` : ""}
-              {ago(one.updatedAt)}
+              {ago(one.handoff?.at ?? one.updatedAt)}
             </span>
             <Button size="sm" disabled={busy !== null} onClick={() => void start(one)}>
               {busy === one.id ? "Starting…" : "Edit it"}

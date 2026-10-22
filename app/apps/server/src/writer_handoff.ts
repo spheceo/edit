@@ -114,7 +114,9 @@ function imports(home: string): Record<string, string> {
 }
 
 /** Writer's scripts in the cloud, newest first (deleted ones left out), each with the Edit project made from it here. */
-export async function list(app: App): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; project: string | null }[]> {
+export async function list(
+  app: App,
+): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null }[]> {
   const made = imports(app.store.home);
   if (!cloud.enabled()) throw new Error("Writer's scripts need Edit's cloud (the relay token)");
   const rows = (await cloud.query("writer:listScripts", {})) as Record<string, unknown>[];
@@ -126,13 +128,20 @@ export async function list(app: App): Promise<{ id: string; title: string; rev: 
       rev: Number(row.rev ?? 0),
       updatedAt: Number(row.updatedAt ?? 0),
       updatedBy: typeof row.updatedBy === "string" ? row.updatedBy : null,
+      // Sent to Edit from Writer ("Send to Edit"), and whether it changed since.
+      handoff: (() => {
+        const mark = row.handoff as { at?: number; by?: string; rev?: number } | null | undefined;
+        if (mark === null || mark === undefined || typeof mark.at !== "number") return null;
+        return { at: mark.at, by: typeof mark.by === "string" ? mark.by : null, changed: Number(row.rev ?? 0) > Number(mark.rev ?? 0) };
+      })(),
       project: (() => {
         const id = made[String(row.scriptId ?? "")];
         return id !== undefined && app.store.get(id) !== null ? id : null;
       })(),
     }))
     .filter((row) => row.id !== "")
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+    // Those sent to Edit first, newest first.
+    .sort((a, b) => Number(b.handoff !== null) - Number(a.handoff !== null) || (b.handoff?.at ?? b.updatedAt) - (a.handoff?.at ?? a.updatedAt));
 }
 
 /** A Writer script's body, read from R2 (the relay presigns it). */

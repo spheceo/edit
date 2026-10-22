@@ -228,6 +228,11 @@ export function heard(state: State, given: unknown[], projects: Set<string>): st
     const id = typeof one.noteId === "string" ? one.noteId : typeof one.id === "string" ? one.id : null;
     const project = typeof one.sourceId === "string" ? one.sourceId : null;
     if (id === null || project === null) continue;
+    // Deleted by the guest who wrote it (its replies with it): gone here too.
+    if (one.deleted === true) {
+      delete state.notes[id];
+      continue;
+    }
     const anchor = (one.anchor ?? {}) as Record<string, unknown>;
     const was = state.notes[id];
     const status = one.status === "done" ? "done" : "open";

@@ -65,6 +65,17 @@ export default {
     if (url.pathname.startsWith("/v1/3dtiles/")) return withCors(await tiles(request, url, env));
     if (url.pathname === "/v1/geocode") return geocode(request, url, env);
     if (url.pathname === "/v1/outline") return outline(request, url, env);
+    // Today's transcription spend (bytes; ~14.4 MB an hour of audio), for Edit's log and the team.
+    if (url.pathname === "/v1/transcribe/usage" && request.method === "GET") {
+      if (!authorized(request, env)) return json(401, { error: "This relay needs a client token." });
+      const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
+      const client = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      const day = new Date().toISOString().slice(0, 10);
+      const budget = env.BUDGET.get(env.BUDGET.idFromName(day));
+      const used = await (await budget.fetch(new Request("https://budget/usage", { method: "POST", body: JSON.stringify({ client }) }))).json() as Record<string, number>;
+      return json(200, { day, ...used, limits: { connection: Number(env.DAILY_BYTES_PER_IP), total: Number(env.DAILY_BYTES_TOTAL), again: Number(env.DAILY_REHEAR_BYTES ?? env.DAILY_BYTES_TOTAL) } });
+    }
     if (url.pathname !== "/v1/transcribe") return json(404, { error: "not found" });
     if (request.method !== "POST") return json(405, { error: "POST audio to /v1/transcribe" });
 
@@ -368,6 +379,10 @@ export class TranscriptionBudget {
   async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname === "/maps") return this.mapSession(request);
     if (new URL(request.url).pathname === "/speech") return this.speech(request);
+    if (new URL(request.url).pathname === "/usage") {
+      const { client } = await request.json() as { client: string };
+      return json(200, { connection: await this.state.storage.get<number>(`ip:${client}`) ?? 0, total: await this.state.storage.get<number>("all") ?? 0, again: await this.state.storage.get<number>("again") ?? 0 });
+    }
     const { client, size, again } = await request.json() as { client: string; size: number; again?: boolean };
     if (!/^[a-f0-9]{64}$/.test(client) || !Number.isSafeInteger(size) || size <= 0 || size > Number(this.env.MAX_UPLOAD_BYTES)) return json(400, { error: "Invalid budget reservation." });
     const answer = await this.state.storage.transaction(async storage => {

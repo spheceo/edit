@@ -1157,10 +1157,33 @@ export function editContext(app: App, found: Live, args: Args): Args {
     }
     return row;
   });
-  const media = p.media.map(
+  // Narrowed, only the span's media and the span's issues: the comp's whole
+  // media list and audit (44k characters) left no room for a single clip.
+  const picked = Array.isArray(args.clip_ids) ? (args.clip_ids as unknown[]) : null;
+  const narrowed = from !== null || to !== null || picked !== null;
+  const used = new Set(
+    p.clips
+      .filter((clip) => (picked === null || picked.some((id) => id === clip.id)) && inside(clip.start, clipEnd(clip)))
+      .map((clip) => (clip as { media?: string }).media)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  const listedMedia = narrowed ? p.media.filter((own) => used.has(own.id)) : p.media;
+  const media = listedMedia.map(
     (own) =>
       `${own.id} ${debugKind(own)} ${fixed(own.duration, 1)}s${own.has_audio ? " sound" : ""} "${takeChars(own.name, 60)}"`,
   );
+  if (narrowed && listedMedia.length < p.media.length) media.push(`(${p.media.length - listedMedia.length} more media not used here)`);
+  const fullAudit = audited(app, p, found.rev) as Args & { issues: Args[] };
+  const audit: Args = narrowed
+    ? {
+        ...fullAudit,
+        issues: fullAudit.issues.filter((issue) => {
+          const at = [issue.at, issue.start].find((value) => typeof value === "number") as number | undefined;
+          return at === undefined || picked !== null || inside(at, at + 1);
+        }),
+        span_only: "issues in this span (and those with no time); get_edit_context with no span for all",
+      }
+    : fullAudit;
   const context: Args = {
     rev: found.rev,
     id: p.id,
@@ -1175,7 +1198,7 @@ export function editContext(app: App, found: Live, args: Args): Args {
     subtitles_in_span: subtitles,
     footage_blocks: footage,
     cut_ins: cutIns.filter((cutIn) => cutIn !== null),
-    audit: audited(app, p, found.rev),
+    audit,
     smoothing: hooks.smoothingPending(p.id),
   };
   const markerSpan: [number, number] | null =
@@ -1202,6 +1225,18 @@ export function editContext(app: App, found: Live, args: Args): Args {
       context.transcript = heard;
     }
   }
+  // The cut-ins' word times over a long span (the comp's 16 minutes of three
+  // cases) made the reply too big for the agent's client to take, so it
+  // edited blind: past the budget, the last cut-ins' words go, with a note.
+  const shown = context.cut_ins as Args[];
+  let dropped = 0;
+  for (let index = shown.length - 1; index >= 0 && byteLength(stableStringify(context)) > BUDGET; index--) {
+    if (typeof shown[index]!.words === "string") {
+      shown[index]!.words = null;
+      dropped += 1;
+    }
+  }
+  if (dropped > 0) context.cut_in_words_cut = `${dropped} cut-ins' word times left out to fit; narrow start/end (or section) to see them`;
   // Clips last, cut to what fits.
   let room = Math.max(BUDGET - byteLength(stableStringify(context)), 0);
   const kept: Json[] = [];

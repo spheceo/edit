@@ -112,6 +112,8 @@ export const NEGLECT_TERMS = [
   "butt",
   "slap",
   "strangle",
+  // "risk of injury to a child", read in the charges (the team, on Mom Leaves 5 Kids: "mute child").
+  "child",
 ] as const;
 /**
  * The listed words that are verbs: their other forms count as them too

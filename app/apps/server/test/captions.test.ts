@@ -26,6 +26,7 @@ import {
   type Adjusted,
   type Glimpse,
   type Line,
+  spelledAsTheCase,
 } from "../src/captions.ts";
 import { routes } from "../src/captions_tools.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
@@ -478,4 +479,12 @@ test("track_region, transcribe, find_in_footage and the routes answer", async ()
   } finally {
     cleanup();
   }
+});
+
+test("subtitles spell the case's names as the case does", () => {
+  // "misspelling of name": the transcriber's "Cornelius" for the script's "Corneliuz".
+  expect(spelledAsTheCase("I'm at the hospital with Cornelius", ["Corneliuz Shand", "Tabitha Frank"])).toBe("I'm at the hospital with Corneliuz");
+  // Words that aren't one letter off, or are names already, stay.
+  expect(spelledAsTheCase("Tabitha said Then they left", ["Tabitha Frank", "Thea"])).toBe("Tabitha said Then they left");
+  expect(spelledAsTheCase("Officer Sinclair", [])).toBe("Officer Sinclair");
 });

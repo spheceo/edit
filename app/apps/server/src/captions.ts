@@ -758,6 +758,32 @@ export function uncrammed(spans: [number, number][], texts: string[], doubtful: 
 }
 
 /** A line's text with the house words said in it starred out. */
+/**
+ * `text` with the case's names spelled as the case spells them: a
+ * capitalised word one letter off a name's word becomes it (the team:
+ * "misspelling of name", "Cornelius" for the script's "Corneliuz").
+ */
+export function spelledAsTheCase(text: string, names: readonly string[]): string {
+  const known = [...new Set(names.flatMap((name) => name.split(/[\s,.]+/u)).filter((word) => /^\p{Lu}[\p{L}'’-]{3,}$/u.test(word)))];
+  if (known.length === 0) return text;
+  return text.replace(/\b\p{Lu}[\p{L}'’-]{3,}\b/gu, (word, at: number) => {
+    // A capital that starts a sentence says nothing ("Then" isn't "Thea"); a short word is too often another word.
+    const before = text.slice(0, at).trimEnd();
+    if (known.includes(word) || word.length < 5 || before === "" || /[.!?…"“]$/u.test(before)) return word;
+    const near = known.find((name) => name[0] === word[0] && oneOff(word.toLowerCase(), name.toLowerCase()));
+    return near ?? word;
+  });
+}
+
+/** Whether `a` and `b` differ by one letter changed, added or dropped. */
+function oneOff(a: string, b: string): boolean {
+  if (a === b || Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+  return a.length > b.length ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+}
+
 export function starredText(line: Line, found: Found[]): string {
   const first = round(lineStart(line) * 1000.0);
   const lastWord = line.words[line.words.length - 1];
@@ -818,7 +844,8 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
   const captioned = beforeCaptions - lines.length;
   spreadColours(lines);
   const house = await seams.subtitles.houseWords(app, project, from, to, neglect);
-  const texts = lines.map((line) => starredText(line, house.found));
+  const caseNames = seams.research.knownNames(app, project);
+  const texts = lines.map((line) => spelledAsTheCase(starredText(line, house.found), caseNames));
   // Each line's words on the timeline (frames), crammed ones given time to be read.
   const timed: [number, number][] = lines.map((line) => {
     const clip = clipOf(project, line.clip);

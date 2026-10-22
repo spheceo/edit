@@ -416,6 +416,12 @@ export function fixMessage(project: Project, shared: Shared | undefined, notes: 
     }
     if (asks.pin?.words) said.push(`said there: "${asks.pin.words}"`);
     if (asks.pin?.source) said.push(`footage: ${asks.pin.source}${asks.pin.sourceMs === undefined ? "" : ` @${fixed(asks.pin.sourceMs / 1000, 2)}s`}`);
+    else if (asks.pin?.clipId) {
+      // Pinned by the clip under it on that version: its footage now, wherever the clip is.
+      const clip = project.clips.find((one) => one.id === asks.pin!.clipId);
+      const media = clip !== undefined && (clip.type === "video" || clip.type === "audio") ? project.media.find((one) => one.id === clip.media) : undefined;
+      said.push(clip === undefined ? `on clip ${asks.pin.clipId} (gone from the edit since)` : `on clip ${clip.id}${media === undefined ? "" : ` (${media.name})`}`);
+    }
     return `- [${note.id}]${where}${said.length > 0 ? ` (${said.join("; ")})` : ""}: ${note.author}: "${note.text}"${under}`;
   });
   return (

@@ -1147,7 +1147,7 @@
           "type": "string"
         },
         "times": {
-          "description": "Seconds on the timeline.",
+          "description": "Timeline SECONDS (not frames: for frames use frames).",
           "items": {
             "type": "number"
           },
@@ -1156,6 +1156,13 @@
         "volume_db": {
           "description": "Default 0.",
           "type": "number"
+        },
+        "frames": {
+          "description": "Timeline FRAMES instead of times (as apply_edit_plan and get_edit_context give them); use one or the other.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1219,7 +1226,7 @@
           "type": "number"
         },
         "times": {
-          "description": "Seconds on the timeline.",
+          "description": "Timeline SECONDS (not frames: for frames use frames).",
           "items": {
             "type": "number"
           },
@@ -1232,6 +1239,13 @@
         "volume_db": {
           "description": "A raw gain instead of loudness. Default 0.",
           "type": "number"
+        },
+        "frames": {
+          "description": "Timeline FRAMES instead of times (as apply_edit_plan and get_edit_context give them); use one or the other.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
         }
       },
       "required": [

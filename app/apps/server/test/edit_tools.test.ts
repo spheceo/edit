@@ -388,7 +388,7 @@ test("a board's shutter comes in with the plan, saved once with it", async () =>
 test("a bundled sound lands its hit on each time asked, never on A1", async () => {
   const { app, id } = setUp("tools-sfx");
   expect(await refused(app, "add_sound_effect", { sound: "boom", times: [1] })).toBe("no sound boom; use one of shutter");
-  expect(await refused(app, "add_sound_effect", { sound: "shutter" })).toBe("give times (timeline seconds) or markers (names)");
+  expect(await refused(app, "add_sound_effect", { sound: "shutter" })).toBe("give times (timeline seconds), frames (timeline frames) or markers (names)");
   expect(await said(app, "add_sound_effect", { sound: "shutter", times: [2, 0.05], volume_db: -6 })).toBe(
     "placed shutter at 2.00s, 0.05s (replacing 0 already near those times)",
   );

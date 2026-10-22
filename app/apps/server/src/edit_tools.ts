@@ -1788,13 +1788,21 @@ async function desktopWallpaper(home: string, width: number, height: number): Pr
 /** Where a sound goes: its `times` (timeline seconds) and every place each of its `markers` (names) is. */
 export function soundTimes(store: Store, id: string, args: Args): number[] {
   const times = isNull(args.times) ? [] : (serde("times: ", () => read({ vec: "f64" }, args.times)) as number[]);
+  // Frames, as a plan gives them: the comp's agent passed frame numbers as
+  // times twice, and on a long timeline most of them were still in range.
+  if (!isNull(args.frames)) {
+    const frames = serde("frames: ", () => read({ vec: "f64" }, args.frames)) as number[];
+    const project = store.get(id)?.project;
+    if (project === undefined) throw new Error("project vanished");
+    times.push(...frames.map((frame) => frame / fpsOf(project)));
+  }
   if (!isNull(args.markers)) {
     const names = strings(args.markers, "markers: ");
     const project = store.get(id)?.project;
     if (project === undefined) throw new Error("project vanished");
     times.push(...markers.times(project, names));
   }
-  if (times.length === 0) throw new Error("give times (timeline seconds) or markers (names)");
+  if (times.length === 0) throw new Error("give times (timeline seconds), frames (timeline frames) or markers (names)");
   // Frames given as seconds (a plan's frames reused here) land minutes past
   // the end: say so instead of placing sounds where nothing plays.
   const project = store.get(id)?.project;

@@ -20,6 +20,10 @@ After teaching loop 2, both FOIA edits got JJ's notes through their in-app agent
 - Cause: the agent blurred the Code Blue Cam logo across the tapes, but in a Video Player the footage moves with the desktop's camera, and the agent said a blur couldn't follow it.
 - Code: the desktop blurs every mark watermarks.ts found on the footage where a player plays it, with keyframes following the camera.
 
+## Found while applying them
+- add_subtitles over a span dropped the subtitle across each edge (replaced, not remade): both agents re-subtitled whole stretches to get them back. It now widens the span over them.
+- A line relabelled on its own (Mom & Teen's two "Female Sergeant:" lines under the officer's voice, note 022: "think this should be called 'female sergeant' and then make her pink") went back to "Officer:" on every re-run; now kept. Her pink held only while her cast entry had no role: with the officer voices under her label she became an official, and officials are never pink (Oct 17's "officer in hot pink" note). Her role is now "other" in the cast. Open: the Oct 17 rule and JJ's Oct 19 ask disagree for her.
+
 ## Not for code
 - Note 039 (Mom & Teen, 16:18): "lets use an illustrative image we create based on what hannan looks like and then just make her younger and blur her face fully": Edit makes no images.
 - Note 027's wallpaper folder (`18JpoLwuHSxvgfYsLrR9bNW0Xd815swwJ`): its blue-windows-bg is the one Edit has used since Oct 20 (`WALLPAPER_DRIVE_ID`); the agent couldn't open the link and didn't know. The folder also has a red-windows-bg.png.

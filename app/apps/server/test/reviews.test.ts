@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import type { Project } from "../src/model.ts";
 import * as fs from "node:fs";
 
-import { changes, clearOthers, fixMessage, frameNow, heard, read, waiting, type Note, type Version } from "../src/reviews.ts";
+import { changes, clearOthers, fixMessage, frameNow, heard, posterSecond, read, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { clip, media, project as newProject } from "./helpers/model.ts";
@@ -120,4 +120,13 @@ test("approving a version deletes the exports shared as the others, never the ap
   } finally {
     fixture.cleanup();
   }
+});
+
+test("a review's poster is plain footage: not under a blur or a card", () => {
+  const p = edit();
+  const [, v2] = p.tracks.map((track) => track.id);
+  // A blur over the first 4 s, a cut-in card from 4 to 6 s.
+  p.clips.push(clip({ id: "blur", track: v2, start: 0, duration: 120, type: "adjustment", blur: { radius: 30 } }));
+  p.clips.push(clip({ id: "card", track: v2, start: 120, duration: 60, type: "solid", name: "Cut-in 1 · card", fill: [0, 0, 0, 1] }));
+  expect(posterSecond(p, 20)).toBe(6);
 });

@@ -163,7 +163,7 @@ export async function share(app: App, projectId: string, path: string | null): P
   try {
     if (!fs.existsSync(copy)) await reviewCopy(chosen.path, copy);
     const seconds = chosen.frames / fps;
-    await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(Math.min(5, seconds / 2), 2), "-i", chosen.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
+    await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(live.project, seconds), 2), "-i", chosen.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
     const prefix = `edit/reviews/${projectId}/${timeline}`;
     sharing.set(projectId, "uploading");
     await cloud.uploadFile(copy, `${prefix}/video.mp4`, (done, total) => sharing.set(projectId, `uploading ${total ? Math.round((done / total) * 100) : 0}%`));
@@ -196,6 +196,26 @@ export async function share(app: App, projectId: string, path: string | null): P
   } finally {
     sharing.delete(projectId);
   }
+}
+
+/**
+ * The moment a review's poster (its link preview) is taken from: the first
+ * second of the opening, from 2 s, that's plain footage, with no blur, card,
+ * desktop, board or map on screen (Mom & Teen's at 5 s was mostly the
+ * edit's own blur). Five seconds in when there's none.
+ */
+export function posterSecond(project: Project, seconds: number): number {
+  const fps = fpsOf(project);
+  const graphic = /cut-in|desktop|board|map|card|title|file viewer|charges|disclaimer/iu;
+  for (let at = 2; at < Math.min(seconds, 90); at += 1) {
+    const frame = Math.round(at * fps);
+    const on = project.clips.filter((clip) => clip.start <= frame && frame < clipEnd(clip));
+    if (on.some((clip) => clip.type === "adjustment" && (clip.blur?.radius ?? 0) > 0)) continue;
+    if (on.some((clip) => clip.type === "solid" || graphic.test(clip.name ?? ""))) continue;
+    const footage = on.some((clip) => clip.type === "video" && project.media.find((one) => one.id === clip.media)?.kind === "video");
+    if (footage) return at;
+  }
+  return Math.min(5, seconds / 2);
 }
 
 /** A file's video and sound as ffprobe reads them, for the page's Fields. */

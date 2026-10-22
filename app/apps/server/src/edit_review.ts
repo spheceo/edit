@@ -204,7 +204,13 @@ export function textLate(project: Project, transcripts: Map<string, Transcript>)
   const grace = toI64(round(0.2 * fps));
   const lead = toI64(round(0.7 * fps));
   const issues: unknown[] = [];
+  // A text already up within half a second of its narration's start can't come
+  // any earlier: its words are the bridge's first (nothing before it to go over).
+  const narrations = project.clips.filter((clip) => clip.type === "audio" && clip.name === "Voice-over").map((clip) => clip.start);
+  const opening = toI64(round(0.5 * fps));
+  const atItsStart = (start: number) => narrations.some((from) => start >= from && start - from <= opening);
   const check = (start: number, until: number, text: string, extra: Record<string, unknown>) => {
+    if (atItsStart(start)) return;
     const telling = tellingWords(text).slice(0, 3);
     if (telling.length === 0) return;
     const said = heard.filter(([frame, word]) => frame >= start - recap && frame < until && telling.some((one) => sameWord(one, word)));

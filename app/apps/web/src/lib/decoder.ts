@@ -1,5 +1,6 @@
 import type { NetworkStats } from "./range-source";
 import { DecodedCache } from "./decoded-cache";
+import { note } from "./diagnostics";
 import { AUDIO_CHUNK_SECONDS, type DecodeRequest, type DecodeResponse, type PcmChunk } from "./decoder.protocol";
 
 const MiB = 1024 * 1024;
@@ -12,7 +13,16 @@ export function videoTime(time: number, fps: number, duration: number) {
   return Math.max(0, Math.min((Math.floor(time * rate + 0.5 + 1e-7) + 0.01) / rate, Math.max(0, duration - 1e-6)));
 }
 
-interface Flight { id: number; kind: "video" | "audio"; key: string; values: Set<string>; /** A rough request's time. */ rough?: number }
+interface Flight { id: number; kind: "video" | "audio"; key: string; values: Set<string>; /** A rough request's time. */ rough?: number; /** When it was asked (performance.now()). */ sent?: number }
+
+/**
+ * A worker silent this long with a request waiting has hung (a codec that
+ * never answers, no error either): it's replaced, and the preview's next ask
+ * goes to the fresh one instead of "Loading frame…" for good.
+ */
+const HUNG_MS = 10_000;
+/** More replacements than this in a minute: something else is wrong; say so instead. */
+const MOST_RESTARTS = 3;
 
 /** Source seconds within which a decoded picture is close enough mid-drag (a preview's keyframe interval). */
 const ROUGH_REACH = 0.55;
@@ -27,6 +37,9 @@ export class Decoder {
   private generation = 0;
   private images = new Map<string, Promise<void>>();
   private pictureSizes = new Map<string, number>();
+  /** When each worker last said anything, and when it was last replaced for hanging. */
+  private heard: Record<"video" | "audio", number> = { video: 0, audio: 0 };
+  private restarts: number[] = [];
   /** The lanes the workers were last told to keep. */
   private retained: string | undefined;
   readonly pictures = new DecodedCache<VideoFrame>(128 * MiB, (frame) => frame.close());
@@ -48,7 +61,9 @@ export class Decoder {
         return null;
       }
       const generation = this.generation;
+      this.heard[kind] = performance.now();
       worker.onmessage = ({ data }: MessageEvent<DecodeResponse>) => {
+        this.heard[kind] = performance.now();
         if (data.type === "done" && data.network) this.network[kind] = data.network;
         if (generation === this.generation) this.receive(data);
         else if (data.type === "video") data.frame.close();
@@ -75,6 +90,22 @@ export class Decoder {
     for (const [lane, flight] of this.flights) if (flight.kind === kind) this.flights.delete(lane);
     // The fresh worker hears which lanes to keep.
     this.retained = undefined;
+  }
+
+  /** Replaces a worker that has gone quiet with work waiting (see HUNG_MS). */
+  private checkHung(kind: "video" | "audio") {
+    if (!this[kind]) return;
+    const now = performance.now();
+    const waiting = [...this.flights.values()].filter((flight) => flight.kind === kind && flight.sent !== undefined);
+    if (!waiting.length) return;
+    const oldest = Math.min(...waiting.map((flight) => flight.sent!));
+    if (now - oldest < HUNG_MS || now - this.heard[kind] < HUNG_MS) return;
+    this.restarts = this.restarts.filter((at) => now - at < 60_000);
+    if (this.restarts.length >= MOST_RESTARTS) return;
+    this.restarts.push(now);
+    note("warn", "preview", `The ${kind} decoder hadn't answered for ${Math.round((now - this.heard[kind]) / 1000)} s with ${waiting.length} request(s) waiting: started a fresh one`);
+    this.retire(kind);
+    if (this.restarts.length === MOST_RESTARTS) this.failed(`The ${kind} decoder keeps hanging (${MOST_RESTARTS} times in a minute)`);
   }
 
   private receive(data: DecodeResponse) {
@@ -144,18 +175,20 @@ export class Decoder {
    * keyframe interval (a preview's is half a second) is already decoded.
    */
   requestRough(key: string, url: string, lane: string, time: number, fps: number, duration: number) {
+    this.checkHung("video");
     const at = videoTime(time, fps, duration);
     if (this.pictures.has(frameKey(key, at)) || this.nearbyPicture(key, at, ROUGH_REACH, at - ROUGH_REACH, at + 1 / fps)) return;
     const active = this.flights.get(lane);
     if (active?.key === key && active.rough !== undefined && Math.abs(active.rough - at) <= ROUGH_REACH) return;
     const id = ++this.serial;
     this.files.add(key);
-    this.flights.set(lane, { id, kind: "video", key, values: new Set(), rough: at });
+    this.flights.set(lane, { id, kind: "video", key, values: new Set(), rough: at, sent: performance.now() });
     this.stats.videoRequests++;
     this.worker("video")?.postMessage({ type: "video", id, key, url, lane, times: [at], playing: false, rough: true } satisfies DecodeRequest);
   }
 
   requestVideo(key: string, url: string, lane: string, time: number, fps: number, duration: number, direction = 1, playing = false, step = 1 / fps) {
+    this.checkHung("video");
     const wanted = frameKey(key, videoTime(time, fps, duration));
     const active = this.flights.get(lane);
     if (active?.key === key && active.values.has(wanted)) return;
@@ -180,12 +213,13 @@ export class Decoder {
     if (active?.key === key && times.every((t) => active.values.has(frameKey(key, t)))) return;
     const id = ++this.serial;
     this.files.add(key);
-    this.flights.set(lane, { id, kind: "video", key, values: new Set(times.map((t) => frameKey(key, t))) });
+    this.flights.set(lane, { id, kind: "video", key, values: new Set(times.map((t) => frameKey(key, t))), sent: performance.now() });
     this.stats.videoRequests++;
     this.worker("video")?.postMessage({ type: "video", id, key, url, lane, times, playing } satisfies DecodeRequest);
   }
 
   requestAudio(key: string, url: string, lane: string, time: number, duration: number, speed = 1) {
+    this.checkHung("audio");
     const first = Math.max(0, Math.floor(time / AUDIO_CHUNK_SECONDS));
     const active = this.flights.get(lane);
     if (active?.key === key && active.values.has(audioKey(key, first, speed))) return;
@@ -200,7 +234,7 @@ export class Decoder {
     if (!chunks.length || (active?.key === key && chunks.every((chunk) => active.values.has(audioKey(key, chunk, speed))))) return;
     const id = ++this.serial;
     this.files.add(key);
-    this.flights.set(lane, { id, kind: "audio", key, values: new Set(chunks.map((chunk) => audioKey(key, chunk, speed))) });
+    this.flights.set(lane, { id, kind: "audio", key, values: new Set(chunks.map((chunk) => audioKey(key, chunk, speed))), sent: performance.now() });
     this.stats.audioRequests++;
     this.worker("audio")?.postMessage({ type: "audio", id, key, url, lane, chunks, speed } satisfies DecodeRequest);
   }

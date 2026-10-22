@@ -160,6 +160,8 @@ export default defineConfig({
     },
   },
   build: {
+    // Function names survive minifying, so an error's stack (and React's component stack) names the code it came from.
+    rolldownOptions: { output: { minify: { compress: { keepNames: { function: true, class: true } }, mangle: { keepNames: true } } } },
     outDir: "dist",
     emptyOutDir: true,
     target: "es2022",

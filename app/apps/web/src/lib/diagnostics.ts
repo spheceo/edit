@@ -97,11 +97,31 @@ export function addContext(name: string, read: () => unknown) {
 
 let installed = false;
 
+/** An error's first lines of stack, to say where it came from. */
+function stackOf(error: unknown): string {
+  const stack = (error as { stack?: string } | null)?.stack;
+  return stack ? `\n${stack.split("\n").slice(0, 14).join("\n")}` : "";
+}
+
+/** React's own error hooks (createRoot's options): the error with the components it happened in. */
+export const reactErrors = {
+  onUncaughtError(error: unknown, info: { componentStack?: string }) {
+    note("error", "ui", `React (uncaught): ${(error as Error)?.message ?? String(error)}${stackOf(error)}\ncomponents:${(info.componentStack ?? "").split("\n").slice(0, 16).join("\n")}`);
+  },
+  onCaughtError(error: unknown, info: { componentStack?: string }) {
+    note("error", "ui", `React (caught): ${(error as Error)?.message ?? String(error)}\ncomponents:${(info.componentStack ?? "").split("\n").slice(0, 16).join("\n")}`);
+  },
+  onRecoverableError(error: unknown, info: { componentStack?: string }) {
+    note("warn", "ui", `React (recovered): ${(error as Error)?.message ?? String(error)}\ncomponents:${(info.componentStack ?? "").split("\n").slice(0, 10).join("\n")}`);
+  },
+};
+
 /** Catches this window's uncaught errors (once, at startup). */
 export function installDiagnostics() {
   if (installed) return;
   installed = true;
-  addEventListener("error", (event) => note("error", "ui", `${event.message} (${event.filename}:${event.lineno})`));
+  // With the stack: which function threw (names are kept in the build), not only the message.
+  addEventListener("error", (event) => note("error", "ui", `${event.message} (${event.filename}:${event.lineno})${stackOf(event.error)}`));
   addEventListener("unhandledrejection", (event) => {
     const reason = event.reason as { stack?: string } | undefined;
     note("error", "ui", `Unhandled: ${reason?.stack ?? String(event.reason)}`);

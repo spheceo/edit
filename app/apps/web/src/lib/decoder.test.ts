@@ -47,6 +47,27 @@ describe("worker decoder client", () => {
     expect(WorkerStub.workers[1]!.job.type).toBe("video");
   });
 
+  it("a worker that goes silent with a request waiting is replaced, and the ask goes to a fresh one", () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      const time = videoTime(2, 30, 10);
+      decoder.requestVideo("file", "/file", "v:c1", time, 30, 10);
+      const first = WorkerStub.workers[0]!;
+      // Asked again while it's quiet, but not for long: the same worker, still waiting.
+      vi.advanceTimersByTime(5_000);
+      decoder.requestVideo("file", "/file", "v:c1", time, 30, 10);
+      expect(WorkerStub.workers).toHaveLength(1);
+      // Ten seconds of nothing: it's replaced and the frame is asked of the new one.
+      vi.advanceTimersByTime(6_000);
+      decoder.requestVideo("file", "/file", "v:c1", time, 30, 10);
+      expect(first.terminate).toHaveBeenCalled();
+      expect(WorkerStub.workers).toHaveLength(2);
+      expect(WorkerStub.workers[1]!.job.type).toBe("video");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("coalesces in-flight requests, caches completed frames and batches refill work", () => {
     const time = videoTime(2, 30, 10);
     decoder.requestVideo("file", "/file", "v:c1", time, 30, 10);

@@ -1,4 +1,4 @@
-import { Archive, Check, ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -23,12 +23,10 @@ export function Home() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [cloud, setCloud] = useState<CloudList | null>(null);
   const [statuses, setStatuses] = useState<Record<string, ProjectStatus>>({});
-  const [writer, setWriter] = useState<WriterScriptRow[]>([]);
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<Kind>("all");
+  const [kind, setKind] = useState<Kind>(() => (localStorage.getItem(KIND) === "subtitled" ? "subtitled" : "edits"));
   const [style, setStyle] = useState<Style | null>(null);
-  const [subtitledOpen, setSubtitledOpen] = useState(() => localStorage.getItem(SUBTITLED_OPEN) === "1");
   const toast = useEditor((state) => state.toast);
 
   const refresh = () => {
@@ -42,11 +40,6 @@ export function Home() {
       .projectStatus()
       .then(setStatuses)
       .catch(() => {});
-    // Scripts written in Writer, ready to edit.
-    void api
-      .writerScripts()
-      .then(({ scripts }) => setWriter(scripts))
-      .catch(() => setWriter([]));
     return api
       .projects()
       .then(({ projects }) => setProjects(projects))
@@ -77,7 +70,7 @@ export function Home() {
   const cloudEditsAll = cloudOnly.filter((project) => project.summary?.subtitles !== true).length;
   // The two edits worked on last, big at the top, while nothing narrows the list
   // (from the cloud too: a Mac that has none here yet still gets them).
-  const narrowed = words !== "" || style !== null || kind !== "all";
+  const narrowed = words !== "" || style !== null;
   const newest = [
     ...edits.filter((project) => !project.problem).map((project) => ({ at: project.modified_ms, local: project as ProjectSummary | null, cloud: null as CloudProject | null })),
     ...cloudEdits.map((project) => ({ at: project.updated_ms, local: null as ProjectSummary | null, cloud: project as CloudProject | null })),
@@ -95,9 +88,9 @@ export function Home() {
     remote: remote.get(project.id),
     state: statuses[project.id],
   });
-  const toggleSubtitled = () => {
-    localStorage.setItem(SUBTITLED_OPEN, subtitledOpen ? "0" : "1");
-    setSubtitledOpen(!subtitledOpen);
+  const choose = (value: Kind) => {
+    localStorage.setItem(KIND, value);
+    setKind(value);
   };
 
   return (
@@ -154,14 +147,13 @@ export function Home() {
               <div className="flex rounded-lg bg-panel p-0.5 ring-1 ring-line">
                 {(
                   [
-                    ["all", "All", all.length + cloudOnly.length],
                     ["edits", "Edits", all.filter((project) => !project.subtitles).length + cloudEditsAll],
                     ["subtitled", "Subtitled videos", all.filter((project) => project.subtitles).length + cloudOnly.length - cloudEditsAll],
                   ] as [Kind, string, number][]
                 ).map(([value, label, total]) => (
                   <button
                     key={value}
-                    onClick={() => setKind(value)}
+                    onClick={() => choose(value)}
                     className={cx(
                       "h-7 rounded-md px-3 text-[12px] font-medium transition-colors",
                       kind === value ? "bg-active text-fg" : "text-muted hover:text-fg",
@@ -208,8 +200,6 @@ export function Home() {
               </section>
             )}
 
-            {showEdits && !narrowed && writer.some((one) => one.project === null) && <FromWriter scripts={writer.filter((one) => one.project === null).slice(0, 6)} onChanged={refresh} />}
-
             {showEdits && (rest.length > 0 || restCloud.length > 0) && (
               <section className="mt-9">
                 <SectionTitle count={rest.length + restCloud.length}>{continuing.length > 0 ? "More edits" : "Edits"}</SectionTitle>
@@ -225,26 +215,15 @@ export function Home() {
             )}
 
             {showSubtitled && subtitled.length + cloudSubtitled.length > 0 && (
-              <section className="mt-9">
-                {kind === "subtitled" ? (
-                  <SectionTitle count={subtitled.length + cloudSubtitled.length}>Subtitled videos</SectionTitle>
-                ) : (
-                  <button onClick={toggleSubtitled} className="group/title mb-3 flex items-center gap-1.5">
-                    <ChevronRight size={14} className={cx("text-muted transition-transform", subtitledOpen && "rotate-90")} />
-                    <span className="text-[12px] font-medium tracking-wide text-muted uppercase group-hover/title:text-fg">Subtitled videos</span>
-                    <span className="text-[12px] text-faint tabular">{subtitled.length + cloudSubtitled.length}</span>
-                  </button>
-                )}
-                {(subtitledOpen || kind === "subtitled") && (
-                  <div className="overflow-hidden rounded-xl border border-line">
-                    {subtitled.map((project) => (
-                      <ProjectRow key={project.id} {...cardProps(project)} />
-                    ))}
-                    {cloudSubtitled.map((project) => (
-                      <CloudRow key={project.id} project={project} />
-                    ))}
-                  </div>
-                )}
+              <section className="mt-8">
+                <div className="overflow-hidden rounded-xl border border-line">
+                  {subtitled.map((project) => (
+                    <ProjectRow key={project.id} {...cardProps(project)} />
+                  ))}
+                  {cloudSubtitled.map((project) => (
+                    <CloudRow key={project.id} project={project} />
+                  ))}
+                </div>
               </section>
             )}
 
@@ -259,10 +238,10 @@ export function Home() {
   );
 }
 
-type Kind = "all" | "edits" | "subtitled";
+type Kind = "edits" | "subtitled";
 
-/** Whether the subtitled videos' list is open (remembered on this browser). */
-const SUBTITLED_OPEN = "edit.home.subtitledOpen";
+/** Which list Home shows (remembered on this browser). */
+const KIND = "edit.home.kind";
 
 /** Each kind of video's colour (its dot on cards and filters). */
 const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#ffd166" };
@@ -464,50 +443,6 @@ interface CardProps {
   remote?: CloudProject;
   /** Its feedback and export state. */
   state?: ProjectStatus;
-}
-
-/** Writer's newest scripts not edited here yet: one click makes the project and starts its import (footage from the shared registry). */
-function FromWriter({ scripts, onChanged }: { scripts: WriterScriptRow[]; onChanged: () => void }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const toast = useEditor((state) => state.toast);
-  const start = async (one: WriterScriptRow) => {
-    setBusy(one.id);
-    try {
-      const { project } = await api.importWriter(one.id);
-      onChanged();
-      navigate(`/p/${project}`);
-    } catch (error) {
-      toast((error as Error).message, "error");
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <section className="mt-9">
-      <SectionTitle count={scripts.length}>From Writer</SectionTitle>
-      <div className="overflow-hidden rounded-xl border border-line">
-        {scripts.map((one) => (
-          <div key={one.id} className="flex h-12 items-center gap-3 border-t border-line px-3 first:border-t-0">
-            <img src="/writer-mark.svg" alt="Writer" className="size-5 shrink-0" />
-            <div className="min-w-0 flex-1 truncate font-medium">{one.title}</div>
-            {one.handoff !== null && (
-              <span className="shrink-0 rounded-md bg-sky-400/15 px-2 py-0.5 text-[11px] font-medium text-sky-300" title={one.handoff.changed ? "Changed in Writer since it was sent" : undefined}>
-                Sent to Edit{one.handoff.by ? ` by ${one.handoff.by}` : ""}
-                {one.handoff.changed ? " · changed since" : ""}
-              </span>
-            )}
-            <span className="shrink-0 text-[12px] text-faint">
-              {one.updatedBy ? `${one.updatedBy} · ` : ""}
-              {ago(one.handoff?.at ?? one.updatedAt)}
-            </span>
-            <Button size="sm" disabled={busy !== null} onClick={() => void start(one)}>
-              {busy === one.id ? "Starting…" : "Edit it"}
-            </Button>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
 }
 
 /** Chips for a project's review notes waiting and a finished edit not exported as it is now. */
@@ -876,15 +811,48 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ url: string; result?: Preview; error?: string } | null>(null);
   const toast = useEditor((state) => state.toast);
+  const [scripts, setScripts] = useState<WriterScriptRow[] | null>(null);
+  const [starting, setStarting] = useState<string | null>(null);
   const url = text.trim();
   const script = DOC.test(url);
 
-  // A fresh dialog each time.
+  // A fresh dialog each time, with Writer's scripts as they are now.
   useEffect(() => {
     if (!open) return;
     setText("");
     setPreview(null);
+    let alive = true;
+    api
+      .writerScripts()
+      .then(({ scripts }) => alive && setScripts(scripts))
+      .catch(() => alive && setScripts([]));
+    return () => {
+      alive = false;
+    };
   }, [open]);
+
+  // Writer's scripts, newest first, narrowed by what's typed.
+  const words = script ? "" : url.toLowerCase();
+  const fromWriter = (scripts ?? [])
+    .filter((one) => one.built && (words === "" || one.title.toLowerCase().includes(words)))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const startScript = async (one: WriterScriptRow) => {
+    if (one.project !== null) {
+      onClose();
+      navigate(`/p/${one.project}`);
+      return;
+    }
+    setStarting(one.id);
+    try {
+      const { project } = await api.importWriter(one.id);
+      onClose();
+      navigate(`/p/${project}`);
+    } catch (error) {
+      toast((error as Error).message, "error");
+    } finally {
+      setStarting(null);
+    }
+  };
 
   // Read the Doc as soon as a link is pasted: its title names the project.
   useEffect(() => {
@@ -927,7 +895,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} width={440}>
+    <Modal open={open} onClose={onClose} width={520}>
       <form
         className="p-2"
         onSubmit={(event) => {
@@ -938,7 +906,7 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
         <input
           autoFocus
           value={text}
-          placeholder="Project name, or paste a Google Doc script"
+          placeholder="Name a project, paste a Google Doc, or find a Writer script"
           onChange={(event) => setText(event.target.value)}
           className="h-11 w-full rounded-lg bg-transparent px-3 text-[14px] outline-none placeholder:text-faint"
         />
@@ -954,6 +922,32 @@ function NewProject({ open, onClose }: { open: boolean; onClose: () => void }) {
             ) : (
               <span className="shimmer">Reading the Doc…</span>
             )}
+          </div>
+        )}
+        {!script && fromWriter.length > 0 && (
+          <div className="border-t border-line px-1 pt-2 pb-1">
+            <div className="px-2 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">From Writer</div>
+            <div className="max-h-[264px] overflow-y-auto">
+              {fromWriter.map((one) => (
+                <button
+                  type="button"
+                  key={one.id}
+                  disabled={starting !== null}
+                  onClick={() => void startScript(one)}
+                  className="group flex h-11 w-full items-center gap-3 rounded-lg px-2 text-left transition-colors hover:bg-hover disabled:opacity-60"
+                >
+                  <img src="/writer-mark.svg" alt="" className="size-[18px] shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-[13px]">{one.title}</span>
+                  <span className="shrink-0 text-[12px] text-faint tabular group-hover:hidden">
+                    {one.durationMs > 0 ? `${shortDuration(one.durationMs / 1000)} · ` : ""}
+                    {ago(one.updatedAt)}
+                  </span>
+                  <span className="hidden shrink-0 text-[12px] font-medium text-fg group-hover:inline">
+                    {starting === one.id ? "Starting…" : one.project !== null ? "Open" : "Edit it"}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
         <div className="flex items-center gap-2 border-t border-line px-1 pt-2 pb-0.5">

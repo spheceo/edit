@@ -116,7 +116,7 @@ function imports(home: string): Record<string, string> {
 /** Writer's scripts in the cloud, newest first (deleted ones left out), each with the Edit project made from it here. */
 export async function list(
   app: App,
-): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null }[]> {
+): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null; clips: number; durationMs: number; built: boolean }[]> {
   const made = imports(app.store.home);
   if (!cloud.enabled()) throw new Error("Writer's scripts need Edit's cloud (the relay token)");
   const rows = (await cloud.query("writer:listScripts", {})) as Record<string, unknown>[];
@@ -128,6 +128,12 @@ export async function list(
       rev: Number(row.rev ?? 0),
       updatedAt: Number(row.updatedAt ?? 0),
       updatedBy: typeof row.updatedBy === "string" ? row.updatedBy : null,
+      // From Writer's library row: a built script has its footage cut into clips (a source being researched is one whole clip, or none).
+      ...(() => {
+        const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown };
+        const clips = typeof summary.clipCount === "number" ? summary.clipCount : 0;
+        return { clips, durationMs: typeof summary.durationMs === "number" ? summary.durationMs : 0, built: clips > 1 };
+      })(),
       // Sent to Edit from Writer ("Send to Edit"), and whether it changed since.
       handoff: (() => {
         const mark = row.handoff as { at?: number; by?: string; rev?: number } | null | undefined;

@@ -241,6 +241,10 @@ export interface WriterScriptRow {
   project: string | null;
   /** Sent to Edit from Writer ("Send to Edit"): when, by whom, and whether the script changed since. */
   handoff: { at: number; by: string | null; changed: boolean } | null;
+  /** Its footage clips and running time; `built` when it has clips to edit (not a source still being researched). */
+  clips: number;
+  durationMs: number;
+  built: boolean;
 }
 
 export interface ProjectStatus {

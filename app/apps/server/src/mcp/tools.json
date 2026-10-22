@@ -1368,6 +1368,31 @@
     "name": "feedback_unfixed"
   },
   {
+    "description": "Answers a question on the project's Repack review (a note whose kind is question): your answer shows under it as done, with no change to the edit.",
+    "inputSchema": {
+      "properties": {
+        "answer": {
+          "description": "The answer, short.",
+          "type": "string"
+        },
+        "note": {
+          "description": "The note's id.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "note",
+        "answer"
+      ],
+      "type": "object"
+    },
+    "name": "feedback_answer"
+  },
+  {
     "description": "Shares a whole export for review on Repack. A 720p copy where anyone with the link comments at a moment of the video, as on Frame.io; the first share makes the review, later ones a new version under the same link. Their notes come back to Edit, which sets you on them. Returns the link.",
     "inputSchema": {
       "properties": {

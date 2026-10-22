@@ -26,9 +26,11 @@ import { writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, Project } from "./model.ts";
 import { join } from "./paths.ts";
-import { clipEnd, fps as fpsOf } from "./project.ts";
+import { clipEnd, fps as fpsOf, trackOf } from "./project.ts";
+import { cachedTranscripts } from "./edit_tools.ts";
+import { native } from "./native/index.ts";
 import { onScreen } from "./review.ts";
-import { fixed } from "./rust.ts";
+import { fixed, jsonForSerde } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
@@ -59,6 +61,8 @@ export interface Note {
   parentId: string | null;
   /** Written by an app (the agent's own replies), not a reviewer. */
   fromApp?: boolean;
+  /** What the reviewer said it is (spec-v2): the kind of change, here or everywhere, a box on the frame, the footage under it, a note on the whole video. */
+  asks?: { intent?: string; scope?: string; box?: { x: number; y: number; w: number; h: number }; pin?: { clipId?: string; source?: string; sourceMs?: number; words?: string }; general?: boolean };
   createdAt: number;
   updatedAt: number;
   /** When the agent here was set on it. */
@@ -164,6 +168,11 @@ export async function share(app: App, projectId: string, path: string | null): P
     sharing.set(projectId, "uploading");
     await cloud.uploadFile(copy, `${prefix}/video.mp4`, (done, total) => sharing.set(projectId, `uploading ${total ? Math.round((done / total) * 100) : 0}%`));
     await cloud.uploadFile(poster, `${prefix}/poster.jpg`);
+    // What the page shows beside the video: its transcript, chapters, the
+    // censoring, a waveform and the files' details (Fields), and the clips
+    // under each moment (a note is pinned to its footage as it's written).
+    sharing.set(projectId, "describing it");
+    const extra = await describe(app, live.project, chosen.path, copy, prefix, clips);
     sharing.set(projectId, "publishing");
     const durationMs = Math.round((chosen.frames / fps) * 1000);
     const answer = (await cloud.mutation("reviews:publish", {
@@ -171,7 +180,7 @@ export async function share(app: App, projectId: string, path: string | null): P
       title: live.project.name,
       kind: "video",
       key: `${prefix}/video.mp4`,
-      meta: { fps, durationMs, timeline },
+      meta: { fps, durationMs, timeline, ...extra },
       posterKey: `${prefix}/poster.jpg`,
       by: app.machine,
     })) as { reviewId: string; url: string; version: number };
@@ -189,7 +198,102 @@ export async function share(app: App, projectId: string, path: string | null): P
   }
 }
 
-/** A review copy of an export: 720p H.264 at ~3 Mbit/s on Video Toolbox (a 30-minute edit in a minute or two), x264 without it. */
+/** A file's video and sound as ffprobe reads them, for the page's Fields. */
+async function probe(path: string): Promise<Record<string, unknown>> {
+  try {
+    const out = new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path]));
+    const parsed = JSON.parse(out) as { format?: Record<string, string>; streams?: Record<string, unknown>[] };
+    const video = parsed.streams?.find((one) => one.codec_type === "video");
+    const audio = parsed.streams?.find((one) => one.codec_type === "audio");
+    return {
+      ...(video === undefined ? {} : { video: { width: video.width, height: video.height, codec: video.codec_name, bitRate: Number(video.bit_rate ?? 0) || null } }),
+      ...(audio === undefined ? {} : { audio: { codec: audio.codec_name, sampleRate: Number(audio.sample_rate ?? 0) || null, channels: audio.channels } }),
+      sizeBytes: Number(parsed.format?.size ?? 0) || null,
+      bitRate: Number(parsed.format?.bit_rate ?? 0) || null,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The extra a review's version carries (spec-v2 section 3): the files'
+ * details, the edit's sections and censoring as ranges, and as R2 JSON
+ * beside the video its words (export time, with who says them) and a
+ * waveform; plus the picture clips, so a note can be pinned to its footage.
+ */
+async function describe(app: App, project: Project, exported: string, copy: string, prefix: string, clips: [string, number, number][]): Promise<Record<string, unknown>> {
+  const fps = fpsOf(project);
+  const ms = (frame: number) => Math.round((frame / fps) * 1000);
+  const out: Record<string, unknown> = { export: { renderedAt: Date.now(), ...(await probe(exported)) }, review: await probe(copy), clips };
+  // Chapters: the intro, each cut-in, the story, the outro.
+  try {
+    const parts = native().sections({ json: jsonForSerde(project) }).parts;
+    out.sections = parts.map((part) => ({ label: part.label, fromMs: ms(part.start), toMs: ms(part.end) }));
+  } catch {
+    // No script: no chapters.
+  }
+  // The censoring: muted words (on the footage's and the voice-overs' sound) and blurs.
+  const marks: { kind: string; fromMs: number; toMs: number; text?: string }[] = [];
+  for (const clip of project.clips) {
+    if (clip.type === "audio") {
+      for (const mute of clip.mutes ?? []) {
+        const from = clip.start + ((mute.from - clip.source_in) / clip.speed) * fps;
+        const to = clip.start + ((mute.to - clip.source_in) / clip.speed) * fps;
+        if (to > clip.start && from < clipEnd(clip)) marks.push({ kind: "mute", fromMs: ms(Math.max(from, clip.start)), toMs: ms(Math.min(to, clipEnd(clip))) });
+      }
+    } else if (clip.type === "adjustment" && (clip.blur?.radius ?? 0) > 0 && (clip.blur?.width ?? 0) > 0) {
+      marks.push({ kind: "blur", fromMs: ms(clip.start), toMs: ms(clipEnd(clip)), ...(clip.name ? { text: clip.name } : {}) });
+    }
+  }
+  out.marks = marks.sort((a, b) => a.fromMs - b.fromMs).slice(0, 2000);
+  // The words as heard in the export, with who says them.
+  const heard = cachedTranscripts(app, project, false);
+  const words: { t: string; s: number; e: number; who: string }[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || trackOf(project, clip.track)?.muted === true || clip.volume_db <= -40) continue;
+    const transcript = heard.get(clip.media);
+    if (transcript === undefined) continue;
+    const media = project.media.find((one) => one.id === clip.media);
+    const narrator = media?.kind === "audio";
+    const to = clip.source_in + (clip.duration / fps) * clip.speed;
+    for (const word of transcript.words) {
+      if (word.start < clip.source_in || word.end > to) continue;
+      const at = (seconds: number) => ms(clip.start + ((seconds - clip.source_in) / clip.speed) * fps);
+      const voice = word.speaker ?? "";
+      words.push({ t: word.text, s: at(word.start), e: at(word.end), who: narrator ? "Narrator" : (transcript.speakers?.[voice] ?? voice) });
+    }
+  }
+  words.sort((a, b) => a.s - b.s);
+  if (words.length > 0) {
+    const file = `${copy}.words.json`;
+    fs.writeFileSync(file, JSON.stringify({ words }));
+    await cloud.uploadFile(file, `${prefix}/transcript.json`);
+    fs.rmSync(file, { force: true });
+    out.transcriptKey = `${prefix}/transcript.json`;
+  }
+  // A waveform of the review copy's sound: its loudest sample every 100 ms, 0–100.
+  try {
+    const pcm = await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-i", copy, "-ac", "1", "-ar", "8000", "-f", "s16le", "-"]);
+    const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));
+    const peaks: number[] = [];
+    for (let at = 0; at < samples.length; at += 800) {
+      let most = 0;
+      for (let one = at; one < Math.min(at + 800, samples.length); one++) most = Math.max(most, Math.abs(samples[one]!));
+      peaks.push(Math.round((most / 32768) * 100));
+    }
+    const file = `${copy}.peaks.json`;
+    fs.writeFileSync(file, JSON.stringify({ everyMs: 100, peaks }));
+    await cloud.uploadFile(file, `${prefix}/waveform.json`);
+    fs.rmSync(file, { force: true });
+    out.waveformKey = `${prefix}/waveform.json`;
+  } catch (error) {
+    diag.warn("review", `the waveform: ${diag.messageOf(error)}`);
+  }
+  return out;
+}
+
+/** A review copy of an export:/** A review copy of an export: 720p H.264 at ~3 Mbit/s on Video Toolbox (a 30-minute edit in a minute or two), x264 without it. */
 async function reviewCopy(source: string, dest: string): Promise<void> {
   const partial = `${dest}.partial.mp4`;
   const common = ["-v", "error", "-nostdin", "-y", "-i", source, "-vf", "scale=-2:720", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"];
@@ -253,6 +357,13 @@ export function heard(state: State, given: unknown[], projects: Set<string>): st
       status,
       parentId: typeof one.parentId === "string" ? one.parentId : null,
       fromApp: one.fromApp === true,
+      asks: {
+        ...(typeof one.intent === "string" ? { intent: one.intent } : {}),
+        ...(typeof one.scope === "string" ? { scope: one.scope } : {}),
+        ...(typeof one.box === "object" && one.box !== null ? { box: one.box as NonNullable<Note["asks"]>["box"] } : {}),
+        ...(typeof one.pin === "object" && one.pin !== null ? { pin: one.pin as NonNullable<Note["asks"]>["pin"] } : {}),
+        ...(one.general === true ? { general: true } : {}),
+      },
       createdAt: typeof one.createdAt === "number" ? one.createdAt : Date.now(),
       updatedAt: typeof one.updatedAt === "number" ? one.updatedAt : Date.now(),
     };
@@ -269,6 +380,8 @@ export function heard(state: State, given: unknown[], projects: Set<string>): st
 export function waiting(state: State, project: string, now: number): Note[] {
   return Object.values(state.notes)
     .filter((note) => note.project === project && note.parentId === null && note.status === "open" && note.unfixed === undefined && note.fix === undefined)
+    // FYI and praise are for reading, not fixing.
+    .filter((note) => note.asks?.intent !== "fyi")
     .filter((note) => note.claimed === undefined || now - note.claimed > RETRY_MS)
     .sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0) || a.createdAt - b.createdAt);
 }
@@ -291,12 +404,24 @@ export function fixMessage(project: Project, shared: Shared | undefined, notes: 
       const shown = onScreen(project, frame).slice(0, 4).join("; ");
       where = ` at ${clock(note.ms / 1000)}${note.endMs === null ? "" : `–${clock(note.endMs / 1000)}`} of v${note.version} (timeline ${fixed(frame / fps, 2)}s${end === null ? "" : `–${fixed(end / fps, 2)}s`}, frame ${frame}; there: ${shown})`;
     }
-    return `- [${note.id}]${where}: ${note.author}: "${note.text}"${under}`;
+    const asks = note.asks ?? {};
+    const said: string[] = [];
+    if (asks.general === true) said.push("about the whole video, no one moment");
+    if (asks.intent !== undefined) said.push(`kind: ${asks.intent}`);
+    if (asks.scope === "everywhere") said.push("everywhere it happens, not only here");
+    if (asks.box !== undefined) {
+      const { width, height } = project.settings;
+      const box = asks.box;
+      said.push(`the area they boxed: centre ${Math.round((box.x + box.w / 2 - 0.5) * width)}, ${Math.round((box.y + box.h / 2 - 0.5) * height)} px from the frame's centre, ${Math.round(box.w * width)}×${Math.round(box.h * height)} px`);
+    }
+    if (asks.pin?.words) said.push(`said there: "${asks.pin.words}"`);
+    if (asks.pin?.source) said.push(`footage: ${asks.pin.source}${asks.pin.sourceMs === undefined ? "" : ` @${fixed(asks.pin.sourceMs / 1000, 2)}s`}`);
+    return `- [${note.id}]${where}${said.length > 0 ? ` (${said.join("; ")})` : ""}: ${note.author}: "${note.text}"${under}`;
   });
   return (
     `(Edit, automatically) New feedback on this edit's review${shared === undefined ? "" : ` (${shared.url})`}: ${notes.length} note${notes.length === 1 ? "" : "s"}. ` +
     "Load the feedback skill and fix them across the video, the team's words being what they want. " +
-    'After each note, call feedback_done {note: "<its id>", summary: "<one line: what you changed>"}; for one you can\'t or shouldn\'t do, feedback_unfixed {note, reason}. ' +
+    'After each note, call feedback_done {note: "<its id>", summary: "<one line: what you changed>"}; for one you can\'t or shouldn\'t do, feedback_unfixed {note, reason}; a question (kind: question) gets feedback_answer {note, answer} and no change. A kind names the change wanted (a blur, a mute, music…): keep to it; "everywhere" means across the whole video. ' +
     "Then mute_house_words once if subtitles changed, and finish with a line per note.\n" +
     lines.join("\n")
   );
@@ -632,6 +757,25 @@ registerTool("feedback_unfixed", async ({ app, args, projectId }: ToolCall) => {
   if (note === null || reason === null) throw new Error("note (its id) and reason are required");
   await unfixed(app, projectId, note, reason);
   return text(`left ${note} open, saying why on the review`);
+});
+
+registerTool("feedback_answer", async ({ app, args, projectId }: ToolCall) => {
+  const note = str(args.note);
+  const answer = str(args.answer);
+  if (note === null || answer === null) throw new Error("note (its id) and answer are required");
+  const home = app.store.home;
+  const own = read(home).notes[note];
+  if (own === undefined || own.project !== projectId) throw new Error(`no note ${note} on this project's review`);
+  const latest = read(home).shared[projectId]?.versions.reduce((most, one) => Math.max(most, one.n), 0) ?? own.version;
+  await cloud.mutation("reviews:resolve", { noteId: note, version: latest + 1, changedRanges: [], fixSummary: `Answer: ${answer}` });
+  update(home, (saved) => {
+    const found = saved.notes[note];
+    if (found !== undefined) {
+      found.status = "done";
+      found.fix = { clips: [], ranges: [], summary: `Answer: ${answer}`, at: Date.now() };
+    }
+  });
+  return text(`answered ${note} on the review`);
 });
 
 registerTool("share_for_review", async ({ app, args, projectId }: ToolCall) => {

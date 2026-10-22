@@ -78,6 +78,12 @@ test("the agent's message names each note with its moment, its place on the time
   // What the team said under it comes with it.
   const reply: Note = { ...note, id: "r1", parentId: "n1", text: "the second song too", createdAt: 2 };
   expect(fixMessage(p, shared, [note], [reply])).toContain('JJ replied: "the second song too"');
+  // What the reviewer marked the note as comes with it.
+  const marked: Note = { ...note, asks: { intent: "blur", scope: "everywhere", box: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, pin: { source: "drive:abc", sourceMs: 12500, words: "come out here" } } };
+  const said = fixMessage(p, shared, [marked]);
+  expect(said).toContain("kind: blur; everywhere it happens");
+  expect(said).toContain("centre 0, 0 px from the frame's centre, 960×540 px");
+  expect(said).toContain('said there: "come out here"; footage: drive:abc @12.50s');
 });
 
 test("a fix's changes are the clips added, removed or changed, not the ones a ripple only moved along", () => {

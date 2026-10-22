@@ -71,11 +71,20 @@ export function Home() {
   const all = projects ?? [];
   const edits = all.filter((project) => !project.subtitles && kept(project.name, project.style));
   const subtitled = all.filter((project) => project.subtitles && kept(project.name, project.style));
-  const cloudEdits = cloudOnly.filter((project) => kept(project.name, project.summary?.style as Style | undefined));
-  // The two edits worked on last, big at the top, while nothing narrows the list.
+  const cloudKept = cloudOnly.filter((project) => kept(project.name, project.summary?.style as Style | undefined));
+  const cloudSubtitled = cloudKept.filter((project) => project.summary?.subtitles === true);
+  const cloudEdits = cloudKept.filter((project) => project.summary?.subtitles !== true);
+  const cloudEditsAll = cloudOnly.filter((project) => project.summary?.subtitles !== true).length;
+  // The two edits worked on last, big at the top, while nothing narrows the list
+  // (from the cloud too: a Mac that has none here yet still gets them).
   const narrowed = words !== "" || style !== null || kind !== "all";
-  const continuing = narrowed ? [] : edits.filter((project) => !project.problem).slice(0, 2);
-  const rest = edits.filter((project) => !continuing.includes(project));
+  const newest = [
+    ...edits.filter((project) => !project.problem).map((project) => ({ at: project.modified_ms, local: project as ProjectSummary | null, cloud: null as CloudProject | null })),
+    ...cloudEdits.map((project) => ({ at: project.updated_ms, local: null as ProjectSummary | null, cloud: project as CloudProject | null })),
+  ].sort((a, b) => b.at - a.at);
+  const continuing = narrowed ? [] : newest.slice(0, 2);
+  const rest = edits.filter((project) => !continuing.some((one) => one.local === project));
+  const restCloud = cloudEdits.filter((project) => !continuing.some((one) => one.cloud === project));
   const showEdits = kind !== "subtitled";
   const showSubtitled = kind !== "edits";
   const cardProps = (project: ProjectSummary) => ({
@@ -146,8 +155,8 @@ export function Home() {
                 {(
                   [
                     ["all", "All", all.length + cloudOnly.length],
-                    ["edits", "Edits", all.filter((project) => !project.subtitles).length + cloudOnly.length],
-                    ["subtitled", "Subtitled videos", all.filter((project) => project.subtitles).length],
+                    ["edits", "Edits", all.filter((project) => !project.subtitles).length + cloudEditsAll],
+                    ["subtitled", "Subtitled videos", all.filter((project) => project.subtitles).length + cloudOnly.length - cloudEditsAll],
                   ] as [Kind, string, number][]
                 ).map(([value, label, total]) => (
                   <button
@@ -188,38 +197,42 @@ export function Home() {
               <section className="mt-8">
                 <SectionTitle>Continue</SectionTitle>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {continuing.map((project, index) => (
-                    <ProjectCard key={project.id} index={index} big {...cardProps(project)} />
-                  ))}
+                  {continuing.map((one, index) =>
+                    one.local !== null ? (
+                      <ProjectCard key={one.local.id} index={index} big {...cardProps(one.local)} />
+                    ) : (
+                      <CloudCard key={one.cloud!.id} project={one.cloud!} index={index} big onChanged={refresh} />
+                    ),
+                  )}
                 </div>
               </section>
             )}
 
             {showEdits && !narrowed && writer.some((one) => one.project === null) && <FromWriter scripts={writer.filter((one) => one.project === null).slice(0, 6)} onChanged={refresh} />}
 
-            {showEdits && (rest.length > 0 || cloudEdits.length > 0) && (
+            {showEdits && (rest.length > 0 || restCloud.length > 0) && (
               <section className="mt-9">
-                <SectionTitle count={rest.length + cloudEdits.length}>{continuing.length > 0 ? "More edits" : "Edits"}</SectionTitle>
+                <SectionTitle count={rest.length + restCloud.length}>{continuing.length > 0 ? "More edits" : "Edits"}</SectionTitle>
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4">
                   {rest.map((project, index) => (
                     <ProjectCard key={project.id} index={index} {...cardProps(project)} />
                   ))}
-                  {cloudEdits.map((project, index) => (
+                  {restCloud.map((project, index) => (
                     <CloudCard key={project.id} project={project} index={rest.length + index} onChanged={refresh} />
                   ))}
                 </div>
               </section>
             )}
 
-            {showSubtitled && subtitled.length > 0 && (
+            {showSubtitled && subtitled.length + cloudSubtitled.length > 0 && (
               <section className="mt-9">
                 {kind === "subtitled" ? (
-                  <SectionTitle count={subtitled.length}>Subtitled videos</SectionTitle>
+                  <SectionTitle count={subtitled.length + cloudSubtitled.length}>Subtitled videos</SectionTitle>
                 ) : (
                   <button onClick={toggleSubtitled} className="group/title mb-3 flex items-center gap-1.5">
                     <ChevronRight size={14} className={cx("text-muted transition-transform", subtitledOpen && "rotate-90")} />
                     <span className="text-[12px] font-medium tracking-wide text-muted uppercase group-hover/title:text-fg">Subtitled videos</span>
-                    <span className="text-[12px] text-faint tabular">{subtitled.length}</span>
+                    <span className="text-[12px] text-faint tabular">{subtitled.length + cloudSubtitled.length}</span>
                   </button>
                 )}
                 {(subtitledOpen || kind === "subtitled") && (
@@ -227,12 +240,15 @@ export function Home() {
                     {subtitled.map((project) => (
                       <ProjectRow key={project.id} {...cardProps(project)} />
                     ))}
+                    {cloudSubtitled.map((project) => (
+                      <CloudRow key={project.id} project={project} />
+                    ))}
                   </div>
                 )}
               </section>
             )}
 
-            {(showEdits ? edits.length + cloudEdits.length : 0) + (showSubtitled ? subtitled.length : 0) === 0 && (
+            {(showEdits ? edits.length + cloudEdits.length : 0) + (showSubtitled ? subtitled.length + cloudSubtitled.length : 0) === 0 && (
               <p className="mt-16 text-center text-muted">Nothing matches{words ? ` “${query.trim()}”` : ""}.</p>
             )}
           </>
@@ -274,6 +290,15 @@ function coverFrame(project: ProjectSummary): number | null {
 function wash(style: Style): string {
   const colour = STYLE_COLOURS[style] ?? STYLE_COLOURS.bodycam;
   return `radial-gradient(120% 90% at 20% 0%, ${colour}33 0%, transparent 60%), radial-gradient(90% 80% at 100% 100%, ${colour}1f 0%, transparent 55%), #0b0b0b`;
+}
+
+/** A quiet mark at the end of a card's line: it isn't on this Mac yet (opening it downloads it). */
+function NotHere({ title }: { title: string }) {
+  return (
+    <span title={title} className="ml-auto flex shrink-0 items-center gap-1 pl-2 text-white/55">
+      <CloudDownload size={13} />
+    </span>
+  );
 }
 
 interface NoticeProps {
@@ -424,9 +449,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
           text: mostlyMissing ? "Footage missing" : `${missing} ${missing === 1 ? "file" : "files"} missing`,
           title: `${missing} of ${used} footage files the edit plays aren't on this Mac (deleted, or on a drive that isn't plugged in)`,
         }
-      : mostlyRemote
-        ? { tone: "info", text: "In the cloud", title: "Its footage downloads when you open it" }
-        : null;
+      : null;
   return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, notice, open, menu, driveMenu, nameInput, dialogs };
 }
 
@@ -596,6 +619,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index
                   {styleLabel} · {shortDuration(seconds)} · {ago(project.modified_ms)}
                 </span>
               )}
+              {card.mostlyRemote && <NotHere title="Its footage downloads when you open it" />}
             </div>
           </div>
           {(card.cloudNews || card.drive || card.notice || (state && (state.archived !== null || state.approved !== null || state.feedback > 0 || (state.complete && !state.exported)))) && (
@@ -739,8 +763,31 @@ function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSumm
   );
 }
 
+/** A subtitled video only in the cloud: a row as the others, opening it downloads it. */
+function CloudRow({ project }: { project: CloudProject }) {
+  const summary = project.summary ?? {};
+  const seconds = summary.durationFrames && summary.fps ? summary.durationFrames / summary.fps : null;
+  return (
+    <div onClick={() => navigate(`/p/${project.id}`)} className="group flex h-14 cursor-pointer items-center gap-3 border-t border-line px-3 first:border-t-0 hover:bg-hover">
+      <div className="relative h-9 w-16 shrink-0 overflow-hidden rounded-md" style={{ background: wash((summary.style as Style | undefined) ?? "bodycam") }}>
+        <img src={`/api/cloud/projects/${project.id}/cover.jpg?v=${project.updated_ms}`} loading="lazy" alt="" className="absolute inset-0 size-full object-cover" onError={(event) => event.currentTarget.remove()} />
+      </div>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="truncate font-medium">{project.name}</div>
+        {project.holder && <CloudBadge editor={project.holder} />}
+      </div>
+      <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{seconds !== null ? shortDuration(seconds) : ""}</span>
+      <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.updated_ms)}</span>
+      <span className="flex w-24 shrink-0 items-center justify-end gap-1 text-[12px] text-faint" title="Not on this Mac yet: opening it downloads it">
+        <CloudDownload size={13} /> Not here
+      </span>
+      <span className="size-7 shrink-0" />
+    </div>
+  );
+}
+
 /** A project only in the cloud: opening it downloads it to this Mac. */
-function CloudCard({ project, index, onChanged }: { project: CloudProject; index: number; onChanged: () => void }) {
+function CloudCard({ project, index, onChanged, big = false }: { project: CloudProject; index: number; onChanged: () => void; big?: boolean }) {
   const [deleting, setDeleting] = useState(false);
   const toast = useEditor((state) => state.toast);
   const summary = project.summary ?? {};
@@ -764,19 +811,30 @@ function CloudCard({ project, index, onChanged }: { project: CloudProject; index
         className="group cursor-pointer"
         onClick={() => navigate(`/p/${project.id}`)}
       >
-        <div className="relative aspect-video overflow-hidden rounded-xl border border-line bg-panel transition-[border-color] duration-200 group-hover:border-line-strong">
+        <div className={cx("relative aspect-video overflow-hidden rounded-xl border border-line bg-panel transition-[border-color] duration-200 group-hover:border-line-strong", big && "md:aspect-[16/8]")}>
           <div className="absolute inset-0" style={{ background: wash((summary.style as Style | undefined) ?? "bodycam") }} />
+          <img
+            src={`/api/cloud/projects/${project.id}/cover.jpg?v=${project.updated_ms}`}
+            loading="lazy"
+            alt=""
+            className="absolute inset-0 size-full object-cover opacity-0 transition-[opacity,transform] duration-500 group-hover:scale-[1.03]"
+            onLoad={(event) => event.currentTarget.classList.remove("opacity-0")}
+            onError={(event) => event.currentTarget.remove()}
+          />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[78%] bg-gradient-to-t from-black via-black/85 via-45% to-transparent" />
-          <div className="absolute inset-x-0 bottom-0 p-3.5">
-            <div className="line-clamp-2 text-[14px] leading-snug font-semibold tracking-[-0.01em] text-white drop-shadow">{project.name}</div>
-            <div className="mt-1 truncate text-[12px] text-white/70 tabular">
-              {[style, seconds !== null ? shortDuration(seconds) : null, `${ago(project.updated_ms)} by ${project.updated_by}`].filter(Boolean).join(" · ")}
+          <div className={cx("absolute inset-x-0 bottom-0", big ? "p-5" : "p-3.5")}>
+            <div className={cx("line-clamp-2 font-semibold tracking-[-0.01em] text-white drop-shadow", big ? "text-[19px] leading-tight" : "text-[14px] leading-snug")}>{project.name}</div>
+            <div className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-white/70 tabular">
+              <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[(summary.style as Style | undefined) ?? "bodycam"] ?? STYLE_COLOURS.bodycam }} />
+              <span className="truncate">{[style, seconds !== null ? shortDuration(seconds) : null, `${ago(project.updated_ms)} by ${project.updated_by}`].filter(Boolean).join(" · ")}</span>
+              <NotHere title="Not on this Mac yet: opening it downloads it" />
             </div>
           </div>
-          <div className="absolute top-2.5 left-2.5 flex gap-1">
-            <Notice tone="info" text="In the cloud" title="Not on this Mac yet: opening it downloads it" />
-            {project.holder && <CloudBadge editor={project.holder} />}
-          </div>
+          {project.holder && (
+            <div className="absolute top-2.5 left-2.5 flex gap-1">
+              <CloudBadge editor={project.holder} />
+            </div>
+          )}
           <button
             title="More"
             onClick={(event) => {

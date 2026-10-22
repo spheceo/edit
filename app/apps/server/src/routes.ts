@@ -28,6 +28,7 @@ import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { missingMedia, UpdateError } from "./store.ts";
 import * as archive from "./archive.ts";
+import * as covers from "./covers.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
@@ -53,6 +54,7 @@ export function buildRouter(): Router<App> {
   reviews.routes(router);
   writerHandoff.routes(router);
   archive.routes(router);
+  covers.routes(router);
   seams.voice.routes(router);
   router
     .post("/api/diagnostics/client", clientLog)
@@ -813,7 +815,10 @@ async function coverJpeg(context: Context): Promise<Response> {
   const dir = join(app.store.cacheDir(), "covers");
   const out = join(dir, `${live.project.id}-${version}-${frame}-${width}.jpg`);
   const headers = { "content-type": "image/jpeg", "cache-control": "private, max-age=86400" };
-  if (isFile(out)) return new Response(Bun.file(out), { headers });
+  if (isFile(out)) {
+    covers.share(app, live.project.id, version, width, out);
+    return new Response(Bun.file(out), { headers });
+  }
   let images;
   try {
     images = await withProjectAsync(
@@ -860,6 +865,7 @@ async function coverJpeg(context: Context): Promise<Response> {
     diag.warn("http", `cover of ${live.project.id} at ${frame}: ${diag.messageOf(error)}; the frame as it is`);
     return new Response(image.data, { headers: { "content-type": "image/png", "cache-control": "private, max-age=86400" } });
   }
+  covers.share(app, live.project.id, version, width, out);
   return new Response(Bun.file(out), { headers });
 }
 

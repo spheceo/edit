@@ -1,4 +1,4 @@
-import { Check, CircleAlert, Cloud, CloudUpload, Copy, Download, ExternalLink, FolderOpen, RotateCw, Trash2 } from "lucide-react";
+import { Check, CircleAlert, Cloud, CloudUpload, Copy, Download, ExternalLink, FolderOpen, RotateCw, Share2, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -254,7 +254,32 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
       live = false;
     };
   }, [projectId, finished]);
+  const [sharing, setSharing] = useState<string | null>(null);
   const shown = (list ?? []).filter((one) => !one.missing);
+  // Shares an export to a Repack link (a review copy, uploaded); the link is copied once it's up.
+  const share = async (path: string) => {
+    setSharing("Starting");
+    try {
+      const answer = await api.shareReview(projectId, path);
+      let url = answer.url ?? null;
+      while (url === null) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const review = await api.review(projectId);
+        if (review.sharing !== null) {
+          setSharing(review.sharing);
+          continue;
+        }
+        url = review.review?.url ?? null;
+        if (url === null) throw new Error("the share didn't finish (see the log)");
+      }
+      await navigator.clipboard?.writeText(url).catch(() => {});
+      toast(`Shared for review: ${url} (link copied)`, "info");
+    } catch (error) {
+      toast((error as Error).message, "error");
+    } finally {
+      setSharing(null);
+    }
+  };
   if (shown.length === 0) return null;
   return (
     <div className="border-t border-line px-6 py-3">
@@ -277,6 +302,17 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
             <Button size="sm" variant="ghost" title={`Show on ${machine}`} onClick={() => void api.revealExport(one.path).catch((error) => toast((error as Error).message, "error"))}>
               <FolderOpen size={13} />
             </Button>
+            {one.whole && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={sharing !== null}
+                title={sharing ?? "Share for review: a Repack link anyone can comment on; the notes come back to the agent"}
+                onClick={() => void share(one.path)}
+              >
+                <Share2 size={13} />
+              </Button>
+            )}
             {confirming === one.path ? (
               <Button
                 size="sm"

@@ -27,6 +27,7 @@ import { uploadFiles } from "../lib/upload";
 import type { Clip, Project, Track } from "../lib/types";
 import { clipMenu, timelineMenu, trackMenu } from "../lib/menus";
 import { openMenu } from "./ContextMenu";
+import { FeedbackBands } from "./FeedbackBands";
 import { GRAPH_HEADER, GraphEditor } from "./GraphEditor";
 import { clipTitle } from "./Inspector";
 import { ELEMENT_MIME, MEDIA_MIME } from "./MediaPanel";
@@ -857,6 +858,7 @@ export function Timeline() {
               requestDraw();
             }}
           />
+          <FeedbackBands projectId={project.id} fps={fps} />
         </div>
         {view.graph && <GraphEditor />}
       </div>

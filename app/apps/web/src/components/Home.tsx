@@ -1,8 +1,8 @@
-import { ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Lock, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
+import { ChevronRight, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
-import { api } from "../lib/api";
+import { api, type ProjectStatus } from "../lib/api";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
@@ -22,6 +22,7 @@ const FORMAT = { width: 1920, height: 1080, fps: 30 };
 export function Home() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [cloud, setCloud] = useState<CloudList | null>(null);
+  const [statuses, setStatuses] = useState<Record<string, ProjectStatus>>({});
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>("all");
@@ -35,6 +36,11 @@ export function Home() {
       .projects()
       .then(setCloud)
       .catch(() => setCloud(null));
+    // Feedback waiting, and finished edits not exported as they are now.
+    void api
+      .projectStatus()
+      .then(setStatuses)
+      .catch(() => {});
     return api
       .projects()
       .then(({ projects }) => setProjects(projects))
@@ -72,6 +78,7 @@ export function Home() {
     cloudOn: Boolean(cloud?.on),
     status: cloud?.statuses?.[project.id],
     remote: remote.get(project.id),
+    state: statuses[project.id],
   });
   const toggleSubtitled = () => {
     localStorage.setItem(SUBTITLED_OPEN, subtitledOpen ? "0" : "1");
@@ -424,10 +431,36 @@ interface CardProps {
   status?: CloudStatus;
   /** It as listed in the cloud. */
   remote?: CloudProject;
+  /** Its feedback and export state. */
+  state?: ProjectStatus;
+}
+
+/** Chips for a project's review notes waiting and a finished edit not exported as it is now. */
+function StateChips({ state }: { state?: ProjectStatus }) {
+  if (state === undefined) return null;
+  return (
+    <>
+      {state.feedback > 0 && (
+        <span
+          title={`${state.feedback} open note${state.feedback === 1 ? "" : "s"} on its Repack review`}
+          className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-sky-300"
+        >
+          <MessageSquare size={12} />
+          {state.feedback} {state.feedback === 1 ? "note" : "notes"}
+        </span>
+      )}
+      {state.complete && !state.exported && (
+        <span title="The edit is finished, but what it is now hasn't been exported" className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-amber-300">
+          <FileVideo size={12} />
+          Not exported
+        </span>
+      )}
+    </>
+  );
 }
 
 /** An edit: a frame of it with the title over a black gradient, as a streaming service's tile. */
-function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big = false }: CardProps & { index: number; big?: boolean }) {
+function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index, big = false }: CardProps & { index: number; big?: boolean }) {
   const card = useProject(project, onChanged, cloudOn, status, remote);
   const seconds = project.duration_frames / project.fps;
   const styleLabel = STYLES.find((option) => option.value === project.style)?.label ?? "Bodycam";
@@ -479,9 +512,10 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big =
               )}
             </div>
           </div>
-          {(card.cloudNews || card.drive || card.notice) && (
+          {(card.cloudNews || card.drive || card.notice || (state && (state.feedback > 0 || (state.complete && !state.exported)))) && (
             <div className="absolute top-2.5 left-2.5 flex gap-1">
               {card.notice && <Notice {...card.notice} />}
+              <StateChips state={state} />
               {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
               {card.drive && (
                 <button
@@ -509,7 +543,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, index, big =
 }
 
 /** A subtitled video: a row in the list (they're mostly opened for their Drive link). */
-function ProjectRow({ project, onChanged, cloudOn, status, remote }: CardProps) {
+function ProjectRow({ project, onChanged, cloudOn, status, remote, state }: CardProps) {
   const card = useProject(project, onChanged, cloudOn, status, remote);
   const seconds = project.duration_frames / project.fps;
   const picture = !project.problem && coverFrame(project) !== null;
@@ -526,6 +560,7 @@ function ProjectRow({ project, onChanged, cloudOn, status, remote }: CardProps) 
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {card.nameInput ?? <div className="truncate font-medium">{project.name}</div>}
           {card.notice && <Notice {...card.notice} />}
+          <StateChips state={state} />
           {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
         </div>
         <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{shortDuration(seconds)}</span>

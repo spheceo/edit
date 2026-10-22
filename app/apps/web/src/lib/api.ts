@@ -214,7 +214,44 @@ export const api = {
   resumeScript: (id: string, recut = false) => request<{ job: ScriptJob | null }>("POST", `/api/projects/${id}/script/job${recut ? "?recut=true" : ""}`),
   /** Where Edit keeps big media files (the media drive, set in code or with `edit media use`). */
   mediaDrive: () => request<MediaDrive>("GET", "/api/media-drive"),
+  /** Per project: open review notes, a finished edit, and whether what it is now is exported. */
+  projectStatus: () => request<Record<string, ProjectStatus>>("GET", "/api/projects/status"),
+  /** The project's Repack review: its link, its notes with their frames, the agent's fixes. */
+  review: (id: string) => request<Review>("GET", `/api/projects/${id}/review`),
+  /** Shares a whole export for review (the newest without `path`); `started` while it uploads. */
+  shareReview: (id: string, path?: string) =>
+    request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/review/share`, path === undefined ? {} : { path }),
+  setAutoFix: (on: boolean) => request<{ autoFix: boolean }>("POST", "/api/reviews/settings", { autoFix: on }),
 };
+
+export interface ProjectStatus {
+  feedback: number;
+  complete: boolean;
+  exported: boolean;
+}
+
+/** A note on a project's Repack review, as Edit has it. */
+export interface ReviewNote {
+  id: string;
+  version: number;
+  author: string;
+  text: string;
+  status: "open" | "done";
+  reply_to: string | null;
+  /** Its moment on the timeline now (null: no moment). */
+  frame: number | null;
+  /** What the agent changed for it: its words, and the stretches (frames) on the timeline now. */
+  fix: { summary: string; ranges: [number, number][] } | null;
+  unfixed: string | null;
+  fixing: boolean;
+}
+
+export interface Review {
+  sharing: string | null;
+  autoFix: boolean;
+  review: { url: string; versions: { n: number; path: string }[] } | null;
+  notes: ReviewNote[];
+}
 
 /** The media drive: an optional folder (usually on an external drive) for downloads, uploads and exports. */
 export interface MediaDrive {

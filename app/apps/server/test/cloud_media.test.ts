@@ -588,3 +588,31 @@ test("a Drive file is copied in the cloud when the relay can, with its progress;
     cleanup();
   }
 });
+
+test("an excerpt takes its words from its recording's shared transcript instead of being heard again", async () => {
+  // Writer heard the whole recording (youtube:OVITtAlFG6M) Edit's way and shared it beside the source.
+  const whole = {
+    model: "scribe_v2",
+    language: "eng",
+    words: [
+      { text: "Before.", start: 9.0, end: 9.5, speaker: "speaker_0" },
+      { text: "Your", start: 10.2, end: 10.4, speaker: "speaker_1" },
+      { text: "honor.", start: 10.45, end: 10.9, speaker: "speaker_1" },
+      { text: "After.", start: 20.5, end: 21.0, speaker: "speaker_0" },
+    ],
+    speakers: { speaker_0: "Judge", speaker_1: "Scott Williams (Sergeant)" },
+    keyterms: ["Scott Williams"],
+  };
+  mock.cloud.put("edit/analysis/youtube/OVITtAlFG6M/transcript.json", JSON.stringify(whole));
+  const dir = fs.mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/whole-`);
+  const target = `${dir}/cache/transcript.json`;
+  expect(await cloudMedia.wholeTranscript("youtube:OVITtAlFG6M#10000-20000", target, dir)).toBe(true);
+  const made = JSON.parse(fs.readFileSync(target, "utf8"));
+  expect(made.words.map((word: { text: string; start: number }) => [word.text, Math.round(word.start * 100) / 100])).toEqual([["Your", 0.2], ["honor.", 0.45]]);
+  expect([made.speakers.speaker_1, made.keyterms]).toEqual(["Scott Williams (Sergeant)", ["Scott Williams"]]);
+  // Already heard here, a whole file, or nothing shared: left alone.
+  expect(await cloudMedia.wholeTranscript("youtube:OVITtAlFG6M#10000-20000", target, dir)).toBe(false);
+  expect(await cloudMedia.wholeTranscript("youtube:OVITtAlFG6M", `${dir}/b.json`, dir)).toBe(false);
+  expect(await cloudMedia.wholeTranscript("drive:1AbCdEfGhIjKlMnOpQrStUvWxYz0123#0-5000", `${dir}/c.json`, dir)).toBe(false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

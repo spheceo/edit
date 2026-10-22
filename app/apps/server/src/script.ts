@@ -1834,6 +1834,16 @@ async function transcripts(app: App, project: Project): Promise<Map<string, Hear
   const media = project.media.filter((item) => used.has(item.id) && item.has_audio);
   // Listening for the case's names (names.ts: the script's narration and any research).
   const names = await seams.research.caseNames(app, project);
+  // A recording Writer already heard (its words shared in the cloud) isn't heard again.
+  for (const item of media) {
+    if (item.cloud === undefined || item.cloud === null) continue;
+    try {
+      const scratch = seams.cloudMedia.scratchDir(app.store.cacheDir());
+      if (await seams.cloudMedia.wholeTranscript(item.cloud.source, app.media.paths(item.path).transcript, scratch)) app.media.transcribed(item.path);
+    } catch (error) {
+      diag.warn("script", `${item.name}: its recording's shared transcript: ${diag.messageOf(error)}`);
+    }
+  }
   for (const item of media) app.media.transcribe(item.path, true, names);
   const out = new Map<string, Heard>();
   const started = timing.now();

@@ -369,6 +369,15 @@ export class Processor {
     return this.transcribe(source, hasAudio);
   }
 
+  /** Takes a transcript written into the cache by hand (a shared one) as done. */
+  transcribed(source: string): void {
+    if (!isFile(this.paths(source).transcript)) return;
+    this.set(source, (status) => {
+      status.transcript = "ready";
+      delete status.transcript_error;
+    });
+  }
+
   /**
    * Transcribes `source` through the relay unless already done or running,
    * listening for `keyterms` (the case's names, names.ts). `again` hears a

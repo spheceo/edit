@@ -70,6 +70,7 @@ import * as seams from "./seams.ts";
 import type { Excerpt, Made, Original, Originals } from "./seams.ts";
 import * as tools from "./tools.ts";
 import { stableStringify } from "./stable.ts";
+import { serialize, type Transcript } from "./transcribe.ts";
 
 /**
  * A media's cloud proxy: footage's from the addon (the preview's picture and
@@ -1813,7 +1814,44 @@ export async function shareAnalysis(app: App, id: string): Promise<number> {
   return sent;
 }
 
-/** When each source's shared analysis was last looked for. */
+/**
+ * An excerpt's words from its whole recording's shared transcript, so it
+ * isn't heard again: Writer hears each recording it imports, whole, Edit's
+ * way, and puts the words at the recording's own analysis
+ * (`edit/analysis/<drive|youtube>/<id>/transcript.json`); an Edit excerpt
+ * (`<kind>:<id>#<start ms>-<end ms>`) takes the words inside it, its own
+ * clock starting at its start. Writes `target` and says whether it did.
+ */
+export async function wholeTranscript(source: string, target: string, scratch: string): Promise<boolean> {
+  if (!cloud.enabled() || fs.existsSync(target)) return false;
+  const found = /^(drive|youtube):([^#]+)#(\d+)-(\d+)$/u.exec(source);
+  if (found === null) return false;
+  const [, kind, id, from, to] = found;
+  const prefix = analysisPrefix(`${kind}:${id}`);
+  if (prefix === null) return false;
+  const copy = join(scratch, `whole-${kind}-${id}-${process.pid}.json`);
+  let whole: Transcript;
+  try {
+    await cloud.download(`${prefix}transcript.json`, copy);
+    whole = JSON.parse(fs.readFileSync(copy, "utf8")) as Transcript;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(cloud.partialPath(copy), { force: true });
+  }
+  if (!Array.isArray(whole.words)) return false;
+  const [start, end] = [Number(from) / 1000, Number(to) / 1000];
+  const words = whole.words
+    .filter((word) => word.end > start && word.start < end)
+    .map((word) => ({ ...word, start: Math.max(word.start - start, 0), end: Math.max(word.end - start, 0) }));
+  fs.mkdirSync(parent(target) ?? ".", { recursive: true });
+  writeAtomic(target, serialize({ ...whole, words }));
+  diag.info("cloud", `${source}: ${words.length} words from its recording's shared transcript (not heard again)`);
+  return true;
+}
+
+/** When each source's shared analysis was last looked for. *//** When each source's shared analysis was last looked for. */
 const checked = new Map<string, number>();
 
 /**

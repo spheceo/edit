@@ -29,7 +29,7 @@ interface Shot {
   y: number | null;
   scale: number | null;
   smooth: boolean | null;
-  /** A picture's label in its Photo Viewer: "actual image" or "illustrative image". */
+  /** A picture's label in its Photo Viewer: "illustrative image" ("actual image" is dropped: only a picture filling the screen has it). */
   label: string | null;
   /** A Windows screen for this shot's span: {windows, exit, open} as the desktop op's. */
   desktop: Record<string, unknown> | null;

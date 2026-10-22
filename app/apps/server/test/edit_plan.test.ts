@@ -745,3 +745,13 @@ test("a courtroom video's subtitle whose words aren't white is flagged", () => {
   p.style = "courtroom";
   expect(kinds(p, "subtitle_coloured").map((issue) => issue.text)).toEqual(["Yes, sir."]);
 });
+
+test("an actual-image label over a window is flagged; over a full-frame picture it isn't", () => {
+  const p = project("plan");
+  apply(p, [
+    { op: "add", clip: { type: "solid", track: "new", name: "Desktop · Photo Viewer", start: 0, duration: 90, fill: [0.2, 0.2, 0.2, 1] } },
+    { op: "add", clip: { type: "text", track: "new", name: "Tag", start: 10, duration: 60, text: "(actual image)", style: { size: 30 } } },
+    { op: "add", clip: { type: "text", track: "new", name: "Tag 2", start: 200, duration: 60, text: "[ACTUAL PHOTO]", style: { size: 30 } } },
+  ]);
+  expect(kinds(p, "actual_label_in_window").map((issue) => issue.text)).toEqual(["(actual image)"]);
+});

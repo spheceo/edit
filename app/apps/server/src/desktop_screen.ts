@@ -182,7 +182,10 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
     y: share("y"),
     width,
     z: num(given.z) ?? index,
-    label: label === null || trim(label) === "" ? null : trim(label),
+    // "actual image" is only for a picture filling the screen, never one in a
+    // window (the team: "remove actual image text on all these photo / video
+    // viewers on the windows screen"); other labels ("illustrative image") stay.
+    label: label === null || trim(label) === "" || /\bactual\b/iu.test(label) ? null : trim(label),
   };
 }
 
@@ -460,6 +463,14 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     stops.push({ from, to, pose });
     free = to;
   }
+  // One zoom while it travels between windows: it pans, never zooming in on
+  // one and back out for the next (the team: "I don't feel it looks too good
+  // that we zoom in and then zoom out again"). The widest the windows need.
+  const travel = stops.slice(player !== null ? 1 : 0);
+  if (travel.length > 1) {
+    const z = Math.min(...travel.map((stop) => stop.pose.z));
+    for (const stop of travel) stop.pose = { ...stop.pose, z };
+  }
   const drift = (frame: number) => 1 + (DRIFT * frame) / fps;
   if (exits) {
     const target = into(player!, nextMedia, spec.next!.zoom);
@@ -616,9 +627,13 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       const [cx, cy] = window.content;
       let y = cy + NOTE_PAD * k;
       const px = NOTE_SIZE * k;
+      // Never two lines at once ("this text doesn't appear at the same time in
+      // the Notepad"): each waits for the one before to finish typing.
+      let typedBy = 0;
       window.notes.forEach((note, line) => {
         const given = window.spec.line_at?.[line];
-        const at = Math.max(given ?? window.spec.at + Math.round((14 + 40 * line) * s), window.spec.at + Math.round(8 * s));
+        const at = Math.max(given ?? window.spec.at + Math.round((14 + 40 * line) * s), window.spec.at + Math.round(8 * s), typedBy);
+        typedBy = at + Math.min((window.spec.lines[line] ?? "").length, 36) * Math.max(Math.round(s), 1) + Math.round(6 * s);
         const textFrom = Math.min(rel(at), total - 2);
         const centre: [number, number] = [cx + NOTE_PAD * k + note.w / 2, y + note.h / 2];
         add({

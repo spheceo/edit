@@ -3,6 +3,7 @@ description: Subtitles in an edit (after the intro): watching, wording, speakers
 ---
 
 - THE SUBTITLES (Repack's, after the intro; the intro keeps its own speaker captions): watch_footage first (who says each line, what's background), then add_subtitles (everything after the intro by default; neglect: true in a child abuse or neglect case). The narrator, radio and background talk get none; house words are muted and starred (read the mutes back). White words, no glow, in a pure black box, the speaker's name above in their colour ("Officer:"), no animation, LOCKED BOTTOM MIDDLE whatever is under them, a face included ("They must be locked to the bottom middle"; audit subtitle_moved, place_subtitles puts them back).
+- NAMES as the script spells them, never the transcriber's guess ("misspelling of name": "Cornelius" where the script says "Corneliuz").
 - TIMING: each line on screen while it's said, never past the cut it's said before (subtitle_past_cut). A line that repeats ("I'm hungry" … "I'm hungry again"), a short line or one that reads oddly is where the transcriber slips: check it against read_transcript's word times and the words around it, fix it when the context settles it, else keep the transcriber's best reading (never "[unclear]") and list it with its time for the user.
 - EVERY LINE SAID after the intro gets one: review_edit's uncovered speech says where not; fix the cause and add_subtitles over that stretch. Footage changed later (a range realigned): add_subtitles again (it keeps hand-moved positions).
 {{> names-first}}

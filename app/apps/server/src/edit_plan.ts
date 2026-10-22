@@ -1627,6 +1627,16 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       if (size < SMALLEST_TEXT) issues.push({ kind: "small_text", clip: text.id, start: text.start, size: round(size), at_least: SMALLEST_TEXT, text: text.text.slice(0, 40) });
     }
   }
+  // "actual image" / "actual footage" only on a picture filling the screen,
+  // never over one in a window (the team: "remove actual image text on all
+  // these photo / video viewers on the windows screen (throughout the entire
+  // project)").
+  const windows = project.clips.filter((clip) => visible(clip.track) && /Photo Viewer|Video Player|File Viewer/u.test(clip.name ?? ""));
+  for (const text of project.clips) {
+    if (text.type !== "text" || !visible(text.track) || !/\bactual (image|footage|photo|video)\b/iu.test(text.text)) continue;
+    const over = windows.find((window) => window.start < clipEnd(text) && text.start < clipEnd(window));
+    if (over !== undefined) issues.push({ kind: "actual_label_in_window", clip: text.id, start: text.start, text: text.text.slice(0, 40), window: over.name, fix: "delete it: the label is only for a picture filling the screen" });
+  }
   // The house's subtitles have white words (who says them is the name label's
   // colour), and a courtroom video's, with no label, never change by speaker
   // (the team: "for courtroom videos we have the text for subtitles be white

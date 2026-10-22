@@ -138,7 +138,8 @@ test("a_picture_picked_as_a_cut_in_shot_goes_on_a_desktop_the_footage_zooms_out_
   const photo = p.clips.find((own) => own.name === "Cut-in 1 · Desktop · Photo Viewer · news.jpg");
   // It opens once the slow zoom out of the footage is mostly done (55 frames in), never huge over the footage.
   expect(photo?.start).toBe(505);
-  expect(p.clips.some((own) => own.type === "text" && own.text === "(actual image)")).toBe(true);
+  // "actual image" isn't for a picture in a window: the label is dropped.
+  expect(p.clips.some((own) => own.type === "text" && /actual image/u.test(own.text))).toBe(false);
   expect(bareStills(p)).toEqual([]);
   // One zoom across the cut-in: the second shot starts where the first ended, never back at 1.
   const [one, two] = ["shot 1", "shot 2"].map((name) => p.clips.find((own) => own.name === `Cut-in 1 · B-roll: ${name}`) as VideoClip);

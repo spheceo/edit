@@ -389,6 +389,26 @@ test("an_evidence_board_marks_each_photo_and_lands_a_shutter_on_it", () => {
   expect(needs([{ op: "evidence_board", shutters: false }])).toEqual({ shutter: false, desktops: [] });
 });
 
+test("a desktop whose first note is said as it starts opens on its windows, not zooming out of the footage first", () => {
+  // Mom & Teen's notes came up 1–3 s after their words while the camera zoomed out of the player.
+  const p = project("plan");
+  p.media.push(media({ id: "room", name: "room.mp4", path: "/room.mp4", kind: "video", duration: 600, width: 1280, height: 720, has_audio: true }));
+  p.media.push(media({ id: "next", name: "next.mp4", path: "/next.mp4", kind: "video", duration: 600, width: 1280, height: 720, has_audio: true }));
+  p.media.push(media({ id: "wall", name: "wall", path: "/wall.png", kind: "image", duration: 30, width: 1344, height: 752 }));
+  p.clips.push(clip({ id: "foot", track: "v1", start: 0, duration: 300, type: "video", media: "room", source_in: 10 }));
+  p.clips.push(clip({ id: "after", track: "v1", start: 600, duration: 300, type: "video", media: "next", source_in: 50 }));
+  const op = { op: "desktop", start: 300, end: 600, windows: [{ app: "notepad", at: 300, lines: ["Mom lay on the mattress"], line_at: [306] }] };
+  const frames: Record<string, string> = {};
+  needs([op], p).screens!.forEach(([app, w, h], index) => {
+    p.media.push(media({ id: `f${index}`, name: app, path: `/${app}${index}.png`, kind: "image", duration: 30, width: w, height: h }));
+    frames[frameKey(app, w, h)] = `f${index}`;
+  });
+  const result = applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } }).results[0] as Record<string, unknown>;
+  expect((result.camera as Record<string, unknown>).opens_from_footage).toBe(false);
+  expect(result.lines_at).toEqual([308]);
+  expect(p.clips.some((own) => own.name?.startsWith("Desktop · Video Player") === true)).toBe(false);
+});
+
 test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_player_on_the_next_footage", () => {
   const p = project("plan");
   p.media.push(media({ id: "room", name: "room.mp4", path: "/room.mp4", kind: "video", duration: 600, width: 1280, height: 720, has_audio: true }));
@@ -413,18 +433,28 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_pla
     p.media.push(media({ id: `f${index}`, name: app, path: `/${app}${index}.png`, kind: "image", duration: 30, width: w, height: h }));
     frames[frameKey(app, w, h)] = `f${index}`;
   });
-  const applied = applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } });
+  // The tape before carries an uploader's logo top right (watermarks.ts found it).
+  const logos = { room: [{ text: "Code Blue Cam logo", box: [0.88, 0.02, 0.97, 0.12] as [number, number, number, number] }] };
+  const applied = applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames, marks: logos } });
   const result = applied.results[0] as Record<string, unknown>;
   const camera = result.camera as Record<string, unknown>;
   expect([camera.opens_from_footage, camera.ends_in_footage]).toEqual([true, true]);
+  // It's blurred where the player plays that tape, moving with the camera; the next tape has none.
+  const blurs = p.clips.filter((own) => own.name === "Desktop · Video Player · mark blur");
+  expect(blurs.length).toBe(1);
+  const blur = blurs[0]!;
+  expect(blur.type === "adjustment" && blur.blur?.shape).toBe("rect");
+  expect(new Set((blur.keyframes?.["blur.x"] ?? []).map((key) => Math.round(key.value))).size).toBeGreaterThan(2);
+  expect((blur.keyframes?.["blur.width"] ?? []).length).toBeGreaterThan(0);
   // One Video Player: the footage before (10 s + 300 frames = 20 s), then, while it's off screen, the footage after, ending where it starts (50 s).
   const before = p.clips.find((own) => own.name === "Desktop · Video Player · room.mp4") as VideoClip;
   const after = p.clips.find((own) => own.name === "Desktop · Video Player · next.mp4") as VideoClip;
   expect(Math.round(before.source_in)).toBe(20);
   expect(Math.abs(after.source_in + ((after.duration / 30) * after.speed) - 50)).toBeLessThan(0.05);
   expect(after.start + after.duration).toBe(600);
-  // The photo waits for the zoom out of the footage, then pops in.
-  expect(p.clips.find((own) => own.name === "Desktop · Photo Viewer · mug")!.start).toBeGreaterThanOrEqual(355);
+  // The photo waits for the zoom out of the footage (hurried for it: it's due a second in), then pops in.
+  expect(p.clips.find((own) => own.name === "Desktop · Photo Viewer · mug")!.start).toBeGreaterThanOrEqual(330);
+  expect(p.clips.find((own) => own.name === "Desktop · Photo Viewer · mug")!.start).toBeLessThan(340);
   expect(result.lines_at).toEqual([400, 450]);
   // The notes type on, and the windows and lines are marked for their sounds.
   const notes = p.clips.filter((own) => own.name?.startsWith("Desktop · Notepad note") === true) as TextClip[];

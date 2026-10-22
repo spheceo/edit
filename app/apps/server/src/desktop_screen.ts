@@ -25,6 +25,7 @@
 import { clipFrom } from "./clips.ts";
 import * as markers from "./markers.ts";
 import type { Media, Project } from "./model.ts";
+import type { Mark } from "./watermarks.ts";
 import { native } from "./native/index.ts";
 import { addTrack, clipEnd, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import { round, trim } from "./rust.ts";
@@ -69,6 +70,8 @@ export interface WindowSpec {
   lines: string[];
   line_at: number[] | null;
   at: number;
+  /** Whether `at` or line_at was given (or found from the words): a time to keep, not a default. */
+  timed?: boolean;
   x: number | null;
   y: number | null;
   width: number | null;
@@ -109,6 +112,8 @@ export interface Laid {
 export interface Art {
   wallpaper: string;
   frames: Record<string, string>;
+  /** Another channel's marks found on footage (watermarks.ts), by media id: blurred in a Video Player too. */
+  marks?: Record<string, Mark[]>;
 }
 
 /** A frame's key: its kind and its pixel size as drawn (FRAME_SCALE times its size on the desktop). */
@@ -172,6 +177,7 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
     lines,
     line_at: lineAt as number[] | null,
     at,
+    timed: int(given.at) !== null || lineAt !== null,
     x: share("x"),
     y: share("y"),
     width,
@@ -345,6 +351,8 @@ const HOLD = 10;
 const ZOOM_OUT = 60;
 const GLIDE = 54;
 const ZOOM_IN = 54;
+/** The zoom out at its quickest (it hurries for a note said as the screen starts). */
+const QUICKEST_ZOOM_OUT = 30;
 /** A window pops in over this many frames, fading over this many. */
 const POP = 16;
 const FADE = 12;
@@ -360,12 +368,24 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   const k = Math.min(W / 1920, H / 1080);
   const total = spec.end - spec.start;
   const rel = (frame: number) => frame - spec.start;
-  const openIndex = spec.open?.index ?? null;
   // No window opens while the camera is still zoomed into the opening Video
   // Player: it would pop up huge over the footage. They wait until the zoom
-  // out is mostly done.
+  // out is mostly done, so when the narration names the first note as the
+  // screen starts, the zoom out is quicker, or there's none and the screen
+  // opens on its windows (Mom & Teen's notes came 1–3 s after their words:
+  // "we need to have it visually in front of us a second before").
+  let zoomOut = Math.round(ZOOM_OUT * s);
+  if (spec.open !== null) {
+    const timed = spec.windows.filter((window, index) => index !== spec.open!.index && window.timed === true);
+    const room = (windows: WindowSpec[]) => Math.min(...windows.map((window) => Math.min(window.at, ...(window.line_at ?? [])))) - spec.start - Math.round(HOLD * s);
+    const quickest = Math.round(QUICKEST_ZOOM_OUT * s);
+    // Notes are read: they never wait. A picture waits for the quickest zoom out.
+    if (room(timed.filter((window) => window.app === "notepad")) < Math.round(quickest * 0.75)) spec = withoutOpen(spec);
+    else zoomOut = Math.min(zoomOut, Math.max(Math.round(room(timed) / 0.75), quickest));
+  }
+  const openIndex = spec.open?.index ?? null;
   if (openIndex !== null) {
-    const earliest = spec.start + Math.round((HOLD + ZOOM_OUT * 0.75) * s);
+    const earliest = spec.start + Math.round(HOLD * s + zoomOut * 0.75);
     spec.windows.forEach((window, index) => {
       if (index !== openIndex && window.at < earliest) window.at = Math.min(earliest, spec.end - 1);
     });
@@ -412,7 +432,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   if (player !== null) {
     stops.push({ from: 0, to: 0, pose: into(player, openMedia, spec.open!.zoom) });
     const hold = Math.round(HOLD * s);
-    const out = Math.min(Math.round(ZOOM_OUT * s), Math.max(total - hold - 1, 1));
+    const out = Math.min(zoomOut, Math.max(total - hold - 1, 1));
     // Out to the player with room round it and the first window beside it.
     const first = others[0];
     const wide = first === undefined ? framing([player]) : framing([player, first]);
@@ -473,7 +493,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       const oy = Math.max(0, Math.min(player!.cy + player!.h / 2, pose.y + hh) - Math.max(player!.cy - player!.h / 2, pose.y - hh));
       return (ox * oy) / (player!.w * player!.h);
     };
-    const from = Math.min(Math.round((HOLD + ZOOM_OUT) * s), exitAt - 1);
+    const from = Math.min(Math.round(HOLD * s) + zoomOut, exitAt - 1);
     let best: [number, number] | null = null;
     let run: number | null = null;
     let least: [number, number] = [from, Infinity];
@@ -661,6 +681,33 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
         ...(piece.media.kind === "image" ? { frame: { width: 0, shadow: 0 } } : {}),
         ...keysFor(x + w / 2, y + h / 2, scaleFor(piece.media, width), index, piece.from, piece.until),
       });
+      // The uploader's logo on the footage, blurred where it plays in the
+      // window and moving with the camera (Mom Leaves 5 Kids' Code Blue Cam
+      // logo was blurred on the tapes but showed in the desktop's player).
+      const height = (width * piece.media.height) / Math.max(piece.media.width, 1);
+      for (const mark of art.marks?.[piece.media.id] ?? []) {
+        const [x0, y0, x1, y1] = mark.box;
+        if ((x1 - x0) * (y1 - y0) >= 0.25) continue;
+        const left = Math.max(x + w / 2 + (x0 - 0.5) * width, x);
+        const right = Math.min(x + w / 2 + (x1 - 0.5) * width, x + w);
+        const top = Math.max(y + h / 2 + (y0 - 0.5) * height, y);
+        const bottom = Math.min(y + h / 2 + (y1 - 0.5) * height, y + h);
+        if (right - left < 2 || bottom - top < 2) continue;
+        const pad = 1.2;
+        const keyed = keysFor((left + right) / 2, (top + bottom) / 2, 1, index, piece.from, piece.until);
+        const keys = keyed.keyframes as Record<string, Args[]>;
+        // The window's scale keys as a size: values and handle speeds times it.
+        const times = (handle: unknown, size: number) => ({ ...(handle as Args), speed: ((handle as Args).speed as number) * size });
+        const sized = (size: number) => (keys.scale ?? []).map((key) => ({ ...key, value: (key.value as number) * size, handle_in: times(key.handle_in, size), handle_out: times(key.handle_out, size) }));
+        add({
+          type: "adjustment",
+          name: `${spec.prefix}${name} · mark blur`,
+          start: spec.start + piece.from,
+          duration: piece.until - piece.from,
+          blur: { radius: 18 * k, x: keyed.transform.x, y: keyed.transform.y, width: (right - left) * pad * keyed.transform.scale, height: (bottom - top) * pad * keyed.transform.scale, feather: 4 * k, shape: "rect" },
+          keyframes: { "blur.x": keys.x, "blur.y": keys.y, "blur.width": sized((right - left) * pad), "blur.height": sized((bottom - top) * pad), ...(keys.opacity !== undefined ? { opacity: keys.opacity } : {}) },
+        });
+      }
     }
     if (window.spec.label !== null) {
       const text = window.spec.label.startsWith("(") ? window.spec.label : `(${window.spec.label})`;
@@ -754,6 +801,14 @@ export function openFrom(spec: Spec, footage: Footage | null, next: Footage | nu
     label: null,
   };
   return { ...spec, windows: [window, ...spec.windows], open: { index: 0, zoom: footage.zoom }, next };
+}
+
+/** A spec with no opening Video Player: the one openFrom added goes, the agent's own stays a window. */
+function withoutOpen(spec: Spec): Spec {
+  const index = spec.open?.index ?? null;
+  if (index === null) return spec;
+  const added = spec.windows[index]?.z === -1;
+  return { ...spec, windows: added ? spec.windows.filter((_, own) => own !== index) : spec.windows, open: null, next: null };
 }
 
 /** A Hermite segment's value at `frame` between keys `a` and `b` (each with its speed, value units a frame). */

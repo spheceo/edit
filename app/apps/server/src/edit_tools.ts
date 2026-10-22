@@ -1834,7 +1834,13 @@ export async function planAssets(app: App, project: Project, operations: Json[])
     needs.screens.forEach(([kind, w, h], index) => {
       keyed[screenFrameKey(kind, w, h)] = frameIds[index]!;
     });
-    assets.screen = { wallpaper: wall, frames: keyed };
+    // Footage marks found so far, to blur where a Video Player plays the footage.
+    const marks: Record<string, watermarks.Mark[]> = {};
+    for (const media of project.media) {
+      const found = media.kind === "video" ? watermarks.cachedMarks(media) : null;
+      if (found !== null && found.length > 0) marks[media.id] = found;
+    }
+    assets.screen = { wallpaper: wall, frames: keyed, marks };
   }
   return [assets, made];
 }

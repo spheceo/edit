@@ -363,8 +363,9 @@ function assign(people: Map<string, Person>, fps: number): Map<string, string> {
   // An extra colour: apart from everyone's taken near in time.
   const extraFree = (colour: string, person: Person) =>
     taken.every(([other, holder]) => !near(person, holder) || speakers.apart(colour, other) >= APART);
-  const shades = (role: string): readonly string[] => {
-    const own = speakers.palette(role, victim);
+  const isWoman = (key: string, person: Person) => speakers.woman(key, ...person.shown.keys(), ...person.names.keys());
+  const shades = (role: string, woman = false): readonly string[] => {
+    const own = speakers.palette(role, victim, woman);
     return own === speakers.OTHER ? [] : own;
   };
   // First everyone who keeps their own colour (most lines first), so a
@@ -373,8 +374,11 @@ function assign(people: Map<string, Person>, fps: number): Map<string, string> {
     const role = roles.get(person)!;
     const own = sorted(person.colours).sort((a, b) => b[1] - a[1])[0]?.[0];
     if (own === undefined) continue;
-    const ofRole = shades(role).includes(own) || (shades(role).length === 0 && !whitish(own) && extraFree(own, person));
-    if (ofRole && speakers.allowed(role, own) && shadeFree(own, person)) {
+    const woman = isWoman(key, person);
+    const mine = shades(role, woman);
+    // Her own pink stays, whichever pink it is.
+    const ofRole = mine.includes(own) || (woman && speakers.allowed(role, own, true) && speakers.pinkish(own) && extraFree(own, person)) || (mine.length === 0 && !whitish(own) && extraFree(own, person));
+    if (ofRole && speakers.allowed(role, own, woman) && shadeFree(own, person)) {
       taken.push([own, person]);
       out.set(key, own);
     }
@@ -382,10 +386,11 @@ function assign(people: Map<string, Person>, fps: number): Map<string, string> {
   for (const [key, person] of order) {
     if (out.has(key)) continue;
     const role = roles.get(person)!;
+    const woman = isWoman(key, person);
     const colour =
-      shades(role).find((shade) => shadeFree(shade, person)) ??
-      [...speakers.OTHER, ...speakers.SPARE].find((extra) => speakers.allowed(role, extra) && extraFree(extra, person)) ??
-      furthestInTime(person, taken, shades(role).length > 0 ? shades(role) : speakers.OTHER);
+      shades(role, woman).find((shade) => shadeFree(shade, person)) ??
+      [...speakers.OTHER, ...speakers.SPARE].find((extra) => speakers.allowed(role, extra, woman) && extraFree(extra, person)) ??
+      furthestInTime(person, taken, shades(role, woman).length > 0 ? shades(role, woman) : speakers.OTHER);
     taken.push([colour, person]);
     out.set(key, colour);
   }

@@ -547,6 +547,8 @@ export interface Person {
   role: string;
   lines: number;
   color: string;
+  /** Their label or name ("Female Sergeant"): a woman officer may be pink. */
+  name?: string;
 }
 
 export interface SpeakersSeam {

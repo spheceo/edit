@@ -607,7 +607,7 @@ export function cap(word: Word): Word {
 
 /**
  * One label, one colour, and no two labels alike across the files (each
- * transcript picks its own colours) nor an official in pink.
+ * transcript picks its own colours) nor an official in pink (a woman officer may be).
  */
 function spreadColours(lines: Line[]): void {
   const label = (line: Line) => subtitleName(line.name ?? line.voice ?? "Speaker");
@@ -618,7 +618,7 @@ function spreadColours(lines: Line[]): void {
     if (found !== undefined) found[3] += 1;
     else labels.push([name, line.role, line.color ?? "#ffffff", 1]);
   }
-  const colors = seams.speakers.distinct(labels.map(([, role, color, count]) => ({ role, lines: count, color })));
+  const colors = seams.speakers.distinct(labels.map(([name, role, color, count]) => ({ role, lines: count, color, name })));
   for (const line of lines) {
     const index = labels.findIndex(([own]) => own === label(line));
     if (index >= 0) line.color = colors[index] ?? null;

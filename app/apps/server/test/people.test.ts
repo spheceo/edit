@@ -119,6 +119,19 @@ test("an_officer_in_pink_is_moved_off_it", () => {
   expect(labelColour(edit, "m1")).toBe("#e57e00");
 });
 
+test("a woman officer or sergeant is pink", () => {
+  // The user, Oct 22: "if its a female officer i guess we can make her pink" (JJ's female sergeant on Mom & Teen).
+  const edit = project([
+    subtitle("s1", 0, "Morocco (Sergeant)", "Female Sergeant:", "#0090e5"),
+    subtitle("s2", 40, "Morocco (Sergeant)", "Female Sergeant:", "#0090e5"),
+    subtitle("o1", 120, "Schweickart (Officer)", "Officer 2:", "#ff66d1"),
+  ]);
+  oneColourPerPerson(edit);
+  expect(pinkish(labelColour(edit, "s1"))).toBe(true);
+  // A man officer still never is.
+  expect(pinkish(labelColour(edit, "o1"))).toBe(false);
+});
+
 test("never_white_and_merged_voices_are_named", () => {
   const edit = project([
     subtitle("s1", 0, "Sister 2", "Sister 2:", "#ffffff"),

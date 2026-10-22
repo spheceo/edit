@@ -392,7 +392,11 @@ async function name(app: App, source: string, target: string): Promise<void> {
  * The editors' colour code (Repack's subtitles): the first of each is the
  * role's own colour, the rest shades for a second or third person in it.
  */
-export function palette(role: string, victimPresent: boolean): readonly string[] {
+export function palette(role: string, victimPresent: boolean, woman = false): readonly string[] {
+  // A woman officer or sergeant is pink (the user, Oct 22: "if its a female
+  // officer i guess we can make her pink"; JJ on Mom & Teen: "think this
+  // should be called 'female sergeant' and then make her pink").
+  if (woman && official(role) && role !== "dispatch") return WOMAN_OFFICIAL;
   switch (role) {
     // A second officer is paler than the first, a third deeper; the rest
     // stand too close to those to be told apart, so are picked only when
@@ -495,8 +499,16 @@ export function pinkish(hex: string): boolean {
 }
 
 /** Whether `color` may go to someone in `role`. */
-export function allowed(role: string, color: string): boolean {
-  return !(official(role) && pinkish(color));
+export function allowed(role: string, color: string, woman = false): boolean {
+  return !(official(role) && pinkish(color)) || (woman && role !== "dispatch");
+}
+
+/** A woman officer's or sergeant's pinks, apart from the medics' magenta. */
+export const WOMAN_OFFICIAL = ["#ff69b5", "#ff8cc6", "#ffb3d9"] as const;
+
+/** Whether a label or name says the person is a woman ("Female Sergeant", "Officer Mrs. Hale"). */
+export function woman(...names: string[]): boolean {
+  return names.some((name) => /\b(female|woman|lady|policewoman|mrs|ms|miss)\b/iu.test(name));
 }
 
 /** The nearest (ΔE) of `taken` to `color`; infinite when none is taken. */
@@ -538,10 +550,11 @@ export function distinct(people: Person[]): string[] {
     const person = people[index]!;
     if (person.role === "narrator" || person.role === BACKGROUND) continue;
     let color: string;
-    if (allowed(person.role, person.color) && nearestOf(taken, person.color) >= DISTINCT) {
+    const isWoman = woman(person.name ?? "");
+    if (allowed(person.role, person.color, isWoman) && nearestOf(taken, person.color) >= DISTINCT) {
       color = person.color;
     } else {
-      const choices = [...palette(person.role, victim), ...OTHER, ...SPARE].filter((c) => allowed(person.role, c));
+      const choices = [...palette(person.role, victim, isWoman), ...OTHER, ...SPARE].filter((c) => allowed(person.role, c, isWoman));
       color = pick(choices, taken) ?? person.color;
     }
     taken.push(color);
@@ -696,8 +709,9 @@ export function colors(transcript: Transcript): Record<string, string> {
       continue;
     }
     // More people than colours that stand apart: the least alike.
+    const isWoman = woman(...voices.map((voice) => get(transcript.speakers, voice) ?? ""));
     const color = pick(
-      [...palette(own, victim), ...OTHER, ...SPARE].filter((c) => allowed(own, c)),
+      [...palette(own, victim, isWoman), ...OTHER, ...SPARE].filter((c) => allowed(own, c, isWoman)),
       taken,
     );
     if (color === undefined) continue;

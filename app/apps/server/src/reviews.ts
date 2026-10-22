@@ -56,6 +56,8 @@ export interface Note {
   author: string;
   status: "open" | "done";
   parentId: string | null;
+  /** Written by an app (the agent's own replies), not a reviewer. */
+  fromApp?: boolean;
   createdAt: number;
   updatedAt: number;
   /** When the agent here was set on it. */
@@ -84,8 +86,8 @@ export interface Shared {
 }
 
 interface State {
-  /** Notes changed after this (Repack's ms) haven't been heard yet. */
-  since: number;
+  /** Repack's place in its notes' changes: the next look asks from here. */
+  cursor: number;
   /** Fix new feedback by itself (on unless turned off). */
   autoFix: boolean;
   shared: Record<string, Shared>;
@@ -93,7 +95,7 @@ interface State {
 }
 
 function empty(): State {
-  return { since: 0, autoFix: true, shared: {}, notes: {} };
+  return { cursor: 0, autoFix: true, shared: {}, notes: {} };
 }
 
 export function read(home: string): State {
@@ -166,7 +168,9 @@ export async function share(app: App, projectId: string, path: string | null): P
       title: live.project.name,
       kind: "video",
       key: `${prefix}/video.mp4`,
-      meta: { fps, durationMs, timeline, poster: `${prefix}/poster.jpg` },
+      meta: { fps, durationMs, timeline },
+      posterKey: `${prefix}/poster.jpg`,
+      by: app.machine,
     })) as { reviewId: string; url: string; version: number };
     update(home, (state) => {
       const was = state.shared[projectId];
@@ -211,19 +215,25 @@ export function frameNow(project: Project, version: Version | undefined, ms: num
   return at;
 }
 
-/** Notes heard from Repack: kept, and the projects with new open ones (to fix). */
+/**
+ * Notes heard from Repack (`reviews:changes`): kept, and the projects with
+ * new open ones to fix: a note not heard before, or one a reviewer opened
+ * again ("Not fixed"), which is tried again from the start.
+ */
 export function heard(state: State, given: unknown[], projects: Set<string>): string[] {
   const fresh = new Set<string>();
   for (const raw of given) {
     if (typeof raw !== "object" || raw === null) continue;
     const one = raw as Record<string, unknown>;
-    const id = typeof one.id === "string" ? one.id : typeof one._id === "string" ? one._id : null;
+    const id = typeof one.noteId === "string" ? one.noteId : typeof one.id === "string" ? one.id : null;
     const project = typeof one.sourceId === "string" ? one.sourceId : null;
     if (id === null || project === null) continue;
     const anchor = (one.anchor ?? {}) as Record<string, unknown>;
     const was = state.notes[id];
+    const status = one.status === "done" ? "done" : "open";
+    const reopened = was !== undefined && was.status === "done" && status === "open";
     const note: Note = {
-      ...was,
+      ...(reopened ? { ...was, fix: undefined, unfixed: undefined, claimed: undefined } : was),
       id,
       reviewId: String(one.reviewId ?? was?.reviewId ?? ""),
       project,
@@ -232,14 +242,17 @@ export function heard(state: State, given: unknown[], projects: Set<string>): st
       endMs: anchor.kind === "time" && typeof anchor.endMs === "number" ? anchor.endMs : null,
       text: String(one.text ?? ""),
       author: String(one.author ?? "someone"),
-      status: one.status === "done" ? "done" : "open",
+      status,
       parentId: typeof one.parentId === "string" ? one.parentId : null,
+      fromApp: one.fromApp === true,
       createdAt: typeof one.createdAt === "number" ? one.createdAt : Date.now(),
       updatedAt: typeof one.updatedAt === "number" ? one.updatedAt : Date.now(),
     };
+    if (note.fix === undefined) delete note.fix;
+    if (note.unfixed === undefined) delete note.unfixed;
+    if (note.claimed === undefined) delete note.claimed;
     state.notes[id] = note;
-    state.since = Math.max(state.since, note.updatedAt);
-    if (note.status === "open" && was === undefined && projects.has(project)) fresh.add(project);
+    if (note.parentId === null && note.status === "open" && (was === undefined || reopened) && projects.has(project)) fresh.add(project);
   }
   return [...fresh];
 }
@@ -247,15 +260,21 @@ export function heard(state: State, given: unknown[], projects: Set<string>): st
 /** The open notes of a project not yet tried here (or tried long ago and never resolved). */
 export function waiting(state: State, project: string, now: number): Note[] {
   return Object.values(state.notes)
-    .filter((note) => note.project === project && note.status === "open" && note.unfixed === undefined && note.fix === undefined)
+    .filter((note) => note.project === project && note.parentId === null && note.status === "open" && note.unfixed === undefined && note.fix === undefined)
     .filter((note) => note.claimed === undefined || now - note.claimed > RETRY_MS)
     .sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0) || a.createdAt - b.createdAt);
 }
 
 /** The message that sets the agent on a project's notes. */
-export function fixMessage(project: Project, shared: Shared | undefined, notes: Note[]): string {
+export function fixMessage(project: Project, shared: Shared | undefined, notes: Note[], replies: Note[] = []): string {
   const fps = fpsOf(project);
   const lines = notes.map((note) => {
+    // What the team said under it since (a "not fixed", more detail), not the agent's own replies.
+    const under = replies
+      .filter((reply) => reply.parentId === note.id && reply.fromApp !== true)
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((reply) => `\n    ${reply.author} replied: "${reply.text}"`)
+      .join("");
     const version = shared?.versions.find((one) => one.n === note.version);
     let where = "";
     if (note.ms !== null) {
@@ -264,8 +283,7 @@ export function fixMessage(project: Project, shared: Shared | undefined, notes: 
       const shown = onScreen(project, frame).slice(0, 4).join("; ");
       where = ` at ${clock(note.ms / 1000)}${note.endMs === null ? "" : `–${clock(note.endMs / 1000)}`} of v${note.version} (timeline ${fixed(frame / fps, 2)}s${end === null ? "" : `–${fixed(end / fps, 2)}s`}, frame ${frame}; there: ${shown})`;
     }
-    const reply = note.parentId === null ? "" : ` (a reply to ${note.parentId})`;
-    return `- [${note.id}]${where}${reply}: ${note.author}: "${note.text}"`;
+    return `- [${note.id}]${where}: ${note.author}: "${note.text}"${under}`;
   });
   return (
     `(Edit, automatically) New feedback on this edit's review${shared === undefined ? "" : ` (${shared.url})`}: ${notes.length} note${notes.length === 1 ? "" : "s"}. ` +
@@ -385,12 +403,20 @@ export function stop(): void {
 /** One look at Repack: new notes kept; projects whose notes have settled get the agent. */
 export async function poll(app: App, now = Date.now()): Promise<void> {
   const home = app.store.home;
-  const since = read(home).since;
-  const given = (await cloud.query("reviews:changes", { since })) as unknown[];
   const projects = new Set(app.store.list().map((summary) => summary.id));
-  const fresh = update(home, (state) => heard(state, Array.isArray(given) ? given : [], projects));
+  const fresh = new Set<string>();
+  // Page by page from where the last look ended.
+  for (let page = 0; page < 20; page++) {
+    const cursor = read(home).cursor;
+    const answer = (await cloud.query("reviews:changes", { cursor })) as { notes?: unknown[]; cursor?: number; more?: boolean };
+    update(home, (state) => {
+      for (const project of heard(state, answer.notes ?? [], projects)) fresh.add(project);
+      if (typeof answer.cursor === "number") state.cursor = answer.cursor;
+    });
+    if (answer.more !== true) break;
+  }
   for (const project of fresh) lastHeard.set(project, now);
-  if (fresh.length > 0) app.store.emit({ type: "reviews", projects: fresh });
+  if (fresh.size > 0) app.store.emit({ type: "reviews", projects: [...fresh] });
   await fixSettled(app, now);
 }
 
@@ -418,7 +444,7 @@ export async function fixSettled(app: App, now = Date.now()): Promise<string[]> 
     }
     let claimed: string[];
     try {
-      claimed = (await cloud.mutation("reviews:claim", { noteIds: notes.map((note) => note.id), by: app.machine })) as string[];
+      claimed = ((await cloud.mutation("reviews:claim", { noteIds: notes.map((note) => note.id), by: app.machine })) as { claimed?: string[] }).claimed ?? [];
     } catch (error) {
       diag.warn("review", `claiming ${project}'s notes: ${diag.messageOf(error)}`);
       continue;
@@ -431,11 +457,13 @@ export async function fixSettled(app: App, now = Date.now()): Promise<string[]> 
     if (mine.length === 0) continue;
     checkpoints.set(project, structuredClone(live.project));
     try {
-      await seams.agentPanel(app).send(project, fixMessage(live.project, state.shared[project], mine), null, null);
+      const replies = Object.values(state.notes).filter((note) => note.project === project && note.parentId !== null);
+      await seams.agentPanel(app).send(project, fixMessage(live.project, state.shared[project], mine, replies), null, null);
       started.push(project);
       diag.info("review", `${live.project.name}: the agent is fixing ${mine.length} note(s)`);
     } catch (error) {
       diag.warn("review", `starting ${project}'s fix: ${diag.messageOf(error)}`);
+      await cloud.mutation("reviews:release", { noteIds: mine.map((note) => note.id), by: app.machine }).catch(() => {});
       update(home, (saved) => {
         for (const note of mine) if (saved.notes[note.id] !== undefined) delete saved.notes[note.id]!.claimed;
       });

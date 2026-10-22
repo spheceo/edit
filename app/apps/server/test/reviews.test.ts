@@ -35,12 +35,11 @@ test("a note's moment on an old export finds its clip after later edits", () => 
 test("notes heard are kept, the new open ones name their project, and settled ones wait for the agent once", () => {
   const state = read("/nonexistent");
   const notes = [
-    { id: "n1", reviewId: "r", sourceId: "p1", version: 1, anchor: { kind: "time", ms: 5000 }, text: "music too loud", author: "JJ", status: "open", createdAt: 10, updatedAt: 10 },
-    { id: "n2", reviewId: "r", sourceId: "p1", version: 1, anchor: { kind: "time", ms: 2000, endMs: 4000 }, text: "blur the kid", author: "JJ", status: "open", createdAt: 11, updatedAt: 11 },
-    { id: "n3", reviewId: "r", sourceId: "elsewhere", version: 1, anchor: { kind: "time", ms: 1 }, text: "x", author: "JJ", status: "open", createdAt: 12, updatedAt: 12 },
+    { noteId: "n1", reviewId: "r", sourceId: "p1", version: 1, anchor: { kind: "time", ms: 5000 }, text: "music too loud", author: "JJ", status: "open", createdAt: 10, updatedAt: 10 },
+    { noteId: "n2", reviewId: "r", sourceId: "p1", version: 1, anchor: { kind: "time", ms: 2000, endMs: 4000 }, text: "blur the kid", author: "JJ", status: "open", createdAt: 11, updatedAt: 11 },
+    { noteId: "n3", reviewId: "r", sourceId: "elsewhere", version: 1, anchor: { kind: "time", ms: 1 }, text: "x", author: "JJ", status: "open", createdAt: 12, updatedAt: 12 },
   ];
   expect(heard(state, notes, new Set(["p1"]))).toEqual(["p1"]);
-  expect(state.since).toBe(12);
   // Heard again: nothing new.
   expect(heard(state, notes, new Set(["p1"]))).toEqual([]);
   // In order along the video; one tried isn't offered again (until half an hour has gone).
@@ -48,6 +47,17 @@ test("notes heard are kept, the new open ones name their project, and settled on
   state.notes.n2!.claimed = 1000;
   expect(waiting(state, "p1", 2000).map((note) => note.id)).toEqual(["n1"]);
   expect(waiting(state, "p1", 1000 + 31 * 60_000).map((note) => note.id)).toEqual(["n2", "n1"]);
+  // Fixed, then opened again by the reviewer ("Not fixed"): new to fix, from the start; a reply is never claimed itself.
+  state.notes.n1!.fix = { clips: ["a"], ranges: [[0, 30]], summary: "music down", at: 5 };
+  state.notes.n1!.status = "done";
+  expect(waiting(state, "p1", 2000).map((note) => note.id)).toEqual([]);
+  const again = [
+    { ...notes[0]!, status: "open", updatedAt: 20 },
+    { noteId: "r1", reviewId: "r", sourceId: "p1", version: 1, parentId: "n1", text: "still too loud at the start", author: "JJ", status: "open", createdAt: 19, updatedAt: 19 },
+  ];
+  expect(heard(state, again, new Set(["p1"]))).toEqual(["p1"]);
+  expect(state.notes.n1!.fix).toBeUndefined();
+  expect(waiting(state, "p1", 2000).map((note) => note.id)).toEqual(["n1"]);
 });
 
 test("the agent's message names each note with its moment, its place on the timeline and what's there", () => {
@@ -59,6 +69,9 @@ test("the agent's message names each note with its moment, its place on the time
   expect(message).toContain('- [n1] at 0:12.0 of v2 (timeline 12.00s, frame 360; there: b ');
   expect(message).toContain('JJ: "change the music"');
   expect(message).toContain("feedback_done");
+  // What the team said under it comes with it.
+  const reply: Note = { ...note, id: "r1", parentId: "n1", text: "the second song too", createdAt: 2 };
+  expect(fixMessage(p, shared, [note], [reply])).toContain('JJ replied: "the second song too"');
 });
 
 test("a fix's changes are the clips added, removed or changed, not the ones a ripple only moved along", () => {

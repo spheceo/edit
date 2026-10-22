@@ -257,6 +257,14 @@ registerTool("speed_voiceover", async ({ app, args, projectId }) => {
   return text(`sped ${fixed(start / fps, 2)}–${fixed(end / fps, 2)}s up ${display(speed)}x: saved ${fixed(saved / fps, 2)}s`);
 });
 
+registerTool("generate_voiceover", async ({ app, projectId }) => {
+  const live = app.store.get(projectId);
+  if (live === null) throw new Error("no such project");
+  if (voiceover.anyPlaced(live.project)) throw new Error("the cut-ins already have voice-overs: revoice_cut_in changes one");
+  const done = await diag.timeAsync("voiceover", "generate a voice-over", () => voiceover.generate(app, projectId));
+  return text(stableStringify(done));
+});
+
 registerTool("revoice_cut_in", async ({ app, args, projectId }) => {
   const cutIn = num(args.cut_in);
   if (cutIn === null || !Number.isInteger(cutIn) || cutIn < 1) throw new Error("cut_in is required (its number, from 1)");

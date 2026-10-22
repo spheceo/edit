@@ -123,7 +123,8 @@ const PIECES_AT_ONCE = 4;
  * (a 400 or 422: nothing heard or billed) are dropped and it's asked once
  * without them rather than fail over a spelling aid.
  */
-export async function run(source: string, target: string, keyterms: readonly string[] = []): Promise<void> {
+/** `again`: a finished file heard again for the case's names, which the relay gives only a share of each day's allowance (first hearings come first). */
+export async function run(source: string, target: string, keyterms: readonly string[] = [], again = false): Promise<void> {
   const audio = withExtension(target, "ogg");
   // Asked before the media's other work has made its cache folder.
   fs.mkdirSync(target.slice(0, target.lastIndexOf("/")) || ".", { recursive: true });
@@ -132,20 +133,20 @@ export async function run(source: string, target: string, keyterms: readonly str
   try {
     const seconds = await lengthOf(audio);
     if (seconds <= WHOLE_UP_TO) {
-      transcript = await ask(audio, keyterms);
+      transcript = await ask(audio, keyterms, again);
     } else {
       const pieces = plan(seconds);
       const piecesDir = withExtension(target, "pieces");
       const names = createHash("sha256").update(keyterms.join("\n")).digest("hex").slice(0, 12);
       const [whole, heard] = await Promise.all([
         // Any earlier hearing of the whole file will do: only its voices are used.
-        saved(withExtension(target, "whole.json"), fixed3(seconds), () => ask(audio, keyterms)),
+        saved(withExtension(target, "whole.json"), fixed3(seconds), () => ask(audio, keyterms, again)),
         limited(pieces, PIECES_AT_ONCE, (piece, index) =>
           saved(`${piecesDir}/${names}-${index}-${fixed3(piece.from)}-${fixed3(piece.to)}.json`, "", async () => {
             const file = withExtension(target, `piece-${index}.ogg`);
             try {
               await encode(["-ss", fixed3(piece.from), "-t", fixed3(piece.to - piece.from), "-i", audio], file, "could not cut the audio");
-              return await ask(file, keyterms);
+              return await ask(file, keyterms, again);
             } finally {
               fs.rmSync(file, { force: true });
             }
@@ -261,7 +262,7 @@ async function lengthOf(audio: string): Promise<number> {
  * transcriptions at once (a script import's footage and voice-over takes can
  * ask together): a 429 waits and asks again.
  */
-async function ask(audio: string, keyterms: readonly string[]): Promise<Transcript> {
+async function ask(audio: string, keyterms: readonly string[], again = false): Promise<Transcript> {
   const auth = relay.authHeaders();
   const waits = [...BUSY_WAITS];
   let status: number;
@@ -269,7 +270,7 @@ async function ask(audio: string, keyterms: readonly string[]): Promise<Transcri
   let names = [...keyterms];
   for (;;) {
     let response: Response;
-    const query = names.map((name) => `keyterm=${encodeURIComponent(name)}`).join("&");
+    const query = [...names.map((name) => `keyterm=${encodeURIComponent(name)}`), ...(again ? ["again=1"] : [])].join("&");
     try {
       response = await fetch(`${relay.url()}/v1/transcribe${query === "" ? "" : `?${query}`}`, {
         method: "POST",

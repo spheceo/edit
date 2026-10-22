@@ -1526,9 +1526,10 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     }
     const laidOut = result === null;
     // Laid out: the cut-ins get their voice-over, spoken and split across them.
-    // Not a courtroom video's: its narration is the user's recording (styles.ts).
+    // A courtroom video's too (the team couldn't get one made for Judge EXPLODES,
+    // Oct 22): a recording added later takes its place (place_voiceovers).
     const now = app.store.get(id);
-    const unvoiced = now !== null && now.project.style !== "courtroom" && !seams.voiceover.anyPlaced(now.project);
+    const unvoiced = now !== null && !seams.voiceover.anyPlaced(now.project);
     if (laidOut && unvoiced) {
       app.scripts.set(app, id, (job) => {
         job.state = "voicing";

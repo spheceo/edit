@@ -389,7 +389,7 @@ export class Processor {
     const shared = again ? null : sharedSourceOf(this.store.cacheDir(), source);
     const hear = async () => {
       if (shared !== null && mediaHooks.wholeTranscript !== null && (await mediaHooks.wholeTranscript(shared, target).catch(() => false))) return;
-      await transcribe.run(source, target, keyterms);
+      await transcribe.run(source, target, keyterms, again);
     };
     void diag
       .timeOnAsync("media", "media: transcription", source, hear)

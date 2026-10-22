@@ -25,6 +25,23 @@ describe("relay atomic spend reservations", () => {
     expect(values.get("all")).toBe(120);
     await budget.alarm(); expect(values.size).toBe(0);
   });
+
+  it("hearing footage again for its names gets only a share of the day; new footage still gets the rest", async () => {
+    const values = new Map<string, number>();
+    type Storage = ConstructorParameters<typeof TranscriptionBudget>[0]["storage"];
+    const storage: Storage = {
+      get: async <T>(key: string) => values.get(key) as T | undefined,
+      put: async (key: string, value: number) => { values.set(key, value); },
+      transaction: <T>(callback: (store: Storage) => Promise<T>) => callback(storage),
+      setAlarm: async () => {}, deleteAll: async () => { values.clear(); },
+    };
+    const budget = new TranscriptionBudget({ storage }, { DAILY_BYTES_PER_IP: "100", DAILY_BYTES_TOTAL: "100", DAILY_REHEAR_BYTES: "30", MAX_UPLOAD_BYTES: "100" } as Env);
+    const reserve = (size: number, again: boolean) => budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client: "a".repeat(64), size, again }) }));
+    expect((await reserve(20, true)).status).toBe(200);
+    expect((await reserve(20, true)).status).toBe(429);
+    expect((await reserve(70, false)).status).toBe(200);
+    expect(values.get("all")).toBe(90);
+  });
 });
 
 describe("relay cloud endpoints", () => {

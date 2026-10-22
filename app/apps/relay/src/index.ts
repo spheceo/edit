@@ -47,6 +47,8 @@ export interface Env extends CloudEnv {
   TRANSCRIBE_BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
   DAILY_BYTES_PER_IP: string;
   DAILY_BYTES_TOTAL: string;
+  /** Of the day's bytes, at most this many on files heard again for the case's names (`again=1`): first hearings come first. */
+  DAILY_REHEAR_BYTES?: string;
   MAX_UPLOAD_BYTES: string;
 }
 
@@ -93,7 +95,8 @@ export default {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
     const client = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
     const budget = env.BUDGET.get(env.BUDGET.idFromName(day));
-    const reserved = await budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client, size }) }));
+    const again = url.searchParams.get("again") === "1";
+    const reserved = await budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client, size, again }) }));
     if (!reserved.ok) return reserved;
 
     const form = multipart(request.body!, size, type, [
@@ -365,7 +368,7 @@ export class TranscriptionBudget {
   async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname === "/maps") return this.mapSession(request);
     if (new URL(request.url).pathname === "/speech") return this.speech(request);
-    const { client, size } = await request.json() as { client: string; size: number };
+    const { client, size, again } = await request.json() as { client: string; size: number; again?: boolean };
     if (!/^[a-f0-9]{64}$/.test(client) || !Number.isSafeInteger(size) || size <= 0 || size > Number(this.env.MAX_UPLOAD_BYTES)) return json(400, { error: "Invalid budget reservation." });
     const answer = await this.state.storage.transaction(async storage => {
       const ipKey = `ip:${client}`;
@@ -373,8 +376,14 @@ export class TranscriptionBudget {
       const allUsed = await storage.get<number>("all") ?? 0;
       if (ipUsed + size > Number(this.env.DAILY_BYTES_PER_IP)) return json(429, { error: "Today's transcription allowance for this connection is used up; it resets at midnight UTC." });
       if (allUsed + size > Number(this.env.DAILY_BYTES_TOTAL)) return json(429, { error: "Edit's shared transcription budget for today is used up; it resets at midnight UTC." });
+      // Hearing finished footage again for its names is an improvement, not a
+      // need: it gets a share of the day, so a new import is never left unheard
+      // (Oct 22: re-hearing teaching copies spent the day by 00:20 UTC).
+      const rehearUsed = again ? (await storage.get<number>("again") ?? 0) : 0;
+      if (again && rehearUsed + size > Number(this.env.DAILY_REHEAR_BYTES ?? this.env.DAILY_BYTES_TOTAL)) return json(429, { error: "Today's share for hearing footage again with the case's names is used up; new footage is still heard. It resets at midnight UTC." });
       await storage.put(ipKey, ipUsed + size);
       await storage.put("all", allUsed + size);
+      if (again) await storage.put("again", rehearUsed + size);
       return json(200, { ok: true });
     });
     await this.state.storage.setAlarm(Date.now() + 2 * 86400_000);

@@ -1762,6 +1762,19 @@
     "name": "speed_voiceover"
   },
   {
+    "description": "Speaks every cut-in with the house voice and lays the takes on them, as a script import does: for an edit whose import made none (or one that failed). Refused once any cut-in has a voice-over. Costs paid ElevenLabs lines.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "generate_voiceover"
+  },
+  {
     "description": "Speaks one cut-in's narration again with the house voice and puts the new take in place of its voice-over, played at the speed that fits the cut-in as it is (0.85–1.2), so nothing else on the timeline moves; the script's cut-in text follows. Give text to change the words: a word the narration gets wrong (\"himself\" for a woman: \"herself\"), a name misspoken. The whole cut-in's text, not just the changed words. Its mutes are cleared: run mute_house_words after. Costs a paid ElevenLabs line; a take too far off the cut-in's length is refused (reword nearer it).",
     "inputSchema": {
       "properties": {

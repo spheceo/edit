@@ -22,7 +22,7 @@ After teaching loop 2, both FOIA edits got JJ's notes through their in-app agent
 
 ## Found while applying them
 - add_subtitles over a span dropped the subtitle across each edge (replaced, not remade): both agents re-subtitled whole stretches to get them back. It now widens the span over them.
-- A line relabelled on its own (Mom & Teen's two "Female Sergeant:" lines under the officer's voice, note 022: "think this should be called 'female sergeant' and then make her pink") went back to "Officer:" on every re-run; now kept. Her pink held only while her cast entry had no role: with the officer voices under her label she became an official, and officials are never pink (Oct 17's "officer in hot pink" note). Her role is now "other" in the cast. Open: the Oct 17 rule and JJ's Oct 19 ask disagree for her.
+- A line relabelled on its own (Mom & Teen's two "Female Sergeant:" lines under the officer's voice, note 022: "think this should be called 'female sergeant' and then make her pink") went back to "Officer:" on every re-run; now kept. Her pink held only while her cast entry had no role: with the officer voices under her label she became an official, and officials are never pink (Oct 17's "officer in hot pink" note). Her role is now "other" in the cast. Decided (the user): "if its a female officer i guess we can make her pink": a woman official whose label or name says so gets pinks of her own (speakers.ts `WOMAN_OFFICIAL`); men officials still never are.
 
 ## Not for code
 - Note 039 (Mom & Teen, 16:18): "lets use an illustrative image we create based on what hannan looks like and then just make her younger and blur her face fully": Edit makes no images.

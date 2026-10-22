@@ -785,29 +785,59 @@ async function extendClip({ app, args, projectId }: ToolCall): Promise<Content[]
     for (const cut of cuts) {
       const clip = cut.own;
       const media = project.media.find((one) => one.id === clip.media);
-      const sourceEnd = clip.source_in + (clip.duration / fps) * clip.speed;
-      // A beat past the word's last sound (or before its first).
-      const needed = seconds ?? (cut.to === null ? 0 : cut.side === "out" ? cut.to + 0.05 - sourceEnd : clip.source_in - (cut.to - 0.05));
-      const room = cut.side === "out" ? (media?.duration ?? Number.POSITIVE_INFINITY) - sourceEnd : clip.source_in;
-      const add = Math.min(needed, room);
-      if (needed > MOST_ADDED) {
-        done.push({ clip: clip.id, side: cut.side, skipped: `the word runs ${fixed(needed, 2)}s past the cut: its times are off, not the cut` });
-        continue;
-      }
-      const frames = Math.ceil((add / clip.speed) * fps);
-      if (frames <= 0) {
-        done.push({ clip: clip.id, side: cut.side, skipped: "no source left past the cut" });
-        continue;
-      }
-      const pair = new Set([clip.id, ...linkedWith(project, clip.id)]);
       const at = cut.side === "out" ? clipEnd(clip) : clip.start;
-      const result = insertTime(project, at, frames, cut.side === "out" ? pair : new Set(), cut.side === "in" ? pair : new Set());
-      done.push({ clip: clip.id, side: cut.side, at: fixed(at / fps, 2), added_seconds: fixed(frames / fps, 2), moved: result.moved, lengthened: result.lengthened });
+      const pair = new Set([clip.id, ...linkedWith(project, clip.id)]);
+      let added = 0;
+      let moved = 0;
+      let lengthened = 0;
+      let skipped: string | null = null;
+      // A beat past the word's last sound (or before its first); then, while
+      // the next word is already under way there (talk running on), on to
+      // its end, so the cut lands in a pause.
+      let reach = cut.to;
+      for (let pass = 0; pass < 4; pass++) {
+        const sourceEnd = clip.source_in + (clip.duration / fps) * clip.speed;
+        const needed = pass === 0 && seconds !== null ? seconds : reach === null ? 0 : cut.side === "out" ? reach + 0.05 - sourceEnd : clip.source_in - (reach - 0.05);
+        const room = cut.side === "out" ? (media?.duration ?? Number.POSITIVE_INFINITY) - sourceEnd : clip.source_in;
+        if (added + needed > MOST_ADDED) {
+          skipped = added === 0 ? `the word runs ${fixed(needed, 2)}s past the cut: its times are off, not the cut` : null;
+          break;
+        }
+        const frames = Math.ceil((Math.min(needed, room) / clip.speed) * fps);
+        if (frames <= 0) {
+          if (added === 0) skipped = "no source left past the cut";
+          break;
+        }
+        const result = insertTime(project, cut.side === "out" ? clipEnd(clip) : clip.start, frames, cut.side === "out" ? pair : new Set(), cut.side === "in" ? pair : new Set());
+        added += frames / fps;
+        moved = Math.max(moved, result.moved);
+        lengthened = Math.max(lengthened, result.lengthened);
+        const still = (hooks.cutMidWord(project, heard) as Args[]).filter((issue) => issue.clip === clip.id && issue.side === cut.side);
+        if (still.length === 0) break;
+        const times = still.map((issue) => num(cut.side === "out" ? issue.word_ends : issue.word_starts)).filter((time): time is number => time !== null);
+        if (times.length === 0) break;
+        reach = cut.side === "out" ? Math.max(...times) : Math.min(...times);
+      }
+      if (skipped !== null) done.push({ clip: clip.id, side: cut.side, skipped });
+      else if (added > 0) done.push({ clip: clip.id, side: cut.side, at: fixed(at / fps, 2), added_seconds: fixed(added, 2), moved, lengthened });
     }
     return done;
   });
   const added = report.reduce((sum, one) => sum + (typeof one.added_seconds === "string" ? Number(one.added_seconds) : 0), 0);
-  return text(stableStringify({ cuts: report, timeline_longer_by_seconds: fixed(added, 2) }));
+  // The words now heard there need their subtitles and mutes (a house word among them).
+  // Each cut's place now (the time put in before it moved it on), earliest first.
+  const made = report.filter((one) => typeof one.at === "string").map((one) => [Number(one.at), Number(one.added_seconds)] as [number, number]);
+  const spans = made
+    .map(([at, more]) => [at + made.filter(([other]) => other < at).reduce((sum, [, longer]) => sum + longer, 0), more] as [number, number])
+    .sort((a, b) => a[0] - b[0])
+    .map(([at, more]) => `${fixed(Math.max(at - 3, 0), 2)}–${fixed(at + more + 3, 2)}s`);
+  return text(
+    stableStringify({
+      cuts: report,
+      timeline_longer_by_seconds: fixed(added, 2),
+      ...(spans.length > 0 ? { then: `add_subtitles over each span (${spans.join(", ")}), then mute_house_words over the whole timeline` } : {}),
+    }),
+  );
 }
 
 /** The clips linked with `id` (its picture or sound), not itself. */

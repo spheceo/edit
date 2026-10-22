@@ -519,3 +519,41 @@ test("export starts through the exports with the default path, and says a subtit
     "optional optical flow is still running; export the current timeline with wait_for_smoothing false or wait for it to finish",
   );
 });
+
+test("extend_clip plays a clipped word to its end and on to the pause, and the rest of the timeline moves on", async () => {
+  // Mom Leaves 5 Kids: "I know." cut 0.1 s short, with "I'm" already under way after it.
+  const { app, id, fixture } = setUp("extend");
+  const path = `${fixture.dir}/bodycam.mp4`;
+  write(path, "");
+  write(
+    app.media.paths(path).transcript,
+    JSON.stringify({
+      model: "scribe_v2",
+      language: "eng",
+      words: [
+        { text: "I", start: 9.0, end: 9.1, speaker: "speaker_0" },
+        { text: "know.", start: 9.12, end: 9.4, speaker: "speaker_0" },
+        { text: "I'm", start: 9.35, end: 9.6, speaker: "speaker_0" },
+        { text: "Okay.", start: 20.0, end: 20.4, speaker: "speaker_1" },
+      ],
+    }),
+  );
+  await fixture.store.update(id, "test", (project) => {
+    project.media.push(media({ id: "m", name: "bodycam.mp4", path, kind: "video", duration: 60, width: 1920, height: 1080, fps: 30, has_audio: true }));
+    const [v1, , , a1] = project.tracks.map((track) => track.id);
+    project.clips.push(
+      clip({ id: "pa", track: v1, start: 0, duration: 279, type: "video", media: "m", source_in: 0, link: "la" }),
+      clip({ id: "sa", track: a1, start: 0, duration: 279, type: "audio", media: "m", source_in: 0, link: "la" }),
+      clip({ id: "pb", track: v1, start: 279, duration: 60, type: "video", media: "m", source_in: 19.5, link: "lb" }),
+      clip({ id: "sb", track: a1, start: 279, duration: 60, type: "audio", media: "m", source_in: 19.5, link: "lb" }),
+    );
+  });
+  const reply = JSON.parse(await said(app, "extend_clip")) as { cuts: Record<string, unknown>[]; then?: string };
+  expect(reply.cuts.map((cut) => [cut.clip, cut.side])).toEqual([["sa", "out"]]);
+  const project = projectOf(app, id);
+  // To "I'm"'s end and a beat: 9.65 s of source, so 290 frames.
+  expect([clipOf(project, "pa")!.duration, clipOf(project, "sa")!.duration]).toEqual([290, 290]);
+  expect([clipOf(project, "pb")!.start, clipOf(project, "sb")!.start]).toEqual([290, 290]);
+  expect(reply.then).toContain("add_subtitles over each span (6.30–");
+  expect(await said(app, "extend_clip")).toBe("no cut clips a word");
+});

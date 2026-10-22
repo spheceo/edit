@@ -858,8 +858,16 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
       const natural = toI64(Math.ceil(saidTo + (HOLD / clip.speed) * fps));
       let end = Math.max(Math.min(natural, until), start);
       if (until - end <= snap) end = Math.max(until, start);
-      // Someone's "okay" over the next line: no room to read it, so it's left out.
-      if (end - start < least && line.words.length <= 2) continue;
+      // A short line squeezed by the next: it starts a little before its
+      // words when there's quiet there (Mom Leaves 5 Kids' "it was.", 0.16 s
+      // before the social worker's line, was left out and the audit flagged
+      // it); someone's "okay" over the next line, with no room, is left out.
+      if (end - start < least && line.words.length <= 2) {
+        const said = spans[index - 1];
+        const earliest = Math.max(start - toI64(Math.floor((seams.subtitles.LEAD_MS / 1000.0) * fps)), clip.start, from, said === undefined ? 0 : toI64(Math.ceil(said[1])));
+        if (end - earliest < least) continue;
+        start = earliest;
+      }
       nextStart.set(line.clip, start);
       slots.push([index, line, start, end, natural]);
     }

@@ -329,3 +329,30 @@ test("hex colours, speakers' short names and Rust's number formatting", () => {
   expect(fixed(29.999, 2)).toBe("30.00");
   expect(fixed(-0.001, 2)).toBe("-0.00");
 });
+
+test("add_subtitles gives a short line squeezed by the next one a lead into the quiet before it", async () => {
+  // Mom Leaves 5 Kids: Tabitha's "it was." (0.16 s) just before the social worker's line was left out, and the audit flagged it.
+  const { app, dir, store, cleanup } = fixtureHome("squeezed");
+  try {
+    const id = await footage(app, dir);
+    const squeezed: Transcript = {
+      ...TRANSCRIPT,
+      words: [
+        { text: "it", start: 1.18, end: 1.25, speaker: "speaker_1" },
+        { text: "was.", start: 1.26, end: 1.34, speaker: "speaker_1" },
+        { text: "That's", start: 1.4, end: 1.6, speaker: "speaker_0" },
+        { text: "his", start: 1.62, end: 1.8, speaker: "speaker_0" },
+        { text: "first", start: 1.82, end: 2.1, speaker: "speaker_0" },
+        { text: "thing.", start: 2.12, end: 2.62, speaker: "speaker_0" },
+      ],
+    };
+    write(app.media.paths(bodycam(dir).path).transcript, serialize(squeezed));
+    expect((await call(app, "add_subtitles", { project_id: id })).isError).toBe(false);
+    const lines = store.get(id)!.project.clips.filter((clip): clip is TextClip => clip.type === "text").sort((a, b) => a.start - b.start);
+    expect(lines.map((clip) => clip.text)).toEqual(["it was.", "That's his first thing."]);
+    expect(lines[0]!.start).toBeLessThanOrEqual(Math.floor(1.18 * 30));
+    expect(lines[0]!.start + lines[0]!.duration).toBeLessThanOrEqual(lines[1]!.start);
+  } finally {
+    cleanup();
+  }
+});

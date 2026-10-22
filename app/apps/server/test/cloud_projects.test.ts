@@ -76,24 +76,29 @@ test("a_new_project_takes_the_lock_then_pushes_after_a_pause", () => {
   expect(entry.status(true).sync).toBe("synced");
 });
 
-test("a_held_lock_is_renewed_while_used_and_let_go_when_idle", () => {
+test("a_held_lock_is_kept_while_working_and_let_go_when_idle_even_open", () => {
   const t0 = 1_000_000;
   const entry = new Entry({ rev: 0, dirty: false });
   entry.viewers.set("ui", t0);
-  expect(entry.step(t0)).toBe("Acquire");
+  // Looking on doesn't take it (it checks who has it); an agent turn here does.
+  expect(entry.step(t0)).toBe("Check");
+  expect(entry.step(t0, true)).toBe("Acquire");
   entry.acquired("token", t0);
+  entry.changedAt = t0;
   expect(entry.step(at(t0, 10))).toBeNull();
   entry.viewers.set("ui", at(t0, 30));
   expect(entry.step(at(t0, 45))).toBe("Renew");
   entry.renewedAt = at(t0, 45);
-  // The editor goes quiet (crashed, no close): let go once it's stale.
-  expect(entry.step(at(t0, 90))).toBe("Renew");
-  entry.renewedAt = at(t0, 90);
-  expect(entry.step(at(t0, 106))).toBe("Release");
+  // A turn still running keeps it past the quiet minute.
+  expect(entry.step(at(t0, 70), true)).toBeNull();
+  // Open but idle (nothing changed for a minute, nothing running): let go, so a teammate can carry on.
+  entry.viewers.set("ui", at(t0, 69));
+  expect(entry.step(at(t0, 70))).toBe("Release");
   entry.released();
   expect(entry.lock).toEqual({ kind: "unknown" });
   expect(entry.saved.token).toBeUndefined();
-  expect(entry.step(at(t0, 107))).toBeNull();
+  // Still open: it watches who has it, without taking it.
+  expect(entry.step(at(t0, 71))).toBe("Check");
 });
 
 test("closing_pushes_at_once_then_releases", () => {
@@ -199,7 +204,9 @@ test("a_token_from_before_a_restart_is_renewed_first", () => {
   const entry = new Entry({ rev: 5, dirty: false, token: "old" });
   expect(entry.lock).toEqual({ kind: "held" });
   entry.viewers.set("ui", performance.now());
-  expect(entry.step(performance.now())).toBe("Renew");
+  // A turn picked up again after the restart keeps it; idle, it's let go.
+  expect(entry.step(performance.now(), true)).toBe("Renew");
+  expect(entry.step(performance.now())).toBe("Release");
 });
 
 test("settings_are_private_and_writes_follow_the_lock", () => {

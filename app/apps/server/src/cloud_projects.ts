@@ -4,7 +4,12 @@
 // where someone else stopped. One machine edits a project at a time: it holds
 // the project's lock, a two-minute lease renewed every 45 s, and every write
 // to a cloud project goes through `Cloud.mayWrite` (the store's commit), which
-// refuses one another machine holds.
+// refuses one another machine holds. The lock is held only while this machine
+// is working on the project (edits in the last minute, an agent turn, a script
+// import): open but idle, it lets go, so a teammate can carry on ("anyone
+// [can] make changes, even if the project is open, just as long as there
+// isn't a running thread and changes aren't being made"). A machine only
+// looking never takes it; its first edit does.
 //
 // What this machine knows lives in the data folder: `cloud.json` (the
 // setting: token, holder label; mode 600, it holds the token) and
@@ -178,8 +183,8 @@ export class Entry {
     return this.changedAt !== null && since(now, this.changedAt) < IDLE_RELEASE;
   }
 
-  /** What to do next, if anything (the state machine's one decision). */
-  step(now: number): Step | null {
+  /** What to do next, if anything (the state machine's one decision). `working`: an agent turn or a script import runs on it here. */
+  step(now: number, working = false): Step | null {
     if (this.busy !== null || (this.retryAt !== null && now < this.retryAt)) return null;
     if (this.wantPull) return "Pull";
     if (this.wantMedia) return "Media";
@@ -189,15 +194,21 @@ export class Entry {
       case "held": {
         const settled = this.closing || this.changedAt === null || since(now, this.changedAt) >= DEBOUNCE;
         if (this.saved.dirty && settled) return "Push";
-        if (!this.saved.dirty && !watched && (this.closing || !recent)) return "Release";
+        // Idle (nothing changed for a minute, nothing running), open or not: let go.
+        if (!this.saved.dirty && (this.closing || (!recent && !working))) return "Release";
         const renew = this.renewedAt === null || since(now, this.renewedAt) >= RENEW_EVERY;
         return renew ? "Renew" : null;
       }
       // A write asks for itself (`Cloud.mayWrite`); this is for changes
       // waiting to go and an editor open on it.
+      // Looking on doesn't take it: a write does (`Cloud.mayWrite`). An editor
+      // open on it checks who has it, to show their changes as they come.
       case "unknown":
-      case "provisional":
-        return this.saved.dirty || watched ? "Acquire" : null;
+      case "provisional": {
+        if (this.saved.dirty || working) return "Acquire";
+        const due = this.checkedAt === null || since(now, this.checkedAt) >= CHECK_EVERY;
+        return watched && due && this.lock.kind === "unknown" ? "Check" : null;
+      }
       case "elsewhere": {
         const due = this.checkedAt === null || since(now, this.checkedAt) >= CHECK_EVERY;
         return watched && due ? "Check" : null;
@@ -991,6 +1002,18 @@ export function stop(cloudProjects: Cloud): void {
   if (server?.cloud === cloudProjects) server = null;
 }
 
+/** Whether an agent turn or a script import is running on project `id` here (its lock is kept meanwhile). */
+function workingHere(app: App, id: string): boolean {
+  try {
+    const chat = (app.agents as unknown as { chat(project: string): { running?: boolean } }).chat(id);
+    if (chat?.running === true) return true;
+  } catch {
+    // No agent here (tests).
+  }
+  const job = app.scripts?.get(id);
+  return job !== null && job !== undefined && job.state !== "done" && job.state !== "failed";
+}
+
 async function loop(app: App, cloudProjects: Cloud): Promise<void> {
   while (!cloudProjects.stopped) {
     if (cloudProjects.on()) {
@@ -1003,7 +1026,7 @@ async function loop(app: App, cloudProjects: Cloud): Promise<void> {
             entry.renewing = false;
           });
         }
-        const step = entry.step(at);
+        const step = entry.step(at, workingHere(app, id));
         if (step === null) continue;
         entry.busy = step;
         due.push([id, step]);
@@ -1299,15 +1322,23 @@ async function check(app: App, cloudProjects: Cloud, id: string): Promise<void> 
   }
   if (meta === null) return;
   const holder = meta.holder;
+  const newer = meta.rev > cloudProjects.savedRev(id);
   if (holder !== null && holder !== cloudProjects.holder()) {
-    const newer = meta.rev > cloudProjects.savedRev(id);
     cloudProjects.with(id, (entry) => {
       entry.lock = { kind: "elsewhere", holder };
     });
     if (newer) await pull(app, cloudProjects, id);
     return;
   }
-  return acquire(app, cloudProjects, id, false);
+  // Free (they let go): editable here again, their last changes brought in;
+  // the lock is taken by the first write, not by looking.
+  const wants = cloudProjects.with(id, (entry) => entry.saved.dirty) === true;
+  if (wants) return acquire(app, cloudProjects, id, false);
+  cloudProjects.with(id, (entry) => {
+    if (entry.lock.kind === "elsewhere") entry.forgetLock();
+  });
+  cloudProjects.emit(id);
+  if (newer) await pull(app, cloudProjects, id);
 }
 
 // ---------------------------------------------------------------------------

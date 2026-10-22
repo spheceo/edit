@@ -169,6 +169,14 @@ export function routes(router: Router<App>): void {
       throw new ApiError(400, diag.messageOf(error));
     }
   });
+  router.get("/api/writer/scripts/{id}", async ({ params }) => {
+    try {
+      const given = await fetchScript(params.id ?? "");
+      return sorted({ ...script.summary(toParsed(given)), title: given.title, style: styleOf(given.kind) });
+    } catch (error) {
+      throw new ApiError(400, diag.messageOf(error));
+    }
+  });
   router.post("/api/writer/scripts/{id}/import", async ({ app, params }) => {
     try {
       return sorted(await importScript(app, params.id ?? ""));

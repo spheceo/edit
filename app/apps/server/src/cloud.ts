@@ -95,7 +95,8 @@ export type Method = "GET" | "PUT" | "HEAD";
  * for PUT and HEAD; the relay caps it at 7 days.
  */
 export async function presign(key: string, method: Method, expires: number | null = null): Promise<string> {
-  checkKey(key);
+  // Writer's script files are read for the handoff (the relay allows that too), never written.
+  if (!(method !== "PUT" && key.startsWith("writer/scripts/") && validKey(`edit/${key.slice("writer/".length)}`))) checkKey(key);
   const body: Record<string, unknown> = { key, method };
   if (expires !== null) body.expires = Math.max(Math.floor(expires), 1);
   const answer = await relayJson("r2/url", body);

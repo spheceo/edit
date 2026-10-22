@@ -100,11 +100,55 @@ export function answer(value: unknown): Json {
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Whether a gateway request carries video or sound (only Gemini hears those). */
+function hasMedia(request: Json): boolean {
+  return ((Array.isArray(request.messages) ? request.messages : []) as Json[]).some(
+    (message) => Array.isArray(message.content) && (message.content as Json[]).some((part) => part.type === "file" || part.type === "input_audio"),
+  );
+}
+
+/**
+ * A text-and-pictures request when every Gemini model's free day is spent:
+ * xAI's chat completions speak the gateway's own format, so it goes as it is
+ * with its model swapped (`XAI_API_KEY`, `EDIT_XAI_MODEL`). Null when there's
+ * no xAI key or the request has video or sound.
+ */
+async function xai(request: Json): Promise<unknown | null> {
+  const key = trim(process.env.XAI_API_KEY ?? "");
+  const model = trim(process.env.EDIT_XAI_MODEL ?? "");
+  if (key === "" || model === "" || hasMedia(request)) return null;
+  const { reasoning: _reasoning, ...rest } = request;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...rest, model }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const text = await response.text();
+    if (response.status === 200) {
+      diag.info("watch", `Gemini's free day is spent: ${model} (xAI) answered`);
+      return serdeParse(text);
+    }
+    if (response.status === 429 || response.status >= 500) {
+      await pause(4_000 * attempt);
+      continue;
+    }
+    throw new Error(`xAI answered ${response.status}: ${text.slice(0, 300)}`);
+  }
+  throw new Error("xAI kept refusing for now");
+}
+
 /** Posts a gateway request (its bytes) to Gemini and answers as the gateway would. */
 export async function post(bytes: Uint8Array): Promise<unknown> {
   const key = trim(process.env.GEMINI_API_KEY ?? "");
   if (key === "") throw new Error("EDIT_AI_PROVIDER is gemini but GEMINI_API_KEY isn't set");
-  const { model: asked, body } = translate(serdeParse(new TextDecoder().decode(bytes)) as Json);
+  const request = serdeParse(new TextDecoder().decode(bytes)) as Json;
+  const { model: asked, body } = translate(request);
+  if (order(asked).length === 0) {
+    const answered = await xai(request);
+    if (answered !== null) return answered;
+  }
   const release = await lane.acquire();
   try {
     let last = "no Gemini model left today";
@@ -163,6 +207,9 @@ export async function post(bytes: Uint8Array): Promise<unknown> {
         throw new Error(last);
       }
     }
+    // Every model's day spent on the way: pictures can still go to xAI.
+    const answered = await xai(request);
+    if (answered !== null) return answered;
     throw new Error(last);
   } finally {
     release();

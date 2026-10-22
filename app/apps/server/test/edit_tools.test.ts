@@ -4,10 +4,11 @@ import * as fs from "node:fs";
 
 import type { App } from "../src/app.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
-import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, lineSeconds, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
+import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
+import type { Transcript } from "../src/transcribe.ts";
 import { clipOf, newProject } from "../src/project.ts";
 import { fixtureHome, write, type Fixture } from "./helpers/home.ts";
 import { clip, media } from "./helpers/model.ts";
@@ -565,4 +566,19 @@ test("a bodycam intro past 40 s is flagged; an interrogation's isn't", () => {
   expect(introLong(p, [[0, 28 * 30]])).toEqual([]);
   p.style = "interrogation";
   expect(introLong(p, [[0, 90 * 30]])).toEqual([]);
+});
+
+test("a bodycam intro that doesn't end on the arrest is flagged, naming the arrest line", () => {
+  const p = newProject("p", "t", { width: 1920, height: 1080, fps: 30 });
+  p.style = "bodycam";
+  p.media.push({ id: "m1", path: "/x.mp4", name: "x.mp4", kind: "video", duration: 100, width: 1920, height: 1080, fps: 30, has_audio: true } as Project["media"][number]);
+  const track = p.tracks.find((one) => one.kind === "audio")!.id;
+  p.clips.push({ id: "a1", type: "audio", track, start: 0, duration: 300, media: "m1", source_in: 0, speed: 1, volume_db: 0, name: "Teaser", color: "green", fade_in: 0, fade_out: 0, keyframes: {} } as Project["clips"][number]);
+  const words = (text: string, at: number) => text.split(" ").map((word, index) => ({ text: word, start: at + index * 0.3, end: at + index * 0.3 + 0.25 }));
+  const heard = new Map([["m1", { words: [...words("it will be the worst nightmare", 5), ...words("you're under arrest for risk of injury", 60)] } as unknown as Transcript]]);
+  const issues = introWithoutArrest(p, heard, [[0, 300]]) as { kind: string; arrest: { at_seconds: number } }[];
+  expect(issues.map((issue) => [issue.kind, issue.arrest.at_seconds])).toEqual([["intro_no_arrest", 60]]);
+  // Ending on it: nothing to say.
+  heard.set("m1", { words: words("you're under arrest for risk of injury", 6) } as unknown as Transcript);
+  expect(introWithoutArrest(p, heard, [[0, 300]])).toEqual([]);
 });

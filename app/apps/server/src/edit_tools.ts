@@ -1055,6 +1055,41 @@ export function introLong(project: Project, teasers: [number, number][]): Json[]
   return [{ kind: "intro_long", start, end, seconds: Math.round(seconds), at_most: LONGEST_INTRO, fix: "keep ~30 s of the strongest emotional moments, mostly the suspect, ending on the arrest: cut calm lines, small talk and third parties from the teasers (remove_time)" }];
 }
 
+/** What an arrest sounds like in bodycam footage. */
+const ARREST = /\b(you'?re|you are) (now )?under arrest\b|\bunder arrest\b|\bcuff (you|her|him)\b|\bhands behind your back\b/iu;
+
+/**
+ * A bodycam intro that doesn't end on the arrest when the footage has one
+ * (`intro_no_arrest`: the team's reference intro ends on the cuffing; ours
+ * ended on a calm line). Names the arrest line found, to end on it.
+ */
+export function introWithoutArrest(project: Project, heard: Map<string, Transcript>, teasers: [number, number][]): Json[] {
+  if (project.style !== "bodycam" || teasers.length === 0) return [];
+  const fps = project.settings.fps;
+  const end = Math.max(...teasers.map(([, to]) => to));
+  // What the intro's last 10 s say.
+  let said = "";
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || clipEnd(clip) <= end - 10 * fps || clip.start >= end) continue;
+    const words = heard.get(clip.media)?.words ?? [];
+    const from = clip.source_in + (Math.max(end - 10 * fps, clip.start) - clip.start) / fps * clip.speed;
+    const to = clip.source_in + (Math.min(end, clipEnd(clip)) - clip.start) / fps * clip.speed;
+    said += ` ${words.filter((word) => word.start >= from && word.end <= to).map((word) => word.text).join(" ")}`;
+  }
+  if (ARREST.test(said)) return [];
+  for (const media of project.media) {
+    if (media.kind !== "video") continue;
+    const words = heard.get(media.id)?.words ?? [];
+    for (let index = 0; index < words.length; index++) {
+      const window = words.slice(index, index + 8).map((word) => word.text).join(" ");
+      // The window that starts with the arrest words, so the time is theirs.
+      if (ARREST.exec(window)?.index !== 0) continue;
+      return [{ kind: "intro_no_arrest", start: Math.max(end - 10 * fps, 0), end, arrest: { media: media.id, at_seconds: Math.round(words[index]!.start * 10) / 10, said: window.slice(0, 80) }, fix: "end the intro on the arrest: a teaser of that line (the cuffing) as its last" }];
+    }
+  }
+  return [];
+}
+
 /**
  * The plan's mechanical audit, plus what it needs the media cache for: B-roll
  * that's mostly pixelated or blurred (files not read yet start reading and
@@ -1079,6 +1114,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...(framing.interrogationIssues(project, parts, (at) => editPlan.cutSounds(project, at)) as Json[]),
     ...seams.faces.punchInsOffFace(project, teasers),
     ...introLong(project, teasers),
+    ...introWithoutArrest(project, heard, teasers),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
@@ -1112,7 +1148,7 @@ const FIXABLE = [
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
-  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long",
+  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest",
 ];
 
 /**

@@ -2141,6 +2141,12 @@ impl Project {
             let ClipContent::Text { style, .. } = &clip.content else {
                 return Err(format!("clip {} names a person but isn't text", clip.id));
             };
+            // A courtroom video's subtitles have no name label, and their
+            // words stay white whoever speaks (the team: "for courtroom videos
+            // we have the text for subtitles be white and not change by subject").
+            if self.style == Style::Courtroom && style.label.is_none() {
+                continue;
+            }
             let shown = style
                 .label
                 .as_ref()
@@ -2440,6 +2446,11 @@ mod validation_tests {
         p.clips = vec![line("a", 0, yellow, false)];
         p.people.push(p.people[0].clone());
         assert!(p.validate().unwrap_err().contains("duplicate person id"));
+        // A courtroom video's unlabelled subtitles keep white words, whoever's they are.
+        p.people.pop();
+        p.style = Style::Courtroom;
+        p.clips = vec![line("a", 0, Rgba::WHITE, false)];
+        assert!(p.validate().is_ok(), "{:?}", p.validate());
     }
 
     #[test]

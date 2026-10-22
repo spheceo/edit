@@ -30,8 +30,8 @@ export const useUpdate = create<{
   from: string | null;
 }>(() => ({ status: null, from: null }));
 
-/** The server only asks the relay every ten minutes anyway. */
-const IDLE_POLL_MS = 10 * 60_000;
+/** The server asks GitHub at most once a minute (an unchanged answer costs nothing). */
+const IDLE_POLL_MS = 60_000;
 const BUSY_POLL_MS = 500;
 /** How long to wait for the new version before giving up on it. */
 const RESTART_PATIENCE_MS = 120_000;

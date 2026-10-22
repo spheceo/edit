@@ -25,8 +25,14 @@ export { BUILD, VERSION } from "./version.ts";
 
 const REPO = "spheceo/edit";
 
-/** A new release shows up within this long of the editor asking. */
-const CHECK_EVERY_MS = 10 * 60 * 1000;
+/**
+ * A new release shows up within this long of the editor asking. Each look
+ * reads the releases' Atom feed, which GitHub's API limit (60 anonymous asks
+ * an hour, every one counted) doesn't cover; the API is asked only when the
+ * feed's tags change.
+ */
+const CHECK_EVERY_MS = 60 * 1000;
+const FEED = `https://github.com/${REPO}/releases.atom`;
 
 /** Whether this build installs updates itself. */
 export function enabled(): boolean {
@@ -198,7 +204,29 @@ export class Updater implements UpdaterSeam {
  * Asks GitHub for the newest build on `channel`; null when this one is current
  * (or the newest has no build for this machine).
  */
-export async function check(channel: Channel, api = `https://api.github.com/repos/${REPO}/releases`): Promise<Release | null> {
+export async function check(channel: Channel, api = `https://api.github.com/repos/${REPO}/releases`, feed: string | null = FEED): Promise<Release | null> {
+  // The feed's tags as they were at the last answer: unchanged, so is the answer.
+  const tags = feed === null ? null : await feedTags(feed).catch(() => null);
+  const last = lastAnswer.get(`${channel} ${api}`);
+  if (tags !== null && last !== undefined && last.tags === tags && Date.now() - last.at < ASK_ANYWAY_MS) return last.release;
+  const release = await ask(channel, api);
+  if (tags !== null) lastAnswer.set(`${channel} ${api}`, { tags, release, at: Date.now() });
+  return release;
+}
+
+/** The last answer from the API for each channel, the feed's tags then, and when. */
+const lastAnswer = new Map<string, { tags: string; release: Release | null; at: number }>();
+/** The API is asked again after this long even with the feed unchanged (a release whose builds were still uploading). */
+const ASK_ANYWAY_MS = 30 * 60_000;
+
+/** Every tag in the releases' feed, sorted and joined: it changes when a build is published or taken down. */
+export async function feedTags(url: string): Promise<string> {
+  const [code, body] = await fetchText(url);
+  if (code !== 200) throw new Error(`the releases feed answered ${code}`);
+  return [...body.matchAll(/\/releases\/tag\/([^"<\s]+)/g)].map((match) => match[1]!).sort().join(" ");
+}
+
+async function ask(channel: Channel, api: string): Promise<Release | null> {
   if (channel === "stable") {
     const [code, body] = await fetchText(`${api}/latest`);
     if (code === 404) return null; // nothing released yet

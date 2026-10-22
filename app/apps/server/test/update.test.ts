@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { ahead, appBundle, assetTarget, installApp, enabled, latestBuild, newer, programs, readChannel, swapAll, Updater } from "../src/update.ts";
+import { ahead, appBundle, assetTarget, feedTags, installApp, enabled, latestBuild, newer, programs, readChannel, swapAll, Updater } from "../src/update.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("newer_compares_numerically", () => {
@@ -145,5 +145,18 @@ test.skipIf(process.platform !== "darwin")("an_app_update_replaces_the_whole_app
     expect(fs.readdirSync(`${dir}/apps`)).toEqual(["Edit.app"]);
   } finally {
     cleanup();
+  }
+});
+
+test("the releases feed's tags: every tag, sorted", async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch: () =>
+      new Response(`<feed><entry><link href="https://github.com/spheceo/edit/releases/tag/nightly-2"/></entry><entry><link href="https://github.com/spheceo/edit/releases/tag/v0.0.0"/></entry><entry><link href="https://github.com/spheceo/edit/releases/tag/nightly-1"/></entry></feed>`),
+  });
+  try {
+    expect(await feedTags(`http://localhost:${server.port}/releases.atom`)).toBe("nightly-1 nightly-2 v0.0.0");
+  } finally {
+    server.stop(true);
   }
 });

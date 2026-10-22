@@ -27,6 +27,7 @@ import { DEFAULT_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { missingMedia, UpdateError } from "./store.ts";
+import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
@@ -46,6 +47,8 @@ export function buildRouter(): Router<App> {
     .get("/api/media-drive", mediaDrive)
     .post("/api/media-drive", setMediaDrive);
   seams.cloudProjects.routes(router);
+  // Before /api/projects/{id}: /api/projects/status is its own.
+  reviews.routes(router);
   seams.voice.routes(router);
   router
     .post("/api/diagnostics/client", clientLog)

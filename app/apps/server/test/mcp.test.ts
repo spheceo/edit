@@ -34,7 +34,7 @@ test("tool_reference_is_one_short_line_per_tool", () => {
 });
 
 test("every tool takes project_id; the instructions list the skills", () => {
-  expect(TOOLS.length).toBe(60);
+  expect(TOOLS.length).toBe(63);
   for (const tool of TOOLS) {
     expect(tool.inputSchema.type).toBe("object");
     expect(tool.inputSchema.properties.project_id).toEqual({

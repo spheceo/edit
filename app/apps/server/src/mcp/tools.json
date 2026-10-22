@@ -1318,6 +1318,73 @@
     "name": "read_review"
   },
   {
+    "description": "Marks a Repack review note fixed. Call it after each note Edit set you on, before the next: Edit works out what you changed since the note before (the clips and their stretch of the timeline), keeps it with the note so the timeline shows the change and the reviewer's words over it, and marks the note done on the review with your summary.",
+    "inputSchema": {
+      "properties": {
+        "note": {
+          "description": "The note's id, as Edit gave it ([id]).",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "One line: what you changed for it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "note",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "name": "feedback_done"
+  },
+  {
+    "description": "Leaves a Repack review note open, with why. Your reason is posted under it for the team.",
+    "inputSchema": {
+      "properties": {
+        "note": {
+          "description": "The note's id.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it's left.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "note",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "name": "feedback_unfixed"
+  },
+  {
+    "description": "Shares a whole export for review on Repack. A 720p copy where anyone with the link comments at a moment of the video, as on Frame.io; the first share makes the review, later ones a new version under the same link. Their notes come back to Edit, which sets you on them. Returns the link.",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "description": "The export (as the exports list has it). Default: the newest whole export.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "share_for_review"
+  },
+  {
     "description": "Save a news article about THIS case into the project (the user reads it in the Research view: its text, outlet and date), and put the photos it carries into the review: an article's own photos are of the case, the best images there are. Only for articles you've checked match the case.",
     "inputSchema": {
       "properties": {
@@ -1570,7 +1637,7 @@
     "name": "remove_time"
   },
   {
-    "description": "Lengthens footage cut inside a word (the audit's cut_mid_word) by putting time into the whole timeline at the cut (a ripple insert, the reverse of remove_time): an out point plays on to the end of the word, an in point starts before it, its linked picture or sound with it; everything after moves right (the narration, B-roll, subtitles, markers), what plays across the cut (a music bed, a B-roll shot) plays on longer with its keyframes after the cut moving on, the subtitle ending on the cut holds to the word and a flash or whoosh on the cut goes with it. With no arguments it fixes every cut_mid_word the audit lists. Returns each cut, the seconds added and the timeline's new length.",
+    "description": "Plays a word a cut clips (cut_mid_word) to its end. A ripple insert at the cut, the reverse of remove_time: an out point plays on to the end of the word, an in point starts before it, its linked picture or sound with it; everything after moves right (the narration, B-roll, subtitles, markers), what plays across the cut (a music bed, a B-roll shot) plays on longer with its keyframes after the cut moving on, the subtitle ending on the cut holds to the word and a flash or whoosh on the cut goes with it. With no arguments it fixes every cut_mid_word the audit lists. Returns each cut, the seconds added and the spans to subtitle again.",
     "inputSchema": {
       "properties": {
         "clip": {

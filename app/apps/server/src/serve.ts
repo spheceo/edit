@@ -21,6 +21,7 @@ import { registerMediaTools } from "./media_tools.ts";
 import { allowedHosts } from "./http/host.ts";
 import { holdLock } from "./media_drive/layout.ts";
 import { initNative } from "./native/index.ts";
+import * as reviews from "./reviews.ts";
 import { buildRouter } from "./routes.ts";
 import * as seams from "./seams.ts";
 import { Store } from "./store.ts";
@@ -173,6 +174,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   seams.speakers.watch(app);
   // Cloud projects (on with the built-in token): sync, locks, and letting them go on the way out.
   optional("cloud", () => seams.cloudProjects.start(app));
+  // Repack reviews of exports: their notes followed, and fixed by the agent once they settle.
+  optional("review", () => reviews.start(app));
   let quitting = false;
   const quit = (code: number) => {
     // A second signal, or a cloud push that never answers, doesn't hold Edit open.

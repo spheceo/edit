@@ -5,6 +5,7 @@
 // subtitled video (or whenever asked). The local rendering, mixing, the partial
 // file beside the destination and its rename are the addon's (`ExportJob`).
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
@@ -47,6 +48,8 @@ interface Running {
   cloudJob?: string;
   /** The timeline kept for a restart (`snapshotFile`), removed when it ends. */
   snapshot: string | null;
+  /** What it exports, as `timelineHash`. */
+  timeline: string;
 }
 
 /**
@@ -66,6 +69,23 @@ export interface ExportRecord {
   frames: number;
   whole: boolean;
   format: string;
+  /** The exported timeline's fingerprint (`timelineHash`): an edit since makes the project "not exported". */
+  timeline?: string;
+}
+
+/** A project's timeline as a fingerprint: the same whatever revision or machine saved it, different after any edit. */
+export function timelineHash(project: Project): string {
+  return createHash("sha256").update(jsonForSerde(project)).digest("hex").slice(0, 16);
+}
+
+/** The picture clips of an export's timeline ([id, start, duration] frames): a review note's moment finds its clip by them after later edits. */
+export function clipMap(project: Project): [string, number, number][] {
+  return project.clips.filter((clip) => clip.type === "video").map((clip): [string, number, number] => [clip.id, clip.start, clip.duration]);
+}
+
+/** Where an export's clip map is kept, by its timeline (`timelineHash`). */
+export function mapFile(home: string, timeline: string): string {
+  return join(home, "export-maps", `${timeline}.json`);
 }
 
 /** How many exports a project keeps listed (the oldest drop off the list; their files stay). */
@@ -262,7 +282,7 @@ export class ExportRegistry implements seams.Exports {
       ...(cloudJob === undefined ? {} : { cloudJob }), ...(extra.drive === undefined ? {} : { drive: extra.drive }), ...(snapshot === null ? {} : { snapshot }),
     };
     const key = jobs.begin(this.home, "export", project.id, args);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob };
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project) };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -381,7 +401,10 @@ export class ExportRegistry implements seams.Exports {
           frames,
           whole: plan.start === 0 && plan.end >= duration(project),
           format: options.format,
+          timeline: running.timeline,
         });
+        fs.mkdirSync(join(this.home ?? store.home, "export-maps"), { recursive: true });
+        writeAtomic(mapFile(this.home ?? store.home, running.timeline), JSON.stringify(clipMap(project)));
       } catch (error) {
         diag.warn("export", `couldn't list ${output}: ${diag.messageOf(error)}`);
       }

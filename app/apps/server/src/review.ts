@@ -124,13 +124,21 @@ function described(project: Project, clip: Clip): string {
   return `${clip.id} ${clip.track} ${clip.start}–${clipEnd(clip)}: ${what}`;
 }
 
+/** What's on the timeline at `frame`, lowest track first: each clip's id, track, span and what it is. */
+export function onScreen(project: Project, frame: number): string[] {
+  const tracks = project.tracks.map((track) => track.id);
+  return project.clips
+    .filter((clip) => clip.start <= frame && frame < clipEnd(clip))
+    .sort((a, b) => tracks.indexOf(a.track) - tracks.indexOf(b.track))
+    .map((clip) => described(project, clip));
+}
+
 /**
  * The comments placed on `project`'s timeline (the export it reviews starts
  * at frame 0): each with its time and frame and the clips there.
  */
 export function placed(project: Project, found: Comment[], rate: number | null): unknown[] {
   const fps = fpsOf(project);
-  const tracks = project.tracks.map((track) => track.id);
   const one = (comment: Comment): Record<string, unknown> => {
     const out: Record<string, unknown> = { author: comment.author, text: comment.text };
     if (comment.number !== null) out.number = comment.number;
@@ -140,10 +148,7 @@ export function placed(project: Project, found: Comment[], rate: number | null):
       out.timecode = comment.timecode;
       out.time = round(at * 100) / 100;
       out.frame = frame;
-      out.on_timeline = project.clips
-        .filter((clip) => clip.start <= frame && frame < clipEnd(clip))
-        .sort((a, b) => tracks.indexOf(a.track) - tracks.indexOf(b.track))
-        .map((clip) => described(project, clip));
+      out.on_timeline = onScreen(project, frame);
     }
     if (comment.replies.length > 0) out.replies = comment.replies.map(one);
     return out;

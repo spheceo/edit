@@ -218,8 +218,11 @@ export const RESUME_WITHIN_MS = 10 * 60_000;
  * where the editing tools are (edit_tools.unfinishedNote).
  */
 export const agentHooks = {
-  unfinished: (_project: string): string | null => null,
+  unfinished: (_project: string): { note: string; count: number } | null => null,
 };
+
+/** Follow-ups Edit sends after one message at most, each only while the last cut the flags by a fifth or more. */
+export const MAX_FOLLOW_UPS = 3;
 
 
 /** The turn that carries on one a restart cut short. */
@@ -263,8 +266,8 @@ interface TurnUsage {
 }
 
 export class Agents implements seams.AgentPanel {
-  /** The turn (generation) each project's last automatic follow-up went to: one per user message. */
-  private followedUp = new Map<string, number>();
+  /** Each project's automatic follow-ups for the user's last message: its generation, how many, the flags left at the last. */
+  private followedUp = new Map<string, { generation: number; sent: number; count: number }>();
   /** Token use of each project's running turn. */
   private usage = new Map<string, TurnUsage>();
   private dir: string;
@@ -1359,26 +1362,33 @@ export class Agents implements seams.AgentPanel {
    * pictures, and said so, rather than fixing them.
    */
   private followUp(project: string, generation: number): void {
-    if (this.followedUp.get(project) === generation) return;
+    const before = this.followedUp.get(project);
+    const mine = before !== undefined && before.generation === generation ? before : null;
+    if (mine !== null && mine.sent >= MAX_FOLLOW_UPS) return;
     const chat = this.withChat(project);
+    // A whole edit or its final pass, in this message's turns (the user's last
+    // message and Edit's follow-ups after it).
     let asked = -1;
     chat.entries.forEach((item, index) => {
-      if (item.kind === "user") asked = index;
+      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
     });
     const whole = chat.entries
       .slice(asked + 1)
       .some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
     if (!whole) return;
-    let note: string | null;
+    let left: { note: string; count: number } | null;
     try {
-      note = agentHooks.unfinished(project);
+      left = agentHooks.unfinished(project);
     } catch (error) {
       diag.warn("agent", `checking what ${project}'s edit left: ${diag.messageOf(error)}`);
       return;
     }
-    if (note === null) return;
-    this.followedUp.set(project, generation);
-    diag.info("agent", `${project}: the edit left flags; asking for them once more`);
+    if (left === null) return;
+    // Another pass only while the last one got somewhere.
+    if (mine !== null && left.count > mine.count * 0.8) return;
+    this.followedUp.set(project, { generation, sent: (mine?.sent ?? 0) + 1, count: left.count });
+    diag.info("agent", `${project}: the edit left ${left.count} flags; asking for them (${(mine?.sent ?? 0) + 1} of ${MAX_FOLLOW_UPS})`);
+    const note = left.note;
     void (async () => {
       await timing.sleep(1000);
       const later = this.withChat(project);

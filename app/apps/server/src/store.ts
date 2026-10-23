@@ -431,6 +431,9 @@ export class Store {
       // The renames below say whether it worked.
     }
     const stamp = nowMs();
+    // What Edit rendered for it and can render again (smoothed slow motion,
+    // map shots) goes: a teaching loop's 15 deleted trials left 8 GB of it.
+    for (const made of ["smooth", "maps"]) fs.rmSync(join(this.uploadsDir(id), made), { recursive: true, force: true });
     try {
       fs.renameSync(this.chatPath(id), join(bin, `${id}-${stamp}.chat.json`));
     } catch {

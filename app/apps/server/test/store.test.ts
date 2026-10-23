@@ -373,3 +373,21 @@ test("a card's frame is plain footage running, never a cut-in, a graphic or a cu
     cleanup();
   }
 });
+
+test("deleting a project removes what Edit rendered for it (smoothed footage, maps), keeping its own files", () => {
+  const fixture = fixtureHome("delete-renders");
+  try {
+    const live = fixture.store.createAs("Trial", "bodycam", { width: 1920, height: 1080, fps: 30 });
+    const dir = fixture.store.uploadsDir(live.project.id);
+    for (const sub of ["smooth", "maps", "voice-over"]) {
+      fs.mkdirSync(`${dir}/${sub}`, { recursive: true });
+      fs.writeFileSync(`${dir}/${sub}/a.mp4`, "x");
+    }
+    expect(fixture.store.delete(live.project.id)).toBe(true);
+    expect(fs.existsSync(`${dir}/smooth`)).toBe(false);
+    expect(fs.existsSync(`${dir}/maps`)).toBe(false);
+    expect(fs.existsSync(`${dir}/voice-over/a.mp4`)).toBe(true);
+  } finally {
+    fixture.cleanup();
+  }
+});

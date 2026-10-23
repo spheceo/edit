@@ -8,7 +8,7 @@
 //
 //   bun scripts/push-secrets.ts                 what would be pushed (names), nothing sent
 //   bun scripts/push-secrets.ts --yes           push them all
-//   bun scripts/push-secrets.ts --yes A,B       push only these
+//   bun scripts/push-secrets.ts --yes --only A,B   push only these (the rest of the Worker's untouched)
 //   --env prod                                  another Infisical environment (default dev)
 //
 // A Worker secret that isn't in the folder is left as it is (never deleted).
@@ -24,6 +24,7 @@ const args = process.argv.slice(2);
 const yes = args.includes("--yes");
 const envAt = args.indexOf("--env");
 const environment = envAt >= 0 ? (args[envAt + 1] ?? "dev") : "dev";
+// `--only A,B` (or the names given bare): just these.
 const only = args.filter((arg, index) => !arg.startsWith("--") && args[index - 1] !== "--env").flatMap((arg) => arg.split(",")).filter(Boolean);
 
 function run(command: string, argv: string[], input: string | null, cwd?: string): Promise<{ code: number; out: string }> {

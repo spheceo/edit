@@ -6,8 +6,9 @@ compatibility_date = "2026-09-07"
 workers_dev = true
 preview_urls = false
 
-# Secrets (`bunx wrangler secret put NAME`; for `wrangler dev`, apps/relay/.dev.vars,
-# gitignored). Never in this file:
+# Secrets: in Infisical (Repack's project, folder /edit-relay, references to the root's values),
+# pushed with `bun scripts/push-secrets.ts --yes` (dry run without --yes; values on wrangler's
+# stdin, never printed). For `wrangler dev`, apps/relay/.dev.vars, gitignored. Never in this file:
 #   ELEVENLABS_API_KEY, ELEVENLABS_SPEECH_KEY, GOOGLE_MAPS_KEY, CLIENT_TOKEN
 # Edit's cloud (/v1/cloud/*, src/cloud.ts); without CLOUD_TOKEN every cloud
 # request is refused:

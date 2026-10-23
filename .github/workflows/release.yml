@@ -78,7 +78,11 @@ jobs:
         run: |
           version="$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
           cargo install wasm-bindgen-cli --version "$version" --locked
+      # Pinned: a binary compiled by Bun 1.4.4 hung at start under the hardened
+      # runtime for Writer (Oct 23); 1.4.0 is what Edit is built and checked with.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
       - name: Build the UI
         run: |
           cargo build -p edit-wasm --target wasm32-unknown-unknown --release
@@ -111,7 +115,11 @@ jobs:
         with:
           name: web-dist
           path: app/apps/web/dist
+      # Pinned: a binary compiled by Bun 1.4.4 hung at start under the hardened
+      # runtime for Writer (Oct 23); 1.4.0 is what Edit is built and checked with.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
       # The addon and the window helper, then everything embedded in one `edit`
       # (apps/server/scripts/embed.ts); `bun build --compile` leaves the
       # signature invalid, so every binary is signed again (ad hoc).

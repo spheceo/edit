@@ -19,6 +19,17 @@ export interface Account {
   accounts: string;
 }
 
+/**
+ * The edit styles the person may make full edits in (accounts' `edit.<style>`),
+ * as the server's kinds.ts reads the token; null for all of them (an admin, a
+ * token from before the kinds, or nobody signed in).
+ */
+export function editStyles(account: Account | null): Set<string> | null {
+  if (account === null || account.person === null || account.admin) return null;
+  if (!account.perms.some((perm) => perm.includes("."))) return null;
+  return new Set(account.perms.filter((perm) => perm.startsWith("edit.")).map((perm) => perm.slice("edit.".length)));
+}
+
 export const useAccount = create<{ account: Account | null; waiting: boolean }>(() => ({ account: null, waiting: false }));
 
 export async function loadAccount(): Promise<Account | null> {

@@ -174,6 +174,8 @@ export interface ProjectSummary {
   clips: number;
   /** A subtitled video: Repack-style subtitles (repack_subtitles) over its footage. */
   subtitles?: boolean;
+  /** Nothing but footage (or nothing) yet: a subtitled video starting, so open to subtitlers too (`kinds.ts`). */
+  footage_only?: boolean;
   /** Its export on the team's Drive. */
   drive?: DriveFile;
   /** Why it can't be opened (its file is left as it is). */

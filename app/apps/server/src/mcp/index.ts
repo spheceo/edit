@@ -190,4 +190,4 @@ export async function once(key: string, name: string, work: () => Promise<Conten
 }
 
 // list_projects answers before any project is resolved (it works with none).
-registerTool("list_projects", ({ app }) => text(JSON.stringify(app.store.list(), null, 2)), { noProject: true });
+registerTool("list_projects", ({ app }) => text(JSON.stringify(app.store.visible(), null, 2)), { noProject: true });

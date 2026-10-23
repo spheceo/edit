@@ -567,6 +567,13 @@ export function routes(router: Router<App>): void {
 }
 
 /** Tests: back to signed out with nothing pending. */
+/** Tests: someone signed in with these perms (kinds.ts reads them). */
+export function signedInForTests(perms: string[], admin = false): void {
+  state.person = { sub: "person-test", email: "test@example.com", name: "Test Person", image: null };
+  state.perms = perms;
+  state.admin = admin;
+}
+
 export function resetForTests(): void {
   forget(null);
   state.pending = null;

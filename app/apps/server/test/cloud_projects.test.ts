@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
+import * as accounts from "../src/accounts.ts";
 import * as cloud from "../src/cloud.ts";
 import {
   BACKOFF_MAX,
@@ -24,6 +25,7 @@ import {
   writePrivate,
   list,
   creatorOf,
+  cloudShape,
 } from "../src/cloud_projects.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
 import type { Project } from "../src/model.ts";
@@ -387,6 +389,27 @@ test("a project from the cloud says who started it: its own record, else Convex'
     // Never the email.
     expect(JSON.stringify(store.get(id)!.project)).not.toContain("kenobi@");
   } finally {
+    cleanup();
+  }
+});
+
+test("someone who can't work on a cloud project's kind of video isn't shown it, and it isn't brought here", async () => {
+  const { app, store, projects, cleanup } = setup("cloud-kinds");
+  try {
+    expect(cloudShape({ style: "courtroom", subtitles: false, footageOnly: false })).toEqual({ style: "courtroom", subtitles: false, footageOnly: false });
+    expect(cloudShape(null)).toEqual({ style: "bodycam", subtitles: false, footageOnly: false });
+    const theirs = { ...newProject("p1-77", "Courtroom edit", SETTINGS_1080, "courtroom") } as unknown as Record<string, unknown>;
+    mock.cloud.convex.saveElsewhere(theirs, "kenobi");
+    mock.cloud.convex.projects.get("p1-77")!.summary = { style: "courtroom", subtitles: false, footageOnly: false };
+    accounts.signedInForTests(["use", "video.subtitles"]);
+    expect(((await list(app)).projects as { id: string }[]).map((one) => one.id)).not.toContain("p1-77");
+    await expect(open(app, "p1-77", "ui-1")).rejects.toThrow("isn't available to your account");
+    expect(store.get("p1-77")).toBeNull();
+    expect(projects.projects.has("p1-77")).toBe(false);
+    accounts.signedInForTests(["use", "edit.courtroom"]);
+    expect(((await list(app)).projects as { id: string }[]).map((one) => one.id)).toContain("p1-77");
+  } finally {
+    accounts.resetForTests();
     cleanup();
   }
 });

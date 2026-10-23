@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 
 import { creator } from "./accounts.ts";
 import * as diag from "./diag.ts";
+import * as kinds from "./kinds.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import * as mediaDrive from "./media_drive/layout.ts";
 import type { Clip, DriveFile, Project, ProjectSummary, Settings, Style } from "./model.ts";
@@ -493,6 +494,8 @@ export class Store {
       throw new TypeError("store.update's edit must be synchronous (it runs atomically)");
     }
     project.id = id;
+    const refused = refusalOf(current.project, project);
+    if (refused !== null) throw new Error(refused);
     try {
       const live = this.commitUnguarded(id, current.rev, this.prepare(id, project), origin);
       cloud?.wrote(id);
@@ -517,6 +520,9 @@ export class Store {
   async commit(id: string, rev: number, project: Project, origin: string): Promise<Live> {
     // Invalid before refused: a bad save says what's wrong with it first.
     const prepared = this.prepare(id, project);
+    const before = this.projects.get(id);
+    const refused = before === undefined ? null : refusalOf(before.project, project);
+    if (refused !== null) throw new UpdateError("refused", refused);
     const cloud = this.cloudHook;
     if (cloud !== null) {
       try {
@@ -619,14 +625,31 @@ export class Store {
     this.active = id;
   }
 
-  /** Explicit id, else the project the UI has open, else the most recent. */
+  /** The projects the signed-in person may work on (`kinds`): what Home and the agent are shown. */
+  visible(): ProjectSummary[] {
+    const given = kinds.granted();
+    const all = this.list();
+    return given === null ? all : all.filter((summary) => summary.problem !== undefined || kinds.mayWork(summaryShape(summary), given));
+  }
+
+  /** Null when the signed-in person may work on project `id` (or it isn't here); else why not. */
+  unavailable(id: string): string | null {
+    const live = this.get(id);
+    if (live === null) return null;
+    const shape = shapeOf(live.project);
+    return kinds.mayWork(shape) ? null : kinds.unavailable(shape);
+  }
+
+  /** Explicit id, else the project the UI has open, else the most recent (of those the signed-in person may work on). */
   resolve(id?: string | null): string {
     if (id !== undefined && id !== null && id !== "") {
       if (this.get(id) === null) throw new Error(`no project ${id}`);
+      const why = this.unavailable(id);
+      if (why !== null) throw new Error(why);
       return id;
     }
-    if (this.active !== null) return this.active;
-    const first = this.list()[0];
+    if (this.active !== null && this.unavailable(this.active) === null) return this.active;
+    const first = this.visible()[0];
     if (first === undefined) throw new Error("no projects yet; create one in the UI first");
     return first.id;
   }
@@ -645,6 +668,7 @@ function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
     clips: project.clips.length,
   };
   if (isSubtitled(project)) summary.subtitles = true;
+  else if (shapeOf(project).footageOnly) summary.footage_only = true;
   if (project.drive !== undefined && project.drive !== null) summary.drive = project.drive as DriveFile;
   if (project.created_by !== undefined && project.created_by !== null) summary.created_by = project.created_by;
   const missing = missingMedia(project);
@@ -776,11 +800,39 @@ export const SUBTITLE_NAME = "Subtitle";
  * B-roll and sound). Here, not in subtitles.ts, because `list` needs it.
  */
 export function isSubtitled(project: Project): boolean {
-  const prefix = `${SUBTITLE_NAME} · `;
-  const subtitle = (clip: Clip) => typeof clip.name === "string" && clip.name.startsWith(prefix);
-  const footage = (clip: Clip) => {
-    if (clip.type !== "video" && clip.type !== "audio") return false;
-    return mediaOf(project, clip.media)?.kind === "video";
-  };
-  return project.clips.some(subtitle) && project.clips.every((clip) => subtitle(clip) || footage(clip));
+  const subtitle = isSubtitleClip;
+  return project.clips.some(subtitle) && project.clips.every((clip) => subtitle(clip) || isFootageClip(project, clip));
+}
+
+function isSubtitleClip(clip: Clip): boolean {
+  return typeof clip.name === "string" && clip.name.startsWith(`${SUBTITLE_NAME} · `);
+}
+
+function isFootageClip(project: Project, clip: Clip): boolean {
+  if (clip.type !== "video" && clip.type !== "audio") return false;
+  return mediaOf(project, clip.media)?.kind === "video";
+}
+
+/** What `kinds` needs to know of a project: its style, whether it's a subtitled video, or only footage yet. */
+export function shapeOf(project: Project): kinds.Shape {
+  const subtitles = isSubtitled(project);
+  return { style: project.style, subtitles, footageOnly: !subtitles && project.clips.every((clip) => isFootageClip(project, clip)) };
+}
+
+/** A summary's shape (`footage_only` is set by `summaryOf`). */
+export function summaryShape(summary: ProjectSummary): kinds.Shape {
+  return { style: summary.style, subtitles: summary.subtitles === true, footageOnly: summary.footage_only === true };
+}
+
+/**
+ * A change the signed-in person may not make (`kinds`): to a project of a
+ * kind they can't work on, or one that turns it into one. Null when it's fine.
+ */
+export function refusalOf(before: Project, after: Project): string | null {
+  const given = kinds.granted();
+  if (given === null) return null;
+  const was = shapeOf(before);
+  if (!kinds.mayWork(was, given)) return kinds.unavailable(was);
+  const now = shapeOf(after);
+  return kinds.mayWork(now, given) ? null : kinds.cantMake(kinds.kindOf(now));
 }

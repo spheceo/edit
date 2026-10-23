@@ -102,7 +102,8 @@ export function Editor({ id }: { id: string }) {
       .then((cloud) => alive && useEditor.setState({ cloud }))
       .catch((error) => {
         // Unreachable server: the project request below says so.
-        if (error instanceof ApiError && error.status === 404) throw error;
+        // Or not this account's kind of video (403): says so instead of opening.
+        if (error instanceof ApiError && (error.status === 404 || error.status === 403)) throw error;
       })
       .then(() => api.project(id))
       .then(({ rev, project }) => {

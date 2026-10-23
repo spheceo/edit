@@ -622,7 +622,8 @@ export function stop(): void {
 /** One look at Repack: new notes kept; projects whose notes have settled get the agent. */
 export async function poll(app: App, now = Date.now()): Promise<void> {
   const home = app.store.home;
-  const projects = new Set(app.store.list().map((summary) => summary.id));
+  // Only those the signed-in person may work on (kinds.ts): the agent follows up on no other.
+  const projects = new Set(app.store.visible().map((summary) => summary.id));
   const fresh = new Set<string>();
   // Page by page from where the last look ended.
   for (let page = 0; page < 20; page++) {
@@ -871,7 +872,7 @@ export function projectStatus(app: App): Record<string, Status> {
   const shared = read(home).shared;
   const here = archive.archived(home);
   const out: Record<string, Status> = {};
-  for (const summary of app.store.list()) {
+  for (const summary of app.store.visible()) {
     if (summary.problem !== undefined) continue;
     const live = app.store.get(summary.id);
     if (live === null) continue;

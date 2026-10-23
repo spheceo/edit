@@ -49,7 +49,8 @@ import { duration } from "./project.ts";
 import * as relay from "./relay.ts";
 import { byteLength, isWhitespace, serdeParse, takeChars } from "./rust.ts";
 import { stableStringify } from "./stable.ts";
-import { isSubtitled, nowMs, validId, type CloudHook, type Store } from "./store.ts";
+import * as kinds from "./kinds.ts";
+import { isSubtitled, nowMs, shapeOf, validId, type CloudHook, type Store } from "./store.ts";
 
 /** A push waits this long after the last change (more changes restart it). */
 const DEBOUNCE = 2_000;
@@ -811,7 +812,19 @@ export function summary(project: Project): Record<string, unknown> {
     media: project.media.length,
     style: project.style,
     subtitles: isSubtitled(project),
+    // A subtitled video starting (kinds.ts): open to subtitlers too.
+    footageOnly: shapeOf(project).footageOnly,
     width: project.settings.width,
+  };
+}
+
+/** A cloud project's shape for `kinds`, from the summary its commits keep (none: an edit in the default style). */
+export function cloudShape(given: unknown): kinds.Shape {
+  const style = field(given, "style");
+  return {
+    style: style === "interrogation" || style === "courtroom" ? style : "bodycam",
+    subtitles: field(given, "subtitles") === true,
+    footageOnly: field(given, "footageOnly") === true,
   };
 }
 
@@ -843,6 +856,8 @@ interface Meta {
   holder: string | null;
   /** Who started it, as Convex keeps it (from the relay's verified token); null for projects from before. */
   createdBy: Creator | null;
+  /** What its commits keep beside the body (`summary`): its kind of video. */
+  summary: unknown;
 }
 
 /** Convex's `createdBy` as a project's `created_by`; null when it isn't one. */
@@ -894,6 +909,7 @@ export const remote = {
       bodyUrl: typeof bodyUrl === "string" ? bodyUrl : "",
       holder: liveHolder(field(answer, "lock")),
       createdBy: creatorOf(field(answer, "createdBy")),
+      summary: field(answer, "summary"),
     };
   },
 
@@ -1378,6 +1394,8 @@ export async function open(app: App, id: string, client: string): Promise<Record
   if (cloudProjects === null) return { cloud: false, on: false };
   if (!cloudProjects.on()) return cloudProjects.status(id);
   if (app.store.get(id) === null) await download(app, cloudProjects, id);
+  const why = app.store.unavailable(id);
+  if (why !== null) throw new ApiError(403, why);
   cloudProjects.viewing(id, client);
   const step = cloudProjects.with(id, (entry) => {
     // A new look: what was said last time has been seen.
@@ -1420,9 +1438,14 @@ async function download(app: App, cloudProjects: Cloud, id: string): Promise<voi
   let fetched: [Project, number] | null;
   try {
     const meta = await remote.get(id);
+    // Not brought here for someone who can't work on its kind of video.
+    if (meta !== null && !kinds.mayWork(cloudShape(meta.summary))) {
+      cloudProjects.forget(id);
+      throw new ApiError(403, kinds.unavailable(cloudShape(meta.summary)));
+    }
     fetched = meta === null ? null : [withCreator(await remote.download(meta.bodyUrl), meta), meta.rev];
   } catch (error) {
-    if (isBug(error)) throw error;
+    if (isBug(error) || error instanceof ApiError) throw error;
     cloudProjects.forget(id);
     throw new Error(`Couldn't download it from the cloud: ${diag.messageOf(error)}`);
   }
@@ -1536,7 +1559,9 @@ export async function list(app: App): Promise<Record<string, unknown>> {
     return { error: diag.messageOf(error), on: true, statuses };
   }
   const statuses = cloudProjects.statuses();
-  const projects = items.map((item) => {
+  // Kinds of video the signed-in person can't work on aren't listed (kinds.ts).
+  const given = kinds.granted();
+  const projects = items.filter((item) => given === null || kinds.mayWork(cloudShape(field(item, "summary")), given)).map((item) => {
     const projectId = field(item, "projectId");
     const id = typeof projectId === "string" ? projectId : "";
     const holderNow = liveHolder(field(item, "lock"));

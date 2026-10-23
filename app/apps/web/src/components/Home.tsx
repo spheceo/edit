@@ -2,6 +2,7 @@ import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudU
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
+import { editStyles, useAccount } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
@@ -814,6 +815,9 @@ const DOC = /docs\.google\.com\/document\/d\//;
 function NewProject({ open, onClose, only = null }: { open: boolean; onClose: () => void; only?: Style | null }) {
   const [text, setText] = useState("");
   const [style, setStyle] = useState<Style>("bodycam");
+  // Only the styles this account makes full edits in (none: subtitled videos only, which start as a plain project).
+  const allowed = editStyles(useAccount((state) => state.account));
+  const styles = STYLES.filter((option) => allowed === null || allowed.has(option.value));
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ url: string; result?: Preview; error?: string } | null>(null);
   const toast = useEditor((state) => state.toast);
@@ -827,7 +831,8 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
     if (!open) return;
     setText("");
     setPreview(null);
-    if (only !== null) setStyle(only);
+    if (only !== null && (allowed === null || allowed.has(only))) setStyle(only);
+    else if (styles.length > 0 && !styles.some((option) => option.value === style)) setStyle(styles[0]!.value);
     let alive = true;
     api
       .writerScripts()
@@ -887,6 +892,11 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
   const ready = !script || Boolean(preview?.result);
   const create = async () => {
     if (!ready) return;
+    // A script makes a full edit: not for an account of subtitled videos only (the server refuses it too).
+    if (script && allowed !== null && !allowed.has(style)) {
+      toast("Your account can't make full edits: an admin can give you an Edit style at accounts.spheceo.com.", "error");
+      return;
+    }
     setBusy(true);
     try {
       const name = script ? preview?.result?.title || "Untitled" : url || "Untitled";
@@ -962,8 +972,8 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
           </div>
         )}
         <div className="flex items-center gap-2 border-t border-line px-1 pt-2 pb-0.5">
-          <div className="mr-auto flex rounded-lg bg-black p-0.5 ring-1 ring-line">
-            {STYLES.map((option) => (
+          <div className={cx("mr-auto flex rounded-lg bg-black p-0.5 ring-1 ring-line", styles.length === 0 && "invisible")}>
+            {styles.map((option) => (
               <button
                 type="button"
                 key={option.value}

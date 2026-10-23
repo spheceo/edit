@@ -16,6 +16,7 @@ import { mimeOf } from "./http/assets.ts";
 import { ApiError, bad, notFound } from "./http/errors.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
 import { image, registerTool, text, type Content } from "./mcp/registry.ts";
+import * as kinds from "./kinds.ts";
 import type { Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { duration as projectDuration, fps as fpsOf } from "./project.ts";
@@ -495,6 +496,9 @@ async function scriptAttach(context: RouteContext<App>): Promise<Response> {
   const id = context.params.id ?? "";
   const given = await body(context, SCRIPT_BODY);
   const url = given.url as string;
+  // A script makes a full edit: only of a style the signed-in person may edit (kinds.ts).
+  const style = app.store.get(id)?.project.style;
+  if (style !== undefined && !kinds.mayEdit(style)) throw new ApiError(403, kinds.cantMake(`edit.${style}`));
   const parsed = await readScript(url);
   let live;
   try {

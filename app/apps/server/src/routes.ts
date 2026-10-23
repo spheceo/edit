@@ -32,6 +32,7 @@ import { missingMedia, UpdateError } from "./store.ts";
 import * as archive from "./archive.ts";
 import * as avatars from "./avatars.ts";
 import * as covers from "./covers.ts";
+import * as kinds from "./kinds.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
@@ -197,6 +198,9 @@ function field<T>(object: Record<string, unknown>, name: string, kind: Expected,
 function liveOr404(app: App, id: string) {
   const live = app.store.get(id);
   if (live === null) throw notFound("no such project");
+  // A kind of video the signed-in person can't work on (kinds.ts): hidden, not read-only.
+  const why = app.store.unavailable(id);
+  if (why !== null) throw new ApiError(403, why);
   return live;
 }
 
@@ -375,7 +379,7 @@ async function updateInstall({ app }: Context): Promise<Response> {
 // Projects
 
 function listProjects({ app }: Context): Response {
-  return json({ projects: app.store.list() });
+  return json({ projects: app.store.visible() });
 }
 
 const STYLES: Style[] = ["bodycam", "interrogation", "courtroom"];
@@ -393,6 +397,7 @@ async function createProject(context: Context): Promise<Response> {
     return value;
   };
   const settings = { width: size("width"), height: size("height"), fps: size("fps") };
+  if (!kinds.mayStart(style as Style)) throw new ApiError(403, kinds.cantMake(`edit.${style}`));
   let live;
   try {
     live = context.app.store.createAs(name, style as Style, settings);
@@ -498,6 +503,8 @@ async function deleteProject({ app, params }: Context): Promise<Response> {
   // A cloud project goes from the cloud first (refused while someone else
   // edits it or the cloud can't be reached); one only there, only there.
   const local = app.store.get(id) !== null;
+  const why = app.store.unavailable(id);
+  if (why !== null) throw new ApiError(403, why);
   let inCloud = false;
   if (app.store.cloud() !== null) {
     try {

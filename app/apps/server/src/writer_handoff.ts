@@ -19,6 +19,7 @@ import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import { ApiError } from "./http/errors.ts";
+import * as kinds from "./kinds.ts";
 import type { Router } from "./http/router.ts";
 import type { ScriptBlock, Style } from "./model.ts";
 import * as script from "./script.ts";
@@ -148,6 +149,8 @@ export async function list(
       })(),
     }))
     .filter((row) => row.id !== "")
+    // Only scripts of styles the signed-in person may edit (kinds.ts); one Writer hasn't given a style yet, to anyone who edits.
+    .filter((row) => (row.style === null ? kinds.editsAny() : kinds.mayEdit(row.style)))
     // Those sent to Edit first, newest first.
     .sort((a, b) => Number(b.handoff !== null) - Number(a.handoff !== null) || (b.handoff?.at ?? b.updatedAt) - (a.handoff?.at ?? a.updatedAt));
 }
@@ -165,6 +168,7 @@ export async function fetchScript(id: string): Promise<WriterScript> {
 /** Makes an Edit project from a Writer script and starts its import (footage, transcripts, voice-over, layout). */
 export async function importScript(app: App, id: string): Promise<{ project: string }> {
   const given = await fetchScript(id);
+  if (!kinds.mayEdit(styleOf(given.kind))) throw new Error(kinds.cantMake(`edit.${styleOf(given.kind)}`));
   const parsed = toParsed(given);
   const live = app.store.createAs(given.title, styleOf(given.kind), { width: 1920, height: 1080, fps: 30 });
   await app.store.update(live.project.id, "script", (project) => script.attach(project, `writer:${id}`, parsed));

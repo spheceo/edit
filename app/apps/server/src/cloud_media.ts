@@ -1168,6 +1168,44 @@ export async function restoreHere(app: App, id: string, progress: (bytes: number
  * machine that hasn't backfilled them yet) are named in the error and in the
  * project's cloud status (`missing`), never silently left out.
  */
+/** The R2 key playback streams for a cloud medium: its proxy (sound and light views use it too). */
+export function streamKey(cloudMedia: { proxy?: string } | null | undefined, kind: string): string | null {
+  if (cloudMedia === null || cloudMedia === undefined) return null;
+  if (kind !== "proxy" && kind !== "audio" && kind !== "light") return null;
+  const key = cloudMedia.proxy ?? null;
+  return key !== null && cloud.validKey(key) ? key : null;
+}
+
+/** A fresh presigned streaming URL for a cloud medium (each ask re-signs, so a long session never expires). */
+export async function streamUrl(cloudMedia: { proxy?: string } | null | undefined, kind: string): Promise<string | null> {
+  const key = streamKey(cloudMedia, kind);
+  if (key === null || !cloud.enabled()) return null;
+  return getUrl(key, 6 * HOUR);
+}
+
+/**
+ * Fetches one medium's proxy on first use (lazy `ensureLocal`): projects no
+ * longer download every proxy on open; playback streams meanwhile.
+ */
+export async function ensureMediaLocal(app: App, id: string, mediaId: string): Promise<void> {
+  const live = app.store.get(id);
+  if (live === null) throw new Error("no such project");
+  const media = live.project.media.find((item) => item.id === mediaId);
+  if (media === undefined || media.cloud === undefined || media.cloud === null || isFile(media.path)) return;
+  let key = streamKey(media.cloud, "proxy");
+  if (key === null) {
+    const record = await getRecord(media.cloud.source).catch(() => null);
+    key = readyProxy(record);
+  }
+  if (key === null) throw new Error(`${media.name} is still being prepared in the cloud`);
+  const local = localPath(app.store.cacheDir(), key);
+  await fetchKey(key, local);
+  await app.store.update(id, "cloud", (project) => {
+    const item = project.media.find((one) => one.id === mediaId);
+    if (item !== undefined && !isFile(item.path)) { item.path = canonical(local); item.cloud!.proxy = key; }
+  });
+}
+
 export function ensureLocal(app: App, id: string): Promise<void> {
   // One at a time per project: a second ask (another open, a pull) shares it.
   const running = ensuring.get(id);

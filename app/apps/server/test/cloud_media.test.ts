@@ -623,3 +623,15 @@ test("an excerpt takes its words from its recording's shared transcript instead 
   expect(sharedSourceOf("/c", "/elsewhere/a.mp4")).toBeNull();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("streamKey names the proxy for playback kinds and nothing else", async () => {
+  const { streamKey } = await import("../src/cloud_media.ts");
+  const media = { proxy: "edit/proxies/sha256/abc.mp4" };
+  expect(streamKey(media, "proxy")).toBe("edit/proxies/sha256/abc.mp4");
+  expect(streamKey(media, "audio")).toBe("edit/proxies/sha256/abc.mp4");
+  expect(streamKey(media, "light")).toBe("edit/proxies/sha256/abc.mp4");
+  expect(streamKey(media, "thumbs")).toBeNull();
+  expect(streamKey(null, "proxy")).toBeNull();
+  expect(streamKey({}, "proxy")).toBeNull();
+  expect(streamKey({ proxy: "not-a-key" }, "proxy")).toBeNull();
+});

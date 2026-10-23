@@ -13,6 +13,7 @@ import { cleanCache } from "./cache_cleanup.ts";
 import { importDrive } from "./drive_import.ts";
 import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
+import * as cloudMedia from "./cloud_media.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -768,7 +769,13 @@ async function mediaFile(context: Context): Promise<Response> {
     default:
       throw notFound("unknown media file");
   }
-  if (!isFile(file)) throw notFound("not ready");
+  if (!isFile(file)) {
+    // Stream the proxy from R2 rather than downloading it whole first;
+    // each ask re-signs, so a long session's URL never expires.
+    const url = await cloudMedia.streamUrl(media.cloud, kind).catch(() => null);
+    if (url !== null) return Response.redirect(url, 302);
+    throw notFound("not ready");
+  }
   let response = serveFile(context.request, file);
   if (kind === "peaks") {
     // Bun names an octet-stream file in a content-disposition header; tower's ServeFile

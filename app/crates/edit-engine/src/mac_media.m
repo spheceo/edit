@@ -5,6 +5,7 @@
 #import <ImageIO/ImageIO.h>
 #import <Vision/Vision.h>
 #import <VideoToolbox/VideoToolbox.h>
+#import <Security/Security.h>
 
 static void fail(char *error, size_t capacity, NSString *message) {
     if (capacity) snprintf(error, capacity, "%s", message.UTF8String ?: "AVFoundation failed");
@@ -1006,5 +1007,60 @@ int edit_smooth(const char *path, double start, double length, double speed, dou
     } @catch (NSException *exception) {
         fail(error, capacity, [NSString stringWithFormat:@"VideoToolbox stopped smoothing: %@ (%@)", exception.reason ?: @"no reason given", exception.name]);
         return 0;
+    }
+}
+
+
+// The Keychain, for the sign-in's refresh token (apps/server/src/keychain.ts).
+// An item added here trusts only this program (the default access of an item
+// an app adds), so another process asking for its secret gets a prompt,
+// never the secret (the audit, Oct 23: an item made by /usr/bin/security was
+// readable by anything running as the user, through that tool). Nothing here
+// ever prompts: an item this program isn't trusted for answers
+// errSecInteractionNotAllowed. Answers are OSStatus codes (0: done).
+static NSDictionary *keychain_item(const char *service, const char *account) {
+    return @{
+        (id)kSecClass: (id)kSecClassGenericPassword,
+        (id)kSecAttrService: [NSString stringWithUTF8String:service],
+        (id)kSecAttrAccount: [NSString stringWithUTF8String:account],
+    };
+}
+
+int edit_keychain_get(const char *service, const char *account, char *out, size_t capacity, size_t *length) {
+    @autoreleasepool {
+        SecKeychainSetUserInteractionAllowed(false);
+        NSMutableDictionary *query = [keychain_item(service, account) mutableCopy];
+        query[(id)kSecReturnData] = @YES;
+        query[(id)kSecMatchLimit] = (id)kSecMatchLimitOne;
+        CFTypeRef found = NULL;
+        OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &found);
+        if (status != errSecSuccess) return (int)status;
+        NSData *data = (__bridge_transfer NSData *)found;
+        if (data.length + 1 > capacity) return (int)errSecBufferTooSmall;
+        memcpy(out, data.bytes, data.length);
+        out[data.length] = 0;
+        *length = data.length;
+        return 0;
+    }
+}
+
+int edit_keychain_set(const char *service, const char *account, const char *value) {
+    @autoreleasepool {
+        SecKeychainSetUserInteractionAllowed(false);
+        NSDictionary *item = keychain_item(service, account);
+        NSData *data = [NSData dataWithBytes:value length:strlen(value)];
+        OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)item, (__bridge CFDictionaryRef) @{(id)kSecValueData: data});
+        if (status != errSecItemNotFound) return (int)status;
+        NSMutableDictionary *added = [item mutableCopy];
+        added[(id)kSecValueData] = data;
+        return (int)SecItemAdd((__bridge CFDictionaryRef)added, NULL);
+    }
+}
+
+int edit_keychain_delete(const char *service, const char *account) {
+    @autoreleasepool {
+        SecKeychainSetUserInteractionAllowed(false);
+        OSStatus status = SecItemDelete((__bridge CFDictionaryRef)keychain_item(service, account));
+        return status == errSecItemNotFound ? 0 : (int)status;
     }
 }

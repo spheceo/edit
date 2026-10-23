@@ -207,6 +207,10 @@ export interface Native {
   makeImageThumbs(source: string, paths: CachePaths): Promise<number>; // A
   makePeaks(source: string, out: string): Promise<void>; // A
   makeCloudProxy(source: string, probe: Probe, out: string): Promise<void>; // A
+  /** The Keychain (mac_media.m): a generic password read without a prompt (status -25308: an item this program isn't trusted for); kept, a new one trusting only this program; removed. */
+  keychainGet(service: string, account: string): { status: number; value?: string | null }; // S
+  keychainSet(service: string, account: string, value: string): number; // S
+  keychainDelete(service: string, account: string): number; // S
   /** Whether this Mac smooths slow motion with VideoToolbox (macOS 15.4+). */
   smoothSupported(): boolean; // S
   /** Smooth slow motion with VideoToolbox's frame rate conversion (mac_media `smooth`); waits while an export runs. */

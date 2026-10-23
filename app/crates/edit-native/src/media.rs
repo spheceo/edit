@@ -169,6 +169,63 @@ pub async fn make_cloud_proxy(
     .await
 }
 
+/// A Keychain answer: `status` 0 with `value` (null when there's none), or the OSStatus.
+#[napi(object)]
+pub struct KeychainAnswer {
+    pub status: i32,
+    pub value: Option<String>,
+}
+
+/// The generic password `service`/`account`, read without a prompt (mac_media
+/// `keychain_get`): -25308 for an item this program isn't trusted for.
+#[napi]
+pub fn keychain_get(service: String, account: String) -> KeychainAnswer {
+    #[cfg(target_os = "macos")]
+    return match edit_engine::mac_media::keychain_get(&service, &account) {
+        Ok(value) => KeychainAnswer { status: 0, value },
+        Err(status) => KeychainAnswer {
+            status,
+            value: None,
+        },
+    };
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (service, account);
+        KeychainAnswer {
+            status: -4,
+            value: None,
+        }
+    }
+}
+
+/// Keeps the generic password `service`/`account`; a new item trusts only this program. 0, or the OSStatus.
+#[napi]
+pub fn keychain_set(service: String, account: String, value: String) -> i32 {
+    #[cfg(target_os = "macos")]
+    return edit_engine::mac_media::keychain_set(&service, &account, &value)
+        .err()
+        .unwrap_or(0);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (service, account, value);
+        -4
+    }
+}
+
+/// Removes the generic password `service`/`account` (none there is fine). 0, or the OSStatus.
+#[napi]
+pub fn keychain_delete(service: String, account: String) -> i32 {
+    #[cfg(target_os = "macos")]
+    return edit_engine::mac_media::keychain_delete(&service, &account)
+        .err()
+        .unwrap_or(0);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (service, account);
+        -4
+    }
+}
+
 /// Whether this Mac smooths slow motion with VideoToolbox (macOS 15.4+).
 #[napi]
 pub fn smooth_supported() -> bool {

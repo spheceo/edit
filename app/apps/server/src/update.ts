@@ -475,7 +475,7 @@ export function installApp(zip: string, bundle: string): string {
 /** The Developer ID team that signs Edit's releases. */
 export const EDIT_TEAM = "5PLDN9BDV4";
 
-function teamOf(app: string): string | null {
+export function teamOf(app: string): string | null {
   const shown = run(["/usr/bin/codesign", "-dv", app]);
   const team = /^TeamIdentifier=(.+)$/m.exec(shown.stderr)?.[1]?.trim();
   return team === undefined || team === "not set" ? null : team;

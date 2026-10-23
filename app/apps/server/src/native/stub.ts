@@ -441,6 +441,15 @@ export function createStub(): Stub {
     async makeCloudProxy() {
       notInStub("makeCloudProxy");
     },
+    keychainGet() {
+      return { status: -4, value: null };
+    },
+    keychainSet() {
+      return -4;
+    },
+    keychainDelete() {
+      return -4;
+    },
     smoothSupported() {
       return false;
     },

@@ -196,6 +196,24 @@ export interface InitOptions {
  */
 export declare function isLocked(path: string): boolean
 
+/** A Keychain answer: `status` 0 with `value` (null when there's none), or the OSStatus. */
+export interface KeychainAnswer {
+  status: number
+  value?: string
+}
+
+/** Removes the generic password `service`/`account` (none there is fine). 0, or the OSStatus. */
+export declare function keychainDelete(service: string, account: string): number
+
+/**
+ * The generic password `service`/`account`, read without a prompt (mac_media
+ * `keychain_get`): -25308 for an item this program isn't trusted for.
+ */
+export declare function keychainGet(service: string, account: string): KeychainAnswer
+
+/** Keeps the generic password `service`/`account`; a new item trusts only this program. 0, or the OSStatus. */
+export declare function keychainSet(service: string, account: string, value: string): number
+
 /** The key of `file` (its size and modification time) under `name`. */
 export declare function keyOf(name: string, file: string): string
 

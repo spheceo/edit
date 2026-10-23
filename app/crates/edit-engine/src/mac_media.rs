@@ -23,6 +23,19 @@ unsafe extern "C" {
         capacity: usize,
     ) -> i32;
     fn edit_image_info(path: *const c_char, width: *mut u32, height: *mut u32) -> i32;
+    fn edit_keychain_get(
+        service: *const c_char,
+        account: *const c_char,
+        out: *mut c_char,
+        capacity: usize,
+        length: *mut usize,
+    ) -> i32;
+    fn edit_keychain_set(
+        service: *const c_char,
+        account: *const c_char,
+        value: *const c_char,
+    ) -> i32;
+    fn edit_keychain_delete(service: *const c_char, account: *const c_char) -> i32;
     fn edit_image_thumbnail(path: *const c_char, output: *const c_char) -> i32;
     fn edit_image_frame(
         path: *const c_char,
@@ -724,6 +737,65 @@ impl Drop for Writer {
     fn drop(&mut self) {
         // Cancels an unfinished writer as well as releasing a completed one.
         unsafe { edit_writer_close(self.handle.as_ptr()) };
+    }
+}
+
+/// The Keychain's "no such item".
+pub const KEYCHAIN_NOT_FOUND: i32 = -25300;
+
+/// A string for the Keychain calls (errSecParam for one with a NUL in it).
+fn keychain_string(value: &str) -> Result<CString, i32> {
+    CString::new(value).map_err(|_| -50)
+}
+
+/// A generic password this program may read, without a prompt (mac_media.m):
+/// `Ok(None)` when there's none, `Err(status)` otherwise (-25308,
+/// errSecInteractionNotAllowed, or -25293: an item this program isn't trusted for).
+pub fn keychain_get(service: &str, account: &str) -> Result<Option<String>, i32> {
+    let (service, account) = (keychain_string(service)?, keychain_string(account)?);
+    let mut out = vec![0u8; 16 * 1024];
+    let mut length = 0usize;
+    // SAFETY: the strings live through the call; `out` has `capacity` bytes and the call writes at most that many.
+    let status = unsafe {
+        edit_keychain_get(
+            service.as_ptr(),
+            account.as_ptr(),
+            out.as_mut_ptr().cast(),
+            out.len(),
+            &mut length,
+        )
+    };
+    match status {
+        0 => {
+            out.truncate(length);
+            String::from_utf8(out).map(Some).map_err(|_| -26275)
+        }
+        KEYCHAIN_NOT_FOUND => Ok(None),
+        other => Err(other),
+    }
+}
+
+/// Keeps a generic password, made (when new) to trust only this program.
+pub fn keychain_set(service: &str, account: &str, value: &str) -> Result<(), i32> {
+    let (service, account, value) = (
+        keychain_string(service)?,
+        keychain_string(account)?,
+        keychain_string(value)?,
+    );
+    // SAFETY: the strings live through the call.
+    match unsafe { edit_keychain_set(service.as_ptr(), account.as_ptr(), value.as_ptr()) } {
+        0 => Ok(()),
+        other => Err(other),
+    }
+}
+
+/// Removes a generic password (none there is fine).
+pub fn keychain_delete(service: &str, account: &str) -> Result<(), i32> {
+    let (service, account) = (keychain_string(service)?, keychain_string(account)?);
+    // SAFETY: the strings live through the call.
+    match unsafe { edit_keychain_delete(service.as_ptr(), account.as_ptr()) } {
+        0 => Ok(()),
+        other => Err(other),
     }
 }
 

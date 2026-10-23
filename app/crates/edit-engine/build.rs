@@ -78,6 +78,7 @@ fn main() {
             "CoreGraphics",
             "Vision",
             "VideoToolbox",
+            "Security",
         ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }

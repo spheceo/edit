@@ -14,6 +14,8 @@
 
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 
+import { isEditing } from "./manifest";
+
 /**
  * What a route needs. Since accounts' contract v2 every route needs only
  * `use` (has Edit at all): Edit enforces the kinds of work itself, from the
@@ -79,15 +81,15 @@ export async function caller(request: Request, env: AuthEnv): Promise<Caller | n
 }
 
 /**
- * Whether a person may use one of Edit's capabilities (manifest.ts) at the
- * relay: an admin, or it's in their `perms`. A token from before accounts'
- * contract v2 carries no capability ids at all (only `use` and v1's names):
- * it keeps what it had until accounts switches and grants each person their
- * preset, so nobody loses voice-overs in between.
+ * Whether a person may make voice-overs (paid): they come with editing, so an
+ * admin or anyone with an `edit.*` capability (manifest.ts); subtitles alone
+ * don't. A token from before accounts' contract v2 carries no capability ids
+ * at all (only `use` and v1's names): it keeps them until accounts switches
+ * and grants each person their preset, so nobody loses them in between.
  */
-export function hasCapability(found: Caller, id: string): boolean {
+export function mayVoice(found: Caller): boolean {
   if (found.kind !== "person") return false;
-  if (found.admin || found.perms.includes(id)) return true;
+  if (found.admin || found.perms.some(isEditing)) return true;
   return !found.perms.some((one) => one.includes("."));
 }
 

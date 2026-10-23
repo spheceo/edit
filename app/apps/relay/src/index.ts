@@ -1,5 +1,5 @@
-import { allow, budgetKey, burstKey, hasCapability, type AuthEnv } from "./auth";
-import { CAPABILITIES, manifest } from "./manifest";
+import { allow, budgetKey, burstKey, mayVoice, type AuthEnv } from "./auth";
+import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
 
 export { DriveToR2 } from "./jobs";
@@ -264,8 +264,8 @@ async function speech(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") return json(405, { error: "POST JSON to /v1/speech" });
   const found = await allow(request, env, "use", "speech");
   if (found instanceof Response) return found;
-  // Voice generation is paid: the one capability the relay checks itself.
-  if (!hasCapability(found, CAPABILITIES.voiceover)) return json(403, { error: "Your account can't make voice-overs: an admin can give you Edit's Voice-overs at accounts.spheceo.com." });
+  // Voice generation is paid: the one thing the relay checks beyond `use`. It comes with editing.
+  if (!mayVoice(found)) return json(403, { error: "Voice-overs come with editing: ask an admin for an Edit style at accounts.spheceo.com." });
   const key = speechKey(env);
   if (!key) return json(503, { error: "Voice generation is not configured on the relay yet." });
   const limits = [env.MAX_SPEECH_CHARS, env.DAILY_SPEECH_CHARS_PER_IP, env.DAILY_SPEECH_CHARS_TOTAL].map(Number);

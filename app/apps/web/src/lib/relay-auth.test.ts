@@ -122,15 +122,16 @@ describe("relay sign-in gate", () => {
     expect(await call("exports/worker/claim", ["use"])).toBe(401);
   });
 
-  it("gates voice generation (paid) on Edit's voice-over capability, keeping it for tokens from before v2", async () => {
+  it("gives voice generation (paid) to editing: any edit style, an admin, or a token from before v2; not subtitles alone", async () => {
     useKeys(createLocalJWKSet({ keys: [jwk] }));
     vi.spyOn(console, "log").mockImplementation(() => {});
     const speak = async (claims: Record<string, unknown>) =>
       (await relay.fetch(asked(await token(claims), "https://relay/v1/speech", { method: "POST", body: JSON.stringify({ text: "Hi.", voice_id: "abcdefgh12" }), headers: { "content-type": "application/json" } }), env())).status;
-    // v2: capabilities granted, voice-overs not among them.
+    // v2: subtitles only.
     expect(await speak({ perms: ["use", "video.subtitles"] })).toBe(403);
-    // With it, or an admin, or a v1 token (no capability ids yet): past the gate (no key configured here: 503).
-    expect(await speak({ perms: ["use", "extra.voiceover"] })).not.toBe(403);
+    // Any edit style, an admin, or a v1 token (no capability ids yet): past the gate (no key configured here: 503).
+    expect(await speak({ perms: ["use", "edit.courtroom"] })).not.toBe(403);
+    expect(await speak({ perms: ["use", "video.subtitles", "edit.bodycam"] })).not.toBe(403);
     expect(await speak({ perms: ["use"], admin: true })).not.toBe(403);
     expect(await speak({ perms: ["use", "cloud", "ai"] })).not.toBe(403);
   });

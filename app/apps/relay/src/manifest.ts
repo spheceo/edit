@@ -3,7 +3,10 @@
 // do subtitles, but they can't do editing"). Served at
 // `GET /.well-known/spheceo-app.json`, public. Capability ids are forever:
 // rename a label, never an id. Edit itself enforces them from the token's
-// `perms`; the relay needs only `use`, except voice generation, which is paid.
+// `perms`; the relay needs only `use`, except voice generation, which is paid
+// and comes with editing (the user: "if someone has the permission to edit,
+// say bodycam, they should get full perms around voice generation"): any
+// `edit.*` capability.
 
 /** apps/../assets/brand/edit-icon.svg, the app icon (a test keeps it the same file). */
 export const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
@@ -18,8 +21,12 @@ export const CAPABILITIES = {
   bodycam: "edit.bodycam",
   interrogation: "edit.interrogation",
   courtroom: "edit.courtroom",
-  voiceover: "extra.voiceover",
 } as const;
+
+/** Whether a capability id is one of the edit styles (voice-overs come with any of them). */
+export function isEditing(id: string): boolean {
+  return id.startsWith("edit.");
+}
 
 export function manifest() {
   return {
@@ -29,14 +36,13 @@ export function manifest() {
     icon: `data:image/svg+xml;base64,${btoa(ICON_SVG)}`,
     capabilities: [
       { id: CAPABILITIES.subtitles, label: "Subtitled videos", description: "Make subtitled videos from Drive footage: subtitles, speakers, mutes, export and the Drive upload.", group: "Kinds of video" },
-      { id: CAPABILITIES.bodycam, label: "Bodycam edits", description: "Full edits in the bodycam style: script import, cutting, the agent, research, maps, music, export and review.", group: "Kinds of video" },
-      { id: CAPABILITIES.interrogation, label: "Interrogation edits", description: "Full edits in the interrogation style.", group: "Kinds of video" },
-      { id: CAPABILITIES.courtroom, label: "Courtroom edits", description: "Full edits in the courtroom style.", group: "Kinds of video" },
-      { id: CAPABILITIES.voiceover, label: "Voice-overs", description: "Generate and re-voice narration with the house voice (paid). Without it, an edit's import places no voice-over.", group: "Extras" },
+      { id: CAPABILITIES.bodycam, label: "Bodycam edits", description: "Full edits in the bodycam style: script import, cutting, voice-overs, the agent, research, maps, music, export and review.", group: "Kinds of video" },
+      { id: CAPABILITIES.interrogation, label: "Interrogation edits", description: "Full edits in the interrogation style, voice-overs included.", group: "Kinds of video" },
+      { id: CAPABILITIES.courtroom, label: "Courtroom edits", description: "Full edits in the courtroom style, voice-overs included.", group: "Kinds of video" },
     ],
     presets: [
       { id: "subtitles", label: "Subtitles only", capabilities: [CAPABILITIES.subtitles] },
-      { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.voiceover, CAPABILITIES.subtitles] },
+      { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.subtitles] },
       { id: "full", label: "Everything", capabilities: Object.values(CAPABILITIES) },
     ],
   };

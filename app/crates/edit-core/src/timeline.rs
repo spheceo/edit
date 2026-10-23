@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::model::{Clip, ClipContent, Keyframe, Project, ScriptBlock};
+use crate::model::{Clip, ClipContent, Keyframe, Project};
 
 /// What a ripple did.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -276,23 +276,10 @@ fn ripple(project: &mut Project, warp: Warp, hold: &HashSet<String>) -> Rippled 
     for marker in &mut project.markers {
         marker.frame = warp.frame(marker.frame);
     }
-    // A link to a clip that's gone is dropped.
-    let alive: HashSet<&str> = project.clips.iter().map(|clip| clip.id.as_str()).collect();
-    if let Some(script) = &mut project.script {
-        for block in &mut script.blocks {
-            let links = match block {
-                ScriptBlock::Footage { clip, .. } => vec![clip],
-                ScriptBlock::Narration {
-                    clip, voiceover, ..
-                } => vec![clip, voiceover],
-            };
-            for link in links {
-                if link.as_deref().is_some_and(|id| !alive.contains(id)) {
-                    *link = None;
-                }
-            }
-        }
-    }
+    // A script block's link to a clip that's gone is kept: it says the block
+    // was placed and removed on purpose. Dropped, it read as never placed, and
+    // opening the project laid the script out again on top of the edit (Mom
+    // Leaves 5 Kids, Oct 23: a second copy after 30:50).
     out
 }
 
@@ -348,7 +335,7 @@ pub fn speed_span_holding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Ease, Media, MediaKind, Script, Settings};
+    use crate::model::{Ease, Media, MediaKind, Script, ScriptBlock, Settings};
     use serde_json::json;
 
     fn clip(value: serde_json::Value) -> Clip {
@@ -468,14 +455,17 @@ mod tests {
         assert_eq!(word_times, &[0.0, 10.0]);
         assert_eq!(p.clip("after").unwrap().start, 140);
         assert_eq!((p.mark_in, p.mark_out), (Some(20), Some(190)));
-        // The script's link to the deleted title is dropped; the sound keeps its id.
+        // The script's link to the deleted title stays (placed, then removed); the sound keeps its id.
         let Some(ScriptBlock::Narration {
             clip, voiceover, ..
         }) = p.script.as_ref().unwrap().blocks.first()
         else {
             panic!()
         };
-        assert_eq!((clip.as_deref(), voiceover.as_deref()), (None, Some("snd")));
+        assert_eq!(
+            (clip.as_deref(), voiceover.as_deref()),
+            (Some("inside"), Some("snd"))
+        );
     }
 
     #[test]

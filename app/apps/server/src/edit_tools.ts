@@ -1050,9 +1050,27 @@ export function introLong(project: Project, teasers: [number, number][]): Json[]
   if (project.style !== "bodycam" || teasers.length === 0) return [];
   const fps = project.settings.fps;
   const [start, end] = [Math.min(...teasers.map(([from]) => from)), Math.max(...teasers.map(([, to]) => to))];
-  const seconds = (end - start) / fps;
+  // The teasers' footage, not the narration of a cut-in between them.
+  const seconds = teasers.reduce((sum, [from, to]) => sum + (to - from), 0) / fps;
   if (seconds <= LONGEST_INTRO) return [];
-  return [{ kind: "intro_long", start, end, seconds: Math.round(seconds), at_most: LONGEST_INTRO, fix: "keep ~30 s of the strongest emotional moments, mostly the suspect, ending on the arrest: cut calm lines, small talk and third parties from the teasers (remove_time)" }];
+  return [{ kind: "intro_long", start, end, teaser_seconds: Math.round(seconds), at_most: LONGEST_INTRO, fix: "keep ~30 s of the strongest emotional moments, mostly the suspect, ending on the arrest: cut calm lines, small talk and third parties from the teasers (remove_time)" }];
+}
+
+/** A bodycam edit has at least one Windows screen per this many cut-ins. */
+const CUT_INS_PER_SCREEN = 6;
+
+/**
+ * Too few Windows screens in a bodycam edit (`windows_underused`: the team
+ * wants them used more: "better at utilizing these notepads", "have more
+ * images pop up"); windows_overused is the other side.
+ */
+export function windowsUnderused(project: Project): Json[] {
+  if (project.style !== "bodycam") return [];
+  const cutIns = (project.script?.blocks ?? []).filter((block) => block.kind === "narration").length;
+  const wanted = Math.floor(cutIns / CUT_INS_PER_SCREEN);
+  const screens = new Set(project.clips.map((clip) => /^(.*?)Desktop · /u.exec(clip.name ?? "")?.[1]).filter((prefix): prefix is string => prefix !== undefined)).size;
+  if (wanted === 0 || screens >= wanted) return [];
+  return [{ kind: "windows_underused", screens, at_least: wanted, cut_ins: cutIns, fix: "make a cut-in whose narration lists findings or several people a Windows screen (a desktop shot in cover_cut_in): Photo Viewers of who and what's named, a Notepad of the facts" }];
 }
 
 /** What an arrest sounds like in bodycam footage. */
@@ -1115,6 +1133,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...seams.faces.punchInsOffFace(project, teasers),
     ...introLong(project, teasers),
     ...introWithoutArrest(project, heard, teasers),
+    ...windowsUnderused(project),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
@@ -1148,7 +1167,7 @@ const FIXABLE = [
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
-  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest",
+  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused",
 ];
 
 /**

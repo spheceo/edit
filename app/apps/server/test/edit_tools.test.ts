@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 
 import type { App } from "../src/app.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
-import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
+import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
@@ -562,7 +562,9 @@ test("extend_clip plays a clipped word to its end and on to the pause, and the r
 test("a bodycam intro past 40 s is flagged; an interrogation's isn't", () => {
   const p = newProject("p", "t", { width: 1920, height: 1080, fps: 30 });
   p.style = "bodycam";
-  expect(introLong(p, [[0, 30 * 30], [36 * 30, 68 * 30]]).map((issue) => (issue as { seconds: number }).seconds)).toEqual([68]);
+  expect(introLong(p, [[0, 30 * 30], [36 * 30, 50 * 30]]).map((issue) => (issue as { teaser_seconds: number }).teaser_seconds)).toEqual([44]);
+  // A cut-in between the teasers isn't counted: 20 s + 18 s of teasers.
+  expect(introLong(p, [[0, 20 * 30], [45 * 30, 63 * 30]])).toEqual([]);
   expect(introLong(p, [[0, 28 * 30]])).toEqual([]);
   p.style = "interrogation";
   expect(introLong(p, [[0, 90 * 30]])).toEqual([]);
@@ -581,4 +583,13 @@ test("a bodycam intro that doesn't end on the arrest is flagged, naming the arre
   // Ending on it: nothing to say.
   heard.set("m1", { words: words("you're under arrest for risk of injury", 6) } as unknown as Transcript);
   expect(introWithoutArrest(p, heard, [[0, 300]])).toEqual([]);
+});
+
+test("a bodycam edit with fewer Windows screens than one per six cut-ins is flagged", () => {
+  const p = newProject("p", "t", { width: 1920, height: 1080, fps: 30 });
+  p.style = "bodycam";
+  p.script = { blocks: Array.from({ length: 13 }, (_, index) => ({ kind: "narration", text: `cut-in ${index + 1}` })) } as unknown as Project["script"];
+  expect(windowsUnderused(p).map((issue) => (issue as { at_least: number }).at_least)).toEqual([2]);
+  for (const name of ["Cut-in 3 · Desktop · Notepad", "Cut-in 9 · Desktop · Photo Viewer · a.jpg"]) p.clips.push({ id: name, name, type: "text", track: p.tracks[0]!.id, start: 0, duration: 10 } as unknown as Project["clips"][number]);
+  expect(windowsUnderused(p)).toEqual([]);
 });

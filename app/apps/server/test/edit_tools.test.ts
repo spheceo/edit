@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 
 import type { App } from "../src/app.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
-import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
+import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, desktopsSparse, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
@@ -592,4 +592,13 @@ test("a bodycam edit with fewer Windows screens than one per six cut-ins is flag
   expect(windowsUnderused(p).map((issue) => (issue as { at_least: number }).at_least)).toEqual([2]);
   for (const name of ["Cut-in 3 · Desktop · Notepad", "Cut-in 9 · Desktop · Photo Viewer · a.jpg"]) p.clips.push({ id: name, name, type: "text", track: p.tracks[0]!.id, start: 0, duration: 10 } as unknown as Project["clips"][number]);
   expect(windowsUnderused(p)).toEqual([]);
+});
+
+test("a bodycam Windows screen with fewer than three windows is flagged", () => {
+  const p = newProject("p", "t", { width: 1920, height: 1080, fps: 30 });
+  p.style = "bodycam";
+  const add = (name: string) => p.clips.push({ id: name, name, type: "text", track: p.tracks[0]!.id, start: 10, duration: 10 } as unknown as Project["clips"][number]);
+  for (const name of ["Cut-in 2 · Desktop · Notepad", "Cut-in 2 · Desktop · Notepad note 1", "Cut-in 2 · Desktop · wallpaper"]) add(name);
+  for (const name of ["Cut-in 6 · Desktop · Notepad", "Cut-in 6 · Desktop · Photo Viewer · a.jpg", "Cut-in 6 · Desktop · Video Player · b.mp4"]) add(name);
+  expect(desktopsSparse(p).map((issue) => [(issue as { desktop: string }).desktop, (issue as { windows: number }).windows])).toEqual([["Cut-in 2 · Desktop", 1]]);
 });

@@ -1073,6 +1073,31 @@ export function windowsUnderused(project: Project): Json[] {
   return [{ kind: "windows_underused", screens, at_least: wanted, cut_ins: cutIns, fix: "make a cut-in whose narration lists findings or several people a Windows screen (a desktop shot in cover_cut_in): Photo Viewers of who and what's named, a Notepad of the facts" }];
 }
 
+/** A bodycam Windows screen holds at least this many windows. */
+const FEWEST_WINDOWS = 3;
+
+/**
+ * A bodycam Windows screen with fewer than FEWEST_WINDOWS windows
+ * (`desktop_sparse`: Mom & Teen's loop 3 screens were a lone Notepad each;
+ * the team: "have more images pop up", "more different things pop up here
+ * on this window screen").
+ */
+export function desktopsSparse(project: Project): Json[] {
+  if (project.style !== "bodycam") return [];
+  const screens = new Map<string, { start: number; windows: number }>();
+  for (const clip of project.clips) {
+    const found = /^(.*?Desktop) · (Photo Viewer|Video Player|Notepad)( · |$)/u.exec(clip.name ?? "");
+    if (found === null) continue;
+    const screen = screens.get(found[1]!) ?? { start: clip.start, windows: 0 };
+    screen.windows += 1;
+    screen.start = Math.min(screen.start, clip.start);
+    screens.set(found[1]!, screen);
+  }
+  return [...screens.entries()]
+    .filter(([, screen]) => screen.windows < FEWEST_WINDOWS)
+    .map(([name, screen]) => ({ kind: "desktop_sparse", desktop: name, start: screen.start, windows: screen.windows, at_least: FEWEST_WINDOWS, fix: "add windows that pop up as the narration names them: Photo Viewers of who and what's named, Video Players of the footage it describes (the desktop shot's windows in cover_cut_in)" }));
+}
+
 /** What an arrest sounds like in bodycam footage. */
 const ARREST = /\b(you'?re|you are) (now )?under arrest\b|\bunder arrest\b|\bcuff (you|her|him)\b|\bhands behind your back\b/iu;
 
@@ -1134,6 +1159,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...introLong(project, teasers),
     ...introWithoutArrest(project, heard, teasers),
     ...windowsUnderused(project),
+    ...desktopsSparse(project),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
@@ -1167,7 +1193,7 @@ const FIXABLE = [
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
-  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused",
+  "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */

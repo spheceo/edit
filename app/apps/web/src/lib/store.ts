@@ -471,7 +471,9 @@ export async function syncScriptJob(id: string) {
     // A failed run waits for Retry; an import that stopped part-way (blocks never
     // placed) carries on by itself. A placed block whose clip is gone was removed
     // on purpose (a cut-in card replaced by B-roll): never put it back.
-    const neverPlaced = project.script.blocks.some((block) => !block.clip);
+    // Laid out once (any block placed): finished, never resumed (only a Re-cut lays it out again; the server refuses too).
+    const laidOut = project.script.blocks.some((block) => block.clip || (block.kind === "narration" && block.voiceover));
+    const neverPlaced = !laidOut && project.script.blocks.some((block) => !block.clip);
     // Only an import that stopped part-way, never one that finished: a finished edit
     // whose blocks lost their clip links was laid out again on top of itself when it
     // was opened (Mom Leaves 5 Kids, Oct 23: a second copy after 30:50).

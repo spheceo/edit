@@ -496,6 +496,11 @@ async function scriptAttach(context: RouteContext<App>): Promise<Response> {
   const id = context.params.id ?? "";
   const given = await body(context, SCRIPT_BODY);
   const url = given.url as string;
+  // One script per edit: never over one importing or already laid out (it would double the timeline).
+  const running = app.scripts.get(id);
+  if (running !== null && ["downloading", "transcribing", "placing", "voicing"].includes(running.state)) throw new ApiError(409, "a script is importing into this project: wait for it, or make a new project");
+  const now = app.store.get(id)?.project;
+  if (now !== undefined && script.laidOut(now)) throw new ApiError(409, "this project already has a script laid out: make a new project for another script, or Re-cut this one");
   // A script makes a full edit: only of a style the signed-in person may edit (kinds.ts).
   const style = app.store.get(id)?.project.style;
   if (style !== undefined && !kinds.mayEdit(style)) throw new ApiError(403, kinds.cantMake(`edit.${style}`));
@@ -521,6 +526,8 @@ async function scriptResume(context: RouteContext<App>): Promise<Response> {
     if (isBug(error)) throw error;
     throw new ApiError(423, diag.messageOf(error));
   }
+  const live = projectOr404(app, id);
+  if (!recut && script.laidOut(live.project)) throw new ApiError(409, "this script's import finished: Re-cut to lay it out again");
   script.start(app, id, recut);
   return sortedJson({ job: app.scripts.get(id) });
 }

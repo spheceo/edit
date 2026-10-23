@@ -164,11 +164,15 @@ test.skipIf(ffmpeg === null || ffprobe === null)(
       expect(sent[0]!.startsWith("The script is imported and laid out.")).toBe(true);
       const [, polled] = await http("GET", `/api/projects/${id}/script/job`);
       expect(polled).toMatchObject({ unfinished: false, job: { state: "done" } });
-      // Again: nothing to fetch, nothing placed twice; the research is asked
-      // for again only because none was saved yet .
-      await start(app, id, false);
+      // Again: a finished import is never resumed (the audit, Oct 23: after a
+      // restart it rebuilt a finished edit), in the server or through the route;
+      // a second script over it is refused too.
+      expect(start(app, id, false)).toBeNull();
       expect(store.get(id)!.project.clips.length).toBe(project.clips.length);
-      expect(sent.length).toBe(2);
+      expect(sent.length).toBe(1);
+      expect(await http("POST", `/api/projects/${id}/script/job`)).toEqual([409, { error: "this script's import finished: Re-cut to lay it out again" }]);
+      const [again] = await http("POST", `/api/projects/${id}/script`, { url: "https://docs.google.com/document/d/x/edit" });
+      expect(again).toBe(409);
       expect(fs.existsSync(`${home}/media/drive/${FILE}/.done`)).toBe(true);
       expect(await http("POST", `/api/projects/nope/script/job`)).toEqual([404, { error: "no such project" }]);
     } finally {

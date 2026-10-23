@@ -1429,8 +1429,20 @@ function missingFiles(project: Project): string[] {
 export function unfinished(project: Project): boolean {
   const script = project.script;
   if (script === undefined || script === null) return false;
+  // Laid out once (every range is placed in one go, after the downloads): finished,
+  // whatever's been removed or never came since. Only a Re-cut lays it out again.
+  if (laidOut(project)) return false;
   // Only blocks never placed: one placed and since removed was removed on purpose.
   return missingFiles(project).length > 0 || script.blocks.some((block) => !placed(project, block));
+}
+
+/**
+ * Whether the import already laid the script out: any block placed. The audit
+ * (Oct 23): a resume after a restart, with the job only in memory, rebuilt a
+ * finished edit; the project itself says it's done, on every Mac.
+ */
+export function laidOut(project: Project): boolean {
+  return (project.script?.blocks ?? []).some((block) => placed(project, block));
 }
 
 /**
@@ -1465,6 +1477,10 @@ const cloudExcerptLane = new mediaModule.Semaphore(1);
 export function start(app: App, projectId: string, recut: boolean): Promise<void> | null {
   const live = app.store.get(projectId);
   if (live === null) return null;
+  // A finished import is never resumed (only a Re-cut lays it out again).
+  if (!recut && laidOut(live.project)) return null;
+  // The job belongs to the script it started with: one attached since stops it.
+  const source = live.project.script?.source ?? null;
   const files = missingFiles(live.project);
   const job: ScriptJob = {
     state: "downloading",
@@ -1519,6 +1535,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     });
     let result: string | null = null;
     try {
+      if ((app.store.get(id)?.project.script?.source ?? null) !== source) throw new Error("another script was attached while this one was importing: this import stops");
       await diag.timeAsync("script", "script: lay out", () => place(app, id, done, recut));
     } catch (error) {
       if (isBug(error)) throw error;
@@ -1743,9 +1760,10 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
         delete block.cut;
       }
     }
-    // A range whose file only came in now (a resumed import) would land
-    // after everything already placed: lay the whole script out again.
-    if (recut || outOfOrder(project)) clearLayout(project);
+    // Only a Re-cut lays a script out again (it clears the trims and the rest:
+    // never on a resume). A range out of order is the Re-cut's to fix.
+    if (recut) clearLayout(project);
+    else if (outOfOrder(project)) throw new Error("some ranges came in after the rest was laid out: Re-cut to lay the script out again (it starts the layout over)");
     layOut(project);
   });
 }

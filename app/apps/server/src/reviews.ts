@@ -639,15 +639,22 @@ let timer: ReturnType<typeof setInterval> | null = null;
 /** When each project's newest open note was heard here. */
 const lastHeard = new Map<string, number>();
 
-/** Starts following the reviews (with the cloud on): every POLL_MS, and fixes settled notes. */
-export function start(app: App): void {
-  if (timer !== null || !cloud.enabled()) return;
+/**
+ * Starts following the reviews: every `every` ms (POLL_MS), whenever the cloud
+ * is on, and fixes settled notes. It ticks from the start, signed in or not:
+ * the sign-in is read from the Keychain after this runs (and can come later),
+ * and a start that waited for the cloud to be on never followed a review after
+ * sign-in moved to accounts (Marc's 5 notes on Judge EXPLODES v2, Oct 23).
+ */
+export function start(app: App, every = POLL_MS): void {
+  if (timer !== null) return;
   const tick = () => {
+    if (!cloud.enabled()) return;
     void poll(app).catch((error: unknown) => diag.warn("review", `following the reviews: ${diag.messageOf(error)}`));
   };
-  timer = setInterval(tick, POLL_MS);
+  timer = setInterval(tick, every);
   timer.unref?.();
-  setTimeout(tick, 5_000).unref?.();
+  setTimeout(tick, Math.min(5_000, every)).unref?.();
 }
 
 export function stop(): void {

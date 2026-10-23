@@ -128,9 +128,13 @@ export async function poll(app: App): Promise<void> {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
+/** Follows archives and restores from the start, whenever the cloud is on (the sign-in is read after this runs; see reviews.start). */
 export function start(app: App): void {
-  if (timer !== null || !cloud.enabled()) return;
-  const tick = () => void poll(app).catch((error: unknown) => diag.warn("cloud", `following archives: ${diag.messageOf(error)}`));
+  if (timer !== null) return;
+  const tick = () => {
+    if (!cloud.enabled()) return;
+    void poll(app).catch((error: unknown) => diag.warn("cloud", `following archives: ${diag.messageOf(error)}`));
+  };
   timer = setInterval(tick, POLL_MS);
   timer.unref?.();
   setTimeout(tick, 8_000).unref?.();

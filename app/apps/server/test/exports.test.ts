@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { deleteExport, ExportRegistry, listExports } from "../src/exports.ts";
+import { archiveExportFile, deleteExport, ExportRegistry, listExports } from "../src/exports.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { clip } from "./helpers/model.ts";
@@ -145,4 +145,19 @@ test("a free Mac keeps a short export or a subtitle video; a busy one or a long 
   // Corrupt Cop, an edit: 13 min here.
   expect(seams.modalExports.cloudBetter(project([footage]), plan(34_987), false, 0.3)).toContain("13 min");
   expect(seams.modalExports.cloudBetter(project([footage]), plan(4_600), false, 0.3)).toBeNull();
+});
+
+test("archiveExportFile deletes locally only after a size-verified upload", async () => {
+  const dir = fs.mkdtempSync(`${os.tmpdir()}/edit-archive-`);
+  try {
+    const file = `${dir}/Out.mp4`;
+    fs.writeFileSync(file, Buffer.alloc(50));
+    const io = (size: number | null) => ({ enabled: () => true, upload: async () => {}, head: async () => (size === null ? null : { size }) });
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(51))).toBe(false);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(null))).toBe(false);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50))).toBe(true);
+    expect(fs.existsSync(file)).toBe(false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

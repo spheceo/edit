@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
+import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
@@ -33,6 +34,8 @@ export interface StartExtra {
   cloudJob?: string;
   /** Upload the finished file to Drive; by default only a whole subtitled video is (`drive.wanted`). */
   drive?: boolean;
+  /** Keep the local file after its verified cloud upload (default: deleted, cloud is canonical). */
+  keepLocal?: boolean;
 }
 
 interface Running {
@@ -50,6 +53,7 @@ interface Running {
   snapshot: string | null;
   /** What it exports, as `timelineHash`. */
   timeline: string;
+  keepLocal: boolean;
 }
 
 /**
@@ -71,6 +75,50 @@ export interface ExportRecord {
   format: string;
   /** The exported timeline's fingerprint (`timelineHash`): an edit since makes the project "not exported". */
   timeline?: string;
+  /** R2 key of the verified cloud copy, when the local file was deleted after upload. */
+  cloudKey?: string;
+}
+
+/** The R2 key an export of `project` named `name` is archived under. */
+export function exportCloudKey(project: string, name: string): string {
+  return `edit/exports/${project}/${name}`;
+}
+
+/** Injectable cloud IO for `archiveExportFile` (tests stand in for R2). */
+export const exportCloud = {
+  enabled: (): boolean => cloud.enabled(),
+  upload: (path: string, key: string): Promise<void> => cloud.uploadFile(path, key),
+  head: (key: string): Promise<{ size: number } | null> => cloud.head(key),
+};
+
+/**
+ * Uploads `output` to `key` and deletes the local file — only after R2 is
+ * verified to hold an object of exactly the local size. Any failure keeps
+ * the local file (it may be the only copy) and returns false.
+ */
+export async function archiveExportFile(
+  output: string,
+  key: string,
+  io: typeof exportCloud = exportCloud,
+): Promise<boolean> {
+  let size: number;
+  try { size = fs.statSync(output).size; } catch { return false; }
+  try {
+    await io.upload(output, key);
+    const found = await io.head(key);
+    if (found === null || found.size !== size) return false;
+  } catch { return false; }
+  try { fs.rmSync(output, { force: true }); } catch { return false; }
+  return !fs.existsSync(output);
+}
+
+/** The cloud key recorded for `path`, when its local copy was archived. */
+export function cloudKeyFor(home: string, path: string): string | null {
+  for (const own of Object.values(readRecords(home))) {
+    const hit = own.find((record) => record.path === path);
+    if (hit?.cloudKey !== undefined) return hit.cloudKey;
+  }
+  return null;
 }
 
 /** A project's timeline as a fingerprint: the same whatever revision or machine saved it, different after any edit. */
@@ -133,7 +181,7 @@ function writeRecords(home: string, records: Record<string, ExportRecord[]>): vo
 export function listExports(home: string, id: string): (ExportRecord & { missing: boolean })[] {
   return [...(readRecords(home)[id] ?? [])]
     .reverse()
-    .map((record) => ({ ...record, missing: !fs.existsSync(record.path) }));
+    .map((record) => ({ ...record, missing: !fs.existsSync(record.path) && record.cloudKey === undefined }));
 }
 
 function remember(home: string, id: string, record: ExportRecord): void {
@@ -282,7 +330,7 @@ export class ExportRegistry implements seams.Exports {
       ...(cloudJob === undefined ? {} : { cloudJob }), ...(extra.drive === undefined ? {} : { drive: extra.drive }), ...(snapshot === null ? {} : { snapshot }),
     };
     const key = jobs.begin(this.home, "export", project.id, args);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project) };
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project), keepLocal: extra.keepLocal === true };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -407,6 +455,22 @@ export class ExportRegistry implements seams.Exports {
         writeAtomic(mapFile(this.home ?? store.home, running.timeline), JSON.stringify(clipMap(project)));
       } catch (error) {
         diag.warn("export", `couldn't list ${output}: ${diag.messageOf(error)}`);
+      }
+      // Cloud is canonical: upload, verify by size, then delete the local
+      // file. Skipped when Drive will read the file next, or on request.
+      if (!upload && !running.keepLocal && exportCloud.enabled()) {
+        const key = exportCloudKey(id, fileName(output) ?? "export.mp4");
+        if (await archiveExportFile(output, key)) {
+          try {
+            remember(this.home ?? store.home, id, {
+              path: output, name: fileName(output) ?? output, finished_ms: nowMs(), seconds: took / 1000, bytes,
+              frames, whole: plan.start === 0 && plan.end >= duration(project), format: options.format, timeline: running.timeline, cloudKey: key,
+            });
+          } catch { /* the list keeps the local-only record */ }
+          diag.info("export", `${id}: archived ${output} to ${key} and deleted the local copy`);
+        } else {
+          diag.warn("export", `${id}: cloud archive of ${output} unverified; local copy kept`);
+        }
       }
     } else if (running.cancelled) {
       diag.info("export", `${project.name} export cancelled`);

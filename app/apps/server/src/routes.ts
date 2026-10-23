@@ -11,7 +11,8 @@ import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { cleanCache } from "./cache_cleanup.ts";
 import { importDrive } from "./drive_import.ts";
-import { deleteExport, listExports } from "./exports.ts";
+import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
+import * as cloud from "./cloud.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -996,10 +997,16 @@ async function deleteProjectExport(context: Context): Promise<Response> {
 }
 
 /** A finished export, downloaded to the device the editor is open on. */
-function exportedFile(context: Context): Response {
+async function exportedFile(context: Context): Promise<Response> {
   const path = requiredQuery(context, "path");
   if (!context.app.exports.exported(path)) throw notFound("not an export from this session");
   const name = fileName(path)?.replaceAll('"', "'") ?? "export";
+  if (!isFile(path)) {
+    // Archived after upload: hand out the verified cloud copy instead.
+    const key = cloudKeyFor(context.app.store.home, path);
+    if (key !== null) return Response.redirect(await cloud.presign(key, "GET"), 302);
+    throw notFound("not an export from this session");
+  }
   const response = serveFile(context.request, path);
   response.headers.set("content-disposition", `attachment; filename="${name}"`);
   return response;

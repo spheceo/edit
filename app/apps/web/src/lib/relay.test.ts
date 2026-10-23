@@ -105,6 +105,10 @@ describe("relay cloud endpoints", () => {
     expect((await call("convex", { kind: "mutation", path: "records:anything", args: {} })).status).toBe(403);
     // A review call is always Edit's, whatever it says.
     expect((await call("convex", { kind: "mutation", path: "reviews:publish", args: { app: "writer" } })).status).toBe(200);
+    // Only the reviews functions Edit calls, each as its kind.
+    expect((await call("convex", { kind: "mutation", path: "reviews:setAccess", args: {} })).status).toBe(403);
+    expect((await call("convex", { kind: "mutation", path: "reviews:get", args: {} })).status).toBe(403);
+    expect((await call("convex", { kind: "query", path: "reviews:get", args: {} })).status).toBe(200);
     const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).args.app).toBe("edit");
   });

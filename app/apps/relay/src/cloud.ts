@@ -70,7 +70,14 @@ const CONVEX_PATH = /^edit:[A-Za-z_][A-Za-z0-9_]*$/;
 /** Repack's reviews (always as Edit) and Writer's scripts, read only (the handoff). */
 const REVIEWS_PATH = /^reviews:[A-Za-z_][A-Za-z0-9_]*$/;
 const WRITER_READS = new Set(["writer:listScripts", "writer:getScript"]);
-const callable = (path: string, kind: string) => CONVEX_PATH.test(path) || REVIEWS_PATH.test(path) || (WRITER_READS.has(path) && kind === "query");
+/** The reviews functions Edit calls, each as its kind (the audit, Oct 23: any reviews:* went through with the service token). */
+const REVIEW_CALLS = new Map<string, string>([
+  ["reviews:changes", "query"], ["reviews:get", "query"], ["reviews:open", "query"],
+  ["reviews:publish", "mutation"], ["reviews:claim", "mutation"], ["reviews:release", "mutation"], ["reviews:resolve", "mutation"],
+  ["reviews:reply", "mutation"], ["reviews:approve", "mutation"], ["reviews:note", "mutation"], ["reviews:deleteNote", "mutation"], ["reviews:setMeta", "mutation"],
+]);
+const callable = (path: string, kind: string) =>
+  CONVEX_PATH.test(path) || (REVIEWS_PATH.test(path) && REVIEW_CALLS.get(path) === kind) || (WRITER_READS.has(path) && kind === "query");
 
 /** Each cloud route's permission: `use` for all of them (accounts' contract v2); null for a route that isn't one. */
 function permissionOf(route: string): Permission | null {

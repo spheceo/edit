@@ -5,6 +5,7 @@ import { expect, test } from "bun:test";
 import { blursFor, boxAt, offShot } from "../src/mark_blurs.ts";
 import type { AdjustmentClip, Clip, Media, Project, VideoClip } from "../src/model.ts";
 import { addTrack, newProject, sample } from "../src/project.ts";
+import { left, leaveMark, NOT_A_MARK } from "../src/watermarks.ts";
 
 const SETTINGS = { width: 1920, height: 1080, fps: 30 };
 const LOGO = { text: "fox8", box: [0.85, 0.05, 0.95, 0.12] as [number, number, number, number] };
@@ -78,4 +79,17 @@ test("a still rectangle over a run of shots, or over a push-in, is blur_off_shot
   // Its shot pushes in: the still rectangle doesn't follow the logo.
   (p.clips[0] as VideoClip).keyframes = { scale: [{ frame: 0, value: 1, ease: "linear" }, { frame: 99, value: 1.3, ease: "linear" }] };
   expect((offShot(p) as Record<string, unknown>[]).map((issue) => issue.moving)).toEqual(["c1"]);
+});
+
+test("a mark left alone (the court's own room tag) is never blurred again", () => {
+  const p = project();
+  const v1 = p.tracks.find((track) => track.kind === "video")!.id;
+  p.clips.push(shot("c1", v1, 0, 100));
+  const media = p.media[0]!;
+  expect(blursFor(p, p.clips[0] as VideoClip, media, LOGO).length).toBe(1);
+  leaveMark(media, "fox8");
+  expect(left(media, LOGO)).toBe(true);
+  expect(media.markers).toEqual([{ time: 0, name: NOT_A_MARK, note: "fox8" }]);
+  leaveMark(media, "FOX8");
+  expect(media.markers!.length).toBe(1);
 });

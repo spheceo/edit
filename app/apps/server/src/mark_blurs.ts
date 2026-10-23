@@ -228,6 +228,11 @@ function laneFor(project: Project, start: number, end: number): string {
  */
 export function blurMarks(project: Project, args: Record<string, unknown>): Record<string, unknown> {
   const only = Array.isArray(args.clips) ? new Set(args.clips.map(String)) : null;
+  // Marks that aren't another outlet's (the court's own room tag, a
+  // camera's label): `leave` puts a "not a mark" marker on each media
+  // showing them, which every later run and the audit respect (Trooper's
+  // "D54A Court Room 3" got 67 blurs it didn't need).
+  const leave = Array.isArray(args.leave) ? args.leave.map((one) => String(one).toLowerCase()).filter((one) => one !== "") : [];
   // The old Mark blurs first: a re-run lays them again from the timeline as it is now.
   project.clips = project.clips.filter((clip) => !((clip.name ?? "").startsWith(NAME) && (only === null || overlapsAny(project, clip, only))));
   const made: AdjustmentClip[] = [];
@@ -245,6 +250,8 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
       continue;
     }
     for (const mark of marks) {
+      if (leave.some((one) => mark.text.toLowerCase().includes(one))) watermarks.leaveMark(media, mark.text);
+      if (watermarks.left(media, mark)) continue;
       const [x0, y0, x1, y1] = mark.box;
       if ((x1 - x0) * (y1 - y0) >= 0.25) {
         skipped.push(`${media.name}: ${mark.text || "a mark"} (too big to blur without hiding the picture)`);

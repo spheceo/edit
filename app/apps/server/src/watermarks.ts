@@ -70,6 +70,20 @@ export function cachedMarks(media: Media): Mark[] | null {
   }
 }
 
+/** The media marker saying one of its marks isn't another outlet's (`blur_marks leave`): never blurred or flagged. */
+export const NOT_A_MARK = "not a mark";
+
+/** Whether a mark was left alone on this media. */
+export function left(media: Media, mark: Mark): boolean {
+  return (media.markers ?? []).some((marker) => marker.name === NOT_A_MARK && (marker.note ?? "").toLowerCase() === mark.text.toLowerCase());
+}
+
+/** Marks a mark of this media as not another outlet's (once). */
+export function leaveMark(media: Media, text: string): void {
+  if (left(media, { text, box: [0, 0, 0, 0] })) return;
+  media.markers = [...(media.markers ?? []), { time: 0, name: NOT_A_MARK, note: text }];
+}
+
 /** A slowed shot's smoothed copy (broll.ts names it `<source stem>-0.80x-<key>.mp4`): its source's stem. */
 const SMOOTHED = /^(.*)-\d+\.\d\dx-[0-9a-f]+\.mp4$/u;
 
@@ -239,6 +253,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
       continue;
     }
     for (const mark of marks) {
+      if (left(media, mark)) continue;
       const box = onFrame(project, clip, media, mark.box);
       if (!seen(project, clip, mark.box, box) || blurred(project, clip, box)) continue;
       if (footage) {

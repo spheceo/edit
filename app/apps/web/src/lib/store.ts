@@ -472,7 +472,10 @@ export async function syncScriptJob(id: string) {
     // placed) carries on by itself. A placed block whose clip is gone was removed
     // on purpose (a cut-in card replaced by B-roll): never put it back.
     const neverPlaced = project.script.blocks.some((block) => !block.clip);
-    if (unfinished && neverPlaced && !running && job?.state !== "failed") {
+    // Only an import that stopped part-way, never one that finished: a finished edit
+    // whose blocks lost their clip links was laid out again on top of itself when it
+    // was opened (Mom Leaves 5 Kids, Oct 23: a second copy after 30:50).
+    if (unfinished && neverPlaced && !running && job?.state !== "failed" && job?.state !== "done") {
       const resumed = await api.resumeScript(id);
       if (useEditor.getState().project?.id === id) useEditor.setState({ scriptJob: resumed.job });
     }

@@ -12,6 +12,11 @@
 //   --env prod                                  another Infisical environment (default dev)
 //
 // A Worker secret that isn't in the folder is left as it is (never deleted).
+// Three live only in the Worker and are never pushed (refused by name, even
+// if the folder had them): ELEVENLABS_API_KEY, ELEVENLABS_SPEECH_KEY and
+// GOOGLE_MAPS_KEY. They work as they are, and Cloudflare can't hand a secret
+// back, so if the Worker is ever recreated they come from ElevenLabs and
+// Google Cloud again (the user's decision, Oct 23).
 
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -46,7 +51,14 @@ if (exported.code !== 0) {
   console.error(`couldn't read ${FOLDER} from Infisical (${environment}): is \`infisical login\` done?`);
   process.exit(1);
 }
-const secrets = (JSON.parse(exported.out) as { key: string; value: string }[]).filter((one) => only.length === 0 || only.includes(one.key));
+/** Kept only in the Worker: never overwritten from here. */
+const WORKER_ONLY = ["ELEVENLABS_API_KEY", "ELEVENLABS_SPEECH_KEY", "GOOGLE_MAPS_KEY"];
+const refused = only.filter((name) => WORKER_ONLY.includes(name));
+if (refused.length > 0) {
+  console.error(`never pushed (they live only in the Worker): ${refused.join(", ")}`);
+  process.exit(1);
+}
+const secrets = (JSON.parse(exported.out) as { key: string; value: string }[]).filter((one) => !WORKER_ONLY.includes(one.key) && (only.length === 0 || only.includes(one.key)));
 const unresolved = secrets.filter((one) => one.value === "" || one.value.startsWith("${"));
 if (unresolved.length > 0) {
   console.error(`not resolved in Infisical (fix the reference first): ${unresolved.map((one) => one.key).join(", ")}`);

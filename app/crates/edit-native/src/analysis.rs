@@ -266,7 +266,12 @@ pub async fn desktop_files(
 /// `width` × `height` pixels at scale `scale`, drawn into `<home>/graphics/`
 /// if missing: its path.
 #[napi]
-pub async fn desktop_window(kind: String, width: u32, height: u32, scale: f64) -> napi::Result<String> {
+pub async fn desktop_window(
+    kind: String,
+    width: u32,
+    height: u32,
+    scale: f64,
+) -> napi::Result<String> {
     crate::blocking("drawing a desktop window", move || {
         let home = crate::lifecycle::home()?;
         let path = edit_engine::desktop::window_file(&home, &kind, width, height, scale)?;

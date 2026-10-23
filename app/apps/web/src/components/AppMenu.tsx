@@ -28,7 +28,9 @@ export function AppMenu() {
             { label: `Signed in as ${account.person.email}`, icon: <UserRound size={14} />, onSelect: () => window.open(account.accounts, "_blank", "noopener") },
             { label: "Sign out", icon: <LogOut size={14} />, onSelect: () => void signOut() },
           ]
-        : [{ label: "Sign in…", icon: <LogIn size={14} />, onSelect: () => void signIn() }];
+        : account.available
+          ? [{ label: "Sign in…", icon: <LogIn size={14} />, onSelect: () => void signIn() }]
+          : [];
   return (
     <IconButton
       label="More"

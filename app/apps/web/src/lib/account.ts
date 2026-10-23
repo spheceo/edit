@@ -5,6 +5,8 @@ import { create } from "zustand";
 
 export interface Account {
   signed_in: boolean;
+  /** The accounts site answers: signing in is offered. */
+  available: boolean;
   person: { email: string; name: string; image: string | null } | null;
   perms: string[];
   admin: boolean;

@@ -16,7 +16,7 @@ export function SignInCard() {
     void loadAccount();
   }, []);
 
-  if (account === null || account.signed_in || later) return null;
+  if (account === null || account.signed_in || !account.available || later) return null;
   return (
     <div className="mt-8 rounded-xl border border-sky-400/25 bg-sky-400/[0.06] p-4">
       <div className="flex items-center gap-3">

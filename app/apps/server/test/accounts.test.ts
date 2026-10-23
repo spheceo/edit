@@ -125,7 +125,7 @@ test("the map page's tiles go through Edit's server to the relay with the person
   process.env.EDIT_RELAY_URL = process.env.EDIT_ACCOUNTS_URL;
   try {
     const asked = new URL("http://127.0.0.1:7799/v1/3dtiles/datasets/x/files/y.glb?session=s1");
-    const answer = await relay.forwardTiles(new Request(asked), asked);
+    const answer = await relay.forwardTiles(new Request(asked.toString()), asked);
     expect(answer.headers.get("cache-control")).toBe("max-age=60");
     expect(await answer.json()).toEqual({ bearer: `Bearer ${accounts.accessToken()}`, query: "?session=s1" });
   } finally {

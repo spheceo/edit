@@ -58,6 +58,18 @@ interface State {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+/** Whether the accounts site answers (its JWKS): signing in is offered only then, so a build out before the site is never stuck on it. */
+let available = false;
+
+async function checkAvailable(): Promise<void> {
+  try {
+    const answer = await fetch(`${accountsUrl()}/.well-known/jwks.json`, { signal: AbortSignal.timeout(10_000) });
+    available = answer.ok;
+  } catch {
+    available = false;
+  }
+}
+
 const state: State = { home: null, access: null, expires: 0, person: null, perms: [], admin: false, pending: null, problem: null, refreshing: null, timer: null };
 
 const base64url = (bytes: Buffer) => bytes.toString("base64url");
@@ -85,6 +97,7 @@ export function accessToken(): string | null {
 export function status(): Record<string, unknown> {
   return {
     signed_in: state.person !== null && state.access !== null,
+    available: available || state.person !== null,
     person: state.person,
     perms: state.perms,
     admin: state.admin,
@@ -201,6 +214,8 @@ export function renew(home: string | null = state.home): Promise<void> {
 /** At start: signed in before (a refresh token kept), renewed quietly. */
 export async function start(app: App): Promise<void> {
   state.home = app.store.home;
+  void checkAvailable();
+  setInterval(() => void checkAvailable(), 10 * 60_000).unref?.();
   await renew(app.store.home);
   if (state.person !== null) diag.info("accounts", `signed in as ${state.person.email.split("@")[0]}`);
 }

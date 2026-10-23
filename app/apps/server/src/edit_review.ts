@@ -27,7 +27,9 @@ function coverage(project: Project, transcripts: Map<string, Transcript>): { rep
       if (clip.type !== "text") return false;
       const track = trackOf(project, clip.track);
       if (track === undefined || track.hidden) return false;
-      return track.subtitles === true || (clip.name ?? "").startsWith("Caption");
+      // Stacked lines (overlap) sit on tracks of their own: Predator Doctor's
+      // 55 read as 40 stretches of speech with nothing on screen.
+      return track.subtitles === true || /^(Caption|Subtitle)/u.test(clip.name ?? "");
     })
     .map((clip) => [clip.start, clipEnd(clip)] as [number, number]);
   let checked = 0;
@@ -404,10 +406,9 @@ export function textNotSaid(project: Project, transcripts: Map<string, Transcrip
       project.media.find((media) => media.id === clip.media)?.kind === "video",
   );
   const reused = reusedSpans(project);
-  for (const clip of project.clips) {
+  const lines = project.clips.filter((clip) => clip.type === "text" && /^(Caption|Subtitle)/u.test(clip.name ?? ""));
+  for (const clip of lines) {
     if (clip.type !== "text") continue;
-    const name = clip.name ?? "";
-    if (!(name.startsWith("Caption") || name.startsWith("Subtitle"))) continue;
     const middle = clip.start + clip.duration / 2;
     if (!sound.some((audio) => audio.start <= middle && clipEnd(audio) > middle) && !reused.some(([from, to]) => from <= middle && to > middle)) {
       issues.push({ kind: "subtitle_unheard", clip: clip.id, start: clip.start, text: clip.text, fix: "delete it: no footage sound plays under it (B-roll under a narration is silent; subtitles are for what's heard)" });
@@ -423,7 +424,13 @@ export function textNotSaid(project: Project, transcripts: Map<string, Transcrip
     if (near.length === 0) continue;
     const unheard = shown.filter((word) => !near.includes(word)).length;
     const under = heard.filter(([frame]) => frame >= clip.start + edge && frame < clipEnd(clip) - edge).map(([, word]) => word);
-    const unshown = under.filter((word) => !shown.includes(word)).length;
+    // People talking over each other: the other's words are on the line
+    // stacked with this one, not missing from it ("No. Absolutely not." under
+    // the detective's "That was never in your mind whatsoever.").
+    const alongside = lines
+      .filter((other) => other !== clip && other.start < clipEnd(clip) && clipEnd(other) > clip.start)
+      .flatMap((other) => (other.type === "text" ? splitWhitespace(other.text).map(stem) : []));
+    const unshown = under.filter((word) => !shown.includes(word) && !alongside.includes(word)).length;
     const off = unheard + unshown;
     if (off >= 2 && off / (shown.length + unshown) >= 0.4) {
       issues.push({ kind: "text_not_said", clip: clip.id, start: clip.start, text: clip.text });

@@ -185,6 +185,25 @@ test("a_caption_that_isnt_what_is_said_is_flagged", () => {
   expect(issues.map((issue) => issue.clip)).toEqual(["wrong"]);
 });
 
+test("a line said over another's is what that one stacked beside it says, not words missing from it", () => {
+  // Predator Doctor's "No. Absolutely not." under the detective's line: here "Come on, baby." over the medic call's end.
+  const p = footageProject();
+  const v2 = addTrack(p, "video");
+  const v3 = addTrack(p, "video");
+  p.clips.push({ ...words("short", v2, "Come on, baby.", 20, 64), name: "Subtitle · Victim" });
+  expect((textNotSaid(p, new Map([["m7", TEASER]])) as Record<string, unknown>[]).map((issue) => issue.clip)).toEqual(["short"]);
+  p.clips.push({ ...words("stacked", v3, "Start us a medic right now in the backyard.", 5, 40), name: "Subtitle · Officer" });
+  expect(textNotSaid(p, new Map([["m7", TEASER]]))).toEqual([]);
+});
+
+test("a stacked subtitle (overlap) on its own track covers the speech under it", () => {
+  const p = footageProject();
+  const stacked = addTrack(p, "video");
+  const end = Math.max(...p.clips.map((clip) => clip.start + clip.duration));
+  p.clips.push({ ...words("all", stacked, "everything", 0, end), name: "Subtitle · Officer" });
+  expect(unsubtitledSpeech(p, new Map([["m7", TEASER]]))).toEqual([]);
+});
+
 test("a caption over silent footage (B-roll under a narration) is flagged as unheard", () => {
   const p = footageProject();
   const v2 = addTrack(p, "video");

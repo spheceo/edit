@@ -155,7 +155,7 @@ const appear = (fresh: boolean) =>
   ({
     initial: fresh ? { opacity: 0, y: 4 } : false,
     animate: { opacity: 1, y: 0 },
-    transition: { type: "spring", stiffness: 520, damping: 42 },
+    transition: { duration: 0.18, ease: [0.2, 0, 0, 1] },
   }) as const;
 
 /** One exchange: your message, the work (folds away when done), the answer. */

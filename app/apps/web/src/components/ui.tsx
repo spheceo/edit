@@ -9,7 +9,8 @@ import { toggleMenu } from "./ContextMenu";
 const cx = (...parts: (string | false | null | undefined)[]) => parts.filter(Boolean).join(" ");
 export { cx };
 
-export const spring = { type: "spring", stiffness: 520, damping: 42, mass: 0.8 } as const;
+// The kit's motion (design/kit: 180 ms, ease cubic-bezier(.2,0,0,1)): nothing bounces.
+export const spring = { duration: 0.18, ease: [0.2, 0, 0, 1] } as const;
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   /** primary: the one main action (red); subtle: secondary (an edge); ghost: none; danger: destructive among others (tinted); destructive: a dialog’s final destructive answer (solid red). */
@@ -220,12 +221,13 @@ export function Switch({ checked, onChange }: { checked: boolean; onChange: (val
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={cx("relative h-[18px] w-8 rounded-full transition-colors duration-200", checked ? "bg-white" : "bg-active")}
+      // The kit's switch (.sp-switch): on is white with a dark thumb.
+      className={cx("relative h-[18px] w-[30px] rounded-full border transition-colors duration-[120ms]", checked ? "border-fg bg-fg" : "border-line-strong bg-active")}
     >
       <motion.span
         layout
-        transition={spring}
-        className={cx("absolute top-[3px] size-3 rounded-full", checked ? "right-[3px] bg-black" : "left-[3px] bg-muted")}
+        transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
+        className={cx("absolute top-[2px] size-3 rounded-full", checked ? "right-[2px] bg-bg" : "left-[2px] bg-muted")}
       />
     </button>
   );

@@ -152,3 +152,11 @@
   color: transparent;
   animation: shimmer 2.2s linear infinite;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    animation: none;
+    color: var(--color-muted);
+    background: none;
+  }
+}

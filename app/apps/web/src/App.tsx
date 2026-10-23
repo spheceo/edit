@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 
 import { AppDialogs } from "./components/AppMenu";
 import { ContextMenuHost } from "./components/ContextMenu";
@@ -13,7 +13,8 @@ export function App() {
   const path = usePath();
   const projectId = path.match(/^\/p\/([\w-]+)/)?.[1];
   return (
-    <>
+    // The kit: respect reduced motion (movement goes, fades stay).
+    <MotionConfig reducedMotion="user">
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={projectId ?? "home"}
@@ -31,6 +32,6 @@ export function App() {
       <Toasts />
       <AppDialogs />
       <ContextMenuHost />
-    </>
+    </MotionConfig>
   );
 }

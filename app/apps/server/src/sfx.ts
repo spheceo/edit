@@ -13,6 +13,20 @@ import { join } from "./paths.ts";
 /** The marker a placed sound lines up on the cut. */
 export const HIT = "hit";
 
+/** A sound effect's name saying it's one moment (a whoosh, a hit), not a bed. */
+export const MOMENT = /whoosh|swoosh|swish|impact|\bhit\b|boom|click|riser|stinger|slam|thud|transition|shutter/iu;
+
+/**
+ * A one-moment sound effect longer than this plays only its hit unless told
+ * how long (`HIT_PLAY` seconds, the hit two thirds in, fading out): Judge
+ * EXPLODES' "Swooshes, Whoosh, Dark, Big" is 22 s of whooshes in one file and
+ * played whole under every teaser and cut-in, turned up to +3 dB because
+ * the whole file measured quiet (Marius: "Really loud sound effect for no
+ * reason", "this does occur later on in the video as well").
+ */
+export const LONG_MOMENT = 4.0;
+export const HIT_PLAY = 1.8;
+
 export interface Sound {
   name: string;
   /** Its file name in the assets ("shutter.wav"). */

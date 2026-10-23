@@ -66,7 +66,20 @@ async function addFromLibrary({ app, args, projectId }: ToolCall): Promise<Conte
   const times = seams.editing.soundTimes(app.store, projectId, args);
   const [mediaId, sound] = await library.importSound(app, projectId, soundId, ORIGIN);
   const given = num(args.seconds);
-  const seconds = given !== null && given > 0.0 ? given : null;
+  let seconds = given !== null && given > 0.0 ? given : null;
+  const leadGiven = num(args.lead);
+  let lead = leadGiven !== null && leadGiven >= 0.0 ? leadGiven : null;
+  let fadeOut = Math.max(num(args.fade_out) ?? 0.0, 0.0);
+  {
+    // A file of several whooshes or hits plays one: its loudest.
+    const media = mediaOf(live(app, projectId).project, mediaId);
+    const hit = (media?.markers ?? []).find((marker) => marker.name === seams.sfx.HIT)?.time;
+    if (seconds === null && sound.kind === "sfx" && media !== undefined && hit !== undefined && media.duration > seams.sfx.LONG_MOMENT && seams.sfx.MOMENT.test(sound.name)) {
+      seconds = seams.sfx.HIT_PLAY;
+      lead ??= Math.min(hit, (seams.sfx.HIT_PLAY * 2) / 3);
+      if (fadeOut === 0.0) fadeOut = 0.25;
+    }
+  }
   let volumeDb = num(args.volume_db) ?? 0.0;
   let level = "";
   let target: number | null = null;
@@ -94,19 +107,18 @@ async function addFromLibrary({ app, args, projectId }: ToolCall): Promise<Conte
     if (media === undefined) throw new Error("sound media vanished");
     // The stretch that plays (around the hit when trimmed; see place_sound).
     const hit = (media.markers ?? []).find((marker) => marker.name === seams.sfx.HIT)?.time ?? 0.0;
-    const from = seconds !== null && hit > 0.0 ? Math.max(hit - (num(args.lead) ?? seconds / 2.0), 0.0) : 0.0;
+    const from = seconds !== null && hit > 0.0 ? Math.max(hit - (lead ?? seconds / 2.0), 0.0) : 0.0;
     const length = Math.min(seconds ?? media.duration, media.duration - from);
     const measured = await library.loudness(media.path, from, length);
     // Never boost a near-silent stretch into noise.
     volumeDb = Math.min(Math.max(target - measured, -40.0), 12.0);
     level += `; it measures ${fixed(measured, 1)} LUFS, so volume ${signed(volumeDb, 1)} dB puts it at ${fixed(measured + volumeDb, 1)} LUFS`;
   }
-  const lead = num(args.lead);
   const placed = await seams.editing.placeSound(app.store, projectId, mediaId, sound.name, [], times, {
     volume_db: f32(volumeDb),
     seconds,
-    lead: lead !== null && lead >= 0.0 ? lead : null,
-    fade_out: Math.max(num(args.fade_out) ?? 0.0, 0.0),
+    lead,
+    fade_out: fadeOut,
     color: sound.kind === "music" ? "green" : "yellow",
   });
   return text(`${placed}${level}`);

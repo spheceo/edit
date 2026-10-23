@@ -70,6 +70,24 @@ export function cachedMarks(media: Media): Mark[] | null {
   }
 }
 
+/** A slowed shot's smoothed copy (broll.ts names it `<source stem>-0.80x-<key>.mp4`): its source's stem. */
+const SMOOTHED = /^(.*)-\d+\.\d\dx-[0-9a-f]+\.mp4$/u;
+
+/**
+ * A media's marks, a smoothed copy taking its source's (the same picture,
+ * slowed): Judge EXPLODES' B-roll was 60 smoothed copies of one hearing, each
+ * looked at alone, and one came back without the logo the rest had.
+ */
+export function marksOf(project: Project, media: Media): Mark[] | null {
+  const copy = SMOOTHED.exec(media.name);
+  if (copy !== null) {
+    const source = project.media.find((other) => other.id !== media.id && other.kind === "video" && other.name.replace(/\.[^.]+$/u, "") === copy[1]);
+    const marks = source === undefined ? null : cachedMarks(source);
+    if (marks !== null) return marks;
+  }
+  return cachedMarks(media);
+}
+
 /** The model's answer as marks (boxes as shares of the picture). */
 export function readMarks(answer: string): Mark[] {
   const given = JSON.parse(watch.unfence(answer)) as { marks?: { text?: unknown; box?: unknown }[] };
@@ -136,6 +154,21 @@ async function look(media: Media, file: string): Promise<void> {
   fs.writeFileSync(file, JSON.stringify({ marks: readMarks(content) }));
 }
 
+/** Media of ours (a finished video of ours reused): it carries only our own additions. */
+export function ours(project: Project): Set<string> {
+  return reusedMedia(project);
+}
+
+/** Whether a media is one marks are looked for on: found photos and footage, not Edit's own pictures. */
+export function looksForMarks(media: Media): boolean {
+  return isFootage(media) || (media.kind === "image" && !/^(desktop|map|frame|board|paper)-/u.test(media.name));
+}
+
+/** Starts looking at a media for marks in the background (once at a time per file). */
+export function lookSoon(media: Media): void {
+  warm(media);
+}
+
 /** Starts looking at a photo in the background (once at a time per file). */
 function warm(media: Media): void {
   const file = cacheFile(media);
@@ -172,7 +205,9 @@ function seen(project: Project, clip: VideoClip, box: Mark["box"], [cx, cy, w, h
 function blurred(project: Project, clip: VideoClip, [x, y, w, h]: [number, number, number, number]): boolean {
   return project.clips.some((other) => {
     if (other.type !== "adjustment" || trackOf(project, other.track)?.hidden === true) return false;
-    if (other.start > clip.start + 2 || clipEnd(other) < clipEnd(clip) - 2) return false;
+    // blur_marks' blurs stick to the clip but end where a picture covers it, so any of them over it counts.
+    const sticky = (other.name ?? "").startsWith("Mark blur");
+    if (sticky ? other.start >= clipEnd(clip) || clipEnd(other) <= clip.start : other.start > clip.start + 2 || clipEnd(other) < clipEnd(clip) - 2) return false;
     const blur = other.blur;
     if (blur === undefined || blur === null || (blur.radius ?? 0) < 12) return false;
     if (blur.width === undefined || blur.width === null || blur.width <= 0) return true;
@@ -195,7 +230,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
     if (media === undefined || ours.has(media.id)) continue;
     const footage = isFootage(media);
     if (!footage && (media.kind !== "image" || /^(desktop|map|frame|board|paper)-/u.test(media.name))) continue;
-    const marks = cachedMarks(media);
+    const marks = marksOf(project, media);
     if (marks === null) {
       if (cacheFile(media) !== null) {
         pending.add(media.name);
@@ -231,7 +266,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
             ? "too big to blur without hiding the room: a clean copy of the tape is needed (say so in your report, with the tape's name); meanwhile leave it"
             : mark.inset === true
               ? "another video's picture in a box: the tape's one fixed framing past it (scale, x/y so it's off the frame) or a rect blur over it for each clip (blur_box is the first clip's)"
-              : "another channel's mark: the tape's one fixed framing past it (scale, x/y or crop so it's off the frame) or a rect blur over it for each clip, under the texts (blur_box is the first clip's)",
+              : "another channel's mark: op blur_marks (no arguments) blurs every mark on the timeline with a blur stuck to its shot (it follows the push-in, fades with the dissolve, ends with the shot); or the tape's one fixed framing past it (scale, x/y or crop so it's off the frame)",
         });
         continue;
       }
@@ -241,7 +276,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
         start: clip.start,
         text: mark.text,
         blur_box: box,
-        fix: "crop past it (scale, x/y or crop so it's off the frame) or a rect blur over blur_box under the texts; or another picture",
+        fix: "op blur_marks (a blur stuck to the picture, following its push-in and ending with it); or crop past it (scale, x/y or crop so it's off the frame); or another picture",
       });
     }
   }

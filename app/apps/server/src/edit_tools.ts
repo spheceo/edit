@@ -19,6 +19,7 @@ import * as footageLevels from "./footage_levels.ts";
 import * as framing from "./framing.ts";
 import * as tools from "./tools.ts";
 import * as onscreen from "./onscreen.ts";
+import * as markBlurs from "./mark_blurs.ts";
 import * as watermarks from "./watermarks.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
@@ -1098,6 +1099,34 @@ export function desktopsSparse(project: Project): Json[] {
     .map(([name, screen]) => ({ kind: "desktop_sparse", desktop: name, start: screen.start, windows: screen.windows, at_least: FEWEST_WINDOWS, fix: "add windows that pop up as the narration names them: Photo Viewers of who and what's named, Video Players of the footage it describes (the desktop shot's windows in cover_cut_in)" }));
 }
 
+/**
+ * A one-moment sound effect playing on for seconds (`sfx_long`): a whoosh,
+ * hit or boom longer than LONG_MOMENT. Judge EXPLODES' 22 s file of whooshes
+ * played whole under every teaser and cut-in (Marius: "Really loud sound
+ * effect for no reason… this does occur later on in the video as well").
+ */
+export function soundEffectsLong(project: Project): Json[] {
+  const fps = project.settings.fps;
+  const out: Json[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || clip.volume_db <= -40 || trackOf(project, clip.track)?.muted === true) continue;
+    const media = project.media.find((one) => one.id === clip.media);
+    if (media === undefined || media.kind !== "audio") continue;
+    const name = `${clip.name ?? ""} ${media.name}`;
+    if (!sfx.MOMENT.test(name) || /music|drone|ambien|bed\b|loop/iu.test(name)) continue;
+    const seconds = (clip.duration / fps) * clip.speed;
+    if (seconds <= sfx.LONG_MOMENT) continue;
+    out.push({
+      kind: "sfx_long",
+      clip: clip.id,
+      start: clip.start,
+      seconds: round(seconds * 10) / 10,
+      fix: `one hit, not the file: update its duration to ~${sfx.HIT_PLAY} s around the hit (source_in a second before the media's "hit" marker) with a short fade_out, or delete it if nothing on screen calls for it; add_from_library places only the hit by itself`,
+    });
+  }
+  return out;
+}
+
 /** What an arrest sounds like in bodycam footage. */
 const ARREST = /\b(you'?re|you are) (now )?under arrest\b|\bunder arrest\b|\bcuff (you|her|him)\b|\bhands behind your back\b/iu;
 
@@ -1160,6 +1189,8 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...introWithoutArrest(project, heard, teasers),
     ...windowsUnderused(project),
     ...desktopsSparse(project),
+    ...(markBlurs.offShot(project) as Json[]),
+    ...soundEffectsLong(project),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
@@ -1194,10 +1225,11 @@ const FIXABLE = [
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
+  "blur_off_shot", "sfx_long",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */
-const WHOLE_EDIT = ["teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map"];
+const WHOLE_EDIT = ["blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map"];
 
 /**
  * Edit's follow-up after a whole edit that left three or more fixable flags (or one of WHOLE_EDIT's)

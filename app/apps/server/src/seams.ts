@@ -718,6 +718,12 @@ export interface StylesSeam {
 export interface SfxSeam {
   /** The marker a placed sound lines up on the cut. */
   readonly HIT: string;
+  /** A sound effect's name saying it's one moment (a whoosh, a hit), not a bed. */
+  readonly MOMENT: RegExp;
+  /** A one-moment effect longer than this (seconds) plays only its hit. */
+  readonly LONG_MOMENT: number;
+  /** How long a hit plays (seconds) when not told. */
+  readonly HIT_PLAY: number;
 }
 
 /** How a sound is placed. */

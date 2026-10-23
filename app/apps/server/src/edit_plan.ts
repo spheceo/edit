@@ -12,6 +12,7 @@ import * as vignettes from "./vignettes.ts";
 import * as looks from "./looks.ts";
 import * as graphics from "./graphics.ts";
 import * as intro from "./intro_graphics.ts";
+import * as markBlurs from "./mark_blurs.ts";
 import * as markers from "./markers.ts";
 import type { Clip, Keyframe, Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
@@ -430,13 +431,15 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return graphics.placeLabel(project, args);
     case "markers":
       return markers.edit(project, args);
+    case "blur_marks":
+      return markBlurs.blurMarks(project, args);
     default:
       // A transition's kind given as its own op ("red_flash" in the intro skill's words).
       if (["drop", "flash", "red_flash", "dip", "open", "light_leak", "burn"].includes(String(op))) {
         throw new Error(`unknown op ${op}: it's a transition, {"op": "transition", "kind": "${op}", "at": <frame>}`);
       }
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, ease_vignettes, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, ease_vignettes, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, blur_marks, tidy_tracks`,
       );
   }
 }

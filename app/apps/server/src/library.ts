@@ -50,12 +50,9 @@ const FRESH_MS = 120_000;
 const AUDIO = ["wav", "mp3", "m4a", "aif", "aiff", "flac", "ogg", "aac"];
 /** Longer sound effects are beds (drones, heartbeats): no hit to line up. */
 const HIT_SECONDS = 15.0;
-/**
- * ...unless the name says it's a moment, not a bed: a 22-second file of
- * several whooshes placed from its silent start played nothing (the comp's
- * 37 bridge whooshes, at +12 dB and still about -54 LUFS).
- */
-const MOMENT = /whoosh|swoosh|swish|impact|\bhit\b|boom|click|riser|stinger|slam|thud|transition|shutter/iu;
+// ...unless the name says it's a moment, not a bed (sfx.ts `MOMENT`): a
+// 22-second file of several whooshes placed from its silent start played
+// nothing (the comp's 37 bridge whooshes, at +12 dB and still about -54 LUFS).
 
 /** Each downloaded sound's folder (its checksum's start) → its category, from the last listing read. */
 const folders = new Map<string, string>();
@@ -398,7 +395,7 @@ export async function importSound(app: App, project: string, soundId: string, or
     media !== undefined &&
     (media.markers ?? []).length === 0 &&
     sound.kind === "sfx" &&
-    (media.duration <= HIT_SECONDS || MOMENT.test(sound.name))
+    (media.duration <= HIT_SECONDS || seams.sfx.MOMENT.test(sound.name))
   ) {
     const hit = await loudest(path);
     await app.store.update(project, origin, (edited) => {

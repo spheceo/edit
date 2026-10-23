@@ -142,6 +142,8 @@ function runtimeEnv(args: string[]): Record<string, string | undefined> | undefi
 // over plain HTTPS, up to 1080p, with the original sound: yt-dlp ranks the
 // original track above YouTube's dubs. A progressive MP4 when there's no DASH.
 const FORMAT = "bv*[vcodec^=avc1][height<=1080][protocol=https]+ba[ext=m4a][protocol=https]/b[vcodec^=avc1][ext=mp4]/bv*[height<=1080]+ba/b";
+/** Through the paid proxy ($1/GB): at most 720p, about half the bytes of 1080p (the audit, Oct 23). */
+const PROXY_FORMAT = "bv*[vcodec^=avc1][height<=720][protocol=https]+ba[ext=m4a][protocol=https]/b[vcodec^=avc1][ext=mp4][height<=720]/bv*[height<=720]+ba/b[height<=720]/b";
 
 /** Whether yt-dlp's words say YouTube refused this Mac (worth the proxy). */
 function refused(stderr: string): boolean {
@@ -255,7 +257,7 @@ async function runYtdlp(
     "30",
     "--continue",
     "-f",
-    FORMAT,
+    proxy === null ? FORMAT : PROXY_FORMAT,
     "--merge-output-format",
     "mp4",
     ...ffmpegArgs(),

@@ -28,6 +28,7 @@ import { canonical, expandHome, extension, fileName, fileStem, isFile, join, par
 import { DEFAULT_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
+import { storageReport, verifyExports } from "./storage.ts";
 import { missingMedia, UpdateError } from "./store.ts";
 import * as archive from "./archive.ts";
 import * as avatars from "./avatars.ts";
@@ -98,6 +99,7 @@ export function buildRouter(): Router<App> {
     .post("/api/projects/{id}/export", startExport)
     .post("/api/projects/{id}/export/cancel", cancelExport)
     .get("/api/projects/{id}/exports", projectExports)
+    .get("/api/storage", async ({ app }) => json({ ...storageReport(app.store.home), exports: await verifyExports(app.store.home) }))
     .post("/api/cache/clean", cleanTheCache)
     .post("/api/projects/{id}/exports/delete", deleteProjectExport);
   router

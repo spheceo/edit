@@ -10,6 +10,8 @@ import { join } from "node:path";
 import * as accounts from "../src/accounts.ts";
 import type { App } from "../src/app.ts";
 import * as relay from "../src/relay.ts";
+import { baseRouter, respond } from "../src/http/server.ts";
+import * as windowFocus from "../src/window_focus.ts";
 
 const dir = fs.mkdtempSync(join(os.tmpdir(), "edit-accounts-"));
 const app = { store: { home: join(dir, "home") }, port: 7799 } as unknown as App;
@@ -96,7 +98,7 @@ test("signs in with PKCE through the loopback, keeps the refresh token in the ke
   const again = new URL(accounts.begin(app));
   challenges.set("code-2", again.searchParams.get("code_challenge")!);
   const done = await accounts.finish(app, new URLSearchParams({ code: "code-2", state: again.searchParams.get("state")! }));
-  expect(done).toEqual({ ok: true, message: "Signed in as someone@gmail.com. You can close this tab and go back to Edit." });
+  expect(done).toEqual({ ok: true, message: "Signed in as someone@gmail.com." });
   expect(accounts.status()).toMatchObject({ signed_in: true, person: { email: "someone@gmail.com", name: "Someone" }, perms: ["use", "cloud"] });
   expect(Object.values(kept())).toEqual(["refresh-1-aaaaaaaa"]);
   expect(relay.token()).toBe(accounts.accessToken());
@@ -187,4 +189,33 @@ test("a device sign-in turned down or run out stops and says so", async () => {
   await accounts.beginDevice(app, "remote");
   await accounts.devicePolling();
   expect(String(accounts.status().problem)).toContain("ran out");
+});
+
+test("the browser lands on a calm page: the code out of the address bar, Edit's window asked to the front, the tab closed if it may be", async () => {
+  fs.writeFileSync(join(dir, "keychain.json"), JSON.stringify({}));
+  const routes = baseRouter();
+  accounts.routes(routes);
+  const host = { ...app, allowedHosts: ["127.0.0.1"] } as unknown as App;
+  const visit = async (code: string) => {
+    const authorize = new URL(accounts.begin(app));
+    challenges.set(code, authorize.searchParams.get("code_challenge")!);
+    const request = new Request(`http://127.0.0.1:7799/callback?code=${code}&state=${authorize.searchParams.get("state")}`, {
+      headers: { host: "127.0.0.1:7799", "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate" },
+    });
+    return (await respond(host, routes, request, null))!;
+  };
+  // Edit's window is open (it's polling): it's told to come forward, and the tab tries to close.
+  const polled = windowFocus.next(5_000);
+  const page = await (await visit("code-5")).text();
+  expect(await polled).toBe(true);
+  expect(page).toContain(`history.replaceState(null, "", "/callback")`);
+  expect(page).toContain("Signed in as someone@gmail.com. Back to Edit…");
+  expect(page).toContain(`<a href="/">Open Edit</a>`);
+  expect(page).toContain("window.close()");
+  // Headless (no window asking): the button, no close.
+  windowFocus.resetForTests();
+  await accounts.signOut(app);
+  const headless = await (await visit("code-6")).text();
+  expect(headless).toContain("You can go back to Edit.");
+  expect(headless).not.toContain("window.close()");
 });

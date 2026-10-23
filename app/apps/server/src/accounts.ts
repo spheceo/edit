@@ -22,6 +22,7 @@ import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as keychain from "./keychain.ts";
+import * as windowFocus from "./window_focus.ts";
 import { BUILD } from "./version.ts";
 
 const DEFAULT_ACCOUNTS = "https://accounts.spheceo.com";
@@ -438,7 +439,7 @@ export async function finish(app: App, query: URLSearchParams): Promise<{ ok: bo
     await take(app.store.home, value);
     state.device = null;
     diag.info("accounts", `signed in as ${state.person?.email.split("@")[0] ?? "?"}`);
-    return { ok: true, message: `Signed in as ${state.person?.email ?? "you"}. You can close this tab and go back to Edit.` };
+    return { ok: true, message: `Signed in as ${state.person?.email ?? "you"}.` };
   } catch (error) {
     state.problem = `Signing in failed: ${diag.messageOf(error)}`;
     diag.warn("accounts", state.problem);
@@ -488,8 +489,34 @@ function openBrowser(url: string): void {
   child.unref();
 }
 
-const PAGE = (title: string, message: string) =>
-  `<!doctype html><meta charset="utf-8"><title>${title}</title><style>body{font:16px -apple-system,system-ui,sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0}main{max-width:28rem;text-align:center}h1{font-size:20px}</style><main><h1>${title}</h1><p>${message.replace(/[<>&]/gu, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[ch]!)}</p></main>`;
+const escape = (text: string) => text.replace(/[<>&"]/gu, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[ch]!);
+
+/**
+ * The page the browser lands on after signing in: in Edit's look (black, Geist
+ * where it's installed), the one-use code taken out of the address bar at once,
+ * an "Open Edit" button to go back by hand, and, with Edit's window open (which
+ * comes to the front by itself), a try at closing the tab (a browser may refuse:
+ * Edit didn't open it).
+ */
+function page(ok: boolean, title: string, message: string, windowOpen: boolean): string {
+  const close = ok && windowOpen;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title>
+<script>history.replaceState(null, "", "/callback");</script>
+<style>
+:root{color-scheme:dark}
+body{margin:0;height:100vh;display:grid;place-items:center;background:#000;color:#ededed;font:14px/1.5 "Geist Variable","Geist",-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+main{width:min(380px,calc(100vw - 48px));padding:28px;border:1px solid rgba(255,255,255,.08);border-radius:16px;background:#0b0b0b;text-align:left}
+.mark{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:600}
+.dot{width:8px;height:8px;border-radius:50%;background:${ok ? "#34d399" : "#fbbf24"}}
+p{margin:10px 0 0;color:#8f8f8f}
+a{display:inline-flex;margin-top:22px;height:32px;padding:0 12px;align-items:center;border-radius:8px;background:#ededed;color:#000;font-weight:500;text-decoration:none}
+a:hover{background:#fff}
+</style></head><body><main>
+<div class="mark"><span class="dot"></span>${escape(title)}</div>
+<p>${escape(message)}</p>
+<a href="/">Open Edit</a>
+</main>${close ? `<script>setTimeout(() => window.close(), 1200);</script>` : ""}</body></html>`;
+}
 
 export function routes(router: Router<App>): void {
   router.get("/api/account", () => Response.json(status()));
@@ -517,7 +544,11 @@ export function routes(router: Router<App>): void {
   // The loopback redirect (RFC 8252): the accounts site sends the browser here with the code.
   router.get("/callback", async ({ app, request }) => {
     const done = await finish(app, new URL(request.url).searchParams);
-    return new Response(PAGE(done.ok ? "Signed in to Edit" : "Couldn't sign in", done.message), {
+    // Edit's window comes to the front by itself; headless, the page's button goes back.
+    const windowOpen = done.ok && windowFocus.attached();
+    if (done.ok) windowFocus.focus();
+    const message = done.ok ? `Signed in as ${state.person?.email ?? "you"}. ${windowOpen ? "Back to Edit…" : "You can go back to Edit."}` : done.message;
+    return new Response(page(done.ok, done.ok ? "Signed in to Edit" : "Couldn't sign in", message, windowOpen), {
       status: done.ok ? 200 : 400,
       headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
     });

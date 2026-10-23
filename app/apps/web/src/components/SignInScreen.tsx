@@ -68,8 +68,8 @@ function SignInScreen() {
                 <Button variant="primary" disabled={waiting || !account.available} onClick={() => void signIn()}>
                   {waiting ? "Finish signing in in your browser…" : "Sign in with Google"}
                 </Button>
-                <button className="text-[12px] text-muted hover:text-fg" disabled={waiting || !account.available} onClick={() => void signInWithCode()}>
-                  Use a code instead
+                <button className="mt-1 text-[11px] text-muted/70 hover:text-muted" disabled={waiting || !account.available} onClick={() => void signInWithCode()}>
+                  On another device? Sign in with a code
                 </button>
               </>
             ) : (

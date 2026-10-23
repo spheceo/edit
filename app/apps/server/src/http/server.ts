@@ -145,7 +145,8 @@ async function logged(method: string, route: string, path: string, ms: number, r
     }
   }
   if (status < 400) {
-    diag.record("http", name, ms, null);
+    // The window's long poll for "come to the front" is meant to take its 25 s: not timed.
+    if (route !== "/api/window/next") diag.record("http", name, ms, null);
     return response;
   }
   // Errors answer with a small JSON body: read it for the log, then pass it on.

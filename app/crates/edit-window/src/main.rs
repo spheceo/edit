@@ -10,13 +10,13 @@
 //!   the port, and stopped (Ctrl-C, so its cloud projects are let go) when the
 //!   window closes.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use tauri::webview::NewWindowResponse;
-use tauri::{RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
 
 const DEFAULT_PORT: u16 = 7700;
 
@@ -64,6 +64,12 @@ fn run(url: &str, server: Option<Child>, watch_stdin: bool) -> ! {
                     handle.exit(0);
                 });
             }
+            // Brought to the front when the server asks (the browser's sign-in came back).
+            if let (Some(host), Some(port)) = (local.host_str(), local.port_or_known_default()) {
+                let handle = app.handle().clone();
+                let host = host.to_owned();
+                std::thread::spawn(move || follow_focus(&handle, &host, port));
+            }
             let stays_inside = local.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(local.clone()))
                 .title("Edit")
@@ -102,6 +108,45 @@ fn run(url: &str, server: Option<Child>, watch_stdin: bool) -> ! {
         }
     });
     std::process::exit(0);
+}
+
+/// Asks the server, again and again, whether the window should come to the
+/// front (`GET /api/window/next`, a long poll: `{"focus":true}` when it should,
+/// `{"focus":false}` after ~25 s to ask again), and brings it forward when told.
+/// A server without the route (older) or not answering is asked again later.
+fn follow_focus(handle: &AppHandle, host: &str, port: u16) {
+    loop {
+        match ask_focus(host, port) {
+            Ok(true) => {
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            Ok(false) => {}
+            Err(()) => std::thread::sleep(Duration::from_secs(5)),
+        }
+    }
+}
+
+/// One long poll: whether the server wants the window in front.
+fn ask_focus(host: &str, port: u16) -> Result<bool, ()> {
+    let mut stream = TcpStream::connect((host, port)).map_err(|_| ())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(40)))
+        .map_err(|_| ())?;
+    write!(
+        stream,
+        "GET /api/window/next HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|_| ())?;
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).map_err(|_| ())?;
+    if !answer.starts_with("HTTP/1.1 200") {
+        return Err(());
+    }
+    Ok(answer.contains("\"focus\":true"))
 }
 
 fn open_in_browser(url: &Url) {
@@ -156,4 +201,50 @@ fn stop(mut child: Child) {
     }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ask_focus;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// A server answering one request with `answer`; what it was asked comes back.
+    fn serve_once(answer: &'static str) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // The whole request first, as a server does: closing with some of
+            // it unread resets the connection under the answer.
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|end| end == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            stream.write_all(answer.as_bytes()).unwrap();
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (port, asked)
+    }
+
+    #[test]
+    fn the_window_comes_forward_only_when_the_server_says_so() {
+        let (port, asked) =
+            serve_once("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"focus\":true}");
+        assert_eq!(ask_focus("127.0.0.1", port), Ok(true));
+        assert!(asked
+            .join()
+            .unwrap()
+            .starts_with("GET /api/window/next HTTP/1.1\r\n"));
+        let (port, _) = serve_once("HTTP/1.1 200 OK\r\n\r\n{\"focus\":false}");
+        assert_eq!(ask_focus("127.0.0.1", port), Ok(false));
+        // An older server without the route: asked again later.
+        let (port, _) = serve_once("HTTP/1.1 404 Not Found\r\n\r\nnot found");
+        assert_eq!(ask_focus("127.0.0.1", port), Err(()));
+    }
 }

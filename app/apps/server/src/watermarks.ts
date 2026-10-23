@@ -228,6 +228,8 @@ function blurred(project: Project, clip: VideoClip, [x, y, w, h]: [number, numbe
     if (other.type !== "adjustment" || trackOf(project, other.track)?.hidden === true) return false;
     // blur_marks' blurs stick to the clip but end where a picture covers it, so any of them over it counts.
     const sticky = (other.name ?? "").startsWith("Mark blur");
+    // blur_marks' own blur for this clip follows it: it covers the mark.
+    if (sticky && (other.name ?? "").endsWith(` · ${clip.id}`) && other.start < clipEnd(clip) && clipEnd(other) > clip.start) return true;
     if (sticky ? other.start >= clipEnd(clip) || clipEnd(other) <= clip.start : other.start > clip.start + 2 || clipEnd(other) < clipEnd(clip) - 2) return false;
     const blur = other.blur;
     if (blur === undefined || blur === null || (blur.radius ?? 0) < 12) return false;

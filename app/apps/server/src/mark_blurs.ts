@@ -173,7 +173,10 @@ export function blursFor(project: Project, clip: VideoClip, media: Media, mark: 
       start: clip.start + from,
       duration: to - from,
       color: "blue",
-      name: `${NAME} · ${mark.text || "mark"}`,
+      // Named for its clip too, so the audit knows it covers that clip's mark
+      // wherever the clip moves (a Windows photo gliding in moved 47 px
+      // before the blur's first frame, and the box check said it missed).
+      name: `${NAME} · ${mark.text || "mark"} · ${clip.id}`,
       fade_in: 0,
       fade_out: 0,
       ...(Object.keys(keyframes).length > 0 ? { keyframes } : {}),

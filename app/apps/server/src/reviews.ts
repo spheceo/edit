@@ -648,9 +648,16 @@ const lastHeard = new Map<string, number>();
  */
 export function start(app: App, every = POLL_MS): void {
   if (timer !== null) return;
+  let lastReconcile = 0;
   const tick = () => {
     if (!cloud.enabled()) return;
-    void poll(app).catch((error: unknown) => diag.warn("review", `following the reviews: ${diag.messageOf(error)}`));
+    void poll(app)
+      .then(async () => {
+        if (Date.now() - lastReconcile < RECONCILE_MS) return;
+        lastReconcile = Date.now();
+        await reconcile(app);
+      })
+      .catch((error: unknown) => diag.warn("review", `following the reviews: ${diag.messageOf(error)}`));
   };
   timer = setInterval(tick, every);
   timer.unref?.();
@@ -660,6 +667,50 @@ export function start(app: App, every = POLL_MS): void {
 export function stop(): void {
   if (timer !== null) clearInterval(timer);
   timer = null;
+}
+
+/** How often every shared review is read whole and checked against what Edit heard (`reconcile`). */
+export const RECONCILE_MS = 10 * 60_000;
+
+/**
+ * The safety net under `poll`: every shared review read whole (`reviews:get`)
+ * and compared with the notes Edit has. An open note from a client (not Edit's
+ * own, not a reply) that Edit never heard is taken in now, as if heard, so the
+ * auto-fix and Home's badge see it, and said loudly: an error in the log and a
+ * "review-missed" event the app shows. A client note going unseen is the one
+ * failure this mustn't have (Marc's 5 on Judge EXPLODES v2, Oct 23). The
+ * projects it found notes for.
+ */
+export async function reconcile(app: App): Promise<string[]> {
+  const home = app.store.home;
+  const projects = new Set(app.store.visible().map((summary) => summary.id));
+  const found: string[] = [];
+  for (const [projectId, shared] of Object.entries(read(home).shared)) {
+    let review: { notes?: unknown[]; title?: unknown } | null;
+    try {
+      review = (await cloud.query("reviews:get", { sourceId: projectId })) as typeof review;
+    } catch (error) {
+      diag.warn("review", `checking ${projectId}'s review: ${diag.messageOf(error)}`);
+      continue;
+    }
+    const known = read(home).notes;
+    const missed = (review?.notes ?? []).filter((raw) => {
+      const one = raw as Record<string, unknown>;
+      const id = typeof one.noteId === "string" ? one.noteId : null;
+      return id !== null && one.fromApp !== true && one.deleted !== true && (one.parentId ?? null) === null && one.status === "open" && known[id] === undefined;
+    });
+    if (missed.length === 0) continue;
+    update(home, (state) => void heard(state, missed, projects));
+    const who = [...new Set(missed.map((raw) => String((raw as Record<string, unknown>).author ?? "someone")))].join(", ");
+    const title = app.store.get(projectId)?.project.name ?? (typeof review?.title === "string" ? review.title : projectId);
+    const message = `${missed.length} open note${missed.length === 1 ? "" : "s"} from ${who} on “${title}” weren't heard until now: they're in, and the agent picks them up (${shared.url})`;
+    diag.error("review", message);
+    app.store.emit({ type: "review-missed", project: projectId, notes: missed.length, message });
+    lastHeard.set(projectId, Date.now());
+    found.push(projectId);
+  }
+  if (found.length > 0) app.store.emit({ type: "reviews", projects: found });
+  return found;
 }
 
 /** One look at Repack: new notes kept; projects whose notes have settled get the agent. */

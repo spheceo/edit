@@ -569,6 +569,9 @@ export function connectEvents() {
       useEditor.setState({ cloud: event.status });
     } else if (event.type === "cloud-conflict") {
       useEditor.getState().toast(event.message, "error");
+    } else if (event.type === "review-missed") {
+      // A client's notes Edit hadn't heard (reviews.reconcile): never quietly.
+      useEditor.getState().toast(event.message, "error");
     } else if (event.type === "transcript") {
       // A transcript changed on disk (its voices were just named): panels reload it.
       window.dispatchEvent(new CustomEvent("edit:transcript", { detail: event.path }));

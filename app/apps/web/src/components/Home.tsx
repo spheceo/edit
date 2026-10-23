@@ -7,7 +7,7 @@ import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
-import { clientId, useEditor } from "../lib/store";
+import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
 import { STYLES, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
@@ -49,6 +49,8 @@ export function Home() {
   };
 
   useEffect(() => {
+    // Home hears the server too: a client's review notes Edit had missed are said here as well.
+    connectEvents();
     void refresh();
     // Who’s editing what changes while the list is up.
     const timer = setInterval(() => void refresh(), 20_000);

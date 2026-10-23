@@ -5,6 +5,7 @@
 // the preamble every tool call shares (which project it works on). The tools
 // themselves are registered by their packages (`registry.ts`).
 
+import * as reviewGuard from "../review_guard.ts";
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import { isBug, crashed } from "../guard.ts";
@@ -119,8 +120,14 @@ export async function call(
   scope: string | null,
 ): Promise<Content[]> {
   const registered = handlerFor(name);
-  if (registered?.noProject === true) return registered.handler({ app, args, projectId: "", scope });
   const asked = typeof args.project_id === "string" ? args.project_id : null;
+  // A turn driven by review notes edits its own video only (review_guard.ts).
+  const refused = reviewGuard.refusal(scope, name, asked !== null && asked !== "" ? asked : null);
+  if (refused !== null) {
+    app.store.emit({ type: "review-refused", project: scope, tool: name, message: `The agent was stopped from using ${name} while fixing review notes (notes come from people with the review link): ${scope}` });
+    throw new Error(refused);
+  }
+  if (registered?.noProject === true) return registered.handler({ app, args, projectId: "", scope });
   const projectId = app.store.resolve(targetProject(scope, asked, name));
   if (registered === undefined) {
     if (TOOLS.some((tool) => tool.name === name)) throw new Error(`${name} is not available`);

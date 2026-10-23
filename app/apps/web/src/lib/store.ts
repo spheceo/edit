@@ -569,6 +569,9 @@ export function connectEvents() {
       useEditor.setState({ cloud: event.status });
     } else if (event.type === "cloud-conflict") {
       useEditor.getState().toast(event.message, "error");
+    } else if (event.type === "review-refused") {
+      // A review note tried to take the agent outside its video (review_guard.ts).
+      useEditor.getState().toast(event.message, "error");
     } else if (event.type === "review-missed") {
       // A client's notes Edit hadn't heard (reviews.reconcile): never quietly.
       useEditor.getState().toast(event.message, "error");

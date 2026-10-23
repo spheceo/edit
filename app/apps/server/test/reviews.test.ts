@@ -82,11 +82,11 @@ test("the agent's message names each note with its moment, its place on the time
   const message = fixMessage(p, shared, [note]);
   expect(message).toStartWith("(Edit, automatically) New feedback on this edit's review (https://repack.spheceo.com/r/abc): 1 note.");
   expect(message).toContain('- [n1] at 0:12.0 of v2 (timeline 12.00s, frame 360; there: b ');
-  expect(message).toContain('JJ: "change the music"');
+  expect(message).toContain('"JJ": "change the music"');
   expect(message).toContain("feedback_done");
   // What the team said under it comes with it.
   const reply: Note = { ...note, id: "r1", parentId: "n1", text: "the second song too", createdAt: 2 };
-  expect(fixMessage(p, shared, [note], [reply])).toContain('JJ replied: "the second song too"');
+  expect(fixMessage(p, shared, [note], [reply])).toContain('"JJ" replied: "the second song too"');
   // What the reviewer marked the note as comes with it.
   const marked: Note = { ...note, asks: { intent: "blur", scope: "everywhere", box: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, pin: { source: "drive:abc", sourceMs: 12500, words: "come out here" } } };
   const said = fixMessage(p, shared, [marked]);

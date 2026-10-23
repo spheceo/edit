@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 
 import * as claude from "./claude.ts";
 import * as diag from "./diag.ts";
+import * as reviewGuard from "./review_guard.ts";
 import { nowMs, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
 import { INSTRUCTIONS, toolReference } from "./mcp/index.ts";
@@ -627,6 +628,8 @@ export class Agents implements seams.AgentPanel {
       if (generation !== null && (chat.generation !== generation || chat.halted)) return;
       if (chat.running) throw new Error("the agent is still working; stop it or wait");
       if (generation === null) {
+        // A review fix, Edit's follow-up to one, or the team's own message (review_guard.ts).
+        reviewGuard.turnStarts(project, text);
         chat.generation = this.nextGeneration++;
         chat.halted = false;
         chat.retries = 0;
@@ -1734,6 +1737,20 @@ export interface Transport {
   said?(): string;
 }
 
+/** Codex features Edit's agent never needs: a shell, a browser, the computer, pictures made. */
+export const CODEX_OFF = ["shell_tool", "unified_exec", "browser_use", "browser_use_external", "in_app_browser", "computer_use", "image_generation"];
+
+/**
+ * Codex's environment: what it needs to run and sign in (its home, PATH, the
+ * locale, a temp folder), not Edit's keys and tokens.
+ */
+export function codexEnv(from: Record<string, string | undefined> = process.env): Record<string, string> {
+  const keep = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "LANG", "LC_ALL", "CODEX_HOME", "SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"];
+  const out: Record<string, string> = {};
+  for (const name of keep) if (from[name] !== undefined) out[name] = from[name]!;
+  return out;
+}
+
 export class Codex {
   /** Replies awaited, by request id. */
   readonly pending = new Map<number, Reply>();
@@ -1751,10 +1768,14 @@ export class Codex {
     // Only Edit's tools: switch off the user's own MCP servers, apps and
     // plugins (overrides merge into their config, so each server is disabled by name).
     const args = ["app-server", "--disable", "apps", "--disable", "plugins"];
+    // No shell, web, browser or computer of its own (the audit, Oct 23: a read-only
+    // sandbox still reads the whole disk): Edit's tools are all it needs, through code mode.
+    for (const feature of CODEX_OFF) args.push("--disable", feature);
+    args.push("-c", 'web_search="disabled"');
     for (const name of userMcpServers()) args.push("-c", `mcp_servers.${tomlKey(name)}.enabled=false`);
     let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
     try {
-      child = Bun.spawn([binary, ...args], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      child = Bun.spawn([binary, ...args], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: codexEnv() });
     } catch (error) {
       throw new Error(`couldn't start Codex: ${diag.messageOf(error)}`);
     }

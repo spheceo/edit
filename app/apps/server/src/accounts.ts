@@ -30,12 +30,13 @@ const EARLY_MS = 5 * 60_000;
 /** A sign-in started and never finished is forgotten after this. */
 const PENDING_MS = 10 * 60_000;
 /**
- * After a failed renewal (offline, the site down), the next try: the first
- * soon, inside the 60 s in which the accounts site still takes a refresh
- * token it has just rotated (its answer may have been lost on the way), then
- * once a minute.
+ * After a failed renewal (offline, the site down), the next tries: three
+ * 15 s apart (at 15, 30 and 45 s), all inside the 60 s in which the accounts
+ * site still takes a refresh token it has just rotated (its answer may have
+ * been lost on the way), then once a minute.
  */
-const FIRST_RETRY_MS = 15_000;
+const SOON_RETRY_MS = 15_000;
+const SOON_RETRIES = 3;
 const RETRY_MS = 60_000;
 let failures = 0;
 
@@ -208,7 +209,7 @@ export function renew(home: string | null = state.home): Promise<void> {
       throw new Error(`the accounts site answered ${code}`);
     } catch (error) {
       state.problem = `Couldn't renew the sign-in: ${diag.messageOf(error)}`;
-      const wait = failures === 0 ? FIRST_RETRY_MS : RETRY_MS;
+      const wait = failures < SOON_RETRIES ? SOON_RETRY_MS : RETRY_MS;
       failures += 1;
       diag.warn("accounts", `renewing the sign-in: ${diag.messageOf(error)}; trying again in ${wait / 1000} s`);
       if (state.timer !== null) clearTimeout(state.timer);

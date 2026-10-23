@@ -150,8 +150,10 @@ export function blursFor(project: Project, clip: VideoClip, media: Media, mark: 
       if (keys !== null) keyframes[param] = keys;
     });
     // Its strength follows the picture through a dissolve (an adjustment's
-    // opacity mixes it in), so it fades exactly as the logo does.
-    const fade = alpha.slice(from, to);
+    // opacity mixes it in), three times as fast: at the picture's own pace a
+    // half-strength blur over a two-thirds-shown logo left "COURTROOM WATCH"
+    // readable mid-dissolve; this way at most a twelfth of it ever shows sharp.
+    const fade = alpha.slice(from, to).map((value) => Math.min(1, 3 * value));
     if (fade.some((value) => value < 0.98)) {
       // A key where the fade turns (a ramp starts or ends) and every other frame on a ramp.
       const keys: Keyframe[] = [];

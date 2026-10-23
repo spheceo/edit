@@ -54,8 +54,10 @@ test("a mark's blur fades as the next shot dissolves in over it, and is gone und
   expect(blur!.duration).toBeLessThanOrEqual(100);
   const opacity = blur!.keyframes!.opacity!;
   expect(sample(opacity, 0)).toBe(1);
-  expect(sample(opacity, 94)).toBeLessThan(0.6);
-  expect(sample(opacity, 94)).toBeGreaterThan(0.4);
+  // The next shot is two thirds in at 96: the blur fades out three times as fast as the picture, so the logo is never readable.
+  expect(sample(opacity, 95)).toBe(1);
+  expect(sample(opacity, 98)).toBeLessThan(0.6);
+  expect(sample(opacity, 98)).toBeGreaterThan(0.4);
 });
 
 test("a still rectangle over a run of shots, or over a push-in, is blur_off_shot", () => {

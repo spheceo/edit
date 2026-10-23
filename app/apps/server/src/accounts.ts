@@ -22,6 +22,7 @@ import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as keychain from "./keychain.ts";
+import { BUILD } from "./version.ts";
 
 const DEFAULT_ACCOUNTS = "https://accounts.spheceo.com";
 const CLIENT = "edit";
@@ -128,7 +129,8 @@ interface Tokens {
 async function post(path: string, body: Record<string, string>): Promise<{ status: number; value: Tokens; retryAfter: number | null }> {
   const answer = await fetch(`${accountsUrl()}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
+    // What admins see as "where" on the person's page.
+    headers: { "content-type": "application/json", accept: "application/json", "user-agent": `Edit/${BUILD.replace(/^v/u, "")} (${process.platform === "darwin" ? "macOS" : process.platform})` },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(20_000),
   });

@@ -32,6 +32,7 @@ beforeAll(() => {
       const url = new URL(request.url);
       const body = (await request.json().catch(() => ({}))) as Record<string, string>;
       seen.push({ path: url.pathname, body });
+      if (!/^Edit\/\S+ \((macOS|linux)\)$/u.test(request.headers.get("user-agent") ?? "")) return Response.json({ error: "no user agent" }, { status: 400 });
       if (url.pathname === "/app/revoke") return Response.json({});
       // Standing in for the relay too: what a tile request carried.
       if (url.pathname.startsWith("/v1/3dtiles/")) return Response.json({ bearer: request.headers.get("authorization"), query: url.search }, { headers: { "cache-control": "max-age=60" } });

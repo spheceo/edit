@@ -31,6 +31,9 @@ export const OFF_LU = 6.0;
  */
 export const MUSIC_UNDER = 20.0;
 const MUSIC_CLOSEST = 16.0;
+/** A sound effect sits about this far (LU) under the narration; closer than SFX_UNDER_AT_LEAST is `sfx_loud`. */
+const SFX_UNDER = 5.0;
+const SFX_UNDER_AT_LEAST = 2.0;
 /** The most a clip is turned up (a near-silent room boosted further is only noise) and down. */
 const MOST_UP = 24.0;
 const MOST_DOWN = -12.0;
@@ -256,6 +259,29 @@ export function issues(app: App, project: Project): { issues: Record<string, unk
         });
         break;
       }
+    }
+  }
+  // Sound effects louder than the narration (Marius, Judge EXPLODES: "sound
+  // effects are also too loud"; its fix pass set nine stingers by guess, 1.7 LU
+  // over the narration): a whoosh or hit sits a few LU under it.
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || trackOf(project, clip.track)?.muted === true || seams.voiceover.isVoiceover(project, clip) || clip.volume_db <= -40) continue;
+    const media = mediaOf(project, clip.media);
+    if (media === undefined || media.kind !== "audio" || media.path.includes("/library/music/") || media.duration >= 45) continue;
+    if (!seams.sfx.MOMENT.test(`${clip.name ?? ""} ${media.name}`) && !/typ(ing|ewriter)/iu.test(`${clip.name ?? ""} ${media.name}`)) continue;
+    const stretch = { path: media.path, from: clip.source_in, seconds: Math.min((clip.duration / fps) * clip.speed, Math.max(media.duration - clip.source_in, 0.1)) };
+    if (!known(stretch) || level === null) continue;
+    const lufs = heard.get(keyOf(stretch));
+    if (lufs === null || lufs === undefined) continue;
+    const over = lufs + Math.fround(clip.volume_db) - level;
+    if (over > -SFX_UNDER_AT_LEAST) {
+      loud.push({
+        kind: "sfx_loud",
+        clip: clip.id,
+        at: clip.start,
+        lu_over_narration: Math.round(over * 10) / 10,
+        fix: `volume_db ${Math.round((Math.fround(clip.volume_db) - over - SFX_UNDER) * 10) / 10} (~${SFX_UNDER} LU under the narration; add_from_library's under_speech does it when placing)`,
+      });
     }
   }
   // An interrogation's bridges: the library's drones are for bodycam at a

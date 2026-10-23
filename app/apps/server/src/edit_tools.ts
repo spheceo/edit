@@ -1225,7 +1225,7 @@ const FIXABLE = [
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
-  "blur_off_shot", "sfx_long",
+  "blur_off_shot", "sfx_long", "sfx_loud",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */

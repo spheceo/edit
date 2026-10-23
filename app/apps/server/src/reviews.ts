@@ -137,7 +137,7 @@ const sharing = new Map<string, string>();
  * poster to R2, then Repack's review (made the first time, a new version
  * under the same link after). Returns the link and the version.
  */
-export async function share(app: App, projectId: string, path: string | null): Promise<{ url: string; version: number }> {
+export async function share(app: App, projectId: string, path: string | null, replace = false): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (the relay token)");
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
@@ -146,10 +146,16 @@ export async function share(app: App, projectId: string, path: string | null): P
   const chosen = path === null ? exported[0] : exported.find((one) => one.path === path);
   if (chosen === undefined) throw new Error(path === null ? "export the whole edit first: a review shares an export" : "that isn't one of this project's whole exports");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
-  const timeline = chosen.timeline ?? timelineHash(live.project);
+  // `replace`: the latest version's files are overwritten with this export
+  // (same keys, so its link, number and notes stay) instead of a new version:
+  // a small fix after sharing (Judge EXPLODES' stingers turned down) stays V2.
+  const latest = replace ? read(home).shared[projectId]?.versions.reduce<Version | null>((most, one) => (most === null || one.n > most.n ? one : most), null) : null;
+  if (replace && (latest === null || latest === undefined)) throw new Error("nothing shared yet to replace");
+  const exportedTimeline = chosen.timeline ?? timelineHash(live.project);
+  const timeline = latest?.timeline ?? exportedTimeline;
   let clips: [string, number, number][];
   try {
-    clips = JSON.parse(fs.readFileSync(mapFile(home, timeline), "utf8")) as [string, number, number][];
+    clips = JSON.parse(fs.readFileSync(mapFile(home, exportedTimeline), "utf8")) as [string, number, number][];
   } catch {
     // An export from before the maps were kept: the project as it is now (right while it hasn't changed since).
     clips = clipMap(live.project);
@@ -173,6 +179,16 @@ export async function share(app: App, projectId: string, path: string | null): P
     // under each moment (a note is pinned to its footage as it's written).
     sharing.set(projectId, "describing it");
     const extra = await describe(app, live.project, chosen.path, copy, prefix, clips);
+    if (latest !== null && latest !== undefined) {
+      const shared = read(home).shared[projectId]!;
+      update(home, (state) => {
+        const one = state.shared[projectId]?.versions.find((version) => version.n === latest.n);
+        if (one !== undefined) Object.assign(one, { path: chosen.path, clips });
+      });
+      fs.rmSync(copy, { force: true });
+      diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);
+      return { url: shared.url, version: latest.n };
+    }
     sharing.set(projectId, "publishing");
     const durationMs = Math.round((chosen.frames / fps) * 1000);
     const answer = (await cloud.mutation("reviews:publish", {
@@ -894,7 +910,7 @@ export function routes(router: Router<App>): void {
     const id = context.params.id ?? "";
     const path = typeof given?.path === "string" ? given.path : null;
     // A minute or two (the review copy, the upload): it runs on, and the review says how it's going.
-    const started = share(context.app, id, path);
+    const started = share(context.app, id, path, given?.replace === true);
     started.catch((error: unknown) => diag.warn("review", `sharing ${id}: ${diag.messageOf(error)}`));
     const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))]).catch((error: unknown) => {
       throw new ApiError(400, diag.messageOf(error));

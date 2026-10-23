@@ -393,6 +393,15 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       if (index !== openIndex && window.at < earliest) window.at = Math.min(earliest, spec.end - 1);
     });
   }
+  // Never two windows at once, as words named close together (or the wait
+  // above) would have them: each opens at least a second after the one
+  // before (JJ: "dangerous to have two things appear at the same time when
+  // they are across the screen").
+  const opening = spec.windows.filter((_, index) => index !== openIndex).sort((a, b) => a.at - b.at);
+  for (let i = 1; i < opening.length; i++) {
+    const after = opening[i - 1]!.at + Math.round(fps);
+    if (opening[i]!.at < after) opening[i]!.at = Math.min(after, spec.end - 1);
+  }
   const { laid, desktop } = layout(project, spec);
   const [DW, DH] = desktop;
   const player = openIndex === null ? null : laid[openIndex]!;

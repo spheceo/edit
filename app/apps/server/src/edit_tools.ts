@@ -1115,6 +1115,44 @@ export function desktopsSparse(project: Project): Json[] {
     .map(([name, screen]) => ({ kind: "desktop_sparse", desktop: name, start: screen.start, windows: screen.windows, at_least: FEWEST_WINDOWS, fix: "add windows that pop up as the narration names them: Photo Viewers of who and what's named, Video Players of the footage it describes (the desktop shot's windows in cover_cut_in)" }));
 }
 
+/** A File Viewer holds at least this many seconds; an outro charges screen, CHARGES_HOLD. */
+const VIEWER_HOLD = 4;
+const CHARGES_HOLD = 5;
+
+/**
+ * A graphic gone before it's read (`graphic_short`): a File Viewer under
+ * VIEWER_HOLD s, a charges screen in the outro (its only texts) under
+ * CHARGES_HOLD s. Loop 5's Mom & Teen cut Basma's charges to 3.6 s to bring
+ * Hanan's in sooner (JJ: "file viewers stay for a little longer each",
+ * "people can barely read what it is").
+ */
+export function graphicsShort(project: Project, outro: [number, number] | null): Json[] {
+  const fps = project.settings.fps;
+  const seconds = (frames: number) => round((frames / fps) * 10) / 10;
+  const out: Json[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "video" || !/(^|· )File Viewer$/u.test(clip.name ?? "") || clip.duration >= VIEWER_HOLD * fps) continue;
+    out.push({ kind: "graphic_short", clip: clip.id, start: clip.start, seconds: seconds(clip.duration), at_least: VIEWER_HOLD, fix: `hold the File Viewer (its frame, photo and name) at least ${VIEWER_HOLD} s over one shot` });
+  }
+  if (outro === null) return out;
+  // Each charges screen: the outro's texts on screen together.
+  const spans = project.clips
+    .filter((clip) => clip.type === "text" && trackOf(project, clip.track)?.subtitles !== true && !(clip.name ?? "").startsWith("Subtitle") && clip.start < outro[1] && clipEnd(clip) > outro[0])
+    .map((clip): [number, number] => [clip.start, clipEnd(clip)])
+    .sort((a, b) => a[0] - b[0]);
+  const screens: [number, number][] = [];
+  for (const [from, to] of spans) {
+    const last = screens[screens.length - 1];
+    if (last !== undefined && from < last[1]) last[1] = Math.max(last[1], to);
+    else screens.push([from, to]);
+  }
+  for (const [from, to] of screens) {
+    if (to - from >= CHARGES_HOLD * fps) continue;
+    out.push({ kind: "graphic_short", start: from, end: to, seconds: seconds(to - from), at_least: CHARGES_HOLD, fix: `hold each person's charges at least ${CHARGES_HOLD} s while the voice-over talks about them: lengthen this screen (its picture too), moving the next one later, never shortening another below ${CHARGES_HOLD} s` });
+  }
+  return out;
+}
+
 /**
  * A one-moment sound effect playing on for seconds (`sfx_long`): a whoosh,
  * hit or boom longer than LONG_MOMENT. Judge EXPLODES' 22 s file of whooshes
@@ -1189,7 +1227,8 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   const heard = cachedTranscripts(app, project, false);
   const onProject = <T>(work: (input: ProjectInput) => T): T =>
     rev === null ? work({ json: jsonForSerde(project) }) : withProject(project.id, rev, () => jsonForSerde(project), work);
-  const parts = onProject((input) => native().sections(input)).parts;
+  const sections = onProject((input) => native().sections(input));
+  const parts = sections.parts;
   const teasers = parts.filter((part) => part.kind === "intro").map((part): [number, number] => [part.start, part.end]);
   const extra = [
     ...hooks.calloutTiming(project, heard),
@@ -1205,6 +1244,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...introWithoutArrest(project, heard, teasers),
     ...windowsUnderused(project),
     ...desktopsSparse(project),
+    ...graphicsShort(project, sections.outro ?? null),
     ...(markBlurs.offShot(project) as Json[]),
     ...soundEffectsLong(project),
     ...(typing.typingSoundsOff(project) as Json[]),
@@ -1245,7 +1285,7 @@ const FIXABLE = [
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
-  "blur_off_shot", "sfx_long", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target",
+  "blur_off_shot", "sfx_long", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */

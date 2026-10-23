@@ -409,6 +409,36 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_pla
   expect(() => applyWith(p, [{ op: "desktop_profile", start: 0, duration: 90, media: "mug", lines: ["x"] }], { shutter: null, desktops: [] })).toThrow(/retired/);
 });
 
+test("desktop windows named together open at least a second apart", () => {
+  // JJ: "dangerous to have two things appear at the same time when they are across the screen".
+  const p = project("plan");
+  p.media.push(media({ id: "room", name: "room.mp4", path: "/room.mp4", kind: "video", duration: 600, width: 1280, height: 720, has_audio: true }));
+  p.media.push(media({ id: "mug", name: "mug", path: "/mug.png", kind: "image", duration: 30, width: 634, height: 730 }));
+  p.media.push(media({ id: "home", name: "home", path: "/home.png", kind: "image", duration: 30, width: 1200, height: 800 }));
+  p.media.push(media({ id: "wall", name: "wall", path: "/wall.png", kind: "image", duration: 30, width: 1344, height: 752 }));
+  p.clips.push(clip({ id: "foot", track: "v1", start: 0, duration: 300, type: "video", media: "room", source_in: 10 }));
+  const op = {
+    op: "desktop",
+    start: 300,
+    end: 600,
+    windows: [
+      { app: "photo_viewer", media: "mug", at: 310 },
+      { app: "photo_viewer", media: "home", at: 312 },
+      { app: "notepad", at: 315, lines: ["Charged with murder"] },
+    ],
+  };
+  const frames: Record<string, string> = {};
+  needs([op], p).screens!.forEach(([app, w, h], index) => {
+    p.media.push(media({ id: `f${index}`, name: app, path: `/${app}${index}.png`, kind: "image", duration: 30, width: w, height: h }));
+    frames[frameKey(app, w, h)] = `f${index}`;
+  });
+  applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } });
+  const opens = ["Desktop · Photo Viewer · mug", "Desktop · Photo Viewer · home", "Desktop · Notepad"].map((name) => p.clips.find((own) => own.name === name)!.start);
+  expect(opens[1]! - opens[0]!).toBeGreaterThanOrEqual(30);
+  expect(opens[2]! - opens[1]!).toBeGreaterThanOrEqual(30);
+  valid(p);
+});
+
 test("review_notes_on_screen_are_flagged", () => {
   const p = project("plan");
   apply(p, [

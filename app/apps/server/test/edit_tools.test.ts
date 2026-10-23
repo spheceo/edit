@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 
 import type { App } from "../src/app.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
-import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, desktopsSparse, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
+import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, desktopsSparse, graphicsShort, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
@@ -603,4 +603,21 @@ test("a bodycam Windows screen with fewer than three windows is flagged", () => 
   for (const name of ["Cut-in 2 · Desktop · Notepad", "Cut-in 2 · Desktop · Notepad note 1", "Cut-in 2 · Desktop · wallpaper"]) add(name);
   for (const name of ["Cut-in 6 · Desktop · Notepad", "Cut-in 6 · Desktop · Photo Viewer · a.jpg", "Cut-in 6 · Desktop · Video Player · b.mp4"]) add(name);
   expect(desktopsSparse(p).map((issue) => [(issue as { desktop: string }).desktop, (issue as { windows: number }).windows])).toEqual([["Cut-in 2 · Desktop", 1]]);
+});
+
+test("a File Viewer under 4 s and an outro charges screen under 5 s are flagged", () => {
+  // Loop 5's Mom & Teen: Basma's File Viewer 3 s, her charges cut to 3.6 s (JJ: "people can barely read what it is").
+  const p = newProject("p", "t", { width: 1920, height: 1080, fps: 30 });
+  const add = (name: string, type: string, start: number, duration: number) =>
+    p.clips.push({ id: `${name}@${start}`, name, type, track: p.tracks[0]!.id, start, duration } as unknown as Project["clips"][number]);
+  add("File Viewer", "video", 100, 90);
+  add("File Viewer", "video", 300, 150);
+  // Two screens in the outro: one 3.6 s, one of two texts together 12 s.
+  add("Outro · Basma charges text", "text", 1000, 108);
+  add("Outro · Hanan charges", "text", 1110, 200);
+  add("Outro · Hanan charges text", "text", 1200, 270);
+  add("Cliffhanger", "text", 500, 60);
+  const short = graphicsShort(p, [900, 1500]) as { start: number; seconds: number; at_least: number }[];
+  expect(short.map((issue) => [issue.start, issue.seconds, issue.at_least])).toEqual([[100, 3, 4], [1000, 3.6, 5]]);
+  expect(graphicsShort(p, null).length).toBe(1);
 });

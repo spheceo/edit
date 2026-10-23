@@ -54,6 +54,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
+import { proxyJob, requestProxy } from "./cloud_proxy.ts";
 import * as diag from "./diag.ts";
 import * as endpoints from "./endpoints.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
@@ -679,6 +680,20 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
       await putRecord({ source, originalReady: true, size });
     }
     await fetchKey(proxy, local);
+  } else if (process.env.EDIT_CLOUD_PROXY === "1") {
+    // Cloud-first: the original goes up once, the proxy is made in the
+    // cloud, and playback streams it (Phase 3) until a fetch caches it.
+    // No worker answer: fall back to making it here, as before.
+    if (needOriginal) {
+      await cloud.uploadFile(path, originalKey);
+      await putRecord({ source, originalReady: true, size, duration: probe.duration });
+    }
+    const asked = await requestProxy(proxyJob(source, originalKey, proxy, probe.width ?? 0, probe.height ?? 0));
+    if (asked.state === "preparing") {
+      return { path: local, name, probe, cloud: { source, original: originalKey, proxy, size } };
+    }
+    if (asked.state === "ready") await fetchKey(proxy, local);
+    else await publish(path, probe, source, originalKey, false, proxy, local, later);
   } else {
     await publish(path, probe, source, originalKey, needOriginal, proxy, local, later);
   }

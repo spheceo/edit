@@ -34,6 +34,8 @@ interface Job {
   progress: number; reservedUsd: number; output: string; bytes?: number;
   started?: number; finished?: number; workerSeconds?: number; estimatedComputeUsd?: number;
   error?: string; uploadId?: string;
+  /** Who started it (a person's sub): only they, or an admin, may cancel it. */
+  by?: string;
   request?: string; retry?: string;
   seconds?: number; startup?: number;
 }
@@ -61,17 +63,33 @@ export async function exportRoute(request: Request, url: URL, env: Env & AuthEnv
   if (worker) {
     // Modal's own workers: their machine token only.
     if (!(await cloudAuthorized(request, { CLOUD_TOKEN: env.MODAL_WORKER_TOKEN }))) return json(401, { error: "Cloud export authorization required." });
-  } else {
+  }
+  let caller: { sub: string; admin: boolean } | null = null;
+  if (!worker) {
     const found = await allow(request, env, "use", url.pathname.slice("/v1/".length));
     if (found instanceof Response) return found;
+    caller = found.kind === "person" ? { sub: found.sub, admin: found.admin } : null;
   }
   if (request.method !== "POST") return json(405, { error: "POST JSON required." });
   if (!env.EXPORT_JOBS) return json(503, { error: "Cloud exports are not configured." });
   // Bound even chunked requests before passing them to the coordinator.
-  const body = await request.text();
+  let body = await request.text();
   if (body.length > 64 * 1024) return json(413, { error: "Control request too large." });
+  // Who's asking, from the verified token (never what the caller sent): a worker sends none.
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (isObject(parsed)) body = JSON.stringify({ ...parsed, caller: worker ? null : caller });
+  } catch {
+    // The coordinator refuses it.
+  }
   const stub = env.EXPORT_JOBS.get(env.EXPORT_JOBS.idFromName("exports-v1"));
   return stub.fetch(new Request(`https://jobs/${url.pathname.slice("/v1/cloud/exports/".length)}`, { method: "POST", body }));
+}
+
+/** The person the relay put on a request (exportRoute), or null. */
+function callerOf(body: Record<string, unknown>): { sub: string; admin: boolean } | null {
+  const caller = body.caller;
+  return isObject(caller) && typeof caller.sub === "string" ? { sub: caller.sub, admin: caller.admin === true } : null;
 }
 
 export class ExportJobs {
@@ -151,7 +169,8 @@ export class ExportJobs {
       await this.storage().put(day, used + reservedUsd);
       const job: Job = { id, manifest, digest: body.digest, build, gpu, created: Date.now(), deadline: 0,
         state: "queued", permit: crypto.randomUUID(), progress: 0, reservedUsd, seconds, startup,
-        output: `edit/exports/results/${id}.mp4`, ...(typeof body.request === "string" ? { request: body.request } : {}) };
+        output: `edit/exports/results/${id}.mp4`, ...(typeof body.request === "string" ? { request: body.request } : {}),
+        ...(callerOf(body) !== null ? { by: callerOf(body)!.sub } : {}) };
       await this.save(job);
       if (previous && previous.id !== job.id) {
         previous.retry = job.id;
@@ -163,6 +182,9 @@ export class ExportJobs {
     const job = await this.job(body);
     if (route === "status") return json(200, this.public(job));
     if (route === "cancel") {
+      // Exports of the same edit are one job: only who started it (or an admin) stops it for everyone.
+      const caller = callerOf(body);
+      if (job.by !== undefined && !(caller !== null && (caller.sub === job.by || caller.admin))) return json(403, { error: "Only who started this export, or an admin, can cancel it." });
       if (!terminal(job.state)) {
         job.state = job.state === "queued" ? "cancelled" : "cancelling";
         await this.save(job);

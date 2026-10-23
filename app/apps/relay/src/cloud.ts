@@ -48,6 +48,8 @@ export interface CloudEnv extends JobsEnv, ModalEnv {
   /** What the AI Gateway may cost a day (USD, its own usage.cost): per person, and across everyone. */
   DAILY_AI_USD_PER_IP?: string;
   DAILY_AI_USD_TOTAL?: string;
+  /** Held for each AI call while it runs (USD), settled at its real cost. */
+  AI_RESERVE_USD?: string;
   /** The day's budgets (index.ts's TranscriptionBudget) and the burst limiter. */
   BUDGET?: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
   BURST?: { limit(options: { key: string }): Promise<{ success: boolean }> };
@@ -65,6 +67,8 @@ const CONVEX_KINDS = new Set(["query", "mutation", "action"]);
 /** A watch window's request: a few minutes of 360p video, base64 (Edit caps the clip at 15 MiB). */
 const MAX_AI_BODY = 32 * 1024 * 1024;
 const AI_GATEWAY = "https://ai-gateway.vercel.sh/v1/chat/completions";
+/** The longest answer a call may ask for (Flash: ~$0.08 of output; a watch window's answer is a few thousand). */
+const MAX_AI_TOKENS = 32768;
 /** Repack's reviews (always as Edit) and Writer's scripts, read only (the handoff). */
 const REVIEWS_PATH = /^reviews:[A-Za-z_][A-Za-z0-9_]*$/;
 const WRITER_READS = new Set(["writer:listScripts", "writer:getScript"]);
@@ -116,7 +120,14 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
     try {
       if (route === "jobs/drive") {
         await mayTouch({ found, env }, "write", needKey(body.key));
-        return json(200, await driveJob(body, env, r2));
+        const started = await driveJob(body, env, r2);
+        if (found.kind === "person" && typeof started.id === "string") await jobOwner(env, started.id, found.sub);
+        return json(200, started);
+      }
+      if (route === "jobs/cancel") {
+        // A Drive copy two projects share is one job: only who started it (or an admin) stops it, and its upload.
+        const owner = typeof body.id === "string" ? await jobOwner(env, body.id) : null;
+        if (owner !== null && !(found.kind === "person" && (found.sub === owner || found.admin))) throw new Forbidden("Only who started this copy, or an admin, can cancel it.");
       }
       if (route === "jobs/status") return json(200, await jobStatus(body, env, r2));
       if (route === "jobs/cancel") return json(200, await cancelJob(body, env, r2));
@@ -171,13 +182,16 @@ async function aiChat(request: Request, env: CloudEnv, found: Caller): Promise<R
     return json(403, { error: { message: `Only ${(allowed.length > 0 ? allowed : AI_MODELS).join(", ")} can be asked through Edit's relay.` } });
   }
   if (body.stream === true) return json(400, { error: { message: "Streaming isn't supported here." } });
+  // An answer's length is bounded, so one call's cost is (about the hold below).
+  if (!(typeof body.max_tokens === "number" && body.max_tokens > 0 && body.max_tokens <= MAX_AI_TOKENS)) body.max_tokens = MAX_AI_TOKENS;
   if (env.BURST !== undefined && !(await env.BURST.limit({ key: `ai:${burstKey(request, found)}` })).success) {
     return json(429, { error: { message: "Too many model calls at once; try again in a minute." } });
   }
   const client = await budgetKey(request, found);
   const budget = env.BUDGET === undefined ? null : env.BUDGET.get(env.BUDGET.idFromName(new Date().toISOString().slice(0, 10)));
+  const reserve = Number(env.AI_RESERVE_USD ?? 0.1);
   const ask = (phase: "check" | "spend", cost = 0) =>
-    budget!.fetch(new Request("https://budget/ai", { method: "POST", body: JSON.stringify({ client, phase, cost, perIp: Number(env.DAILY_AI_USD_PER_IP ?? 5), total: Number(env.DAILY_AI_USD_TOTAL ?? 25) }) }));
+    budget!.fetch(new Request("https://budget/ai", { method: "POST", body: JSON.stringify({ client, phase, cost, reserve, perIp: Number(env.DAILY_AI_USD_PER_IP ?? 5), total: Number(env.DAILY_AI_USD_TOTAL ?? 25) }) }));
   if (budget !== null) {
     const checked = await ask("check");
     if (!checked.ok) return new Response(checked.body, { status: checked.status, headers: { "content-type": "application/json" } });
@@ -190,6 +204,8 @@ async function aiChat(request: Request, env: CloudEnv, found: Caller): Promise<R
       body: JSON.stringify(body),
     });
   } catch {
+    // Nothing was spent: the call's hold is given back.
+    if (budget !== null) await ask("spend", 0).catch(() => undefined);
     return json(502, { error: { message: "Couldn't reach the AI Gateway." } });
   }
   const text = await answer.text();
@@ -201,7 +217,8 @@ async function aiChat(request: Request, env: CloudEnv, found: Caller): Promise<R
     } catch {
       cost = 0;
     }
-    if (cost > 0) await ask("spend", cost).catch(() => undefined);
+    // Settled at its real cost (its hold given back when it cost nothing).
+    await ask("spend", cost).catch(() => undefined);
   }
   return new Response(text, { status: answer.status, headers: { "content-type": answer.headers.get("content-type") ?? "application/json" } });
 }
@@ -247,6 +264,16 @@ export class BadRequest extends Error {}
 /** Not this person's to do (403). */
 export class Forbidden extends Error {}
 export class Upstream extends Error {}
+
+/** Who started cloud job `id` (with `sub`: keeps them as its starter unless it has one). Null when nobody's kept. */
+async function jobOwner(env: CloudEnv, id: string, sub?: string): Promise<string | null> {
+  if (env.BUDGET === undefined) return null;
+  const owners = env.BUDGET.get(env.BUDGET.idFromName("owners"));
+  const answer = await owners.fetch(new Request("https://budget/owner", { method: "POST", body: JSON.stringify(sub === undefined ? { id, phase: "get" } : { id, sub, phase: "set" }) }));
+  if (sub !== undefined || !answer.ok) return null;
+  const found = (await answer.json()) as { sub?: unknown };
+  return typeof found.sub === "string" ? found.sub : null;
+}
 
 /** Who's asking, for the key rules (authz.ts). */
 interface Access {

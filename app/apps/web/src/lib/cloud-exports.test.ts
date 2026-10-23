@@ -149,3 +149,19 @@ describe("durable cloud export admission", () => {
     expect(() => validateManifest({ version: 1, project: {}, options: { format: "h264" }, assets: [{ media: "m", key: "edit/a", size: WORKER_INPUT_LIMIT + 1, etag: "x" }] })).toThrow();
   });
 });
+
+describe("who may cancel a cloud export", () => {
+  it("only who started it, or an admin; one started before starters were kept, anyone", async () => {
+    const f = fixture();
+    const text = JSON.stringify({ version: 1, project: { id: "p", name: "mine", media: [] }, options: { format: "h264" }, assets: [] });
+    const hash = await digest(text);
+    f.objects.set(`edit/exports/manifests/${hash}.json`, text);
+    const job = await (await f.post("start", { manifest: `edit/exports/manifests/${hash}.json`, digest: hash, caller: { sub: "a", admin: false } })).json() as { id: string };
+    expect((await f.post("cancel", { id: job.id, caller: { sub: "b", admin: false } })).status).toBe(403);
+    expect((await f.post("cancel", { id: job.id, caller: null })).status).toBe(403);
+    expect((await f.post("cancel", { id: job.id, caller: { sub: "admin", admin: true } })).status).toBe(200);
+    expect((await f.post("cancel", { id: job.id, caller: { sub: "a", admin: false } })).status).toBe(200);
+    const older = await (await f.submit("older")).json() as { id: string };
+    expect((await f.post("cancel", { id: older.id, caller: { sub: "b", admin: false } })).status).toBe(200);
+  });
+});

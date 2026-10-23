@@ -1,4 +1,4 @@
-import { allow, budgetKey, burstKey, mayVoice, type AuthEnv } from "./auth";
+import { allow, budgetKey, burstKey, mayVoice, type AuthEnv, type Caller } from "./auth";
 import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
 
@@ -41,6 +41,9 @@ export interface Env extends CloudEnv, AuthEnv {
   GOOGLE_MAPS_KEY?: string;
   DAILY_MAP_SESSIONS_PER_IP: string;
   DAILY_MAP_SESSIONS_TOTAL: string;
+  /** Geocode and outline lookups a day, per person and across everyone. */
+  DAILY_LOOKUPS_PER_IP?: string;
+  DAILY_LOOKUPS_TOTAL?: string;
   BUDGET: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
   BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
   /** Transcriptions per IP a minute: a long file is heard in ~40-second pieces, several at once. */
@@ -176,11 +179,21 @@ async function geocode(request: Request, url: URL, env: Env): Promise<Response> 
   if (!(await env.BURST.limit({ key: `geocode:${burstKey(request, found)}` })).success) return json(429, { error: "Too many lookups at once; try again in a minute." });
   const [name, value] = (["address", "latlng", "place_id"] as const).map((name) => [name, url.searchParams.get(name) ?? ""] as const).find(([, value]) => value) ?? ["", ""];
   if (!name || value.length > 300 || (name === "latlng" && !/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(value))) return json(400, { error: "Give an address, latlng or place_id." });
+  const refused = await reserveLookup(request, env, found);
+  if (refused !== null) return refused;
   const upstream = new URL("https://maps.googleapis.com/maps/api/geocode/json");
   upstream.searchParams.set(name, value);
   upstream.searchParams.set("key", env.GOOGLE_MAPS_KEY);
   const answer = await fetch(upstream);
   return new Response(answer.body, { status: answer.status, headers: { "content-type": "application/json" } });
+}
+
+/** One of today's geocode or outline lookups (each billed by Google), or the refusal when they're used up. */
+async function reserveLookup(request: Request, env: Env, found: Caller): Promise<Response | null> {
+  const client = await budgetKey(request, found);
+  const budget = env.BUDGET.get(env.BUDGET.idFromName(new Date().toISOString().slice(0, 10)));
+  const reserved = await budget.fetch(new Request("https://budget/lookups", { method: "POST", body: JSON.stringify({ client }) }));
+  return reserved.ok ? null : reserved;
 }
 
 /** The building at a point, with its outline (GeoJSON in placeView.displayPolygon). */
@@ -192,6 +205,8 @@ async function outline(request: Request, url: URL, env: Env): Promise<Response> 
   const latitude = Number(url.searchParams.get("lat")), longitude = Number(url.searchParams.get("lon"));
   if (!url.searchParams.get("lat") || !url.searchParams.get("lon") || !(Math.abs(latitude) <= 90) || !(Math.abs(longitude) <= 180)) return json(400, { error: "Give lat and lon." });
   if (!(await env.BURST.limit({ key: `geocode:${burstKey(request, found)}` })).success) return json(429, { error: "Too many lookups at once; try again in a minute." });
+  const refused = await reserveLookup(request, env, found);
+  if (refused !== null) return refused;
   const answer = await fetch("https://geocode.googleapis.com/v4/geocode/destinations", {
     method: "POST",
     headers: {
@@ -369,7 +384,7 @@ function json(status: number, body: unknown) {
  */
 interface BudgetStorage {
   get<T>(key: string): Promise<T | undefined>;
-  put(key: string, value: number): Promise<void>;
+  put(key: string, value: number | { sub: string; at: number } | { upload: string; at: number }): Promise<void>;
   transaction<T>(callback: (storage: BudgetStorage) => Promise<T>): Promise<T>;
   setAlarm(time: number): Promise<void>;
   deleteAll(): Promise<void>;
@@ -379,6 +394,8 @@ export class TranscriptionBudget {
   constructor(private state: BudgetState, private env: Env) {}
   async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname === "/maps") return this.mapSession(request);
+    if (new URL(request.url).pathname === "/lookups") return this.lookup(request);
+    if (new URL(request.url).pathname === "/owner") return this.owner(request);
     if (new URL(request.url).pathname === "/speech") return this.speech(request);
     if (new URL(request.url).pathname === "/ai") return this.ai(request);
     if (new URL(request.url).pathname === "/usage") {
@@ -427,6 +444,54 @@ export class TranscriptionBudget {
     return answer;
   }
 
+  /**
+   * Who started a cloud job (the "owners" instance, not a day's): `set` keeps
+   * the first starter of `id` (a job someone else joins stays theirs),
+   * `get` says who it is. Kept 14 days.
+   */
+  async owner(request: Request): Promise<Response> {
+    const { id, sub, phase, upload } = await request.json() as { id: string; sub?: string; phase: "set" | "get" | "setUpload" | "getUpload"; upload?: string };
+    if (typeof id !== "string" || id.length > 200) return json(400, { error: "Invalid job id." });
+    return this.state.storage.transaction(async storage => {
+      // A Drive copy's own multipart upload, so a cancel ends only it.
+      if (phase === "getUpload") {
+        const kept = await storage.get<{ upload: string; at: number }>(`upload:${id}`);
+        return json(200, { upload: kept !== undefined && Date.now() - kept.at < 14 * 86400_000 ? kept.upload : null });
+      }
+      if (phase === "setUpload") {
+        if (typeof upload !== "string" || !upload || upload.length > 1024) return json(400, { error: "Invalid upload id." });
+        await storage.put(`upload:${id}`, { upload, at: Date.now() });
+        return json(200, { ok: true });
+      }
+      const kept = await storage.get<{ sub: string; at: number }>(`owner:${id}`);
+      if (phase === "get") return json(200, { sub: kept !== undefined && Date.now() - kept.at < 14 * 86400_000 ? kept.sub : null });
+      if (typeof sub !== "string") return json(400, { error: "Invalid owner." });
+      if (kept === undefined || Date.now() - kept.at >= 14 * 86400_000) await storage.put(`owner:${id}`, { sub, at: Date.now() });
+      return json(200, { ok: true });
+    });
+  }
+
+  /** One geocode or outline lookup (each a billed Google call), within today's caps. */
+  async lookup(request: Request): Promise<Response> {
+    const { client } = await request.json() as { client: string };
+    const perIp = Number(this.env.DAILY_LOOKUPS_PER_IP ?? 200);
+    const total = Number(this.env.DAILY_LOOKUPS_TOTAL ?? 600);
+    if (!/^[a-f0-9]{64}$/.test(client)) return json(400, { error: "Invalid lookup reservation." });
+    if (![perIp, total].every((value) => Number.isSafeInteger(value) && value > 0)) return json(503, { error: "Lookup budget is misconfigured." });
+    const answer = await this.state.storage.transaction(async storage => {
+      const ipKey = `lookups:${client}`;
+      const ipUsed = await storage.get<number>(ipKey) ?? 0;
+      const allUsed = await storage.get<number>("lookups") ?? 0;
+      if (ipUsed + 1 > perIp) return json(429, { error: "Today's map lookups for this account are used up; they reset at midnight UTC." });
+      if (allUsed + 1 > total) return json(429, { error: "Edit's shared map lookups for today are used up; they reset at midnight UTC." });
+      await storage.put(ipKey, ipUsed + 1);
+      await storage.put("lookups", allUsed + 1);
+      return json(200, { ok: true });
+    });
+    await this.state.storage.setAlarm(Date.now() + 2 * 86400_000);
+    return answer;
+  }
+
   /** Characters of speech, within today's caps (reserved before the call). */
   async speech(request: Request): Promise<Response> {
     const { client, chars } = await request.json() as { client: string; chars: number };
@@ -447,21 +512,29 @@ export class TranscriptionBudget {
     return answer;
   }
 
-  /** The AI Gateway's spend today (USD, its usage.cost): checked before a call, charged after. */
+  /**
+   * The AI Gateway's spend today (USD, its usage.cost): `check` holds
+   * `reserve` for the call before it's made (so calls at once can't all pass
+   * a nearly spent budget: the audit, Oct 23), `spend` settles it at the
+   * call's real cost (0 for a call that failed).
+   */
   async ai(request: Request): Promise<Response> {
-    const { client, phase, cost, perIp, total } = await request.json() as { client: string; phase: "check" | "spend"; cost: number; perIp: number; total: number };
+    const { client, phase, cost, perIp, total, reserve: held } = await request.json() as { client: string; phase: "check" | "spend"; cost: number; perIp: number; total: number; reserve?: number };
+    const reserve = typeof held === "number" && Number.isFinite(held) && held >= 0 ? held : 0;
     if (!/^[a-f0-9]{64}$/.test(client) || !Number.isFinite(cost) || cost < 0 || !(perIp > 0) || !(total > 0)) return json(400, { error: { message: "Invalid AI budget call." } });
     const answer = await this.state.storage.transaction(async storage => {
       const ipKey = `ai:${client}`;
       const ipUsed = await storage.get<number>(ipKey) ?? 0;
       const allUsed = await storage.get<number>("ai") ?? 0;
       if (phase === "check") {
-        if (ipUsed >= perIp) return json(429, { error: { message: `Today's AI allowance for this account is used up ($${perIp}); it resets at midnight UTC.` } });
-        if (allUsed >= total) return json(429, { error: { message: "Edit's shared AI budget for today is used up; it resets at midnight UTC." } });
+        if (ipUsed + reserve > perIp || ipUsed >= perIp) return json(429, { error: { message: `Today's AI allowance for this account is used up ($${perIp}); it resets at midnight UTC.` } });
+        if (allUsed + reserve > total || allUsed >= total) return json(429, { error: { message: "Edit's shared AI budget for today is used up; it resets at midnight UTC." } });
+        await storage.put(ipKey, ipUsed + reserve);
+        await storage.put("ai", allUsed + reserve);
         return json(200, { ok: true });
       }
-      await storage.put(ipKey, ipUsed + cost);
-      await storage.put("ai", allUsed + cost);
+      await storage.put(ipKey, Math.max(ipUsed + cost - reserve, 0));
+      await storage.put("ai", Math.max(allUsed + cost - reserve, 0));
       return json(200, { ok: true });
     });
     await this.state.storage.setAlarm(Date.now() + 2 * 86400_000);

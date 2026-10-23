@@ -33,8 +33,8 @@ OPEN_MAPS = "0"                    # "1" would let the maps answer with no token
 STAMP_CREATOR = "1"                # a project's first commit records who started it (`actor`, from the token); Repack's edit:commitProject takes it since 906b67a (Oct 23)
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
-DAILY_BYTES_PER_IP = "288000000"   # ~20 hours (lowered Oct 22 from ~90: Oct 19–21 used ~195k credits, 13.5 hours of footage costing 62 hours of Scribe; Edit now hears a file once per set of names and keeps what it heard)
-DAILY_BYTES_TOTAL = "288000000"    # ~20 hours (~16.6k credits a day at most)
+DAILY_BYTES_PER_IP = "96000000"    # ~6.7 hours, a third of the day (the audit, Oct 23: one account could spend the team's whole day)
+DAILY_BYTES_TOTAL = "288000000"    # ~20 hours (~16.6k credits a day at most; lowered Oct 22 from ~90: Oct 19–21 used ~195k credits, 13.5 hours of footage costing 62 hours of Scribe)
 DAILY_REHEAR_BYTES = "72000000"   # ~5 hours of the day for hearing finished footage again with the case's names (Oct 22: re-hears spent the whole day by 00:20 UTC and a new import went unheard)
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
 # The AI Gateway through /v1/cloud/ai/chat (the audit, Oct 23: it had no limits): only these models,
@@ -42,19 +42,23 @@ MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
 AI_MODELS = "google/gemini-3.8-flash"
 DAILY_AI_USD_PER_IP = "5"
 DAILY_AI_USD_TOTAL = "25"
+AI_RESERVE_USD = "0.1"            # held for each call while it runs, so calls at once can't pass the budget together; settled at its real cost
 
 # Map stills (Google Photorealistic 3D Tiles, billed per session): a day's
 # sessions per IP and across everyone (raised Oct 21 to finish a round of map
 # re-renders). 80 a day is at most ~2,400 a month;
 # compare with Google's current free allowance before raising it.
-DAILY_MAP_SESSIONS_PER_IP = "120"
+DAILY_MAP_SESSIONS_PER_IP = "67"   # a third of the team's (the audit, Oct 23)
 DAILY_MAP_SESSIONS_TOTAL = "200"
+# Geocode and building-outline lookups (billed per call, ~$5 per 1,000): a day's per person and across everyone.
+DAILY_LOOKUPS_PER_IP = "200"
+DAILY_LOOKUPS_TOTAL = "600"
 
 # Voice generation (text to speech, billed per character): one request's
 # limit, and a day's characters per IP and across everyone. A 10-minute
 # narration is ~9,000 characters; retakes count again.
 MAX_SPEECH_CHARS = "5000"
-DAILY_SPEECH_CHARS_PER_IP = "60000"
+DAILY_SPEECH_CHARS_PER_IP = "50000"  # a third of the team's (the audit, Oct 23)
 DAILY_SPEECH_CHARS_TOTAL = "150000"
 
 # Bursts: a few requests a minute per IP.

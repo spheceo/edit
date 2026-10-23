@@ -145,8 +145,23 @@ async function bytesUploaded(r2: R2, key: string, upload: string): Promise<numbe
   return [...text.matchAll(/<Size>(\d+)<\/Size>/g)].reduce((sum, [, size]) => sum + Number(size), 0);
 }
 
-async function abortUploads(r2: R2, key: string): Promise<void> {
-  for (const upload of await uploadsFor(r2, key)) await r2Fetch(r2, "DELETE", key, { uploadId: upload }, { allow404: true });
+/** The relay's owners store (index.ts's budget object, its "owners" instance): who started a job, and its upload. */
+function owners(env: JobsEnv) {
+  const budget = (env as { BUDGET?: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } } }).BUDGET;
+  return budget === undefined ? null : budget.get(budget.idFromName("owners"));
+}
+
+async function keepUpload(env: JobsEnv, id: string, upload: string): Promise<void> {
+  const store = owners(env);
+  if (store !== null) await store.fetch(new Request("https://budget/owner", { method: "POST", body: JSON.stringify({ id, upload, phase: "setUpload" }) }));
+}
+
+async function keptUpload(env: JobsEnv, id: string): Promise<string | null> {
+  const store = owners(env);
+  if (store === null) return null;
+  const answer = await store.fetch(new Request("https://budget/owner", { method: "POST", body: JSON.stringify({ id, phase: "getUpload" }) }));
+  const found = (answer.ok ? await answer.json() : {}) as { upload?: unknown };
+  return typeof found.upload === "string" ? found.upload : null;
 }
 
 /** Copies Drive bytes [from, from + length) into part `number`; its ETag. */
@@ -214,7 +229,7 @@ function r2Of(env: JobsEnv): R2 {
 // --- The Workflow -------------------------------------------------------------------
 
 export class DriveToR2 extends WorkflowEntrypoint<JobsEnv, DriveParams> {
-  async run(event: { payload: DriveParams }, step: Step): Promise<{ key: string; size: number; name: string }> {
+  async run(event: { payload: DriveParams; instanceId?: string }, step: Step): Promise<{ key: string; size: number; name: string }> {
     const params = event.payload;
     const env = (this as unknown as { env: JobsEnv }).env;
     const r2 = r2Of(env);
@@ -233,6 +248,8 @@ export class DriveToR2 extends WorkflowEntrypoint<JobsEnv, DriveParams> {
       }
       const upload = await step.do("start the upload", retries, () => createUpload(r2, params.key));
       ownedUpload = upload;
+      // Kept for a cancel, which ends this upload and no other at the key (the Mac's own, a project sharing it).
+      if (event.instanceId !== undefined) await step.do("note the upload", retries, async () => { await keepUpload(env, event.instanceId!, upload); return true; });
       const parts = Math.ceil(params.size / (params.part ?? PART));
       const etags: string[] = new Array(parts);
       for (let first = 1; first <= parts; first += AT_ONCE) {
@@ -351,6 +368,11 @@ export async function cancelJob(body: Record<string, unknown>, env: JobsEnv, r2:
     const status = await found.status();
     if (status.status !== "complete" && status.status !== "errored" && status.status !== "terminated") await found.terminate();
   }
-  if (typeof body.key === "string") await abortUploads(r2, needKey(body.key));
+  // Only this job's own upload (the audit, Oct 23: sweeping the key aborted another project's or the Mac's).
+  if (typeof body.key === "string") {
+    const key = needKey(body.key);
+    const upload = await keptUpload(env, id);
+    if (upload !== null) await r2Fetch(r2, "DELETE", key, { uploadId: upload }, { allow404: true });
+  }
   return { ok: true };
 }

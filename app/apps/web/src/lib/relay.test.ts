@@ -49,6 +49,33 @@ describe("relay atomic spend reservations", () => {
     await budget.alarm(); expect(values.size).toBe(0);
   });
 
+  it("holds each AI call's reserve before it runs, so calls at once can't pass the budget together, and settles it at the real cost", async () => {
+    const values = new Map<string, number>();
+    let chain = Promise.resolve();
+    type Storage = ConstructorParameters<typeof TranscriptionBudget>[0]["storage"];
+    const storage: Storage = {
+      get: async <T>(key: string) => values.get(key) as T | undefined,
+      put: async (key: string, value: number) => { values.set(key, value); },
+      transaction: <T>(callback: (store: Storage) => Promise<T>): Promise<T> => {
+        const result = chain.then(() => callback(storage));
+        chain = result.then(() => {}); return result;
+      },
+      setAlarm: async () => {}, deleteAll: async () => { values.clear(); },
+    };
+    const budget = new TranscriptionBudget({ storage }, { DAILY_LOOKUPS_PER_IP: "2", DAILY_LOOKUPS_TOTAL: "3" } as Env);
+    const ai = (phase: string, cost = 0) => budget.fetch(new Request("https://budget/ai", { method: "POST", body: JSON.stringify({ client: "a".repeat(64), phase, cost, reserve: 0.1, perIp: 0.25, total: 10 }) }));
+    expect((await Promise.all([ai("check"), ai("check"), ai("check")])).map((answer) => answer.status)).toEqual([200, 200, 429]);
+    expect(values.get("ai")).toBeCloseTo(0.2);
+    // One cost 0.01, one failed (0): both holds given back but the cost.
+    await ai("spend", 0.01);
+    await ai("spend", 0);
+    expect(values.get("ai")).toBeCloseTo(0.01);
+    expect((await ai("check")).status).toBe(200);
+    // Map lookups: two a day for this account, three for everyone.
+    const lookup = (client: string) => budget.fetch(new Request("https://budget/lookups", { method: "POST", body: JSON.stringify({ client: client.repeat(64) }) }));
+    expect([(await lookup("a")).status, (await lookup("a")).status, (await lookup("a")).status, (await lookup("b")).status, (await lookup("c")).status]).toEqual([200, 200, 429, 200, 429]);
+  });
+
   it("hearing footage again for its names gets only a share of the day; new footage still gets the rest", async () => {
     const values = new Map<string, number>();
     type Storage = ConstructorParameters<typeof TranscriptionBudget>[0]["storage"];
@@ -270,6 +297,39 @@ describe("relay cloud endpoints", () => {
     expect(paths()).toEqual(["edit:deleteProject"]);
   });
 
+  it("cancels a Drive copy only for who started it, or an admin", async () => {
+    const values = new Map<string, unknown>();
+    type Storage = ConstructorParameters<typeof TranscriptionBudget>[0]["storage"];
+    const storage = {
+      get: async <T>(key: string) => values.get(key) as T | undefined,
+      put: async (key: string, value: unknown) => { values.set(key, value); },
+      transaction: <T>(callback: (store: Storage) => Promise<T>) => callback(storage as Storage),
+      setAlarm: async () => {}, deleteAll: async () => { values.clear(); },
+    };
+    const owners = new TranscriptionBudget({ storage: storage as Storage }, env);
+    const terminated: string[] = [];
+    let found: { id: string; status(): Promise<{ status: string }>; terminate(): Promise<void> } | null = null;
+    const jobs = { ...env, GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r",
+      BUDGET: { idFromName: (name: string) => name, get: () => owners },
+      DRIVE_TO_R2: {
+        async get() { if (!found) throw new Error("not found"); return found; },
+        async create({ id }: { id: string }) { found = { id, status: async () => ({ status: "running" }), terminate: async () => { terminated.push(id); } }; return found; },
+      } } as unknown as Env;
+    vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "t" });
+      return Response.json({ name: "a.mp4", size: "10", md5Checksum: "v1" });
+    });
+    const started = (await (await call("jobs/drive", { file: "FILEabcdefgh", key: "edit/originals/drive/FILEabcdefgh/a.mp4" }, { token: EDITOR, env: jobs })).json()) as { id: string };
+    // Another project joining the same copy doesn't make it theirs.
+    await call("jobs/drive", { file: "FILEabcdefgh", key: "edit/originals/drive/FILEabcdefgh/a.mp4" }, { token: SUBS, env: jobs });
+    expect((await call("jobs/cancel", { id: started.id }, { token: SUBS, env: jobs })).status).toBe(403);
+    expect(terminated).toEqual([]);
+    expect((await call("jobs/cancel", { id: started.id }, { token: EDITOR, env: jobs })).status).toBe(200);
+    expect((await call("jobs/cancel", { id: started.id }, { token: ADMIN, env: jobs })).status).toBe(200);
+    expect(terminated.length).toBe(2);
+  });
+
   it("writes keys only where Edit writes them; deletes and lists beyond the analysis only for an admin", async () => {
     cloudWith(null);
     for (const key of ["edit/projects/p1.json", "edit/exports/results/x.mp4", "edit/test/a.mp4"]) {
@@ -393,7 +453,8 @@ describe("relay cloud: Google sign-in and the AI Gateway", () => {
     const answer = await post("ai/chat", asked);
     expect(answer.status).toBe(429);
     expect(await answer.json()).toEqual({ error: { message: "slow down" } });
-    expect(sent).toEqual({ url: "https://ai-gateway.vercel.sh/v1/chat/completions", auth: "Bearer gw-key", body: asked });
+    // The body as sent, with the answer's length bounded (the audit, Oct 23).
+    expect(sent).toEqual({ url: "https://ai-gateway.vercel.sh/v1/chat/completions", auth: "Bearer gw-key", body: '{"model":"google/gemini-3.8-flash","max_tokens":32768}' });
     expect((await post("ai/chat", "{}", "", { ...env, AI_GATEWAY_API_KEY: undefined })).status).toBe(503);
   });
 

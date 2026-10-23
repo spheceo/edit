@@ -29,6 +29,7 @@ preview_urls = false
 # Sign-in (accounts.spheceo.com, Oct 23): every route but /health takes a signed-in person's token,
 # checked against this issuer's JWKS. The old shared token (CLOUD_TOKEN) was retired the same day.
 ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
+MODAL_PROXY_URL = "https://sphe-g-personal--edit-proxies-endpoint.us-east.modal.run"
 OPEN_MAPS = "0"                    # "1" would let the maps answer with no token
 STAMP_CREATOR = "1"                # a project's first commit records who started it (`actor`, from the token); Repack's edit:commitProject takes it since 906b67a (Oct 23)
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus

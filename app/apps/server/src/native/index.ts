@@ -193,6 +193,8 @@ export interface Native {
   sections(project: ProjectInput): Sections; // S
   animatableParams(): Record<string, string[]>; // S
   sampleKeyframes(keys: Keyframe[], frames: number[]): (number | null)[]; // S
+  /** The lines `text` takes in a text style (project pixels), as the renderer wraps it. */
+  textLines(text: string, font: string, weight: number, size: number, tracking: number, maxWidth?: number | null): string[]; // S
 
   // Probing and preview making
   probe(path: string): Promise<Probe>; // A

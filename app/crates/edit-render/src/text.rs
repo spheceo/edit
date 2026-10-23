@@ -156,34 +156,29 @@ struct Placed {
 
 pub const MAX_TEXT_DIMENSION: u32 = 8192;
 
-pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Option<TextImage> {
-    let face = book.pick(spec.family, spec.weight)?;
-    let font = &book.faces.get(face)?.font;
-    let px = spec.px.clamp(1.0, 2000.0);
-    let line_metrics = font.horizontal_line_metrics(px)?;
-    let line_advance = px * spec.line_height.max(0.1);
-
-    // Wrap to the width (greedy, by words; an overlong word breaks by letters).
-    let measure = |text: &str, px: f32| -> f32 {
+/// Wraps `text` as `rasterize` lays it out (greedy, by words; an overlong word
+/// breaks by letters; newlines always break): its lines, measured with the
+/// font's advances and kerning at `px` with `tracking` between letters.
+fn wrap(font: &Font, px: f32, tracking: f32, max_width: Option<f32>, text: &str) -> Vec<String> {
+    let advance = |text: &str| -> f32 {
         let mut pen = 0.0_f32;
         let mut previous: Option<char> = None;
         for ch in text.chars() {
             if let Some(prev) = previous {
                 pen += font.horizontal_kern(prev, ch, px).unwrap_or(0.0);
             }
-            pen += font.metrics(ch, px).advance_width + spec.tracking;
+            pen += font.metrics(ch, px).advance_width + tracking;
             previous = Some(ch);
         }
         if previous.is_some() {
-            pen - spec.tracking
+            pen - tracking
         } else {
             0.0
         }
     };
-    let advance = |text: &str| measure(text, px);
     let mut wrapped: Vec<String> = Vec::new();
-    for paragraph in spec.text.split('\n') {
-        let Some(max) = spec.max_width.filter(|max| *max > px) else {
+    for paragraph in text.split('\n') {
+        let Some(max) = max_width.filter(|max| *max > px) else {
             wrapped.push(paragraph.to_owned());
             continue;
         };
@@ -217,6 +212,50 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
         }
         wrapped.push(line);
     }
+    wrapped
+}
+
+/// The lines `text` takes in `family` at `weight`, `px` and `tracking`, wrapped
+/// at `max_width` (all in the same pixels), exactly as `rasterize` draws them;
+/// None when the book has no font. What the subtitles' one-line rule measures.
+pub fn wrap_lines(
+    book: &FontBook,
+    family: &str,
+    weight: u16,
+    px: f32,
+    tracking: f32,
+    max_width: Option<f32>,
+    text: &str,
+) -> Option<Vec<String>> {
+    let font = &book.faces.get(book.pick(family, weight)?)?.font;
+    Some(wrap(font, px.clamp(1.0, 2000.0), tracking, max_width, text))
+}
+
+pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Option<TextImage> {
+    let face = book.pick(spec.family, spec.weight)?;
+    let font = &book.faces.get(face)?.font;
+    let px = spec.px.clamp(1.0, 2000.0);
+    let line_metrics = font.horizontal_line_metrics(px)?;
+    let line_advance = px * spec.line_height.max(0.1);
+
+    let measure = |text: &str, px: f32| -> f32 {
+        let mut pen = 0.0_f32;
+        let mut previous: Option<char> = None;
+        for ch in text.chars() {
+            if let Some(prev) = previous {
+                pen += font.horizontal_kern(prev, ch, px).unwrap_or(0.0);
+            }
+            pen += font.metrics(ch, px).advance_width + spec.tracking;
+            previous = Some(ch);
+        }
+        if previous.is_some() {
+            pen - spec.tracking
+        } else {
+            0.0
+        }
+    };
+    // Wrap to the width (greedy, by words; an overlong word breaks by letters).
+    let wrapped = wrap(font, px, spec.tracking, spec.max_width, spec.text);
 
     // Lay out each line, then centre lines on the widest.
     let mut lines: Vec<(Vec<(char, f32)>, f32)> = Vec::new();

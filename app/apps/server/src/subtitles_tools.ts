@@ -11,6 +11,7 @@ import { ApiError, bad, notFound } from "./http/errors.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
 import { registerTool, text } from "./mcp/registry.ts";
 import type { Project, Segment } from "./model.ts";
+import { isSubtitle, splitToOneLine, twoLineSubtitles } from "./one_line.ts";
 import { duration, fps as fpsOf, mediaOf } from "./project.ts";
 import * as faces from "./faces.ts";
 import { fixed, round, toI64 } from "./rust.ts";
@@ -63,6 +64,19 @@ registerTool("place_subtitles", async ({ app, args, projectId }) => {
     return text(stableStringify({ moved_back_to_bottom_middle: moved }));
   }
   const report = await faces.placeSubtitles(app, projectId, from, to);
+  return text(stableStringify(report));
+});
+
+registerTool("one_line_subtitles", async ({ app, projectId }) => {
+  const [, report] = await app.store.update(projectId, "agent", (own) => {
+    const before = twoLineSubtitles(own);
+    for (const found of before) {
+      const clip = own.clips.find((one) => one.id === found.id);
+      if (clip !== undefined && isSubtitle(clip)) splitToOneLine(own, clip);
+    }
+    const left = twoLineSubtitles(own);
+    return { split: before.length - left.length, left: left.map((one) => ({ clip: one.id, start: one.start, text: one.text })) };
+  });
   return text(stableStringify(report));
 });
 

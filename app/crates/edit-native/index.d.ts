@@ -501,6 +501,13 @@ export interface Stretch {
  */
 export declare function textBlock(text: string, px: number, weight: number, lineHeight: number): [number, number]
 
+/**
+ * The lines `text` takes in a text style (`font`, `weight`, `size`, `tracking`,
+ * wrapped at `maxWidth`; project pixels), exactly as the renderer wraps it:
+ * what the subtitles' one-line rule (apps/server/src/one_line.ts) measures.
+ */
+export declare function textLines(text: string, font: string, weight: number, size: number, tracking: number, maxWidth?: number | undefined | null): Array<string>
+
 export interface TrackAnchor {
   /** Seconds into the source. */
   at: number

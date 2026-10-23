@@ -1972,6 +1972,20 @@
     "name": "place_subtitles"
   },
   {
+    "description": "Makes every subtitle one line. The house rule: a subtitle is one line; the store splits any it saves new or changed by itself, at the most natural break (a sentence end, then a comma or dash), so this is for ones from before (the audit's subtitle_two_lines). Text size and widths stay; it lists what it couldn't split.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "one_line_subtitles"
+  },
+  {
     "description": "Lays the intro's speaker captions (\"Caption · <who>\") out again the house way without retyping them: under the speaker's face only when the face detector sees it clearly through the line (followed by the detector, smoothed, never covering any face), else bottom middle (clear of faces). By default a caption keeps the face it already sits beside, if that face is clearly visible; one that sat on a face, or by none, goes bottom middle. Pass `under` for the lines where that isn't the speaker. Returns each caption's place and why. Seconds; default the whole timeline.",
     "inputSchema": {
       "properties": {

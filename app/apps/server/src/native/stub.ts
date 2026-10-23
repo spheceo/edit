@@ -316,6 +316,38 @@ export function createStub(): Stub {
       return fs.existsSync(path) ? path : null;
     },
 
+    // Wrapped as the renderer does (greedy, by words), each character 0.58 em wide.
+    textLines(text, _font, _weight, size, tracking, maxWidth) {
+      const width = (part: string) => [...part].length * (0.58 * size + tracking);
+      const out: string[] = [];
+      for (const paragraph of text.split("\n")) {
+        if (maxWidth === undefined || maxWidth === null || maxWidth <= size) {
+          out.push(paragraph);
+          continue;
+        }
+        let line = "";
+        for (const word of paragraph.split(" ")) {
+          const candidate = line === "" ? word : `${line} ${word}`;
+          if (width(candidate) <= maxWidth || (line === "" && width(word) <= maxWidth)) {
+            line = candidate;
+            continue;
+          }
+          if (line !== "") out.push(line);
+          line = "";
+          if (width(word) <= maxWidth) line = word;
+          else
+            for (const ch of word) {
+              if (width(line + ch) > maxWidth && line !== "") {
+                out.push(line);
+                line = ch;
+              } else line += ch;
+            }
+        }
+        out.push(line);
+      }
+      return out;
+    },
+
     projectLoad(json) {
       let value: unknown;
       try {

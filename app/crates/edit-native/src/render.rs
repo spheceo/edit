@@ -211,3 +211,38 @@ pub async fn compose_sheet(
 pub fn bundled_font(file: String) -> Option<Buffer> {
     edit_render::text::bundled_font_bytes(&file).map(|bytes| bytes.to_vec().into())
 }
+
+/// The lines `text` takes in a text style (`font`, `weight`, `size`, `tracking`,
+/// wrapped at `maxWidth`; project pixels), exactly as the renderer wraps it:
+/// what the subtitles' one-line rule (apps/server/src/one_line.ts) measures.
+#[napi]
+pub fn text_lines(
+    text: String,
+    font: String,
+    weight: u32,
+    size: f64,
+    tracking: f64,
+    max_width: Option<f64>,
+) -> Vec<String> {
+    static BOOK: std::sync::OnceLock<edit_render::text::FontBook> = std::sync::OnceLock::new();
+    let book = BOOK.get_or_init(|| {
+        let mut book = edit_render::text::FontBook::default();
+        for (family, weight, file) in edit_render::text::BUNDLED_FONTS {
+            if let Some(bytes) = edit_render::text::bundled_font_bytes(file) {
+                let _ = book.add(family, *weight, bytes);
+            }
+        }
+        book
+    });
+    let weight = u16::try_from(weight).unwrap_or(u16::MAX);
+    edit_render::text::wrap_lines(
+        book,
+        &font,
+        weight,
+        size as f32,
+        tracking as f32,
+        max_width.map(|width| width as f32),
+        &text,
+    )
+    .unwrap_or_else(|| vec![text])
+}

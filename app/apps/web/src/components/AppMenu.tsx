@@ -1,8 +1,9 @@
 // The ⋯ menu at the top (settings, reporting a problem) and the dialogs it opens.
 
-import { Bug, Check, Copy, Ellipsis, RotateCw, ScrollText, Settings } from "lucide-react";
+import { Bug, Check, Copy, Ellipsis, LogIn, LogOut, RotateCw, ScrollText, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { loadAccount, signIn, signOut, useAccount } from "../lib/account";
 import { chooseProvider, useAgent, type AgentModel, type AgentProvider, type AgentStatus } from "../lib/agent";
 import { fetchRetrying } from "../lib/api";
 import { closeDialog, openDialog, useDialogs } from "../lib/dialogs";
@@ -14,6 +15,20 @@ import { toggleMenu } from "./ContextMenu";
 import { cx, IconButton, Modal, Select, Tabs } from "./ui";
 
 export function AppMenu() {
+  const account = useAccount((state) => state.account);
+  useEffect(() => {
+    void loadAccount();
+  }, []);
+  // Who's signed in (accounts.spheceo.com), and signing out; or signing in.
+  const who =
+    account === null
+      ? []
+      : account.signed_in && account.person !== null
+        ? [
+            { label: `Signed in as ${account.person.email}`, icon: <UserRound size={14} />, onSelect: () => window.open(account.accounts, "_blank", "noopener") },
+            { label: "Sign out", icon: <LogOut size={14} />, onSelect: () => void signOut() },
+          ]
+        : [{ label: "Sign in…", icon: <LogIn size={14} />, onSelect: () => void signIn() }];
   return (
     <IconButton
       label="More"
@@ -21,11 +36,12 @@ export function AppMenu() {
         toggleMenu(
           event.currentTarget,
           [
+            ...who,
             { label: "Settings", icon: <Settings size={14} />, shortcut: "⌘,", onSelect: () => openDialog("settings") },
             { label: "Logs", icon: <ScrollText size={14} />, onSelect: () => openDialog("logs") },
             { label: "Report a problem…", icon: <Bug size={14} />, onSelect: () => openReport() },
           ],
-          { width: 210 },
+          { width: account?.signed_in ? 280 : 210 },
         )
       }
     >

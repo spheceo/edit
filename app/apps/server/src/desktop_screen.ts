@@ -628,12 +628,17 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       let y = cy + NOTE_PAD * k;
       const px = NOTE_SIZE * k;
       // Never two lines at once ("this text doesn't appear at the same time in
-      // the Notepad"): each waits for the one before to finish typing.
-      let typedBy = 0;
+      // the Notepad"), and never late for their words: a line named right
+      // after another moves the one before it earlier (as far as the window's
+      // opening allows), so each finishes typing before the next starts.
+      const typing = (line: number) => Math.min((window.spec.lines[line] ?? "").length, 36) * Math.max(Math.round(s), 1) + Math.round(6 * s);
+      const opens = window.spec.at + Math.round(8 * s);
+      const wanted = window.notes.map((_, line) => Math.max(window.spec.line_at?.[line] ?? window.spec.at + Math.round((14 + 40 * line) * s), opens));
+      const starts = [...wanted];
+      for (let line = starts.length - 2; line >= 0; line--) starts[line] = Math.min(starts[line]!, starts[line + 1]! - typing(line));
+      for (let line = 0; line < starts.length; line++) starts[line] = Math.max(starts[line]!, line === 0 ? opens : starts[line - 1]! + typing(line - 1));
       window.notes.forEach((note, line) => {
-        const given = window.spec.line_at?.[line];
-        const at = Math.max(given ?? window.spec.at + Math.round((14 + 40 * line) * s), window.spec.at + Math.round(8 * s), typedBy);
-        typedBy = at + Math.min((window.spec.lines[line] ?? "").length, 36) * Math.max(Math.round(s), 1) + Math.round(6 * s);
+        const at = starts[line]!;
         const textFrom = Math.min(rel(at), total - 2);
         const centre: [number, number] = [cx + NOTE_PAD * k + note.w / 2, y + note.h / 2];
         add({

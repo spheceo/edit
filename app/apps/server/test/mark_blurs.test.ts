@@ -93,3 +93,18 @@ test("a mark left alone (the court's own room tag) is never blurred again", () =
   leaveMark(media, "FOX8");
   expect(media.markers!.length).toBe(1);
 });
+
+test("a look's full-width band and blur_marks' own blur aren't blur_off_shot", () => {
+  const p = project();
+  const v1 = p.tracks.find((track) => track.kind === "video")!.id;
+  const v2 = addTrack(p, "video");
+  p.clips.push(shot("c1", v1, 0, 100), shot("c2", v1, 100, 100, { media: "m2" }));
+  const band = (id: string, name: string, width: number): AdjustmentClip =>
+    ({
+      id, track: v2, start: 0, duration: 200, color: "blue", name, fade_in: 0, fade_out: 0, type: "adjustment",
+      grade: { exposure: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 },
+      blur: { radius: 20, x: 0, y: -475, width, height: 150, feather: 40, shape: "rect" }, opacity: 1,
+    }) as AdjustmentClip;
+  p.clips.push(band("e1", "Film look · soft edge", 1920) as Clip, band("m1", "Mark blur · fox8 · c1", 300) as Clip);
+  expect(offShot(p)).toEqual([]);
+});

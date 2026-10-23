@@ -299,8 +299,13 @@ function overlapsAny(project: Project, clip: Clip, ids: Set<string>): boolean {
 export function offShot(project: Project): unknown[] {
   const index = (track: string) => project.tracks.findIndex((one) => one.id === track);
   const issues: unknown[] = [];
+  const { width } = project.settings;
   for (const blur of project.clips) {
     if (!stillRect(blur) || trackOf(project, blur.track)?.hidden === true || (blur.blur?.width ?? 0) <= 0) continue;
+    // blur_marks' own (stuck to its clip by construction) and a look's bands
+    // across the whole picture (the film look's soft edges: Helpful Wife's
+    // eight were flagged) aren't logo rectangles.
+    if ((blur.name ?? "").startsWith(NAME) || (blur.blur?.width ?? 0) >= width * 0.9) continue;
     const under = project.clips.filter(
       (clip) =>
         index(clip.track) < index(blur.track) &&

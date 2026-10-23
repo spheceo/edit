@@ -18,6 +18,8 @@ import * as fs from "node:fs";
 import { creator } from "./accounts.ts";
 import * as diag from "./diag.ts";
 import * as kinds from "./kinds.ts";
+import { enforceOneLine } from "./one_line.ts";
+import { enforcePointers } from "./pointers.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import * as mediaDrive from "./media_drive/layout.ts";
 import type { Clip, DriveFile, Project, ProjectSummary, Settings, Style } from "./model.ts";
@@ -494,6 +496,9 @@ export class Store {
       throw new TypeError("store.update's edit must be synchronous (it runs atomically)");
     }
     project.id = id;
+    // The house rules: no subtitle takes two lines (one_line.ts), and what points at someone ends with their shot (pointers.ts).
+    enforceOneLine(current.project, project);
+    enforcePointers(current.project, project);
     const refused = refusalOf(current.project, project);
     if (refused !== null) throw new Error(refused);
     try {
@@ -517,10 +522,14 @@ export class Store {
    * Saves `project` as the next rev after `rev`, if cloud projects let this
    * machine change it (every write path ends here). Throws UpdateError.
    */
-  async commit(id: string, rev: number, project: Project, origin: string): Promise<Live> {
+  async commit(id: string, rev: number, given: Project, origin: string): Promise<Live> {
+    const before = this.projects.get(id);
+    // The house rules: no subtitle takes two lines (one_line.ts), and what points at someone ends with their shot (pointers.ts).
+    const project = Object.isFrozen(given) ? (structuredClone(given) as Project) : given;
+    enforceOneLine(before?.project ?? null, project);
+    enforcePointers(before?.project ?? null, project);
     // Invalid before refused: a bad save says what's wrong with it first.
     const prepared = this.prepare(id, project);
-    const before = this.projects.get(id);
     const refused = before === undefined ? null : refusalOf(before.project, project);
     if (refused !== null) throw new UpdateError("refused", refused);
     const cloud = this.cloudHook;

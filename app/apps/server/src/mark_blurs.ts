@@ -19,6 +19,7 @@
 
 import type { AdjustmentClip, Clip, Keyframe, Media, Project, VideoClip } from "./model.ts";
 import { addTrack, clipEnd, freshId, mediaOf, sample, trackOf } from "./project.ts";
+import { fillsFrame, framingAt, stillRect } from "./frames_fill.ts";
 import { round } from "./rust.ts";
 import * as watermarks from "./watermarks.ts";
 
@@ -33,14 +34,6 @@ const FEATHER = 10;
 export const NAME = "Mark blur";
 
 /** A picture clip's framing at a frame of the clip (its own seconds from its start). */
-function framingAt(clip: VideoClip, frame: number): { x: number; y: number; scale: number } {
-  const at = (param: "x" | "y" | "scale", base: number) => {
-    const keys = clip.keyframes?.[param];
-    return keys !== undefined && keys.length > 0 ? (sample(keys, frame) ?? base) : base;
-  };
-  return { x: at("x", clip.transform.x), y: at("y", clip.transform.y), scale: at("scale", clip.transform.scale) };
-}
-
 /** A mark's box on the frame at a frame of the clip: centre x, y and size in project px. */
 export function boxAt(project: Project, clip: VideoClip, media: Media, mark: watermarks.Mark["box"], frame: number): [number, number, number, number] {
   const { width, height } = project.settings;
@@ -64,24 +57,6 @@ function ownAlpha(clip: Clip, frame: number): number {
   if (clip.fade_in > 0 && into < clip.fade_in) alpha *= into / clip.fade_in;
   if (clip.fade_out > 0 && left < clip.fade_out) alpha *= left / clip.fade_out;
   return Math.min(Math.max(alpha, 0), 1);
-}
-
-/** Whether a picture clip covers the whole frame (footage or a photo filled, a solid): what's under it can't be seen. */
-function fillsFrame(project: Project, clip: Clip): boolean {
-  if (clip.type === "solid") return true;
-  if (clip.type !== "video") return false;
-  const media = mediaOf(project, clip.media);
-  if (media === undefined || (media.kind !== "video" && media.kind !== "image")) return false;
-  const { width, height } = project.settings;
-  const [mw, mh] = [media.width || width, media.height || height];
-  const { x, y, scale } = framingAt(clip, 0);
-  const fit = Math.min(width / mw, height / mh) * scale;
-  const crop = clip.crop ?? { left: 0, right: 0, top: 0, bottom: 0 };
-  const left = x - mw * fit * (0.5 - (crop.left ?? 0));
-  const right = x + mw * fit * (0.5 - (crop.right ?? 0));
-  const top = y - mh * fit * (0.5 - (crop.top ?? 0));
-  const bottom = y + mh * fit * (0.5 - (crop.bottom ?? 0));
-  return left <= -width / 2 + 2 && right >= width / 2 - 2 && top <= -height / 2 + 2 && bottom >= height / 2 - 2;
 }
 
 /** How much of the clip shows at each frame of its span: its own alpha under every frame-filling picture above it. */
@@ -187,13 +162,6 @@ export function blursFor(project: Project, clip: VideoClip, media: Media, mark: 
     } as AdjustmentClip);
   }
   return out;
-}
-
-/** A still rect blur (not tracked, not a face's): what blur_marks replaces and blur_off_shot judges. */
-function stillRect(clip: Clip): clip is AdjustmentClip {
-  if (clip.type !== "adjustment" || (clip.blur?.radius ?? 0) <= 0 || clip.blur?.shape !== "rect") return false;
-  const keys = clip.keyframes ?? {};
-  return !["blur.x", "blur.y"].some((param) => (keys[param]?.length ?? 0) > 0);
 }
 
 /** Overlap (share of the smaller) of two centre/size boxes. */

@@ -20,6 +20,8 @@ import * as framing from "./framing.ts";
 import * as tools from "./tools.ts";
 import * as onscreen from "./onscreen.ts";
 import * as markBlurs from "./mark_blurs.ts";
+import { twoLineSubtitles } from "./one_line.ts";
+import { pointerIssues } from "./pointers.ts";
 import * as typing from "./typing_sounds.ts";
 import * as watermarks from "./watermarks.ts";
 import { ioMessage } from "./files.ts";
@@ -1193,6 +1195,9 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...(markBlurs.offShot(project) as Json[]),
     ...soundEffectsLong(project),
     ...(typing.typingSoundsOff(project) as Json[]),
+    ...(pointerIssues(project) as Json[]),
+    // The house rule (one_line.ts): what's left over from before it, or couldn't be split.
+    ...twoLineSubtitles(project).map((one) => ({ kind: "subtitle_two_lines", clip: one.id, start: one.start, text: one.text, lines: 1, fix: "split it into one-line cues at a natural break (any edit to its text splits it itself), or shorten it" })),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
@@ -1227,7 +1232,7 @@ const FIXABLE = [
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
-  "blur_off_shot", "sfx_long", "sfx_loud", "typing_sound_off",
+  "blur_off_shot", "sfx_long", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */

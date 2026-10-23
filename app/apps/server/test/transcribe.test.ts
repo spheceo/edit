@@ -180,9 +180,9 @@ test.skipIf(ffmpeg === null)("a long file is heard whole and in pieces at once, 
     const before = mock.calls("/v1/transcribe", "POST").length;
     await run(source, `${dir}/cache/long.json`, ["McCall"]);
     const asked = mock.calls("/v1/transcribe", "POST").slice(before);
-    // The whole file and its three pieces, each with the case's names.
+    // The whole file (for its voices: without the names, which cost more) and its three pieces with them.
     expect(asked.length).toBe(4);
-    expect(asked.every((call) => call.query.getAll("keyterm").join() === "McCall")).toBe(true);
+    expect(asked.map((call) => call.query.getAll("keyterm").join()).sort()).toEqual(["", "McCall", "McCall", "McCall"]);
     const written = JSON.parse(fs.readFileSync(`${dir}/cache/long.json`, "utf8"));
     // Each piece "heard" Hello there. in its first second: the second and third pieces' fall in the
     // context before their seam, which is the piece before's, so only the first piece's are kept.

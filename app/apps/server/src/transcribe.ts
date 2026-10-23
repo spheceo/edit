@@ -139,8 +139,10 @@ export async function run(source: string, target: string, keyterms: readonly str
       const piecesDir = withExtension(target, "pieces");
       const names = createHash("sha256").update(keyterms.join("\n")).digest("hex").slice(0, 12);
       const [whole, heard] = await Promise.all([
-        // Any earlier hearing of the whole file will do: only its voices are used.
-        saved(withExtension(target, "whole.json"), fixed3(seconds), () => ask(audio, keyterms, again)),
+        // Any earlier hearing of the whole file will do: only its voices are
+        // used, so it's asked without the names (which cost a fifth more:
+        // the audit, Oct 23); the pieces spell them.
+        saved(withExtension(target, "whole.json"), fixed3(seconds), () => ask(audio, [], again)),
         limited(pieces, PIECES_AT_ONCE, (piece, index) =>
           saved(`${piecesDir}/${names}-${index}-${fixed3(piece.from)}-${fixed3(piece.to)}.json`, "", async () => {
             const file = withExtension(target, `piece-${index}.ogg`);

@@ -278,7 +278,8 @@ export async function signOut(app: App): Promise<void> {
 
 /** Opens a URL in the Mac's browser (the sign-in page), never with a secret in it. */
 function openBrowser(url: string): void {
-  if (process.platform !== "darwin") return;
+  // EDIT_NO_BROWSER: a test drives the sign-in itself.
+  if (process.platform !== "darwin" || process.env.EDIT_NO_BROWSER === "1") return;
   const child = spawn("/usr/bin/open", [url], { stdio: "ignore", detached: true });
   child.on("error", (error) => diag.warn("accounts", `opening the browser: ${diag.messageOf(error)}`));
   child.unref();

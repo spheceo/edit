@@ -11,6 +11,7 @@
 // browser stays a child process (`hooks.dump`,
 // which tests replace).
 
+import { publicUrl, safeFetch } from "./net_guard.ts";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -128,6 +129,8 @@ const FRESH_MS = 600_000;
  */
 async function articlePage(url: string): Promise<string> {
   const now = performance.now();
+  // Public web pages only, for read_page and add_article alike (net_guard.ts).
+  await publicUrl(url);
   const kept = PAGES.find(([own, at]) => own === url && now - at < FRESH_MS);
   if (kept !== undefined) return kept[2];
   const page = (await plain(url)) ?? (await hooks.dump(url));
@@ -153,7 +156,7 @@ async function plain(url: string): Promise<string | null> {
   let code: number;
   let page: string;
   try {
-    const response = await fetch(url, {
+    const response = await safeFetch(url, {
       headers: { "user-agent": USER_AGENT, "accept-language": "en-US,en;q=0.9" },
       signal: AbortSignal.timeout(15_000),
     });
@@ -310,7 +313,8 @@ export async function searchWeb(query: string): Promise<Found[]> {
 
 /** A page's readable text (scripts, styles and tags dropped), cut at `limit` characters. */
 export async function readPage(url: string, limit: number): Promise<string> {
-  if (!url.startsWith("http://") && !url.startsWith("https://")) throw new Error("give a web address (http or https)");
+  // Public web pages only (net_guard.ts): never this Mac or its network.
+  await publicUrl(url);
   return takeChars(readable(await articlePage(url)), limit);
 }
 
@@ -658,7 +662,7 @@ async function download(folder: string, [image, page, title]: Hit, query: string
   try {
     const headers: Record<string, string> = { "user-agent": USER_AGENT };
     if (page !== "") headers.referer = page;
-    const response = await fetch(image, { headers, signal: AbortSignal.timeout(25_000) });
+    const response = await safeFetch(image, { headers, signal: AbortSignal.timeout(25_000) });
     const declared = Number(response.headers.get("content-length") ?? "NaN");
     if (Number.isFinite(declared) && declared > MAX_BYTES) {
       void response.body?.cancel();

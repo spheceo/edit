@@ -132,7 +132,8 @@ export class MockServer {
 
   /** Sets `env()` (and any `extra`) in process.env; returns what puts it back. */
   useEnv(extra: Record<string, string | undefined> = {}): () => void {
-    const values = { ...this.env(), ...extra };
+    // Pages the tests serve from here may be read (net_guard.ts allows it only under bun test).
+    const values = { EDIT_TEST_LOCAL_WEB: "1", ...this.env(), ...extra };
     const before = new Map<string, string | undefined>();
     for (const [key, value] of Object.entries(values)) {
       before.set(key, process.env[key]);

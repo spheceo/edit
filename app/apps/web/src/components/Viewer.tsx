@@ -54,9 +54,9 @@ export function Viewer() {
   useEffect(() => { wake(); return () => clearTimeout(idleTimer.current); }, [fullscreen]);
 
   const light = wantsLight;
-  // The picture each media streams: the light preview once it's made (when
+  // The picture each media streams: the light preview once it’s made (when
   // wanted), else the preview, else the original. Each with its files' stamps
-  // ("light~<light>~<preview>"), so a version's URL is only ever that version.
+  // ("light~<light>~<preview>"), so a version’s URL is only ever that version.
   const versionKey = JSON.stringify(
     Object.fromEntries(Object.entries(media).map(([id, status]) => {
       const preview = status.stamps?.preview ?? "";
@@ -145,9 +145,9 @@ export function Viewer() {
           >
             <span className={cx("text-muted", job?.state !== "failed" && "shimmer")}>{importing.line}</span>
             <span className="h-1 w-56 overflow-hidden rounded-full bg-white/10">
-              <span className={cx("block h-full rounded-full transition-[width] duration-500", job?.state === "failed" ? "bg-red-400" : "bg-white/70")} style={{ width: `${Math.max(2, Math.round(importing.fraction * 100))}%` }} />
+              <span className={cx("block h-full rounded-full transition-[width] duration-500", job?.state === "failed" ? "bg-danger" : "bg-white/70")} style={{ width: `${Math.max(2, Math.round(importing.fraction * 100))}%` }} />
             </span>
-            <span className="text-[11px] text-faint tabular">{Math.round(importing.fraction * 100)}% · the edit appears here as soon as it's laid out</span>
+            <span className="text-[11px] text-faint tabular">{Math.round(importing.fraction * 100)}% · the edit appears here as soon as it’s laid out</span>
           </button>
         )}
         {!error && empty && importing === null && (
@@ -165,7 +165,7 @@ export function Viewer() {
   );
 }
 
-/** Drag the selected clip's position directly on the canvas. */
+/** Drag the selected clip’s position directly on the canvas. */
 function dragTransform(event: React.PointerEvent, wrap: HTMLDivElement) {
   const state = useEditor.getState();
   const project = state.project;

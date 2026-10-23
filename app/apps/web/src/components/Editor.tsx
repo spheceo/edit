@@ -30,7 +30,7 @@ const SCRIPT_WIDTH = 440;
 
 /** A panel that springs open and closed, keeping its gap to the viewer. */
 /** Panels keep their share of the window: sized for a ~1640 px wide window and
- * grown in step on wider ones (an ultrawide), so the viewer doesn't take all the extra width. */
+ * grown in step on wider ones (an ultrawide), so the viewer doesn’t take all the extra width. */
 function usePanelScale() {
   const scale = () => Math.min(2.4, Math.max(1, window.innerWidth / 1640));
   const [value, setValue] = useState(scale);
@@ -95,14 +95,14 @@ export function Editor({ id }: { id: string }) {
     let alive = true;
     connectEvents();
     // The project left last saves everything first (reopening it shows its last edits).
-    // A cloud project: downloaded first if it's only in the cloud, and its
-    // lock asked for, so the editor knows whether it's read-only.
+    // A cloud project: downloaded first if it’s only in the cloud, and its
+    // lock asked for, so the editor knows whether it’s read-only.
     settled()
       .then(() => cloudApi.open(id, clientId))
       .then((cloud) => alive && useEditor.setState({ cloud }))
       .catch((error) => {
         // Unreachable server: the project request below says so.
-        // Or not this account's kind of video (403): says so instead of opening.
+        // Or not this account’s kind of video (403): says so instead of opening.
         if (error instanceof ApiError && (error.status === 404 || error.status === 403)) throw error;
       })
       .then(() => api.project(id))
@@ -248,8 +248,8 @@ function useFileDrop() {
   return active;
 }
 
-/** The divider above the timeline (as Repack's panel gutters): a pill that grows when
- * you're on it and turns playhead red while dragged; double-click resets the height. */
+/** The divider above the timeline (as Repack’s panel gutters): a pill that grows when
+ * you’re on it and turns playhead red while dragged; double-click resets the height. */
 function ResizeBar({ resizing, setResizing }: { resizing: boolean; setResizing: (resizing: boolean) => void }) {
   const drag = useRef<{ y: number; height: number } | null>(null);
   const end = () => {
@@ -261,7 +261,7 @@ function ResizeBar({ resizing, setResizing }: { resizing: boolean; setResizing: 
       title="Drag to resize · double-click to reset"
       className={cx(
         "group relative z-10 flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center",
-        // A wider reach than the gap itself, so it's easy to catch.
+        // A wider reach than the gap itself, so it’s easy to catch.
         "before:absolute before:inset-x-0 before:-inset-y-[5px] before:content-['']",
       )}
       onPointerDown={(event) => {
@@ -386,7 +386,7 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
         });
         state.select([id]);
       } else if (event.altKey && (event.code === "KeyI" || event.code === "KeyO" || event.code === "KeyX")) {
-        // ⌥ changes the key's character on a Mac, so match the physical key.
+        // ⌥ changes the key’s character on a Mac, so match the physical key.
         handled();
         if (event.code === "KeyI") clearIn();
         else if (event.code === "KeyO") clearOut();

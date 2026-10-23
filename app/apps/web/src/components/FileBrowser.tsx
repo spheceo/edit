@@ -62,7 +62,7 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
-  // A Drive folder's videos (or one file): downloaded on the machine running Edit, then imported.
+  // A Drive folder’s videos (or one file): downloaded on the machine running Edit, then imported.
   const importDrive = async () => {
     const project = useEditor.getState().project;
     if (!project || !driveLink.trim()) return;
@@ -86,7 +86,7 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
     <Modal open={open} onClose={onClose} width={720}>
       <div className="flex h-[520px]">
         <aside className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-line p-2">
-          <div className="px-2 pt-1 pb-2 text-[11px] font-medium tracking-wide text-faint uppercase">On {machine}</div>
+          <div className="px-2 pt-1 pb-2 text-[13px] font-medium text-muted">On {machine}</div>
           {listing?.places.map((place) => (
             <button
               key={place.path}
@@ -107,7 +107,7 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
               void importDrive();
             }}
           >
-            <label htmlFor="edit-drive-link" className="px-1 text-[11px] font-medium tracking-wide text-faint uppercase">
+            <label htmlFor="edit-drive-link" className="px-1 text-[13px] font-medium text-muted">
               From Google Drive
             </label>
             <input
@@ -186,9 +186,9 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
                   )}
                 >
                   {entry.dir ? (
-                    <Folder size={15} className="shrink-0 text-sky-300" />
+                    <Folder size={15} className="shrink-0 text-info" />
                   ) : AUDIO.test(entry.name) ? (
-                    <AudioLines size={15} className="shrink-0 text-green-300" />
+                    <AudioLines size={15} className="shrink-0 text-success" />
                   ) : (
                     <Film size={15} className="shrink-0 text-pink-300" />
                   )}

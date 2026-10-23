@@ -13,7 +13,7 @@ const STORAGE = "edit.library.closed";
 /** One read per page load; the refresh button reads Drive again. */
 let cached: Promise<LibrarySound[]> | null = null;
 
-/** The team's sound library (a Google Drive folder): adding a sound downloads it into the media bin. */
+/** The team’s sound library (a Google Drive folder): adding a sound downloads it into the media bin. */
 export function Library() {
   const [sounds, setSounds] = useState<LibrarySound[] | null>(null);
   const [error, setError] = useState("");
@@ -77,7 +77,7 @@ export function Library() {
           {loading ? <Spinner /> : <RefreshCw size={13} />}
         </IconButton>
       </div>
-      {error && <p className="px-1.5 text-[12px] text-red-300">{error}</p>}
+      {error && <p className="px-1.5 text-[12px] text-danger">{error}</p>}
       {!sounds && !error && <p className="px-1.5 text-[12px] text-muted">Reading the library from Drive…</p>}
       {folders.map(([folder, sounds]) => {
         const open = search !== "" || !closed.includes(folder);

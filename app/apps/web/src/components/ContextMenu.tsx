@@ -6,6 +6,7 @@ import { create } from "zustand";
 
 import { CLIP_HEX } from "../lib/colors";
 import { CLIP_COLORS, type ClipColor } from "../lib/types";
+import { StartedBy } from "./StartedBy";
 import { cx } from "./ui";
 
 export type MenuItem =
@@ -24,6 +25,8 @@ export type MenuItem =
     }
   | { separator: true }
   | { heading: string }
+  /** Who’s signed in, at the top of the account menu: their photo, name and email. */
+  | { person: { name: string; email: string; picture: string | null } }
   | { swatches: true; value?: ClipColor; onSelect: (color: ClipColor) => void };
 
 interface MenuState {
@@ -46,7 +49,7 @@ export function openMenu(
 /** The button whose menu a press just closed: its click should not reopen it. */
 let closedFrom: Element | null = null;
 
-/** Opens a dropdown under `button` (or at `at`), or closes it if this button's menu is open. */
+/** Opens a dropdown under `button` (or at `at`), or closes it if this button’s menu is open. */
 export function toggleMenu(button: Element, items: MenuItem[], options: { width?: number; at?: { x: number; y: number } } = {}) {
   if (closedFrom === button) {
     closedFrom = null;
@@ -147,20 +150,31 @@ function Panel({ x, y, items, root, onLeave, width }: { x: number; y: number; it
       ref={ref}
       data-menu
       role="menu"
-      initial={{ opacity: 0, scale: 0.96 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.08 } }}
-      transition={{ type: "spring", stiffness: 700, damping: 40, mass: 0.6 }}
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, transition: { duration: 0.08 } }}
+      transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
       style={{ left: position.left, top: position.top, transformOrigin: position.origin, minWidth: width }}
       onPointerLeave={onLeave}
       onContextMenu={(event) => event.preventDefault()}
       className={cx(
-        "fixed z-[70] rounded-xl border border-line bg-raised p-1 shadow-[0_12px_32px_rgba(0,0,0,0.6)]",
-        !width && "min-w-[200px]",
+        // The kit’s menu (design/kit/components.css .sp-menu).
+        "fixed z-[70] rounded-[10px] border border-line-strong bg-raised p-[5px] shadow-[0_12px_32px_#0009]",
+        !width && "min-w-[220px]",
       )}
     >
       {items.map((item, index) => {
-        if ("separator" in item) return <div key={index} className="mx-2 my-1 h-px bg-line" />;
+        if ("separator" in item) return <div key={index} className="-mx-[5px] my-[5px] h-px bg-line" />;
+        if ("person" in item)
+          return (
+            <div key={index} className="flex items-center gap-2.5 px-2 pt-2 pb-2.5">
+              <StartedBy by={{ sub: "", name: item.person.name || item.person.email, ...(item.person.picture ? { picture: item.person.picture } : {}) }} size={32} title={null} />
+              <div className="min-w-0">
+                <div className="truncate leading-[1.3] font-medium">{item.person.name || item.person.email}</div>
+                {item.person.name && <div className="truncate text-[12px] leading-[1.3] text-muted">{item.person.email}</div>}
+              </div>
+            </div>
+          );
         if ("heading" in item)
           return (
             <div key={index} className="px-2.5 pt-1.5 pb-1 text-[11px] font-medium text-faint">
@@ -207,12 +221,12 @@ function Panel({ x, y, items, root, onLeave, width }: { x: number; y: number; it
               item.onSelect();
             }}
             className={cx(
-              "flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors disabled:opacity-35",
-              highlighted && !item.disabled && (item.danger ? "bg-red-500/15" : "bg-active"),
-              item.danger ? "text-red-300" : "text-fg",
+              "flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left text-[13px] transition-colors disabled:opacity-45",
+              highlighted && !item.disabled && "bg-menu-hover",
+              item.danger ? "text-danger" : "text-fg",
             )}
           >
-            {iconColumn && <span className="flex size-4 shrink-0 items-center justify-center text-muted">{item.icon}</span>}
+            {iconColumn && <span className={cx("flex size-4 shrink-0 items-center justify-center", item.danger ? "text-danger" : "text-muted")}>{item.icon}</span>}
             <span className="flex-1 whitespace-nowrap">
               {item.label}
               {item.hint && <span className="ml-2 text-[11px] text-faint">{item.hint}</span>}
@@ -225,7 +239,7 @@ function Panel({ x, y, items, root, onLeave, width }: { x: number; y: number; it
           </button>
         );
       })}
-      {/* Portalled: this panel's scale animation would otherwise anchor the submenu's fixed position to it. */}
+      {/* Portalled: this panel’s scale animation would otherwise anchor the submenu’s fixed position to it. */}
       {createPortal(
         <AnimatePresence>
           {open && "submenu" in items[open.index] && (

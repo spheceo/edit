@@ -15,11 +15,11 @@ import { Button, Modal, Switch, Tabs } from "./ui";
 import { rate } from "../lib/types";
 
 /**
- * Every export is the house one: the project's own size and frame rate, MP4
- * (H.264, high quality, the Mac's hardware encoder), the mix at −14 LUFS and
- * the script's chapters. No choices to get wrong: a 30 fps edit exported at
+ * Every export is the house one: the project’s own size and frame rate, MP4
+ * (H.264, high quality, the Mac’s hardware encoder), the mix at −14 LUFS and
+ * the script’s chapters. No choices to get wrong: a 30 fps edit exported at
  * 60 only repeated its frames, twice the time for the same picture, and any
- * size or rate but the project's misses the chunked export that reuses the
+ * size or rate but the project’s misses the chunked export that reuses the
  * last one (decided Oct 19).
  */
 const HOUSE: Omit<ExportOptions, "range" | "chapters"> = { ...DEFAULTS, size: null, fps: null };
@@ -37,14 +37,14 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [spanChoice, setSpanChoice] = useState<"inout" | "whole">("whole");
   // Upload to Drive: asked for this time, else a whole subtitled video does.
   const [driveChoice, setDriveChoice] = useState<boolean | null>(null);
-  // The media drive's Exports folder when one is set (when a media drive is set).
+  // The media drive’s Exports folder when one is set (when a media drive is set).
   const [exportsDir, setExportsDir] = useState("~/Movies/Edit");
   const [preparing, setPreparing] = useState(false);
   const starting = useRef(false);
   const renderStarted = useRef(0);
   const [, setTick] = useState(0);
 
-  // Timeline frames are at the project's real rate (23.976 for an NTSC 24).
+  // Timeline frames are at the project’s real rate (23.976 for an NTSC 24).
   const frameRate = project ? rate(project.settings) : 30;
   const duration = project ? projectDuration(project) : 0;
   const inOut = inOutSpan(duration, points);
@@ -61,7 +61,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // While rendering: time the run for an estimate of what's left, and say when it's done.
+  // While rendering: time the run for an estimate of what’s left, and say when it’s done.
   useEffect(() => {
     if (exportState?.state === "running") {
       if (!renderStarted.current) renderStarted.current = performance.now();
@@ -104,7 +104,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
       await flushSave();
       const saved = useEditor.getState();
       if (saved.project?.id !== project.id) return;
-      if (saved.dirty) throw new Error("The latest changes couldn't be saved. Try exporting again once the connection returns.");
+      if (saved.dirty) throw new Error("The latest changes couldn’t be saved. Try exporting again once the connection returns.");
       if (saved.project !== intended) throw new Error("The project changed while preparing the export. Review the latest version and try again.");
       useEditor.setState({ exportState: { state: "running", progress: 0, path }, driveState: null });
       requested = true;
@@ -130,7 +130,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
     <Modal open={open} onClose={onClose} width={560}>
       <div className="flex max-h-[88vh] flex-col">
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
-          <h2 className="text-[16px] font-semibold tracking-[-0.01em]">Export</h2>
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Export</h2>
           <p className="mt-1 text-[12px] text-muted">
             {range[0] === 0 && range[1] === duration ? "The whole edit" : "In to out"}, rendered exactly as the preview shows it.
           </p>
@@ -165,7 +165,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
               <Switch checked={toDrive} onChange={setDriveChoice} />
               <Cloud size={12} className="shrink-0" />
               <span>
-                Then upload it to the team's {subtitled ? driveFolder(project) : "Render"} folder on Drive{toDrive ? ", viewable by anyone with the link" : ""}
+                Then upload it to the team’s {subtitled ? driveFolder(project) : "Render"} folder on Drive{toDrive ? ", viewable by anyone with the link" : ""}
               </span>
             </label>
           )}
@@ -178,7 +178,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
           onRetry={exportState?.state === "done" ? () => void api.driveUpload(project.id, exportState.path).catch((error) => toast((error as Error).message, "error")) : null}
           onCopy={(url) => void copyDriveLink(url, toast)}
         />
-        <div className="flex min-h-16 items-center gap-3 border-t border-line px-6 py-3">
+        <div className="flex min-h-16 items-center gap-3 px-6 pt-1 pb-5">
           <div className="flex min-w-0 flex-1 items-center gap-x-3 text-[12px]">
             {exportState?.state === "running" && (
               <span className="text-muted tabular">
@@ -187,7 +187,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
             )}
             {exportState?.state === "done" && (
               <>
-                <span className="flex min-w-0 items-center gap-1.5 text-green-300">
+                <span className="flex min-w-0 items-center gap-1.5 text-success">
                   <Check size={13} className="shrink-0" />
                   <span className="truncate">
                     Exported in {exportState.seconds?.toFixed(1)}s{exportState.bytes ? ` · ${formatBytes(exportState.bytes)}` : ""}
@@ -202,14 +202,14 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
                   <Button size="sm" variant="ghost" onClick={() => void api.revealExport(exportState.path).catch((error) => toast((error as Error).message, "error"))}>
                     <FolderOpen size={13} /> Show on {machine}
                   </Button>
-                  <Button size="sm" variant="ghost" title="Copy the file's path" onClick={() => void navigator.clipboard.writeText(exportState.path).then(() => toast("Copied the path"))}>
+                  <Button size="sm" variant="ghost" title="Copy the file’s path" onClick={() => void navigator.clipboard.writeText(exportState.path).then(() => toast("Copied the path"))}>
                     <Copy size={13} />
                   </Button>
                 </span>
               </>
             )}
             {exportState?.state === "failed" && (
-              <span className="flex min-w-0 items-center gap-1.5 text-red-300">
+              <span className="flex min-w-0 items-center gap-1.5 text-danger">
                 <CircleAlert size={13} className="shrink-0" /> <span className="truncate">{exportState.error}</span>
               </span>
             )}
@@ -236,7 +236,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
 }
 
 /**
- * The project's exports on the machine running Edit, newest first (they
+ * The project’s exports on the machine running Edit, newest first (they
  * survive a restart): each downloads to this device (the Mac, or another
  * over Tailscale), shows in Finder there, or is deleted, after a second click.
  */
@@ -282,7 +282,7 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
       setApproving(false);
     }
   };
-  // Shares an export to a Repack link (a review copy, uploaded); the link is copied once it's up.
+  // Shares an export to a Repack link (a review copy, uploaded); the link is copied once it’s up.
   const share = async (path: string) => {
     setSharing("Starting");
     try {
@@ -296,7 +296,7 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
           continue;
         }
         url = review.review?.url ?? null;
-        if (url === null) throw new Error("the share didn't finish (see the log)");
+        if (url === null) throw new Error("the share didn’t finish (see the log)");
       }
       await navigator.clipboard?.writeText(url).catch(() => {});
       toast(`Shared for review: ${url} (link copied)`, "info");
@@ -313,9 +313,9 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
         <div className="mb-3 flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-[12px]">
           <span className="min-w-0 flex-1 truncate">
             Review v{latest}
-            {review.approved !== null ? <span className="text-green-300"> · approved v{review.approved.version} by {review.approved.by}</span> : null}
+            {review.approved !== null ? <span className="text-success"> · approved v{review.approved.version} by {review.approved.by}</span> : null}
           </span>
-          <Button size="sm" variant="ghost" title="Copy the review's link" onClick={() => void navigator.clipboard?.writeText(review.url).then(() => toast("Review link copied", "info"))}>
+          <Button size="sm" variant="ghost" title="Copy the review’s link" onClick={() => void navigator.clipboard?.writeText(review.url).then(() => toast("Review link copied", "info"))}>
             <Copy size={13} />
           </Button>
           {review.approved === null && (
@@ -325,7 +325,7 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
           )}
         </div>
       )}
-      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">Exports on {machine}</div>
+      <div className="mb-1.5 text-[13px] font-medium text-muted">Exports on {machine}</div>
       <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
         {shown.map((one) => (
           <li key={one.path} className="flex items-center gap-2 text-[12px]">
@@ -383,7 +383,7 @@ function ExportsList({ projectId, machine, finished }: { projectId: string; mach
   );
 }
 
-/** The export's upload to Drive, then its link. */
+/** The export’s upload to Drive, then its link. */
 function DriveRow({
   state,
   drive,
@@ -405,7 +405,7 @@ function DriveRow({
         </span>
       )}
       {state?.state === "failed" && (
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-red-300">
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-danger">
           <CircleAlert size={13} className="shrink-0" /> <span className="truncate">Drive upload failed: {state.error}</span>
         </span>
       )}
@@ -435,7 +435,7 @@ function DriveRow({
 }
 
 /**
- * A frame of the span as the export will render it, from the server's
+ * A frame of the span as the export will render it, from the server’s
  * renderer. Hover to look through the span; while exporting it follows the
  * render.
  */

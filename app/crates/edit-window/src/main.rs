@@ -75,9 +75,9 @@ fn run(url: &str, server: Option<Child>, watch_stdin: bool) -> ! {
                 .title("Edit")
                 // The page shows its own title; the bar keeps just the traffic lights.
                 .hidden_title(true)
-                // A see-through bar over a black window: black, like the page.
+                // A see-through bar over the page's own colour (the kit's #0b0b0b).
                 .title_bar_style(tauri::TitleBarStyle::Transparent)
-                .background_color(tauri::webview::Color(0, 0, 0, 255))
+                .background_color(tauri::webview::Color(11, 11, 11, 255))
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(960.0, 600.0)
                 // Let the page take file drops itself (the timeline uploads them).

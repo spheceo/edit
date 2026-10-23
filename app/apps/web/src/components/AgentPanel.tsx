@@ -52,8 +52,8 @@ import { useEditor } from "../lib/store";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { cx, IconButton } from "./ui";
 
-/** OpenAI's mark (same path phi uses). */
-/** The agent on Claude Code: a plain terminal glyph (Anthropic's marks aren't ours to use). */
+/** OpenAI’s mark (same path phi uses). */
+/** The agent on Claude Code: a plain terminal glyph (Anthropic’s marks aren’t ours to use). */
 export function ClaudeMark({ size = 16 }: { size?: number }) {
   return <SquareTerminal size={size} aria-hidden />;
 }
@@ -80,7 +80,7 @@ export function AgentPanel() {
   const stick = useRef(true);
   const turns = buildTurns(entries, running);
 
-  // Entries already there when the chat loaded don't animate in.
+  // Entries already there when the chat loaded don’t animate in.
   const known = useRef<{ project?: string; ids: Set<string> }>({ ids: new Set() });
   if (loaded && known.current.project !== projectId) known.current = { project: projectId, ids: new Set(entries.map((entry) => entry.id)) };
 
@@ -88,7 +88,7 @@ export function AgentPanel() {
     if (projectId) void openAgent(projectId);
   }, [projectId]);
 
-  // Stay pinned to the newest message unless you've scrolled up; jump before
+  // Stay pinned to the newest message unless you’ve scrolled up; jump before
   // paint so streaming text never lurches.
   useLayoutEffect(() => {
     const node = list.current;
@@ -136,7 +136,7 @@ export function AgentPanel() {
   );
 }
 
-/** True once nothing has streamed or changed for `quiet` ms (so "Thinking" doesn't blink between steps). */
+/** True once nothing has streamed or changed for `quiet` ms (so "Thinking" doesn’t blink between steps). */
 function useQuiet(activityAt: number, quiet: number) {
   const [settled, setSettled] = useState(false);
   useEffect(() => {
@@ -149,7 +149,7 @@ function useQuiet(activityAt: number, quiet: number) {
 
 /**
  * Fade/slide in only things that are new; `animate` never changes so a swap
- * (e.g. the server's copy replacing an optimistic message) can't freeze it mid-fade.
+ * (e.g. the server’s copy replacing an optimistic message) can’t freeze it mid-fade.
  */
 const appear = (fresh: boolean) =>
   ({
@@ -269,7 +269,7 @@ function ToolGroup({ calls, live }: { calls: AgentEntry[]; live: boolean }) {
         onClick={() => setOpen((value) => !value)}
         className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg/85"
       >
-        <Icon size={13} className={cx("shrink-0", failed ? "text-red-400" : "text-faint")} />
+        <Icon size={13} className={cx("shrink-0", failed ? "text-danger" : "text-faint")} />
         <span className={cx("min-w-0 flex-1 truncate", current && "shimmer")}>{title}</span>
         {calls.length > 1 && !current && <span className="text-[11px] text-faint tabular">{calls.length}</span>}
       </button>
@@ -296,7 +296,7 @@ function ToolCall({ call }: { call: AgentEntry }) {
       >
         <Icon size={13} className="shrink-0 text-faint" />
         <span className={cx("min-w-0 flex-1 truncate", call.status === "running" && "shimmer")}>{callTitle(call)}</span>
-        {failed && <span className="text-[11px] text-red-400">failed</span>}
+        {failed && <span className="text-[11px] text-danger">failed</span>}
         {call.status === "stopped" && <span className="text-[11px] text-faint">stopped</span>}
       </button>
       {open && (
@@ -425,7 +425,7 @@ function Empty({ title, detail, children }: { title: string; detail: string; chi
 function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean; fresh?: boolean }) {
   if (entry.kind === "error") {
     return (
-      <div className="flex items-start gap-2 rounded-lg bg-red-500/10 px-2.5 py-2 text-[12px] text-red-200">
+      <div className="flex items-start gap-2 rounded-lg bg-danger-soft px-2.5 py-2 text-[12px] text-danger">
         <CircleAlert size={13} className="mt-px shrink-0" />
         <span>{entry.text}</span>
       </div>
@@ -445,7 +445,7 @@ function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean
 }
 
 /**
- * The agent's replies as Markdown (tables, lists, headings, code), styled for
+ * The agent’s replies as Markdown (tables, lists, headings, code), styled for
  * the panel. Raw HTML in a reply is shown as text, never run.
  */
 const MARKDOWN: Components = {
@@ -530,7 +530,7 @@ function Composer({ disabled }: { disabled: boolean }) {
         send();
       }}
     >
-      <div className={cx("rounded-xl border border-line bg-black p-2 transition-colors focus-within:border-line-strong", disabled && "opacity-50")}>
+      <div className={cx("rounded-xl border border-line bg-black p-2 transition-colors focus-within:border-muted", disabled && "opacity-50")}>
         <textarea
           ref={input}
           name="message"

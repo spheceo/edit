@@ -1,7 +1,7 @@
 import { readSetting, writeSetting } from "../lib/storage";
-// After Effects-style graph editor for the selected clip's keyframes: a value
+// After Effects-style graph editor for the selected clip’s keyframes: a value
 // graph and a speed graph, bezier handles on the keyframes, and marquee
-// selection. Shares the timeline's zoom, scroll, ruler and playhead, so curves
+// selection. Shares the timeline’s zoom, scroll, ruler and playhead, so curves
 // line up with the cut.
 
 import { Eye, EyeOff } from "lucide-react";
@@ -21,7 +21,7 @@ const MIN_INFLUENCE = 0.01;
 /** ⇧ while dragging an arm: how close (px) it must come to flat or linear to lock on. */
 const SNAP_PX = 18;
 
-/** ⇧: reach in 5% steps, with AE's ⅓ and ⅔ as stops too. */
+/** ⇧: reach in 5% steps, with AE’s ⅓ and ⅔ as stops too. */
 function snapInfluence(influence: number) {
   const stops = [1 / 3, 2 / 3, Math.round(influence * 20) / 20];
   const nearest = stops.reduce((best, stop) => (Math.abs(stop - influence) < Math.abs(best - influence) ? stop : best));
@@ -91,7 +91,7 @@ const padded = (values: number[], flat: number): Range => {
   return { lo, hi };
 };
 
-/** Value range a param's curve spans, overshoot included, as in AE's auto-zoomed value graph. */
+/** Value range a param’s curve spans, overshoot included, as in AE’s auto-zoomed value graph. */
 function valueRange(clip: Clip, param: string): Range {
   const keys = clip.keyframes?.[param] ?? [];
   const values = keys.length ? keys.map((key) => key.value) : [paramAt(clip, param, clip.start)];
@@ -110,7 +110,7 @@ function speedAt(keys: Keyframe[], frame: number) {
   return 0;
 }
 
-/** Speed range: every handle's speed and the curve between, always including zero. */
+/** Speed range: every handle’s speed and the curve between, always including zero. */
 function speedRange(clip: Clip, param: string): Range {
   const keys = clip.keyframes?.[param] ?? [];
   const speeds = [0];
@@ -130,7 +130,7 @@ function neighbourOf(keys: Keyframe[], index: number, side: Side): Keyframe | un
   return previous && previous.ease !== "hold" ? previous : undefined;
 }
 
-/** A key's effective handle on one side. */
+/** A key’s effective handle on one side. */
 function handleOf(keys: Keyframe[], index: number, side: Side): Handle | undefined {
   const neighbour = neighbourOf(keys, index, side);
   if (!neighbour) return undefined;
@@ -293,7 +293,7 @@ function Curves({
     });
   };
 
-  // The graph owns the lane width while it's open; hand it back on close.
+  // The graph owns the lane width while it’s open; hand it back on close.
   useEffect(() => {
     const wrap = wrapRef.current!;
     const previous = getLanesWidth();
@@ -303,7 +303,7 @@ function Curves({
       requestDraw();
     });
     observer.observe(wrap);
-    // The timeline's own zoom comes back on close.
+    // The timeline’s own zoom comes back on close.
     const { ppf, scrollX } = useView.getState();
     return () => {
       observer.disconnect();
@@ -313,7 +313,7 @@ function Curves({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Frame the clip's keyframes (or the clip) so short moves are big enough to work on.
+  // Frame the clip’s keyframes (or the clip) so short moves are big enough to work on.
   useEffect(() => {
     const wrap = wrapRef.current;
     if (!clip || !wrap) return;
@@ -371,7 +371,7 @@ function Curves({
   const frameToX = (frame: number) => frame * useView.getState().ppf - useView.getState().scrollX;
   const xToFrame = (x: number) => (x + useView.getState().scrollX) / useView.getState().ppf;
   const onPlayhead = (x: number) => Math.abs(x - frameToX(playhead.frame)) <= 5;
-  /** Each shown param's vertical range: values, or speeds (value per frame). */
+  /** Each shown param’s vertical range: values, or speeds (value per frame). */
   const ranges = () => {
     const { clip, params, mode } = state.current;
     if (frozen.current) return frozen.current;
@@ -395,7 +395,7 @@ function Curves({
     return (speeds.length ? speeds : [0]).map((speed) => ({ x, y: toY(speed, range) }));
   }
 
-  /** A handle's arm: from its root at the key to the end you drag. */
+  /** A handle’s arm: from its root at the key to the end you drag. */
   function handleArm(clip: Clip, ref: HandleRef, range: Range): { root: { x: number; y: number }; end: { x: number; y: number } } | null {
     const keys = clip.keyframes![ref.param];
     const key = keys[ref.index];
@@ -413,7 +413,7 @@ function Curves({
     return { root: { x: keyX, y }, end: { x: frameToX(clip.start + endFrame), y } };
   }
 
-  /** Keys that show their handles: selected ones, and all of the focused property's. */
+  /** Keys that show their handles: selected ones, and all of the focused property’s. */
   function handleRefs(): HandleRef[] {
     const { clip, params, focused, selected } = state.current;
     if (!clip) return [];
@@ -472,7 +472,7 @@ function Curves({
 
     const message = (text: string) => {
       ctx.fillStyle = "#5c5c5c";
-      ctx.font = "13px 'Geist Variable', system-ui, sans-serif";
+      ctx.font = "13px Inter, system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.fillText(text, width / 2, (top + bottom) / 2);
       ctx.textAlign = "left";
@@ -485,7 +485,7 @@ function Curves({
       return;
     }
 
-    // The clip's span; outside it is dimmed.
+    // The clip’s span; outside it is dimmed.
     const x0 = frameToX(clip.start);
     const x1 = frameToX(clip.start + clip.duration);
     ctx.fillStyle = "rgba(255,255,255,0.025)";
@@ -493,8 +493,8 @@ function Curves({
 
     const all = ranges();
     const focusRange = focused ? all.get(focused) : undefined;
-    // Grid labelled with the focused param's values (or speeds per second).
-    ctx.font = "10px 'Geist Mono Variable', ui-monospace, monospace";
+    // Grid labelled with the focused param’s values (or speeds per second).
+    ctx.font = "10px ui-monospace, 'SF Mono', Menlo, monospace";
     ctx.textBaseline = "middle";
     for (let i = 0; i <= 4; i++) {
       const y = Math.round(top + ((bottom - top) * i) / 4) + 0.5;
@@ -630,7 +630,7 @@ function Curves({
         at = keyPoints(clip, over.param, over.index, all.get(over.param)!)[0];
       }
       if (label && at) {
-        ctx.font = "11px 'Geist Variable', system-ui, sans-serif";
+        ctx.font = "11px Inter, system-ui, sans-serif";
         const w = ctx.measureText(label).width + 12;
         const bx = Math.max(4, Math.min(width - w - 4, at.x + 10));
         ctx.fillStyle = "rgba(19,19,19,0.95)";
@@ -939,7 +939,7 @@ function editKeys(clip: Clip, ids: string[], recipe: (keys: Keyframe[], index: n
   });
 }
 
-/** A preset for the segment after each key; it replaces that segment's handles. */
+/** A preset for the segment after each key; it replaces that segment’s handles. */
 function setEase(clip: Clip, ids: string[], ease: Ease) {
   editKeys(clip, ids, (keys, index) => {
     keys[index].ease = ease;

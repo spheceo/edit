@@ -1,6 +1,6 @@
-// The editor's word on footage that's gone: the timeline plays files that
-// aren't on this machine (deleted, or on a drive that isn't plugged in) and
-// the cloud can't bring back, so those clips are black and silent.
+// The editor’s word on footage that’s gone: the timeline plays files that
+// aren’t on this machine (deleted, or on a drive that isn’t plugged in) and
+// the cloud can’t bring back, so those clips are black and silent.
 
 import { TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -30,15 +30,15 @@ export function MissingBanner() {
   const shown = names.slice(0, 3).join(", ") + (names.length > 3 ? ` and ${names.length - 3} more` : "");
   return (
     <div
-      className="mx-2 mb-2 flex h-9 shrink-0 items-center gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-3 text-[12px]"
+      className="mx-2 mb-2 flex h-9 shrink-0 items-center gap-2 rounded-lg border border-warning/25 bg-warning-soft px-3 text-[12px]"
       title={missing.map((media) => media.path).join("\n")}
     >
-      <TriangleAlert size={13} className="shrink-0 text-amber-300" />
+      <TriangleAlert size={13} className="shrink-0 text-warning" />
       <span className="shrink-0 text-fg">
         Footage missing: {missing.length} of {found?.used ?? missing.length} files
       </span>
       <span className="truncate text-muted">
-        aren't on this Mac, so their clips play black and silent ({shown}).
+        aren’t on this Mac, so their clips play black and silent ({shown}).
       </span>
     </div>
   );

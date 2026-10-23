@@ -503,8 +503,8 @@ function openBrowser(url: string): void {
 const escape = (text: string) => text.replace(/[<>&"]/gu, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[ch]!);
 
 /**
- * The page the browser lands on after signing in: in Edit's look (black, Geist
- * where it's installed), the one-use code taken out of the address bar at once,
+ * The page the browser lands on after signing in: in Edit's look (the spheceo
+ * kit's colours, Inter where it's installed), the one-use code taken out of the address bar at once,
  * an "Open Edit" button to go back by hand, and, with Edit's window open (which
  * comes to the front by itself), a try at closing the tab (a browser may refuse:
  * Edit didn't open it).
@@ -515,13 +515,13 @@ function page(ok: boolean, title: string, message: string, windowOpen: boolean):
 <script>history.replaceState(null, "", "/callback");</script>
 <style>
 :root{color-scheme:dark}
-body{margin:0;height:100vh;display:grid;place-items:center;background:#000;color:#ededed;font:14px/1.5 "Geist Variable","Geist",-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-main{width:min(380px,calc(100vw - 48px));padding:28px;border:1px solid rgba(255,255,255,.08);border-radius:16px;background:#0b0b0b;text-align:left}
+body{margin:0;height:100vh;display:grid;place-items:center;background:#0b0b0b;color:#ededed;font:14px/1.5 "Inter",ui-sans-serif,-apple-system,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+main{width:min(380px,calc(100vw - 48px));padding:28px;border:1px solid #242424;border-radius:14px;background:#111111;text-align:left}
 .mark{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:600}
-.dot{width:8px;height:8px;border-radius:50%;background:${ok ? "#34d399" : "#fbbf24"}}
-p{margin:10px 0 0;color:#8f8f8f}
-a{display:inline-flex;margin-top:22px;height:32px;padding:0 12px;align-items:center;border-radius:8px;background:#ededed;color:#000;font-weight:500;text-decoration:none}
-a:hover{background:#fff}
+.dot{width:8px;height:8px;border-radius:50%;background:${ok ? "#7fd18b" : "#f5a05a"}}
+p{margin:10px 0 0;color:#969696}
+a{display:inline-flex;margin-top:22px;height:34px;padding:0 12px;align-items:center;border-radius:8px;background:#ff0033;color:#fff;font-weight:500;text-decoration:none}
+a:hover{background:#ff2a55}
 </style></head><body><main>
 <div class="mark"><span class="dot"></span>${escape(title)}</div>
 <p>${escape(message)}</p>

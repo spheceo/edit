@@ -17,13 +17,13 @@ import { Button, cx, IconButton, ProgressRing, spring } from "./ui";
 export const MEDIA_MIME = "application/x-edit-media";
 export const ELEMENT_MIME = "application/x-edit-element";
 
-/** Which media the bin lists: everything, or what the edit does / doesn't use. */
+/** Which media the bin lists: everything, or what the edit does / doesn’t use. */
 type Show = "all" | "used" | "unused";
 
 const FOLDER_TINT: Record<MediaFolder, string> = {
-  footage: "text-sky-300",
-  audio: "text-green-300",
-  sfx: "text-amber-300",
+  footage: "text-info",
+  audio: "text-success",
+  sfx: "text-warning",
   images: "text-violet-300",
 };
 
@@ -77,7 +77,7 @@ export function MediaPanel({ onImport, onResearch }: { onImport: () => void; onR
   );
 }
 
-/** The bin's ⋯: what to list, and clearing out what the edit doesn't use. */
+/** The bin’s ⋯: what to list, and clearing out what the edit doesn’t use. */
 function MediaOptions({ show, setShow, uses }: { show: Show; setShow: (show: Show) => void; uses: Map<string, MediaUse> }) {
   const edit = useEditor((state) => state.edit);
   const toast = useEditor((state) => state.toast);
@@ -118,7 +118,7 @@ function MediaOptions({ show, setShow, uses }: { show: Show; setShow: (show: Sho
   );
 }
 
-/** Picks files on the device you're browsing from and uploads them. */
+/** Picks files on the device you’re browsing from and uploads them. */
 function UploadButton() {
   const input = useRef<HTMLInputElement>(null);
   return (
@@ -253,11 +253,11 @@ function UploadTile({ upload }: { upload: Upload }) {
           </button>
         )}
         <motion.div
-          className={cx("absolute inset-y-0 left-0", upload.state === "failed" ? "bg-red-500/20" : "bg-white/[0.07]")}
+          className={cx("absolute inset-y-0 left-0", upload.state === "failed" ? "bg-danger-soft" : "bg-white/[0.07]")}
           animate={{ width: `${(upload.state === "uploading" ? progress : upload.state === "queued" ? 0 : 1) * 100}%` }}
           transition={{ ease: "easeOut", duration: 0.3 }}
         />
-        <span className={cx("relative flex items-center gap-1.5 font-mono text-[11px] tabular", upload.state === "failed" ? "text-red-300" : "text-fg/90")}>
+        <span className={cx("relative flex items-center gap-1.5 font-mono text-[11px] tabular", upload.state === "failed" ? "text-danger" : "text-fg/90")}>
           {upload.state === "uploading" ? <ProgressRing value={progress} size={14} /> : <UploadIcon size={12} />}
           {label}
         </span>
@@ -308,7 +308,7 @@ function MediaTile({ media, status, projectId, use }: { media: Media; status?: M
         onPointerLeave={() => setSkim(null)}
       >
         {media.kind === "audio" ? (
-          <div className="flex size-full items-center justify-center bg-green-500/15 text-green-300">
+          <div className="flex size-full items-center justify-center bg-success-soft text-success">
             <AudioLines size={22} />
           </div>
         ) : thumbs ? (
@@ -325,7 +325,7 @@ function MediaTile({ media, status, projectId, use }: { media: Media; status?: M
         )}
         {isUsed(use) && (
           <span className="absolute top-1 left-1 flex items-center gap-0.5 rounded bg-black/70 px-1 font-mono text-[10px] text-fg/90 tabular">
-            <Check size={10} strokeWidth={3} className="text-green-300" />
+            <Check size={10} strokeWidth={3} className="text-success" />
             {use?.clips || "script"}
           </span>
         )}
@@ -337,7 +337,7 @@ function MediaTile({ media, status, projectId, use }: { media: Media; status?: M
           </span>
         )}
         {failed && (
-          <span className="absolute top-1 right-1 text-red-400" title={status?.error}>
+          <span className="absolute top-1 right-1 text-danger" title={status?.error}>
             <CircleAlert size={15} />
           </span>
         )}

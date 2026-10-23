@@ -15,7 +15,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "articles", label: "Articles" },
 ];
 
-/** The project's found images, polled while anything might be adding to them. */
+/** The project’s found images, polled while anything might be adding to them. */
 export function useResearch(projectId: string, fast: boolean) {
   const [items, setItems] = useState<FoundImage[]>([]);
   const [articles, setArticles] = useState<FoundArticle[]>([]);
@@ -46,7 +46,7 @@ const site = (url: string) => {
   }
 };
 
-/** The media bin's way in: a folder-like tile with how many found images wait for review. */
+/** The media bin’s way in: a folder-like tile with how many found images wait for review. */
 export function ResearchTile({ onOpen }: { onOpen: () => void }) {
   const project = useEditor((state) => state.project)!;
   const { items, collecting } = useResearch(project.id, false);
@@ -54,7 +54,7 @@ export function ResearchTile({ onOpen }: { onOpen: () => void }) {
   return (
     <button onClick={onOpen} title="Review images found for this project" className="group block w-full text-left">
       <div className="relative flex aspect-video items-center justify-center rounded-lg bg-raised ring-1 ring-line transition-[box-shadow] group-hover:ring-line-strong">
-        {collecting ? <Spinner /> : <Images size={22} strokeWidth={1.6} className="text-rose-300 transition-transform duration-150 group-hover:scale-105" />}
+        {collecting ? <Spinner /> : <Images size={22} strokeWidth={1.6} className="text-danger transition-transform duration-150 group-hover:scale-105" />}
         {waiting > 0 && (
           <span className="absolute top-1.5 right-1.5 rounded-full bg-playhead px-1.5 text-[10px] leading-4 font-semibold text-white tabular-nums">{waiting}</span>
         )}
@@ -127,7 +127,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
     }
   };
 
-  // The desktop app's webview has no window.confirm, so the bin asks for a second click.
+  // The desktop app’s webview has no window.confirm, so the bin asks for a second click.
   const [armed, setArmed] = useState<"new" | "rejected" | null>(null);
   useEffect(() => {
     if (!armed) return;
@@ -250,7 +250,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
           {(tab === "new" || tab === "rejected") && counts[tab] > 0 && (
             <IconButton
               label={armed === tab ? "Click again to delete" : tab === "new" ? "Delete all images waiting for review" : "Delete all rejected images"}
-              className={armed === tab ? "bg-red-500/20 text-red-300 hover:bg-red-500/30 hover:text-red-200" : undefined}
+              className={armed === tab ? "bg-danger-soft text-danger hover:bg-danger-soft hover:text-danger" : undefined}
               onClick={() => void clear(tab)}
             >
               <Trash2 size={14} />
@@ -333,7 +333,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
   );
 }
 
-/** The case's news coverage, saved by research: a list beside a reader. */
+/** The case’s news coverage, saved by research: a list beside a reader. */
 function Articles({ articles }: { articles: FoundArticle[] }) {
   const [chosen, setChosen] = useState<string | null>(null);
   const article = articles.find((candidate) => candidate.id === chosen) ?? articles[0];
@@ -456,7 +456,7 @@ function Tile({
             event.stopPropagation();
             onReview(item.status === "kept" ? "new" : "kept");
           }}
-          className="flex size-7 items-center justify-center rounded-md bg-black/70 text-white hover:bg-green-600"
+          className="flex size-7 items-center justify-center rounded-md bg-black/70 text-white hover:bg-success"
         >
           <Check size={14} />
         </button>

@@ -18,15 +18,15 @@ interface TimelineWord {
   frame: number;
   text: string;
   speaker?: string;
-  /** The speaker's colour in the editors' code, once voices are named. */
+  /** The speaker’s colour in the editors' code, once voices are named. */
   color?: string;
-  /** Scribe's voice number and the media it's from, to change who it is. */
+  /** Scribe’s voice number and the media it’s from, to change who it is. */
   voice?: string;
   media: string;
 }
 
 type Word = Transcript["words"][number];
-/** Each transcript's words in order of their start, for binary search. */
+/** Each transcript’s words in order of their start, for binary search. */
 const ordered = new WeakMap<Transcript, Word[]>();
 function wordsOf(transcript: Transcript) {
   let words = ordered.get(transcript);
@@ -48,7 +48,7 @@ function timelineWords(clips: Project["clips"], tracks: Project["tracks"], fps: 
     if (!transcript) continue;
     const to = clip.source_in + (clip.duration / fps) * clip.speed;
     const all = wordsOf(transcript);
-    // The clip's first word, by binary search: only its own words are visited.
+    // The clip’s first word, by binary search: only its own words are visited.
     let low = 0;
     let high = all.length;
     while (low < high) {
@@ -71,7 +71,7 @@ function timelineWords(clips: Project["clips"], tracks: Project["tracks"], fps: 
   return words.sort((a, b) => a.frame - b.frame);
 }
 
-/** Repack's roles, each with its own colour (the first of its shades). */
+/** Repack’s roles, each with its own colour (the first of its shades). */
 const ROLES: [string, string, string][] = [
   ["officer", "Officer", "#00e5c7"],
   ["leader", "Sergeant / Detective", "#0090e5"],
@@ -87,7 +87,7 @@ const ROLES: [string, string, string][] = [
   ["other", "Other", "#3ddc84"],
 ];
 
-/** "Officer" once the voices are named, else "Speaker 1" for Scribe's speaker_0. */
+/** "Officer" once the voices are named, else "Speaker 1" for Scribe’s speaker_0. */
 function speakerName(transcript: Transcript, voice?: string) {
   if (!voice) return undefined;
   const named = transcript.speakers?.[voice];
@@ -227,7 +227,7 @@ export function TranscriptPanel() {
       .then(({ status }) => useEditor.setState({ media: { ...useEditor.getState().media, [mediaId]: status } }))
       .catch((error) => toast((error as Error).message, "error"));
 
-  // Audio files in the bin (voice-overs) can be transcribed before they're on the timeline.
+  // Audio files in the bin (voice-overs) can be transcribed before they’re on the timeline.
   const unplaced = project.media.filter((media) => media.kind === "audio" && !isSoundEffect(media) && !heard.includes(media));
   if (!heard.length && !unplaced.length) {
     return (
@@ -236,7 +236,7 @@ export function TranscriptPanel() {
           <AudioLines size={17} />
         </span>
         <div className="mt-3 text-[13px] font-medium">No sound on the timeline</div>
-        <p className="mt-1 max-w-[220px] text-[12px] leading-relaxed text-muted">Put footage with sound on the timeline to transcribe what's said.</p>
+        <p className="mt-1 max-w-[220px] text-[12px] leading-relaxed text-muted">Put footage with sound on the timeline to transcribe what’s said.</p>
       </div>
     );
   }
@@ -262,7 +262,7 @@ export function TranscriptPanel() {
             const stage = statuses[media.id]?.transcript ?? "pending";
             return (
               <div key={media.id} className="flex h-9 items-center gap-2 rounded-lg px-2 hover:bg-hover">
-                <AudioLines size={13} className={cx("shrink-0", stage === "failed" ? "text-red-400" : "text-faint")} />
+                <AudioLines size={13} className={cx("shrink-0", stage === "failed" ? "text-danger" : "text-faint")} />
                 <span className="min-w-0 flex-1 truncate text-[12px]" title={media.name}>
                   {media.name}
                 </span>
@@ -280,7 +280,7 @@ export function TranscriptPanel() {
             );
           })}
           {error && (
-            <p className="flex items-start gap-1.5 px-2 pt-1 pb-1.5 text-[11px] leading-relaxed text-red-300/90">
+            <p className="flex items-start gap-1.5 px-2 pt-1 pb-1.5 text-[11px] leading-relaxed text-danger/90">
               <CircleAlert size={11} className="mt-0.5 shrink-0" />
               {error}
             </p>
@@ -343,7 +343,7 @@ export function TranscriptPanel() {
                         preview.pause();
                         preview.seek(Math.ceil(word.frame - 0.5));
                       }}
-                      // As if nothing's said yet; markWord sets the highlight.
+                      // As if nothing’s said yet; markWord sets the highlight.
                       className="cursor-pointer rounded-[4px] px-[1px] text-white opacity-55 transition-[color,background,opacity] duration-100 hover:bg-hover"
                     >
                       {word.text}

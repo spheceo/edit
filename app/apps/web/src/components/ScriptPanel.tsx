@@ -49,7 +49,7 @@ export function ScriptPanel() {
   );
 }
 
-/** The script import's downloads and progress, as their own tab. */
+/** The script import’s downloads and progress, as their own tab. */
 export function ScriptDownloads() {
   const project = useEditor((state) => state.project)!;
   const job = useEditor((state) => state.scriptJob);
@@ -61,7 +61,7 @@ export function ScriptDownloads() {
   );
 }
 
-/** Footage files in script order, labelled the way the Doc's assets are ("Footage 1"…). */
+/** Footage files in script order, labelled the way the Doc’s assets are ("Footage 1"…). */
 function fileLabels(project: Project) {
   const labels = new Map<string, { label: string; color: string; name?: string }>();
   const colors = [CLIP_HEX.blue, CLIP_HEX.cyan, CLIP_HEX.green, CLIP_HEX.orange, CLIP_HEX.pink, CLIP_HEX.yellow];
@@ -79,7 +79,7 @@ function Blocks({ project }: { project: Project }) {
   const labels = useMemo(() => fileLabels(project), [project.script, project.media]);
   const clips = useMemo(() => new Map(project.clips.map((clip) => [clip.id, clip])), [project.clips]);
   const clipOf = (block: ScriptBlock) => (block.clip ? clips.get(block.clip) : undefined);
-  // Each placed block's span, so the playhead only re-renders the list when it enters another block.
+  // Each placed block’s span, so the playhead only re-renders the list when it enters another block.
   const spans = useMemo(() => blocks.flatMap((block, index) => {
     const clip = block.clip ? clips.get(block.clip) : undefined;
     return clip ? [{ index, start: clip.start, end: clipEnd(clip) }] : [];
@@ -89,7 +89,7 @@ function Blocks({ project }: { project: Project }) {
     return spans.find((span) => frame >= span.start && frame < span.end)?.index ?? -1;
   });
 
-  // Keep the block that's playing in view.
+  // Keep the block that’s playing in view.
   useEffect(() => {
     if (active < 0) return;
     list.current?.querySelector(`[data-block="${active}"]`)?.scrollIntoView({ block: "nearest", behavior: playhead.playing ? "smooth" : "auto" });
@@ -203,7 +203,7 @@ function cueOf(block: Extract<ScriptBlock, { kind: "footage" }>) {
   return `${show(first)}...${show(last)}`;
 }
 
-/** Seconds as m:ss.cc, to show a cut's precision. */
+/** Seconds as m:ss.cc, to show a cut’s precision. */
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
 
 const size = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
@@ -223,7 +223,7 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
                 ? "Transcribing to find exact cuts…"
                 : job.state === "failed"
                   ? job.files.some((file) => file.state === "failed")
-                    ? "Some footage didn't download"
+                    ? "Some footage didn’t download"
                     : (job.error ?? "The import stopped")
                   : "Downloading footage"}
         </span>
@@ -273,12 +273,12 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
               </div>
               <div className="mt-1 h-1 overflow-hidden rounded-full bg-hover">
                 <div
-                  className={cx("h-full rounded-full transition-[width] duration-300", file.state === "failed" ? "bg-red-400" : "bg-white/70")}
+                  className={cx("h-full rounded-full transition-[width] duration-300", file.state === "failed" ? "bg-danger" : "bg-white/70")}
                   style={{ width: `${Math.round((file.state === "failed" ? 1 : progress) * 100)}%` }}
                 />
               </div>
               {file.error && (
-                <div className="mt-1 flex items-start gap-1.5 text-[11px] text-red-300">
+                <div className="mt-1 flex items-start gap-1.5 text-[11px] text-danger">
                   <CircleAlert size={11} className="mt-px shrink-0" />
                   {file.error}
                 </div>
@@ -328,9 +328,9 @@ function AttachScript({ project }: { project: Project }) {
         value={url}
         onChange={(event) => setUrl(event.target.value)}
         placeholder="https://docs.google.com/document/d/…"
-        className="mt-4 h-9 w-full rounded-lg border border-line bg-black px-3 text-[13px] outline-none placeholder:text-faint focus:border-line-strong"
+        className="mt-4 h-9 w-full rounded-lg border border-line bg-black px-3 text-[13px] outline-none placeholder:text-faint focus:border-muted"
       />
-      {error && <p className="mt-2 text-[12px] text-red-300">{error}</p>}
+      {error && <p className="mt-2 text-[12px] text-danger">{error}</p>}
       <Button type="submit" variant="primary" className="mt-3 self-center" disabled={busy || !url.trim()}>
         {busy ? "Reading the Doc…" : "Import script"}
       </Button>

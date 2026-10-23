@@ -74,7 +74,7 @@ function Section({ title, children, aside }: { title: string; children: ReactNod
   return (
     <div className="border-b border-line px-3 py-2.5 last:border-b-0">
       <div className="mb-1.5 flex h-5 items-center justify-between">
-        <span className="text-[11px] font-medium tracking-wide text-faint uppercase">{title}</span>
+        <span className="text-[12px] font-medium text-muted">{title}</span>
         {aside}
       </div>
       <div className="flex flex-col gap-0.5">{children}</div>
@@ -133,7 +133,7 @@ function useClipEditor(clip: Clip) {
       const live = draft.clips.find((candidate) => candidate.id === clip.id);
       if (live) recipe(live as Clip);
     });
-  // A person's subtitle: its colour is theirs, so all of their clips change with it.
+  // A person’s subtitle: its colour is theirs, so all of their clips change with it.
   const recolour = (color: Rgba, own: (clip: Clip) => void) =>
     state().edit((draft) => {
       const live = draft.clips.find((candidate) => candidate.id === clip.id);
@@ -178,7 +178,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             title={animated ? "Add/remove keyframe here · ⌥-click to stop animating" : "Animate this value"}
             disabled={!inside}
             onClick={(event) => once((live) => (animated && !event.altKey ? toggleKeyframe(live, name, frame) : toggleAnimated(live, name, frame)))}
-            className={cx("transition-colors disabled:opacity-20", animated ? "text-amber-300" : "text-faint hover:text-muted")}
+            className={cx("transition-colors disabled:opacity-20", animated ? "text-warning" : "text-faint hover:text-muted")}
           >
             <Diamond size={11} fill={onKey ? "currentColor" : "none"} strokeWidth={2.2} />
           </button>
@@ -266,7 +266,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                 rows={Math.min(5, clip.text.split("\n").length + 1)}
                 onChange={(event) => once((live) => live.type === "text" && (live.text = event.target.value))}
                 onKeyDown={(event) => event.stopPropagation()}
-                className="mb-1.5 w-full resize-none rounded-lg border border-line bg-black px-2.5 py-2 text-[13px] text-fg outline-none focus:border-line-strong"
+                className="mb-1.5 w-full resize-none rounded-lg border border-line bg-black px-2.5 py-2 text-[13px] text-fg outline-none focus:border-muted"
               />
               <Row label="Font">
                 <Select
@@ -498,8 +498,8 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   onChange={(on) =>
                     once((live) => {
                       if (live.type !== "text") return;
-                      // A label on or off changes which colour shows (the label's or the
-                      // text's): the clip stops being a person's until the next subtitle run.
+                      // A label on or off changes which colour shows (the label’s or the
+                      // text’s): the clip stops being a person’s until the next subtitle run.
                       delete live.person;
                       if (!on) delete live.style.label;
                       else live.style.label = { text: "Speaker:", color: [1, 0.86, 0.2, 1], size: Math.round((live.style.size * 26) / 48) };

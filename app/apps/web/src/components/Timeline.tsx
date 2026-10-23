@@ -205,7 +205,7 @@ export function Timeline() {
 
   // Tracks come and go (the agent drafts on new tracks above, then tidies them
   // down): keep the top lane in view where it was on screen, so the lanes being
-  // watched don't jump. Before paint, so nothing flickers.
+  // watched don’t jump. Before paint, so nothing flickers.
   const seenRows = useRef<Row[]>(rows);
   useLayoutEffect(() => {
     const before = seenRows.current;
@@ -231,7 +231,7 @@ export function Timeline() {
     });
     const offEditor = useEditor.subscribe(requestDraw);
     const offView = useView.subscribe(requestDraw);
-    // Clip labels are measured in Geist: fit and draw them again once it's in.
+    // Clip labels are measured in Inter: fit and draw them again once it’s in.
     const onFonts = () => {
       fitted.clear();
       assetLoaded();
@@ -248,7 +248,7 @@ export function Timeline() {
 
   useEffect(requestDraw);
 
-  // The ruler's sections come from the preview engine, which may start after the timeline.
+  // The ruler’s sections come from the preview engine, which may start after the timeline.
   const redraw = useRef(requestDraw);
   redraw.current = requestDraw;
   useEffect(() => {
@@ -273,7 +273,7 @@ export function Timeline() {
   const frameToX = (frame: number) => frame * useView.getState().ppf - useView.getState().scrollX;
   const xToFrame = (x: number) => (x + useView.getState().scrollX) / useView.getState().ppf;
   const playheadX = () => frameToX(playhead.frame);
-  /** Within grabbing distance of the playhead's line (or its head in the ruler). */
+  /** Within grabbing distance of the playhead’s line (or its head in the ruler). */
   const onPlayhead = (x: number) => Math.abs(x - playheadX()) <= 5;
 
   function zoomAround(x: number, factor: number) {
@@ -360,7 +360,7 @@ export function Timeline() {
     const { x, y } = local(event);
     canvasRef.current!.setPointerCapture(event.pointerId);
     const state = useEditor.getState();
-    // The ruler, or the playhead's line anywhere: grab it and scrub.
+    // The ruler, or the playhead’s line anywhere: grab it and scrub.
     if (y < RULER || (onPlayhead(x) && !clipAt(x, y)?.edge)) {
       drag.current = { kind: "scrub" };
       preview.seek(Math.round(xToFrame(x)));
@@ -461,7 +461,7 @@ export function Timeline() {
       const anchor = base.clips.find((clip) => clip.id === current.anchor.id) ?? current.anchor;
       delta += snap([anchor.start + delta, clipEnd(anchor) + delta], current.ids);
       delta = Math.max(delta, -minStart);
-      // Vertical: shift tracks of the anchor's kind by the rows moved.
+      // Vertical: shift tracks of the anchor’s kind by the rows moved.
       const anchorTrack = base.tracks.find((track) => track.id === anchor.track)!;
       const sameKind = base.tracks.filter((track) => track.kind === anchorTrack.kind);
       const row = rowAt(y);
@@ -492,7 +492,7 @@ export function Timeline() {
       let delta = Math.round((x - current.x) / ppf);
       const edgeFrame = current.edge === "start" ? clip.start : clipEnd(clip);
       delta += snap([edgeFrame + delta], current.ids);
-      // Don't trim into neighbours on the same tracks.
+      // Don’t trim into neighbours on the same tracks.
       for (const id of current.ids) {
         const own = base.clips.find((candidate) => candidate.id === id);
         if (!own) continue;
@@ -593,7 +593,7 @@ export function Timeline() {
     drop.current = null;
     snapLine.current = null;
     if (event.dataTransfer.files.length) {
-      // Files from the user's own device: upload, then place where dropped.
+      // Files from the user’s own device: upload, then place where dropped.
       event.stopPropagation();
       uploadFiles([...event.dataTransfer.files], { frame: info.frame, track: info.track });
       requestDraw();
@@ -649,7 +649,7 @@ export function Timeline() {
     const { rows } = layoutRows(project);
 
     // The lanes and the ruler change only with these, not with the playhead:
-    // they're drawn once into a layer, and each tick copies it.
+    // they’re drawn once into a layer, and each tick copies it.
     const key = [project, state.selection, state.media, ppf, scrollX, scrollY, canvas.width, canvas.height, dpr, preview.sections, drop.current, assets.current];
     const cached = layer.current;
     if (!cached || key.some((value, index) => value !== cached.key[index])) {
@@ -667,11 +667,11 @@ export function Timeline() {
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // (A canvas with no size can't be drawn from.)
+    // (A canvas with no size can’t be drawn from.)
     if (canvas.width && canvas.height) ctx.drawImage(layer.current!.canvas, 0, 0);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // The pointer's guides, under the ruler.
+    // The pointer’s guides, under the ruler.
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, RULER, width, height - RULER);
@@ -714,14 +714,14 @@ export function Timeline() {
 
     if (!project.clips.length && !drop.current) {
       ctx.fillStyle = "#5c5c5c";
-      ctx.font = "13px 'Geist Variable', system-ui, sans-serif";
+      ctx.font = "13px Inter, system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.fillText("Drag media or elements here", width / 2, RULER + (height - RULER) / 2);
       ctx.textAlign = "left";
     }
   }
 
-  /** The lanes (rows, clips, a drop's ghost, the in/out dimming) and the ruler. */
+  /** The lanes (rows, clips, a drop’s ghost, the in/out dimming) and the ruler. */
   function drawLanes(ctx: CanvasRenderingContext2D, project: Project, width: number, height: number) {
     const state = useEditor.getState();
     const { ppf, scrollY } = useView.getState();
@@ -743,7 +743,7 @@ export function Timeline() {
     }
 
     // Clips.
-    ctx.font = "500 11px 'Geist Variable', system-ui, sans-serif";
+    ctx.font = "500 11px Inter, system-ui, sans-serif";
     ctx.textBaseline = "middle";
     for (const clip of project.clips) {
       const row = rows.find((candidate) => candidate.track.id === clip.track);
@@ -871,7 +871,7 @@ export function Timeline() {
 const THUMB_LEAST_SHARE = 0.06;
 
 /**
- * The view as a bar under the lanes (from Repack's subtitle timeline): the
+ * The view as a bar under the lanes (from Repack’s subtitle timeline): the
  * thumb is the stretch in view. Its width follows the zoom on a log scale,
  * the whole bar when everything fits down to THUMB_LEAST_SHARE fully zoomed
  * in, so it shrinks smoothly all the way and stays easy to see and grab at
@@ -907,7 +907,7 @@ function ZoomBar({ width, header, onFit }: { width: number; header: number; onFi
       setView({ scrollX: (grip.start + (travel > 0 ? (dx * room) / travel : 0)) * ppf });
       return;
     }
-    // Dragging an end resizes the thumb; the other end's moment stays put.
+    // Dragging an end resizes the thumb; the other end’s moment stays put.
     const next = ppfOf(Math.max(12, Math.min(width, grip.thumb + (grip.part === "out" ? dx : -dx))));
     if (grip.part === "out") setView({ ppf: next, scrollX: grip.start * next });
     else setView({ ppf: next, scrollX: grip.end * next - width });
@@ -969,7 +969,7 @@ function TrackHeader({ row, label }: { row: Row; label: string }) {
       <span
         className={cx(
           "mr-auto font-mono text-[11px] font-medium",
-          track.subtitles ? "text-cyan-300/80" : track.kind === "video" ? "text-fg/80" : "text-green-300/80",
+          track.subtitles ? "text-cyan-300/80" : track.kind === "video" ? "text-fg/80" : "text-success/80",
         )}
       >
         {label}
@@ -983,7 +983,7 @@ function TrackHeader({ row, label }: { row: Row; label: string }) {
           {track.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
         </IconButton>
       )}
-      <IconButton label={track.locked ? "Unlock track" : "Lock track"} className={cx("size-6", track.locked && "text-amber-300")} onClick={() => set("locked")}>
+      <IconButton label={track.locked ? "Unlock track" : "Lock track"} className={cx("size-6", track.locked && "text-warning")} onClick={() => set("locked")}>
         {track.locked ? <Lock size={12} /> : <LockOpen size={12} />}
       </IconButton>
     </div>
@@ -1100,7 +1100,7 @@ function drawClip(
   fade(clip.fade_in, true);
   fade(clip.fade_out, false);
 
-  // Markers in the source (a sound's hit): a flag down from the top.
+  // Markers in the source (a sound’s hit): a flag down from the top.
   if (clip.type === "video" || clip.type === "audio") {
     for (const marker of mediaOf(project, clip.media)?.markers ?? []) {
       const mx = x0 + ((marker.time - clip.source_in) / clip.speed) * fps * ppf;

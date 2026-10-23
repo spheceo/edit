@@ -12,21 +12,24 @@ export { cx };
 export const spring = { type: "spring", stiffness: 520, damping: 42, mass: 0.8 } as const;
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "ghost" | "subtle" | "danger";
-  size?: "sm" | "md";
+  /** primary: the one main action (red); subtle: secondary (an edge); ghost: none; danger: destructive among others (tinted); destructive: a dialog’s final destructive answer (solid red). */
+  variant?: "primary" | "ghost" | "subtle" | "danger" | "destructive";
+  size?: "sm" | "md" | "lg";
 };
 
+// The spheceo kit’s buttons (design/kit/components.css .sp-btn).
 export function Button({ variant = "subtle", size = "md", className, ...props }: ButtonProps) {
   return (
     <button
       {...props}
       className={cx(
-        "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-[background,color,opacity,transform] duration-150 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40",
-        size === "sm" ? "h-7 px-2.5 text-[12px]" : "h-8 px-3 text-[13px]",
-        variant === "primary" && "bg-white text-black hover:bg-white/90",
-        variant === "subtle" && "bg-raised text-fg hover:bg-hover",
-        variant === "ghost" && "text-muted hover:bg-hover hover:text-fg",
-        variant === "danger" && "bg-red-500/15 text-red-300 hover:bg-red-500/25",
+        "inline-flex items-center justify-center gap-1.5 border font-medium whitespace-nowrap transition-[background,border-color,color,opacity] duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] disabled:pointer-events-none disabled:opacity-45",
+        size === "sm" ? "h-7 rounded-md px-2.5 text-[12px]" : size === "lg" ? "h-10 rounded-lg px-4 text-[14px]" : "h-[34px] rounded-lg px-3.5 text-[13px]",
+        variant === "primary" && "border-primary bg-primary text-white hover:border-primary-hover hover:bg-primary-hover",
+        variant === "subtle" && "border-line-strong bg-transparent text-fg hover:bg-hover",
+        variant === "ghost" && "border-transparent text-secondary hover:bg-hover hover:text-fg",
+        variant === "danger" && "border-[#ff003373] bg-danger-soft text-danger hover:bg-[#ff003338]",
+        variant === "destructive" && "border-danger-solid bg-danger-solid text-white hover:border-primary-hover hover:bg-primary-hover",
         className,
       )}
     />
@@ -254,21 +257,22 @@ export function Modal({
     <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-[4px]"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
+          transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
           onPointerDown={(event) => event.target === event.currentTarget && onClose()}
         >
+          {/* The kit’s dialog: 14 px corners, a fade and a 4 px rise, nothing bouncing. */}
           <motion.div
             role="dialog"
-            className="overflow-hidden rounded-2xl border border-line-strong bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.8)]"
+            className="overflow-hidden rounded-[14px] border border-line-strong bg-panel text-[14px] shadow-[0_24px_64px_#000a]"
             style={{ width }}
-            initial={{ opacity: 0, scale: 0.96, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97, y: 4 }}
-            transition={spring}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
           >
             {children}
           </motion.div>

@@ -38,9 +38,9 @@ export function SetupCard() {
   const missing = checks?.filter((item) => !item.ok) ?? [];
   if (missing.length === 0) return null;
   return (
-    <div className="mt-8 rounded-xl border border-amber-400/25 bg-amber-400/[0.06] p-4">
+    <div className="mt-8 rounded-xl border border-warning/25 bg-warning-soft p-4">
       <div className="flex items-center gap-2">
-        <TriangleAlert size={15} className="text-amber-300" />
+        <TriangleAlert size={15} className="text-warning" />
         <span className="text-[13px] font-medium">Finish setting up Edit</span>
         <button
           title="Check again"
@@ -62,7 +62,7 @@ export function SetupCard() {
               className="flex max-w-[440px] items-center gap-2 rounded-md border border-line bg-black/40 px-2 py-1 font-mono text-[11px] text-muted hover:text-fg"
             >
               <span className="truncate">{item.fix}</span>
-              {copied === item.id ? <Check size={12} className="shrink-0 text-green-400" /> : <Copy size={12} className="shrink-0" />}
+              {copied === item.id ? <Check size={12} className="shrink-0 text-success" /> : <Copy size={12} className="shrink-0" />}
             </button>
           </div>
         ))}

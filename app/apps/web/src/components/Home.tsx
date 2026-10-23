@@ -12,7 +12,7 @@ import { ago, shortDuration } from "../lib/time";
 import { STYLES, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
-import { Logo, Mark } from "./Logo";
+import { Logo, Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
@@ -32,7 +32,7 @@ export function Home() {
   const toast = useEditor((state) => state.toast);
 
   const refresh = () => {
-    // The cloud's list is fetched beside this machine's, never in its way.
+    // The cloud’s list is fetched beside this machine’s, never in its way.
     void cloudApi
       .projects()
       .then(setCloud)
@@ -45,12 +45,12 @@ export function Home() {
     return api
       .projects()
       .then(({ projects }) => setProjects(projects))
-      .catch((error) => toast(`Couldn't reach Edit: ${error.message}`, "error"));
+      .catch((error) => toast(`Couldn’t reach Edit: ${error.message}`, "error"));
   };
 
   useEffect(() => {
     void refresh();
-    // Who's editing what changes while the list is up.
+    // Who’s editing what changes while the list is up.
     const timer = setInterval(() => void refresh(), 20_000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -101,7 +101,7 @@ export function Home() {
         <header className="flex items-center gap-4">
           <Logo size={22} />
           {projects && count > 0 && (
-            <label className="ml-4 flex h-8 max-w-[420px] flex-1 items-center gap-2 rounded-lg border border-line px-2.5 text-muted focus-within:border-line-strong">
+            <label className="ml-4 flex h-[34px] max-w-[420px] flex-1 items-center gap-2 rounded-lg border border-line-strong bg-bg px-2.5 text-muted focus-within:border-muted">
               <Search size={14} />
               <input
                 value={query}
@@ -114,10 +114,11 @@ export function Home() {
           )}
           <div className="ml-auto flex items-center gap-1.5">
             <UpdateButton />
-            <AppMenu />
-            <Button variant="primary" onClick={() => setCreating(true)}>
+            {/* One red main action a screen: on an empty Home, the empty state's button is it. */}
+            <Button variant={projects && count === 0 ? "subtle" : "primary"} onClick={() => setCreating(true)}>
               <Plus size={15} strokeWidth={2.2} /> New project
             </Button>
+            <AppMenu />
           </div>
         </header>
 
@@ -130,11 +131,11 @@ export function Home() {
             transition={spring}
             className="mt-[18vh] flex flex-col items-center text-center"
           >
-            <Mark size={64} />
+            <Tile size={64} />
             <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.02em]">Make your first edit</h1>
             <p className="mt-2 max-w-[360px] text-muted">
               {cloud?.on
-                ? "Projects are kept in the team's cloud, so anyone can pick one up where you left off. Import footage, cut it, and let an agent build the polish."
+                ? "Projects are kept in the team’s cloud, so anyone can pick one up where you left off. Import footage, cut it, and let an agent build the polish."
                 : "Projects live on this machine. Import footage, cut it, and let an agent build the polish."}
             </p>
             <Button variant="primary" className="mt-6" onClick={() => setCreating(true)}>
@@ -146,7 +147,8 @@ export function Home() {
         {projects && count > 0 && (
           <>
             <div className="mt-8 flex flex-wrap items-center gap-2">
-              <div className="flex rounded-lg bg-panel p-0.5 ring-1 ring-line">
+              {/* The kit's segmented control (.sp-seg). */}
+              <div className="flex h-[34px] gap-0.5 rounded-[9px] border border-line bg-panel p-0.5">
                 {(
                   [
                     ["edits", "Edits", all.filter((project) => !project.subtitles).length + cloudEditsAll],
@@ -157,17 +159,17 @@ export function Home() {
                     key={value}
                     onClick={() => choose(value)}
                     className={cx(
-                      "h-7 rounded-md px-3 text-[12px] font-medium transition-colors",
+                      "flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors",
                       kind === value ? "bg-active text-fg" : "text-muted hover:text-fg",
                     )}
                   >
-                    {label} <span className="text-faint tabular">{total}</span>
+                    {label} <span className="font-normal text-faint tabular">{total}</span>
                   </button>
                 ))}
               </div>
               {cloud?.on && cloud.error && (
-                <span className="text-[12px] text-amber-300/80" title={cloud.error}>
-                  {cloud.offline ? "Can't reach the cloud: showing what's on this Mac." : "The cloud's list didn't load."}
+                <span className="text-[12px] text-warning/80" title={cloud.error}>
+                  {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
                 </span>
               )}
               <div className="ml-auto flex gap-1.5">
@@ -176,8 +178,9 @@ export function Home() {
                     key={option.value}
                     onClick={() => setStyle(style === option.value ? null : option.value)}
                     className={cx(
-                      "flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] transition-colors",
-                      style === option.value ? "border-line-strong bg-active text-fg" : "border-line text-muted hover:text-fg",
+                      // The kit's filter pill (.sp-pill, pressed fills with the surface).
+                      "flex h-6 items-center gap-1.5 rounded-full border px-[9px] text-[12px] transition-colors",
+                      style === option.value ? "border-line-strong bg-raised text-fg" : "border-line text-secondary hover:bg-hover",
                     )}
                   >
                     <span className="size-1.5 rounded-full" style={{ background: STYLE_COLOURS[option.value] }} />
@@ -245,12 +248,12 @@ type Kind = "edits" | "subtitled";
 /** Which list Home shows (remembered on this browser). */
 const KIND = "edit.home.kind";
 
-/** Each kind of video's colour (its dot on cards and filters). */
-const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#ffd166" };
+/** Each kind of video’s colour (its dot on cards and filters). */
+const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#c4a7ff" };
 
 function SectionTitle({ children, count }: { children: React.ReactNode; count?: number }) {
   return (
-    <h2 className="mb-3 flex items-baseline gap-2 text-[12px] font-medium tracking-wide text-muted uppercase">
+    <h2 className="mb-3 flex items-baseline gap-1.5 text-[13px] font-medium text-muted">
       {children}
       {count !== undefined && <span className="text-faint tabular">{count}</span>}
     </h2>
@@ -258,7 +261,7 @@ function SectionTitle({ children, count }: { children: React.ReactNode; count?: 
 }
 
 /**
- * The card's picture: the server's pick (plain footage running, no cut-in,
+ * The card’s picture: the server’s pick (plain footage running, no cut-in,
  * graphic or cut on screen, its file here; the same until the project
  * changes), null when it has none.
  */
@@ -267,13 +270,13 @@ function coverFrame(project: ProjectSummary): number | null {
   return project.cover_frame ?? null;
 }
 
-/** A card with no picture: a dark wash of its style's colour. */
+/** A card with no picture: a dark wash of its style’s colour. */
 function wash(style: Style): string {
   const colour = STYLE_COLOURS[style] ?? STYLE_COLOURS.bodycam;
   return `radial-gradient(120% 90% at 20% 0%, ${colour}33 0%, transparent 60%), radial-gradient(90% 80% at 100% 100%, ${colour}1f 0%, transparent 55%), #0b0b0b`;
 }
 
-/** A quiet mark at the end of a card's line: it isn't on this Mac yet (opening it downloads it). */
+/** A quiet mark at the end of a card’s line: it isn’t on this Mac yet (opening it downloads it). */
 function NotHere({ title }: { title: string }) {
   return (
     <span title={title} className="ml-auto flex shrink-0 items-center gap-1 pl-2 text-white/55">
@@ -288,15 +291,15 @@ interface NoticeProps {
   title: string;
 }
 
-/** A small chip on a card saying what's off: footage missing, footage still in the cloud. */
+/** A small chip on a card saying what’s off: footage missing, footage still in the cloud. */
 function Notice({ tone, text, title }: NoticeProps) {
   const Icon = tone === "info" ? CloudDownload : TriangleAlert;
   return (
     <span
       title={title}
       className={cx(
-        "flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium",
-        tone === "info" ? "text-fg" : tone === "bad" ? "text-red-300" : "text-amber-300",
+        "flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium",
+        tone === "info" ? "text-fg" : tone === "bad" ? "text-danger" : "text-warning",
       )}
     >
       <Icon size={12} />
@@ -305,7 +308,7 @@ function Notice({ tone, text, title }: NoticeProps) {
   );
 }
 
-/** What a project's card says about it, and what can be done to it (rename, delete, move to cloud). */
+/** What a project’s card says about it, and what can be done to it (rename, delete, move to cloud). */
 function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boolean, status?: CloudStatus, remote?: CloudProject) {
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -313,16 +316,16 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
   const toast = useEditor((state) => state.toast);
   const drive = useDriveLink(project.id, project.drive);
   const inCloud = cloudOn && Boolean(status?.cloud);
-  // Footage the timeline plays that's gone from this Mac (deleted, or on a drive that isn't plugged in).
+  // Footage the timeline plays that’s gone from this Mac (deleted, or on a drive that isn’t plugged in).
   const missing = project.missing ?? 0;
   const used = project.media_used ?? missing;
   const mostlyMissing = missing > 0 && missing * 2 >= used;
   // Cloud footage not on this Mac yet: it comes down when the project opens.
   const fetching = project.remote ?? 0;
   const mostlyRemote = !mostlyMissing && fetching > 0 && fetching * 2 >= used;
-  // Someone else's live lock (this machine's own isn't news).
+  // Someone else’s live lock (this machine’s own isn’t news).
   const editor = remote?.holder && !remote.here ? remote.holder : null;
-  // The cloud is only worth a word when something's off.
+  // The cloud is only worth a word when something’s off.
   const cloudNews = inCloud && (editor !== null || status?.sync === "conflict" || status?.dirty === true || status?.sync === "offline");
 
   const rename = async (name: string) => {
@@ -333,7 +336,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
       await api.saveProject(project.id, live.rev, { ...live.project, name }, clientId);
       onChanged();
     } catch (error) {
-      toast(`Couldn't rename: ${(error as Error).message}`, "error");
+      toast(`Couldn’t rename: ${(error as Error).message}`, "error");
     }
   };
   const remove = async () => {
@@ -341,13 +344,13 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     try {
       await api.deleteProject(project.id);
     } catch (error) {
-      toast(`Couldn't delete “${project.name}”: ${(error as Error).message}`, "error");
+      toast(`Couldn’t delete “${project.name}”: ${(error as Error).message}`, "error");
     }
     onChanged();
   };
   const open = () => {
     if (renaming) return;
-    if (project.problem) toast(`“${project.name}” can't be opened: ${project.problem}`, "error");
+    if (project.problem) toast(`“${project.name}” can’t be opened: ${project.problem}`, "error");
     else navigate(`/p/${project.id}`);
   };
   const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -402,17 +405,17 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     <>
       <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
         <div className="p-6">
-          <h2 className="text-[15px] font-semibold">Delete “{project.name}”?</h2>
-          <p className="mt-2 text-[13px] leading-relaxed text-muted">
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Delete “{project.name}”?</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">
             {inCloud
-              ? "It's deleted from the cloud too, for everyone on the team. A copy is kept in this Mac's Edit data folder; footage files stay where they are."
-              : "The project and its edit are removed (a copy is kept in Edit's data folder). Your footage files stay where they are."}
+              ? "It’s deleted from the cloud too, for everyone on the team. A copy is kept in this Mac’s Edit data folder; footage files stay where they are."
+              : "The project and its edit are removed (a copy is kept in Edit’s data folder). Your footage files stay where they are."}
           </p>
-          <div className="mt-6 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setDeleting(false)}>
+          <div className="mt-[22px] flex justify-end gap-2">
+            <Button variant="subtle" onClick={() => setDeleting(false)}>
               Cancel
             </Button>
-            <Button variant="danger" onClick={() => void remove()}>
+            <Button variant="destructive" onClick={() => void remove()}>
               {inCloud ? "Delete everywhere" : "Delete project"}
             </Button>
           </div>
@@ -421,14 +424,14 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
       <MoveToCloud project={project} open={moving} onClose={() => setMoving(false)} onMoved={onChanged} />
     </>
   );
-  // What's worth a word on the card, as a chip beside "On Drive".
+  // What’s worth a word on the card, as a chip beside "On Drive".
   const notice: NoticeProps | null = project.problem
-    ? { tone: "bad", text: "Can't be opened", title: project.problem }
+    ? { tone: "bad", text: "Can’t be opened", title: project.problem }
     : missing > 0
       ? {
           tone: "warn",
           text: mostlyMissing ? "Footage missing" : `${missing} ${missing === 1 ? "file" : "files"} missing`,
-          title: `${missing} of ${used} footage files the edit plays aren't on this Mac (deleted, or on a drive that isn't plugged in)`,
+          title: `${missing} of ${used} footage files the edit plays aren’t on this Mac (deleted, or on a drive that isn’t plugged in)`,
         }
       : null;
   return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, notice, open, menu, driveMenu, nameInput, dialogs };
@@ -447,7 +450,7 @@ interface CardProps {
   state?: ProjectStatus;
 }
 
-/** Chips for a project's review notes waiting and a finished edit not exported as it is now. */
+/** Chips for a project’s review notes waiting and a finished edit not exported as it is now. */
 function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; projectId?: string; onChanged?: () => void }) {
   const toast = useEditor((store) => store.toast);
   if (state === undefined) return null;
@@ -466,12 +469,12 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
     return (
       <span
         title={state.archived.error ?? "Archived on Repack: its footage and exports were freed; the project and its transcripts are kept"}
-        className="flex h-6 shrink-0 items-center gap-1.5 rounded-md bg-black/75 px-2 text-[11px] font-medium text-muted"
+        className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-black/75 px-2 text-[12px] font-medium text-muted"
       >
         <Archive size={12} />
         {state.archived.restoring ? "Restoring…" : "Archived"}
         {!state.archived.restoring && (
-          <button onClick={restore} className="text-sky-300 hover:text-sky-200">
+          <button onClick={restore} className="text-info hover:text-info">
             Restore
           </button>
         )}
@@ -481,7 +484,7 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
   return (
     <>
       {state.approved !== null && (
-        <span title={`Version ${state.approved} was approved on its review`} className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-green-300">
+        <span title={`Version ${state.approved} was approved on its review`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium text-success">
           <Check size={12} />
           Approved v{state.approved}
         </span>
@@ -489,14 +492,14 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
       {state.approved === null && state.feedback > 0 && (
         <span
           title={`${state.feedback} open note${state.feedback === 1 ? "" : "s"} on its Repack review`}
-          className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-sky-300"
+          className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium text-info"
         >
           <MessageSquare size={12} />
           {state.feedback} {state.feedback === 1 ? "note" : "notes"}
         </span>
       )}
       {state.complete && !state.exported && (
-        <span title="The edit is finished, but what it is now hasn't been exported" className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-amber-300">
+        <span title="The edit is finished, but what it is now hasn’t been exported" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium text-warning">
           <FileVideo size={12} />
           Not exported
         </span>
@@ -505,7 +508,7 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
   );
 }
 
-/** An edit: a frame of it with the title over a black gradient, as a streaming service's tile. */
+/** An edit: a frame of it with the title over a black gradient, as a streaming service’s tile. */
 function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index, big = false }: CardProps & { index: number; big?: boolean }) {
   const card = useProject(project, onChanged, cloudOn, status, remote);
   const seconds = project.duration_frames / project.fps;
@@ -557,7 +560,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index
                 </span>
               )}
               {card.mostlyRemote && <NotHere title="Its footage downloads when you open it" />}
-              <StartedBy by={remote?.created_by ?? project.created_by} className="ml-auto" />
+              <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} className="ml-auto" />
             </div>
           </div>
           {(card.cloudNews || card.drive || card.notice || (state && (state.archived !== null || state.approved !== null || state.feedback > 0 || (state.complete && !state.exported)))) && (
@@ -569,7 +572,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index
                 <button
                   onClick={card.driveMenu}
                   title={`On Drive: ${card.drive.name}`}
-                  className="flex h-6 items-center rounded-md bg-black/75 px-2 text-[11px] font-medium text-green-300 hover:bg-black"
+                  className="flex h-[22px] items-center rounded-full bg-black/75 px-2 text-[12px] font-medium text-success hover:bg-black"
                 >
                   On Drive ↗
                 </button>
@@ -590,7 +593,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index
   );
 }
 
-/** A subtitled video: a row in the list (they're mostly opened for their Drive link). */
+/** A subtitled video: a row in the list (they’re mostly opened for their Drive link). */
 function ProjectRow({ project, onChanged, cloudOn, status, remote, state }: CardProps) {
   const card = useProject(project, onChanged, cloudOn, status, remote);
   const seconds = project.duration_frames / project.fps;
@@ -610,13 +613,13 @@ function ProjectRow({ project, onChanged, cloudOn, status, remote, state }: Card
           {card.notice && <Notice {...card.notice} />}
           <StateChips state={state} projectId={project.id} onChanged={onChanged} />
           {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
-          <StartedBy by={remote?.created_by ?? project.created_by} className="ml-auto" />
+          <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} size={24} className="ml-auto" />
         </div>
         <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{shortDuration(seconds)}</span>
         <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.modified_ms)}</span>
         <span className="w-24 shrink-0 text-right text-[12px]">
           {card.drive ? (
-            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className="text-green-300/90 hover:text-green-200">
+            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className="text-success/90 hover:text-success">
               On Drive ↗
             </button>
           ) : (
@@ -636,24 +639,24 @@ function ProjectRow({ project, onChanged, cloudOn, status, remote, state }: Card
   );
 }
 
-/** A cloud project's badge: who's editing it, else whether it's in sync. */
+/** A cloud project’s badge: who’s editing it, else whether it’s in sync. */
 function CloudBadge({ status, editor }: { status?: CloudStatus; editor: string | null }) {
   const [Icon, text, title] = editor
     ? [Lock, `${editor} is editing`, `${editor} is editing it now: it opens read-only until they close it.`]
     : status?.sync === "conflict"
-      ? [CloudAlert, "Conflict", status.message ?? "A conflict: this Mac's changes were kept as a copy."]
+      ? [CloudAlert, "Conflict", status.message ?? "A conflict: this Mac’s changes were kept as a copy."]
       : status?.dirty || status?.sync === "offline"
-        ? [CloudOff, "Not synced", "Changes saved on this Mac haven't reached the cloud yet."]
-        : [CloudCheck, "Cloud", "In the team's cloud"];
+        ? [CloudOff, "Not synced", "Changes saved on this Mac haven’t reached the cloud yet."]
+        : [CloudCheck, "Cloud", "In the team’s cloud"];
   return (
-    <div title={title} className="flex h-6 items-center gap-1 rounded-md bg-black/75 px-2 text-[11px] font-medium text-fg">
-      <Icon size={13} className={editor ? "text-amber-300" : undefined} />
+    <div title={title} className="flex h-[22px] items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium text-fg">
+      <Icon size={13} className={editor ? "text-warning" : undefined} />
       {text}
     </div>
   );
 }
 
-/** "Move to cloud": a project from before cloud, uploaded so teammates can open it. Its footage isn't moved. */
+/** "Move to cloud": a project from before cloud, uploaded so teammates can open it. Its footage isn’t moved. */
 function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSummary; open: boolean; onClose: () => void; onMoved: () => void }) {
   const [localMedia, setLocalMedia] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -674,7 +677,7 @@ function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSumm
       onClose();
       onMoved();
     } catch (error) {
-      toast(`Couldn't move it to the cloud: ${(error as Error).message}`, "error");
+      toast(`Couldn’t move it to the cloud: ${(error as Error).message}`, "error");
     } finally {
       setBusy(false);
     }
@@ -682,15 +685,15 @@ function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSumm
   return (
     <Modal open={open} onClose={onClose} width={400}>
       <div className="p-6">
-        <h2 className="text-[15px] font-semibold">Move “{project.name}” to the cloud?</h2>
-        <p className="mt-2 text-[13px] leading-relaxed text-muted">The edit is uploaded so a teammate can open it on their Mac and carry on. One machine edits it at a time.</p>
+        <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Move “{project.name}” to the cloud?</h2>
+        <p className="mt-1 text-[13px] leading-relaxed text-muted">The edit is uploaded so a teammate can open it on their Mac and carry on. One machine edits it at a time.</p>
         {localMedia !== null && localMedia > 0 && (
-          <p className="mt-2 text-[13px] leading-relaxed text-amber-300/90">
-            Its footage ({localMedia} {localMedia === 1 ? "file" : "files"}) stays on this Mac: this doesn't upload it, so on another Mac those clips show as missing.
+          <p className="mt-2 text-[13px] leading-relaxed text-warning/90">
+            Its footage ({localMedia} {localMedia === 1 ? "file" : "files"}) stays on this Mac: this doesn’t upload it, so on another Mac those clips show as missing.
           </p>
         )}
-        <div className="mt-6 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+        <div className="mt-[22px] flex justify-end gap-2">
+          <Button variant="subtle" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" disabled={busy} onClick={() => void move()}>
@@ -714,7 +717,7 @@ function CloudRow({ project }: { project: CloudProject }) {
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <div className="truncate font-medium">{project.name}</div>
         {project.holder && <CloudBadge editor={project.holder} />}
-        <StartedBy by={project.created_by} className="ml-auto" />
+        <StartedBy by={project.created_by} projectId={project.id} size={24} className="ml-auto" />
       </div>
       <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{seconds !== null ? shortDuration(seconds) : ""}</span>
       <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.updated_ms)}</span>
@@ -738,7 +741,7 @@ function CloudCard({ project, index, onChanged, big = false }: { project: CloudP
     try {
       await api.deleteProject(project.id);
     } catch (error) {
-      toast(`Couldn't delete “${project.name}”: ${(error as Error).message}`, "error");
+      toast(`Couldn’t delete “${project.name}”: ${(error as Error).message}`, "error");
     }
     onChanged();
   };
@@ -768,7 +771,7 @@ function CloudCard({ project, index, onChanged, big = false }: { project: CloudP
               <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[(summary.style as Style | undefined) ?? "bodycam"] ?? STYLE_COLOURS.bodycam }} />
               <span className="truncate">{[style, seconds !== null ? shortDuration(seconds) : null, `${ago(project.updated_ms)} by ${project.updated_by}`].filter(Boolean).join(" · ")}</span>
               <NotHere title="Not on this Mac yet: opening it downloads it" />
-              <StartedBy by={project.created_by} className="ml-auto" />
+              <StartedBy by={project.created_by} projectId={project.id} className="ml-auto" />
             </div>
           </div>
           {project.holder && (
@@ -790,13 +793,13 @@ function CloudCard({ project, index, onChanged, big = false }: { project: CloudP
       </motion.div>
       <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
         <div className="p-6">
-          <h2 className="text-[15px] font-semibold">Delete “{project.name}”?</h2>
-          <p className="mt-2 text-[13px] leading-relaxed text-muted">It's deleted from the cloud, for everyone on the team. It isn't on this Mac, so no copy is kept here.</p>
-          <div className="mt-6 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setDeleting(false)}>
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Delete “{project.name}”?</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">It’s deleted from the cloud, for everyone on the team. It isn’t on this Mac, so no copy is kept here.</p>
+          <div className="mt-[22px] flex justify-end gap-2">
+            <Button variant="subtle" onClick={() => setDeleting(false)}>
               Cancel
             </Button>
-            <Button variant="danger" onClick={() => void remove()}>
+            <Button variant="destructive" onClick={() => void remove()}>
               Delete everywhere
             </Button>
           </div>
@@ -826,7 +829,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
   const url = text.trim();
   const script = DOC.test(url);
 
-  // A fresh dialog each time, with Writer's scripts as they are now.
+  // A fresh dialog each time, with Writer’s scripts as they are now.
   useEffect(() => {
     if (!open) return;
     setText("");
@@ -843,11 +846,11 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
     };
   }, [open]);
 
-  // Writer's scripts, newest first, narrowed by what's typed.
+  // Writer’s scripts, newest first, narrowed by what’s typed.
   const words = script ? "" : url.toLowerCase();
   const fromWriter = (scripts ?? [])
     .filter((one) => one.built && (words === "" || one.title.toLowerCase().includes(words)))
-    // Home filtered to a kind of video: that kind's scripts (and any Writer hasn't said).
+    // Home filtered to a kind of video: that kind’s scripts (and any Writer hasn’t said).
     .filter((one) => only === null || one.style === null || one.style === only)
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const startScript = async (one: WriterScriptRow) => {
@@ -894,7 +897,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
     if (!ready) return;
     // A script makes a full edit: not for an account of subtitled videos only (the server refuses it too).
     if (script && allowed !== null && !allowed.has(style)) {
-      toast("Your account can't make full edits: an admin can give you an Edit style at accounts.spheceo.com.", "error");
+      toast("Your account can’t make full edits: an admin can give you an Edit style at accounts.spheceo.com.", "error");
       return;
     }
     setBusy(true);
@@ -933,7 +936,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
         {script && (
           <div className="truncate px-3 pb-2 text-[12px] text-muted">
             {preview?.error ? (
-              <span className="text-red-300">{preview.error}</span>
+              <span className="text-danger">{preview.error}</span>
             ) : preview?.result ? (
               <span className="tabular">
                 <span className="text-fg">{preview.result.title || "Untitled script"}</span> · {preview.result.files} Drive{" "}
@@ -946,7 +949,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
         )}
         {!script && fromWriter.length > 0 && (
           <div className="border-t border-line px-1 pt-2 pb-1">
-            <div className="px-2 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">From Writer</div>
+            <div className="px-2 pb-1 text-[13px] font-medium text-muted">From Writer</div>
             <div className="max-h-[264px] overflow-y-auto">
               {fromWriter.map((one) => (
                 <button

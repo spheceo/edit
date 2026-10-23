@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from "motion/react";
 
 import { openReport } from "../lib/diagnostics";
 import { useEditor } from "../lib/store";
-import { cx, spring } from "./ui";
 
 export function Toasts() {
   const toasts = useEditor((state) => state.toasts);
@@ -16,23 +15,21 @@ export function Toasts() {
             layout
             key={toast.id}
             onClick={() => dismiss(toast.id)}
-            initial={{ opacity: 0, y: 12, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 6, scale: 0.98 }}
-            transition={spring}
-            className={cx(
-              "pointer-events-auto flex max-w-[520px] items-center gap-2 rounded-xl border px-3.5 py-2 text-[13px] shadow-[0_12px_40px_rgba(0,0,0,0.6)] backdrop-blur",
-              toast.tone === "error" ? "border-red-500/30 bg-red-950/80 text-red-100" : "border-line-strong bg-raised/90 text-fg",
-            )}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
+            // The kit’s toast: one look for every tone, a red icon saying it’s an error.
+            className="pointer-events-auto flex max-w-[520px] items-center gap-2.5 rounded-[10px] border border-line-strong bg-raised py-2.5 pr-2.5 pl-3.5 text-[13px] text-fg shadow-[0_12px_32px_#0009]"
           >
-            {toast.tone === "error" && <CircleAlert size={15} className="shrink-0 text-red-300" />}
+            {toast.tone === "error" && <CircleAlert size={16} className="shrink-0 text-danger" />}
             {toast.tone === "agent" && <Bot size={15} className="shrink-0 text-agent" />}
             <span className="text-left">{toast.text}</span>
             {toast.tone === "error" && (
               <span
                 role="button"
                 tabIndex={0}
-                className="ml-1 shrink-0 rounded-md bg-red-500/20 px-2 py-0.5 text-[12px] text-red-100 hover:bg-red-500/35"
+                className="ml-1 shrink-0 rounded-md border border-line-strong px-2 py-0.5 text-[12px] text-fg hover:bg-hover"
                 onClick={(event) => {
                   event.stopPropagation();
                   dismiss(toast.id);

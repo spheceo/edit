@@ -141,7 +141,7 @@ export function drawRuler(
   const major = steps.find((step) => step * pxPerSecond >= 90) ?? 3600;
   const minor = major / (major * pxPerSecond >= 180 ? 10 : 5);
   const first = Math.floor(scrollX / pxPerSecond / minor) * minor;
-  ctx.font = "10px 'Geist Mono Variable', ui-monospace, monospace";
+  ctx.font = "10px ui-monospace, 'SF Mono', Menlo, monospace";
   ctx.textBaseline = "top";
   for (let t = first; t * pxPerSecond - scrollX < width; t += minor) {
     const x = Math.round(t * pxPerSecond - scrollX) + 0.5;
@@ -173,7 +173,7 @@ function drawTimelineMarkers(ctx: CanvasRenderingContext2D, width: number, ppf: 
 
 /** The intro (and its splits), B-roll spots, story and outro, as coloured spans with their names. */
 function drawSections(ctx: CanvasRenderingContext2D, width: number, ppf: number, scrollX: number, parts: Section[]) {
-  ctx.font = "500 10px 'Geist Variable', system-ui, sans-serif";
+  ctx.font = "500 10px Inter, system-ui, sans-serif";
   ctx.textBaseline = "middle";
   for (const part of parts) {
     const x0 = part.start * ppf - scrollX;

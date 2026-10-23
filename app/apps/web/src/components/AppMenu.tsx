@@ -1,4 +1,4 @@
-// The ⋯ menu at the top (settings, reporting a problem) and the dialogs it opens.
+// The account menu at the top right (your avatar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens.
 
 import { Bug, Check, Copy, Ellipsis, LogIn, LogOut, RotateCw, ScrollText, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -11,7 +11,8 @@ import { buildReport, closeReport, copyText, openReport, useReport } from "../li
 import { writeSetting } from "../lib/storage";
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
 import { ClaudeMark, OpenAIMark } from "./AgentPanel";
-import { toggleMenu } from "./ContextMenu";
+import { toggleMenu, type MenuItem } from "./ContextMenu";
+import { StartedBy } from "./StartedBy";
 import { cx, IconButton, Modal, Select, Tabs } from "./ui";
 
 export function AppMenu() {
@@ -19,36 +20,41 @@ export function AppMenu() {
   useEffect(() => {
     void loadAccount();
   }, []);
-  // Who's signed in (accounts.spheceo.com), and signing out; or signing in.
-  const who =
-    account === null
-      ? []
-      : account.signed_in && account.person !== null
-        ? [
-            { label: `Signed in as ${account.person.email}`, icon: <UserRound size={14} />, onSelect: () => window.open(account.accounts, "_blank", "noopener") },
-            { label: "Sign out", icon: <LogOut size={14} />, onSelect: () => void signOut() },
-          ]
-        : account.available
-          ? [{ label: "Sign in…", icon: <LogIn size={14} />, onSelect: () => void signIn() }]
-          : [];
+  const person = account?.signed_in ? account.person : null;
+  // The kit’s account menu, always in this order: who you are, Manage account, the app’s own items, then Sign out.
+  const items: MenuItem[] = [
+    ...(person !== null && account !== null
+      ? ([
+          { person: { name: person.name, email: person.email, picture: person.image } },
+          { label: "Manage account", icon: <UserRound size={14} />, onSelect: () => window.open(account.accounts, "_blank", "noopener") },
+          { separator: true },
+        ] as MenuItem[])
+      : []),
+    { label: "Settings", icon: <Settings size={14} />, shortcut: "⌘,", onSelect: () => openDialog("settings") },
+    { label: "Logs", icon: <ScrollText size={14} />, onSelect: () => openDialog("logs") },
+    { label: "Report a problem…", icon: <Bug size={14} />, onSelect: () => openReport() },
+    { separator: true },
+    person !== null
+      ? { label: "Sign out", icon: <LogOut size={14} />, onSelect: () => void signOut() }
+      : { label: "Sign in…", icon: <LogIn size={14} />, disabled: account === null || !account.available, onSelect: () => void signIn() },
+  ];
+  const open = (event: React.MouseEvent<HTMLElement>) => toggleMenu(event.currentTarget, items, { width: 260 });
+  if (person === null) {
+    return (
+      <IconButton label="More" onClick={open}>
+        <Ellipsis size={16} />
+      </IconButton>
+    );
+  }
   return (
-    <IconButton
-      label="More"
-      onClick={(event) =>
-        toggleMenu(
-          event.currentTarget,
-          [
-            ...who,
-            { label: "Settings", icon: <Settings size={14} />, shortcut: "⌘,", onSelect: () => openDialog("settings") },
-            { label: "Logs", icon: <ScrollText size={14} />, onSelect: () => openDialog("logs") },
-            { label: "Report a problem…", icon: <Bug size={14} />, onSelect: () => openReport() },
-          ],
-          { width: account?.signed_in ? 280 : 210 },
-        )
-      }
+    <button
+      title={person.name || person.email}
+      aria-label="Your account"
+      onClick={open}
+      className="ml-1 shrink-0 rounded-full shadow-[0_0_0_2px_var(--color-bg),0_0_0_3.5px_var(--color-line-strong)]"
     >
-      <Ellipsis size={16} />
-    </IconButton>
+      <StartedBy by={{ sub: "", name: person.name || person.email, ...(person.image ? { picture: person.image } : {}) }} size={32} title={null} />
+    </button>
   );
 }
 
@@ -71,7 +77,7 @@ export function AppDialogs() {
     <>
       <Modal open={open === "settings"} onClose={closeDialog} width={480}>
         <DialogHeader title="Settings" />
-        <div className="flex max-h-[72vh] flex-col gap-6 overflow-y-auto px-5 pb-5">
+        <div className="flex max-h-[72vh] flex-col gap-6 overflow-y-auto px-6 pb-6">
           <ToolSettings />
           <UpdateSettings />
         </div>
@@ -92,7 +98,7 @@ interface LogLine {
   message: string;
 }
 
-/** Edit's log as it happens: what it's doing (downloads, cuts, the agent, exports) and what went wrong, newest at the bottom. */
+/** Edit’s log as it happens: what it’s doing (downloads, cuts, the agent, exports) and what went wrong, newest at the bottom. */
 function LogsView() {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [problems, setProblems] = useState(false);
@@ -136,13 +142,13 @@ function LogsView() {
     setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <div className="flex flex-col gap-3 px-5 pb-5">
+    <div className="flex flex-col gap-3 px-6 pb-6">
       <div className="flex items-center gap-2">
         <input
           value={words}
           onChange={(event) => setWords(event.target.value)}
           placeholder="Search the log"
-          className="h-8 flex-1 rounded-lg border border-line bg-panel px-2.5 text-[13px] outline-none placeholder:text-faint focus:border-line-strong"
+          className="h-8 flex-1 rounded-lg border border-line bg-panel px-2.5 text-[13px] outline-none placeholder:text-faint focus:border-muted"
         />
         <Select value={area} onChange={setArea} options={areas.map((one) => ({ value: one, label: one === "all" ? "Everything" : one }))} />
         <Tabs<"all" | "problems">
@@ -169,15 +175,15 @@ function LogsView() {
           shown.map((line, index) => (
             <div key={`${line.at}-${index}`} className="flex gap-3 px-3 hover:bg-white/[0.03]">
               <span className="shrink-0 text-faint tabular">{time(line.at)}</span>
-              <span className={cx("w-14 shrink-0 truncate", line.level === "error" ? "text-red-300" : line.level === "warn" ? "text-amber-300" : "text-muted")}>{line.area}</span>
-              <span className={cx("min-w-0 flex-1 break-words whitespace-pre-wrap", line.level === "error" ? "text-red-200" : line.level === "warn" ? "text-amber-100" : "text-fg/85")}>{line.message}</span>
+              <span className={cx("w-14 shrink-0 truncate", line.level === "error" ? "text-danger" : line.level === "warn" ? "text-warning" : "text-muted")}>{line.area}</span>
+              <span className={cx("min-w-0 flex-1 break-words whitespace-pre-wrap", line.level === "error" ? "text-danger" : line.level === "warn" ? "text-warning" : "text-fg/85")}>{line.message}</span>
             </div>
           ))
         )}
       </div>
       <div className="flex items-center justify-between text-[12px] text-faint">
         <span>
-          {shown.length} of {lines.length} lines · the full log is kept in Edit's data folder
+          {shown.length} of {lines.length} lines · the full log is kept in Edit’s data folder
         </span>
         <div className="flex gap-2">
           <button className="h-8 rounded-lg px-3 text-[13px] text-muted hover:text-fg" onClick={() => void fetch("/api/logs/reveal", { method: "POST" })}>
@@ -217,16 +223,16 @@ function ReportDialog() {
   return (
     <Modal open={open} onClose={closeReport} width={640}>
       <DialogHeader title="Report a problem" />
-      <div className="flex flex-col gap-3 px-5 pb-5">
+      <div className="flex flex-col gap-3 px-6 pb-6">
         <p className="text-[13px] leading-relaxed text-muted">
           {trigger ? <span className="text-fg">{trigger}. </span> : null}
-          Copy this report and paste it to whoever is fixing Edit: it has what went wrong, Edit's recent log and how long things took. Nothing is sent anywhere.
+          Copy this report and paste it to whoever is fixing Edit: it has what went wrong, Edit’s recent log and how long things took. Nothing is sent anywhere.
         </p>
         <input
           value={comment}
           onChange={(event) => setComment(event.target.value)}
           placeholder="What were you doing? (optional)"
-          className="h-8 rounded-lg border border-line bg-panel px-2.5 text-[13px] outline-none placeholder:text-faint focus:border-line-strong"
+          className="h-8 rounded-lg border border-line bg-panel px-2.5 text-[13px] outline-none placeholder:text-faint focus:border-muted"
         />
         <textarea
           readOnly
@@ -343,7 +349,7 @@ function ToolSettings() {
           />
         </Line>
       </Card>
-      {problem && <p className="mt-2 text-[12px] text-red-300">{problem}</p>}
+      {problem && <p className="mt-2 text-[12px] text-danger">{problem}</p>}
     </Group>
   );
 }
@@ -398,12 +404,12 @@ function Fix({ command }: { command: string }) {
       className="ml-11 flex min-w-0 items-center gap-2 self-start rounded-md border border-line bg-black/40 px-2 py-1 font-mono text-[11px] text-muted hover:text-fg"
     >
       <span className="truncate">{command}</span>
-      {copied ? <Check size={12} className="shrink-0 text-green-400" /> : <Copy size={12} className="shrink-0" />}
+      {copied ? <Check size={12} className="shrink-0 text-success" /> : <Copy size={12} className="shrink-0" />}
     </button>
   );
 }
 
-/** This build and the update channel: Nightly (every nightly as it's out) or Stable (releases only). */
+/** This build and the update channel: Nightly (every nightly as it’s out) or Stable (releases only). */
 function UpdateSettings() {
   const status = useUpdate((state) => state.status);
   const [error, setError] = useState<string | null>(null);
@@ -433,22 +439,22 @@ function UpdateSettings() {
       </Card>
       <p className="mt-2 px-1 text-[12px] leading-relaxed text-muted">
         {status && !status.enabled
-          ? "This is a dev build: it doesn't update itself. Pull and rebuild."
+          ? "This is a dev build: it doesn’t update itself. Pull and rebuild."
           : status?.latest
             ? `${status.latest} is out: update from the button at the top. Edit restarts itself; your work is saved.`
             : status?.channel === "stable"
-              ? "Up to date. Stable moves only on a release; a nightly you're on now waits for the next one."
-              : "Up to date. Nightlies are pre-releases, out as soon as they're built; one click at the top installs a new one."}
+              ? "Up to date. Stable moves only on a release; a nightly you’re on now waits for the next one."
+              : "Up to date. Nightlies are pre-releases, out as soon as they’re built; one click at the top installs a new one."}
       </p>
-      {error && <p className="mt-2 px-1 text-[12px] text-red-300">{error}</p>}
+      {error && <p className="mt-2 px-1 text-[12px] text-danger">{error}</p>}
     </Group>
   );
 }
 
 function DialogHeader({ title }: { title: string }) {
   return (
-    <div className="flex h-12 items-center px-5">
-      <span className="text-[15px] font-semibold">{title}</span>
+    <div className="flex items-center px-6 pt-6 pb-4">
+      <h2 className="text-[18px] font-semibold tracking-[-0.3px]">{title}</h2>
     </div>
   );
 }
@@ -457,7 +463,7 @@ function Group({ title, action, children }: { title: string; action?: ReactNode;
   return (
     <section className="flex flex-col">
       <div className="mb-2 flex h-6 items-center justify-between px-1">
-        <span className="text-[11px] font-medium tracking-wide text-faint uppercase">{title}</span>
+        <span className="text-[13px] font-medium text-muted">{title}</span>
         {action}
       </div>
       {children}
@@ -472,11 +478,11 @@ function Card({ children }: { children: ReactNode }) {
 function StatusPill({ state }: { state?: string }) {
   const [label, tone] =
     state === "ready"
-      ? ["Ready", "bg-green-500/15 text-green-300"]
+      ? ["Ready", "bg-success-soft text-success"]
       : state === "logged_out"
-        ? ["Signed out", "bg-amber-500/15 text-amber-300"]
+        ? ["Signed out", "bg-warning-soft text-warning"]
         : state === "missing"
-          ? ["Not installed", "bg-red-500/15 text-red-300"]
+          ? ["Not installed", "bg-danger-soft text-danger"]
           : ["Checking…", "bg-hover text-muted"];
   return <span className={cx("shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>;
 }

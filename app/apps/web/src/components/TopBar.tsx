@@ -10,7 +10,7 @@ import { useEditor } from "../lib/store";
 import { AgentMark } from "./AgentPanel";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
-import { Mark } from "./Logo";
+import { Tile } from "./Logo";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton } from "./ui";
@@ -18,6 +18,7 @@ import { Button, cx, IconButton } from "./ui";
 export function TopBar({ onExport }: { onExport: () => void }) {
   const name = useEditor((state) => state.project?.name ?? "");
   const createdBy = useEditor((state) => state.project?.created_by);
+  const projectId = useEditor((state) => state.project?.id);
   const down = useConnection((state) => state.down);
   const agentActive = useEditor((state) => state.agentActive > 0);
   const showAgent = useEditor((state) => state.showAgent);
@@ -29,9 +30,9 @@ export function TopBar({ onExport }: { onExport: () => void }) {
       <IconButton label="All projects" onClick={() => navigate("/")}>
         <ChevronLeft size={17} />
       </IconButton>
-      <Mark size={20} />
+      <Tile size={22} />
       <NameField value={name} />
-      <StartedBy by={createdBy} size={22} />
+      <StartedBy by={createdBy} projectId={projectId} size={32} />
       <History />
       <SyncState />
       {/* Only worth a word when the server is away. */}
@@ -42,7 +43,7 @@ export function TopBar({ onExport }: { onExport: () => void }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.12 }}
-            className="ml-1 text-[12px] text-amber-300/80"
+            className="ml-1 text-[12px] text-warning/80"
           >
             Reconnecting…
           </motion.span>
@@ -56,7 +57,6 @@ export function TopBar({ onExport }: { onExport: () => void }) {
           {agentActive && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-agent" />}
         </IconButton>
         <DriveButton />
-        <AppMenu />
         <Button variant="primary" className="ml-1.5" onClick={onExport}>
           {exportState?.state === "running" ? (
             <span className="tabular">{Math.round(exportState.progress * 100)}%</span>
@@ -65,18 +65,19 @@ export function TopBar({ onExport }: { onExport: () => void }) {
           )}
           Export
         </Button>
+        <AppMenu />
       </div>
     </header>
   );
 }
 
-/** A cloud project's sync: saved to cloud, syncing, offline, conflict, read-only. */
+/** A cloud project’s sync: saved to cloud, syncing, offline, conflict, read-only. */
 function SyncState() {
   const cloud = useEditor((state) => state.cloud);
   const label = syncLabel(cloud);
   if (!label) return null;
   const Icon = { ok: CloudCheck, busy: CloudSync, warn: label.text === "Read-only" ? Lock : CloudOff, bad: CloudAlert }[label.tone];
-  const title = cloud?.missing ?? cloud?.message ?? (cloud?.sync === "readonly" ? `${cloud.holder} is editing` : cloud?.sync === "offline" ? "Changes are saved on this Mac and go to the cloud when it's back" : label.text);
+  const title = cloud?.missing ?? cloud?.message ?? (cloud?.sync === "readonly" ? `${cloud.holder} is editing` : cloud?.sync === "offline" ? "Changes are saved on this Mac and go to the cloud when it’s back" : label.text);
   return (
     <span
       title={title}
@@ -84,8 +85,8 @@ function SyncState() {
         "ml-1 flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[12px]",
         label.tone === "ok" && "text-faint",
         label.tone === "busy" && "text-muted",
-        label.tone === "warn" && "text-amber-300/80",
-        label.tone === "bad" && "text-red-300",
+        label.tone === "warn" && "text-warning/80",
+        label.tone === "bad" && "text-danger",
       )}
     >
       <Icon size={14} className={label.tone === "busy" ? "animate-pulse" : undefined} />
@@ -94,7 +95,7 @@ function SyncState() {
   );
 }
 
-/** The edit's export on the team's Drive: its upload, then its link. */
+/** The edit’s export on the team’s Drive: its upload, then its link. */
 function DriveButton() {
   const projectId = useEditor((state) => state.project?.id ?? "");
   const drive = useDriveLink(projectId, useEditor((state) => state.project?.drive));
@@ -158,7 +159,7 @@ function NameField({ value }: { value: string }) {
   );
 }
 
-/** Undo and redo (⌘Z, ⇧⌘Z): every edit, in and out points, imports and the agent's changes. */
+/** Undo and redo (⌘Z, ⇧⌘Z): every edit, in and out points, imports and the agent’s changes. */
 function History() {
   const canUndo = useEditor((state) => state.past.length > 0);
   const canRedo = useEditor((state) => state.future.length > 0);

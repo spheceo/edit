@@ -1,4 +1,4 @@
-/** The Edit mark: three timeline clips forming an E, cut by a playhead. */
+/** The Edit mark: three timeline clips forming an E, cut by a playhead (the bare glyph). */
 export function Mark({ size = 20, cut = "#000" }: { size?: number; cut?: string }) {
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden>
@@ -17,11 +17,16 @@ export function Mark({ size = 20, cut = "#000" }: { size?: number; cut?: string 
   );
 }
 
-export function Logo({ size = 20 }: { size?: number }) {
+/** The mark on its tile, as every spheceo app shows its own (design/kit/icons/edit/mark.svg): 22 px in a header, 56 on the sign-in, 64 in an empty state. */
+export function Tile({ size = 22 }: { size?: number }) {
+  return <img src="/edit-mark.svg" width={size} height={size} alt="" aria-hidden className="block shrink-0" />;
+}
+
+export function Logo({ size = 22 }: { size?: number }) {
   return (
     <span className="inline-flex items-center gap-2">
-      <Mark size={size} />
-      <span className="text-[15px] font-semibold tracking-[-0.02em] text-fg">Edit</span>
+      <Tile size={size} />
+      <span className="text-[15px] font-semibold tracking-[-0.01em] text-fg">Edit</span>
     </span>
   );
 }

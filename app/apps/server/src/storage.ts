@@ -28,6 +28,8 @@ export interface ExportConfirmation {
 }
 
 export interface StorageReport {
+  /** One offline state for the whole app: false means show "offline". */
+  online: boolean;
   home: string;
   totalBytes: number;
   budgetBytes: number;
@@ -124,5 +126,5 @@ export function storageReport(home: string): StorageReport {
   let diskFreeBytes: number | null = null;
   try { const s = fs.statfsSync(home); diskFreeBytes = s.bavail * s.bsize; } catch { diskFreeBytes = null; }
   const budgetBytes = localBudgetBytes();
-  return { home, totalBytes, budgetBytes, overBudgetBytes: Math.max(totalBytes - budgetBytes, 0), diskFreeBytes, sections, exports: exportConfirmations(home) };
+  return { online: cloud.enabled(), home, totalBytes, budgetBytes, overBudgetBytes: Math.max(totalBytes - budgetBytes, 0), diskFreeBytes, sections, exports: exportConfirmations(home) };
 }

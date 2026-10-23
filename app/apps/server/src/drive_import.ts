@@ -7,9 +7,13 @@
 // copy goes again a few days after it was last used (cache_cleanup.ts). Docs,
 // notes and pictures in the folder are left alone: only the footage matters.
 
+import * as fs from "node:fs";
+
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { importPaths, type Imported } from "./import.ts";
+import { startsWith } from "./paths.ts";
+import * as seams from "./seams.ts";
 import { curl, driveError, encode, quote } from "./library.ts";
 import { join } from "./paths.ts";
 import { serdeParse } from "./rust.ts";
@@ -64,5 +68,21 @@ export async function importDrive(app: App, id: string, url: string, place: bool
     const path = await diag.timeOnAsync("drive", "drive: download footage", one.name, () => script.download(dir, one.id, () => {}));
     paths.push(path);
   }
-  return importPaths(app, id, paths, place, origin);
+  const imported = await importPaths(app, id, paths, place, origin);
+  // Upload-once: Edit's downloaded staging copies go once their uploads are
+  // verified in the cloud (the import's background upload). A failed or
+  // pending upload keeps its copy — it may be the only one.
+  if (imported[2].length === 0) {
+    const root = app.store.uploadsDir(id);
+    for (const path of paths) {
+      void seams.cloudMedia.uploaded(path).then((ok) => { if (ok) removeStagedCopy(path, root); });
+    }
+  }
+  return imported;
+}
+
+/** Deletes a Drive staging copy under `root` (Edit's own copy only). Whether it went. */
+export function removeStagedCopy(path: string, root: string): boolean {
+  if (!startsWith(path, `${root}/`)) return false;
+  try { fs.rmSync(path, { force: true }); return !fs.existsSync(path); } catch { return false; }
 }

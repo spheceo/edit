@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { apply, applyWith, audit, BOARD_MARKER, BOARD_SHUTTER, hooks, needs, type Assets } from "../src/edit_plan.ts";
 import { frameKey } from "../src/desktop_screen.ts";
 import { frames } from "../src/markers.ts";
-import type { Clip, Project, TextClip, VideoClip } from "../src/model.ts";
+import type { Project, TextClip, VideoClip } from "../src/model.ts";
 import { native } from "../src/native/index.ts";
 import { sample, trackOf } from "../src/project.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -204,125 +204,59 @@ function boardProject(photos: number): Project {
   return p;
 }
 
-const f = Math.fround;
 
-/** The camera's speed (px a frame) at `frame` of a board element, from its x and y keyframes as the renderer samples them. */
-function boardSpeed(own: Clip, frame: number): number {
-  const at = (param: string, at: number) => sample(own.keyframes![param]!, at)!;
-  const step = f(0.02);
-  const dx = f(at("x", f(frame + step)) - at("x", f(frame - step)));
-  const dy = f(at("y", f(frame + step)) - at("y", f(frame - step)));
-  return f(f(Math.hypot(dx, dy)) / f(2 * step));
-}
 
-/**
- * One continuous movement: never a stop, the speed smooth through every key,
- * easing a little at each photo (`photos`: when each is centred) and picking
- * up between, within ~0.5x-1.5x its average from first to last.
- */
-function assertGlides(own: Clip, photos: number[], end: number): void {
-  const speed = (frame: number) => boardSpeed(own, frame);
-  for (const key of own.keyframes!.x!) {
-    if (key.frame > 0.5 && key.frame < end - 0.5) {
-      const [before, here, after] = [speed(f(key.frame - 0.1)), speed(key.frame), speed(f(key.frame + 0.1))];
-      const jump = Math.abs(after - here - (here - before));
-      expect(jump, `jolt at ${key.frame}: ${before}, ${here}, ${after}`).toBeLessThan(0.05 + 0.01 * here);
-    }
-  }
-  // From one photo to the next it only eases a little and picks up a little.
-  for (let index = 0; index + 1 < photos.length; index++) {
-    const [from, to] = [photos[index]!, photos[index + 1]!];
-    const speeds = Array.from({ length: Math.trunc((to - from) * 4) + 1 }, (_, step) => speed(from + step * 0.25));
-    const average = speeds.reduce((sum, value) => sum + value, 0) / speeds.length;
-    const slowest = Math.min(...speeds);
-    const fastest = Math.max(0, ...speeds);
-    expect(slowest > 0.5 * average && fastest < 1.35 * average, `${from}-${to}: ${slowest} to ${fastest}, average ${average}`).toBe(
-      true,
-    );
-  }
-  // Slowest as it passes each photo between the first and the last.
-  for (const at of photos.slice(1, -1)) {
-    expect(speed(at) < speed(at - 3) && speed(at) < speed(at + 3), `not easing at the photo at ${at}`).toBe(true);
-  }
-  // Before the first photo and after the last it drifts, never stops.
-  for (let step = 0; step < Math.trunc(end); step++) expect(speed(step + 0.5), `stopped at ${step}`).toBeGreaterThan(0.3);
-}
 
-test("an_evidence_boards_title_is_written_over_its_first_photo_and_moves_with_it", () => {
+test("an_evidence_boards_title_is_written_over_the_board_and_moves_with_it", () => {
   const p = boardProject(2);
   apply(p, [{ op: "evidence_board", start: 0, end: 200, title: "Nevaeh's account", items: [{ media: "m1", label: "the bed", at: 60 }, { media: "m2", label: "the window", at: 140 }] }]);
   const title = clipNamed(p, "Evidence board · title") as TextClip;
   const photo = clipNamed(p, "Evidence board · photo 1");
   expect([title.text, title.start, title.duration, title.style.font]).toEqual(["Nevaeh's account", 0, 200, "Reenie Beanie"]);
-  // Above the photo by the same distance all the way down the board.
-  for (const frame of [0, 60, 140, 199]) {
-    expect(Math.abs(sample(title.keyframes!.x!, frame)! - sample(photo.keyframes!.x!, frame)!)).toBeLessThan(0.5);
-    expect(sample(photo.keyframes!.y!, frame)! - sample(title.keyframes!.y!, frame)!).toBeCloseTo(0.4 * 1080, 0);
-  }
+  // Above the photos, keeping its place on the board as the board drifts.
+  const gap = (frame: number) => sample(photo.keyframes!.y!, frame - photo.start)! - sample(title.keyframes!.y!, frame)!;
+  for (const frame of [photo.start, 100, 199]) expect(gap(frame)).toBeCloseTo(gap(photo.start), 0);
+  expect(gap(photo.start)).toBeGreaterThan(0.3 * 1080);
 });
 
-test("an_evidence_board_glides_continuously_past_photos_centred_on_their_words", () => {
-  const p = boardProject(5);
-  const ats = [139, 165, 185, 207, 243];
+test("an_evidence_board_shows_at_most_four_photos_side_by_side_each_a_beat_before_its_word_drifting_slowly", () => {
+  // JJ, Mom & Teen v7: "far, far, far too rehearsed… a lot smoother"; Mom Leaves v5: "slower so we can actually see what is going on".
+  const p = boardProject(4);
+  const ats = [139, 165, 207, 243];
   const items = ats.map((at, index) => ({ media: `m${index + 1}`, label: "zip ties", at }));
   const result = apply(p, [{ op: "evidence_board", start: 100, end: 346, illustrative: true, items }]);
-  // Paper, five photos and notes, the vignette, "Illustrative images".
-  expect(p.clips.length).toBe(13);
+  // Paper, four photos and notes, the vignette, "Illustrative images".
+  expect(p.clips.length).toBe(11);
   const report = result.results[0] as Record<string, unknown>;
   expect(report.end).toBe(346);
   expect(report.centred).toEqual(ats);
+  const where: [number, number][] = [];
   ats.forEach((at, index) => {
     const photo = clipNamed(p, `Evidence board · photo ${index + 1}`);
-    expect([photo.start, photo.duration]).toEqual([100, 246]);
-    for (const param of ["x", "y"]) {
-      const value = sample(photo.keyframes![param]!, at - 100)!;
-      expect(Math.abs(value), `photo ${index} ${param} ${value} at its word`).toBeLessThan(0.5);
-    }
-    assertGlides(photo, [39, 65, 85, 107, 143], 246);
+    // In 20 frames before its word, fading in, held to the end.
+    expect([photo.start, photo.start + photo.duration, photo.fade_in]).toEqual([at - 20, 346, 10]);
+    const at0 = (param: string) => sample(photo.keyframes![param]!, 0)!;
+    const atEnd = (param: string) => sample(photo.keyframes![param]!, photo.duration - 1)!;
+    // On screen the whole time, and moving slowly (about a pixel a frame at most).
+    for (const value of [at0("x"), atEnd("x")]) expect(Math.abs(value)).toBeLessThan(0.5 * 1920);
+    for (const value of [at0("y"), atEnd("y")]) expect(Math.abs(value)).toBeLessThan(0.5 * 1080);
+    expect(Math.abs(atEnd("y") - at0("y")) / photo.duration).toBeLessThan(1.2);
+    expect(Math.abs(atEnd("x") - at0("x"))).toBeLessThan(0.5);
+    where.push([at0("x"), at0("y")]);
   });
-  // Each note writes on as its photo comes in, moving with the board.
-  const note = clipNamed(p, "Evidence board · note 2");
-  expect(note.start).toBe(165 - 8);
-  const photo = clipNamed(p, "Evidence board · photo 2");
-  const offset = (frame: number, param: string) =>
-    sample(note.keyframes![param]!, frame)! - sample(photo.keyframes![param]!, frame + 57)!;
-  for (const frame of [5, 10, 40, 100, 188]) {
-    for (const param of ["x", "y"]) {
-      const [now, first] = [offset(frame, param), offset(0, param)];
-      expect(Math.abs(now - first), `note drifts from its photo: ${now} vs ${first}`).toBeLessThan(0.5);
-    }
-  }
-  // Nothing to flag but the empty timeline before the board.
-  const issues = issuesOf(p);
-  expect(issues.every((issue) => issue.kind === "picture_gap" && issue.end === 100)).toBe(true);
-  // Every item needs at once one has it, in order.
+  // Two by two: left and right, top and bottom.
+  expect(where[0]![0]).toBeLessThan(0);
+  expect(where[1]![0]).toBeGreaterThan(0);
+  expect(where[2]![1]).toBeGreaterThan(where[0]![1]);
+  // Notes write on as their photo comes in.
+  expect(clipNamed(p, "Evidence board · note 2").start).toBe(165 - 8);
+  // Five is too many to read.
+  expect(() => apply(boardProject(5), [{ op: "evidence_board", start: 0, items: [1, 2, 3, 4, 5].map((n) => ({ media: `m${n}`, at: n * 30 })) }])).toThrow("1 to 4 photos");
+  // Every item needs at once one has it, in order, inside the board.
   const bad = boardProject(2);
   expect(() => apply(bad, [{ op: "evidence_board", start: 0, items: [{ media: "m1", at: 10 }, { media: "m2" }] }])).toThrow();
-  expect(() =>
-    apply(bad, [
-      {
-        op: "evidence_board",
-        start: 0,
-        items: [
-          { media: "m1", at: 30 },
-          { media: "m2", at: 20 },
-        ],
-      },
-    ]),
-  ).toThrow();
-  expect(() =>
-    apply(bad, [
-      {
-        op: "evidence_board",
-        start: 0,
-        end: 20,
-        items: [
-          { media: "m1", at: 10 },
-          { media: "m2", at: 30 },
-        ],
-      },
-    ]),
-  ).toThrow();
+  expect(() => apply(bad, [{ op: "evidence_board", start: 0, items: [{ media: "m1", at: 30 }, { media: "m2", at: 20 }] }])).toThrow();
+  expect(() => apply(bad, [{ op: "evidence_board", start: 0, end: 20, items: [{ media: "m1", at: 10 }, { media: "m2", at: 30 }] }])).toThrow();
 });
 
 test("an_evidence_board_keeps_the_old_frames_timing", () => {
@@ -343,10 +277,7 @@ test("an_evidence_board_keeps_the_old_frames_timing", () => {
   expect(report.end).toBe(60 * 3 + 30 * 2);
   expect(report.centred).toEqual([30, 120, 210]);
   expect(p.clips.length).toBe(7);
-  const photo = clipNamed(p, "Evidence board · photo 2");
-  const x = sample(photo.keyframes!.x!, 120)!;
-  expect(Math.abs(x)).toBeLessThan(0.5);
-  assertGlides(photo, [30, 120, 210], 240);
+  expect(clipNamed(p, "Evidence board · photo 2").start).toBe(120 - 20);
   expect(clipNamed(p, "Evidence board · note 2").start).toBe(120 - 12);
   expect(issuesOf(p)).toEqual([]);
 });

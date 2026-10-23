@@ -36,7 +36,7 @@ import {
   trackOf,
 } from "./project.ts";
 import { isBug } from "./guard.ts";
-import { asInt, compareStrings, f32Saved as f32, idiv, jsonForSerde, remEuclid, round, trim } from "./rust.ts";
+import { asInt, compareStrings, f32Saved as f32, idiv, jsonForSerde, round, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { HIT } from "./sfx.ts";
 import { readStruct, SerdeError, type Struct } from "./serde.ts";
@@ -570,24 +570,6 @@ function transition(project: Project, args: Args): Json {
 
 /** The evidence board's glide between photos (frames) in the old `frames`/`pan` timing, unless told otherwise. */
 const BOARD_PAN = 30;
-/**
- * How fast the camera passes each photo: this share of its average speed on
- * the way in and out. It eases a little to show each photo and picks up
- * between them (peaking ~1.25x the average); it never stops.
- */
-const BOARD_PASS = 0.7;
-/** The camera picks up speed into the first photo over the whole way in (at most this many frames, a slow drift before that)... */
-const BOARD_LEAD = 45;
-/**
- * ...from at most this share of the frame's height before it, so the photo is
- * rising into the picture from the board's first frame (on a short way in it
- * arrives a little slower than BOARD_PASS would have it).
- */
-const BOARD_LEAD_REACH = 0.4;
-/** After the last photo it settles into the slow drift within this many frames... */
-const BOARD_SETTLE = 36;
-/** ...and this share of the frame's height, so the last photo stays in the picture to the board's end. */
-const BOARD_SETTLE_REACH = 0.17;
 /** That slow drift (px a frame at 1080p): slow, but still visibly moving. */
 const BOARD_DRIFT = 1;
 /**
@@ -751,8 +733,9 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
   const given = int(args.start);
   if (given === null) throw new Error("evidence_board needs start (frames)");
   const start = Math.max(given, 0);
-  const items = Array.isArray(args.items) && args.items.length > 0 && args.items.length <= 8 ? (args.items as unknown[]).map(objectOf) : null;
-  if (items === null) throw new Error("evidence_board needs items: 1 to 8 photos [{media, label, at}]");
+  // At most four: JJ on Mom & Teen's five-photo board, "far, far, far too rehearsed… a lot smoother".
+  const items = Array.isArray(args.items) && args.items.length > 0 && args.items.length <= 4 ? (args.items as unknown[]).map(objectOf) : null;
+  if (items === null) throw new Error("evidence_board needs items: 1 to 4 photos [{media, label, at}] (more is too busy to read: make two boards, or keep the ones that matter)");
   const [width, height] = [project.settings.width, project.settings.height];
   const k = height / 1080;
   // When each photo is centred (board frames) and how long the board lasts.
@@ -787,98 +770,22 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
     }
     total = at - lastPan;
   }
-  // Where each photo sits on the board (its centre, project pixels): down the
-  // board, alternately straight under and off to the right.
-  const spot = (index: number): Point => [remEuclid(index, 2) === 0 ? 0 : 0.42 * width, index * 0.5 * height];
-  const spots: Point[] = items.map((_, index) => spot(index));
+  // Where each photo sits (its centre, project pixels): all of them on the
+  // screen at once, side by side (two rows for three or four), never a camera
+  // swinging from one to the next (JJ: "slower so we can actually see what is
+  // going on", "This is simply not smooth enough").
+  const columns = items.length === 1 ? 1 : 2;
+  const rows = Math.ceil(items.length / columns);
+  const spots: Point[] = items.map((_, index) => {
+    const [row, column] = [Math.floor(index / columns), index % columns];
+    const inRow = Math.min(columns, items.length - row * columns);
+    const x = inRow === 1 ? 0 : (column === 0 ? -1 : 1) * 0.235 * width;
+    const y = rows === 1 ? 0.04 * height : (row === 0 ? -0.17 : 0.25) * height;
+    return [x, y];
+  });
   const drift = BOARD_DRIFT * k;
-  // The camera's path: through every photo heading down the board's way (from
-  // the photo before to the one after, as if the zig-zag carried on past the
-  // ends), so it turns as it passes each photo and swings across between
-  // them, one smooth S down the board.
-  const headings: Point[] = spots.map((_, index) => {
-    const [[ax, ay], [bx, by]] = [spot(index - 1), spot(index + 1)];
-    const length = Math.max(Math.hypot(bx - ax, by - ay), 1);
-    return [(bx - ax) / length, (by - ay) / length];
-  });
-  // How hard the curve leaves each photo: how far the neighbours are along
-  // the heading (straight down the board, the curve's y moves evenly).
-  const pulls = headings.map(([hx, hy], index) => {
-    const around: number[] = [];
-    for (const from of [index - 1, index]) {
-      const a = spots[from];
-      const b = spots[from + 1];
-      if (from < 0 || a === undefined || b === undefined) continue;
-      around.push(Math.abs((b[0] - a[0]) * hx + (b[1] - a[1]) * hy));
-    }
-    return Math.max(around.reduce((sum, value) => sum + value, 0) / Math.max(around.length, 1), 1);
-  });
-  const scaled = (index: number): Point => {
-    const [hx, hy] = headings[index] ?? [0, 1];
-    const pull = pulls[index] ?? 1;
-    return [hx * pull, hy * pull];
-  };
-  const glides: Stretch[] = [];
-  for (let index = 0; index + 1 < spots.length; index++) {
-    const from = centred[index];
-    const to = centred[index + 1];
-    if (from === undefined || to === undefined) continue;
-    glides.push(new Stretch(from, to, spots[index]!, scaled(index), spots[index + 1]!, scaled(index + 1)));
-  }
-  // Passing each photo at BOARD_PASS of the average speed either side (no
-  // faster than the slower side's average, so each stretch's speed rises in
-  // its middle and never dips below its ends).
-  const averages = glides.map((glide) => glide.length() / Math.max(glide.to - glide.from, 1));
-  const passes = spots.map((_, index) => {
-    const around = [index > 0 ? averages[index - 1] : undefined, averages[index]].filter(
-      (value): value is number => value !== undefined,
-    );
-    if (around.length === 0) return drift;
-    const mean = around.reduce((sum, value) => sum + value, 0) / around.length;
-    const slowest = around.reduce((low, value) => Math.min(low, value), Number.POSITIVE_INFINITY);
-    return Math.min(Math.max(BOARD_PASS * mean, drift), slowest);
-  });
-  // The way in: picking up speed evenly over the last BOARD_LEAD frames
-  // before the first photo, from no further than BOARD_LEAD_REACH.
-  const firstAt = centred[0] ?? 0;
-  const lead = Math.min(firstAt, BOARD_LEAD);
-  if (passes.length > 0 && lead > 0) {
-    passes[0] = Math.max(Math.min(passes[0]!, (2 * BOARD_LEAD_REACH * height) / lead - drift), drift);
-  }
-  glides.forEach((glide, index) => {
-    glide.enter = passes[index] ?? drift;
-    glide.leave = passes[index + 1] ?? drift;
-  });
-  const along = ([x, y]: Point, [hx, hy]: Point, distance: number): Point => [x + hx * distance, y + hy * distance];
-  const path: Stretch[] = [];
-  const [spot0, heading0, pass0] = [spots[0], headings[0], passes[0]];
-  if (spot0 !== undefined && heading0 !== undefined && pass0 !== undefined && lead > 0) {
-    const begins = along(spot0, heading0, (-lead * (pass0 + drift)) / 2);
-    if (firstAt > lead) {
-      const drifts = along(begins, heading0, -drift * (firstAt - lead));
-      path.push(Stretch.straight([0, firstAt - lead], drifts, begins, drift, drift));
-    }
-    path.push(Stretch.straight([firstAt - lead, firstAt], begins, spot0, drift, pass0));
-  }
-  path.push(...glides);
-  // The way out: easing from the last photo into the drift within
-  // BOARD_SETTLE frames and BOARD_SETTLE_REACH, then drifting to the end.
-  const [lastAt, spotN, headingN, passN] = [
-    centred[centred.length - 1],
-    spots[spots.length - 1],
-    headings[headings.length - 1],
-    passes[passes.length - 1],
-  ];
-  if (lastAt !== undefined && spotN !== undefined && headingN !== undefined && passN !== undefined) {
-    const [last, end] = [lastAt, total];
-    const frames = Math.min(end - last, BOARD_SETTLE, (2 * BOARD_SETTLE_REACH * height) / (passN + drift));
-    const settles = along(spotN, headingN, (frames * (passN + drift)) / 2);
-    path.push(Stretch.straight([last, last + frames], spotN, settles, passN, drift));
-    if (end > last + frames) {
-      const ends = along(settles, headingN, drift * (end - last - frames));
-      path.push(Stretch.straight([last + frames, end], settles, ends, drift, drift));
-    }
-  }
+  // The camera: one slow, even drift over the whole board.
+  const path: Stretch[] = [Stretch.straight([0, total], [0, -drift * total * 0.5], [0, drift * total * 0.5], drift, drift)];
   // Where the camera is at `frame` (and how fast it's going).
   const cameraAt = (frame: number): CameraKey => {
     const stretch = path.find((own) => frame <= own.to) ?? path[path.length - 1];
@@ -931,12 +838,15 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
     if (mediaId === null) throw new Error(`item ${index + 1}: media (an image's media id) is required`);
     const media = mediaOf(project, mediaId);
     if (media === undefined) throw new Error(`item ${index + 1}: no media ${mediaId}`);
-    // About half the frame's height (no wider than ~60% of it).
+    // Half the frame's height alone, a third in two rows (no wider than its column).
     const [w, h] = [Math.max(media.width, 1), Math.max(media.height, 1)];
     const fit = Math.min(width / w, height / h);
-    let scale = (0.56 * height) / (h * fit);
-    if (w * fit * scale > 0.62 * width) scale = (0.62 * width) / (w * fit);
+    let scale = ((rows === 1 ? 0.5 : 0.33) * height) / (h * fit);
+    const widest = (columns === 1 ? 0.62 : 0.42) * width;
+    if (w * fit * scale > widest) scale = widest / (w * fit);
     const shown = h * fit * scale;
+    // In a beat before it's named (fading in), then held to the board's end.
+    const from = Math.max(at - 20, 0);
     const photo = addTrack(project, "video");
     add({
       type: "video",
@@ -944,19 +854,20 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
       track: photo,
       media: mediaId,
       source_in: 0,
-      start,
-      duration: total,
-      transform: { x: x - opening.x, y: y - opening.y, scale },
-      frame: { width: 16 * k, shadow: 0.5 },
-      keyframes: keys(x, y, 0),
+      start: start + from,
+      duration: total - from,
+      fade_in: from > 0 ? 10 : 0,
+      transform: { x: x - cameraAt(from).x, y: y - cameraAt(from).y, scale },
+      frame: { width: 12 * k, shadow: 0.5 },
+      keyframes: keys(x, y, from),
     });
     const label = str(item.label);
     if (label !== null && trim(label) !== "") notesLater.push(() => {
       // Written as the photo comes in: starting a little before it's centred
       // (a third of the way from the last one, at most 12 frames).
       const gap = index > 0 && centred[index - 1] !== undefined ? at - centred[index - 1]! : at;
-      const from = at - Math.min(idiv(gap, 3), 12);
-      const [lx, ly] = [x + (index % 2 === 0 ? 0.02 : -0.02) * width, y + shown / 2 + 0.06 * height];
+      const from = Math.max(at - Math.min(idiv(gap, 3), 12), 0);
+      const [lx, ly] = [x, y + shown / 2 + 0.045 * height];
       const track = addTrack(project, "video");
       const here = cameraAt(from);
       add({
@@ -979,7 +890,7 @@ function evidenceBoard(project: Project, args: Args, shutter: Shutter | null): J
   // account or what record the board is ("Nevaeh's account", "Prior reports").
   const title = str(args.title);
   if (title !== null && trim(title) !== "") {
-    const [tx, ty] = [spots[0]![0], spots[0]![1] - 0.4 * height];
+    const [tx, ty] = [0, -0.42 * height];
     const track = addTrack(project, "video");
     add({
       type: "text",

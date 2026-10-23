@@ -1033,7 +1033,15 @@ export function attach(app: App, cloudProjects: Cloud): void {
   accounts.beforeSignOut(() => releaseAll(app));
   server ??= { cloud: cloudProjects, app };
   if (cloudProjects.on()) diag.info("cloud", `cloud on as ${cloudProjects.holder()} (${relay.url()})`);
-  void loop(app, cloudProjects);
+  keepLooping(app, cloudProjects);
+}
+
+/** The sync loop, started again (and said so) if it ever throws: it stopped for the session without a word (the audit, Oct 23). */
+function keepLooping(app: App, cloudProjects: Cloud): void {
+  loop(app, cloudProjects).catch((error: unknown) => {
+    diag.error("cloud", `cloud sync stopped: ${diag.messageOf(error)}; starting it again`);
+    if (!cloudProjects.stopped) setTimeout(() => keepLooping(app, cloudProjects), 5000);
+  });
 }
 
 /** Stops `cloudProjects`' loop (tests; the server's runs until it exits). */

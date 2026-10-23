@@ -205,6 +205,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   };
   process.on("SIGINT", () => quit(130));
   process.on("SIGTERM", () => quit(143));
+  // A promise nobody waited on that failed: said in the log, where it used to go unseen (the audit, Oct 23).
+  process.on("unhandledRejection", (reason) => diag.error("server", `unhandled failure: ${diag.messageOf(reason)}${reason instanceof Error && reason.stack ? `\n${reason.stack}` : ""}`));
   const router = buildRouter();
   const servers: Server<unknown>[] = [];
   for (const address of bindAddresses(host, port, ip)) {

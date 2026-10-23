@@ -162,6 +162,11 @@ export class Processor {
     };
   }
 
+  /** Forgets what's known of a media key's files (cache_cleanup removed them): read from disk again when asked. */
+  forgetKey(key: string): void {
+    this.statuses.delete(key);
+  }
+
   status(source: string): MediaStatus {
     const known = this.statuses.get(mediaKey(source));
     return known !== undefined ? shown(known) : this.statusFromDisk(source);

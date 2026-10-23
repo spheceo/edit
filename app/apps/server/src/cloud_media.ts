@@ -500,6 +500,11 @@ const uploadSlot = new Semaphore(1);
  * there are none): true when they all went up, false when one failed (it's
  * tried again when Edit starts).
  */
+/** Whether an upload of `file` is still going (cache_cleanup leaves its copy alone). */
+export function uploadingNow(file: string): boolean {
+  return uploading.has(file);
+}
+
 export function uploaded(file: string): Promise<boolean> {
   return uploading.get(file)?.done ?? Promise.resolve(true);
 }

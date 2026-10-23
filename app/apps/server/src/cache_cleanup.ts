@@ -22,7 +22,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
-import { readLocalOriginals, writeLocalOriginals } from "./cloud_media.ts";
+import { readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { join } from "./paths.ts";
 
 /** Made again cheaply from the source. */
@@ -55,11 +55,17 @@ export interface CleanReport {
   removed: string[];
 }
 
-function size(path: string): number {
+/** Bytes under `path`, each file once however many hard links it has (a proxy and its preview are one file). */
+function size(path: string, seen = new Set<string>()): number {
   try {
     const stat = fs.statSync(path);
-    if (!stat.isDirectory()) return stat.size;
-    return fs.readdirSync(path).reduce((total, name) => total + size(join(path, name)), 0);
+    if (!stat.isDirectory()) {
+      const inode = `${stat.dev}:${stat.ino}`;
+      if (seen.has(inode)) return 0;
+      seen.add(inode);
+      return stat.size;
+    }
+    return fs.readdirSync(path).reduce((total, name) => total + size(join(path, name), seen), 0);
   } catch {
     return 0;
   }
@@ -87,8 +93,10 @@ function age(path: string, now: number): number {
  * media work started). Null when a project file won't read: then nothing it
  * might use is known, so everything counts as used.
  */
-function used(app: App): { paths: Set<string>; keys: Set<string>; saved: Map<string, number> } | null {
+function used(app: App): { paths: Set<string>; keys: Set<string>; saved: Map<string, number>; missing: number } | null {
   const paths = new Set<string>();
+  // Files a project uses that aren't here (a drive unplugged): their key can't be known.
+  let missing = 0;
   const keys = new Set<string>();
   // Each key's latest save of a project using it.
   const saved = new Map<string, number>();
@@ -100,12 +108,18 @@ function used(app: App): { paths: Set<string>; keys: Set<string>; saved: Map<str
       at = fs.statSync(join(dir, name)).mtimeMs;
       const value = JSON.parse(fs.readFileSync(join(dir, name), "utf8")) as { media?: { path?: unknown }[] };
       media = Array.isArray(value.media) ? value.media : [];
-    } catch {
+    } catch (error) {
+      diag.warn("cache", `${name} won't read, so nothing it might use is cleaned (${diag.messageOf(error)})`);
       return null;
     }
     for (const item of media) {
       if (typeof item.path !== "string") continue;
       paths.add(item.path);
+      // A missing file keys differently (no size or time): its folder would look unused.
+      if (!fs.existsSync(item.path)) {
+        missing += 1;
+        continue;
+      }
       try {
         const key = app.native.mediaKey(item.path);
         keys.add(key);
@@ -115,7 +129,7 @@ function used(app: App): { paths: Set<string>; keys: Set<string>; saved: Map<str
       }
     }
   }
-  return { paths, keys, saved };
+  return { paths, keys, saved, missing };
 }
 
 function freeSpace(dir: string): number {
@@ -134,6 +148,8 @@ export function cleanCache(
   now = Date.now(),
   limits: Limits = { cacheBytes: CACHE_LIMIT, freeBytes: FREE_FLOOR },
 ): CleanReport {
+  // A home that isn't one (EDIT_HOME="") cleans nothing: its cache would be "/cache".
+  if (app.store.home.trim() === "" || app.store.home === "/") return { folders: 0, files: 0, bytes: 0, removed: [] };
   const cache = app.store.cacheDir();
   const inUse = used(app);
   const report: CleanReport = { folders: 0, files: 0, bytes: 0, removed: [] };
@@ -161,9 +177,19 @@ export function cleanCache(
   // the cloud: the copy only speeds exports up, so it goes once unused a while.
   const known = readLocalOriginals(cache);
   let dropped = false;
+  // Only Edit's own Drive downloads (<media root>/media/[<project>/]drive/<file id>/<file>),
+  // never a file of the user's whose path happens to say "drive" or "uploads".
+  const roots = new Set<string>([join(app.store.home, "media")]);
+  try {
+    roots.add(join(app.store.layout().mediaRoot(), "media"));
+  } catch {
+    // The media drive isn't connected: only the internal one's.
+  }
   for (const [key, entry] of Object.entries(known)) {
-    const downloaded = entry.path.startsWith(`${app.store.home}/`) || entry.path.includes("/uploads/");
-    if (!downloaded || !/\/drive\/[A-Za-z0-9_-]{10,}\//.test(entry.path)) continue;
+    const root = [...roots].find((one) => entry.path.startsWith(`${one}/`));
+    if (root === undefined || !/^(?:[A-Za-z0-9_-]+\/)?drive\/[A-Za-z0-9_-]{10,}\/[^/]+$/.test(entry.path.slice(root.length + 1))) continue;
+    // Not while its upload to the cloud is still going.
+    if (uploadingNow(entry.path)) continue;
     if (inUse === null || inUse.paths.has(entry.path) || now - (entry.used_ms ?? entry.mtime_ms) < DOWNLOADED) continue;
     remove(entry.path);
     if (!dryRun) {
@@ -191,7 +217,8 @@ export function cleanCache(
     } catch {
       continue;
     }
-    const unused = inUse !== null && !inUse.keys.has(name);
+    // With a used file missing, no folder can be known unused (its key is unknown).
+    const unused = inUse !== null && inUse.missing === 0 && !inUse.keys.has(name);
     let touched = false;
     for (const entry of entries) {
       const path = join(dir, entry);
@@ -213,10 +240,12 @@ export function cleanCache(
     for (const [key] of oldest) {
       if (over <= 0) break;
       const dir = join(cache, key);
-      const previews = safeList(dir).filter((entry) => PREVIEW.test(entry));
+      // Finished previews only, not one being made, and none made lately.
+      const previews = safeList(dir).filter((entry) => PREVIEW.test(entry) && !PARTIAL.test(entry) && age(join(dir, entry), now) >= RECENT);
       if (previews.length === 0) continue;
       const before = report.bytes;
       for (const entry of previews) remove(join(dir, entry));
+      if (!dryRun) app.media.forgetKey(key);
       over -= report.bytes - before;
       report.folders += 1;
     }

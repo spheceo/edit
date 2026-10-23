@@ -116,6 +116,8 @@ test("past the cache's limit or with the disk nearly full, the previews of the p
       fs.mkdirSync(`${cache}/${key}`, { recursive: true });
       fs.writeFileSync(`${cache}/${key}/preview.mp4`, Buffer.alloc(1000));
       fs.writeFileSync(`${cache}/${key}/preview.done`, "");
+      // Made when the project was (a preview made just now is never trimmed).
+      for (const made of ["preview.mp4", "preview.done"]) fs.utimesSync(`${cache}/${key}/${made}`, at, at);
       fs.writeFileSync(`${cache}/${key}/transcript.json`, Buffer.alloc(10));
     }
     const [oldest, older, recent] = keys as [string, string, string];
@@ -134,6 +136,34 @@ test("past the cache's limit or with the disk nearly full, the previews of the p
     cleanCache(app, false, Date.now(), { cacheBytes: 1e9, freeBytes: 1e9, free: 0 });
     expect(fs.existsSync(`${cache}/${older}/preview.mp4`)).toBe(false);
     expect(fs.existsSync(`${cache}/${recent}/preview.mp4`)).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("with a project's footage missing (a drive unplugged), no media folder is taken for unused; a hard-linked preview counts once", async () => {
+  const { dir, app, store, cleanup } = fixtureHome("cache-unplugged");
+  try {
+    const cache = store.cacheDir();
+    const live = store.create("Case", { width: 1920, height: 1080, fps: 30 });
+    const project = structuredClone(live.project);
+    project.media = [{ id: "m1", name: "a.mp4", path: "/Volumes/LaCie/gone/a.mp4", kind: "video", duration: 1, width: 2, height: 2, fps: 30, has_audio: false }];
+    await store.replace(project.id, null, project, "test");
+    // Some folder no project's key names: with a file missing, it may be that one's.
+    const stray = `${cache}/0123456789abcdef`;
+    fs.mkdirSync(stray, { recursive: true });
+    fs.writeFileSync(`${stray}/preview.mp4`, Buffer.alloc(500));
+    fs.linkSync(`${stray}/preview.mp4`, `${stray}/proxy.mp4`);
+    const old = (Date.now() - 30 * 24 * 3600 * 1000) / 1000;
+    fs.utimesSync(`${stray}/preview.mp4`, old, old);
+    expect(cleanCache(app, true).files).toBe(0);
+    expect(fs.existsSync(`${stray}/preview.mp4`)).toBe(true);
+    // The footage back: now it's plainly unused, and its 500 bytes are counted once.
+    project.media = [];
+    await store.replace(project.id, null, project, "test");
+    const report = cleanCache(app, true);
+    expect(report.bytes).toBe(500);
+    void dir;
   } finally {
     cleanup();
   }

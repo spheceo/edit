@@ -24,6 +24,7 @@ import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { join } from "./paths.ts";
+import { localBudgetBytes } from "./storage.ts";
 
 /** Made again cheaply from the source. */
 const REBUILT = /^(preview|thumbs|peaks|loudness|censor|light)/;
@@ -34,10 +35,12 @@ const DAY = 24 * 3600 * 1000;
 const RECENT = 2 * DAY;
 /** A Drive download (its original in the cloud) not read by an export for this long goes. */
 const DOWNLOADED = 3 * DAY;
-/** The cache's size past which old projects' previews go. */
-const CACHE_LIMIT = 25e9;
-/** The disk's free space below which old projects' previews go. */
-const FREE_FLOOR = 10e9;
+/** The cache's size past which old projects' previews go: the one local-data budget (sub-1 GB). */
+const CACHE_LIMIT = localBudgetBytes();
+/** The disk's free space below which old projects' previews go (safety valve only). */
+const FREE_FLOOR = 1e9;
+/** Cloud-cache subtrees holding rebuildable copies of R2 objects (LRU-evicted past the budget). */
+const CLOUD_EVICTABLE = ["proxies", "sound", "originals", "excerpts"];
 /** A preview file of a media folder (the picture, its light copy, the sound, the done mark). */
 const PREVIEW = /^preview/;
 
@@ -248,6 +251,52 @@ export function cleanCache(
       if (!dryRun) app.media.forgetKey(key);
       over -= report.bytes - before;
       report.folders += 1;
+    }
+  }
+  // Cloud cache past the one budget: copies of R2 objects (proxies, sound,
+  // originals, excerpts) go least-recently-touched first. Recent files stay
+  // (one may be uploading or playing); the canonical copy is on R2, and a
+  // later need fetches or streams it again.
+  {
+    let over = size(cache) - (dryRun ? report.bytes : 0) - limits.cacheBytes;
+    if (over > 0) {
+      const candidates: { path: string; at: number; bytes: number }[] = [];
+      const collect = (dir: string) => {
+        for (const name of safeList(dir)) {
+          const path = join(dir, name);
+          try {
+            const stat = fs.statSync(path);
+            if (stat.isDirectory()) collect(path);
+            else if (now - stat.mtimeMs >= RECENT) candidates.push({ path, at: stat.mtimeMs, bytes: stat.size });
+          } catch { /* gone */ }
+        }
+      };
+      for (const sub of CLOUD_EVICTABLE) collect(join(cache, "cloud", sub));
+      candidates.sort((a, b) => a.at - b.at);
+      for (const candidate of candidates) {
+        if (over <= 0) break;
+        const before = report.bytes;
+        remove(candidate.path);
+        over -= report.bytes - before;
+      }
+    }
+  }
+  // Project history is metadata, but unbounded it breaks the budget alone:
+  // past a quarter of it, the oldest snapshots go (the live projects stay).
+  {
+    const history = join(app.store.home, "projects", "history");
+    let over = size(history) - Math.floor(localBudgetBytes() / 4);
+    if (over > 0) {
+      const files = safeList(history).map((name) => {
+        const path = join(history, name);
+        try { const s = fs.statSync(path); return { path, at: s.mtimeMs }; } catch { return null; }
+      }).filter((f): f is { path: string; at: number } => f !== null).sort((a, b) => a.at - b.at);
+      for (const file of files) {
+        if (over <= 0) break;
+        const before = report.bytes;
+        remove(file.path);
+        over -= report.bytes - before;
+      }
     }
   }
   return report;

@@ -168,3 +168,24 @@ test("with a project's footage missing (a drive unplugged), no media folder is t
     cleanup();
   }
 });
+
+test("cloud-cache proxies past the budget go oldest first, recent ones stay", () => {
+  const { app, store, cleanup } = fixtureHome("cache-cloud");
+  try {
+    const cache = store.cacheDir();
+    const old = (Date.now() - 5 * 24 * 3600 * 1000) / 1000;
+    const put = (path: string, bytes: number, at?: number) => {
+      fs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+      fs.writeFileSync(path, Buffer.alloc(bytes));
+      if (at !== undefined) fs.utimesSync(path, at, at);
+    };
+    put(`${cache}/cloud/proxies/drive/old.mp4`, 1000, old);
+    put(`${cache}/cloud/proxies/drive/new.mp4`, 1000);
+    const dry = cleanCache(app, true, Date.now(), { cacheBytes: 1500, freeBytes: 0, free: 1e12 });
+    expect(dry.bytes).toBe(1000);
+    expect(fs.existsSync(`${cache}/cloud/proxies/drive/old.mp4`)).toBe(true);
+    cleanCache(app, false, Date.now(), { cacheBytes: 1500, freeBytes: 0, free: 1e12 });
+    expect(fs.existsSync(`${cache}/cloud/proxies/drive/old.mp4`)).toBe(false);
+    expect(fs.existsSync(`${cache}/cloud/proxies/drive/new.mp4`)).toBe(true);
+  } finally { cleanup(); }
+});

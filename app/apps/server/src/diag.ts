@@ -58,8 +58,11 @@ export function open(home: string): void {
   const dir = join(home, "logs");
   const path = join(dir, "edit.log");
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    const fd = fs.openSync(path, "a");
+    // Private to this user: the log names projects, people and what they said (the audit, Oct 23).
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(dir, 0o700);
+    const fd = fs.openSync(path, "a", 0o600);
+    fs.chmodSync(path, 0o600);
     if (state.file !== null) fs.closeSync(state.file.fd);
     state.file = { path, fd };
   } catch (error) {

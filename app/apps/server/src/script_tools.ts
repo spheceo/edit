@@ -616,6 +616,8 @@ export function researchRoutes(router: Router<App>): void {
   });
   router.post("/api/projects/{id}/research/{item}", researchReview);
   router.get("/api/projects/{id}/research/{item}/image", ({ app, params, request }) => {
+    // The project's own research only, and only a project the person may open (the audit, Oct 23).
+    projectOr404(app, params.id ?? "");
     const found = research.items(app.store.home, params.id ?? "").find((own) => own.id === params.item);
     if (found === undefined) throw notFound("no such found image");
     return serveFile(request, found.file);

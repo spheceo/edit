@@ -32,6 +32,9 @@ import { call, ORIGIN } from "./mcp/index.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Marker, Media, Project } from "./model.ts";
 import { native, withProject, withProjectAsync, type EncodedImage, type ProjectInput } from "./native/index.ts";
+import { dirname, resolve as resolvePath } from "node:path";
+
+import { listExports } from "./exports.ts";
 import { expandHome, join } from "./paths.ts";
 import {
   addTrack,
@@ -93,6 +96,8 @@ export const hooks = {
   mapExportWait: (): number => seams.broll.MAP_EXPORT_WAIT,
   watchInBackground: (app: App, projectId: string): void => seams.watch.watchInBackground(app, projectId),
   defaultExportPath: (store: Store, project: Project): string => seams.server.defaultExportPath(store, project),
+  /** Whether `path` is one of `projectId`'s own exports (Edit made it), so writing it again is fine. */
+  ownExport: (app: App, projectId: string, path: string): boolean => listExports(app.store.home, projectId).some((one) => resolvePath(one.path) === path),
   footageLoudness: (project: Project): Promise<number> => seams.library.footageLoudness(project),
   loudness: (path: string, from: number, seconds: number): Promise<number> => seams.library.loudness(path, from, seconds),
 };
@@ -980,7 +985,15 @@ async function exportTool({ app, args, projectId }: ToolCall): Promise<Content[]
   await hooks.waitForMaps(app, projectId, hooks.mapExportWait());
   const found = live(app, projectId);
   const given = str(args.path);
-  const path = given !== null && trim(given) !== "" ? expandHome(given) : hooks.defaultExportPath(app.store, found.project);
+  const fallback = hooks.defaultExportPath(app.store, found.project);
+  // The agent's export goes where Edit's exports go, never over a file Edit didn't make (the audit, Oct 23: it could write anywhere).
+  const folder = dirname(fallback);
+  const path = given === null || trim(given) === "" ? fallback : given.includes("/") ? expandHome(given) : join(folder, trim(given));
+  const resolved = resolvePath(path);
+  if (!resolved.startsWith(`${resolvePath(folder)}/`) && !resolved.startsWith(`${resolvePath(join(app.store.home, "exports"))}/`)) {
+    throw new Error(`exports go in ${folder}: give a file name there (or no path for the default)`);
+  }
+  if (fs.existsSync(resolved) && !hooks.ownExport(app, projectId, resolved)) throw new Error(`${resolved} exists and isn't one of this project's exports: give another name`);
   const subtitled = isSubtitled(found.project);
   const drive = bool(args.drive);
   const started = await app.exports.start(

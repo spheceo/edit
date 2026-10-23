@@ -77,8 +77,10 @@ export function sameOrigin(origin: string, host: string): boolean {
  */
 export function allowedHosts(extra: { host?: string | null; tailscale?: (string | null)[] } = {}): string[] {
   const allowed = ["localhost", "127.0.0.1", "::1"];
+  // The machine's own name only when it listens beyond this Mac (Tailscale, or a host it was told): on loopback alone it's never needed.
   const name = hostname();
-  if (name !== null) allowed.push(name);
+  const offLoopback = (extra.tailscale ?? []).some((entry) => entry !== null && entry !== "") || (extra.host !== undefined && extra.host !== null && !["localhost", "127.0.0.1", "::1"].includes(extra.host.toLowerCase()));
+  if (name !== null && offLoopback) allowed.push(name);
   for (const entry of extra.tailscale ?? []) {
     if (entry !== null && entry !== "") allowed.push(entry);
   }

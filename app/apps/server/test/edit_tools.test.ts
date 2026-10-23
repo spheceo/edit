@@ -507,11 +507,13 @@ test("export starts through the exports with the default path, and says a subtit
   };
   hooks.defaultExportPath = (_store, project) => `/tmp/${project.name}`;
   expect(await said(app, "export")).toBe("export started → /tmp/tools.mp4");
-  expect(await said(app, "export", { path: "~/out", options: { format: "prores" } })).toBe(`export started → ${process.env.HOME}/out.mp4`);
+  // A name goes in the exports' folder; anywhere else is refused (the audit, Oct 23).
+  expect(await said(app, "export", { path: "out", options: { format: "prores" } })).toBe("export started → /tmp/out.mp4");
   expect(started).toEqual([
     { id, format: "h264", path: "/tmp/tools" },
-    { id, format: "prores", path: `${process.env.HOME}/out` },
+    { id, format: "prores", path: "/tmp/out" },
   ]);
+  expect(await refused(app, "export", { path: "~/Library/LaunchAgents/x" })).toContain("exports go in /tmp");
   expect(await refused(app, "export", { options: { format: "avi" } })).toBe(
     "export options: unknown variant `avi`, expected one of `h264`, `hevc`, `prores`, `gif`, `wav`, `mp3`, `png`",
   );

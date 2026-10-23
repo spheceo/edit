@@ -813,9 +813,9 @@ int edit_smooth_supported(void) {
     return 0;
 }
 
-int edit_smooth(const char *path, double start, double length, double speed, double fps,
-                uint32_t max_w, uint32_t max_h, uint64_t bitrate, const char *output,
-                void (*pause)(void), char *error, size_t capacity) {
+static int smooth_inner(const char *path, double start, double length, double speed, double fps,
+                        uint32_t max_w, uint32_t max_h, uint64_t bitrate, const char *output,
+                        void (*pause)(void), char *error, size_t capacity) {
     if (@available(macOS 15.4, *)) {
     @autoreleasepool {
         if (!(speed > 0 && speed < 1) || !(fps > 0) || !(length > 0)) { fail(error, capacity, @"Smoothing needs a speed below 1, a rate and a length"); return 0; }
@@ -992,4 +992,19 @@ int edit_smooth(const char *path, double start, double length, double speed, dou
     }
     fail(error, capacity, @"Smoothing on VideoToolbox needs macOS 15.4");
     return 0;
+}
+
+// VideoToolbox's frame processor can throw an Objective-C exception (Oct 23,
+// a smoothed B-roll shot while two reviews were being shared): it isn't a
+// Rust panic, so `util::catch` couldn't stop it and the whole server aborted.
+// Here it becomes an error, and the shot is smoothed by FFmpeg instead.
+int edit_smooth(const char *path, double start, double length, double speed, double fps,
+                uint32_t max_w, uint32_t max_h, uint64_t bitrate, const char *output,
+                void (*pause)(void), char *error, size_t capacity) {
+    @try {
+        return smooth_inner(path, start, length, speed, fps, max_w, max_h, bitrate, output, pause, error, capacity);
+    } @catch (NSException *exception) {
+        fail(error, capacity, [NSString stringWithFormat:@"VideoToolbox stopped smoothing: %@ (%@)", exception.reason ?: @"no reason given", exception.name]);
+        return 0;
+    }
 }

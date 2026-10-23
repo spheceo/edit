@@ -1,3 +1,4 @@
+import { allow, budgetKey, burstKey, type AuthEnv } from "./auth";
 import { cloud, type CloudEnv } from "./cloud";
 
 export { DriveToR2 } from "./jobs";
@@ -27,7 +28,7 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  * Worker never buffers or parses either (keeps CPU tiny on any plan).
  */
 
-export interface Env extends CloudEnv {
+export interface Env extends CloudEnv, AuthEnv {
   ELEVENLABS_API_KEY?: string;
   /** A key for voice generation (text to speech, voices); else ELEVENLABS_API_KEY. */
   ELEVENLABS_SPEECH_KEY?: string;
@@ -67,10 +68,9 @@ export default {
     if (url.pathname === "/v1/outline") return outline(request, url, env);
     // Today's transcription spend (bytes; ~14.4 MB an hour of audio), for Edit's log and the team.
     if (url.pathname === "/v1/transcribe/usage" && request.method === "GET") {
-      if (!authorized(request, env)) return json(401, { error: "This relay needs a client token." });
-      const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
-      const client = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      const found = await allow(request, env, "use", "transcribe/usage");
+      if (found instanceof Response) return found;
+      const client = await budgetKey(request, found);
       const day = new Date().toISOString().slice(0, 10);
       const budget = env.BUDGET.get(env.BUDGET.idFromName(day));
       const used = await (await budget.fetch(new Request("https://budget/usage", { method: "POST", body: JSON.stringify({ client }) }))).json() as Record<string, number>;
@@ -79,7 +79,8 @@ export default {
     if (url.pathname !== "/v1/transcribe") return json(404, { error: "not found" });
     if (request.method !== "POST") return json(405, { error: "POST audio to /v1/transcribe" });
 
-    if (!authorized(request, env)) return json(401, { error: "This relay needs a client token." });
+    const found = await allow(request, env, "use", "transcribe");
+    if (found instanceof Response) return found;
     if (!env.ELEVENLABS_API_KEY) return json(503, { error: "Transcription is not configured on the relay yet." });
 
     const type = request.headers.get("content-type") ?? "";
@@ -89,8 +90,7 @@ export default {
     if (![env.MAX_UPLOAD_BYTES, env.DAILY_BYTES_PER_IP, env.DAILY_BYTES_TOTAL].every(value => Number.isSafeInteger(Number(value)) && Number(value) > 0)) return json(503, { error: "Transcription budget is misconfigured." });
     if (size > Number(env.MAX_UPLOAD_BYTES)) return json(413, { error: "That recording is too long for one request." });
 
-    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    if (!(await env.TRANSCRIBE_BURST.limit({ key: ip })).success) {
+    if (!(await env.TRANSCRIBE_BURST.limit({ key: burstKey(request, found) })).success) {
       return json(429, { error: "Too many transcriptions at once; try again in a minute." });
     }
     const language = url.searchParams.get("language");
@@ -103,8 +103,7 @@ export default {
       return json(400, { error: "Invalid keyterms: at most 100, each under 50 characters." });
     }
     const day = new Date().toISOString().slice(0, 10);
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
-    const client = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    const client = await budgetKey(request, found);
     const budget = env.BUDGET.get(env.BUDGET.idFromName(day));
     const again = url.searchParams.get("again") === "1";
     const reserved = await budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client, size, again }) }));
@@ -140,12 +139,14 @@ export default {
 async function tiles(request: Request, url: URL, env: Env): Promise<Response> {
   if (request.method === "OPTIONS") return new Response(null, { status: 204 });
   if (request.method !== "GET") return json(405, { error: "GET tiles" });
+  // Every tile asks (one map is hundreds): only the session's root is logged.
+  const root = url.pathname === "/v1/3dtiles/root.json";
+  const found = root ? await allow(request, env, "use", "maps", env.OPEN_MAPS === "1") : await allowQuietly(request, env);
+  if (found instanceof Response) return found;
   if (!env.GOOGLE_MAPS_KEY) return json(503, { error: "Maps are not configured on the relay yet." });
-  if (url.pathname === "/v1/3dtiles/root.json") {
-    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    if (!(await env.BURST.limit({ key: `maps:${ip}` })).success) return json(429, { error: "Too many maps at once; try again in a minute." });
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
-    const client = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (root) {
+    if (!(await env.BURST.limit({ key: `maps:${burstKey(request, found)}` })).success) return json(429, { error: "Too many maps at once; try again in a minute." });
+    const client = await budgetKey(request, found);
     const budget = env.BUDGET.get(env.BUDGET.idFromName(new Date().toISOString().slice(0, 10)));
     const reserved = await budget.fetch(new Request("https://budget/maps", { method: "POST", body: JSON.stringify({ client }) }));
     if (!reserved.ok) return reserved;
@@ -166,8 +167,10 @@ async function tiles(request: Request, url: URL, env: Env): Promise<Response> {
  * only Google's geocoding may be shown with its tiles). */
 async function geocode(request: Request, url: URL, env: Env): Promise<Response> {
   if (request.method !== "GET") return json(405, { error: "GET /v1/geocode?address=…" });
+  const found = await allow(request, env, "use", "geocode", env.OPEN_MAPS === "1");
+  if (found instanceof Response) return found;
   if (!env.GOOGLE_MAPS_KEY) return json(503, { error: "Maps are not configured on the relay yet." });
-  if (!(await env.BURST.limit({ key: `geocode:${request.headers.get("cf-connecting-ip") ?? "unknown"}` })).success) return json(429, { error: "Too many lookups at once; try again in a minute." });
+  if (!(await env.BURST.limit({ key: `geocode:${burstKey(request, found)}` })).success) return json(429, { error: "Too many lookups at once; try again in a minute." });
   const [name, value] = (["address", "latlng", "place_id"] as const).map((name) => [name, url.searchParams.get(name) ?? ""] as const).find(([, value]) => value) ?? ["", ""];
   if (!name || value.length > 300 || (name === "latlng" && !/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(value))) return json(400, { error: "Give an address, latlng or place_id." });
   const upstream = new URL("https://maps.googleapis.com/maps/api/geocode/json");
@@ -180,10 +183,12 @@ async function geocode(request: Request, url: URL, env: Env): Promise<Response> 
 /** The building at a point, with its outline (GeoJSON in placeView.displayPolygon). */
 async function outline(request: Request, url: URL, env: Env): Promise<Response> {
   if (request.method !== "GET") return json(405, { error: "GET /v1/outline?lat=…&lon=…" });
+  const found = await allow(request, env, "use", "outline", env.OPEN_MAPS === "1");
+  if (found instanceof Response) return found;
   if (!env.GOOGLE_MAPS_KEY) return json(503, { error: "Maps are not configured on the relay yet." });
   const latitude = Number(url.searchParams.get("lat")), longitude = Number(url.searchParams.get("lon"));
   if (!url.searchParams.get("lat") || !url.searchParams.get("lon") || !(Math.abs(latitude) <= 90) || !(Math.abs(longitude) <= 180)) return json(400, { error: "Give lat and lon." });
-  if (!(await env.BURST.limit({ key: `geocode:${request.headers.get("cf-connecting-ip") ?? "unknown"}` })).success) return json(429, { error: "Too many lookups at once; try again in a minute." });
+  if (!(await env.BURST.limit({ key: `geocode:${burstKey(request, found)}` })).success) return json(429, { error: "Too many lookups at once; try again in a minute." });
   const answer = await fetch("https://geocode.googleapis.com/v4/geocode/destinations", {
     method: "POST",
     headers: {
@@ -213,27 +218,19 @@ async function elevenError(answer: Response): Promise<Response> {
   return json(answer.status, { error: `ElevenLabs: ${message}` });
 }
 
-/**
- * Whether a paid call (transcription, voices) comes from an Edit: it carries
- * the client token or the cloud token, which every release has built in. Open
- * only on a relay with neither (a local `wrangler dev`): Oct 21's 62 hours of
- * Scribe were Edit's own, but nothing stopped anyone else's.
- */
-function authorized(request: Request, env: Env) {
-  const tokens = [env.CLIENT_TOKEN, env.CLOUD_TOKEN].filter((token): token is string => Boolean(token));
-  if (tokens.length === 0) return true;
-  const given = request.headers.get("authorization");
-  return tokens.some((token) => given === `Bearer ${token}`);
+/** A tile of a map whose session (its root) was allowed: the same gate, not logged (hundreds a map). */
+function allowQuietly(request: Request, env: Env) {
+  return allow(request, env, "use", "maps", env.OPEN_MAPS === "1", false);
 }
 
 /** The account's voices, trimmed to what Edit shows (cheap; no budget). */
 async function voices(request: Request, env: Env): Promise<Response> {
   if (request.method !== "GET") return json(405, { error: "GET /v1/voices" });
-  if (!authorized(request, env)) return json(401, { error: "This relay needs a client token." });
+  const found = await allow(request, env, "use", "voices");
+  if (found instanceof Response) return found;
   const key = speechKey(env);
   if (!key) return json(503, { error: "Voice generation is not configured on the relay yet." });
-  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-  if (!(await env.SPEECH_BURST.limit({ key: `voices:${ip}` })).success) return json(429, { error: "Too many requests at once; try again in a minute." });
+  if (!(await env.SPEECH_BURST.limit({ key: `voices:${burstKey(request, found)}` })).success) return json(429, { error: "Too many requests at once; try again in a minute." });
   const out: unknown[] = [];
   let token = "";
   for (let page = 0; page < 5; page++) {
@@ -262,7 +259,8 @@ const OUTPUT_FORMATS = new Set(["mp3_44100_128", "mp3_44100_192", "wav_44100", "
  * reserved against today's per-IP and shared character budgets first. */
 async function speech(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") return json(405, { error: "POST JSON to /v1/speech" });
-  if (!authorized(request, env)) return json(401, { error: "This relay needs a client token." });
+  const found = await allow(request, env, "use", "speech");
+  if (found instanceof Response) return found;
   const key = speechKey(env);
   if (!key) return json(503, { error: "Voice generation is not configured on the relay yet." });
   const limits = [env.MAX_SPEECH_CHARS, env.DAILY_SPEECH_CHARS_PER_IP, env.DAILY_SPEECH_CHARS_TOTAL].map(Number);
@@ -286,10 +284,8 @@ async function speech(request: Request, env: Env): Promise<Response> {
   if (!/^[a-z0-9_]{3,64}$/.test(model)) return json(400, { error: "Unknown model." });
   if (!OUTPUT_FORMATS.has(format)) return json(400, { error: "Unknown output format." });
 
-  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-  if (!(await env.SPEECH_BURST.limit({ key: `speech:${ip}` })).success) return json(429, { error: "Too many lines at once; try again in a minute." });
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
-  const client = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (!(await env.SPEECH_BURST.limit({ key: `speech:${burstKey(request, found)}` })).success) return json(429, { error: "Too many lines at once; try again in a minute." });
+  const client = await budgetKey(request, found);
   const budget = env.BUDGET.get(env.BUDGET.idFromName(new Date().toISOString().slice(0, 10)));
   const reserved = await budget.fetch(new Request("https://budget/speech", { method: "POST", body: JSON.stringify({ client, chars: text.length }) }));
   if (!reserved.ok) return reserved;

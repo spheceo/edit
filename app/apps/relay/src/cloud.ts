@@ -25,6 +25,7 @@
  *   /v1/cloud/ai/chat               an AI Gateway chat completion, passed through with the relay's
  *                                   AI_GATEWAY_API_KEY (the footage watcher); the gateway's answer as it is
  */
+import { allow, type AuthEnv, type Permission } from "./auth";
 import { cancelJob, driveJob, googleSignIn, jobStatus, type JobsEnv } from "./jobs";
 import { exportRoute, type ModalEnv } from "./exports";
 
@@ -61,9 +62,22 @@ const REVIEWS_PATH = /^reviews:[A-Za-z_][A-Za-z0-9_]*$/;
 const WRITER_READS = new Set(["writer:listScripts", "writer:getScript"]);
 const callable = (path: string, kind: string) => CONVEX_PATH.test(path) || REVIEWS_PATH.test(path) || (WRITER_READS.has(path) && kind === "query");
 
-export async function cloud(request: Request, url: URL, env: CloudEnv): Promise<Response> {
+/** Each cloud route's permission (accounts' `edit:<perm>`). */
+function permissionOf(route: string): Permission | null {
+  if (route === "ai/chat") return "ai";
+  if (route === "google/token") return "drive";
+  if (route === "convex" || route.startsWith("r2/") || route.startsWith("jobs/")) return "cloud";
+  return null;
+}
+
+export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv): Promise<Response> {
   if (url.pathname.startsWith("/v1/cloud/exports/")) return exportRoute(request, url, env);
-  if (!(await cloudAuthorized(request, env))) return json(401, { error: "This relay needs Edit's cloud token." });
+  const permission = permissionOf(url.pathname.slice("/v1/cloud/".length));
+  if (permission === null) return json(404, { error: "not found" });
+  // Only a person's token or the shared cloud token: the cloud was never open, even on a relay without one.
+  const found = await allow(request, { ...env, CLIENT_TOKEN: undefined }, permission, url.pathname.slice("/v1/".length));
+  if (found instanceof Response) return found;
+  if (found.kind === "open") return json(401, { error: "This relay needs Edit's cloud token or a signed-in person's." });
   if (request.method !== "POST") return json(405, { error: `POST JSON to ${url.pathname}` });
   if (url.pathname === "/v1/cloud/ai/chat") return aiChat(request, env);
   if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY) return json(413, { error: "Request too large." });

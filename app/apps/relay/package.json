@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@edit/types": "workspace:*"
+    "@edit/types": "workspace:*",
+    "jose": "^6.2.13"
   },
   "scripts": {
     "deploy": "cf deploy"

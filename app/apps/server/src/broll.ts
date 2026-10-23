@@ -555,6 +555,41 @@ async function fetchText(url: string): Promise<string> {
  * Where a place is, from Google's geocoding through the relay (only Google's
  * may be shown with its tiles): lat, lon and its full address.
  */
+/**
+ * A map lookup asked before (each one a billed Google call), else asked now:
+ * kept by what was asked in `<cache>/map-lookups-v1.json`, so the same
+ * map_view again finds its render without asking Google first (the audit,
+ * Oct 23). Only answers are kept: a failure or no building is asked again.
+ */
+export async function lookedUp<T>(app: App, key: string, ask: () => Promise<T | null>): Promise<T | null> {
+  const path = join(app.store.cacheDir(), "map-lookups-v1.json");
+  let kept: Record<string, unknown> = {};
+  try {
+    kept = JSON.parse(fs.readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch {
+    kept = {};
+  }
+  if (Object.hasOwn(kept, key)) return kept[key] as T;
+  const answer = await ask();
+  if (answer === null) return null;
+  try {
+    const now = (() => {
+      try {
+        return JSON.parse(fs.readFileSync(path, "utf8")) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    })();
+    now[key] = answer;
+    const temp = `${path}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(now));
+    fs.renameSync(temp, path);
+  } catch {
+    // Asked again next time.
+  }
+  return answer;
+}
+
 async function geocode(place: string): Promise<[number, number, string]> {
   const url = `${relay.url()}/v1/geocode?address=${urlencode(place)}`;
   let found: Record<string, unknown>;
@@ -1074,11 +1109,11 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
     [lat, lon] = [lat0, lon0];
     found = place ?? `${fixed(lat, 5)}, ${fixed(lon, 5)}`;
   } else if (place !== null) {
-    [lat, lon, found] = await geocode(place);
+    [lat, lon, found] = (await lookedUp(app, `geocode ${place}`, () => geocode(place)))!;
   } else {
     throw new Error("give a place (an address or name) or lat and lon");
   }
-  const ring = mark ? await buildingOutline(lat, lon) : null;
+  const ring = mark ? await lookedUp(app, `outline ${display(lat)},${display(lon)}`, () => buildingOutline(lat, lon)) : null;
   const config: Record<string, unknown> = {
     lat: new F64(lat),
     lon: new F64(lon),

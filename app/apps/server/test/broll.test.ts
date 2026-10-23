@@ -272,6 +272,23 @@ test("map_view without a place or a point says what it needs", async () => {
   }
 });
 
+test("a map's place and building are looked up once (each a billed Google call), failures asked again", async () => {
+  const { app, cleanup } = fixtureHome("map-lookups");
+  try {
+    let asked = 0;
+    const ask = async () => { asked += 1; return [1, 2, "Somewhere"] as [number, number, string]; };
+    expect(await broll.lookedUp(app, "geocode 1 Main St", ask)).toEqual([1, 2, "Somewhere"]);
+    expect(await broll.lookedUp(app, "geocode 1 Main St", ask)).toEqual([1, 2, "Somewhere"]);
+    expect(asked).toBe(1);
+    const none = async () => { asked += 1; return null; };
+    await broll.lookedUp(app, "outline 1,2", none);
+    await broll.lookedUp(app, "outline 1,2", none);
+    expect(asked).toBe(3);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a finished map asked for again is the media it already is", async () => {
   const { app, cleanup } = fixtureHome("map-again");
   try {

@@ -37,6 +37,11 @@ DAILY_BYTES_PER_IP = "288000000"   # ~20 hours (lowered Oct 22 from ~90: Oct 19â
 DAILY_BYTES_TOTAL = "288000000"    # ~20 hours (~16.6k credits a day at most)
 DAILY_REHEAR_BYTES = "72000000"   # ~5 hours of the day for hearing finished footage again with the case's names (Oct 22: re-hears spent the whole day by 00:20 UTC and a new import went unheard)
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
+# The AI Gateway through /v1/cloud/ai/chat (the audit, Oct 23: it had no limits): only these models,
+# and a day's spend (USD, the gateway's usage.cost) per person and across everyone.
+AI_MODELS = "google/gemini-3.8-flash"
+DAILY_AI_USD_PER_IP = "5"
+DAILY_AI_USD_TOTAL = "25"
 
 # Map stills (Google Photorealistic 3D Tiles, billed per session): a day's
 # sessions per IP and across everyone (raised Oct 21 to finish a round of map

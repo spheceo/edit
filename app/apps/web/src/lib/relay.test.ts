@@ -301,13 +301,45 @@ describe("relay cloud: Google sign-in and the AI Gateway", () => {
       sent = { url: String(input), auth: new Headers(init.headers).get("authorization"), body: await new Response(init.body).text() };
       return Response.json({ error: { message: "slow down" } }, { status: 429 });
     });
-    expect((await post("ai/chat", '{"model":"m"}', "wrong")).status).toBe(401);
+    const asked = '{"model":"google/gemini-3.8-flash"}';
+    expect((await post("ai/chat", asked, "wrong")).status).toBe(401);
     expect(sent).toBeNull();
-    const answer = await post("ai/chat", '{"model":"m"}');
+    const answer = await post("ai/chat", asked);
     expect(answer.status).toBe(429);
     expect(await answer.json()).toEqual({ error: { message: "slow down" } });
-    expect(sent).toEqual({ url: "https://ai-gateway.vercel.sh/v1/chat/completions", auth: "Bearer gw-key", body: '{"model":"m"}' });
+    expect(sent).toEqual({ url: "https://ai-gateway.vercel.sh/v1/chat/completions", auth: "Bearer gw-key", body: asked });
     expect((await post("ai/chat", "{}", "", { ...env, AI_GATEWAY_API_KEY: undefined })).status).toBe(503);
+  });
+
+  it("asks the gateway only for Edit's models, never streaming, within a burst limit and the day's budget counted from its usage.cost", async () => {
+    // The audit, Oct 23: any model, any body, no limit.
+    const spent: number[] = [];
+    let allowance = true;
+    const budget = {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async (request: Request) => {
+          const asked = (await request.json()) as { phase: string; cost: number };
+          if (asked.phase === "spend") spent.push(asked.cost);
+          return asked.phase === "check" && !allowance ? Response.json({ error: { message: "used up" } }, { status: 429 }) : Response.json({ ok: true });
+        },
+      }),
+    };
+    let burst = true;
+    const limited = { ...env, BUDGET: budget, BURST: { limit: async () => ({ success: burst }) } } as unknown as Env;
+    const upstream = vi.fn(async () => Response.json({ choices: [], usage: { cost: 0.0123 } }));
+    vi.stubGlobal("fetch", upstream);
+    expect((await post("ai/chat", '{"model":"openai/gpt-7"}', undefined, limited)).status).toBe(403);
+    expect((await post("ai/chat", '{"model":"google/gemini-3.8-flash","stream":true}', undefined, limited)).status).toBe(400);
+    expect(upstream).not.toHaveBeenCalled();
+    expect((await post("ai/chat", '{"model":"google/gemini-3.8-flash"}', undefined, limited)).status).toBe(200);
+    expect(spent).toEqual([0.0123]);
+    allowance = false;
+    expect((await post("ai/chat", '{"model":"google/gemini-3.8-flash"}', undefined, limited)).status).toBe(429);
+    allowance = true;
+    burst = false;
+    expect((await post("ai/chat", '{"model":"google/gemini-3.8-flash"}', undefined, limited)).status).toBe(429);
+    expect(upstream).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -380,6 +380,7 @@ export class TranscriptionBudget {
   async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname === "/maps") return this.mapSession(request);
     if (new URL(request.url).pathname === "/speech") return this.speech(request);
+    if (new URL(request.url).pathname === "/ai") return this.ai(request);
     if (new URL(request.url).pathname === "/usage") {
       const { client } = await request.json() as { client: string };
       return json(200, { connection: await this.state.storage.get<number>(`ip:${client}`) ?? 0, total: await this.state.storage.get<number>("all") ?? 0, again: await this.state.storage.get<number>("again") ?? 0 });
@@ -440,6 +441,27 @@ export class TranscriptionBudget {
       if (allUsed + chars > total) return json(429, { error: "Edit's shared voice budget for today is used up; it resets at midnight UTC." });
       await storage.put(ipKey, ipUsed + chars);
       await storage.put("speech", allUsed + chars);
+      return json(200, { ok: true });
+    });
+    await this.state.storage.setAlarm(Date.now() + 2 * 86400_000);
+    return answer;
+  }
+
+  /** The AI Gateway's spend today (USD, its usage.cost): checked before a call, charged after. */
+  async ai(request: Request): Promise<Response> {
+    const { client, phase, cost, perIp, total } = await request.json() as { client: string; phase: "check" | "spend"; cost: number; perIp: number; total: number };
+    if (!/^[a-f0-9]{64}$/.test(client) || !Number.isFinite(cost) || cost < 0 || !(perIp > 0) || !(total > 0)) return json(400, { error: { message: "Invalid AI budget call." } });
+    const answer = await this.state.storage.transaction(async storage => {
+      const ipKey = `ai:${client}`;
+      const ipUsed = await storage.get<number>(ipKey) ?? 0;
+      const allUsed = await storage.get<number>("ai") ?? 0;
+      if (phase === "check") {
+        if (ipUsed >= perIp) return json(429, { error: { message: `Today's AI allowance for this account is used up ($${perIp}); it resets at midnight UTC.` } });
+        if (allUsed >= total) return json(429, { error: { message: "Edit's shared AI budget for today is used up; it resets at midnight UTC." } });
+        return json(200, { ok: true });
+      }
+      await storage.put(ipKey, ipUsed + cost);
+      await storage.put("ai", allUsed + cost);
       return json(200, { ok: true });
     });
     await this.state.storage.setAlarm(Date.now() + 2 * 86400_000);

@@ -13,6 +13,7 @@ import * as looks from "./looks.ts";
 import * as graphics from "./graphics.ts";
 import * as intro from "./intro_graphics.ts";
 import * as markBlurs from "./mark_blurs.ts";
+import * as typing from "./typing_sounds.ts";
 import * as markers from "./markers.ts";
 import type { Clip, Keyframe, Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
@@ -197,6 +198,8 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   const separated = separateOverlaps(project, placed);
   // No words under a blur, whatever the plan added where.
   liftTextOverBlurs(project);
+  // Typing sounds play exactly while their lines type (a desktop rebuilt moves its lines).
+  typing.fitTypingSounds(project);
   // Every graphic op puts its layers on new tracks above everything; packed
   // down here, a plan never leaves the edit taller than what's on screen at
   // once needs (the interrogation intro's plans left 69 video tracks where 9 do).

@@ -20,6 +20,7 @@ import * as framing from "./framing.ts";
 import * as tools from "./tools.ts";
 import * as onscreen from "./onscreen.ts";
 import * as markBlurs from "./mark_blurs.ts";
+import * as typing from "./typing_sounds.ts";
 import * as watermarks from "./watermarks.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
@@ -1191,6 +1192,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...desktopsSparse(project),
     ...(markBlurs.offShot(project) as Json[]),
     ...soundEffectsLong(project),
+    ...(typing.typingSoundsOff(project) as Json[]),
   ];
   const { issues: censored, pending } = onProject((input) => native().censorIssues(input, true));
   const picture = onscreen.issues(project);
@@ -1225,7 +1227,7 @@ const FIXABLE = [
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
-  "blur_off_shot", "sfx_long", "sfx_loud",
+  "blur_off_shot", "sfx_long", "sfx_loud", "typing_sound_off",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */
@@ -2160,6 +2162,7 @@ export async function placeSound(
       });
       placed.push(`${fixed(time, 2)}s`);
     }
+    if (typing.TYPING.test(`${name} ${media.name}`)) typing.fitTypingSounds(project);
     return [placed, replaced] as const;
   });
   return `placed ${name} at ${placed.join(", ")} (replacing ${replaced} already near those times)`;

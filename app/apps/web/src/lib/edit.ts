@@ -788,7 +788,7 @@ export function setSpeed(project: Project, ids: Iterable<string>, speed: number)
 }
 
 /** The checks edit-core's `Project::validate` runs, so a change the server would refuse is never shown. */
-export function validateProject(project: Project): string | null {
+export function validateProject(project: Project, options: { people?: boolean } = {}): string | null {
   const finite = (value: unknown): boolean => typeof value === "number" ? Number.isFinite(value) : value !== null && typeof value === "object" ? Object.values(value).every(finite) : true;
   if (!finite(project)) return `project numbers must be finite`;
   if (!Number.isSafeInteger(project.next_id) || project.next_id < 0) return `next_id must be a nonnegative safe integer`;
@@ -835,7 +835,7 @@ export function validateProject(project: Project): string | null {
       if (sorted[i].start < clipEnd(sorted[i - 1])) return `clips would overlap on ${trackLabel(project, tracks.get(track)!)}`;
     }
   }
-  return peopleProblem(project);
+  return options.people === false ? null : peopleProblem(project);
 }
 
 /** Gives each clip a fade in and out of `frames` (0 removes them). */

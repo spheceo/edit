@@ -6,6 +6,7 @@ import { Decoder, videoTime } from "./decoder";
 import { addContext, note, recordTiming } from "./diagnostics";
 import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
 import { clipEnd, paramAt, projectDuration, validateProject } from "./edit";
+import { peopleProblem } from "./people";
 import { mutePoints } from "./mutes";
 import { savedFrame, saveFrame } from "./storage";
 import type { Clip, Media, Project, Sections, Track } from "./types";
@@ -239,6 +240,9 @@ class Preview {
   }
 
   /** A project the page's rules or its engine refuse: said on the preview, never a black frame. */
+  /** The last colour warning noted, so it's noted once. */
+  private warned: string | null = null;
+
   private refuse(problem: string) {
     if (this.refused && this.error?.includes(problem)) return;
     this.refused = true;
@@ -302,7 +306,16 @@ class Preview {
   }
 
   setProject(project: Project, proxyVersions: Record<string, string>) {
-    const problem = validateProject(project);
+    // People's colours (one per person) are the server's and the engine's to
+    // police: a page whose copy of that rule is out of step only warns, and the
+    // picture still shows (Judge EXPLODES showed nothing over a courtroom rule
+    // the page lacked).
+    const colours = peopleProblem(project);
+    if (colours !== null && colours !== this.warned) {
+      this.warned = colours;
+      note("warn", "preview", `the page's colour check: ${colours} (shown anyway)`);
+    }
+    const problem = validateProject(project, { people: false });
     if (problem) {
       // A drag can pass through an invalid state: the last valid picture
       // stays. With none of this project yet, say why there's nothing.

@@ -85,10 +85,19 @@ describe("preview seeks and lifetime", () => {
   });
   afterEach(() => { preview.detach(); vi.unstubAllGlobals(); });
 
-  it("says on the preview when the page's own rules refuse a project, never a black frame", () => {
+  it("shows a project whose people's colours the page's own rule doubts (the server and engine police them)", () => {
+    // Judge EXPLODES: the page's copy of the rule lacked the courtroom's white subtitles and showed nothing.
     const white = { ...fixture(), people: [{ id: "x1", name: "Mother", label: "Mother:", role: "suspect", color: "#ffffff", names: [] }] } as unknown as Project;
     preview.setProject(white, {}); draw();
-    expect(preview.error).toContain("can't show this project: Mother (x1) can't be white");
+    expect(preview.error).toBeNull();
+    expect(engine.setProject).toHaveBeenCalled();
+  });
+
+  it("says on the preview when the page's own rules refuse a project, never a black frame", () => {
+    const overlapping = fixture();
+    overlapping.clips = [...overlapping.clips, { ...overlapping.clips[0], id: "c9" }];
+    preview.setProject(overlapping, {}); draw();
+    expect(preview.error).toContain("can't show this project");
     preview.setProject(fixture("p2"), {}); draw();
     expect(preview.error).toBeNull();
   });

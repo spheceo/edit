@@ -2453,6 +2453,118 @@ mod validation_tests {
         assert!(p.validate().is_ok(), "{:?}", p.validate());
     }
 
+    /// The page keeps its own copy of the people rule (apps/web/src/lib/people.ts),
+    /// and the two drifted (its copy refused Judge EXPLODES' white courtroom
+    /// subtitles, Oct 23). These cases and this core's verdicts are written to
+    /// apps/web/src/lib/people-cases.json, which the page's test checks itself
+    /// against: `EDIT_WRITE_PEOPLE_CASES=1 cargo test -p edit-core people_rule`
+    /// writes it again after a change here.
+    #[test]
+    fn people_rule_cases_for_the_page() {
+        let base = project();
+        let track = base.tracks[0].id.clone();
+        let line = |color: Rgba, label: Option<Rgba>| Clip {
+            id: "s".into(),
+            track: track.clone(),
+            start: 0,
+            duration: 10,
+            color: ClipColor::Cyan,
+            name: Some("Subtitle · Lauren (Suspect)".into()),
+            link: None,
+            fade_in: 0,
+            fade_out: 0,
+            keyframes: Default::default(),
+            person: Some("p1".into()),
+            content: ClipContent::Text {
+                text: "No.".into(),
+                style: TextStyle {
+                    color,
+                    label: label.map(|color| TextLabel {
+                        text: "Lauren:".into(),
+                        color,
+                        size: 26.0,
+                    }),
+                    ..Default::default()
+                },
+                transform: Default::default(),
+                animation: Default::default(),
+                opacity: 1.0,
+                word_times: Vec::new(),
+            },
+        };
+        let person = |color: &str, role: &str| Person {
+            id: "p1".into(),
+            name: "Lauren (Suspect)".into(),
+            color: color.into(),
+            role: role.into(),
+            ..Default::default()
+        };
+        let yellow = Rgba([1.0, 1.0, 0.0, 1.0]);
+        let teal = Rgba([0.0, 0.9, 0.78, 1.0]);
+        let cases: Vec<(&str, Style, Person, Clip)> = vec![
+            (
+                "courtroom: an unlabelled subtitle stays white",
+                Style::Courtroom,
+                person("#ffff00", "suspect"),
+                line(Rgba::WHITE, None),
+            ),
+            (
+                "bodycam: an unlabelled subtitle in white isn't the person's colour",
+                Style::Bodycam,
+                person("#ffff00", "suspect"),
+                line(Rgba::WHITE, None),
+            ),
+            (
+                "bodycam: an unlabelled subtitle in the person's colour",
+                Style::Bodycam,
+                person("#ffff00", "suspect"),
+                line(yellow, None),
+            ),
+            (
+                "courtroom: a labelled one in the person's colour",
+                Style::Courtroom,
+                person("#ffff00", "suspect"),
+                line(Rgba::WHITE, Some(yellow)),
+            ),
+            (
+                "courtroom: a labelled one in another colour",
+                Style::Courtroom,
+                person("#ffff00", "suspect"),
+                line(Rgba::WHITE, Some(teal)),
+            ),
+            (
+                "a suspect can't be white",
+                Style::Bodycam,
+                person("#f4f4f4", "suspect"),
+                line(Rgba([0.957, 0.957, 0.957, 1.0]), None),
+            ),
+            (
+                "a bystander may be a light grey",
+                Style::Courtroom,
+                person("#e6e6e6", "bystander"),
+                line(Rgba::WHITE, None),
+            ),
+        ];
+        let written: Vec<serde_json::Value> = cases
+            .into_iter()
+            .map(|(name, style, person, clip)| {
+                let mut p = base.clone();
+                p.style = style;
+                p.people = vec![person];
+                p.clips = vec![clip];
+                serde_json::json!({ "name": name, "ok": p.validate().is_ok(), "project": p })
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&written).unwrap() + "\n";
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/web/src/lib/people-cases.json");
+        if std::env::var_os("EDIT_WRITE_PEOPLE_CASES").is_some() {
+            std::fs::write(&file, &text).unwrap();
+        }
+        let kept = std::fs::read_to_string(&file).unwrap_or_default();
+        assert_eq!(kept, text, "apps/web/src/lib/people-cases.json is out of date: EDIT_WRITE_PEOPLE_CASES=1 cargo test -p edit-core people_rule");
+    }
+
     #[test]
     fn fresh_ids_skip_existing_clips_and_links_and_wrap_safely() {
         let mut p = project();

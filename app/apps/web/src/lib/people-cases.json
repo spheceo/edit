@@ -1,0 +1,778 @@
+[
+  {
+    "name": "courtroom: an unlabelled subtitle stays white",
+    "ok": true,
+    "project": {
+      "clips": [
+        {
+          "animation": {
+            "duration": 12.0,
+            "preset": "none",
+            "stagger": 1.5
+          },
+          "color": "cyan",
+          "duration": 10,
+          "fade_in": 0,
+          "fade_out": 0,
+          "id": "s",
+          "name": "Subtitle · Lauren (Suspect)",
+          "opacity": 1.0,
+          "person": "p1",
+          "start": 0,
+          "style": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "font": "Geist",
+            "glow": {
+              "color": null,
+              "enabled": true,
+              "radius": 46.0,
+              "strength": 0.5
+            },
+            "line_height": 1.149999976158142,
+            "size": 96.0,
+            "tracking": 0.0,
+            "weight": 700
+          },
+          "text": "No.",
+          "track": "v1",
+          "transform": {
+            "rotation": 0.0,
+            "scale": 1.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "type": "text"
+        }
+      ],
+      "id": "p",
+      "media": [],
+      "name": "test",
+      "next_id": 6,
+      "people": [
+        {
+          "color": "#ffff00",
+          "id": "p1",
+          "name": "Lauren (Suspect)",
+          "role": "suspect"
+        }
+      ],
+      "settings": {
+        "fps": 30,
+        "height": 1080,
+        "width": 1920
+      },
+      "style": "courtroom",
+      "tracks": [
+        {
+          "hidden": false,
+          "id": "v1",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v2",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v3",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a4",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a5",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        }
+      ],
+      "version": 1
+    }
+  },
+  {
+    "name": "bodycam: an unlabelled subtitle in white isn't the person's colour",
+    "ok": false,
+    "project": {
+      "clips": [
+        {
+          "animation": {
+            "duration": 12.0,
+            "preset": "none",
+            "stagger": 1.5
+          },
+          "color": "cyan",
+          "duration": 10,
+          "fade_in": 0,
+          "fade_out": 0,
+          "id": "s",
+          "name": "Subtitle · Lauren (Suspect)",
+          "opacity": 1.0,
+          "person": "p1",
+          "start": 0,
+          "style": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "font": "Geist",
+            "glow": {
+              "color": null,
+              "enabled": true,
+              "radius": 46.0,
+              "strength": 0.5
+            },
+            "line_height": 1.149999976158142,
+            "size": 96.0,
+            "tracking": 0.0,
+            "weight": 700
+          },
+          "text": "No.",
+          "track": "v1",
+          "transform": {
+            "rotation": 0.0,
+            "scale": 1.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "type": "text"
+        }
+      ],
+      "id": "p",
+      "media": [],
+      "name": "test",
+      "next_id": 6,
+      "people": [
+        {
+          "color": "#ffff00",
+          "id": "p1",
+          "name": "Lauren (Suspect)",
+          "role": "suspect"
+        }
+      ],
+      "settings": {
+        "fps": 30,
+        "height": 1080,
+        "width": 1920
+      },
+      "style": "bodycam",
+      "tracks": [
+        {
+          "hidden": false,
+          "id": "v1",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v2",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v3",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a4",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a5",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        }
+      ],
+      "version": 1
+    }
+  },
+  {
+    "name": "bodycam: an unlabelled subtitle in the person's colour",
+    "ok": true,
+    "project": {
+      "clips": [
+        {
+          "animation": {
+            "duration": 12.0,
+            "preset": "none",
+            "stagger": 1.5
+          },
+          "color": "cyan",
+          "duration": 10,
+          "fade_in": 0,
+          "fade_out": 0,
+          "id": "s",
+          "name": "Subtitle · Lauren (Suspect)",
+          "opacity": 1.0,
+          "person": "p1",
+          "start": 0,
+          "style": {
+            "color": [
+              1.0,
+              1.0,
+              0.0,
+              1.0
+            ],
+            "font": "Geist",
+            "glow": {
+              "color": null,
+              "enabled": true,
+              "radius": 46.0,
+              "strength": 0.5
+            },
+            "line_height": 1.149999976158142,
+            "size": 96.0,
+            "tracking": 0.0,
+            "weight": 700
+          },
+          "text": "No.",
+          "track": "v1",
+          "transform": {
+            "rotation": 0.0,
+            "scale": 1.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "type": "text"
+        }
+      ],
+      "id": "p",
+      "media": [],
+      "name": "test",
+      "next_id": 6,
+      "people": [
+        {
+          "color": "#ffff00",
+          "id": "p1",
+          "name": "Lauren (Suspect)",
+          "role": "suspect"
+        }
+      ],
+      "settings": {
+        "fps": 30,
+        "height": 1080,
+        "width": 1920
+      },
+      "style": "bodycam",
+      "tracks": [
+        {
+          "hidden": false,
+          "id": "v1",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v2",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v3",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a4",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a5",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        }
+      ],
+      "version": 1
+    }
+  },
+  {
+    "name": "courtroom: a labelled one in the person's colour",
+    "ok": true,
+    "project": {
+      "clips": [
+        {
+          "animation": {
+            "duration": 12.0,
+            "preset": "none",
+            "stagger": 1.5
+          },
+          "color": "cyan",
+          "duration": 10,
+          "fade_in": 0,
+          "fade_out": 0,
+          "id": "s",
+          "name": "Subtitle · Lauren (Suspect)",
+          "opacity": 1.0,
+          "person": "p1",
+          "start": 0,
+          "style": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "font": "Geist",
+            "glow": {
+              "color": null,
+              "enabled": true,
+              "radius": 46.0,
+              "strength": 0.5
+            },
+            "label": {
+              "color": [
+                1.0,
+                1.0,
+                0.0,
+                1.0
+              ],
+              "size": 26.0,
+              "text": "Lauren:"
+            },
+            "line_height": 1.149999976158142,
+            "size": 96.0,
+            "tracking": 0.0,
+            "weight": 700
+          },
+          "text": "No.",
+          "track": "v1",
+          "transform": {
+            "rotation": 0.0,
+            "scale": 1.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "type": "text"
+        }
+      ],
+      "id": "p",
+      "media": [],
+      "name": "test",
+      "next_id": 6,
+      "people": [
+        {
+          "color": "#ffff00",
+          "id": "p1",
+          "name": "Lauren (Suspect)",
+          "role": "suspect"
+        }
+      ],
+      "settings": {
+        "fps": 30,
+        "height": 1080,
+        "width": 1920
+      },
+      "style": "courtroom",
+      "tracks": [
+        {
+          "hidden": false,
+          "id": "v1",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v2",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v3",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a4",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a5",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        }
+      ],
+      "version": 1
+    }
+  },
+  {
+    "name": "courtroom: a labelled one in another colour",
+    "ok": false,
+    "project": {
+      "clips": [
+        {
+          "animation": {
+            "duration": 12.0,
+            "preset": "none",
+            "stagger": 1.5
+          },
+          "color": "cyan",
+          "duration": 10,
+          "fade_in": 0,
+          "fade_out": 0,
+          "id": "s",
+          "name": "Subtitle · Lauren (Suspect)",
+          "opacity": 1.0,
+          "person": "p1",
+          "start": 0,
+          "style": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "font": "Geist",
+            "glow": {
+              "color": null,
+              "enabled": true,
+              "radius": 46.0,
+              "strength": 0.5
+            },
+            "label": {
+              "color": [
+                0.0,
+                0.8999999761581421,
+                0.7799999713897705,
+                1.0
+              ],
+              "size": 26.0,
+              "text": "Lauren:"
+            },
+            "line_height": 1.149999976158142,
+            "size": 96.0,
+            "tracking": 0.0,
+            "weight": 700
+          },
+          "text": "No.",
+          "track": "v1",
+          "transform": {
+            "rotation": 0.0,
+            "scale": 1.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "type": "text"
+        }
+      ],
+      "id": "p",
+      "media": [],
+      "name": "test",
+      "next_id": 6,
+      "people": [
+        {
+          "color": "#ffff00",
+          "id": "p1",
+          "name": "Lauren (Suspect)",
+          "role": "suspect"
+        }
+      ],
+      "settings": {
+        "fps": 30,
+        "height": 1080,
+        "width": 1920
+      },
+      "style": "courtroom",
+      "tracks": [
+        {
+          "hidden": false,
+          "id": "v1",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v2",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v3",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a4",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a5",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        }
+      ],
+      "version": 1
+    }
+  },
+  {
+    "name": "a suspect can't be white",
+    "ok": false,
+    "project": {
+      "clips": [
+        {
+          "animation": {
+            "duration": 12.0,
+            "preset": "none",
+            "stagger": 1.5
+          },
+          "color": "cyan",
+          "duration": 10,
+          "fade_in": 0,
+          "fade_out": 0,
+          "id": "s",
+          "name": "Subtitle · Lauren (Suspect)",
+          "opacity": 1.0,
+          "person": "p1",
+          "start": 0,
+          "style": {
+            "color": [
+              0.9570000171661377,
+              0.9570000171661377,
+              0.9570000171661377,
+              1.0
+            ],
+            "font": "Geist",
+            "glow": {
+              "color": null,
+              "enabled": true,
+              "radius": 46.0,
+              "strength": 0.5
+            },
+            "line_height": 1.149999976158142,
+            "size": 96.0,
+            "tracking": 0.0,
+            "weight": 700
+          },
+          "text": "No.",
+          "track": "v1",
+          "transform": {
+            "rotation": 0.0,
+            "scale": 1.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "type": "text"
+        }
+      ],
+      "id": "p",
+      "media": [],
+      "name": "test",
+      "next_id": 6,
+      "people": [
+        {
+          "color": "#f4f4f4",
+          "id": "p1",
+          "name": "Lauren (Suspect)",
+          "role": "suspect"
+        }
+      ],
+      "settings": {
+        "fps": 30,
+        "height": 1080,
+        "width": 1920
+      },
+      "style": "bodycam",
+      "tracks": [
+        {
+          "hidden": false,
+          "id": "v1",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v2",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v3",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a4",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a5",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        }
+      ],
+      "version": 1
+    }
+  },
+  {
+    "name": "a bystander may be a light grey",
+    "ok": true,
+    "project": {
+      "clips": [
+        {
+          "animation": {
+            "duration": 12.0,
+            "preset": "none",
+            "stagger": 1.5
+          },
+          "color": "cyan",
+          "duration": 10,
+          "fade_in": 0,
+          "fade_out": 0,
+          "id": "s",
+          "name": "Subtitle · Lauren (Suspect)",
+          "opacity": 1.0,
+          "person": "p1",
+          "start": 0,
+          "style": {
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "font": "Geist",
+            "glow": {
+              "color": null,
+              "enabled": true,
+              "radius": 46.0,
+              "strength": 0.5
+            },
+            "line_height": 1.149999976158142,
+            "size": 96.0,
+            "tracking": 0.0,
+            "weight": 700
+          },
+          "text": "No.",
+          "track": "v1",
+          "transform": {
+            "rotation": 0.0,
+            "scale": 1.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "type": "text"
+        }
+      ],
+      "id": "p",
+      "media": [],
+      "name": "test",
+      "next_id": 6,
+      "people": [
+        {
+          "color": "#e6e6e6",
+          "id": "p1",
+          "name": "Lauren (Suspect)",
+          "role": "bystander"
+        }
+      ],
+      "settings": {
+        "fps": 30,
+        "height": 1080,
+        "width": 1920
+      },
+      "style": "courtroom",
+      "tracks": [
+        {
+          "hidden": false,
+          "id": "v1",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v2",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "v3",
+          "kind": "video",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a4",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        },
+        {
+          "hidden": false,
+          "id": "a5",
+          "kind": "audio",
+          "locked": false,
+          "muted": false
+        }
+      ],
+      "version": 1
+    }
+  }
+]

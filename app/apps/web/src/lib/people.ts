@@ -74,6 +74,10 @@ export function peopleProblem(project: Project): string | null {
     const person = people.get(clip.person);
     if (person === undefined) return `a clip names a person who isn't in the cast`;
     if (clip.type !== "text") return `a clip names a person but isn't text`;
+    // As edit-core's validate_people: a courtroom video's subtitles have no
+    // name label and keep white words whoever speaks (the team, Oct 22). This
+    // copy lacked it, so the preview refused Judge EXPLODES (Oct 23).
+    if (project.style === "courtroom" && (clip.style.label === undefined || clip.style.label === null)) continue;
     const shown = toHex((clip.style.label ?? clip.style).color);
     if (shown !== toHex([person.bytes[0] / 255, person.bytes[1] / 255, person.bytes[2] / 255, 1])) {
       return `${person.name}'s clips must all be in their colour ${person.color}: recolour the person, not one of their clips`;

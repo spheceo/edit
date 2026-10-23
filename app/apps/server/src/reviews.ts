@@ -675,13 +675,6 @@ export async function uploadFull(app: App, projectId: string, n: number, progres
   return { key, bytes, meta: "set" };
 }
 
-/** Approved: the other versions' full-quality files go from R2 (about a gigabyte each); the approved one's stays. */
-async function removeOtherFulls(projectId: string, shared: Shared, kept: number): Promise<void> {
-  const keys = shared.versions.filter((one) => one.n !== kept).flatMap((one) => ["mp4", "mov", "m4v"].map((ext) => `edit/reviews/${projectId}/${one.timeline}/full.${ext}`));
-  if (keys.length === 0) return;
-  await cloud.remove(keys).catch((error: unknown) => diag.warn("review", `${projectId}: the older versions' full files: ${diag.messageOf(error)}`));
-}
-
 export function clearOthers(app: App, projectId: string, kept: number): string[] {
   const home = app.store.home;
   const shared = read(home).shared[projectId];
@@ -700,7 +693,7 @@ export function clearOthers(app: App, projectId: string, kept: number): string[]
   }
   // The versions stay listed here (their clip maps still place their notes); only their files go.
   fs.rmSync(join(home, "cache", "reviews", projectId), { recursive: true, force: true });
-  if (cloud.enabled()) void removeOtherFulls(projectId, shared, kept);
+  // The other versions' full-quality files go from R2 with the approval: Repack deletes every file their meta names.
   if (deleted.length > 0) diag.info("review", `${projectId}: v${kept} approved; deleted ${deleted.length} older export(s)`);
   return deleted;
 }

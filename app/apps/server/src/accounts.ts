@@ -283,24 +283,24 @@ export async function start(app: App): Promise<void> {
   if (headless) void codesOnTerminal(app);
 }
 
-/** Until someone signs in: a device code printed, and a new one when it runs out (or the site was unreachable). */
+/** Until someone signs in: a device code printed (on stderr, with Edit's other start-up lines: a stdout that's a file is buffered), and a new one when it runs out (or the site was unreachable). */
 async function codesOnTerminal(app: App): Promise<void> {
   while (!hasSession()) {
     try {
       const device = await beginDevice(app, "edit serve");
-      process.stdout.write(
+      process.stderr.write(
         `\nedit: sign in to Edit: open ${device.uri} and enter ${device.userCode}` +
           (device.complete !== null ? `\n      (or open ${device.complete})` : "") +
           `\n      the code lasts ${Math.round((device.expires - Date.now()) / 60_000)} minutes\n\n`,
       );
       await devicePolling();
-      if (hasSession()) process.stdout.write(`edit: signed in as ${state.person?.email ?? "you"}\n`);
+      if (hasSession()) process.stderr.write(`edit: signed in as ${state.person?.email ?? "you"}\n`);
       else if (state.problem !== null) {
-        process.stdout.write(`edit: ${state.problem}\n`);
+        process.stderr.write(`edit: ${state.problem}\n`);
         await new Promise((resolve) => setTimeout(resolve, 30_000));
       }
     } catch (error) {
-      process.stdout.write(`edit: couldn't start signing in (${diag.messageOf(error)}); trying again in a minute\n`);
+      process.stderr.write(`edit: couldn't start signing in (${diag.messageOf(error)}); trying again in a minute\n`);
       await new Promise((resolve) => setTimeout(resolve, 60_000));
     }
   }

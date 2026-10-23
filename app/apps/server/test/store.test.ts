@@ -391,3 +391,20 @@ test("deleting a project removes what Edit rendered for it (smoothed footage, ma
     fixture.cleanup();
   }
 });
+
+test("each server start counts a project's revisions from its own base, so a page from the last start can't match one", () => {
+  const was = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  const first = fixtureHome("rev-base-1");
+  const second = fixtureHome("rev-base-2");
+  try {
+    expect(first.store.firstRev).toBeGreaterThan(1000);
+    expect(first.store.firstRev).not.toBe(second.store.firstRev);
+    const made = first.store.createAs("Case", "bodycam", { width: 1920, height: 1080, fps: 30 });
+    expect(made.rev).toBe(first.store.firstRev);
+  } finally {
+    process.env.NODE_ENV = was;
+    first.cleanup();
+    second.cleanup();
+  }
+});

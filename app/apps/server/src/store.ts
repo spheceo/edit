@@ -13,6 +13,7 @@
 // here that changed what `get` returned would change every reader's copy.
 // `checkout` gives a copy to edit; `update` does read-modify-write in one go.
 
+import { randomInt } from "node:crypto";
 import * as fs from "node:fs";
 
 import { creator } from "./accounts.ts";
@@ -109,6 +110,14 @@ export class Store {
   private active: string | null = null;
   readonly events = new Events();
   private cloudHook: CloudHook | null = null;
+
+  /**
+   * The revision a project starts at when this server loads it: a different
+   * one each start, so a save from a page still on the last server's revisions
+   * is a conflict (it reloads), never a match overwriting what's changed since
+   * (the audit, Oct 23: revisions restarted at 1). Tests count from 1.
+   */
+  readonly firstRev = process.env.NODE_ENV === "test" ? 1 : 1 + 1000 * randomInt(1, 2_000_000);
 
   private constructor(home: string, layout: mediaDrive.Layout) {
     this.home = home;
@@ -332,7 +341,7 @@ export class Store {
     const project = read.project;
     // Files moved to (or back from) the media drive are found.
     this.currentLayout.resolveProject(project);
-    const live: Live = { rev: 1, project: deepFreeze(project) };
+    const live: Live = { rev: this.firstRev, project: deepFreeze(project) };
     this.projects.set(id, live);
     this.summaries.delete(id);
     return live;
@@ -374,7 +383,7 @@ export class Store {
     const project = newProject(id, trimmed, settings, style);
     const by = creator();
     if (by !== null) project.created_by = by;
-    const live = this.write(id, 1, project);
+    const live = this.write(id, this.firstRev, project);
     this.projects.set(id, live);
     this.cloudHook?.created(id);
     return live;
@@ -389,7 +398,7 @@ export class Store {
     copy.id = `p${nowMs()}-${nextFileId()}`;
     copy.name = name;
     delete copy.drive;
-    const live = this.write(copy.id, 1, copy);
+    const live = this.write(copy.id, this.firstRev, copy);
     this.projects.set(copy.id, live);
     return live;
   }
@@ -409,7 +418,7 @@ export class Store {
     for (let attempt = 0; attempt < 5; attempt++) {
       const current = this.load(id);
       if (current === null) {
-        const live = this.save(id, 1, prepared);
+        const live = this.save(id, this.firstRev, prepared);
         this.projects.set(id, live);
         return live;
       }

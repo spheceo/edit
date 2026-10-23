@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
+import { readState } from "../src/files.ts";
 import * as jobs from "../src/jobs.ts";
+import { scratch } from "./helpers/home.ts";
 
 function home(): string {
   return fs.mkdtempSync(`${os.tmpdir()}/edit-jobs-`);
@@ -53,4 +55,24 @@ test("a restart starts unfinished jobs again, but not one cut short three times"
 test("without a data folder nothing is written", () => {
   expect(jobs.begin(null, "export", "p", {})).toBe("export:p");
   jobs.end(null, "export:p");
+});
+
+test("a state file that won't read is set aside, never read as empty and written over", () => {
+  const { dir, cleanup } = scratch("state-broken");
+  try {
+    const path = `${dir}/jobs.json`;
+    fs.writeFileSync(path, "{ not json");
+    const warned: string[] = [];
+    expect(readState(path, (message) => warned.push(message))).toBeUndefined();
+    expect(fs.existsSync(path)).toBe(false);
+    const aside = fs.readdirSync(dir).find((name) => name.startsWith("jobs.json.broken-"));
+    expect(aside).toBeDefined();
+    expect(fs.readFileSync(`${dir}/${aside}`, "utf8")).toBe("{ not json");
+    expect(warned[0]).toContain("isn't valid JSON");
+    // None at all is simply empty, quietly.
+    expect(readState(`${dir}/none.json`, (message) => warned.push(message))).toBeUndefined();
+    expect(warned.length).toBe(1);
+  } finally {
+    cleanup();
+  }
 });

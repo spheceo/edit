@@ -40,6 +40,7 @@ import * as cloud from "./cloud.ts";
 import { ConvexFailure } from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
 import * as diag from "./diag.ts";
+import { readState as readStateFile } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
@@ -763,16 +764,17 @@ export function readSettings(home: string): Settings {
 /** What `cloud/projects.json` keeps (nothing when it won't read, as serde's `.ok()`). */
 export function readState(home: string): Map<string, Saved> {
   const out = new Map<string, Saved>();
-  try {
-    const value = JSON.parse(fs.readFileSync(join(home, STATE_DIR, STATE), "utf8")) as unknown;
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return out;
-    for (const [id, given] of Object.entries(value as Record<string, unknown>)) {
-      const saved = readSaved(given);
-      if (saved === null) return new Map();
-      out.set(id, saved);
+  // A file that won't read is set aside, never read as empty and written over (files.readState).
+  const value = readStateFile(join(home, STATE_DIR, STATE), (message) => diag.warn("cloud", message));
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return out;
+  for (const [id, given] of Object.entries(value as Record<string, unknown>)) {
+    const saved = readSaved(given);
+    // One entry that doesn't read is that project's, not every project's.
+    if (saved === null) {
+      diag.warn("cloud", `${id}'s cloud state in ${STATE} doesn't read: it's asked about again`);
+      continue;
     }
-  } catch {
-    return new Map();
+    out.set(id, saved);
   }
   return out;
 }

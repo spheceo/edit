@@ -23,7 +23,7 @@ import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
 import { clipMap, deleteExport, listExports, mapFile, timelineHash } from "./exports.ts";
-import { writeAtomic } from "./files.ts";
+import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, Project } from "./model.ts";
 import { join } from "./paths.ts";
@@ -111,12 +111,11 @@ function empty(): State {
 }
 
 export function read(home: string): State {
-  try {
-    const raw = JSON.parse(fs.readFileSync(join(home, FILE), "utf8")) as Partial<State>;
-    return { ...empty(), ...raw, shared: raw.shared ?? {}, notes: raw.notes ?? {} };
-  } catch {
-    return empty();
-  }
+  // A file that won't read is set aside, never read as empty and written over (files.readState).
+  const raw = readState(join(home, FILE), (message) => diag.warn("review", message));
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return empty();
+  const given = raw as Partial<State>;
+  return { ...empty(), ...given, shared: given.shared ?? {}, notes: given.notes ?? {} };
 }
 
 function write(home: string, state: State): void {

@@ -11,10 +11,9 @@
 // twice and still didn't end (it may be what brings the server down) isn't
 // started a third time.
 
-import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
-import { nowMs, writeAtomic } from "./files.ts";
+import { nowMs, readState, writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 
 export type Kind = "export" | "drive" | "smooth" | "watch" | "upload" | "map";
@@ -38,12 +37,9 @@ function file(home: string): string {
 }
 
 function read(home: string): Job[] {
-  try {
-    const value = JSON.parse(fs.readFileSync(file(home), "utf8")) as unknown;
-    return Array.isArray(value) ? (value as Job[]).filter((job) => typeof job?.key === "string") : [];
-  } catch {
-    return [];
-  }
+  // A file that won't read is set aside, never read as empty and written over (files.readState).
+  const value = readState(file(home), (message) => diag.warn("jobs", message));
+  return Array.isArray(value) ? (value as Job[]).filter((job) => typeof job?.key === "string") : [];
 }
 
 function write(home: string, jobs: Job[]): void {

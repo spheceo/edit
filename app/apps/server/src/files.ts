@@ -77,3 +77,37 @@ const IO_TEXT: Record<string, string> = {
   EPERM: "Operation not permitted",
   EBUSY: "Resource busy",
 };
+
+/**
+ * A state file's JSON (`reviews.json`, `cloud/projects.json`, `jobs.json`…):
+ * undefined when there's none. One that won't read or parse is set aside
+ * (`<path>.broken-<ms>`, a warning to `warn`) rather than read as empty, so
+ * the next write never replaces what it held (the audit, Oct 23).
+ */
+export function readState(path: string, warn: (message: string) => void = () => {}): unknown {
+  let text: string;
+  try {
+    text = fs.readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    setAside(path, `couldn't be read (${ioMessage(error)})`, warn);
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    setAside(path, `isn't valid JSON (${(error as Error).message})`, warn);
+    return undefined;
+  }
+}
+
+function setAside(path: string, why: string, warn: (message: string) => void): void {
+  const aside = `${path}.broken-${nowMs()}`;
+  try {
+    fs.renameSync(path, aside);
+    warn(`${path} ${why}: kept as ${aside}, starting it again`);
+  } catch (error) {
+    warn(`${path} ${why}, and couldn't be set aside (${ioMessage(error)})`);
+    throw new Error(`${path} ${why}: Edit won't write over it; move it away and restart`);
+  }
+}

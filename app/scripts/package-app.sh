@@ -33,7 +33,7 @@ keychains=("${(@f)$(security list-keychains -d user | sed -E 's/^[[:space:]]*"(.
 trap 'rm -rf "$work"; if [[ -n "${keychain:-}" ]]; then security list-keychains -d user -s "${keychains[@]}"; security delete-keychain "$keychain" 2>/dev/null; fi; true' EXIT
 
 echo "==> Edit.app ($target)"
-(cd "$root/crates/edit-window" && bunx @tauri-apps/cli@2 build --target "$target" --bundles app --config \
+(cd "$root/crates/edit-window" && bunx @tauri-apps/cli@2.12.4 build --target "$target" --bundles app --config \
   "{\"bundle\":{\"resources\":{\"$pkg/edit-ffmpeg\":\"edit-ffmpeg\",\"$pkg/edit-ffprobe\":\"edit-ffprobe\",\"$pkg/edit\":\"edit\"}}}")
 built="${CARGO_TARGET_DIR:-$root/target}/$target/release/bundle/macos/Edit.app"
 app="$work/Edit.app"

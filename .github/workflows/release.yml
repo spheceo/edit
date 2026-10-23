@@ -14,8 +14,11 @@ on:
     tags: ["v*", "nightly-*"]
   workflow_dispatch:
 
+# Read-only by default: only the jobs that make and publish the release get
+# write, and the token reaches only their gh steps (the audit, Oct 23: every
+# step, ~480 build scripts and the signing step's tools among them, had it).
 permissions:
-  contents: write
+  contents: read
 
 # The code and its build config live in app/.
 defaults:
@@ -24,7 +27,6 @@ defaults:
 
 env:
   TAG: ${{ github.ref_name }}
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   GH_REPO: ${{ github.repository }}
   RELEASE: ${{ github.event_name == 'push' }}
   NIGHTLY: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'nightly-') }}
@@ -32,8 +34,10 @@ env:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Every tag, for a nightly's notes (what changed since the build before).
           fetch-depth: 0
@@ -47,9 +51,13 @@ jobs:
           fi
       - name: Create the draft release
         if: env.RELEASE == 'true' && env.NIGHTLY != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "Edit $TAG" --generate-notes
       - name: Create the draft nightly
         if: env.NIGHTLY == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh release view "$TAG" >/dev/null 2>&1 && exit 0
@@ -67,11 +75,11 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: app
       - name: Install wasm-bindgen (the version in Cargo.lock)
@@ -80,7 +88,7 @@ jobs:
           cargo install wasm-bindgen-cli --version "$version" --locked
       # Pinned: a binary compiled by Bun 1.4.4 hung at start under the hardened
       # runtime for Writer (Oct 23); 1.4.0 is what Edit is built and checked with.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
       - name: Build the UI
@@ -89,7 +97,7 @@ jobs:
           wasm-bindgen --target web --out-dir apps/web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
           bun install --cwd apps/web --frozen-lockfile
           bun run --cwd apps/web build
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: web-dist
           path: app/apps/web/dist
@@ -103,21 +111,21 @@ jobs:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ matrix.target }}
           workspaces: app
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: web-dist
           path: app/apps/web/dist
       # Pinned: a binary compiled by Bun 1.4.4 hung at start under the hardened
       # runtime for Writer (Oct 23); 1.4.0 is what Edit is built and checked with.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
       # The addon and the window helper, then everything embedded in one `edit`
@@ -164,7 +172,7 @@ jobs:
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q '"serverInfo"'
       # FFmpeg ships beside `edit` (apps/server/src/tools.ts), pinned in scripts/ffmpeg.sh;
       # kept between runs so a build doesn't need its host up (ffmpeg.sh skips a matching copy).
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: app/ffmpeg
           key: ffmpeg-${{ matrix.target }}-${{ hashFiles('app/scripts/ffmpeg.sh') }}
@@ -189,20 +197,47 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
         run: scripts/package-app.sh "${{ matrix.target }}" package dist
-      - name: Upload to the release
+      # Handed to the upload job: this job's token can't write the release.
+      - name: Keep for the release
         if: env.RELEASE == 'true'
-        run: gh release upload "$TAG" --clobber dist/*
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: dist-${{ matrix.target }}
+          path: app/dist
       - name: Keep as a test build
         if: env.RELEASE != 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ env.NAME }}
           path: app/dist
 
-  publish:
+  # The only steps with a token that writes the release: its files, then its publishing.
+  upload:
     needs: build
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" --clobber dist/*
+
+  publish:
+    needs: upload
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     # No checkout here, so no app/ to run in.
     defaults:
       run:
@@ -210,6 +245,8 @@ jobs:
     steps:
       # A nightly stays a pre-release: install.sh and Stable installs read `releases/latest`, which skips it.
       - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "$NIGHTLY" = true ]; then
             gh release edit "$TAG" --draft=false

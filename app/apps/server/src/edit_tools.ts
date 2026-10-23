@@ -21,7 +21,7 @@ import * as tools from "./tools.ts";
 import * as onscreen from "./onscreen.ts";
 import * as markBlurs from "./mark_blurs.ts";
 import { twoLineSubtitles } from "./one_line.ts";
-import { pointerIssues } from "./pointers.ts";
+import { firstCut, pointerIssues } from "./pointers.ts";
 import * as typing from "./typing_sounds.ts";
 import * as watermarks from "./watermarks.ts";
 import { ioMessage } from "./files.ts";
@@ -1135,7 +1135,7 @@ export function graphicsShort(project: Project, outro: [number, number] | null):
     out.push({ kind: "graphic_short", clip: clip.id, start: clip.start, seconds: seconds(clip.duration), at_least: VIEWER_HOLD, fix: `hold the File Viewer (its frame, photo and name) at least ${VIEWER_HOLD} s over one shot` });
   }
   if (outro === null) return out;
-  // Each charges screen: the outro's texts on screen together.
+  // Each charges screen: the outro's texts on screen together (a crossfade into the next isn't together).
   const spans = project.clips
     .filter((clip) => clip.type === "text" && trackOf(project, clip.track)?.subtitles !== true && !(clip.name ?? "").startsWith("Subtitle") && clip.start < outro[1] && clipEnd(clip) > outro[0])
     .map((clip): [number, number] => [clip.start, clipEnd(clip)])
@@ -1143,12 +1143,29 @@ export function graphicsShort(project: Project, outro: [number, number] | null):
   const screens: [number, number][] = [];
   for (const [from, to] of spans) {
     const last = screens[screens.length - 1];
-    if (last !== undefined && from < last[1]) last[1] = Math.max(last[1], to);
+    if (last !== undefined && from < last[1] - Math.round(fps / 2)) last[1] = Math.max(last[1], to);
     else screens.push([from, to]);
   }
   for (const [from, to] of screens) {
     if (to - from >= CHARGES_HOLD * fps) continue;
     out.push({ kind: "graphic_short", start: from, end: to, seconds: seconds(to - from), at_least: CHARGES_HOLD, fix: `hold each person's charges at least ${CHARGES_HOLD} s while the voice-over talks about them: lengthen this screen (its picture too), moving the next one later, never shortening another below ${CHARGES_HOLD} s` });
+  }
+  return out;
+}
+
+/**
+ * A File Viewer over a cut in the footage under it (`viewer_over_cut`): it
+ * sits over one shot (JJ: "We keep the file viewer even while changing
+ * scenes"). Loop 5's Mom & Teen held one 4 s over three 2–3 s shots; the shot
+ * under a viewer may run long (long_broll_shot doesn't count what it covers).
+ */
+export function viewersOverCuts(project: Project): Json[] {
+  const out: Json[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "video" || !/(^|· )File Viewer$/u.test(clip.name ?? "")) continue;
+    const cut = firstCut(project, clip);
+    if (cut === null) continue;
+    out.push({ kind: "viewer_over_cut", clip: clip.id, start: clip.start, cut, fix: "one shot under the whole File Viewer: lengthen the shot it opens on to its end (deleting or moving the shots after it), or start the viewer after the cut" });
   }
   return out;
 }
@@ -1245,6 +1262,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...windowsUnderused(project),
     ...desktopsSparse(project),
     ...graphicsShort(project, sections.outro ?? null),
+    ...viewersOverCuts(project),
     ...(markBlurs.offShot(project) as Json[]),
     ...soundEffectsLong(project),
     ...(typing.typingSoundsOff(project) as Json[]),
@@ -1285,7 +1303,7 @@ const FIXABLE = [
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
-  "blur_off_shot", "sfx_long", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short",
+  "blur_off_shot", "sfx_long", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "viewer_over_cut",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */

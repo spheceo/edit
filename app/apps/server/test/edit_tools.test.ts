@@ -613,11 +613,12 @@ test("a File Viewer under 4 s and an outro charges screen under 5 s are flagged"
   add("File Viewer", "video", 100, 90);
   add("File Viewer", "video", 300, 150);
   // Two screens in the outro: one 3.6 s, one of two texts together 12 s.
-  add("Outro · Basma charges text", "text", 1000, 108);
+  // Basma's crossfades into Hanan's over 10 frames (R2): still two screens.
+  add("Outro · Basma charges text", "text", 1000, 120);
   add("Outro · Hanan charges", "text", 1110, 200);
   add("Outro · Hanan charges text", "text", 1200, 270);
   add("Cliffhanger", "text", 500, 60);
   const short = graphicsShort(p, [900, 1500]) as { start: number; seconds: number; at_least: number }[];
-  expect(short.map((issue) => [issue.start, issue.seconds, issue.at_least])).toEqual([[100, 3, 4], [1000, 3.6, 5]]);
+  expect(short.map((issue) => [issue.start, issue.seconds, issue.at_least])).toEqual([[100, 3, 4], [1000, 4, 5]]);
   expect(graphicsShort(p, null).length).toBe(1);
 });

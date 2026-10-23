@@ -123,3 +123,22 @@ test("a callout named as one, with no leader line, ends with its shot too", asyn
     cleanup();
   }
 });
+
+test("a File Viewer over a cut in the footage under it is flagged; one over a single shot is not", async () => {
+  // JJ on Mom & Teen v7: "We keep the file viewer even while changing scenes".
+  const { viewersOverCuts } = await import("../src/edit_tools.ts");
+  const { store, cleanup } = fixtureHome("pointers-viewer");
+  try {
+    const id = store.createAs("Mom", "bodycam", SETTINGS).project.id;
+    await store.update(id, "test", (project) => {
+      footage(project);
+      project.media.push(media({ id: "mug", name: "mug.png", path: "/nowhere/mug.png", kind: "image", duration: 30, width: 600, height: 700 }));
+      const viewer = (vid: string, start: number) => clip({ id: vid, type: "video", track: project.tracks[1]!.id, media: "mug", name: "File Viewer", start, duration: 120, source_in: 0 });
+      project.clips.push(viewer("over", 30), viewer("one", 150));
+    });
+    const project = store.get(id)!.project;
+    expect(viewersOverCuts(project)).toMatchObject([{ kind: "viewer_over_cut", clip: "over", cut: 90 }]);
+  } finally {
+    cleanup();
+  }
+});

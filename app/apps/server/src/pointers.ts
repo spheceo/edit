@@ -16,7 +16,8 @@ import { clipEnd, trackOf } from "./project.ts";
 const MIN_SHOT = 15;
 
 export function isPointer(clip: Clip): boolean {
-  if (clip.type === "text") return clip.style.leader !== undefined && clip.style.leader !== null;
+  // A callout with a leader line, or one named as one (a name and role beside someone, no line: loop 5's R1 made them so).
+  if (clip.type === "text") return (clip.style.leader !== undefined && clip.style.leader !== null) || /^Callout\b/u.test(clip.name ?? "");
   return clip.type === "adjustment" && (clip.name ?? "").startsWith("Spotlight ");
 }
 

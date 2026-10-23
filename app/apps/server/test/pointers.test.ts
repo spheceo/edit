@@ -111,3 +111,15 @@ test("a blur that tracks but doesn't move at a cut is flagged as off its shot; o
     cleanup();
   }
 });
+
+test("a callout named as one, with no leader line, ends with its shot too", async () => {
+  const { store, cleanup } = fixtureHome("pointers-named");
+  try {
+    const id = store.createAs("Judge", "courtroom", SETTINGS).project.id;
+    await store.update(id, "test", (project) => footage(project));
+    await store.update(id, "agent", (project) => void project.clips.push(clip({ id: "n1", type: "text", track: project.tracks[2]!.id, name: "Callout O'Neill name", start: 40, duration: 120, text: "TIMOTHY O'NEILL" })));
+    expect(store.get(id)!.project.clips.find((one) => one.id === "n1")!.duration).toBe(50);
+  } finally {
+    cleanup();
+  }
+});

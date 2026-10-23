@@ -368,6 +368,8 @@ export function heard(state: State, given: unknown[], projects: Set<string>): st
   for (const raw of given) {
     if (typeof raw !== "object" || raw === null) continue;
     const one = raw as Record<string, unknown>;
+    // Edit's own notes (`pin`: things for the client to confirm) aren't requests to fix.
+    if (one.fromApp === true) continue;
     const id = typeof one.noteId === "string" ? one.noteId : typeof one.id === "string" ? one.id : null;
     const project = typeof one.sourceId === "string" ? one.sourceId : null;
     if (id === null || project === null) continue;
@@ -537,6 +539,40 @@ export async function done(app: App, projectId: string, noteId: string, summary:
     fixSummary: summary,
   });
   return fix;
+}
+
+/** What a note Edit pins on a review is about (Repack's intents for a video). */
+export const NOTE_KINDS = ["cut", "blur", "mute", "subtitle", "speaker", "graphic", "audio", "music", "order", "other", "question", "fyi"] as const;
+
+/**
+ * Pins a note from Edit on the project's latest shared version (`reviews:note`):
+ * at a moment (ms on that version's export), over a stretch, or about the
+ * version as a whole. Its author is "Edit"; Edit's own notes never come back
+ * as things to fix (`heard` skips them). The note's id.
+ */
+export async function pin(
+  app: App,
+  projectId: string,
+  note: { text: string; kind?: (typeof NOTE_KINDS)[number]; atMs?: number; range?: { startMs: number; endMs: number } },
+): Promise<{ noteId: string; version: number }> {
+  if (!cloud.enabled()) throw new Error("pinning a note needs Edit's cloud");
+  const shared = read(app.store.home).shared[projectId];
+  if (shared === undefined || shared.versions.length === 0) throw new Error("this project hasn't been shared for review");
+  const version = Math.max(...shared.versions.map((one) => one.n));
+  const text = note.text.trim();
+  if (text === "") throw new Error("a note needs words");
+  const args: Record<string, unknown> = { sourceId: projectId, version, text, kind: note.kind ?? "question" };
+  if (note.range !== undefined) args.range = { startMs: Math.round(note.range.startMs), endMs: Math.round(note.range.endMs) };
+  else if (note.atMs !== undefined) args.at = Math.round(note.atMs);
+  const answer = (await cloud.mutation("reviews:note", args)) as { noteId?: string };
+  if (typeof answer?.noteId !== "string") throw new Error("Repack gave no note id");
+  diag.info("review", `${projectId}: pinned a ${args.kind as string} note on v${version}`);
+  return { noteId: answer.noteId, version };
+}
+
+/** Takes one of Edit's own notes off the review (`reviews:deleteNote`; again is harmless). */
+export async function unpin(noteId: string): Promise<void> {
+  await cloud.mutation("reviews:deleteNote", { noteId });
 }
 
 /** Records a note the agent left, with why (a reply on the review; the note stays open for the team). */
@@ -917,6 +953,34 @@ export function routes(router: Router<App>): void {
       throw new ApiError(400, diag.messageOf(error));
     });
     return sorted(first === null ? { started: true } : first.done);
+  });
+  // A note from Edit on the latest version: {text, kind?, at_ms? | start_ms + end_ms?}.
+  router.post("/api/projects/{id}/review/note", async (context) => {
+    const given = (await readJson<unknown>(context).catch(() => ({}))) as Record<string, unknown>;
+    const kind = typeof given.kind === "string" ? given.kind : "question";
+    if (!(NOTE_KINDS as readonly string[]).includes(kind)) throw new ApiError(400, `kind is one of ${NOTE_KINDS.join(", ")}`);
+    const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined);
+    const start = number(given.start_ms);
+    const end = number(given.end_ms);
+    try {
+      return sorted(
+        await pin(context.app, context.params.id ?? "", {
+          text: typeof given.text === "string" ? given.text : "",
+          kind: kind as (typeof NOTE_KINDS)[number],
+          ...(start !== undefined && end !== undefined ? { range: { startMs: start, endMs: end } } : { atMs: number(given.at_ms) }),
+        }),
+      );
+    } catch (error) {
+      throw new ApiError(400, diag.messageOf(error));
+    }
+  });
+  router.delete("/api/projects/{id}/review/note/{note}", async ({ params }) => {
+    try {
+      await unpin(params.note ?? "");
+      return sorted({ ok: true });
+    } catch (error) {
+      throw new ApiError(400, diag.messageOf(error));
+    }
   });
   router.post("/api/projects/{id}/review/approve", async ({ app, params }) => {
     try {

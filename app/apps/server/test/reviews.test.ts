@@ -36,6 +36,14 @@ test("a note's moment on an old export finds its clip after later edits", () => 
   expect(frameNow(p, undefined, 12_000)).toBe(360);
 });
 
+test("Edit's own notes on a review (things for the client to confirm) are never taken as fixes to make", () => {
+  const state = read("/nonexistent");
+  const note = { reviewId: "r", sourceId: "p1", version: 1, anchor: { kind: "time", ms: 1000 }, author: "Edit", status: "open", createdAt: 1, updatedAt: 1 };
+  expect(heard(state, [{ ...note, noteId: "mine", text: "Please confirm: …", fromApp: true }], new Set(["p1"]))).toEqual([]);
+  expect(state.notes.mine).toBeUndefined();
+  expect(heard(state, [{ ...note, noteId: "theirs", text: "cut this", author: "JJ" }], new Set(["p1"]))).toEqual(["p1"]);
+});
+
 test("notes heard are kept, the new open ones name their project, and settled ones wait for the agent once", () => {
   const state = read("/nonexistent");
   const notes = [

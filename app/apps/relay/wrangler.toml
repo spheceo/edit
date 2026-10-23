@@ -9,11 +9,8 @@ preview_urls = false
 # Secrets: in Infisical (Repack's project, folder /edit-relay, references to the root's values),
 # pushed with `bun scripts/push-secrets.ts --yes` (dry run without --yes; values on wrangler's
 # stdin, never printed). For `wrangler dev`, apps/relay/.dev.vars, gitignored. Never in this file:
-#   ELEVENLABS_API_KEY, ELEVENLABS_SPEECH_KEY, GOOGLE_MAPS_KEY, CLIENT_TOKEN
-# Edit's cloud (/v1/cloud/*, src/cloud.ts); without CLOUD_TOKEN every cloud
-# request is refused:
-#   CLOUD_TOKEN            the bearer token Edit sends (its EDIT_RELAY_TOKEN; if
-#                          CLIENT_TOKEN is set too, it must be the same value)
+#   ELEVENLABS_API_KEY, ELEVENLABS_SPEECH_KEY, GOOGLE_MAPS_KEY
+# Edit's cloud (/v1/cloud/*, src/cloud.ts; signed-in people only, src/auth.ts):
 #   R2_ACCOUNT_ID          Cloudflare account id (<id>.r2.cloudflarestorage.com)
 #   R2_ACCESS_KEY_ID       an R2 API token's S3 access key id
 #   R2_SECRET_ACCESS_KEY   and its secret
@@ -29,10 +26,10 @@ preview_urls = false
 #   AI_GATEWAY_API_KEY
 
 [vars]
-# Sign-in (accounts.spheceo.com, Oct 23): a person's token is checked against this issuer's JWKS; the
-# old shared tokens (CLOUD_TOKEN, CLIENT_TOKEN) still work until the coordinator says they go.
+# Sign-in (accounts.spheceo.com, Oct 23): every route but /health takes a signed-in person's token,
+# checked against this issuer's JWKS. The old shared token (CLOUD_TOKEN) was retired the same day.
 ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
-OPEN_MAPS = "1"                    # maps answer with no token (builds from before signing in send none); "0" once they're gone
+OPEN_MAPS = "0"                    # "1" would let the maps answer with no token
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
 DAILY_BYTES_PER_IP = "288000000"   # ~20 hours (lowered Oct 22 from ~90: Oct 19–21 used ~195k credits, 13.5 hours of footage costing 62 hours of Scribe; Edit now hears a file once per set of names and keeps what it heard)

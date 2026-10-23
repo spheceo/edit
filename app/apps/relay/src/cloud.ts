@@ -3,9 +3,9 @@
  * The relay holds the R2 keys and Convex's service token; Edit only ever gets
  * short-lived presigned URLs and the answers of `edit:` Convex functions.
  *
- * Every route is POST JSON and needs `authorization: Bearer <CLOUD_TOKEN>`
- * (no IP fallback: without the secret every request is refused). R2 keys
- * must sit under `edit/` (the bucket is shared with Repack).
+ * Every route is POST JSON and needs a signed-in person's token with the
+ * route's permission (auth.ts). R2 keys must sit under `edit/` (the bucket
+ * is shared with Repack).
  *
  *   /v1/cloud/r2/url                {key, method: GET|PUT|HEAD, expires?} → {url}
  *   /v1/cloud/r2/multipart/create   {key, contentType?}                    → {uploadId}
@@ -74,10 +74,8 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
   if (url.pathname.startsWith("/v1/cloud/exports/")) return exportRoute(request, url, env);
   const permission = permissionOf(url.pathname.slice("/v1/cloud/".length));
   if (permission === null) return json(404, { error: "not found" });
-  // Only a person's token or the shared cloud token: the cloud was never open, even on a relay without one.
-  const found = await allow(request, { ...env, CLIENT_TOKEN: undefined }, permission, url.pathname.slice("/v1/".length));
+  const found = await allow(request, env, permission, url.pathname.slice("/v1/".length));
   if (found instanceof Response) return found;
-  if (found.kind === "open") return json(401, { error: "This relay needs Edit's cloud token or a signed-in person's." });
   if (request.method !== "POST") return json(405, { error: `POST JSON to ${url.pathname}` });
   if (url.pathname === "/v1/cloud/ai/chat") return aiChat(request, env);
   if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY) return json(413, { error: "Request too large." });
@@ -126,7 +124,7 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
   }
 }
 
-/** `Bearer <CLOUD_TOKEN>`, compared in constant time; refused when unset. */
+/** `Bearer <CLOUD_TOKEN>` (now only Modal's worker token, passed as CLOUD_TOKEN), compared in constant time; refused when unset. */
 /** A chat completion through the AI Gateway with the relay's key; the body and the answer pass through untouched. */
 async function aiChat(request: Request, env: CloudEnv): Promise<Response> {
   if (!env.AI_GATEWAY_API_KEY) return json(503, { error: { message: "The AI Gateway is not configured on the relay yet." } });

@@ -40,8 +40,6 @@ export interface Env extends CloudEnv, AuthEnv {
   GOOGLE_MAPS_KEY?: string;
   DAILY_MAP_SESSIONS_PER_IP: string;
   DAILY_MAP_SESSIONS_TOTAL: string;
-  /** If set, requests must send `authorization: Bearer <token>`. */
-  CLIENT_TOKEN?: string;
   BUDGET: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
   BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
   /** Transcriptions per IP a minute: a long file is heard in ~40-second pieces, several at once. */
@@ -59,7 +57,7 @@ const MODEL = "scribe_v2";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY), speech: Boolean(speechKey(env)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.CLOUD_TOKEN && env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY), speech: Boolean(speechKey(env)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);

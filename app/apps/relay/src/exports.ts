@@ -2,7 +2,7 @@
  * owns computation. Desktop disconnects and repeated submissions do not
  * repeat renders. Each worker sees signed URLs for its own immutable inputs.
  */
-import { allow } from "./auth";
+import { allow, type AuthEnv } from "./auth";
 import { WORKER_OUTPUT_LIMIT, WORKER_INPUT_LIMIT, WORKER_RATES, WORKER_SECONDS, WORKER_STARTUP_SECONDS, type WorkerManifest, type WorkerGpu } from "@edit/types/worker";
 import { BadRequest, Upstream, cloudAuthorized, escapeXml, isObject, needKey, objectUrl, r2Config, r2Fetch, xmlValue, type R2 } from "./cloud";
 
@@ -56,15 +56,14 @@ export function configured(env: ModalEnv): boolean {
 }
 
 /** Called only by cloud.ts; worker routes use a different, restricted token. */
-export async function exportRoute(request: Request, url: URL, env: Env): Promise<Response> {
+export async function exportRoute(request: Request, url: URL, env: Env & AuthEnv): Promise<Response> {
   const worker = url.pathname.startsWith("/v1/cloud/exports/worker/");
   if (worker) {
     // Modal's own workers: their machine token only.
     if (!(await cloudAuthorized(request, { CLOUD_TOKEN: env.MODAL_WORKER_TOKEN }))) return json(401, { error: "Cloud export authorization required." });
   } else {
-    const found = await allow(request, { ...env, CLIENT_TOKEN: undefined }, "export", url.pathname.slice("/v1/".length));
+    const found = await allow(request, env, "export", url.pathname.slice("/v1/".length));
     if (found instanceof Response) return found;
-    if (found.kind === "open") return json(401, { error: "Cloud export authorization required." });
   }
   if (request.method !== "POST") return json(405, { error: "POST JSON required." });
   if (!env.EXPORT_JOBS) return json(503, { error: "Cloud exports are not configured." });

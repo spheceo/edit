@@ -71,7 +71,12 @@ export function typingSoundsOff(project: Project): Record<string, unknown>[] {
     const media = project.media.find((one) => one.id === clip.media);
     if (media === undefined || !TYPING.test(`${clip.name ?? ""} ${media.name}`)) continue;
     const line = lineFor(project, lines, clip);
-    if (line === null) continue;
+    if (line === null) {
+      // Typing under nothing being typed: it was placed off its line (or the line moved).
+      const under = lines.find(([from, to]) => from < clipEnd(clip) && clip.start < to) ?? null;
+      out.push({ kind: "typing_sound_off", clip: clip.id, start: clip.start, ...(under !== null ? { line: under, fix: `start ${under[0]}, duration ${under[1] - under[0]}, source_in 0 (its line's first letter to its last)` } : { fix: "no line types here: delete it, or place it on a line's \"desktop line\" marker" }) });
+      continue;
+    }
     if (Math.abs(clip.start - line[0]) > 1 || clipEnd(clip) > line[1] + 2) {
       out.push({ kind: "typing_sound_off", clip: clip.id, start: clip.start, line: line, fix: `start ${line[0]}, duration ${line[1] - line[0]}, source_in 0 (from the line's first letter to its last; add_from_library on the line's "desktop line" marker does this itself)` });
     }

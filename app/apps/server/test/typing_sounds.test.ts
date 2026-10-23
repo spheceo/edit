@@ -31,3 +31,12 @@ test("a typing sound starts on its line's first letter and stops on its last", (
   expect(typingSoundsOff(p)).toEqual([]);
   expect(fitTypingSounds(p)).toBe(0);
 });
+
+test("a typing sound far from its line is flagged with the line it plays over", () => {
+  const p = project();
+  const sound = p.clips.find((clip) => clip.id === "snd") as AudioClip;
+  // Three seconds early (lined up on its loudest key), running into the line.
+  Object.assign(sound, { start: 10, duration: 107 });
+  expect(fitTypingSounds(p)).toBe(0);
+  expect((typingSoundsOff(p) as Record<string, unknown>[]).map((issue) => issue.line)).toEqual([[100, 121]]);
+});

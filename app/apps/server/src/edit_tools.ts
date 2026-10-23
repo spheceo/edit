@@ -2112,7 +2112,9 @@ export async function placeSound(
     // one-second riser's loudest moment came early, so its "hit" put the whole
     // build after the cut it was meant to lead into).
     const builds = RISER.test(name);
-    const hit = builds ? media.duration : ((own.find((marker) => marker.name === sfx.HIT) ?? own[0])?.time ?? 0);
+    // Typing starts on the line's first letter: from the sound's own start, never lined up on its loudest key.
+    const types = typing.TYPING.test(`${name} ${media.name}`);
+    const hit = builds ? media.duration : types ? 0 : ((own.find((marker) => marker.name === sfx.HIT) ?? own[0])?.time ?? 0);
     // Trimmed, a sound with a hit keeps the stretch around it.
     const from = builds
       ? Math.max(media.duration - (sound.seconds ?? media.duration), 0)

@@ -211,6 +211,9 @@ export class Processor {
 
   /** Starts whatever work is missing for `source`. Safe to call repeatedly. */
   ensure(source: string, probe: Probe): void {
+    // A cloud proxy still being made in the cloud: nothing local to process
+    // yet (playback streams it); processing runs when a fetch caches it.
+    if (isLocalCopy(this.store.cacheDir(), source) && !isFile(source)) return;
     if (probe.kind === "image") {
       this.set(source, (status) => {
         status.proxy = "skipped";

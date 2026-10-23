@@ -1,4 +1,5 @@
-import { allow, budgetKey, burstKey, type AuthEnv } from "./auth";
+import { allow, budgetKey, burstKey, hasCapability, type AuthEnv } from "./auth";
+import { CAPABILITIES, manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
 
 export { DriveToR2 } from "./jobs";
@@ -57,6 +58,10 @@ const MODEL = "scribe_v2";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    // What Edit lets an admin grant (accounts.spheceo.com reads it): public, cached up to an hour.
+    if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
+      return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
+    }
     if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY), speech: Boolean(speechKey(env)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
@@ -259,6 +264,8 @@ async function speech(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") return json(405, { error: "POST JSON to /v1/speech" });
   const found = await allow(request, env, "use", "speech");
   if (found instanceof Response) return found;
+  // Voice generation is paid: the one capability the relay checks itself.
+  if (!hasCapability(found, CAPABILITIES.voiceover)) return json(403, { error: "Your account can't make voice-overs: an admin can give you Edit's Voice-overs at accounts.spheceo.com." });
   const key = speechKey(env);
   if (!key) return json(503, { error: "Voice generation is not configured on the relay yet." });
   const limits = [env.MAX_SPEECH_CHARS, env.DAILY_SPEECH_CHARS_PER_IP, env.DAILY_SPEECH_CHARS_TOTAL].map(Number);

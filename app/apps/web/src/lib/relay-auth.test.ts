@@ -57,14 +57,14 @@ describe("relay sign-in gate", () => {
   it("refuses a person without the permission (403), and a bad, expired or other app's token (401)", async () => {
     useKeys(createLocalJWKSet({ keys: [jwk] }));
     vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(((await allow(asked(await token()), env(), "export", "cloud/exports/start")) as Response).status).toBe(403);
+    expect(((await allow(asked(await token({ perms: ["cloud"] })), env(), "use", "transcribe")) as Response).status).toBe(403);
     expect(((await allow(asked(await token({}, { exp: Math.floor(Date.now() / 1000) - 120 })), env(), "use", "transcribe")) as Response).status).toBe(401);
     expect(((await allow(asked(await token({}, { aud: "writer" })), env(), "use", "transcribe")) as Response).status).toBe(401);
     expect(((await allow(asked(await token({}, { iss: "https://evil.test" })), env(), "use", "transcribe")) as Response).status).toBe(401);
     expect(((await allow(asked(await token({}, { key: other })), env(), "use", "transcribe")) as Response).status).toBe(401);
     expect(((await allow(asked("not-a-token"), env(), "use", "transcribe")) as Response).status).toBe(401);
     // An admin may use everything.
-    expect(await allow(asked(await token({ perms: [], admin: true })), env(), "export", "cloud/exports/start")).toMatchObject({ kind: "person" });
+    expect(await allow(asked(await token({ perms: [], admin: true })), env(), "use", "cloud/exports/start")).toMatchObject({ kind: "person" });
     // Inside the 60 s skew an expired token still passes.
     expect(await allow(asked(await token({}, { exp: Math.floor(Date.now() / 1000) - 20 })), env(), "use", "transcribe")).toMatchObject({ kind: "person" });
   });
@@ -106,21 +106,33 @@ describe("relay sign-in gate", () => {
     expect(one).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("gates each cloud route by its permission", async () => {
+  it("needs only use on every cloud route (contract v2), ignoring ids it doesn't know", async () => {
     useKeys(createLocalJWKSet({ keys: [jwk] }));
     vi.spyOn(console, "log").mockImplementation(() => {});
     const call = async (route: string, perms: string[]) =>
       (await cloud(asked(await token({ perms }), `https://relay/v1/cloud/${route}`, { method: "POST", body: "{}", headers: { "content-type": "application/json" } }), new URL(`https://relay/v1/cloud/${route}`), env())).status;
-    // Without the permission: refused before anything runs.
-    expect(await call("ai/chat", ["use", "cloud"])).toBe(403);
-    expect(await call("google/token", ["use", "cloud"])).toBe(403);
-    expect(await call("r2/url", ["use"])).toBe(403);
-    expect(await call("exports/start", ["use", "cloud"])).toBe(403);
-    // With it: past the gate (the relay has nothing configured here, so it says so instead).
-    expect(await call("ai/chat", ["ai"])).not.toBe(403);
-    expect(await call("r2/url", ["cloud"])).not.toBe(403);
+    // Without use: refused before anything runs.
+    expect(await call("r2/url", ["cloud", "video.subtitles"])).toBe(403);
+    // With use, whatever else (v1's names, capability ids, ones it's never heard of): past the gate.
+    for (const route of ["ai/chat", "google/token", "r2/url", "convex", "exports/start"]) {
+      expect(await call(route, ["use"])).not.toBe(403);
+      expect(await call(route, ["use", "ai", "video.subtitles", "made.up-thing"])).not.toBe(403);
+    }
     // Modal's worker routes take only the worker token, never a person's.
-    expect(await call("exports/worker/claim", ["export"])).toBe(401);
+    expect(await call("exports/worker/claim", ["use"])).toBe(401);
+  });
+
+  it("gates voice generation (paid) on Edit's voice-over capability, keeping it for tokens from before v2", async () => {
+    useKeys(createLocalJWKSet({ keys: [jwk] }));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const speak = async (claims: Record<string, unknown>) =>
+      (await relay.fetch(asked(await token(claims), "https://relay/v1/speech", { method: "POST", body: JSON.stringify({ text: "Hi.", voice_id: "abcdefgh12" }), headers: { "content-type": "application/json" } }), env())).status;
+    // v2: capabilities granted, voice-overs not among them.
+    expect(await speak({ perms: ["use", "video.subtitles"] })).toBe(403);
+    // With it, or an admin, or a v1 token (no capability ids yet): past the gate (no key configured here: 503).
+    expect(await speak({ perms: ["use", "extra.voiceover"] })).not.toBe(403);
+    expect(await speak({ perms: ["use"], admin: true })).not.toBe(403);
+    expect(await speak({ perms: ["use", "cloud", "ai"] })).not.toBe(403);
   });
 
   it("asks for a signed-in token on a paid route at the front door", async () => {

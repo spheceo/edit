@@ -62,7 +62,7 @@ export async function exportRoute(request: Request, url: URL, env: Env & AuthEnv
     // Modal's own workers: their machine token only.
     if (!(await cloudAuthorized(request, { CLOUD_TOKEN: env.MODAL_WORKER_TOKEN }))) return json(401, { error: "Cloud export authorization required." });
   } else {
-    const found = await allow(request, env, "export", url.pathname.slice("/v1/".length));
+    const found = await allow(request, env, "use", url.pathname.slice("/v1/".length));
     if (found instanceof Response) return found;
   }
   if (request.method !== "POST") return json(405, { error: "POST JSON required." });

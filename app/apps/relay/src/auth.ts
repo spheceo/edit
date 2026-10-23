@@ -14,8 +14,13 @@
 
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 
-/** What the accounts site hands out for Edit (`edit:<perm>` there). */
-export type Permission = "use" | "cloud" | "export" | "ai" | "drive";
+/**
+ * What a route needs. Since accounts' contract v2 every route needs only
+ * `use` (has Edit at all): Edit enforces the kinds of work itself, from the
+ * capabilities in `perms` (manifest.ts). The v1 names are accepted as words
+ * and ignored, as any id the relay doesn't know is.
+ */
+export type Permission = "use";
 
 export interface AuthEnv {
   /** The accounts site (default https://accounts.spheceo.com): the tokens' issuer; its JWKS is at /.well-known/jwks.json. */
@@ -71,6 +76,19 @@ export async function caller(request: Request, env: AuthEnv): Promise<Caller | n
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether a person may use one of Edit's capabilities (manifest.ts) at the
+ * relay: an admin, or it's in their `perms`. A token from before accounts'
+ * contract v2 carries no capability ids at all (only `use` and v1's names):
+ * it keeps what it had until accounts switches and grants each person their
+ * preset, so nobody loses voice-overs in between.
+ */
+export function hasCapability(found: Caller, id: string): boolean {
+  if (found.kind !== "person") return false;
+  if (found.admin || found.perms.includes(id)) return true;
+  return !found.perms.some((one) => one.includes("."));
 }
 
 /** Who to put in the log line: a person's id, never their token or more than that. */

@@ -62,11 +62,9 @@ const REVIEWS_PATH = /^reviews:[A-Za-z_][A-Za-z0-9_]*$/;
 const WRITER_READS = new Set(["writer:listScripts", "writer:getScript"]);
 const callable = (path: string, kind: string) => CONVEX_PATH.test(path) || REVIEWS_PATH.test(path) || (WRITER_READS.has(path) && kind === "query");
 
-/** Each cloud route's permission (accounts' `edit:<perm>`). */
+/** Each cloud route's permission: `use` for all of them (accounts' contract v2); null for a route that isn't one. */
 function permissionOf(route: string): Permission | null {
-  if (route === "ai/chat") return "ai";
-  if (route === "google/token") return "drive";
-  if (route === "convex" || route.startsWith("r2/") || route.startsWith("jobs/")) return "cloud";
+  if (route === "ai/chat" || route === "google/token" || route === "convex" || route.startsWith("r2/") || route.startsWith("jobs/")) return "use";
   return null;
 }
 

@@ -178,6 +178,10 @@ export async function share(app: App, projectId: string, path: string | null, re
     sharing.set(projectId, "uploading");
     await cloud.uploadFile(copy, `${prefix}/video.mp4`, (done, total) => sharing.set(projectId, `uploading ${total ? Math.round((done / total) * 100) : 0}%`));
     await cloud.uploadFile(poster, `${prefix}/poster.jpg`);
+    // The export itself, untouched, for the page's Download button (`fullKey`).
+    const fullKey = fullKeyOf(prefix, chosen.path);
+    sharing.set(projectId, "uploading the full-quality file");
+    await cloud.uploadFile(chosen.path, fullKey, (done, total) => sharing.set(projectId, `uploading the full-quality file ${total ? Math.round((done / total) * 100) : 0}%`));
     // What the page shows beside the video: its transcript, chapters, the
     // censoring, a waveform and the files' details (Fields), and the clips
     // under each moment (a note is pinned to its footage as it's written).
@@ -200,7 +204,7 @@ export async function share(app: App, projectId: string, path: string | null, re
       title: live.project.name,
       kind: "video",
       key: `${prefix}/video.mp4`,
-      meta: { fps, durationMs, timeline, ...extra },
+      meta: { fps, durationMs, timeline, fullKey, ...extra },
       posterKey: `${prefix}/poster.jpg`,
       by: app.machine,
     })) as { reviewId: string; url: string; version: number };
@@ -642,6 +646,42 @@ export async function approve(app: App, projectId: string): Promise<{ version: n
 }
 
 /** Deletes the exports shared as versions other than `kept` (never the one it is), and the review copies here. */
+/** Where a version's full-quality file goes: beside its review copy, the export's own extension. */
+export function fullKeyOf(prefix: string, exportPath: string): string {
+  const ext = /\.(mp4|mov|m4v)$/iu.exec(exportPath)?.[1]?.toLowerCase() ?? "mp4";
+  return `${prefix}/full.${ext}`;
+}
+
+/**
+ * Uploads version `n`'s export, as it is, as that version's full-quality file
+ * (the reviews shared before the Download button), and names it in the version's
+ * meta. Its key and size.
+ */
+export async function uploadFull(app: App, projectId: string, n: number, progress: (done: number, total: number | null) => void = () => {}): Promise<{ key: string; bytes: number; meta: string }> {
+  const shared = read(app.store.home).shared[projectId];
+  const version = shared?.versions.find((one) => one.n === n);
+  if (version === undefined) throw new Error(`v${n} isn't shared from here`);
+  if (!fs.existsSync(version.path)) throw new Error(`v${n}'s export isn't on this Mac any more (${version.path}): export it again`);
+  const key = fullKeyOf(`edit/reviews/${projectId}/${version.timeline}`, version.path);
+  await cloud.uploadFile(version.path, key, progress);
+  const bytes = fs.statSync(version.path).size;
+  try {
+    await cloud.mutation("reviews:setMeta", { sourceId: projectId, version: n, meta: { fullKey: key } });
+  } catch (error) {
+    // Uploaded either way: named in the version once Repack can (its reviews:setMeta).
+    if (/Could not find public function|isn't a function|not found/iu.test(diag.messageOf(error))) return { key, bytes, meta: "pending: Repack has no reviews:setMeta yet" };
+    throw error;
+  }
+  return { key, bytes, meta: "set" };
+}
+
+/** Approved: the other versions' full-quality files go from R2 (about a gigabyte each); the approved one's stays. */
+async function removeOtherFulls(projectId: string, shared: Shared, kept: number): Promise<void> {
+  const keys = shared.versions.filter((one) => one.n !== kept).flatMap((one) => ["mp4", "mov", "m4v"].map((ext) => `edit/reviews/${projectId}/${one.timeline}/full.${ext}`));
+  if (keys.length === 0) return;
+  await cloud.remove(keys).catch((error: unknown) => diag.warn("review", `${projectId}: the older versions' full files: ${diag.messageOf(error)}`));
+}
+
 export function clearOthers(app: App, projectId: string, kept: number): string[] {
   const home = app.store.home;
   const shared = read(home).shared[projectId];
@@ -660,6 +700,7 @@ export function clearOthers(app: App, projectId: string, kept: number): string[]
   }
   // The versions stay listed here (their clip maps still place their notes); only their files go.
   fs.rmSync(join(home, "cache", "reviews", projectId), { recursive: true, force: true });
+  if (cloud.enabled()) void removeOtherFulls(projectId, shared, kept);
   if (deleted.length > 0) diag.info("review", `${projectId}: v${kept} approved; deleted ${deleted.length} older export(s)`);
   return deleted;
 }
@@ -1108,6 +1149,17 @@ export function routes(router: Router<App>): void {
     try {
       await unpin(params.note ?? "");
       return sorted({ ok: true });
+    } catch (error) {
+      throw new ApiError(400, diag.messageOf(error));
+    }
+  });
+  // A shared version's full-quality file, uploaded now (reviews shared before the Download button): {version}.
+  router.post("/api/projects/{id}/review/full", async (context) => {
+    const given = (await readJson<unknown>(context).catch(() => ({}))) as Record<string, unknown>;
+    const n = typeof given.version === "number" ? given.version : NaN;
+    if (!Number.isInteger(n)) throw new ApiError(400, "version (a number) is required");
+    try {
+      return sorted(await uploadFull(context.app, context.params.id ?? "", n, (done, total) => sharing.set(context.params.id ?? "", `uploading the full-quality file ${total ? Math.round((done / total) * 100) : 0}%`)).finally(() => sharing.delete(context.params.id ?? "")));
     } catch (error) {
       throw new ApiError(400, diag.messageOf(error));
     }

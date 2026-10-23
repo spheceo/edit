@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import type { Project } from "../src/model.ts";
 import * as fs from "node:fs";
 
-import { boxStills, changes, clearOthers, fixMessage, frameNow, givenUp, heard, MAX_ATTEMPTS, posterSecond, read, waiting, type Note, type Version } from "../src/reviews.ts";
+import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, posterSecond, read, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import * as tools from "../src/tools.ts";
@@ -166,4 +166,10 @@ test("a note the auto-fix tried twice without a result isn't tried again: it's l
   expect(givenUp(state, "p1", later).map((note) => note.id)).toEqual(["b"]);
   // Not while its last try may still be running.
   expect(givenUp(state, "p1", 60_000)).toEqual([]);
+});
+
+test("a version's full-quality file sits beside its review copy, keeping the export's extension", () => {
+  expect(fullKeyOf("edit/reviews/p1/abc", "/x/Judge v3.mp4")).toBe("edit/reviews/p1/abc/full.mp4");
+  expect(fullKeyOf("edit/reviews/p1/abc", "/x/Judge v3.MOV")).toBe("edit/reviews/p1/abc/full.mov");
+  expect(fullKeyOf("edit/reviews/p1/abc", "/x/odd.mkv")).toBe("edit/reviews/p1/abc/full.mp4");
 });

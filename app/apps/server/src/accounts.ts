@@ -29,8 +29,15 @@ const CLIENT = "edit";
 const EARLY_MS = 5 * 60_000;
 /** A sign-in started and never finished is forgotten after this. */
 const PENDING_MS = 10 * 60_000;
-/** After a failed renewal (offline, the site down), the next try. */
+/**
+ * After a failed renewal (offline, the site down), the next try: the first
+ * soon, inside the 60 s in which the accounts site still takes a refresh
+ * token it has just rotated (its answer may have been lost on the way), then
+ * once a minute.
+ */
+const FIRST_RETRY_MS = 15_000;
 const RETRY_MS = 60_000;
+let failures = 0;
 
 export function accountsUrl(): string {
   return (process.env.EDIT_ACCOUNTS_URL ?? DEFAULT_ACCOUNTS).replace(/\/+$/u, "");
@@ -188,6 +195,7 @@ export function renew(home: string | null = state.home): Promise<void> {
       }
       const { status: code, value } = await post("/app/token", { grant_type: "refresh_token", refresh_token: refresh, client_id: CLIENT });
       if (code === 200) {
+        failures = 0;
         await take(home, value);
         return;
       }
@@ -200,9 +208,11 @@ export function renew(home: string | null = state.home): Promise<void> {
       throw new Error(`the accounts site answered ${code}`);
     } catch (error) {
       state.problem = `Couldn't renew the sign-in: ${diag.messageOf(error)}`;
-      diag.warn("accounts", `renewing the sign-in: ${diag.messageOf(error)}; trying again in a minute`);
+      const wait = failures === 0 ? FIRST_RETRY_MS : RETRY_MS;
+      failures += 1;
+      diag.warn("accounts", `renewing the sign-in: ${diag.messageOf(error)}; trying again in ${wait / 1000} s`);
       if (state.timer !== null) clearTimeout(state.timer);
-      state.timer = setTimeout(() => void renew(home), RETRY_MS);
+      state.timer = setTimeout(() => void renew(home), wait);
       state.timer.unref?.();
     } finally {
       state.refreshing = null;

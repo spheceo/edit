@@ -1170,8 +1170,11 @@ const FIXABLE = [
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused",
 ];
 
+/** Fixable flags that come once for the whole edit: one is enough for a follow-up. */
+const WHOLE_EDIT = ["teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map"];
+
 /**
- * Edit's follow-up after a whole edit that left three or more fixable flags
+ * Edit's follow-up after a whole edit that left three or more fixable flags (or one of WHOLE_EDIT's)
  * (agent.followUp), or null.
  */
 export function unfinishedNote(app: App, projectId: string): { note: string; count: number } | null {
@@ -1186,7 +1189,8 @@ export function unfinishedNote(app: App, projectId: string): { note: string; cou
     counts.set(kind, (counts.get(kind) ?? 0) + many);
   }
   const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-  if (total < 3) return null;
+  // Flags that are one for the whole edit count for the follow-up alone (a wide teaser in Helpful Wife's loop 3 round 3 went unasked).
+  if (total < 3 && ![...counts.keys()].some((kind) => WHOLE_EDIT.includes(kind))) return null;
   const listed = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([kind, count]) => `${count} ${kind}`).join(", ");
   return {
     count: total,

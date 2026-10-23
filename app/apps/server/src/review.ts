@@ -72,6 +72,8 @@ export function comments(page: string): Comment[] {
     // The next one's initial (the line before its name) isn't this one's text.
     const stop = next === undefined ? end : next - 1;
     let at = authorAt + 2;
+    // A comment changed after it was posted says so before its number (JJ's of Oct 23 read as replies).
+    if (lines[at] === "Edited" && lines[at + 1] === "#") at += 1;
     let number: number | null = null;
     let timecode: string | null = null;
     if (lines[at] === "#" && /^\d+$/.test(lines[at + 1] ?? "")) {

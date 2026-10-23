@@ -11,6 +11,7 @@ const PAGE = `<html><head><script>self.__next_f.push([1,"{\\"fps\\":30,\\"durati
 <div><span>J</span><span>JJ</span><span>10/17/26 at 9:13 PM</span><span><span>#</span>1</span><span data-testid="comment-prefix-timestamp">00:00:01:07</span><span>remove the first 1 sec - this is where we want to start</span></div>
 <div><span>J</span><span>JJ</span><span>10/17/26 at 9:14 PM</span><span><span>#</span>2</span><span>00:00:05:18</span><span>the intro clips are not good enough</span></div>
 <div><span>J</span><span>JJ</span><span>10/17/26 at 9:23 PM</span><span>2 new intro clips in main intro:</span><span>https://docs.google.com/document/d/x/edit</span></div>
+<div><span>J</span><span>JJ</span><span>10/17/26 at 9:30 PM</span><span>Edited</span><span><span>#</span>3</span><span>00:00:09:02</span><span>stay on the scene a little longer</span></div>
 <div><span>J</span><span>JJ</span><span>10/17/26 at 9:32 PM</span><span><span>#</span>21</span><span>00:00:12:10</span><span>herself*</span><span>Can we regenerate the VO here please?</span></div>
 <div>To pick up a draggable item, press the space bar.</div></body></html>`;
 
@@ -19,6 +20,8 @@ test("a_frameio_review_is_read_into_comments_and_replies", () => {
   expect(found.map((one) => [one.number, one.timecode, one.text])).toEqual([
     [1, "00:00:01:07", "remove the first 1 sec - this is where we want to start"],
     [2, "00:00:05:18", "the intro clips are not good enough"],
+    // Edited after posting: still its own comment, not a reply.
+    [3, "00:00:09:02", "stay on the scene a little longer"],
     [21, "00:00:12:10", "herself*\nCan we regenerate the VO here please?"],
   ]);
   expect(found[1]!.replies.map((one) => [one.author, one.date, one.text])).toEqual([

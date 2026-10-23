@@ -27,7 +27,7 @@
  */
 import { allow, budgetKey, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
 import { EDIT_CALLS, grantedTo, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
-import { cancelJob, driveJob, googleSignIn, jobStatus, type JobsEnv } from "./jobs";
+import { cancelJob, driveJob, googleSignIn, jobStatus, proxyJob, type JobsEnv } from "./jobs";
 import { exportRoute, type ModalEnv } from "./exports";
 
 export interface CloudEnv extends JobsEnv, ModalEnv {
@@ -129,6 +129,7 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
         const owner = typeof body.id === "string" ? await jobOwner(env, body.id) : null;
         if (owner !== null && !(found.kind === "person" && (found.sub === owner || found.admin))) throw new Forbidden("Only who started this copy, or an admin, can cancel it.");
       }
+      if (route === "jobs/proxy") { await mayTouch({ found, env }, "write", needKey(body.manifest)); return json(200, await proxyJob(body, env, r2)); }
       if (route === "jobs/status") return json(200, await jobStatus(body, env, r2));
       if (route === "jobs/cancel") return json(200, await cancelJob(body, env, r2));
     } catch (error) {

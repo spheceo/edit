@@ -17,7 +17,9 @@ from pathlib import Path
 
 import modal
 
-from app import image
+image = (modal.Image.debian_slim(python_version="3.12")
+         .apt_install("ffmpeg", "curl")
+         .pip_install("fastapi[standard]==0.140.0"))
 
 app = modal.App("edit-proxies")
 
@@ -59,6 +61,31 @@ def make_proxy(get_url: str, put_url: str, spec: dict, width: int, height: int) 
         if put.returncode != 0:
             raise RuntimeError(put.stderr.strip() or "upload failed")
         return {"bytes": len(data), "width": width, "height": height}
+
+
+from fastapi import FastAPI, Header, HTTPException, Request
+
+web = FastAPI()
+
+
+@web.post("/")
+async def accept(request: Request, x_proxy_token: str | None = Header(default=None)) -> dict:
+    expected = os.environ.get("EDIT_PROXY_TOKEN")
+    if expected and x_proxy_token != expected:
+        raise HTTPException(status_code=403, detail="bad token")
+    payload = await request.json()
+    for field in ("getUrl", "putUrl", "spec"):
+        if field not in payload:
+            raise HTTPException(status_code=400, detail=f"missing {field}")
+    make_proxy.spawn(payload["getUrl"], payload["putUrl"], payload["spec"],
+                     int(payload.get("width") or 0), int(payload.get("height") or 0))
+    return {"accepted": True, "proxyKey": payload.get("proxyKey")}
+
+
+@app.function(image=image, cpu=(1, 1), memory=(512, 512), timeout=120)
+@modal.asgi_app()
+def endpoint():
+    return web
 
 
 @app.local_entrypoint()

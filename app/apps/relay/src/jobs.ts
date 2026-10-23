@@ -58,6 +58,9 @@ export interface JobsEnv {
   R2_BUCKET?: string;
   CONVEX_URL?: string;
   CONVEX_SERVICE_TOKEN?: string;
+  /** The cloud proxy worker's web endpoint (Modal, apps/worker/proxy.py) and its shared token. */
+  MODAL_PROXY_URL?: string;
+  MODAL_PROXY_TOKEN?: string;
 }
 
 interface DriveParams {
@@ -68,6 +71,36 @@ interface DriveParams {
   version: string;
   /** Bytes per part (tests make it small); else `PART`. */
   part?: number;
+}
+
+/**
+ * A cloud proxy job (server cloud_proxy.ts): read the manifest on R2,
+ * presign the original for reading and the proxy for writing, and hand
+ * them to the Modal worker, which encodes and uploads. The relay never
+ * holds the video; the worker never holds R2 keys.
+ */
+export async function proxyJob(body: Record<string, unknown>, env: JobsEnv, r2: R2): Promise<Record<string, unknown>> {
+  const manifest = needKey(body.manifest);
+  if (typeof body.digest !== "string" || !/^[a-f0-9]{64}$/.test(body.digest)) throw new BadRequest("digest must be a sha256 hex digest.");
+  if (!env.MODAL_PROXY_URL) throw new Upstream("Cloud proxy generation is not configured on the relay yet (MODAL_PROXY_URL).");
+  const answer = await r2Fetch(r2, "GET", manifest, {}, { allow404: true });
+  if (!answer.ok) throw new BadRequest("That proxy job's manifest isn't in the cloud.");
+  let job: Record<string, unknown>;
+  try { job = JSON.parse(await answer.text()) as Record<string, unknown>; } catch { throw new BadRequest("That proxy job's manifest won't read."); }
+  const originalKey = needKey(job.originalKey);
+  const proxyKey = needKey(job.proxyKey);
+  if (!proxyKey.startsWith("edit/proxies/")) throw new BadRequest("A proxy job must write under edit/proxies/.");
+  const head = await r2Fetch(r2, "HEAD", proxyKey, {}, { allow404: true });
+  if (head.ok) return { accepted: true, state: "ready", proxyKey };
+  const getUrl = await objectUrl(r2, "GET", originalKey, {}, 3600);
+  const putUrl = await objectUrl(r2, "PUT", proxyKey, {}, 3600);
+  const called = await fetch(env.MODAL_PROXY_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(env.MODAL_PROXY_TOKEN ? { "x-proxy-token": env.MODAL_PROXY_TOKEN } : {}) },
+    body: JSON.stringify({ getUrl, putUrl, spec: job.spec, width: job.width, height: job.height, proxyKey }),
+  });
+  if (!called.ok) throw new Upstream(`The cloud proxy worker answered ${called.status}.`);
+  return { accepted: true, state: "preparing", proxyKey };
 }
 
 /** Each part: big enough that a 4 GB file is ~60 steps, small enough to retry. */

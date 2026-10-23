@@ -249,10 +249,11 @@ async function runYtdlp(
     // --print below makes it quiet; the progress lines still come.
     "--progress",
     "--no-mtime",
+    // Through the paid proxy a retry can pay for the same bytes again (the audit, Oct 23): once there.
     "--retries",
-    "5",
+    proxy === null ? "5" : "1",
     "--fragment-retries",
-    "5",
+    proxy === null ? "5" : "1",
     "--socket-timeout",
     "30",
     "--continue",

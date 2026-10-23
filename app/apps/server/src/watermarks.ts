@@ -97,10 +97,17 @@ export function marksOf(project: Project, media: Media): Mark[] | null {
   if (copy !== null) {
     const source = project.media.find((other) => other.id !== media.id && other.kind === "video" && other.name.replace(/\.[^.]+$/u, "") === copy[1]);
     const marks = source === undefined ? null : cachedMarks(source);
-    if (marks !== null) return marks;
+    if (marks !== null) return marks.filter((mark) => !OWN_LABEL.test(mark.text));
   }
-  return cachedMarks(media);
+  return cachedMarks(media)?.filter((mark) => !OWN_LABEL.test(mark.text)) ?? null;
 }
+
+/**
+ * The recording's own labels the model still lists as marks: a court's room
+ * ("D54A Court Room 3" on Trooper's hearing got 67 blurs) or a camera's
+ * number. A channel's name with "courtroom" in it ("COURTROOM WATCH") isn't one.
+ */
+const OWN_LABEL = /\b(court ?room|room|dept\.?|department|camera|cam)\s*#?\s*\d/iu;
 
 /** The model's answer as marks (boxes as shares of the picture). */
 export function readMarks(answer: string): Mark[] {

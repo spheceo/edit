@@ -313,7 +313,7 @@ export function offShot(project: Project): unknown[] {
         start: blur.start,
         end: clipEnd(blur),
         ...(shots.length > 1 ? { shots } : { moving: moving!.id }),
-        fix: "op blur_marks (no arguments): every logo or mark gets a blur stuck to its own shot (it follows the push-in and fades with the dissolve) and these still rectangles go; a face's blur is track_region's",
+        fix: "op blur_marks (no arguments): every logo or mark gets a blur stuck to its own shot (it follows the push-in and fades with the dissolve) and these still rectangles go; one left over a shot where no mark was found hides nothing that blur_marks knows of: look once and delete it if nothing there needs hiding; a face's blur is track_region's",
       });
     }
   }

@@ -37,20 +37,16 @@ test("failures_say_what_the_relay_said", () => {
   expect(relay.failure("502", "Bad gateway", "x")).toBe("Bad gateway (502)");
 });
 
-test("the env token wins over the saved one, and an empty one is none", () => {
-  relay.setSavedToken("saved");
+test("signed out, only EDIT_RELAY_TOKEN (tests, a local relay) is sent; empty, nothing is, and the cloud is off", () => {
   expect(relay.token()).toBe("test-token");
   const before = process.env.EDIT_RELAY_TOKEN;
   process.env.EDIT_RELAY_TOKEN = "";
   try {
     expect(relay.envToken()).toBeNull();
-    expect(relay.token()).toBe("saved");
-    relay.setSavedToken("");
     expect(relay.token()).toBeNull();
     expect(relay.cloudEnabled()).toBe(false);
   } finally {
     process.env.EDIT_RELAY_TOKEN = before;
-    relay.setSavedToken(null);
   }
 });
 

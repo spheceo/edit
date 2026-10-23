@@ -1,6 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useKeys } from "../../../relay/src/auth";
 import { presign, validKey, validPrefix, writerReadable } from "../../../relay/src/cloud";
 import relay, { TranscriptionBudget, type Env } from "../../../relay/src/index";
+
+/** A signed-in person's token (every permission), checked against a key of the test's own. */
+let PERSON = "";
+beforeAll(async () => {
+  const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
+  useKeys(createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), kid: "t1", alg: "RS256" }] }));
+  PERSON = await new SignJWT({ perms: ["use", "cloud", "drive", "ai", "export"], admin: false }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+});
+afterAll(() => useKeys(null));
 
 describe("relay atomic spend reservations", () => {
   it("counts concurrent in-flight requests before permitting more spend", async () => {
@@ -56,20 +68,21 @@ describe("relay cloud endpoints", () => {
   } as Env;
   const call = (route: string, body: unknown, options: { token?: string | null; env?: Env; method?: string } = {}) => {
     const headers: Record<string, string> = { "content-type": "application/json" };
-    const token = options.token === undefined ? "cloud-secret" : options.token;
+    const token = options.token === undefined ? PERSON : options.token;
     if (token !== null) headers.authorization = `Bearer ${token}`;
     const method = options.method ?? "POST";
     return relay.fetch(new Request(`https://relay.test/v1/cloud/${route}`, { method, headers, body: method === "GET" ? undefined : JSON.stringify(body) }), options.env ?? env);
   };
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it("refuses every request without the right cloud token, and with no token configured at all", async () => {
+  it("refuses every request without a signed-in person's token, the old shared one included", async () => {
     const upstream = vi.fn(); vi.stubGlobal("fetch", upstream);
     const body = { key: "edit/a.mp4", method: "GET" };
     expect((await call("r2/url", body, { token: null })).status).toBe(401);
     expect((await call("r2/url", body, { token: "wrong" })).status).toBe(401);
-    expect((await call("r2/url", body, { env: { ...env, CLOUD_TOKEN: undefined } })).status).toBe(401);
-    expect((await call("r2/url", body, { token: "", env: { ...env, CLOUD_TOKEN: "" } })).status).toBe(401);
+    // The retired shared token, even on a relay that still had it set.
+    expect((await call("r2/url", body, { token: "cloud-secret" })).status).toBe(401);
+    expect((await call("r2/url", body, { token: "" })).status).toBe(401);
     expect((await call("convex", { kind: "query", path: "edit:get" }, { token: "wrong" })).status).toBe(401);
     expect((await call("r2/url", body, { method: "GET" })).status).toBe(405);
     expect((await call("r2/url", body)).status).toBe(200);
@@ -246,11 +259,11 @@ describe("relay cloud jobs: Drive → R2", () => {
 
 describe("relay cloud: Google sign-in and the AI Gateway", () => {
   const env = { CLOUD_TOKEN: "cloud-secret", GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r", AI_GATEWAY_API_KEY: "gw-key" } as Env;
-  const post = (route: string, body: string, token = "cloud-secret", given: Env = env) =>
-    relay.fetch(new Request(`https://relay.test/v1/cloud/${route}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "content-length": String(body.length) }, body }), given);
+  const post = (route: string, body: string, token = "", given: Env = env) =>
+    relay.fetch(new Request(`https://relay.test/v1/cloud/${route}`, { method: "POST", headers: { authorization: `Bearer ${token || PERSON}`, "content-type": "application/json", "content-length": String(body.length) }, body }), given);
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it("hands Edit a short-lived Google access token, only with the cloud token", async () => {
+  it("hands Edit a short-lived Google access token, only to a signed-in person", async () => {
     const upstream = vi.fn(async () => Response.json({ access_token: "ya29.x", expires_in: 3599 }));
     vi.stubGlobal("fetch", upstream);
     expect((await post("google/token", "{}", "wrong")).status).toBe(401);
@@ -258,7 +271,7 @@ describe("relay cloud: Google sign-in and the AI Gateway", () => {
     const answer = await post("google/token", "{}");
     expect(answer.status).toBe(200);
     expect(await answer.json()).toEqual({ access_token: "ya29.x", expires_in: 3599 });
-    expect((await post("google/token", "{}", "cloud-secret", { ...env, GOOGLE_DOCS_REFRESH_TOKEN: undefined })).status).toBe(502);
+    expect((await post("google/token", "{}", "", { ...env, GOOGLE_DOCS_REFRESH_TOKEN: undefined })).status).toBe(502);
   });
 
   it("passes a chat completion through with the relay's key and returns the gateway's answer as it is", async () => {
@@ -273,7 +286,7 @@ describe("relay cloud: Google sign-in and the AI Gateway", () => {
     expect(answer.status).toBe(429);
     expect(await answer.json()).toEqual({ error: { message: "slow down" } });
     expect(sent).toEqual({ url: "https://ai-gateway.vercel.sh/v1/chat/completions", auth: "Bearer gw-key", body: '{"model":"m"}' });
-    expect((await post("ai/chat", "{}", "cloud-secret", { ...env, AI_GATEWAY_API_KEY: undefined })).status).toBe(503);
+    expect((await post("ai/chat", "{}", "", { ...env, AI_GATEWAY_API_KEY: undefined })).status).toBe(503);
   });
 });
 
@@ -284,18 +297,17 @@ describe("relay transcription", () => {
     TRANSCRIBE_BURST: { limit: async () => ({ success: true }) },
     BUDGET: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response("{}") }) },
   } as unknown as Env;
-  const transcribe = (query: string, given: Env = env, token: string | null = null) =>
-    relay.fetch(new Request(`https://relay.test/v1/transcribe${query}`, { method: "POST", headers: { "content-type": "audio/ogg", "content-length": "4", ...(token === null ? {} : { authorization: `Bearer ${token}` }) }, body: "OggS" }), given);
+  const transcribe = (query: string, given: Env = env, token: string | null = "") =>
+    relay.fetch(new Request(`https://relay.test/v1/transcribe${query}`, { method: "POST", headers: { "content-type": "audio/ogg", "content-length": "4", ...(token === null ? {} : { authorization: `Bearer ${token || PERSON}` }) }, body: "OggS" }), given);
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it("needs the cloud token (every release has it) once the relay has one", async () => {
+  it("needs a signed-in person's token; the retired shared one is told to update", async () => {
     vi.stubGlobal("FixedLengthStream", class extends TransformStream<Uint8Array, Uint8Array> { constructor(_length: number) { super(); } });
     vi.stubGlobal("fetch", async () => Response.json({ words: [] }));
-    const locked = { ...env, CLOUD_TOKEN: "cloud-secret" } as Env;
-    expect((await transcribe("", locked)).status).toBe(401);
-    expect((await transcribe("", locked, "wrong")).status).toBe(401);
-    expect((await transcribe("", locked, "cloud-secret")).status).toBe(200);
-    expect((await transcribe("", { ...locked, CLIENT_TOKEN: "client" } as Env, "client")).status).toBe(200);
+    expect((await transcribe("", env, null)).status).toBe(401);
+    const old = await transcribe("", { ...env, CLOUD_TOKEN: "cloud-secret" } as Env, "cloud-secret");
+    expect([old.status, (await old.text()).includes("out of date")]).toEqual([401, true]);
+    expect((await transcribe("", env)).status).toBe(200);
   });
 
   // The interrogation's "John Ruetten" was heard as "John Rutten" and "John Bruton" without them.

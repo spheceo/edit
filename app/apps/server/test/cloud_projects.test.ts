@@ -27,7 +27,6 @@ import {
 import { baseRouter, respond } from "../src/http/server.ts";
 import type { Project } from "../src/model.ts";
 import { newProject } from "../src/project.ts";
-import * as relay from "../src/relay.ts";
 import { nowMs, type Event } from "../src/store.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
@@ -45,7 +44,6 @@ beforeAll(() => {
 
 afterAll(() => {
   restore();
-  relay.setSavedToken(null);
   mock.stop();
 });
 
@@ -530,16 +528,13 @@ test("the cloud routes: settings (private, checked), status, open and close, tak
     expect(notCloud).toEqual({ status: 409, body: { error: "this isn't a cloud project" } });
     expect(await call("POST", "/api/projects/p9-9/cloud/upload")).toEqual({ status: 400, body: { error: "no such project" } });
     expect(await call("POST", "/api/projects/p9-9/cloud/open", { client: "ui-1" })).toEqual({ status: 404, body: { error: "no such project" } });
-    // Forgetting the token lets every lock go first, while it still works.
+    // With no sign-in (and no EDIT_RELAY_TOKEN) the cloud is off.
     process.env.EDIT_RELAY_TOKEN = "";
-    relay.setSavedToken("cloud-token");
     try {
-      const off = await call("POST", "/api/cloud", { token: null });
-      expect(off.body.on).toBe(false);
-      expect(mock.cloud.convex.locks.has(id)).toBe(false);
+      const off = await call("GET", "/api/cloud");
+      expect([off.body.on, off.body.token]).toEqual([false, null]);
     } finally {
       process.env.EDIT_RELAY_TOKEN = "cloud-token";
-      relay.setSavedToken(null);
     }
   } finally {
     cleanup();

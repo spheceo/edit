@@ -6,8 +6,9 @@
 // The Rust side ran curl subprocesses; here it's fetch, with the relay token
 // only ever in a request header (never an argument, never a log line).
 // Errors are thrown Errors whose text is fit to show (agents and the UI read
-// it). Cloud calls need the relay's `CLOUD_TOKEN`: `EDIT_RELAY_TOKEN`, a saved
-// one, or the one built into releases; [`enabled`] says whether one is set.
+// it). Cloud calls carry the signed-in person's token (accounts.ts; or
+// `EDIT_RELAY_TOKEN` for tests and a local relay); [`enabled`] says whether
+// there's a sign-in.
 //
 // Keys are R2 object keys, always under `edit/` ([`validKey`]); the bucket is
 // shared with Repack, and the relay refuses anything else.
@@ -55,10 +56,7 @@ export const timing = {
   streamPart: STREAM_PART,
 };
 
-/**
- * Whether cloud calls can work: a relay token is set (`EDIT_RELAY_TOKEN`, else
- * a saved one, or the one built into releases). Cloud is always on with one.
- */
+/** Whether cloud calls can work: someone is signed in (or `EDIT_RELAY_TOKEN` is set). Cloud is always on then. */
 export function enabled(): boolean {
   return relay.cloudEnabled();
 }
@@ -923,7 +921,7 @@ export async function runCli(args: string[], io: CliIo = TERMINAL): Promise<void
     if (value === undefined) throw new Error(`give ${what}\n\n${CLI_HELP}`);
     return value;
   };
-  if (!enabled()) throw new Error("set EDIT_RELAY_TOKEN (the relay's CLOUD_TOKEN) first");
+  if (!enabled()) throw new Error("`edit cloud` needs EDIT_RELAY_TOKEN (a local relay's token): against the team's relay, use the running Edit (it's signed in)");
   const show: Report = (sent, total) => {
     const mb = (bytes: number) => (bytes / 1e6).toFixed(1);
     io.err(total > 0 ? `\r${mb(sent)} / ${mb(total)} MB   ` : `\r${mb(sent)} MB   `);

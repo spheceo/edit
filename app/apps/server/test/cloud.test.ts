@@ -274,7 +274,7 @@ test("edit cloud … prints what the relay answered, and refuses without a token
   await expect(cloud.runCli(["url", "edit/x", "POST"], io)).rejects.toThrow("unknown method POST");
   const back = mock.useEnv({ EDIT_RELAY_TOKEN: undefined });
   try {
-    await expect(cloud.runCli(["ls", "edit/"], io)).rejects.toThrow("set EDIT_RELAY_TOKEN (the relay's CLOUD_TOKEN) first");
+    await expect(cloud.runCli(["ls", "edit/"], io)).rejects.toThrow("`edit cloud` needs EDIT_RELAY_TOKEN (a local relay's token): against the team's relay, use the running Edit (it's signed in)");
   } finally {
     back();
   }

@@ -32,6 +32,7 @@
 // Rust ran the network calls on blocking threads; here they're awaited. The
 // store's `mayWrite` is async, so the store re-checks the rev after it.
 
+import * as accounts from "./accounts.ts";
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
@@ -676,7 +677,8 @@ export class Cloud implements CloudHook {
 
   /** The cloud setting: on, where the token comes from, the holder label. */
   settingsStatus(): Record<string, unknown> {
-    const token = relay.envToken() !== null ? "env" : this.settings.token !== undefined ? "saved" : relay.token() !== null ? "built-in" : null;
+    // Where the cloud's sign-in comes from: the person signed in, or EDIT_RELAY_TOKEN (tests, a local relay).
+    const token = relay.envToken() !== null ? "env" : accounts.hasSession() ? "signed-in" : null;
     return { holder: this.holder(), on: this.on(), relay: relay.url(), token };
   }
 
@@ -714,7 +716,7 @@ export class Cloud implements CloudHook {
 
   /** Whether the relay takes the token: null when it does, else why not. */
   async connectionProblem(): Promise<string | null> {
-    if (relay.token() === null) return "No cloud token yet.";
+    if (relay.token() === null) return "Sign in to Edit first.";
     try {
       await cloud.convexCall("query", "edit:getProject", { projectId: "edit-connection-check" }, QUICK);
       return null;
@@ -727,10 +729,11 @@ export class Cloud implements CloudHook {
 
 const CONTROL = /^\p{Cc}$/u;
 
-/** Uses the setting: its token (unless `EDIT_RELAY_TOKEN` is set). */
-function apply(settings: Settings): void {
-  relay.setSavedToken(settings.token ?? null);
-}
+/**
+ * Uses the setting. A token saved here (from before signing in) is no longer
+ * sent: the relay answers signed-in people only.
+ */
+function apply(_settings: Settings): void {}
 
 function writeSettings(settings: Settings): Settings {
   const out: Settings = {};
@@ -990,6 +993,8 @@ export function start(app: App): Cloud {
 /** Attaches `cloudProjects` to `app`'s store and runs its loop (tests attach their own). */
 export function attach(app: App, cloudProjects: Cloud): void {
   cloudProjects.attach(app.store);
+  // Signing out lets go of this machine's locks first, while its token still works.
+  accounts.beforeSignOut(() => releaseAll(app));
   server ??= { cloud: cloudProjects, app };
   if (cloudProjects.on()) diag.info("cloud", `cloud on as ${cloudProjects.holder()} (${relay.url()})`);
   void loop(app, cloudProjects);

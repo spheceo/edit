@@ -13,7 +13,6 @@ import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Mark } from "./Logo";
 import { SetupCard } from "./SetupCard";
-import { SignInCard } from "./SignInCard";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, spring } from "./ui";
 
@@ -120,7 +119,6 @@ export function Home() {
           </div>
         </header>
 
-        <SignInCard />
         <SetupCard />
 
         {projects && count === 0 && (

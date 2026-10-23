@@ -59,8 +59,12 @@ interface State {
   person: Person | null;
   perms: string[];
   admin: boolean;
+  /** A refresh token was found kept (or one was just taken): a session, even while its access token is renewed. */
+  kept: boolean;
   /** The sign-in in progress: its state and PKCE verifier. */
   pending: { state: string; verifier: string; redirect: string; at: number } | null;
+  /** A device sign-in in progress (RFC 8628): what the person types or opens, and when it runs out. */
+  device: { userCode: string; uri: string; complete: string | null; expires: number; via: string } | null;
   /** Why the last sign-in or renewal failed, for the UI. */
   problem: string | null;
   refreshing: Promise<void> | null;
@@ -79,7 +83,12 @@ async function checkAvailable(): Promise<void> {
   }
 }
 
-const state: State = { home: null, access: null, expires: 0, person: null, perms: [], admin: false, pending: null, problem: null, refreshing: null, timer: null };
+const state: State = { home: null, access: null, expires: 0, person: null, perms: [], admin: false, kept: false, pending: null, device: null, problem: null, refreshing: null, timer: null };
+
+/** Whether this Edit has a sign-in (signed in, or a kept one being renewed): the cloud is on. */
+export function hasSession(): boolean {
+  return state.access !== null || state.kept;
+}
 
 const base64url = (bytes: Buffer) => bytes.toString("base64url");
 
@@ -110,13 +119,24 @@ export function status(): Record<string, unknown> {
     person: state.person,
     perms: state.perms,
     admin: state.admin,
-    signing_in: state.pending !== null && Date.now() - state.pending.at < PENDING_MS,
+    signing_in: (state.pending !== null && Date.now() - state.pending.at < PENDING_MS) || state.device !== null,
+    device:
+      state.device === null
+        ? null
+        : { user_code: state.device.userCode, verification_uri: state.device.uri, verification_uri_complete: state.device.complete, expires_in: Math.max(0, Math.round((state.device.expires - Date.now()) / 1000)) },
     problem: state.problem,
     accounts: accountsUrl(),
+    // Tests and local relays (EDIT_RELAY_TOKEN) work without signing in.
+    required: (process.env.EDIT_RELAY_TOKEN ?? "") === "",
   };
 }
 
 interface Tokens {
+  device_code?: unknown;
+  user_code?: unknown;
+  verification_uri?: unknown;
+  verification_uri_complete?: unknown;
+  interval?: unknown;
   access_token?: unknown;
   expires_in?: unknown;
   refresh_token?: unknown;
@@ -126,11 +146,11 @@ interface Tokens {
 }
 
 /** One POST to the accounts site, JSON both ways. */
-async function post(path: string, body: Record<string, string>): Promise<{ status: number; value: Tokens; retryAfter: number | null }> {
+async function post(path: string, body: Record<string, string>, via = ""): Promise<{ status: number; value: Tokens; retryAfter: number | null }> {
   const answer = await fetch(`${accountsUrl()}${path}`, {
     method: "POST",
     // What admins see as "where" on the person's page.
-    headers: { "content-type": "application/json", accept: "application/json", "user-agent": `Edit/${BUILD.replace(/^v/u, "")} (${process.platform === "darwin" ? "macOS" : process.platform})` },
+    headers: { "content-type": "application/json", accept: "application/json", "user-agent": userAgent(via) },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(20_000),
   });
@@ -142,6 +162,12 @@ async function post(path: string, body: Record<string, string>): Promise<{ statu
   }
   const after = Number(answer.headers.get("retry-after"));
   return { status: answer.status, value, retryAfter: Number.isFinite(after) && after > 0 ? after * 1000 : null };
+}
+
+/** `Edit/<build> (macOS)`, or `(macOS; edit serve)` for a device sign-in: what admins and the approval page show. */
+function userAgent(via: string): string {
+  const system = process.platform === "darwin" ? "macOS" : process.platform;
+  return `Edit/${BUILD.replace(/^v/u, "")} (${via === "" ? system : `${system}; ${via}`})`;
 }
 
 /** A refusal that waits (the site's per-minute limit: 429 temporarily_unavailable) or a failure to try again after. */
@@ -160,6 +186,7 @@ async function take(home: string, value: Tokens): Promise<void> {
   const seconds = typeof value.expires_in === "number" && value.expires_in > 0 ? value.expires_in : 3600;
   // Kept before it's used: a rotated token lost here would sign the person out.
   await keychain.set(home, value.refresh_token);
+  state.kept = true;
   const found = claims(value.access_token);
   state.access = value.access_token;
   state.expires = Date.now() + seconds * 1000;
@@ -183,6 +210,7 @@ function schedule(home: string): void {
 }
 
 function forget(problem: string | null): void {
+  state.kept = false;
   state.access = null;
   state.expires = 0;
   state.person = null;
@@ -207,6 +235,7 @@ export function renew(home: string | null = state.home): Promise<void> {
         forget(null);
         return;
       }
+      state.kept = true;
       const { status: code, value, retryAfter } = await post("/app/token", { grant_type: "refresh_token", refresh_token: refresh, client_id: CLIENT });
       if (code === 200) {
         failures = 0;
@@ -238,13 +267,43 @@ export function renew(home: string | null = state.home): Promise<void> {
   return state.refreshing;
 }
 
-/** At start: signed in before (a refresh token kept), renewed quietly. */
+/** Headless `edit serve` (no window, no browser): it signs in with a code printed on the terminal. */
+let headless = false;
+export function signInOnTerminal(on: boolean): void {
+  headless = on;
+}
+
+/** At start: signed in before (a refresh token kept), renewed quietly; headless and signed out, a code to type. */
 export async function start(app: App): Promise<void> {
   state.home = app.store.home;
   void checkAvailable();
   setInterval(() => void checkAvailable(), 10 * 60_000).unref?.();
   await renew(app.store.home);
   if (state.person !== null) diag.info("accounts", `signed in as ${state.person.email.split("@")[0]}`);
+  if (headless) void codesOnTerminal(app);
+}
+
+/** Until someone signs in: a device code printed, and a new one when it runs out (or the site was unreachable). */
+async function codesOnTerminal(app: App): Promise<void> {
+  while (!hasSession()) {
+    try {
+      const device = await beginDevice(app, "edit serve");
+      process.stdout.write(
+        `\nedit: sign in to Edit: open ${device.uri} and enter ${device.userCode}` +
+          (device.complete !== null ? `\n      (or open ${device.complete})` : "") +
+          `\n      the code lasts ${Math.round((device.expires - Date.now()) / 60_000)} minutes\n\n`,
+      );
+      await devicePolling();
+      if (hasSession()) process.stdout.write(`edit: signed in as ${state.person?.email ?? "you"}\n`);
+      else if (state.problem !== null) {
+        process.stdout.write(`edit: ${state.problem}\n`);
+        await new Promise((resolve) => setTimeout(resolve, 30_000));
+      }
+    } catch (error) {
+      process.stdout.write(`edit: couldn't start signing in (${diag.messageOf(error)}); trying again in a minute\n`);
+      await new Promise((resolve) => setTimeout(resolve, 60_000));
+    }
+  }
 }
 
 /** Starts a sign-in: the authorize URL for the browser, with a fresh state and PKCE verifier. */
@@ -258,6 +317,104 @@ export function begin(app: App): string {
   state.problem = null;
   const query = new URLSearchParams({ client_id: CLIENT, redirect_uri: redirect, response_type: "code", state: nonce, code_challenge: challenge, code_challenge_method: "S256" });
   return `${accountsUrl()}/app/authorize?${query.toString()}`;
+}
+
+const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+/** The device sign-in being polled (one at a time). */
+let polling: Promise<void> | null = null;
+
+/**
+ * A sign-in for an Edit with no browser of its own (headless `edit serve`,
+ * Edit used over Tailscale): RFC 8628's device grant. The accounts site
+ * hands out a short code; the person opens its /device page anywhere and
+ * types it (or opens the link with it filled in), and this polls
+ * `/app/token` every `interval` seconds until they've said yes.
+ * `authorization_pending` keeps polling, `slow_down` adds 5 s,
+ * `access_denied` or `expired_token` stops and says so. One at a time: a
+ * second call while one is waiting returns the same code.
+ */
+export async function beginDevice(app: App, via: string): Promise<NonNullable<State["device"]>> {
+  state.home = app.store.home;
+  if (state.device !== null && state.device.expires > Date.now() + 30_000) return state.device;
+  const { status: code, value, retryAfter } = await post("/app/device", { client_id: CLIENT }, via);
+  if (code !== 200 || typeof value.device_code !== "string" || typeof value.user_code !== "string" || typeof value.verification_uri !== "string") {
+    const why = typeof value.error_description === "string" ? value.error_description : typeof value.error === "string" ? value.error : `the accounts site answered ${code}`;
+    throw new Error(code === 429 ? `The accounts site is busy: try again in ${Math.round((retryAfter ?? 60_000) / 1000)} s.` : `Couldn't start a sign-in: ${why}`);
+  }
+  const seconds = typeof value.expires_in === "number" && value.expires_in > 0 ? value.expires_in : 600;
+  const interval = typeof value.interval === "number" && value.interval > 0 ? value.interval : 5;
+  state.device = {
+    userCode: value.user_code,
+    uri: value.verification_uri,
+    complete: typeof value.verification_uri_complete === "string" ? value.verification_uri_complete : null,
+    expires: Date.now() + seconds * 1000,
+    via,
+  };
+  state.problem = null;
+  const device = value.device_code;
+  const started = state.device;
+  polling = (async () => {
+    let wait = interval * 1000;
+    while (state.device === started && Date.now() < started.expires) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      if (state.device !== started) return;
+      let answer: Awaited<ReturnType<typeof post>>;
+      try {
+        answer = await post("/app/token", { grant_type: DEVICE_GRANT, device_code: device, client_id: CLIENT }, via);
+      } catch (error) {
+        // Offline for a moment: keep asking while the code lasts.
+        diag.warn("accounts", `waiting for the device sign-in: ${diag.messageOf(error)}`);
+        continue;
+      }
+      if (answer.status === 200) {
+        try {
+          await take(app.store.home, answer.value);
+          diag.info("accounts", `signed in as ${state.person?.email.split("@")[0] ?? "?"} (with a code)`);
+        } catch (error) {
+          state.problem = `Signing in failed: ${diag.messageOf(error)}`;
+        }
+        state.device = null;
+        return;
+      }
+      const error = typeof answer.value.error === "string" ? answer.value.error : "";
+      if (error === "authorization_pending") continue;
+      if (error === "slow_down") {
+        wait += 5_000;
+        continue;
+      }
+      if (answer.status === 429) {
+        wait = Math.max(wait, answer.retryAfter ?? 60_000);
+        continue;
+      }
+      state.problem =
+        error === "access_denied"
+          ? typeof answer.value.error_description === "string"
+            ? answer.value.error_description
+            : "The sign-in was turned down (or your account can't use Edit yet: ask an admin)."
+          : error === "expired_token"
+            ? "The code ran out before it was used: start again."
+            : `Signing in failed: ${error || `the accounts site answered ${answer.status}`}`;
+      state.device = null;
+      return;
+    }
+    if (state.device === started) {
+      state.device = null;
+      state.problem = "The code ran out before it was used: start again.";
+    }
+  })().finally(() => {
+    polling = null;
+  });
+  return state.device;
+}
+
+/** The device sign-in being waited for, if any (tests wait on it). */
+export function devicePolling(): Promise<void> | null {
+  return polling;
+}
+
+/** Stops waiting for a device sign-in (signing in another way, or giving up). */
+export function cancelDevice(): void {
+  state.device = null;
 }
 
 /** The browser back with a code (or a refusal): exchanged, and the person signed in. */
@@ -279,6 +436,7 @@ export async function finish(app: App, query: URLSearchParams): Promise<{ ok: bo
     const { status: answered, value } = await post("/app/token", { grant_type: "authorization_code", code, code_verifier: pending.verifier, redirect_uri: pending.redirect, client_id: CLIENT });
     if (answered !== 200) throw new Error(typeof value.error_description === "string" ? value.error_description : typeof value.error === "string" ? value.error : `the accounts site answered ${answered}`);
     await take(app.store.home, value);
+    state.device = null;
     diag.info("accounts", `signed in as ${state.person?.email.split("@")[0] ?? "?"}`);
     return { ok: true, message: `Signed in as ${state.person?.email ?? "you"}. You can close this tab and go back to Edit.` };
   } catch (error) {
@@ -288,8 +446,21 @@ export async function finish(app: App, query: URLSearchParams): Promise<{ ok: bo
   }
 }
 
-/** Signs out: the refresh token revoked at the accounts site (best effort) and forgotten here. */
+/** What runs before signing out (the cloud's locks let go), while the token still works. */
+let before: (() => Promise<void>) | null = null;
+export function beforeSignOut(work: () => Promise<void>): void {
+  before = work;
+}
+
+/** Signs out: the cloud's locks let go, the refresh token revoked at the accounts site (best effort) and forgotten here. */
 export async function signOut(app: App): Promise<void> {
+  if (before !== null) {
+    try {
+      await before();
+    } catch (error) {
+      diag.warn("accounts", `letting go of the cloud's locks before signing out: ${diag.messageOf(error)}`);
+    }
+  }
   const refresh = await keychain.get(app.store.home);
   if (refresh !== null) {
     try {
@@ -329,6 +500,16 @@ export function routes(router: Router<App>): void {
     openBrowser(url);
     return Response.json({ url });
   });
+  // A sign-in with a code, for an Edit used from another device (Tailscale) or headless.
+  router.post("/api/account/device", async (context) => {
+    await readJson<unknown>(context).catch(() => ({}));
+    try {
+      await beginDevice(context.app, "remote");
+    } catch (error) {
+      return Response.json({ error: diag.messageOf(error) }, { status: 502 });
+    }
+    return Response.json(status());
+  });
   router.post("/api/account/sign-out", async ({ app }) => {
     await signOut(app);
     return Response.json(status());
@@ -347,5 +528,6 @@ export function routes(router: Router<App>): void {
 export function resetForTests(): void {
   forget(null);
   state.pending = null;
+  state.device = null;
   state.home = null;
 }

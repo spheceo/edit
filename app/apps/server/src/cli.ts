@@ -2,6 +2,7 @@
 // commands beside them. `main.ts` runs it; this file only defines it, so
 // tests can call its parts.
 
+import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
 import { runCli as mediaCli } from "./media_drive/move.ts";
 import { initNative } from "./native/index.ts";
@@ -92,6 +93,8 @@ export async function main(args: string[]): Promise<void> {
     case "serve":
       // A bundle's window helper starts `edit serve` from Finder's bare environment.
       if (process.env.EDIT_ADOPT_SHELL_ENV === "1") adoptShellEnv();
+      // Headless (not Edit.app's window starting it): signing in is a code printed here.
+      else accounts.signInOnTerminal(true);
       start(home(), flag("--host") ?? null, port());
       return;
     case "app":

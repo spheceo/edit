@@ -69,12 +69,15 @@ describe("relay sign-in gate", () => {
     expect(await allow(asked(await token({}, { exp: Math.floor(Date.now() / 1000) - 20 })), env(), "use", "transcribe")).toMatchObject({ kind: "person" });
   });
 
-  it("still accepts the old shared token, and nothing without a token once one is set", async () => {
+  it("turns away the retired shared token (telling an old build to update and sign in) and no token, maps included", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(await allow(asked("shared-cloud"), env(), "use", "transcribe")).toEqual({ kind: "shared" });
-    expect(await allow(asked("client-token"), env({ CLIENT_TOKEN: "client-token" }), "use", "transcribe")).toEqual({ kind: "shared" });
-    expect(((await allow(asked(null), env(), "use", "transcribe")) as Response).status).toBe(401);
-    // Maps stay open to builds from before signing in while OPEN_MAPS holds.
+    const old = (await allow(asked("shared-cloud"), env(), "use", "transcribe")) as Response;
+    expect(old.status).toBe(401);
+    expect(await old.text()).toContain("out of date");
+    const none = (await allow(asked(null), env(), "use", "transcribe")) as Response;
+    expect([none.status, (await none.text()).includes("Sign in")]).toEqual([401, true]);
+    expect(((await allow(asked(null), env(), "use", "maps", false)) as Response).status).toBe(401);
+    // OPEN_MAPS = "1" would open them again.
     expect(await allow(asked(null), env({ OPEN_MAPS: "1" }), "use", "maps", true)).toEqual({ kind: "open" });
   });
 
@@ -95,10 +98,10 @@ describe("relay sign-in gate", () => {
     expect(calls).toBe(2);
   });
 
-  it("keeps each person's budget apart, and connections apart for the shared token", async () => {
+  it("keeps each person's budget apart, and connections apart for anyone else", async () => {
     const one = await budgetKey(asked(null), { kind: "person", sub: "a", perms: [], admin: false });
     const two = await budgetKey(asked(null), { kind: "person", sub: "b", perms: [], admin: false });
-    const shared = await budgetKey(asked(null), { kind: "shared" });
+    const shared = await budgetKey(asked(null), { kind: "open" });
     expect(new Set([one, two, shared]).size).toBe(3);
     expect(one).toMatch(/^[0-9a-f]{64}$/);
   });

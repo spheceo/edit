@@ -404,7 +404,7 @@ test("exports read the originals through presigned URLs, share the proxy's wavef
     const back = mock.useEnv({ EDIT_RELAY_TOKEN: undefined });
     try {
       await expect(cloudMedia.forExport(project, 0, 30, cache)).rejects.toThrow(
-        "this edit's footage is in the cloud: exporting it needs the cloud (EDIT_RELAY_TOKEN)",
+        "this edit's footage is in the cloud: exporting it needs the cloud: sign in to Edit",
       );
     } finally {
       back();

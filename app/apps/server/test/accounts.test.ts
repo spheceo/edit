@@ -16,6 +16,11 @@ const app = { store: { home: join(dir, "home") }, port: 7799 } as unknown as App
 const challenges = new Map<string, string>();
 const seen: { path: string; body: Record<string, string> }[] = [];
 let refreshes = 0;
+const devices: string[] = [];
+const polls = new Map<string, number>();
+/** What the site answers each poll of a device sign-in, in turn ("ok" signs in). */
+let deviceScript: string[] = [];
+let deviceExpires = 600;
 let server: ReturnType<typeof Bun.serve>;
 
 /** An access token as the site makes one (its signature isn't checked here: the relay does that). */
@@ -32,8 +37,14 @@ beforeAll(() => {
       const url = new URL(request.url);
       const body = (await request.json().catch(() => ({}))) as Record<string, string>;
       seen.push({ path: url.pathname, body });
-      if (url.pathname.startsWith("/app/") && !/^Edit\/\S+ \((macOS|linux)\)$/u.test(request.headers.get("user-agent") ?? "")) return Response.json({ error: "no user agent" }, { status: 400 });
+      if (url.pathname.startsWith("/app/") && !/^Edit\/\S+ \((macOS|linux)(; [a-z ]+)?\)$/u.test(request.headers.get("user-agent") ?? "")) return Response.json({ error: "no user agent" }, { status: 400 });
       if (url.pathname === "/app/revoke") return Response.json({});
+      if (url.pathname === "/app/device") {
+        devices.push(request.headers.get("user-agent") ?? "");
+        const code = `dev-${devices.length}`;
+        polls.set(code, 0);
+        return Response.json({ device_code: code, user_code: "BCDF-GHJK", verification_uri: "https://accounts.test/device", verification_uri_complete: "https://accounts.test/device?code=BCDF-GHJK", expires_in: deviceExpires, interval: 0.02 });
+      }
       // Standing in for the relay too: what a tile request carried.
       if (url.pathname.startsWith("/v1/3dtiles/")) return Response.json({ bearer: request.headers.get("authorization"), query: url.search }, { headers: { "cache-control": "max-age=60" } });
       if (url.pathname !== "/app/token") return new Response("not found", { status: 404 });
@@ -43,6 +54,13 @@ beforeAll(() => {
         const sent = createHash("sha256").update(body.code_verifier ?? "").digest("base64url");
         if (challenge === undefined || challenge !== sent || body.redirect_uri !== "http://127.0.0.1:7799/callback") return Response.json({ error: "invalid_grant" }, { status: 400 });
         return Response.json({ access_token: jwt({ perms: ["use", "cloud"], email: "someone@gmail.com" }), token_type: "Bearer", expires_in: 3600, refresh_token: "refresh-1-aaaaaaaa", user: { email: "someone@gmail.com", name: "Someone", image: null } });
+      }
+      if (body.grant_type === "urn:ietf:params:oauth:grant-type:device_code") {
+        const n = (polls.get(body.device_code ?? "") ?? 0) + 1;
+        polls.set(body.device_code ?? "", n);
+        const script = deviceScript[n - 1] ?? "ok";
+        if (script === "ok") return Response.json({ access_token: jwt({ perms: ["use"], email: "someone@gmail.com" }), token_type: "Bearer", expires_in: 3600, refresh_token: "refresh-device-aaaaaaaa", user: { email: "someone@gmail.com", name: "Someone", image: null } });
+        return Response.json({ error: script }, { status: 400 });
       }
       if (body.grant_type === "refresh_token") {
         if (body.refresh_token === "dead-token-aaaaaaaa") return Response.json({ error: "invalid_grant", error_description: "Signed out elsewhere." }, { status: 400 });
@@ -104,7 +122,7 @@ test("renews with the kept refresh token and keeps the rotated one; a refused on
   await accounts.renew(app.store.home);
   expect(accounts.status()).toMatchObject({ signed_in: false, problem: "Signed out elsewhere." });
   expect(Object.values(kept())).toEqual([]);
-  expect(relay.token()).toBe(relay.sharedToken());
+  expect(relay.token()).toBe(relay.envToken());
 });
 
 test("signing out revokes the refresh token there and forgets it here", async () => {
@@ -139,4 +157,34 @@ test("the map page's tiles go through Edit's server to the relay with the person
   } finally {
     delete process.env.EDIT_RELAY_URL;
   }
+});
+
+test("a device sign-in (headless, over Tailscale): a code to type, polled through pending and slow_down until it's approved", async () => {
+  fs.writeFileSync(join(dir, "keychain.json"), JSON.stringify({}));
+  deviceScript = ["authorization_pending", "slow_down", "authorization_pending", "ok"];
+  const device = await accounts.beginDevice(app, "edit serve");
+  expect([device.userCode, device.uri, device.complete]).toEqual(["BCDF-GHJK", "https://accounts.test/device", "https://accounts.test/device?code=BCDF-GHJK"]);
+  expect(devices.at(-1)).toMatch(/^Edit\/\S+ \((macOS|linux); edit serve\)$/u);
+  expect(accounts.status()).toMatchObject({ signing_in: true, device: { user_code: "BCDF-GHJK" } });
+  // A second ask while it waits is the same code.
+  expect((await accounts.beginDevice(app, "edit serve")).userCode).toBe("BCDF-GHJK");
+  expect(devices.length).toBe(1);
+  await accounts.devicePolling();
+  expect(accounts.status()).toMatchObject({ signed_in: true, device: null, person: { email: "someone@gmail.com" } });
+  expect(Object.values(kept())).toEqual(["refresh-device-aaaaaaaa"]);
+}, 20_000);
+
+test("a device sign-in turned down or run out stops and says so", async () => {
+  fs.writeFileSync(join(dir, "keychain.json"), JSON.stringify({}));
+  deviceScript = ["authorization_pending", "access_denied"];
+  await accounts.beginDevice(app, "remote");
+  expect(devices.at(-1)).toMatch(/; remote\)$/u);
+  await accounts.devicePolling();
+  expect(accounts.status()).toMatchObject({ signed_in: false, device: null, signing_in: false });
+  expect(String(accounts.status().problem)).toContain("turned down");
+  accounts.resetForTests();
+  deviceScript = ["expired_token"];
+  await accounts.beginDevice(app, "remote");
+  await accounts.devicePolling();
+  expect(String(accounts.status().problem)).toContain("ran out");
 });

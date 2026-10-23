@@ -5,6 +5,7 @@ import { ContextMenuHost } from "./components/ContextMenu";
 import { Editor } from "./components/Editor";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Home } from "./components/Home";
+import { SignInGate } from "./components/SignInScreen";
 import { Toasts } from "./components/Toasts";
 import { usePath } from "./lib/route";
 
@@ -22,7 +23,9 @@ export function App() {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.16 }}
         >
-          <ErrorBoundary key={projectId ?? "home"}>{projectId ? <Editor id={projectId} /> : <Home />}</ErrorBoundary>
+          <ErrorBoundary key={projectId ?? "home"}>
+            <SignInGate>{projectId ? <Editor id={projectId} /> : <Home />}</SignInGate>
+          </ErrorBoundary>
         </motion.div>
       </AnimatePresence>
       <Toasts />

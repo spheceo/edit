@@ -1247,7 +1247,7 @@ async function fetchProxies(app: App, id: string, round = 0): Promise<void> {
       ...(await Promise.all(
         batch.map(async ([media, key, local, source]) => {
           if (!isFile(local) && !enabled) {
-            return { error: `${key} isn't on this machine and the cloud isn't set up (EDIT_RELAY_TOKEN)` };
+            return { error: `${key} isn't on this machine and Edit isn't signed in (the cloud needs it)` };
           }
           try {
             await diag.timeOnAsync("cloud", "cloud: fetch proxy", key, () => fetchKey(key, local));
@@ -1400,7 +1400,7 @@ export async function forExport(project: Project, start: number, end: number, ca
   }
   if (onDisk.size > 0) diag.info("export", `${project.id}: reading ${onDisk.size} cloud originals from this machine's copies`);
   if (needed.length === 0) return [out, originals];
-  if (!cloud.enabled()) throw new Error("this edit's footage is in the cloud: exporting it needs the cloud (EDIT_RELAY_TOKEN)");
+  if (!cloud.enabled()) throw new Error("this edit's footage is in the cloud: exporting it needs the cloud: sign in to Edit");
   const urls = new Map<string, string>();
   for (const [mediaId, key] of needed) {
     // Long enough for any export.

@@ -1,6 +1,8 @@
 // Edit's relay (apps/relay/): the Cloudflare Worker that holds every API key,
-// so Edit installs never do. `EDIT_RELAY_URL` points at another relay (e.g.
-// `wrangler dev`), and `EDIT_RELAY_TOKEN` is sent as `Authorization: Bearer`.
+// so Edit installs never do. It answers signed-in people only: every call
+// carries the person's access token (accounts.ts). `EDIT_RELAY_URL` points at
+// another relay (e.g. `wrangler dev`), and `EDIT_RELAY_TOKEN`, for tests and
+// local relays only, is sent as the bearer instead.
 // Requests go out through Bun's fetch. Nothing secret is ever put in a
 // child process's arguments: what still runs curl gets `authConfig` on stdin.
 
@@ -23,45 +25,24 @@ export function url(): string {
  */
 export const UNREACHABLE = "could not reach Edit's relay";
 
-declare const EDIT_CLOUD_TOKEN: string | undefined;
-
-/** The team's token, built into release builds (`--define EDIT_CLOUD_TOKEN`): every Edit is on the team's cloud from its first start. */
-const BUILT_IN: string | null = typeof EDIT_CLOUD_TOKEN === "string" && EDIT_CLOUD_TOKEN !== "" ? EDIT_CLOUD_TOKEN : null;
-
-/** A token saved on this Mac (`cloud_projects`, `<home>/cloud.json`; from before it was built in, or `edit cloud`). */
-let savedToken: string | null = null;
-
-/**
- * The signed-in person's access token (accounts.ts), else, while the team
- * moves to signing in, `EDIT_RELAY_TOKEN`, the saved token or the built-in one.
- */
+/** The signed-in person's access token (accounts.ts), else `EDIT_RELAY_TOKEN` (tests, a local relay), else none. */
 export function token(): string | null {
-  return accounts.accessToken() ?? sharedToken();
+  return accounts.accessToken() ?? envToken();
 }
 
-/** The shared token every Edit had before signing in: `EDIT_RELAY_TOKEN`, the saved one, the built-in one. */
-export function sharedToken(): string | null {
-  return envToken() ?? savedToken ?? BUILT_IN;
-}
-
-/** `EDIT_RELAY_TOKEN`, when set and not empty (it wins over the setting). */
+/** `EDIT_RELAY_TOKEN`, when set and not empty: for tests and local relays (the team's relay takes only people). */
 export function envToken(): string | null {
   const value = process.env.EDIT_RELAY_TOKEN;
   return value !== undefined && value !== "" ? value : null;
 }
 
-/** The token saved on this Mac, used when `EDIT_RELAY_TOKEN` isn't set. */
-export function setSavedToken(value: string | null): void {
-  savedToken = value !== null && value !== "" ? value : null;
-}
-
 /**
- * Whether cloud calls can work: a relay token is set (`EDIT_RELAY_TOKEN`, a
- * saved one, or the built-in one). Cloud is always on with one (here,
- * not in cloud.ts, because the store and import ask it).
+ * Whether cloud calls can work: someone is signed in (a sign-in kept, even
+ * while its access token is being renewed), or `EDIT_RELAY_TOKEN` is set.
+ * Here, not in cloud.ts, because the store and import ask it.
  */
 export function cloudEnabled(): boolean {
-  return token() !== null;
+  return envToken() !== null || accounts.hasSession();
 }
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;

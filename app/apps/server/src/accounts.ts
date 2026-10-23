@@ -125,7 +125,7 @@ interface Tokens {
 }
 
 /** One POST to the accounts site, JSON both ways. */
-async function post(path: string, body: Record<string, string>): Promise<{ status: number; value: Tokens }> {
+async function post(path: string, body: Record<string, string>): Promise<{ status: number; value: Tokens; retryAfter: number | null }> {
   const answer = await fetch(`${accountsUrl()}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
@@ -138,7 +138,18 @@ async function post(path: string, body: Record<string, string>): Promise<{ statu
   } catch {
     value = {};
   }
-  return { status: answer.status, value };
+  const after = Number(answer.headers.get("retry-after"));
+  return { status: answer.status, value, retryAfter: Number.isFinite(after) && after > 0 ? after * 1000 : null };
+}
+
+/** A refusal that waits (the site's per-minute limit: 429 temporarily_unavailable) or a failure to try again after. */
+class TryLater extends Error {
+  constructor(
+    message: string,
+    readonly after: number | null,
+  ) {
+    super(message);
+  }
 }
 
 /** Takes a token answer: the access token in memory, the new refresh token in the Keychain. */
@@ -194,22 +205,25 @@ export function renew(home: string | null = state.home): Promise<void> {
         forget(null);
         return;
       }
-      const { status: code, value } = await post("/app/token", { grant_type: "refresh_token", refresh_token: refresh, client_id: CLIENT });
+      const { status: code, value, retryAfter } = await post("/app/token", { grant_type: "refresh_token", refresh_token: refresh, client_id: CLIENT });
       if (code === 200) {
         failures = 0;
         await take(home, value);
         return;
       }
-      if (code === 400 || code === 401) {
+      // Only `invalid_grant` ends a sign-in (signed out elsewhere, removed, gone stale): anything
+      // else, the per-minute limit's 429 above all, keeps the refresh token and tries again.
+      if (value.error === "invalid_grant") {
         await keychain.remove(home);
         forget(typeof value.error_description === "string" ? value.error_description : "Your sign-in ended: sign in again.");
         diag.info("accounts", `sign-in ended (${typeof value.error === "string" ? value.error : code}); signed out`);
         return;
       }
-      throw new Error(`the accounts site answered ${code}`);
+      throw new TryLater(`the accounts site answered ${code}${typeof value.error === "string" ? ` (${value.error})` : ""}`, retryAfter);
     } catch (error) {
       state.problem = `Couldn't renew the sign-in: ${diag.messageOf(error)}`;
-      const wait = failures < SOON_RETRIES ? SOON_RETRY_MS : RETRY_MS;
+      const asked = error instanceof TryLater ? error.after : null;
+      const wait = asked ?? (failures < SOON_RETRIES ? SOON_RETRY_MS : RETRY_MS);
       failures += 1;
       diag.warn("accounts", `renewing the sign-in: ${diag.messageOf(error)}; trying again in ${wait / 1000} s`);
       if (state.timer !== null) clearTimeout(state.timer);
@@ -277,7 +291,12 @@ export async function signOut(app: App): Promise<void> {
   const refresh = await keychain.get(app.store.home);
   if (refresh !== null) {
     try {
-      await post("/app/revoke", { token: refresh });
+      const { status: code, retryAfter } = await post("/app/revoke", { token: refresh });
+      // The per-minute limit: revoked once more after it, in the background (it's forgotten here now).
+      if (code === 429) {
+        const later = setTimeout(() => void post("/app/revoke", { token: refresh }).catch(() => {}), retryAfter ?? 60_000);
+        later.unref?.();
+      }
     } catch (error) {
       diag.warn("accounts", `revoking the sign-in: ${diag.messageOf(error)} (forgotten here anyway)`);
     }

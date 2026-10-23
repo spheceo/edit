@@ -45,6 +45,7 @@ beforeAll(() => {
       }
       if (body.grant_type === "refresh_token") {
         if (body.refresh_token === "dead-token-aaaaaaaa") return Response.json({ error: "invalid_grant", error_description: "Signed out elsewhere." }, { status: 400 });
+        if (body.refresh_token === "busy-token-aaaaaaaa") return Response.json({ error: "temporarily_unavailable" }, { status: 429, headers: { "retry-after": "60" } });
         refreshes += 1;
         return Response.json({ access_token: jwt({ perms: ["use"], email: "someone@gmail.com" }), token_type: "Bearer", expires_in: 3600, refresh_token: `refresh-${refreshes + 1}-aaaaaaaa`, user: { email: "someone@gmail.com", name: "Someone", image: null } });
       }
@@ -91,6 +92,12 @@ test("renews with the kept refresh token and keeps the rotated one; a refused on
   const before = seen.length;
   await Promise.all([accounts.renew(app.store.home), accounts.renew(app.store.home)]);
   expect(seen.length - before).toBe(1);
+  // The site's per-minute limit (429): still signed in, the refresh token kept, tried again later.
+  const keep = Object.keys(kept());
+  fs.writeFileSync(join(dir, "keychain.json"), JSON.stringify(Object.fromEntries(keep.map((key) => [key, "busy-token-aaaaaaaa"]))));
+  await accounts.renew(app.store.home);
+  expect(accounts.status()).toMatchObject({ signed_in: true });
+  expect(Object.values(kept())).toEqual(["busy-token-aaaaaaaa"]);
   // Refused: signed out, the token forgotten, the shared token back for the relay.
   fs.writeFileSync(join(dir, "keychain.json"), JSON.stringify(Object.fromEntries(Object.keys(kept()).map((key) => [key, "dead-token-aaaaaaaa"]))));
   await accounts.renew(app.store.home);

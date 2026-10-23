@@ -327,7 +327,7 @@ async function offered(value: Record<string, unknown>): Promise<Release | null> 
 async function fetchText(url: string): Promise<[number, string]> {
   let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
   try {
-    child = Bun.spawn(["curl", "-sSL", "--max-time", "10", "-w", "\n%{http_code}", url], {
+    child = Bun.spawn(["/usr/bin/curl", "-sSL", "--max-time", "10", "-w", "\n%{http_code}", url], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -393,7 +393,7 @@ export async function install(release: Release, staged: string, progress: (progr
   }
   let tar: Bun.SyncSubprocess<"pipe", "pipe">;
   try {
-    tar = Bun.spawnSync(["tar", "-xzf", archive, "-C", unpacked], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    tar = Bun.spawnSync(["/usr/bin/tar", "-xzf", archive, "-C", unpacked], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   } catch (error) {
     throw new Error(`tar: ${diag.messageOf(error)}`);
   }
@@ -433,16 +433,24 @@ export function installApp(zip: string, bundle: string): string {
   }
   try {
     // ditto keeps the bundle's signature, links and attributes as zipped.
-    const unzip = run(["ditto", "-x", "-k", zip, unpacked]);
+    const unzip = run(["/usr/bin/ditto", "-x", "-k", zip, unpacked]);
     if (unzip.code !== 0) throw new Error(`could not unpack the update: ${unzip.stderr}`);
     const entries = fs.readdirSync(unpacked).filter((entry) => entry.endsWith(".app"));
     if (entries.length !== 1) throw new Error("the update has no Edit.app");
     const fresh = join(unpacked, entries[0]!);
     if (!fs.existsSync(join(fresh, "Contents", "Resources", "edit"))) throw new Error("the update's Edit.app has no server");
-    const verify = run(["codesign", "--verify", "--deep", "--strict", fresh]);
+    const verify = run(["/usr/bin/codesign", "--verify", "--deep", "--strict", fresh]);
     if (verify.code !== 0) throw new Error(`the update's signature is broken: ${verify.stderr}`);
+    // Only a Developer ID build updates itself, and only to one signed by the same team (the audit, Oct 23:
+    // the checksum comes from the same release, so the signature is what's trusted).
     const team = teamOf(bundle);
-    if (team !== null && teamOf(fresh) !== team) throw new Error(`the update isn't signed by ${team}, who signed this Edit`);
+    // Tests sign ad hoc, both sides.
+    const adHocTest = process.env.NODE_ENV === "test" && team === null && teamOf(fresh) === null;
+    if (!adHocTest) {
+      if (team === null) throw new Error("this Edit isn't signed with a Developer ID, so it can't update itself: install the new one from its disk image");
+      if (team !== EDIT_TEAM) throw new Error(`this Edit is signed by ${team}, not Edit's team: install the new one from its disk image`);
+      if (teamOf(fresh) !== team) throw new Error(`the update isn't signed by ${team}, who signed this Edit`);
+    }
     const old = join(dir, `.Edit-old-${process.pid}.app`);
     try {
       fs.renameSync(bundle, old);
@@ -464,8 +472,11 @@ export function installApp(zip: string, bundle: string): string {
 }
 
 /** The team that signed `app` (Developer ID), or null when it's signed ad hoc. */
+/** The Developer ID team that signs Edit's releases. */
+export const EDIT_TEAM = "5PLDN9BDV4";
+
 function teamOf(app: string): string | null {
-  const shown = run(["codesign", "-dv", app]);
+  const shown = run(["/usr/bin/codesign", "-dv", app]);
   const team = /^TeamIdentifier=(.+)$/m.exec(shown.stderr)?.[1]?.trim();
   return team === undefined || team === "not set" ? null : team;
 }
@@ -532,7 +543,7 @@ async function download(url: string, path: string, size: number, progress: (prog
   let curl: Bun.Subprocess<"ignore", "ignore", "pipe">;
   try {
     curl = Bun.spawn(
-      ["curl", "-fsSL", "--retry", "2", "--connect-timeout", "15", "--max-time", "1800", "-o", path, url],
+      ["/usr/bin/curl", "-fsSL", "--retry", "2", "--connect-timeout", "15", "--max-time", "1800", "-o", path, url],
       { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
     );
   } catch (error) {

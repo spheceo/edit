@@ -41,8 +41,10 @@ const FILE = "reviews.json";
 export const POLL_MS = 45_000;
 /** A reviewer's notes are fixed together: this long after the last one. */
 export const SETTLE_MS = 120_000;
-/** A note claimed this long ago and never resolved may be tried again. */
+/** A note claimed this long ago and never resolved may be tried again… */
 const RETRY_MS = 30 * 60_000;
+/** …this many times in all; then it's left for the team, saying so (the audit, Oct 23: a new Opus turn every 30 minutes, forever). */
+export const MAX_ATTEMPTS = 2;
 /** Changed stretches closer than this (frames: a second) are one band. */
 const JOIN_SECONDS = 1;
 
@@ -68,6 +70,8 @@ export interface Note {
   updatedAt: number;
   /** When the agent here was set on it. */
   claimed?: number;
+  /** How many times the auto-fix was set on it (at most MAX_ATTEMPTS, then it says it gave up). */
+  attempts?: number;
   /** The agent's fix: what it changed (clip ids, and their stretch then) and its words. */
   fix?: { clips: string[]; ranges: [number, number][]; summary: string; at: number };
   /** Why the agent left it. */
@@ -384,7 +388,7 @@ export function heard(state: State, given: unknown[], projects: Set<string>): st
     const status = one.status === "done" ? "done" : "open";
     const reopened = was !== undefined && was.status === "done" && status === "open";
     const note: Note = {
-      ...(reopened ? { ...was, fix: undefined, unfixed: undefined, claimed: undefined } : was),
+      ...(reopened ? { ...was, fix: undefined, unfixed: undefined, claimed: undefined, attempts: undefined } : was),
       id,
       reviewId: String(one.reviewId ?? was?.reviewId ?? ""),
       project,
@@ -409,6 +413,7 @@ export function heard(state: State, given: unknown[], projects: Set<string>): st
     if (note.fix === undefined) delete note.fix;
     if (note.unfixed === undefined) delete note.unfixed;
     if (note.claimed === undefined) delete note.claimed;
+    if (note.attempts === undefined) delete note.attempts;
     state.notes[id] = note;
     if (note.parentId === null && note.status === "open" && (was === undefined || reopened) && projects.has(project)) fresh.add(project);
   }
@@ -422,7 +427,17 @@ export function waiting(state: State, project: string, now: number): Note[] {
     // FYI and praise are for reading, not fixing.
     .filter((note) => note.asks?.intent !== "fyi")
     .filter((note) => note.claimed === undefined || now - note.claimed > RETRY_MS)
+    .filter((note) => (note.attempts ?? 0) < MAX_ATTEMPTS)
     .sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0) || a.createdAt - b.createdAt);
+}
+
+/** Notes the auto-fix tried MAX_ATTEMPTS times without a result: left for the team. */
+export function givenUp(state: State, project: string, now: number): Note[] {
+  return Object.values(state.notes).filter(
+    (note) =>
+      note.project === project && note.parentId === null && note.status === "open" && note.unfixed === undefined && note.fix === undefined &&
+      (note.attempts ?? 0) >= MAX_ATTEMPTS && note.claimed !== undefined && now - note.claimed > RETRY_MS,
+  );
 }
 
 /** The message that sets the agent on a project's notes. */
@@ -535,22 +550,26 @@ export async function done(app: App, projectId: string, noteId: string, summary:
   if (note === undefined || note.project !== projectId) throw new Error(`no note ${noteId} on this project's review`);
   const before = checkpoints.get(projectId) ?? live.project;
   const changed = changes(before, live.project);
+  // Repack's limit is 2000 characters: what's written there is short anyway.
+  const said = summary.length > 1900 ? `${summary.slice(0, 1899)}…` : summary;
+  const fix = { ...changed, summary: said, at: Date.now() };
+  const fps = fpsOf(live.project);
+  const latest = state.shared[projectId]?.versions.reduce((most, one) => Math.max(most, one.n), 0) ?? note.version;
+  // On the review first (as feedback_answer does): kept here as done only once Repack has it,
+  // so a failed resolve leaves the note open to try again, never done here and open there.
+  await cloud.mutation("reviews:resolve", {
+    noteId,
+    version: latest + 1,
+    changedRanges: changed.ranges.map(([start, end]) => ({ startMs: Math.round((start / fps) * 1000), endMs: Math.round((end / fps) * 1000) })),
+    fixSummary: said,
+  });
   checkpoints.set(projectId, structuredClone(live.project));
-  const fix = { ...changed, summary, at: Date.now() };
   update(home, (saved) => {
     const own = saved.notes[noteId];
     if (own !== undefined) {
       own.fix = fix;
       own.status = "done";
     }
-  });
-  const fps = fpsOf(live.project);
-  const latest = state.shared[projectId]?.versions.reduce((most, one) => Math.max(most, one.n), 0) ?? note.version;
-  await cloud.mutation("reviews:resolve", {
-    noteId,
-    version: latest + 1,
-    changedRanges: changed.ranges.map(([start, end]) => ({ startMs: Math.round((start / fps) * 1000), endMs: Math.round((end / fps) * 1000) })),
-    fixSummary: summary,
   });
   return fix;
 }
@@ -799,6 +818,10 @@ export async function fixSettled(app: App, now = Date.now()): Promise<string[]> 
     if (live === null) continue;
     // Approved: nothing more to fix.
     if (state.shared[project]?.approved) continue;
+    // Tried twice with nothing to show: said on the review, for the team.
+    for (const note of givenUp(state, project, now)) {
+      await unfixed(app, project, note.id, `auto-fix gave up after ${MAX_ATTEMPTS} tries: the team will look at it`).catch((error: unknown) => diag.warn("review", `giving up on ${note.id}: ${diag.messageOf(error)}`));
+    }
     const notes = waiting(state, project, now);
     if (notes.length === 0) continue;
     const newest = Math.max(...notes.map((note) => note.createdAt), lastHeard.get(project) ?? 0);
@@ -821,7 +844,12 @@ export async function fixSettled(app: App, now = Date.now()): Promise<string[]> 
     const mine = notes.filter((note) => claimed.includes(note.id));
     // Tried now: here, or by the Mac that claimed it first.
     update(home, (saved) => {
-      for (const note of notes) if (saved.notes[note.id] !== undefined) saved.notes[note.id]!.claimed = now;
+      for (const note of notes) {
+        const own = saved.notes[note.id];
+        if (own === undefined) continue;
+        own.claimed = now;
+        if (claimed.includes(note.id)) own.attempts = (own.attempts ?? 0) + 1;
+      }
     });
     if (mine.length === 0) continue;
     checkpoints.set(project, structuredClone(live.project));

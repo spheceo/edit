@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import type { Project } from "../src/model.ts";
 import * as fs from "node:fs";
 
-import { boxStills, changes, clearOthers, fixMessage, frameNow, heard, posterSecond, read, waiting, type Note, type Version } from "../src/reviews.ts";
+import { boxStills, changes, clearOthers, fixMessage, frameNow, givenUp, heard, MAX_ATTEMPTS, posterSecond, read, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import * as tools from "../src/tools.ts";
@@ -154,4 +154,16 @@ test("a boxed note comes to the agent with its frame, the box drawn on it", asyn
   } finally {
     dir.cleanup();
   }
+});
+
+test("a note the auto-fix tried twice without a result isn't tried again: it's left for the team", () => {
+  const state = read("/nonexistent");
+  const base = { reviewId: "r", project: "p1", version: 1, ms: 1000, endMs: null, text: "x", author: "JJ", status: "open" as const, parentId: null, createdAt: 1, updatedAt: 1 };
+  state.notes.a = { ...base, id: "a", attempts: 1, claimed: 0 } as Note;
+  state.notes.b = { ...base, id: "b", attempts: MAX_ATTEMPTS, claimed: 0 } as Note;
+  const later = 31 * 60_000;
+  expect(waiting(state, "p1", later).map((note) => note.id)).toEqual(["a"]);
+  expect(givenUp(state, "p1", later).map((note) => note.id)).toEqual(["b"]);
+  // Not while its last try may still be running.
+  expect(givenUp(state, "p1", 60_000)).toEqual([]);
 });

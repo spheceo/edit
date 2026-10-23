@@ -799,6 +799,9 @@ export class Agents implements seams.AgentPanel {
       mcpServers: { edit: { type: "http", url: `http://127.0.0.1:${this.port}/mcp?project=${project}` } },
       systemPrompt: agentInstructions(live.project, "claude"),
       includePartialMessages: true,
+      // A stop for a runaway turn (a whole edit is a few hundred tool calls); a turn
+      // driven by review notes, which nobody's watching, gets a tighter one (the audit, Oct 23).
+      ...(reviewGuard.inReviewTurn(project) ? { maxTurns: REVIEW_MAX_TURNS, maxBudgetUsd: REVIEW_MAX_USD } : { maxTurns: MAX_TURNS }),
     };
     const level = chat.effort ?? "medium";
     if (claude.EFFORTS.includes(level)) options.effort = level as claude.Options["effort"];
@@ -1738,6 +1741,12 @@ export interface Transport {
 }
 
 /** Codex features Edit's agent never needs: a shell, a browser, the computer, pictures made. */
+/** The most model calls an agent turn may take: a stop for a runaway, well above a whole edit's few hundred. */
+export const MAX_TURNS = 1500;
+/** A turn fixing review notes (automatic, unwatched): its calls and its estimated cost at API prices. */
+export const REVIEW_MAX_TURNS = 250;
+export const REVIEW_MAX_USD = 75;
+
 export const CODEX_OFF = ["shell_tool", "unified_exec", "browser_use", "browser_use_external", "in_app_browser", "computer_use", "image_generation"];
 
 /**

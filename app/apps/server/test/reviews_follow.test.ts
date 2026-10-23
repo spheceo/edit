@@ -105,6 +105,12 @@ test("the reconcile finds an open client note Edit never heard, takes it in and 
     expect(said?.message).toContain("2 open notes from Marc on “Judge”");
     // Once in, it's quiet.
     expect(await reviews.reconcile(app)).toEqual([]);
+    // An approved review isn't read again (its notes get no follow-up), nor a project not here.
+    const asked = () => mock.calls("/v1/cloud/convex").filter((call) => call.json<{ path: string }>().path === "reviews:get").length;
+    const before = asked();
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ ...reviews.read(home), shared: { [id]: { reviewId: "r1", url: "https://feedback.test/r/x", versions: [{ n: 2 }], approved: { version: 2, by: "kenobi", at: 1 } }, "p-gone": { reviewId: "r2", url: "https://feedback.test/r/y", versions: [{ n: 1 }] } } }));
+    expect(await reviews.reconcile(app)).toEqual([]);
+    expect(asked()).toBe(before);
   } finally {
     process.env.EDIT_RELAY_TOKEN = "";
     cleanup();

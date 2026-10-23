@@ -752,6 +752,8 @@ export async function reconcile(app: App): Promise<string[]> {
   const projects = new Set(app.store.visible().map((summary) => summary.id));
   const found: string[] = [];
   for (const [projectId, shared] of Object.entries(read(home).shared)) {
+    // An approved review gets no follow-up (poll), nor one this person can't see: not read again every 10 minutes (the audit, Oct 23).
+    if (shared.approved || !projects.has(projectId)) continue;
     let review: { notes?: unknown[]; title?: unknown } | null;
     try {
       review = (await cloud.query("reviews:get", { sourceId: projectId })) as typeof review;

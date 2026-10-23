@@ -1090,6 +1090,11 @@ async function limited<T, R>(items: T[], limit: number, work: (item: T) => Promi
   return out;
 }
 
+/** The footage on a timeline, as the watch reads it: each sound clip's place and source. */
+function timelineOf(project: Project): string {
+  return JSON.stringify(project.clips.filter((clip) => clip.type === "video" || clip.type === "audio").map((clip) => [clip.id, clip.start, clip.duration, (clip as { media?: string }).media ?? null, (clip as { source_in?: number }).source_in ?? null]));
+}
+
 async function watchNow(app: App, projectId: string, options: WatchOptions): Promise<unknown> {
   const BACKGROUND = seams.speakers.BACKGROUND;
   const live = app.store.get(projectId);
@@ -1100,6 +1105,9 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   const sound = [...seams.subtitles.footageSound(project, 0, duration)].sort((a, b) => a.start - b.start);
   if (sound.length === 0) throw new Error("there is no footage with sound to watch");
   const setSegments = options.segments ?? setsSegments(project);
+  // What was watched, to write segments only onto the same timeline.
+  const watchedTimeline = timelineOf(project);
+  const watchedSegments = JSON.stringify(project.segments ?? []);
   // Every file's transcript at once: one after another, an edit of ten files
   // waited on the transcriber ten times over.
   const wanted = [...new Set(sound.map(clipMedia).filter((id): id is string => id !== null))].sort(compareKeys);
@@ -1554,10 +1562,15 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
       if (segment.note !== "") out.note = segment.note;
       return out;
     });
-    const [saved] = await app.store.update(projectId, "agent", (project) => {
-      project.segments = written;
+    // Only onto the timeline it watched (the audit, Oct 23: a watch of minutes wrote
+    // segments worked out from an old snapshot over edits made since).
+    const [saved, wrote] = await app.store.update(projectId, "agent", (now) => {
+      if (timelineOf(now) !== watchedTimeline || JSON.stringify(now.segments ?? []) !== watchedSegments) return false;
+      now.segments = written;
+      return true;
     });
     rev = saved.rev;
+    if (!wrote) diag.warn("watch", `${projectId}: the timeline changed while watching: its segments weren't written (watch again)`);
   } else {
     const now = app.store.get(projectId);
     if (now === null) throw new Error("no such project");

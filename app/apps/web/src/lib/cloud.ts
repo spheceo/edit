@@ -3,7 +3,7 @@
 // edits a project at a time (it holds the lock, everyone else is read-only).
 
 import { request } from "./api";
-import type { Style } from "./types";
+import type { Creator, Style } from "./types";
 
 /** A project's cloud state on this machine. */
 export interface CloudStatus {
@@ -52,6 +52,8 @@ export interface CloudProject {
     height?: number;
     subtitles?: boolean;
   } | null;
+  /** Who started it (the relay records them from their sign-in); null for projects from before. */
+  created_by?: Creator | null;
   /** Who's editing it now (a live lock), if anyone. */
   holder: string | null;
   /** This machine holds its lock. */

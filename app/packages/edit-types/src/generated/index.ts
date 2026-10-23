@@ -6,6 +6,7 @@ export type * from "./Clip";
 export type * from "./ClipColor";
 export type * from "./ClipContent";
 export type * from "./CloudMedia";
+export type * from "./Creator";
 export type * from "./Crop";
 export type * from "./DriveFile";
 export type * from "./Ease";

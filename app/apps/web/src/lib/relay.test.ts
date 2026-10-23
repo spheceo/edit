@@ -6,10 +6,13 @@ import relay, { TranscriptionBudget, type Env } from "../../../relay/src/index";
 
 /** A signed-in person's token (every permission), checked against a key of the test's own. */
 let PERSON = "";
+/** The same person's token with their name, email and Google photo. */
+let NAMED = "";
 beforeAll(async () => {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
   useKeys(createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), kid: "t1", alg: "RS256" }] }));
   PERSON = await new SignJWT({ perms: ["use", "cloud", "drive", "ai", "export"], admin: false }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
+  NAMED = await new SignJWT({ perms: ["use"], admin: false, name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
 afterAll(() => useKeys(null));
@@ -163,6 +166,24 @@ describe("relay cloud endpoints", () => {
     const [url, init] = upstream.mock.calls[0];
     expect(url).toBe("https://example.convex.cloud/api/mutation");
     expect(JSON.parse(String(init.body))).toEqual({ path: "edit:save", args: { project: "p1", token: "service-token" }, format: "json" });
+  });
+
+  it("a project's first commit records who started it from the token, never from the caller, once switched on", async () => {
+    const upstream = vi.fn(async () => Response.json({ status: "success", value: { rev: 1 } })); vi.stubGlobal("fetch", upstream);
+    const sent = () => JSON.parse(String((upstream.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body)).args;
+    const commit = { kind: "mutation", path: "edit:commitProject", args: { projectId: "p1", baseRev: 0, actor: { sub: "forged", name: "Someone Else" } } };
+    // Off (until Repack's commitProject takes it): nothing new reaches Convex, and a caller's actor never does.
+    await call("convex", commit, { token: NAMED });
+    expect(sent()).toEqual({ projectId: "p1", baseRev: 0, token: "service-token" });
+    const on = { ...env, STAMP_CREATOR: "1" } as Env;
+    await call("convex", commit, { token: NAMED, env: on });
+    expect(sent()).toEqual({ projectId: "p1", baseRev: 0, actor: { sub: "person-t", name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" }, token: "service-token" });
+    // A token without a name: its sub, and an empty name (the UI shows nothing for that).
+    await call("convex", commit, { env: on });
+    expect(sent().actor).toEqual({ sub: "person-t", name: "" });
+    // Other calls are left as they were.
+    await call("convex", { kind: "mutation", path: "edit:save", args: { actor: 1 } }, { token: NAMED, env: on });
+    expect(sent()).toEqual({ actor: 1, token: "service-token" });
   });
 
   it("passes Convex's errors on", async () => {

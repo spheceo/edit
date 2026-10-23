@@ -30,6 +30,7 @@ preview_urls = false
 # checked against this issuer's JWKS. The old shared token (CLOUD_TOKEN) was retired the same day.
 ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
 OPEN_MAPS = "0"                    # "1" would let the maps answer with no token
+STAMP_CREATOR = "1"                # a project's first commit records who started it (`actor`, from the token); Repack's edit:commitProject takes it since 906b67a (Oct 23)
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
 DAILY_BYTES_PER_IP = "288000000"   # ~20 hours (lowered Oct 22 from ~90: Oct 19–21 used ~195k credits, 13.5 hours of footage costing 62 hours of Scribe; Edit now hears a file once per set of names and keeps what it heard)

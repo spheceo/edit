@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 
 import type { App } from "./app.ts";
+import type { Creator } from "./model.ts";
 import * as diag from "./diag.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as keychain from "./keychain.ts";
@@ -47,6 +48,8 @@ export function accountsUrl(): string {
 }
 
 export interface Person {
+  /** The account's id (the token's `sub`). */
+  sub: string;
   email: string;
   name: string;
   image: string | null;
@@ -100,6 +103,13 @@ function claims(token: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** Who's signed in, as a new project records its creator (`Project::created_by`); null signed out. */
+export function creator(): Creator | null {
+  const person = state.person;
+  if (person === null || person.sub === "") return null;
+  return { sub: person.sub, name: person.name || person.email.split("@")[0] || "", ...(person.image !== null ? { picture: person.image } : {}) };
 }
 
 /** The signed-in person's access token while it's good for another half minute, else null. */
@@ -195,9 +205,10 @@ async function take(home: string, value: Tokens): Promise<void> {
   state.admin = found.admin === true;
   const user = value.user ?? {};
   state.person = {
+    sub: typeof found.sub === "string" ? found.sub : "",
     email: typeof user.email === "string" ? user.email : typeof found.email === "string" ? found.email : "",
     name: typeof user.name === "string" ? user.name : typeof found.name === "string" ? found.name : "",
-    image: typeof user.image === "string" ? user.image : null,
+    image: typeof user.image === "string" ? user.image : typeof found.picture === "string" ? found.picture : null,
   };
   state.problem = null;
   schedule(home);

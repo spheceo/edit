@@ -13,6 +13,7 @@ import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Mark } from "./Logo";
 import { SetupCard } from "./SetupCard";
+import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, spring } from "./ui";
 
@@ -555,6 +556,7 @@ function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index
                 </span>
               )}
               {card.mostlyRemote && <NotHere title="Its footage downloads when you open it" />}
+              <StartedBy by={remote?.created_by ?? project.created_by} className="ml-auto" />
             </div>
           </div>
           {(card.cloudNews || card.drive || card.notice || (state && (state.archived !== null || state.approved !== null || state.feedback > 0 || (state.complete && !state.exported)))) && (
@@ -607,6 +609,7 @@ function ProjectRow({ project, onChanged, cloudOn, status, remote, state }: Card
           {card.notice && <Notice {...card.notice} />}
           <StateChips state={state} projectId={project.id} onChanged={onChanged} />
           {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
+          <StartedBy by={remote?.created_by ?? project.created_by} className="ml-auto" />
         </div>
         <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{shortDuration(seconds)}</span>
         <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.modified_ms)}</span>
@@ -710,6 +713,7 @@ function CloudRow({ project }: { project: CloudProject }) {
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <div className="truncate font-medium">{project.name}</div>
         {project.holder && <CloudBadge editor={project.holder} />}
+        <StartedBy by={project.created_by} className="ml-auto" />
       </div>
       <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{seconds !== null ? shortDuration(seconds) : ""}</span>
       <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.updated_ms)}</span>
@@ -763,6 +767,7 @@ function CloudCard({ project, index, onChanged, big = false }: { project: CloudP
               <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[(summary.style as Style | undefined) ?? "bodycam"] ?? STYLE_COLOURS.bodycam }} />
               <span className="truncate">{[style, seconds !== null ? shortDuration(seconds) : null, `${ago(project.updated_ms)} by ${project.updated_by}`].filter(Boolean).join(" · ")}</span>
               <NotHere title="Not on this Mac yet: opening it downloads it" />
+              <StartedBy by={project.created_by} className="ml-auto" />
             </div>
           </div>
           {project.holder && (

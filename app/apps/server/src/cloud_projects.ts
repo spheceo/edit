@@ -43,7 +43,7 @@ import * as diag from "./diag.ts";
 import { crashed, isBug } from "./guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
-import type { Project } from "./model.ts";
+import type { Creator, Project } from "./model.ts";
 import { isFile, join } from "./paths.ts";
 import { duration } from "./project.ts";
 import * as relay from "./relay.ts";
@@ -579,7 +579,7 @@ export class Cloud implements CloudHook {
       return;
     }
     if (meta !== null && meta.rev > this.savedRev(id) && !this.dirty(id)) {
-      const project = await remote.download(meta.bodyUrl);
+      const project = withCreator(await remote.download(meta.bodyUrl), meta);
       // Asked again with nothing awaited before the take: a save that landed
       // here during the download (the lock was already ours) isn't written
       // over; the next push meets the newer version and keeps both.
@@ -841,6 +841,23 @@ interface Meta {
   bodyUrl: string;
   /** Who holds a live lease (expired ones are dropped). */
   holder: string | null;
+  /** Who started it, as Convex keeps it (from the relay's verified token); null for projects from before. */
+  createdBy: Creator | null;
+}
+
+/** Convex's `createdBy` as a project's `created_by`; null when it isn't one. */
+export function creatorOf(value: unknown): Creator | null {
+  const sub = field(value, "sub");
+  const name = field(value, "name");
+  if (typeof sub !== "string" || sub === "" || typeof name !== "string") return null;
+  const picture = field(value, "picture");
+  return typeof picture === "string" && picture !== "" ? { sub, name, picture } : { sub, name };
+}
+
+/** The cloud's body with who started it, from Convex, when the body itself doesn't say (started before Edit recorded it). */
+function withCreator(project: Project, meta: Meta): Project {
+  if ((project.created_by === undefined || project.created_by === null) && meta.createdBy !== null) project.created_by = meta.createdBy;
+  return project;
 }
 
 export const remote = {
@@ -876,6 +893,7 @@ export const remote = {
       rev: asU64(field(answer, "rev")) ?? 0,
       bodyUrl: typeof bodyUrl === "string" ? bodyUrl : "",
       holder: liveHolder(field(answer, "lock")),
+      createdBy: creatorOf(field(answer, "createdBy")),
     };
   },
 
@@ -1175,7 +1193,7 @@ async function pull(app: App, cloudProjects: Cloud, id: string): Promise<void> {
     } else {
       let project: Project;
       try {
-        project = await remote.download(meta.bodyUrl);
+        project = withCreator(await remote.download(meta.bodyUrl), meta);
       } catch (error) {
         if (error instanceof ConvexFailure || isBug(error)) throw error;
         throw ConvexFailure.relay(diag.messageOf(error));
@@ -1402,7 +1420,7 @@ async function download(app: App, cloudProjects: Cloud, id: string): Promise<voi
   let fetched: [Project, number] | null;
   try {
     const meta = await remote.get(id);
-    fetched = meta === null ? null : [await remote.download(meta.bodyUrl), meta.rev];
+    fetched = meta === null ? null : [withCreator(await remote.download(meta.bodyUrl), meta), meta.rev];
   } catch (error) {
     if (isBug(error)) throw error;
     cloudProjects.forget(id);
@@ -1527,6 +1545,8 @@ export async function list(app: App): Promise<Record<string, unknown>> {
       holder: holderNow,
       id,
       local: validId(id) && app.store.get(id) !== null,
+      // Who started it, from the relay's verified token (null for projects from before).
+      created_by: creatorOf(field(item, "createdBy")),
       name: field(item, "name"),
       rev: field(item, "rev"),
       summary: field(item, "summary"),

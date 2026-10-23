@@ -30,6 +30,7 @@ import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { missingMedia, UpdateError } from "./store.ts";
 import * as archive from "./archive.ts";
+import * as avatars from "./avatars.ts";
 import * as covers from "./covers.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
@@ -68,6 +69,7 @@ export function buildRouter(): Router<App> {
   writerHandoff.routes(router);
   archive.routes(router);
   covers.routes(router);
+  avatars.routes(router);
   seams.voice.routes(router);
   router
     .post("/api/diagnostics/client", clientLog)

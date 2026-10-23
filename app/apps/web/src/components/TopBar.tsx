@@ -11,11 +11,13 @@ import { AgentMark } from "./AgentPanel";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Mark } from "./Logo";
+import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton } from "./ui";
 
 export function TopBar({ onExport }: { onExport: () => void }) {
   const name = useEditor((state) => state.project?.name ?? "");
+  const createdBy = useEditor((state) => state.project?.created_by);
   const down = useConnection((state) => state.down);
   const agentActive = useEditor((state) => state.agentActive > 0);
   const showAgent = useEditor((state) => state.showAgent);
@@ -29,6 +31,7 @@ export function TopBar({ onExport }: { onExport: () => void }) {
       </IconButton>
       <Mark size={20} />
       <NameField value={name} />
+      <StartedBy by={createdBy} size={22} />
       <History />
       <SyncState />
       {/* Only worth a word when the server is away. */}

@@ -31,7 +31,8 @@ export interface AuthEnv {
   OPEN_MAPS?: string;
 }
 
-export type Caller = { kind: "person"; sub: string; perms: string[]; admin: boolean } | { kind: "open" };
+/** A person as their token names them (name, email and Google photo when the token carries them). */
+export type Caller = { kind: "person"; sub: string; perms: string[]; admin: boolean; name?: string; email?: string; picture?: string } | { kind: "open" };
 
 const ISSUER = "https://accounts.spheceo.com";
 /** Allowed clock skew between the accounts site and here (the contract's 60 s). */
@@ -74,7 +75,15 @@ export async function caller(request: Request, env: AuthEnv): Promise<Caller | n
     const { payload } = await jwtVerify(token, keysOf(env), { issuer: issuer(env), audience: "edit", clockTolerance: SKEW_SECONDS, algorithms: ["RS256"] });
     if (typeof payload.sub !== "string" || payload.sub === "" || typeof payload.exp !== "number") return null;
     const perms = Array.isArray(payload.perms) ? payload.perms.filter((one): one is string => typeof one === "string") : [];
-    return { kind: "person", sub: payload.sub, perms, admin: payload.admin === true };
+    const text = (value: unknown) => (typeof value === "string" && value !== "" ? value : undefined);
+    const found: Caller = { kind: "person", sub: payload.sub, perms, admin: payload.admin === true };
+    const name = text(payload.name);
+    const email = text(payload.email);
+    const picture = text(payload.picture);
+    if (name !== undefined) found.name = name;
+    if (email !== undefined) found.email = email;
+    if (picture !== undefined && picture.startsWith("https://")) found.picture = picture;
+    return found;
   } catch {
     return null;
   }

@@ -25,7 +25,7 @@
  *   /v1/cloud/ai/chat               an AI Gateway chat completion, passed through with the relay's
  *                                   AI_GATEWAY_API_KEY (the footage watcher); the gateway's answer as it is
  */
-import { allow, type AuthEnv, type Permission } from "./auth";
+import { allow, type AuthEnv, type Caller, type Permission } from "./auth";
 import { cancelJob, driveJob, googleSignIn, jobStatus, type JobsEnv } from "./jobs";
 import { exportRoute, type ModalEnv } from "./exports";
 
@@ -42,6 +42,8 @@ export interface CloudEnv extends JobsEnv, ModalEnv {
   CONVEX_SERVICE_TOKEN?: string;
   /** Vercel's AI Gateway, for the footage watcher (/v1/cloud/ai/chat). */
   AI_GATEWAY_API_KEY?: string;
+  /** "1": a project's first commit carries who started it (`actor`, from the token); Repack's `edit:commitProject` keeps it as `createdBy`. */
+  STAMP_CREATOR?: string;
 }
 
 const HOUR = 3600;
@@ -86,7 +88,7 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
     return json(400, { error: "Send a JSON object." });
   }
   const route = url.pathname.slice("/v1/cloud/".length);
-  if (route === "convex") return convex(body, env);
+  if (route === "convex") return convex(body, env, found);
   if (route === "google/token") {
     try {
       return json(200, await googleSignIn(env));
@@ -376,7 +378,20 @@ export const unescapeXml = (text: string) => text
  * Calls an `edit:` function (or a `reviews:` one, as Edit, or one of
  * Writer's script reads) with the service token added to its args.
  */
-async function convex(body: Record<string, unknown>, env: CloudEnv): Promise<Response> {
+/**
+ * Who started a project, for `edit:commitProject` (Convex keeps it on the
+ * row it creates and never changes it): always the verified token's person,
+ * never what the caller sent. Null for no person.
+ */
+export function actorOf(found: Caller): Record<string, string> | null {
+  if (found.kind !== "person") return null;
+  const actor: Record<string, string> = { sub: found.sub, name: found.name ?? found.email?.split("@")[0] ?? "" };
+  if (found.email !== undefined) actor.email = found.email;
+  if (found.picture !== undefined) actor.picture = found.picture;
+  return actor;
+}
+
+async function convex(body: Record<string, unknown>, env: CloudEnv, found: Caller): Promise<Response> {
   const kind = body.kind;
   if (typeof kind !== "string" || !CONVEX_KINDS.has(kind)) return json(400, { error: "kind must be query, mutation or action." });
   if (typeof body.path !== "string" || !callable(body.path, kind)) {
@@ -385,6 +400,12 @@ async function convex(body: Record<string, unknown>, env: CloudEnv): Promise<Res
   if (body.args !== undefined && !isObject(body.args)) return json(400, { error: "args must be an object." });
   // A review is always Edit's from here, whatever the caller says.
   if (REVIEWS_PATH.test(body.path)) body.args = { ...(body.args as object | undefined), app: "edit" };
+  // Who started a project comes from the token, never the caller.
+  if (body.path === "edit:commitProject") {
+    const { actor: _sent, ...args } = (body.args ?? {}) as Record<string, unknown>;
+    const actor = env.STAMP_CREATOR === "1" ? actorOf(found) : null;
+    body.args = actor === null ? args : { ...args, actor };
+  }
   if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) return json(503, { error: "Convex is not configured on the relay yet." });
   let answer: Response;
   try {

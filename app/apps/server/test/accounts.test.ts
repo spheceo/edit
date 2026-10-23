@@ -12,6 +12,7 @@ import type { App } from "../src/app.ts";
 import * as relay from "../src/relay.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
 import * as windowFocus from "../src/window_focus.ts";
+import { fixtureHome } from "./helpers/home.ts";
 
 const dir = fs.mkdtempSync(join(os.tmpdir(), "edit-accounts-"));
 const app = { store: { home: join(dir, "home") }, port: 7799 } as unknown as App;
@@ -55,7 +56,7 @@ beforeAll(() => {
         const challenge = challenges.get(body.code ?? "");
         const sent = createHash("sha256").update(body.code_verifier ?? "").digest("base64url");
         if (challenge === undefined || challenge !== sent || body.redirect_uri !== "http://127.0.0.1:7799/callback") return Response.json({ error: "invalid_grant" }, { status: 400 });
-        return Response.json({ access_token: jwt({ perms: ["use", "cloud"], email: "someone@gmail.com" }), token_type: "Bearer", expires_in: 3600, refresh_token: "refresh-1-aaaaaaaa", user: { email: "someone@gmail.com", name: "Someone", image: null } });
+        return Response.json({ access_token: jwt({ perms: ["use", "cloud"], email: "someone@gmail.com", name: "Some One", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" }), token_type: "Bearer", expires_in: 3600, refresh_token: "refresh-1-aaaaaaaa", user: { email: "someone@gmail.com", name: "Someone", image: null } });
       }
       if (body.grant_type === "urn:ietf:params:oauth:grant-type:device_code") {
         const n = (polls.get(body.device_code ?? "") ?? 0) + 1;
@@ -218,4 +219,26 @@ test("the browser lands on a calm page: the code out of the address bar, Edit's 
   const headless = await (await visit("code-6")).text();
   expect(headless).toContain("You can go back to Edit.");
   expect(headless).not.toContain("window.close()");
+});
+
+test("a project made while signed in records who started it; signed out, nobody", async () => {
+  const fixture = fixtureHome("accounts-creator");
+  try {
+    fs.writeFileSync(join(dir, "keychain.json"), JSON.stringify({}));
+    const authorize = new URL(accounts.begin(app));
+    challenges.set("code-4", authorize.searchParams.get("code_challenge")!);
+    await accounts.finish(app, new URLSearchParams({ code: "code-4", state: authorize.searchParams.get("state")! }));
+    const by = { sub: "person-1", name: "Someone", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" };
+    expect(accounts.creator()).toEqual(by);
+    const made = fixture.store.createAs("Trial", "bodycam", { width: 1920, height: 1080, fps: 30 });
+    expect(made.project.created_by).toEqual(by);
+    expect(fixture.store.list().find((one) => one.id === made.project.id)?.created_by).toEqual(by);
+    await accounts.signOut(app);
+    expect(accounts.creator()).toBeNull();
+    expect(fixture.store.createAs("Later", "bodycam", { width: 1920, height: 1080, fps: 30 }).project.created_by).toBeUndefined();
+    // Still the first project's, signed out or not.
+    expect(fixture.store.get(made.project.id)?.project.created_by).toEqual(by);
+  } finally {
+    fixture.cleanup();
+  }
 });

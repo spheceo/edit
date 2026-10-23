@@ -15,6 +15,7 @@
 
 import * as fs from "node:fs";
 
+import { creator } from "./accounts.ts";
 import * as diag from "./diag.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import * as mediaDrive from "./media_drive/layout.ts";
@@ -368,6 +369,8 @@ export class Store {
     const id = `p${nowMs()}-${nextFileId()}`;
     const trimmed = name.trim() === "" ? "Untitled" : name.trim();
     const project = newProject(id, trimmed, settings, style);
+    const by = creator();
+    if (by !== null) project.created_by = by;
     const live = this.write(id, 1, project);
     this.projects.set(id, live);
     this.cloudHook?.created(id);
@@ -643,6 +646,7 @@ function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
   };
   if (isSubtitled(project)) summary.subtitles = true;
   if (project.drive !== undefined && project.drive !== null) summary.drive = project.drive as DriveFile;
+  if (project.created_by !== undefined && project.created_by !== null) summary.created_by = project.created_by;
   const missing = missingMedia(project);
   const used = usedMedia(project).length;
   if (used > 0) summary.media_used = used;

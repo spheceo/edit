@@ -4,6 +4,7 @@
 
 import type {
   Clip,
+  Creator,
   DriveFile,
   Glitch,
   Glow,
@@ -16,6 +17,7 @@ import type {
 } from "@edit/types";
 
 export type {
+  Creator,
   Rgba,
   Settings,
   MediaKind,
@@ -183,6 +185,8 @@ export interface ProjectSummary {
   remote?: number;
   /** The frame its card shows: plain footage running (no cut-in, graphic or transition on screen) whose file is here; null when there's none. */
   cover_frame?: number | null;
+  /** Who started it (`Project::created_by`); absent for projects from before. */
+  created_by?: Creator;
 }
 
 export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";

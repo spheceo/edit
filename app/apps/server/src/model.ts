@@ -3,13 +3,14 @@
 // fields it may leave out are optional), plus the server's own below.
 // Timeline times are integer frames; source_in is seconds.
 
-import type { Clip, DriveFile, Style } from "@edit/types";
+import type { Clip, Creator, DriveFile, Style } from "@edit/types";
 
 export type {
   Blur,
   Chapter,
   Clip,
   ClipColor,
+  Creator,
   Crop,
   DriveFile,
   Ease,
@@ -109,6 +110,8 @@ export interface ProjectSummary {
   remote?: number;
   /** The frame its card shows: plain footage running (no cut-in, graphic or transition on screen) whose file is here; null when there's none. */
   cover_frame?: number | null;
+  /** Who started it (`Project::created_by`); absent for projects from before. */
+  created_by?: Creator;
 }
 
 export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";

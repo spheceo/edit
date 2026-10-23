@@ -23,6 +23,7 @@ import {
   takeOver,
   writePrivate,
   list,
+  creatorOf,
 } from "../src/cloud_projects.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
 import type { Project } from "../src/model.ts";
@@ -365,6 +366,26 @@ test("a conflict keeps this machine's changes as a conflicted copy and takes the
     expect(said).toMatchObject({ id, copy: { id: copy!.id, name: "Case (my edit) (conflicted copy)" } });
     // Nothing of theirs was overwritten.
     expect(mock.cloud.convex.body(id)!.name).toBe("Case (their edit)");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a project from the cloud says who started it: its own record, else Convex's (from before Edit kept one)", async () => {
+  const { store, projects, cleanup } = setup("cloud-creator");
+  try {
+    expect(creatorOf({ sub: "s1", name: "Kenobi", picture: "https://lh3.googleusercontent.com/a/k=s96-c" })).toEqual({ sub: "s1", name: "Kenobi", picture: "https://lh3.googleusercontent.com/a/k=s96-c" });
+    expect(creatorOf({ sub: "s1", name: "Kenobi" })).toEqual({ sub: "s1", name: "Kenobi" });
+    for (const nobody of [null, {}, { sub: "", name: "x" }, { sub: "s1" }, "s1"]) expect(creatorOf(nobody)).toBeNull();
+    const id = store.create("Case", SETTINGS_1080).project.id;
+    const body = structuredClone(store.get(id)!.project) as unknown as Record<string, unknown>;
+    delete body.created_by;
+    mock.cloud.convex.saveElsewhere({ ...body, name: "kenobi's" }, "kenobi", { sub: "s1", name: "Kenobi", email: "kenobi@example.com" });
+    projects.projects.set(id, new Entry({ rev: 0, dirty: false }));
+    await store.update(id, "agent", (project) => void (project.name += " + agent"));
+    expect(store.get(id)!.project).toMatchObject({ name: "kenobi's + agent", created_by: { sub: "s1", name: "Kenobi" } });
+    // Never the email.
+    expect(JSON.stringify(store.get(id)!.project)).not.toContain("kenobi@");
   } finally {
     cleanup();
   }

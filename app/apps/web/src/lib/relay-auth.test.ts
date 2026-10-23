@@ -48,10 +48,11 @@ describe("relay sign-in gate", () => {
     useKeys(createLocalJWKSet({ keys: [jwk] }));
     const logged = vi.spyOn(console, "log").mockImplementation(() => {});
     const found = await allow(asked(await token()), env(), "use", "transcribe");
-    expect(found).toEqual({ kind: "person", sub: "person-1", perms: ["use", "cloud"], admin: false });
+    expect(found).toEqual({ kind: "person", sub: "person-1", perms: ["use", "cloud"], admin: false, name: "Someone", email: "someone@gmail.com" });
     const line = String(logged.mock.calls[0]?.[0]);
     expect(JSON.parse(line)).toEqual({ route: "transcribe", who: "person-1" });
     expect(line).not.toContain("eyJ");
+    expect(line).not.toContain("someone@");
   });
 
   it("refuses a person without the permission (403), and a bad, expired or other app's token (401)", async () => {

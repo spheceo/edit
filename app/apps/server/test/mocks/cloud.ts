@@ -274,6 +274,8 @@ interface ProjectRow {
   updatedAt: number;
   updatedBy: string;
   summary: unknown;
+  /** Who started it (Repack's `createdBy`: the relay's `actor` on the first commit, never changed). */
+  createdBy?: { sub: string; name: string; email?: string; picture?: string } | null;
 }
 
 interface LockRow {
@@ -328,7 +330,7 @@ export class ConvexMock {
   }
 
   /** Saves `project` as the next rev, as another machine's commit would. */
-  saveElsewhere(project: Record<string, unknown>, holder: string): number {
+  saveElsewhere(project: Record<string, unknown>, holder: string, createdBy: ProjectRow["createdBy"] = null): number {
     const id = String(project.id);
     const body = this.store(new TextEncoder().encode(JSON.stringify(project)), "application/json");
     const row = this.projects.get(id);
@@ -342,6 +344,7 @@ export class ConvexMock {
       updatedAt: this.now(),
       updatedBy: holder,
       summary: null,
+      createdBy: row?.createdBy ?? createdBy,
     });
     return rev;
   }
@@ -380,6 +383,8 @@ export class ConvexMock {
       updatedAt: row.updatedAt,
       updatedBy: row.updatedBy,
       summary: row.summary,
+      // As Repack's card(): no email.
+      createdBy: row.createdBy ? { sub: row.createdBy.sub, name: row.createdBy.name, ...(row.createdBy.picture ? { picture: row.createdBy.picture } : {}) } : null,
       lock: lock === undefined ? null : { holder: lock.holder, until: lock.until },
     };
   }
@@ -425,6 +430,8 @@ export class ConvexMock {
           updatedAt: this.now(),
           updatedBy: args.holder,
           summary: args.summary ?? null,
+          // Set when the row is made, never after.
+          createdBy: row !== undefined ? (row.createdBy ?? null) : ((args.actor as ProjectRow["createdBy"]) ?? null),
         });
         return { rev: rev + 1 };
       }

@@ -60,6 +60,24 @@ pub struct Project {
     /// server; empty for projects from before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub people: Vec<Person>,
+    /// Who started it: the signed-in account at creation, never changed after.
+    /// None for projects from before (and ones made signed out).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub created_by: Option<Creator>,
+}
+
+/// The account that started a project (accounts.spheceo.com).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Creator {
+    /// The account's id (the token's `sub`).
+    pub sub: String,
+    pub name: String,
+    /// Their Google photo's address; shown through the server (`/api/avatar`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub picture: Option<String>,
 }
 
 /// Someone whose words are on screen.
@@ -1658,6 +1676,7 @@ impl Project {
             drive: None,
             markers: Vec::new(),
             people: Vec::new(),
+            created_by: None,
         };
         for kind in [
             TrackKind::Video,

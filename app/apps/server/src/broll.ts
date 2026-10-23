@@ -539,8 +539,10 @@ export async function waitForSmoothing(projectId: string, limitMs: number): Prom
 /** A URL's answer as text (curl -sS --max-time 30, so any status's body). */
 async function fetchText(url: string): Promise<string> {
   try {
+    // The relay's geocoding asks for this Edit's sign-in; other pages get none.
+    const signed = url.startsWith(`${relay.url()}/`) ? relay.authHeaders() : {};
     const response = await fetch(url, {
-      headers: { "user-agent": USER_AGENT },
+      headers: { "user-agent": USER_AGENT, ...signed },
       signal: AbortSignal.timeout(30_000),
     });
     return await response.text();
@@ -832,7 +834,10 @@ async function renderMap(
 ): Promise<[Uint8Array, Json]> {
   const browser = chrome();
   if (browser === null) throw new Error("map views need Google Chrome (or Chromium) installed");
-  const text = rustJson(config);
+  // The page fetches its tiles from Edit's own server, which passes them on
+  // with this Edit's sign-in; the config the map's key is made of keeps the
+  // relay's own address, so maps rendered before stay cached.
+  const text = rustJson({ ...config, relay: `http://${pageHost(app)}` });
   const token = fingerprint([text, `${performance.now()}-${tokens++}`, String(process.pid)]);
   const done = new Once<MapShot>();
   const page = MAP_PAGE.replaceAll("__CONFIG__", () => text.replaceAll("</", "<\\/"));

@@ -6,6 +6,7 @@
 
 import * as fs from "node:fs";
 
+import * as accounts from "./accounts.ts";
 import { messageOf } from "./diag.ts";
 import { serdeParse } from "./rust.ts";
 
@@ -30,8 +31,16 @@ const BUILT_IN: string | null = typeof EDIT_CLOUD_TOKEN === "string" && EDIT_CLO
 /** A token saved on this Mac (`cloud_projects`, `<home>/cloud.json`; from before it was built in, or `edit cloud`). */
 let savedToken: string | null = null;
 
-/** `EDIT_RELAY_TOKEN`, when set and not empty, else the saved token, else the built-in one. */
+/**
+ * The signed-in person's access token (accounts.ts), else, while the team
+ * moves to signing in, `EDIT_RELAY_TOKEN`, the saved token or the built-in one.
+ */
 export function token(): string | null {
+  return accounts.accessToken() ?? sharedToken();
+}
+
+/** The shared token every Edit had before signing in: `EDIT_RELAY_TOKEN`, the saved one, the built-in one. */
+export function sharedToken(): string | null {
   return envToken() ?? savedToken ?? BUILT_IN;
 }
 
@@ -98,6 +107,30 @@ export function failure(code: string, answer: Uint8Array | string, feature: stri
   message ??= [...text].slice(0, 300).join("");
   if (code === "404" && message === "not found") return `Edit's relay doesn't do ${feature} yet (it needs deploying).`;
   return `${message} (${code})`;
+}
+
+/**
+ * The map page's tiles (`GET /v1/3dtiles/…` on Edit's own server, where
+ * the page fetches them): passed on to the relay with this Edit's token, so
+ * headless Chrome never holds one and a long render outlives the hour a
+ * token lasts.
+ */
+export async function forwardTiles(request: Request, from: URL): Promise<Response> {
+  let answer: Response;
+  try {
+    answer = await fetch(`${url()}${from.pathname}${from.search}`, {
+      headers: { ...authHeaders(), accept: request.headers.get("accept") ?? "*/*" },
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ error: `${UNREACHABLE}: ${messageOf(error)}` }), { status: 502, headers: { "content-type": "application/json" } });
+  }
+  const headers = new Headers();
+  for (const name of ["content-type", "content-length", "cache-control", "etag"]) {
+    const value = answer.headers.get(name);
+    if (value !== null) headers.set(name, value);
+  }
+  return new Response(answer.body, { status: answer.status, headers });
 }
 
 /** Sends one request to the relay; a network failure is `UNREACHABLE: <why>`. */

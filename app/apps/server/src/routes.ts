@@ -3,6 +3,7 @@
 // frames, exports) and `buildRouter`, which puts them together with every
 // package's routes.
 
+import * as accounts from "./accounts.ts";
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
@@ -61,6 +62,7 @@ export function buildRouter(): Router<App> {
   seams.cloudProjects.routes(router);
   // Before /api/projects/{id}: /api/projects/status is its own.
   reviews.routes(router);
+  accounts.routes(router);
   writerHandoff.routes(router);
   archive.routes(router);
   covers.routes(router);

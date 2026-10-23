@@ -12,6 +12,7 @@ import * as diag from "../diag.ts";
 import { isBug, panicResponse } from "../guard.ts";
 import * as mcp from "../mcp/index.ts";
 import * as patches from "../patch.ts";
+import * as relay from "../relay.ts";
 import { staticAsset } from "./assets.ts";
 import { compressed } from "./compress.ts";
 import { ApiError, notFound, text } from "./errors.ts";
@@ -103,6 +104,9 @@ export async function respond(
         response = answer === undefined ? undefined : await compressed(request, answer);
       } else if (match.kind === "method") {
         response = new Response(null, { status: 405, headers: { allow: match.allowed.join(",") } });
+      } else if (method === "GET" && url.pathname.startsWith("/v1/3dtiles/")) {
+        // The map page's tiles, through the relay with this Edit's sign-in.
+        response = await relay.forwardTiles(request, url);
       } else if (method === "GET" || method === "HEAD") {
         response = await compressed(request, staticAsset(url.pathname), url.pathname);
       } else {

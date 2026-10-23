@@ -6,6 +6,7 @@
 import type { Server } from "bun";
 import * as fs from "node:fs";
 
+import * as accounts from "./accounts.ts";
 import { createApp, hostname, type App } from "./app.ts";
 import { pauseForExports, setListening } from "./broll.ts";
 import { startCleaning } from "./cache_cleanup.ts";
@@ -174,6 +175,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   agentHooks.unfinished = (project) => unfinishedNote(app, project);
   seams.speakers.watch(app);
   // Cloud projects (on with the built-in token): sync, locks, and letting them go on the way out.
+  // Signed in before: the access token renewed quietly, before the cloud's first call.
+  optional("accounts", () => accounts.start(app));
   optional("cloud", () => seams.cloudProjects.start(app));
   // Repack reviews of exports: their notes followed, and fixed by the agent once they settle.
   optional("review", () => reviews.start(app));

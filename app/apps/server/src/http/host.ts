@@ -33,6 +33,11 @@ export function checkHost(request: Request, allowed: string[]): Response | null 
   if (!(allowed.includes(name) || name.endsWith(".localhost"))) {
     return text(`host ${name} is not allowed; set EDIT_HOSTS`, 403);
   }
+  // The sign-in's loopback redirect (accounts.ts, RFC 8252) is a top-level
+  // GET from accounts.spheceo.com: cross-site by nature. It's safe to let in:
+  // it only takes the `state` of a sign-in this server started, with a
+  // one-use code that's useless without the PKCE verifier kept here.
+  if (request.method === "GET" && new URL(request.url).pathname === "/callback") return null;
   const origin = request.headers.get("origin");
   if (origin !== null && !sameOrigin(origin, host)) return text("cross-origin requests are not allowed", 403);
   if (request.headers.get("sec-fetch-site") === "cross-site") return text("cross-site requests are not allowed", 403);

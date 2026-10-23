@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 
+import * as accounts from "../src/accounts.ts";
 import type { App } from "../src/app.ts";
 import { timings } from "../src/diag.ts";
 import { mapAssets, staticAsset, useAssets } from "../src/http/assets.ts";
@@ -146,6 +147,38 @@ test("the host check turns away rebinding and cross-site requests", async () => 
     expect([crossSite.status, await crossSite.text()]).toEqual([403, "cross-site requests are not allowed"]);
     const ok = await asked({ headers: { origin: "http://localhost:7700" } });
     expect([ok.status, ok.headers.get("x-frame-options")]).toEqual([200, "DENY"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the sign-in's redirect back from accounts.spheceo.com gets through the cross-site guard, and nothing else does", async () => {
+  const { app, cleanup } = fixtureHome("http-callback");
+  try {
+    const routes = router();
+    accounts.routes(routes);
+    // What Chrome sends on the top-level redirect from the accounts site.
+    const chrome = {
+      "sec-fetch-site": "cross-site",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-dest": "document",
+      "sec-fetch-user": "?1",
+      referer: "https://accounts.spheceo.com/",
+    };
+    const back = (await respond(app, routes, request("/callback?code=c1&state=s1", { headers: chrome, host: "127.0.0.1:7700" }), null))!;
+    // Through the guard to the sign-in, which turns away a state it didn't start.
+    expect(back.status).toBe(400);
+    expect(await back.text()).toContain("isn't the one Edit started");
+    const nullOrigin = (await respond(app, routes, request("/callback?code=c1&state=s1", { headers: { ...chrome, origin: "null" }, host: "127.0.0.1:7700" }), null))!;
+    expect(nullOrigin.status).toBe(400);
+    // The same headers anywhere else, or a POST to /callback, still refused.
+    const other = (await respond(app, routes, request("/api/projects/p1", { headers: chrome }), null))!;
+    expect([other.status, await other.text()]).toEqual([403, "cross-site requests are not allowed"]);
+    const posted = (await respond(app, routes, request("/callback", { method: "POST", headers: chrome }), null))!;
+    expect(posted.status).toBe(403);
+    // A host this server doesn't answer to is refused even there.
+    const rebound = (await respond(app, routes, request("/callback?code=c1&state=s1", { headers: chrome, host: "evil.example:7700" }), null))!;
+    expect(rebound.status).toBe(403);
   } finally {
     cleanup();
   }

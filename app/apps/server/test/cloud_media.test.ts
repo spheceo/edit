@@ -387,7 +387,7 @@ test("exports read the originals through presigned URLs, share the proxy's wavef
     const [out, originals] = await cloudMedia.forExport(project, 0, 30, cache);
     const url = out.media[0]!.path;
     expect(url.startsWith(`${mock.url}/r2/edit/originals/sha256/aa/clip.mov?`)).toBe(true);
-    expect(mock.calls("/v1/cloud/r2/url").at(-1)!.json()).toEqual({ key: "edit/originals/sha256/aa/clip.mov", method: "GET", expires: 86400 });
+    expect(mock.calls("/v1/cloud/r2/url").at(-1)!.json()).toEqual({ key: "edit/originals/sha256/aa/clip.mov", method: "GET", expires: 21600 });
     // Its own file is here: used as it is.
     expect(out.media[1]!.path).toBe(sound);
     expect(project.media[0]!.path).toBe(proxy);

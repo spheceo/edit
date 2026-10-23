@@ -1408,8 +1408,8 @@ export async function forExport(project: Project, start: number, end: number, ca
   if (!cloud.enabled()) throw new Error("this edit's footage is in the cloud: exporting it needs the cloud: sign in to Edit");
   const urls = new Map<string, string>();
   for (const [mediaId, key] of needed) {
-    // Long enough for any export.
-    const url = await getUrl(key, 24 * HOUR);
+    // Long enough for any export (the relay's most for footage).
+    const url = await getUrl(key, 6 * HOUR);
     urls.set(mediaId, url);
     const media = out.media.find((item) => item.id === mediaId);
     if (media !== undefined) media.path = url;

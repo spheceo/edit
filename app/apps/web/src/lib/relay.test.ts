@@ -8,11 +8,19 @@ import relay, { TranscriptionBudget, type Env } from "../../../relay/src/index";
 let PERSON = "";
 /** The same person's token with their name, email and Google photo. */
 let NAMED = "";
+/** Kinds of video (contract v2): a subtitler, a bodycam editor (the same person-t), an admin. */
+let SUBS = "";
+let EDITOR = "";
+let ADMIN = "";
 beforeAll(async () => {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
   useKeys(createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), kid: "t1", alg: "RS256" }] }));
   PERSON = await new SignJWT({ perms: ["use", "cloud", "drive", "ai", "export"], admin: false }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
   NAMED = await new SignJWT({ perms: ["use"], admin: false, name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
+  const sign = (claims: Record<string, unknown>, sub = "person-t") => new SignJWT(claims).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject(sub).setIssuedAt().setExpirationTime("1h").sign(privateKey);
+  SUBS = await sign({ perms: ["use", "video.subtitles"], admin: false }, "person-s");
+  EDITOR = await sign({ perms: ["use", "edit.bodycam", "video.subtitles"], admin: false });
+  ADMIN = await sign({ perms: ["use"], admin: true }, "person-a");
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
 afterAll(() => useKeys(null));
@@ -137,11 +145,14 @@ describe("relay cloud endpoints", () => {
     const get = await answer({ key: "edit/test/a b.mp4" });
     expect(get.origin).toBe("https://account.r2.cloudflarestorage.com");
     expect(get.pathname).toBe("/bucket/edit/test/a%20b.mp4");
-    expect(get.searchParams.get("X-Amz-Expires")).toBe(String(6 * 3600));
+    expect(get.searchParams.get("X-Amz-Expires")).toBe("3600");
     expect(get.searchParams.get("X-Amz-Credential")).toMatch(/^AKID\/\d{8}\/auto\/s3\/aws4_request$/);
     expect(get.href).not.toContain("SECRET");
-    expect((await answer({ key: "edit/a", method: "PUT" })).searchParams.get("X-Amz-Expires")).toBe("3600");
-    expect((await answer({ key: "edit/a", expires: 30 * 86400 })).searchParams.get("X-Amz-Expires")).toBe(String(7 * 86400));
+    expect((await answer({ key: "edit/originals/sha256/ab/a.mp4", method: "PUT" })).searchParams.get("X-Amz-Expires")).toBe("3600");
+    // At most an hour (the audit, Oct 23: links lasted 7 days); a GET of footage up to 6 h, for FFmpeg reading a whole original.
+    expect((await answer({ key: "edit/a", expires: 30 * 86400 })).searchParams.get("X-Amz-Expires")).toBe("3600");
+    expect((await answer({ key: "edit/originals/drive/f1/a.mp4", expires: 30 * 86400 })).searchParams.get("X-Amz-Expires")).toBe(String(6 * 3600));
+    expect((await answer({ key: "edit/originals/drive/f1/a.mp4", method: "PUT", expires: 30 * 86400 })).searchParams.get("X-Amz-Expires")).toBe("3600");
     expect((await call("r2/url", { key: "edit/a", method: "DELETE" })).status).toBe(400);
     expect((await call("r2/url", { key: "edit/a", expires: -1 })).status).toBe(400);
   });
@@ -161,15 +172,15 @@ describe("relay cloud endpoints", () => {
       expect((await call("convex", { kind: "query", path })).status).toBe(403);
     }
     expect((await call("convex", { kind: "internalQuery", path: "edit:get" })).status).toBe(400);
-    expect((await call("convex", { kind: "query", path: "edit:get", args: [1] })).status).toBe(400);
+    expect((await call("convex", { kind: "query", path: "edit:getMedia", args: [1] })).status).toBe(400);
     expect(upstream).not.toHaveBeenCalled();
 
-    const answer = await call("convex", { kind: "mutation", path: "edit:save", args: { project: "p1", token: "forged" } });
+    const answer = await call("convex", { kind: "mutation", path: "edit:putMedia", args: { project: "p1", token: "forged" } });
     expect(answer.status).toBe(200);
     expect(await answer.json()).toEqual({ status: "success", value: { id: 1 } });
     const [url, init] = upstream.mock.calls[0];
     expect(url).toBe("https://example.convex.cloud/api/mutation");
-    expect(JSON.parse(String(init.body))).toEqual({ path: "edit:save", args: { project: "p1", token: "service-token" }, format: "json" });
+    expect(JSON.parse(String(init.body))).toEqual({ path: "edit:putMedia", args: { project: "p1", token: "service-token" }, format: "json" });
   });
 
   it("a project's first commit records who started it from the token, never from the caller, once switched on", async () => {
@@ -186,23 +197,94 @@ describe("relay cloud endpoints", () => {
     await call("convex", commit, { env: on });
     expect(sent().actor).toEqual({ sub: "person-t", name: "" });
     // Other calls are left as they were.
-    await call("convex", { kind: "mutation", path: "edit:save", args: { actor: 1 } }, { token: NAMED, env: on });
+    await call("convex", { kind: "mutation", path: "edit:putMedia", args: { actor: 1 } }, { token: NAMED, env: on });
     expect(sent()).toEqual({ actor: 1, token: "service-token" });
   });
 
   it("passes Convex's errors on", async () => {
     // A function's error (or no such function): Convex's own shape, as 200.
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "error", errorMessage: "Server Error\nCould not find public function for 'edit:nope'.\n" })));
-    const missing = await call("convex", { kind: "query", path: "edit:nope" });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "error", errorMessage: "Server Error\nCould not find public function for 'edit:listMedia'.\n" })));
+    const missing = await call("convex", { kind: "query", path: "edit:listMedia" });
     expect(missing.status).toBe(200);
-    expect(await missing.json()).toEqual({ status: "error", errorMessage: "Server Error\nCould not find public function for 'edit:nope'." });
+    expect(await missing.json()).toEqual({ status: "error", errorMessage: "Server Error\nCould not find public function for 'edit:listMedia'." });
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "error", errorMessage: "Uncaught Error: no", errorData: { why: 1 } }, { status: 560 })));
-    expect(await (await call("convex", { kind: "action", path: "edit:run" })).json()).toEqual({ status: "error", errorMessage: "Uncaught Error: no", errorData: { why: 1 } });
+    expect(await (await call("convex", { kind: "query", path: "edit:getMedia" })).json()).toEqual({ status: "error", errorMessage: "Uncaught Error: no", errorData: { why: 1 } });
     // A request Convex refused: a relay error with Convex's status.
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ code: "BadJsonBody", message: "nope" }, { status: 400 })));
-    const refused = await call("convex", { kind: "query", path: "edit:get" });
+    const refused = await call("convex", { kind: "query", path: "edit:getMedia" });
     expect(refused.status).toBe(400);
     expect(await refused.json()).toEqual({ error: "Convex: BadJsonBody: nope" });
+  });
+
+  /** Convex answering `edit:getProject` with `card` (null: not in the cloud), every other call with `value`; R2 with 204. */
+  const cloudWith = (card: Record<string, unknown> | null, value: unknown = { ok: 1 }) => {
+    const upstream = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("cloudflarestorage.com")) return new Response(url.includes("list-type") ? "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>" : null, { status: url.includes("list-type") ? 200 : 204 });
+      const sent = JSON.parse(String(init?.body ?? "{}")) as { path?: string };
+      return Response.json({ status: "success", value: sent.path === "edit:getProject" ? card : value });
+    });
+    vi.stubGlobal("fetch", upstream);
+    const paths = () => upstream.mock.calls.map(([url, init]) => (String(url).includes("convex") ? JSON.parse(String(init?.body)).path : "r2"));
+    return { upstream, paths };
+  };
+  const bodycam = { projectId: "p1", summary: { style: "bodycam", subtitles: false, footageOnly: false }, createdBy: { sub: "person-t", name: "T" } };
+
+  it("calls only the edit: functions Edit uses, each as its kind", async () => {
+    cloudWith(null);
+    for (const [kind, path] of [["mutation", "edit:deleteMedia"], ["mutation", "edit:sweepUploads"], ["mutation", "edit:getProject"], ["query", "edit:commitProject"]]) {
+      expect((await call("convex", { kind, path, args: {} })).status).toBe(403);
+    }
+    expect((await call("convex", { kind: "query", path: "edit:listMedia", args: {} })).status).toBe(200);
+  });
+
+  it("keeps a project outside the caller's kinds of video from being read or changed", async () => {
+    const { paths } = cloudWith(bodycam, [bodycam, { projectId: "p2", summary: { style: "bodycam", subtitles: true } }, { projectId: "p3", summary: { footageOnly: true } }]);
+    // A subtitler: the bodycam edit is left out of the list, refused when opened, locked or saved.
+    const listed = (await (await call("convex", { kind: "query", path: "edit:listProjects", args: {} }, { token: SUBS })).json()) as { value: { projectId: string }[] };
+    expect(listed.value.map((card) => card.projectId)).toEqual(["p2", "p3"]);
+    expect((await call("convex", { kind: "query", path: "edit:getProject", args: { projectId: "p1" } }, { token: SUBS })).status).toBe(403);
+    expect((await call("convex", { kind: "mutation", path: "edit:acquireLock", args: { projectId: "p1", holder: "x", force: true } }, { token: SUBS })).status).toBe(403);
+    expect((await call("convex", { kind: "mutation", path: "edit:commitProject", args: { projectId: "p1", baseRev: 3, summary: { subtitles: true } } }, { token: SUBS })).status).toBe(403);
+    expect(paths().filter((path) => path !== "edit:getProject")).toEqual(["edit:listProjects"]);
+    // Its review's files and cover too.
+    expect((await call("r2/url", { key: "edit/reviews/p1/abc/video.mp4" }, { token: SUBS })).status).toBe(403);
+    expect((await call("r2/url", { key: "edit/covers/p1.jpg", method: "PUT" }, { token: SUBS })).status).toBe(403);
+    // The bodycam editor may; and anyone may start a project of their own kind.
+    expect((await call("convex", { kind: "mutation", path: "edit:acquireLock", args: { projectId: "p1", holder: "x" } }, { token: EDITOR })).status).toBe(200);
+    expect((await call("r2/url", { key: "edit/reviews/p1/abc/video.mp4" }, { token: EDITOR })).status).toBe(200);
+    cloudWith(null);
+    expect((await call("convex", { kind: "mutation", path: "edit:commitProject", args: { projectId: "p9", baseRev: 0, summary: { style: "bodycam", footageOnly: true } } }, { token: SUBS })).status).toBe(200);
+    expect((await call("convex", { kind: "mutation", path: "edit:commitProject", args: { projectId: "p9", baseRev: 0, summary: { style: "courtroom" } } }, { token: EDITOR })).status).toBe(403);
+  });
+
+  it("deletes a project only for who started it, or an admin", async () => {
+    cloudWith({ ...bodycam, createdBy: { sub: "someone-else" } });
+    expect((await call("convex", { kind: "mutation", path: "edit:deleteProject", args: { projectId: "p1" } }, { token: EDITOR })).status).toBe(403);
+    // An older project (no creator): an admin's to delete.
+    cloudWith({ ...bodycam, createdBy: null });
+    expect((await call("convex", { kind: "mutation", path: "edit:deleteProject", args: { projectId: "p1" } }, { token: EDITOR })).status).toBe(403);
+    cloudWith(bodycam);
+    expect((await call("convex", { kind: "mutation", path: "edit:deleteProject", args: { projectId: "p1" } }, { token: EDITOR })).status).toBe(200);
+    const { paths } = cloudWith({ ...bodycam, createdBy: { sub: "someone-else" } });
+    expect((await call("convex", { kind: "mutation", path: "edit:deleteProject", args: { projectId: "p1" } }, { token: ADMIN })).status).toBe(200);
+    expect(paths()).toEqual(["edit:deleteProject"]);
+  });
+
+  it("writes keys only where Edit writes them; deletes and lists beyond the analysis only for an admin", async () => {
+    cloudWith(null);
+    for (const key of ["edit/projects/p1.json", "edit/exports/results/x.mp4", "edit/test/a.mp4"]) {
+      expect((await call("r2/url", { key, method: "PUT" })).status).toBe(403);
+      expect((await call("r2/multipart/create", { key })).status).toBe(403);
+    }
+    expect((await call("r2/url", { key: "edit/exports/results/x.mp4" })).status).toBe(200);
+    expect((await call("r2/multipart/abort", { key: "edit/exports/results/x.mp4", uploadId: "u1" })).status).toBe(403);
+    expect((await call("r2/url", { key: "edit/test/a.mp4", method: "PUT" }, { token: ADMIN })).status).toBe(200);
+    expect((await call("r2/delete", { keys: ["edit/originals/drive/f/a.mp4"] })).status).toBe(403);
+    expect((await call("r2/delete", { keys: ["edit/originals/drive/f/a.mp4"] }, { token: ADMIN })).status).toBe(200);
+    expect((await call("r2/list", { prefix: "edit/" })).status).toBe(403);
+    expect((await call("r2/list", { prefix: "edit/reviews/" })).status).toBe(403);
+    expect((await call("r2/list", { prefix: "edit/analysis/drive/f/" })).status).toBe(200);
+    expect((await call("r2/list", { prefix: "edit/" }, { token: ADMIN })).status).toBe(200);
   });
 });
 

@@ -89,8 +89,10 @@ function checkKey(key: string): void {
 export type Method = "GET" | "PUT" | "HEAD";
 
 /**
- * A presigned URL for `key`. `expires` (seconds) defaults to 6 h for GET, 1 h
- * for PUT and HEAD; the relay caps it at 7 days.
+ * A presigned URL for `key`. `expires` (seconds) defaults to an hour; the
+ * relay caps it there, or at 6 h for a GET of footage (originals, proxies,
+ * excerpts, sounds), which FFmpeg reads through one URL for a whole excerpt
+ * or export.
  */
 export async function presign(key: string, method: Method, expires: number | null = null): Promise<string> {
   // Writer's script files are read for the handoff (the relay allows that too), never written.

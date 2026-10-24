@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { ahead, appBundle, assetTarget, feedTags, installApp, enabled, latestBuild, newer, programs, readChannel, swapAll, Updater } from "../src/update.ts";
+import { ahead, appBundle, assetTarget, building, feedTags, installApp, enabled, latestBuild, newer, programs, readChannel, swapAll, Updater } from "../src/update.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("newer_compares_numerically", () => {
@@ -159,4 +159,19 @@ test("the releases feed's tags: every tag, sorted", async () => {
   } finally {
     server.stop(true);
   }
+});
+
+test("a tag in the feed whose build isn't out yet is asked about again soon, a stale draft isn't", () => {
+  // nightly-15 running; nightly-16 pushed, its build still uploading (Oct 24).
+  expect(building("nightly-14 nightly-15 nightly-16", "nightly", null, "0.0.0", 15)).toBe(true);
+  // Published and offered: nothing more to wait for.
+  expect(building("nightly-14 nightly-15 nightly-16", "nightly", "nightly-16", "0.0.0", 15)).toBe(false);
+  // nightly-14's build failed and stays a draft: once nightly-16 is offered it doesn't count.
+  expect(building("nightly-14 nightly-15 nightly-16", "nightly", "nightly-16", "0.0.0", 13)).toBe(false);
+  // Nothing ahead of this build.
+  expect(building("nightly-14 nightly-15", "nightly", null, "0.0.0", 15)).toBe(false);
+  // Stable waits only for releases.
+  expect(building("nightly-16 v0.0.0", "stable", null, "0.0.0", 15)).toBe(false);
+  expect(building("v0.0.0 v0.0.1", "stable", null, "0.0.0", null)).toBe(true);
+  expect(building("v0.0.0 v0.0.1", "stable", "v0.0.1", "0.0.0", null)).toBe(false);
 });

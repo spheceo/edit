@@ -208,7 +208,10 @@ export async function check(channel: Channel, api = `https://api.github.com/repo
   // The feed's tags as they were at the last answer: unchanged, so is the answer.
   const tags = feed === null ? null : await feedTags(feed).catch(() => null);
   const last = lastAnswer.get(`${channel} ${api}`);
-  if (tags !== null && last !== undefined && last.tags === tags && Date.now() - last.at < ASK_ANYWAY_MS) return last.release;
+  // A tag is in the feed as soon as it's pushed, ten minutes before its build
+  // is published: until then the feed doesn't change again, so ask sooner.
+  const wait = last !== undefined && building(last.tags, channel, last.release?.tag ?? null) ? ASK_WHILE_BUILDING_MS : ASK_ANYWAY_MS;
+  if (tags !== null && last !== undefined && last.tags === tags && Date.now() - last.at < wait) return last.release;
   const release = await ask(channel, api);
   if (tags !== null) lastAnswer.set(`${channel} ${api}`, { tags, release, at: Date.now() });
   return release;
@@ -216,8 +219,34 @@ export async function check(channel: Channel, api = `https://api.github.com/repo
 
 /** The last answer from the API for each channel, the feed's tags then, and when. */
 const lastAnswer = new Map<string, { tags: string; release: Release | null; at: number }>();
-/** The API is asked again after this long even with the feed unchanged (a release whose builds were still uploading). */
+/** The API is asked again after this long even with the feed unchanged. */
 const ASK_ANYWAY_MS = 30 * 60_000;
+/**
+ * ...or this soon while the feed has a tag the API's answer lacks: its build
+ * is still uploading (nightly-16 reached open apps 30 minutes late, Oct 24).
+ * At most 20 asks an hour of GitHub's 60, and only until it's out.
+ */
+const ASK_WHILE_BUILDING_MS = 3 * 60_000;
+
+/**
+ * Whether the feed (`tags`, as `feedTags` joins them) has a build for
+ * `channel` ahead of this one and of `answer`, the newest the API offered (null:
+ * none): pushed, not yet published. A draft left behind by a failed build
+ * stops counting once a newer one is out.
+ */
+export function building(tags: string, channel: Channel, answer: string | null, version = VERSION, nightly = NIGHTLY): boolean {
+  const number = (tag: string) => Number(/^nightly-(\d+)$/.exec(tag)?.[1] ?? Number.NaN);
+  return tags
+    .split(" ")
+    .filter((tag) => tag !== "" && tag !== answer && (channel === "nightly" || /^v/.test(tag)))
+    .some((tag) => {
+      if (!ahead(tag, version, nightly)) return false;
+      if (answer === null) return true;
+      const [mine, theirs] = [number(tag), number(answer)];
+      if (!Number.isNaN(mine) && !Number.isNaN(theirs)) return mine > theirs;
+      return Number.isNaN(mine) && Number.isNaN(theirs) && newer(tag, answer);
+    });
+}
 
 /** Every tag in the releases' feed, sorted and joined: it changes when a build is published or taken down. */
 export async function feedTags(url: string): Promise<string> {

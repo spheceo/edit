@@ -540,6 +540,7 @@ function Composer({ disabled }: { disabled: boolean }) {
   const [text, setText] = useState("");
   const running = useAgent((state) => state.running);
   const name = useAgent((state) => providerName(state.status));
+  const modelName = useAgent((state) => state.modelName);
   const input = useRef<HTMLTextAreaElement>(null);
 
   const send = () => {
@@ -580,9 +581,9 @@ function Composer({ disabled }: { disabled: boolean }) {
           style={{ height: Math.min(160, 40 + Math.max(0, text.split("\n").length - 2) * 18) }}
         />
         <div className="mt-1 flex items-center gap-1">
-          <span className="flex h-6 items-center gap-1.5 px-1 text-[11px] font-medium text-muted" title="Edit picks the model">
+          <span className="flex h-6 items-center gap-1.5 px-1 text-[11px] font-medium text-muted" title="Edit picks the model and how hard it thinks">
             <ClaudeMark size={12} />
-            Claude
+            {modelName ?? "Claude"}
           </span>
           {running ? (
             <button

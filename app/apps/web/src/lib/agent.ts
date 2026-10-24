@@ -3,6 +3,7 @@
 import { create } from "zustand";
 
 import { fetchRetrying } from "./api";
+import { readSetting, writeSetting } from "./storage";
 
 export interface AgentEntry {
   id: string;
@@ -41,6 +42,8 @@ interface AgentState {
   running: boolean;
   /** Last streamed or changed moment, so "Thinking" only shows after a quiet spell. */
   activityAt: number;
+  /** The model Edit runs the agent on ("Opus 5.5"), shown in the composer; it isn't chosen there. */
+  modelName: string | null;
 }
 
 export const useAgent = create<AgentState>(() => ({
@@ -50,7 +53,17 @@ export const useAgent = create<AgentState>(() => ({
   entries: [],
   running: false,
   activityAt: 0,
+  modelName: readSetting("edit.agent.modelName"),
 }));
+
+/** The name of the model Edit runs turns on (the server's default: the panel sends none). */
+async function loadModelName() {
+  const { models } = await json<{ models: { name: string; is_default: boolean }[] }>(await fetchRetrying("/api/agent/models"));
+  const name = models.find((model) => model.is_default)?.name ?? null;
+  if (name === null) return;
+  writeSetting("edit.agent.modelName", name);
+  useAgent.setState({ modelName: name });
+}
 
 /** Chats already seen this session, so reopening the panel or a project is instant. */
 const chats = new Map<string, { entries: AgentEntry[]; running: boolean }>();
@@ -90,6 +103,7 @@ export async function openAgent(project: string) {
     entries: [...chat.entries, ...pending],
     running: chat.running || pending.length > 0,
   });
+  if (status.ready) loadModelName().catch(() => {});
 }
 
 export async function sendToAgent(text: string) {

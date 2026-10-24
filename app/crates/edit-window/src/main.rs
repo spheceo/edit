@@ -80,6 +80,9 @@ fn run(url: &str, server: Option<Child>, watch_stdin: bool) -> ! {
                 .background_color(tauri::webview::Color(11, 11, 11, 255))
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(960.0, 600.0)
+                // Opens filling the screen (zoomed, not macOS full screen: the
+                // menu bar and Dock stay); the size above is what un-zooming gives.
+                .maximized(true)
                 // Let the page take file drops itself (the timeline uploads them).
                 .disable_drag_drop_handler()
                 // Links out (articles, sources) belong in the browser, not the editor's window.

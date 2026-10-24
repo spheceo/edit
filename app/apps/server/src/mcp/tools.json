@@ -1800,6 +1800,20 @@
     "name": "revoice_cut_in"
   },
   {
+    "description": "Resets the edit to the script's first layout, only when the user asks. Every clip goes, and the script's footage ranges, cut-in cards and voice-overs are laid out again as the import left them; media, transcripts, research, the script and the review link stay. Only when the user asks for it (\"reset the video\", \"start the edit over\"): the chat asks them to accept or reject, and this waits for the answer. Then stop; the user starts the editing workflow when they want.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "reset_edit"
+  },
+  {
     "description": "Moves every clip down onto the track below wherever that track is empty for the clip's whole span (never into V1/A1, the footage tracks), so layers don't float above gaps and clips that overlap keep their order, then removes tracks left empty. Run it after adding or removing layers.",
     "inputSchema": {
       "properties": {

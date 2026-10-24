@@ -78,6 +78,8 @@ interface EditorState {
   timelineHeight: number;
   toasts: Toast[];
   agentActive: number;
+  /** The agent asked to reset the edit (`reset_edit`) and waits for the user's Accept / Reject in the chat. */
+  resetAsked: boolean;
   /** The open project's cloud state (apps/server/src/cloud_projects.ts); null for none. */
   cloud: CloudStatus | null;
 
@@ -210,6 +212,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
   toasts: [],
   agentActive: 0,
+  resetAsked: false,
   cloud: null,
 
   load: (rev, project) => {
@@ -217,7 +220,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     clearTimeout(saveTimer);
     server = { rev, project };
     synced = project;
-    set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, driveState: null, media: {}, scriptJob: null });
+    set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, driveState: null, media: {}, scriptJob: null, resetAsked: false });
   },
   close: () => {
     editorSession++;
@@ -591,6 +594,8 @@ export function connectEvents() {
       window.dispatchEvent(new CustomEvent("edit:transcript", { detail: event.path }));
     } else if (event.type === "agent") {
       applyAgentEvent(event);
+    } else if (event.type === "reset" && project && event.id === project.id) {
+      useEditor.setState({ resetAsked: event.state === "asking" });
     } else if (event.type === "resync" && project) {
       catchUp();
     }

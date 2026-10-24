@@ -37,6 +37,7 @@ import * as archive from "./archive.ts";
 import * as avatars from "./avatars.ts";
 import * as covers from "./covers.ts";
 import * as kinds from "./kinds.ts";
+import * as reset from "./reset.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
@@ -69,6 +70,7 @@ export function buildRouter(): Router<App> {
   seams.cloudProjects.routes(router);
   // Before /api/projects/{id}: /api/projects/status is its own.
   reviews.routes(router);
+  reset.routes(router);
   accounts.routes(router);
   windowFocus.routes(router);
   writerHandoff.routes(router);

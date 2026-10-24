@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   ListChecks,
   Music,
+  RotateCcw,
   RotateCw,
   ScrollText,
   Share,
@@ -40,9 +41,9 @@ import {
   type AgentEntry,
 } from "../lib/agent";
 import { buildTurns, callTitle, formatWorked, groupSummary, type Turn } from "../lib/agentTurns";
-import { useMachine } from "../lib/api";
+import { api, useMachine } from "../lib/api";
 import { useEditor } from "../lib/store";
-import { cx, IconButton } from "./ui";
+import { Button, cx, IconButton } from "./ui";
 
 /** Claude’s mark (Simple Icons’ path), in Claude’s orange: the agent runs on the user’s Claude Code. */
 export function ClaudeMark({ size = 16 }: { size?: number }) {
@@ -128,6 +129,7 @@ export function AgentPanel() {
         )}
       </div>
 
+      {projectId && <ResetCard projectId={projectId} />}
       {!(status && !status.ready) && <Composer disabled={!status?.ready} />}
     </section>
   );
@@ -487,6 +489,44 @@ const MARKDOWN: Components = {
     </td>
   ),
 };
+
+/**
+ * The agent asked to reset the edit (`reset_edit`, "reset the video"): the
+ * user accepts or rejects here, and the agent, waiting on the answer, carries on.
+ */
+function ResetCard({ projectId }: { projectId: string }) {
+  const asked = useEditor((state) => state.resetAsked);
+  const toast = useEditor((state) => state.toast);
+  const [answering, setAnswering] = useState(false);
+  if (!asked) return null;
+  const answer = (accept: boolean) => {
+    setAnswering(true);
+    void api
+      .answerReset(projectId, accept)
+      .then(() => useEditor.setState({ resetAsked: false }))
+      .catch((error) => toast((error as Error).message, "error"))
+      .finally(() => setAnswering(false));
+  };
+  return (
+    <div className="mx-2.5 mb-1 shrink-0 rounded-xl border border-line-strong bg-raised p-3">
+      <div className="flex items-center gap-2 text-[13px] font-medium">
+        <RotateCcw size={14} className="shrink-0 text-warning" />
+        Reset the edit?
+      </div>
+      <p className="mt-1 text-[12px] leading-relaxed text-muted">
+        Every clip goes and the script is laid out again as the import left it: the footage ranges, cut-in cards and voice-overs. Media, transcripts and research stay. The edit before is kept in the project’s history.
+      </p>
+      <div className="mt-2.5 flex justify-end gap-2">
+        <Button size="sm" variant="ghost" disabled={answering} onClick={() => answer(false)}>
+          Reject
+        </Button>
+        <Button size="sm" variant="primary" disabled={answering} onClick={() => answer(true)}>
+          Accept and reset
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function Markdown({ text }: { text: string }) {
   return (

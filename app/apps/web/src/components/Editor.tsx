@@ -107,6 +107,11 @@ export function Editor({ id }: { id: string }) {
         if (!alive) return;
         useEditor.getState().load(rev, project);
         void syncScriptJob(id);
+        // A reset the agent was already asking about when the page (re)loaded.
+        void api
+          .resetAsked(id)
+          .then(({ pending }) => alive && pending !== null && useEditor.setState({ resetAsked: true }))
+          .catch(() => {});
         return api.mediaStatus(id).then(({ media }) => alive && useEditor.setState({ media }));
       })
       .catch((error) => alive && setError(error.message));

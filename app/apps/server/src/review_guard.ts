@@ -19,6 +19,7 @@ export const BLOCKED = new Set([
   "import_media",
   "share_for_review",
   "export",
+  "reset_edit",
 ]);
 
 /** Projects whose next turn is a review fix (set before the message is sent). */

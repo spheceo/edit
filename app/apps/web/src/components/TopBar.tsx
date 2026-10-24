@@ -15,7 +15,7 @@ import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton } from "./ui";
 
-export function TopBar({ onExport }: { onExport: () => void }) {
+export function TopBar({ onShare }: { onShare: () => void }) {
   const name = useEditor((state) => state.project?.name ?? "");
   const createdBy = useEditor((state) => state.project?.created_by);
   const projectId = useEditor((state) => state.project?.id);
@@ -57,13 +57,13 @@ export function TopBar({ onExport }: { onExport: () => void }) {
           {agentActive && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-agent" />}
         </IconButton>
         <DriveButton />
-        <Button variant="primary" className="ml-1.5" onClick={onExport}>
+        <Button variant="primary" className="ml-1.5" onClick={onShare}>
           {exportState?.state === "running" ? (
             <span className="tabular">{Math.round(exportState.progress * 100)}%</span>
           ) : (
             <Share size={14} strokeWidth={2.2} />
           )}
-          Export
+          Share
         </Button>
         <AppMenu />
       </div>

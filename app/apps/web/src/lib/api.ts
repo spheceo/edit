@@ -207,6 +207,8 @@ export const api = {
   shareReview: (id: string, path?: string) =>
     request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/review/share`, path === undefined ? {} : { path }),
   /** Approves the latest shared version: the review closes and the other versions' files (and their exports here) are deleted. */
+  /** Share: exports the whole edit, then puts it on the project's review link (a new version after the first). */
+  shareProject: (id: string, options: ExportOptions) => request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/share`, { options }),
   approveReview: (id: string) => request<{ version: number; deleted: string[] }>("POST", `/api/projects/${id}/review/approve`),
   /** Brings an archived project's footage back from Drive and YouTube. */
   restoreProject: (id: string) => request<{ started: boolean }>("POST", `/api/projects/${id}/restore`),

@@ -25,8 +25,9 @@ import { readJson, type Router } from "./http/router.ts";
 import { clipMap, deleteExport, listExports, mapFile, timelineHash } from "./exports.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
-import type { Clip, Project } from "./model.ts";
+import type { Clip, ExportOptions, Project } from "./model.ts";
 import { join } from "./paths.ts";
+import { defaultExportPath } from "./server_seam.ts";
 import { clipEnd, fps as fpsOf, trackOf } from "./project.ts";
 import { cachedTranscripts } from "./edit_tools.ts";
 import { native } from "./native/index.ts";
@@ -220,6 +221,49 @@ export async function share(app: App, projectId: string, path: string | null, re
   } finally {
     sharing.delete(projectId);
   }
+}
+
+/**
+ * The Share button: the whole edit exported the house way (`options`, the
+ * dialog's: its script chapters), then shared to its review link, made the
+ * first time and a new version under it after. It runs on with nobody
+ * watching; the review's `sharing` says how it's going.
+ */
+export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>): Promise<{ url: string; version: number }> {
+  if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
+  if (sharing.has(projectId)) throw new Error("this project is already being shared");
+  sharing.set(projectId, "exporting");
+  let path: string;
+  try {
+    // A map shot still rendering would export as its first frame.
+    await seams.broll.waitForMaps(app, projectId, 60_000).catch((error: unknown) => {
+      if (!seams.isUnavailable(error)) throw error;
+    });
+    const live = app.store.get(projectId);
+    if (live === null) throw new Error("no such project");
+    const finished = new Promise<string>((resolve, reject) => {
+      const stop = app.store.subscribe((event) => {
+        const one = event as { type?: string; id?: string; state?: string; progress?: number; path?: string; error?: string };
+        if (one.type !== "export" || one.id !== projectId) return;
+        if (one.state === "running") sharing.set(projectId, `exporting ${Math.round((one.progress ?? 0) * 100)}%`);
+        else if (one.state === "done" && one.path !== undefined) {
+          stop();
+          resolve(one.path);
+        } else if (one.state === "failed" || one.state === "cancelled") {
+          stop();
+          reject(new Error(one.state === "cancelled" ? "the export was cancelled" : `the export failed: ${one.error ?? "see the log"}`));
+        }
+      });
+    });
+    await app.exports.start(app.store, app.library, structuredClone(live.project) as Project, { ...native().exportDefaults(), ...options }, defaultExportPath(app.store, live.project), {
+      // The share reads the file next (its review copy and the full-quality upload): not archived away under it.
+      keepLocal: true,
+    });
+    path = await finished;
+  } finally {
+    sharing.delete(projectId);
+  }
+  return share(app, projectId, path);
 }
 
 /**
@@ -1108,6 +1152,20 @@ function finished(app: App, project: string): boolean {
 export function routes(router: Router<App>): void {
   router.get("/api/projects/status", ({ app }) => sorted(projectStatus(app)));
   router.get("/api/projects/{id}/review", ({ app, params }) => sorted(view(app, params.id ?? "")));
+  // Share: export the whole edit, then share it (the link, or its next version).
+  router.post("/api/projects/{id}/share", async (context) => {
+    const given = (await readJson<unknown>(context).catch(() => ({}))) as Record<string, unknown>;
+    const id = context.params.id ?? "";
+    if (context.app.store.get(id) === null) throw new ApiError(404, "no such project");
+    const options = typeof given?.options === "object" && given.options !== null && !Array.isArray(given.options) ? (given.options as Partial<ExportOptions>) : {};
+    const started = exportAndShare(context.app, id, options);
+    started.catch((error: unknown) => diag.warn("review", `sharing ${id}: ${diag.messageOf(error)}`));
+    // Refused at once (already sharing, no cloud) says so; else it runs on.
+    const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 300))]).catch((error: unknown) => {
+      throw new ApiError(400, diag.messageOf(error));
+    });
+    return sorted(first === null ? { started: true } : first.done);
+  });
   router.post("/api/projects/{id}/review/share", async (context) => {
     const given = (await readJson<unknown>(context).catch(() => ({}))) as Record<string, unknown>;
     const id = context.params.id ?? "";

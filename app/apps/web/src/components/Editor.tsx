@@ -9,7 +9,7 @@ import { clientId, connectEvents, leave, settled, syncScriptJob, useEditor } fro
 import { clearIn, clearInOut, clearOut, markIn, markOut } from "../lib/inOut";
 import { goToEnd, goToStart, useView } from "../lib/timelineView";
 import { uploadFiles } from "../lib/upload";
-import { ExportDialog } from "./ExportDialog";
+import { ShareDialog } from "./ShareDialog";
 import { FileBrowser } from "./FileBrowser";
 import { Research } from "./Research";
 import { AgentPanel } from "./AgentPanel";
@@ -85,7 +85,7 @@ export function Editor({ id }: { id: string }) {
   const [resizing, setResizing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [researching, setResearching] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -125,7 +125,7 @@ export function Editor({ id }: { id: string }) {
     };
   }, [id]);
 
-  useShortcuts({ onImport: () => setImporting(true), onExport: () => setExporting(true) });
+  useShortcuts({ onImport: () => setImporting(true), onExport: () => setSharing(true) });
   const dropping = useFileDrop();
   const machine = useMachine();
 
@@ -142,7 +142,7 @@ export function Editor({ id }: { id: string }) {
 
   return (
     <div className="flex h-full flex-col bg-black">
-      <TopBar onExport={() => setExporting(true)} />
+      <TopBar onShare={() => setSharing(true)} />
       <CloudBanner />
       <MissingBanner />
       <div className="flex min-h-0 flex-1 px-2 pb-2">
@@ -192,7 +192,7 @@ export function Editor({ id }: { id: string }) {
           </motion.div>
         )}
       </AnimatePresence>
-      <ExportDialog open={exporting} onClose={() => setExporting(false)} />
+      <ShareDialog open={sharing} onClose={() => setSharing(false)} />
     </div>
   );
 }

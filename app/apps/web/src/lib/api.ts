@@ -215,7 +215,6 @@ export const api = {
   approveReview: (id: string) => request<{ version: number; deleted: string[] }>("POST", `/api/projects/${id}/review/approve`),
   /** Brings an archived project's footage back from Drive and YouTube. */
   restoreProject: (id: string) => request<{ started: boolean }>("POST", `/api/projects/${id}/restore`),
-  setAutoFix: (on: boolean) => request<{ autoFix: boolean }>("POST", "/api/reviews/settings", { autoFix: on }),
   /** Writer's scripts in the cloud, newest first, each with the project made from it here. */
   writerScripts: () => request<{ scripts: WriterScriptRow[] }>("GET", "/api/writer/scripts"),
   /** Makes an Edit project from a Writer script and starts its import. */
@@ -267,7 +266,6 @@ export interface ReviewNote {
 
 export interface Review {
   sharing: string | null;
-  autoFix: boolean;
   review: { url: string; versions: { n: number; path: string }[]; approved: { version: number; by: string; at: number } | null } | null;
   notes: ReviewNote[];
 }

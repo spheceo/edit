@@ -77,6 +77,8 @@ const REVIEW_CALLS = new Map<string, string>([
   ["reviews:changes", "query"], ["reviews:get", "query"], ["reviews:open", "query"],
   ["reviews:publish", "mutation"], ["reviews:claim", "mutation"], ["reviews:release", "mutation"], ["reviews:resolve", "mutation"],
   ["reviews:reply", "mutation"], ["reviews:approve", "mutation"], ["reviews:note", "mutation"], ["reviews:deleteNote", "mutation"], ["reviews:setMeta", "mutation"],
+  // Fixing on the one computer chosen on accounts' Fixing page (accounts/docs/fixing.md).
+  ["reviews:checkIn", "mutation"], ["reviews:takeFix", "mutation"], ["reviews:fixProgress", "mutation"],
 ]);
 const callable = (path: string, kind: string) =>
   EDIT_CALLS.get(path) === kind || (REVIEWS_PATH.test(path) && REVIEW_CALLS.get(path) === kind) || (WRITER_READS.has(path) && kind === "query");

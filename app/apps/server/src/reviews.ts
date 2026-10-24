@@ -1,8 +1,10 @@
 // Repack reviews of an edit (docs/plans/2026-10-22-share-review-handoff.md):
 // an export shared to a Repack link, where anyone with it comments at a
 // moment of the video (as on Frame.io, which it replaces); the notes followed
-// here while Edit runs; the agent set on them by itself five minutes after a
-// reviewer's last note; and each fix's changed stretch of the timeline kept
+// here while Edit runs; the agent set on them when a reviewer clicks "Ready
+// for changes", on the one computer chosen on accounts.spheceo.com's Fixing
+// page, and the next cut exported and shared after (accounts/docs/fixing.md);
+// and each fix's changed stretch of the timeline kept
 // with its note, so the timeline shows what the agent changed for whom and
 // why ("did the agent actually do what we said we wanted it to do?").
 //
@@ -18,7 +20,9 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as archive from "./archive.ts";
 import * as cloud from "./cloud.ts";
+import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
+import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
@@ -40,11 +44,13 @@ import * as tools from "./tools.ts";
 const FILE = "reviews.json";
 /** How often Repack is asked for new notes while Edit runs. */
 export const POLL_MS = 45_000;
-/** A reviewer's notes are fixed together: this long after the last one. */
-export const SETTLE_MS = 5 * 60_000;
+/** How often the fixing computer checks for "Ready for changes"; others check in at POLL_MS. */
+export const CHECK_IN_CHOSEN_MS = 15_000;
+/** The longest a Ready for changes turn is waited for before it's given up on. */
+const FIX_TURN_MS = 3 * 60 * 60_000;
 /** A note claimed this long ago and never resolved may be tried again… */
 const RETRY_MS = 30 * 60_000;
-/** …this many times in all; then it's left for the team, saying so (the audit, Oct 23: a new Opus turn every 30 minutes, forever). */
+/** …this many times in all; then it's left for the team (the audit, Oct 23: a new Opus turn every 30 minutes, forever). */
 export const MAX_ATTEMPTS = 2;
 /** Changed stretches closer than this (frames: a second) are one band. */
 const JOIN_SECONDS = 1;
@@ -71,7 +77,7 @@ export interface Note {
   updatedAt: number;
   /** When the agent here was set on it. */
   claimed?: number;
-  /** How many times the auto-fix was set on it (at most MAX_ATTEMPTS, then it says it gave up). */
+  /** How many times the agent was set on it here (at most MAX_ATTEMPTS). */
   attempts?: number;
   /** The agent's fix: what it changed (clip ids, and their stretch then) and its words. */
   fix?: { clips: string[]; ranges: [number, number][]; summary: string; at: number };
@@ -101,14 +107,14 @@ export interface Shared {
 interface State {
   /** Repack's place in its notes' changes: the next look asks from here. */
   cursor: number;
-  /** Fix new feedback by itself (on unless turned off). */
-  autoFix: boolean;
   shared: Record<string, Shared>;
   notes: Record<string, Note>;
+  /** Each project's last Share settings (not its range or chapters), for the share after a Ready for changes. */
+  shareOptions?: Record<string, Partial<ExportOptions>>;
 }
 
 function empty(): State {
-  return { cursor: 0, autoFix: true, shared: {}, notes: {} };
+  return { cursor: 0, shared: {}, notes: {} };
 }
 
 export function read(home: string): State {
@@ -232,6 +238,11 @@ export async function share(app: App, projectId: string, path: string | null, re
 export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
+  // Remembered for the share after a Ready for changes: the house settings, not this span or its chapters.
+  const { range: _range, chapters: _chapters, ...settings } = options;
+  update(app.store.home, (state) => {
+    state.shareOptions = { ...state.shareOptions, [projectId]: settings };
+  });
   sharing.set(projectId, "exporting");
   let path: string;
   try {
@@ -746,12 +757,12 @@ export function clearOthers(app: App, projectId: string, kept: number): string[]
 // Following Repack while Edit runs
 
 let timer: ReturnType<typeof setInterval> | null = null;
-/** When each project's newest open note was heard here. */
-const lastHeard = new Map<string, number>();
+let checkTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Starts following the reviews: every `every` ms (POLL_MS), whenever the cloud
- * is on, and fixes settled notes. It ticks from the start, signed in or not:
+ * is on; and checks in as this computer (`checkIn`), every POLL_MS, or
+ * CHECK_IN_CHOSEN_MS on the fixing computer. It ticks from the start, signed in or not:
  * the sign-in is read from the Keychain after this runs (and can come later),
  * and a start that waited for the cloud to be on never followed a review after
  * sign-in moved to accounts (Marc's 5 notes on Judge EXPLODES v2, Oct 23).
@@ -772,11 +783,26 @@ export function start(app: App, every = POLL_MS): void {
   timer = setInterval(tick, every);
   timer.unref?.();
   setTimeout(tick, Math.min(5_000, every)).unref?.();
+  const check = () => {
+    const next = () => {
+      if (timer === null) return;
+      checkTimer = setTimeout(check, chosen ? CHECK_IN_CHOSEN_MS : every);
+      checkTimer.unref?.();
+    };
+    if (!cloud.enabled()) return next();
+    void checkIn(app)
+      .catch((error: unknown) => diag.warn("review", `checking in for fixing: ${diag.messageOf(error)}`))
+      .finally(next);
+  };
+  checkTimer = setTimeout(check, Math.min(6_000, every));
+  checkTimer.unref?.();
 }
 
 export function stop(): void {
   if (timer !== null) clearInterval(timer);
+  if (checkTimer !== null) clearTimeout(checkTimer);
   timer = null;
+  checkTimer = null;
 }
 
 /** How often every shared review is read whole and checked against what Edit heard (`reconcile`). */
@@ -818,7 +844,6 @@ export async function reconcile(app: App): Promise<string[]> {
     const message = `${missed.length} open note${missed.length === 1 ? "" : "s"} from ${who} on “${title}” weren't heard until now: they're in, and the agent picks them up (${shared.url})`;
     diag.error("review", message);
     app.store.emit({ type: "review-missed", project: projectId, notes: missed.length, message });
-    lastHeard.set(projectId, Date.now());
     found.push(projectId);
   }
   if (found.length > 0) app.store.emit({ type: "reviews", projects: found });
@@ -826,7 +851,7 @@ export async function reconcile(app: App): Promise<string[]> {
 }
 
 /** One look at Repack: new notes kept; projects whose notes have settled get the agent. */
-export async function poll(app: App, now = Date.now()): Promise<void> {
+export async function poll(app: App): Promise<void> {
   const home = app.store.home;
   // Only those the signed-in person may work on (kinds.ts): the agent follows up on no other.
   const projects = new Set(app.store.visible().map((summary) => summary.id));
@@ -841,7 +866,6 @@ export async function poll(app: App, now = Date.now()): Promise<void> {
     });
     if (answer.more !== true) break;
   }
-  for (const project of fresh) lastHeard.set(project, now);
   if (fresh.size > 0) app.store.emit({ type: "reviews", projects: [...fresh] });
   // Approvals (on Repack's page or another Mac): the other versions' exports here go too.
   const rows = (await cloud.query("reviews:open", {})) as { sourceId?: string; approved?: Shared["approved"] }[];
@@ -856,7 +880,6 @@ export async function poll(app: App, now = Date.now()): Promise<void> {
     });
     if (approved !== null) clearOthers(app, row.sourceId, approved.version);
   }
-  await fixSettled(app, now);
 }
 
 /**
@@ -885,75 +908,174 @@ export async function boxStills(home: string, projectId: string, shared: Shared 
   return out;
 }
 
-/** Sets the agent on each project whose open notes have settled, one project's turn at a time. */
-export async function fixSettled(app: App, now = Date.now()): Promise<string[]> {
-  const home = app.store.home;
-  const state = read(home);
-  if (!state.autoFix) return [];
-  const started: string[] = [];
-  const projects = new Set(Object.values(state.notes).map((note) => note.project));
-  for (const project of projects) {
+// ---------------------------------------------------------------------------
+// Ready for changes, on the fixing computer
+
+/** This computer is the fixing computer, as its last check-in said. */
+let chosen = false;
+/** Projects whose Ready for changes is being worked here. */
+const readying = new Set<string>();
+
+/** This computer fixes notes (accounts' Fixing page), as of its last check-in. */
+export function fixesHere(): boolean {
+  return chosen;
+}
+
+/** A review waiting for the fixing computer, as `reviews:checkIn` lists it. */
+interface Request {
+  reviewId: string;
+  sourceId: string;
+  title: string;
+}
+
+/**
+ * Says this computer is open (for accounts' Fixing page) and, on the fixing
+ * computer, takes each waiting "Ready for changes" for a project here:
+ * `reviews:takeFix`, then `fixReady` runs on by itself. The requests it took.
+ */
+export async function checkIn(app: App): Promise<string[]> {
+  const email = accounts.status().person as { email?: string } | null;
+  const answer = (await cloud.mutation("reviews:checkIn", { machine: machine.id(), name: machine.name(), email: email?.email ?? null })) as { chosen?: boolean; requests?: Request[] };
+  const now = answer.chosen === true;
+  if (now !== chosen) diag.info("review", now ? "this computer is the fixing computer: it takes Ready for changes" : "this computer isn't the fixing computer");
+  chosen = now;
+  if (!chosen) return [];
+  const took: string[] = [];
+  const requests = (answer.requests ?? []).filter((one) => typeof one.reviewId === "string" && typeof one.sourceId === "string");
+  if (requests.length === 0) return took;
+  // The notes it fixes are read from what Edit has heard: hear them first.
+  await poll(app).catch((error: unknown) => diag.warn("review", `hearing the notes before a fix: ${diag.messageOf(error)}`));
+  for (const request of requests) {
+    const project = request.sourceId;
     const live = app.store.get(project);
-    if (live === null) continue;
-    // Approved: nothing more to fix.
-    if (state.shared[project]?.approved) continue;
-    // Tried twice with nothing to show: said on the review, for the team.
-    for (const note of givenUp(state, project, now)) {
-      await unfixed(app, project, note.id, `auto-fix gave up after ${MAX_ATTEMPTS} tries: the team will look at it`).catch((error: unknown) => diag.warn("review", `giving up on ${note.id}: ${diag.messageOf(error)}`));
+    const busy = readying.has(project) || sharing.has(project) || (live !== null && (seams.agentPanel(app).chat(project) as { running?: boolean }).running === true);
+    // A project not here, or busy, waits for a later check-in.
+    if (live === null || busy) {
+      diag.info("review", `${request.title || project}: Ready for changes waits: the project ${live === null ? "isn't on this computer" : "is busy"}`);
+      continue;
     }
-    const notes = waiting(state, project, now);
-    if (notes.length === 0) continue;
-    const newest = Math.max(...notes.map((note) => note.createdAt), lastHeard.get(project) ?? 0);
-    if (now - newest < SETTLE_MS) continue;
-    const chat = seams.agentPanel(app).chat(project) as { running?: boolean };
-    if (chat.running === true) continue;
-    // A cloud project another Mac holds is theirs to fix.
     try {
       await app.store.mayWrite(project);
     } catch {
+      diag.info("review", `${live.project.name}: Ready for changes waits: another computer holds the project`);
       continue;
     }
-    let claimed: string[];
-    try {
-      claimed = ((await cloud.mutation("reviews:claim", { noteIds: notes.map((note) => note.id), by: app.machine })) as { claimed?: string[] }).claimed ?? [];
-    } catch (error) {
-      diag.warn("review", `claiming ${project}'s notes: ${diag.messageOf(error)}`);
+    const taken = (await cloud.mutation("reviews:takeFix", { machine: machine.id(), reviewId: request.reviewId })) as { ok?: boolean; reason?: string; noteIds?: string[] };
+    if (taken.ok !== true) {
+      diag.info("review", `${live.project.name}: Ready for changes not taken (${taken.reason ?? "?"})`);
       continue;
     }
-    const mine = notes.filter((note) => claimed.includes(note.id));
-    // Tried now: here, or by the Mac that claimed it first.
-    update(home, (saved) => {
-      for (const note of notes) {
-        const own = saved.notes[note.id];
-        if (own === undefined) continue;
-        own.claimed = now;
-        if (claimed.includes(note.id)) own.attempts = (own.attempts ?? 0) + 1;
-      }
-    });
-    if (mine.length === 0) continue;
-    checkpoints.set(project, structuredClone(live.project));
-    try {
-      const replies = Object.values(state.notes).filter((note) => note.project === project && note.parentId !== null);
-      const stills = await boxStills(home, project, state.shared[project], mine);
-      // Driven by whoever has the review link: this turn edits this video only (review_guard.ts).
-      reviewGuard.reviewTurnNext(project);
-      try {
-        await seams.agentPanel(app).send(project, fixMessage(live.project, state.shared[project], mine, replies, stills), null, null);
-      } catch (error) {
-        reviewGuard.forgetNext(project);
-        throw error;
-      }
-      started.push(project);
-      diag.info("review", `${live.project.name}: the agent is fixing ${mine.length} note(s)`);
-    } catch (error) {
-      diag.warn("review", `starting ${project}'s fix: ${diag.messageOf(error)}`);
-      await cloud.mutation("reviews:release", { noteIds: mine.map((note) => note.id), by: app.machine }).catch(() => {});
-      update(home, (saved) => {
-        for (const note of mine) if (saved.notes[note.id] !== undefined) delete saved.notes[note.id]!.claimed;
-      });
-    }
+    took.push(project);
+    readying.add(project);
+    void fixReady(app, project, request.reviewId, taken.noteIds ?? [])
+      .catch(async (error: unknown) => {
+        diag.warn("review", `${live.project.name}: Ready for changes: ${diag.messageOf(error)}`);
+        await progress(request.reviewId, { state: "failed", error: diag.messageOf(error) });
+      })
+      .finally(() => readying.delete(project));
   }
-  return started;
+  return took;
+}
+
+/** How a Ready for changes is going, for its review page (`reviews:fixProgress`). Best effort. */
+async function progress(reviewId: string, given: { state?: "fixing" | "sharing" | "done" | "failed"; stage?: string; done?: number; total?: number; error?: string }): Promise<void> {
+  await cloud.mutation("reviews:fixProgress", { machine: machine.id(), reviewId, ...given }).catch((error: unknown) => diag.warn("review", `saying how the fix is going: ${diag.messageOf(error)}`));
+}
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** How often a Ready for changes turn is looked at. */
+let followMs = 5_000;
+/** Tests: look at the turn this often. */
+export function followEveryForTests(ms: number): void {
+  followMs = ms;
+}
+
+/**
+ * A Ready for changes on `project`: its notes claimed, the agent set on them
+ * (as a review turn: this video only), its turn followed note by note, then,
+ * when the edit changed, the whole edit exported with the last Share's
+ * settings and shared as the next version, which ends the request on the
+ * page. Nothing changed (questions answered): done, nothing shared.
+ */
+export async function fixReady(app: App, project: string, reviewId: string, noteIds: string[], every = followMs): Promise<void> {
+  const home = app.store.home;
+  const live = app.store.get(project);
+  if (live === null) throw new Error("the project isn't on this computer any more");
+  const claimed = ((await cloud.mutation("reviews:claim", { noteIds, by: app.machine, machine: machine.id() })) as { claimed?: string[] }).claimed ?? [];
+  const state = read(home);
+  const mine = claimed.map((id) => state.notes[id]).filter((note): note is Note => note !== undefined);
+  if (mine.length === 0) throw new Error("the notes were already taken by another run");
+  update(home, (saved) => {
+    for (const note of mine) {
+      const own = saved.notes[note.id];
+      if (own === undefined) continue;
+      own.claimed = Date.now();
+      own.attempts = (own.attempts ?? 0) + 1;
+    }
+  });
+  const before = timelineHash(live.project);
+  checkpoints.set(project, structuredClone(live.project));
+  await progress(reviewId, { stage: "Fixing the notes", done: 0, total: mine.length });
+  const replies = Object.values(state.notes).filter((note) => note.project === project && note.parentId !== null);
+  const stills = await boxStills(home, project, state.shared[project], mine);
+  const panel = seams.agentPanel(app);
+  reviewGuard.reviewTurnNext(project);
+  try {
+    await panel.send(project, fixMessage(live.project, state.shared[project], mine, replies, stills), null, null);
+  } catch (error) {
+    reviewGuard.forgetNext(project);
+    await cloud.mutation("reviews:release", { noteIds: mine.map((note) => note.id), by: app.machine }).catch(() => {});
+    throw error;
+  }
+  diag.info("review", `${live.project.name}: Ready for changes: the agent is fixing ${mine.length} note(s)`);
+  // Follow the turn (and Edit's own follow-ups to it) to its end, saying how many notes are answered.
+  const began = Date.now();
+  let said = 0;
+  let quiet = 0;
+  while (Date.now() - began < FIX_TURN_MS) {
+    await pause(every);
+    const notes = read(home).notes;
+    const answered = mine.filter((note) => notes[note.id]?.fix !== undefined || notes[note.id]?.unfixed !== undefined).length;
+    if (answered !== said) {
+      said = answered;
+      await progress(reviewId, { stage: answered < mine.length ? `Fixing note ${answered + 1} of ${mine.length}` : "Checking the fixes", done: answered });
+    }
+    // Ended when it's stopped running for two looks in a row (a follow-up turn may start between).
+    quiet = (panel.chat(project) as { running?: boolean }).running === true ? 0 : quiet + 1;
+    if (quiet >= 2) break;
+  }
+  if (Date.now() - began >= FIX_TURN_MS) throw new Error("the agent's turn ran for three hours without ending");
+  const after = app.store.get(project);
+  if (after === null) throw new Error("the project went while it was being fixed");
+  const approved = read(home).shared[project]?.approved;
+  if (approved) {
+    await progress(reviewId, { state: "failed", error: `v${approved.version} was approved meanwhile, so nothing was shared.` });
+    return;
+  }
+  if (timelineHash(after.project) === before) {
+    await progress(reviewId, { state: "done", stage: "Answered: nothing in the edit changed" });
+    return;
+  }
+  const next = (read(home).shared[project]?.versions.reduce((most, one) => Math.max(most, one.n), 0) ?? 0) + 1;
+  await progress(reviewId, { state: "sharing", stage: `Exporting v${next}` });
+  // Say how the export and upload are going while they run.
+  let last = "";
+  const ticker = setInterval(() => {
+    const now = sharing.get(project);
+    if (now === undefined || now === last) return;
+    last = now;
+    void progress(reviewId, { stage: `v${next}: ${now}`.slice(0, 120) });
+  }, 10_000);
+  ticker.unref?.();
+  try {
+    // The share ends the request on the page, as done with this version.
+    const shared = await exportAndShare(app, project, read(home).shareOptions?.[project] ?? {});
+    diag.info("review", `${after.project.name}: Ready for changes: shared v${shared.version}`);
+  } catch (error) {
+    await progress(reviewId, { state: "failed", error: `The fixes are in, but sharing v${next} failed: ${diag.messageOf(error)}` });
+  } finally {
+    clearInterval(ticker);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -969,7 +1091,6 @@ export function view(app: App, projectId: string): unknown {
     .sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0));
   return {
     sharing: sharing.get(projectId) ?? null,
-    autoFix: state.autoFix,
     review: shared === undefined ? null : { url: shared.url, versions: shared.versions.map((one) => ({ n: one.n, path: one.path })), approved: shared.approved ?? null },
     notes: notes.map((note) => {
       const version = shared?.versions.find((one) => one.n === note.version);
@@ -1015,12 +1136,6 @@ export function openCounts(home: string): Record<string, number> {
     if (note.status === "open" && note.parentId === null) out[note.project] = (out[note.project] ?? 0) + 1;
   }
   return out;
-}
-
-export function setAutoFix(home: string, on: boolean): void {
-  update(home, (state) => {
-    state.autoFix = on;
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1223,11 +1338,5 @@ export function routes(router: Router<App>): void {
     } catch (error) {
       throw new ApiError(400, diag.messageOf(error));
     }
-  });
-  router.post("/api/reviews/settings", async (context) => {
-    const given = (await readJson<unknown>(context)) as Record<string, unknown>;
-    if (typeof given?.autoFix !== "boolean") throw new ApiError(400, "autoFix: true or false");
-    setAutoFix(context.app.store.home, given.autoFix);
-    return sorted({ autoFix: given.autoFix });
   });
 }

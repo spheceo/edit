@@ -1,5 +1,4 @@
-import { readSetting, writeSetting } from "./storage";
-// The agent chat: the user's Claude Code or Codex, through Edit's server (apps/server/src/agent.ts).
+// The agent chat: the user's Claude Code, through Edit's server (apps/server/src/agent.ts). Edit picks the model.
 
 import { create } from "zustand";
 
@@ -15,15 +14,6 @@ export interface AgentEntry {
   detail?: string;
   at?: number;
   updated?: number;
-}
-
-export interface AgentModel {
-  id: string;
-  name: string;
-  description: string;
-  default_effort: string;
-  efforts: string[];
-  is_default: boolean;
 }
 
 export type AgentProvider = "claude" | "codex";
@@ -44,7 +34,6 @@ export interface AgentStatus {
 
 interface AgentState {
   status: AgentStatus | null;
-  models: AgentModel[];
   project: string | null;
   /** This project's chat has been fetched (until then show nothing, not the empty state). */
   loaded: boolean;
@@ -52,28 +41,15 @@ interface AgentState {
   running: boolean;
   /** Last streamed or changed moment, so "Thinking" only shows after a quiet spell. */
   activityAt: number;
-  model: string | null;
-  effort: string | null;
 }
-
-const cachedModels = (): AgentModel[] => {
-  try {
-    return JSON.parse(readSetting("edit.agent.models") ?? "[]");
-  } catch {
-    return [];
-  }
-};
 
 export const useAgent = create<AgentState>(() => ({
   status: null,
-  models: cachedModels(),
   project: null,
   loaded: false,
   entries: [],
   running: false,
   activityAt: 0,
-  model: readSetting("edit.agent.model"),
-  effort: readSetting("edit.agent.effort"),
 }));
 
 /** Chats already seen this session, so reopening the panel or a project is instant. */
@@ -85,65 +61,8 @@ const json = async <T>(response: Response): Promise<T> => {
   return body as T;
 };
 
-export const EFFORT_LABELS: Record<string, string> = {
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra high",
-  max: "Max",
-  ultra: "Ultra",
-};
-
 /** The agent's name as the panel shows it. */
 export const providerName = (status: AgentStatus | null) => (status?.provider === "codex" ? "Codex" : "Claude Code");
-
-/** Fetches the models of the provider now chosen. */
-async function refreshModels() {
-  const { models } = await json<{ models: AgentModel[] }>(await fetchRetrying("/api/agent/models"));
-  writeSetting("edit.agent.models", JSON.stringify(models));
-  useAgent.setState({ models });
-}
-
-/** Switches the agent to Claude Code or Codex; the next message in each chat starts a new conversation there. */
-export async function chooseProvider(provider: AgentProvider) {
-  const status = await json<AgentStatus>(
-    await fetchRetrying("/api/agent/provider", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider }),
-    }),
-  );
-  // Each provider names its models its own way.
-  writeSetting("edit.agent.models", "[]");
-  useAgent.setState({ status, models: [], model: null, effort: null });
-  writeSetting("edit.agent.model", "");
-  writeSetting("edit.agent.effort", "");
-  if (status.ready) await refreshModels().catch(() => {});
-  return status;
-}
-
-/** The selected model, falling back to the provider's default. */
-export function currentModel(state = useAgent.getState()) {
-  return state.models.find((model) => model.id === state.model) ?? state.models.find((model) => model.is_default) ?? state.models[0];
-}
-
-/** The selected thinking level, kept valid for the current model. */
-export function currentEffort(state = useAgent.getState()) {
-  const model = currentModel(state);
-  if (!model) return state.effort ?? "medium";
-  return state.effort && model.efforts.includes(state.effort) ? state.effort : model.default_effort;
-}
-
-export function chooseModel(id: string) {
-  writeSetting("edit.agent.model", id);
-  useAgent.setState({ model: id });
-}
-
-export function chooseEffort(effort: string) {
-  writeSetting("edit.agent.effort", effort);
-  useAgent.setState({ effort });
-}
 
 /** Shows this project's chat (instantly if seen before), then refreshes it quietly. */
 export async function openAgent(project: string) {
@@ -155,7 +74,7 @@ export async function openAgent(project: string) {
   const [status, chat] = await Promise.all([
     fetchRetrying("/api/agent").then((response) => json<AgentStatus>(response)),
     fetchRetrying(`/api/projects/${project}/agent`).then((response) =>
-      json<{ entries: AgentEntry[]; running: boolean; model: string | null; effort: string | null }>(response),
+      json<{ entries: AgentEntry[]; running: boolean }>(response),
     ),
   ]).catch(() => [null, null] as const);
   if (useAgent.getState().project !== project) return;
@@ -170,16 +89,12 @@ export async function openAgent(project: string) {
     loaded: true,
     entries: [...chat.entries, ...pending],
     running: chat.running || pending.length > 0,
-    ...(chat.model ? { model: chat.model } : {}),
-    ...(chat.effort ? { effort: chat.effort } : {}),
   });
-  if (status.ready) refreshModels().catch(() => {});
 }
 
 export async function sendToAgent(text: string) {
   const state = useAgent.getState();
   if (!state.project) return;
-  const model = currentModel(state);
   // Show the message now; the server's copy replaces it when it arrives.
   const now = Date.now();
   useAgent.setState({
@@ -191,7 +106,7 @@ export async function sendToAgent(text: string) {
     await fetchRetrying(`/api/projects/${state.project}/agent`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, model: model?.id, effort: currentEffort(state) }),
+      body: JSON.stringify({ text }),
     }).then(json);
   } catch (error) {
     useAgent.setState((current) => ({

@@ -1,6 +1,6 @@
-// The script, a side tab next to Info and Transcript: footage ranges and the
-// narration between them, in order. The block under the playhead lights up;
-// click one to jump there. Also attaches a Google Doc; its downloads have their own tab.
+// The script, a tab beside the media bin: footage ranges and the narration
+// between them, in order. The block under the playhead lights up; click one to
+// jump there. Also attaches a Google Doc; its downloads have their own tab.
 
 import { ArrowUpRight, CircleAlert, FileText, RotateCw, Scissors } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -114,7 +114,7 @@ function Blocks({ project }: { project: Project }) {
   let cutIn = 0;
 
   return (
-    <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+    <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
       <div className="flex flex-col gap-1">
         {rows.map((row) => {
           if (row.kind === "narration") {
@@ -141,8 +141,9 @@ function Blocks({ project }: { project: Project }) {
             );
           }
           const isActive = row.indexes.includes(active);
+          // The ranges flow side by side and wrap, as the Doc writes them on a line.
           return (
-            <div key={row.indexes[0]} className={cx("relative flex flex-col gap-0.5 rounded-lg px-1.5 py-1.5 transition-colors", isActive && "bg-raised")}>
+            <div key={row.indexes[0]} className={cx("flex flex-wrap gap-1 rounded-lg p-1.5 transition-colors", isActive && "bg-raised")}>
               {row.indexes.map((index) => {
                 const block = blocks[index] as Extract<ScriptBlock, { kind: "footage" }>;
                 const file = labels.get(block.file)!;
@@ -153,27 +154,15 @@ function Blocks({ project }: { project: Project }) {
                     key={index}
                     data-block={index}
                     onClick={() => jump(block)}
-                    title={`${file.name ?? file.label}\n${block.label}${block.cut ? `\nCut ${clock(block.cut[0])} – ${clock(block.cut[1])}` : ""}${placed ? "" : "\nNot on the timeline yet"}`}
+                    title={`${file.name ?? file.label}\n${block.label}${cue ? `\n${cue}` : ""}${block.cut ? `\nCut ${clock(block.cut[0])} – ${clock(block.cut[1])}` : ""}${placed ? "" : "\nNot on the timeline yet"}`}
                     className={cx(
-                      "group flex h-7 min-w-0 items-center gap-2.5 rounded-md px-1 text-left transition-colors",
-                      active === index ? "bg-active" : "hover:bg-hover",
+                      "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 font-mono text-[11px] tabular ring-1 transition-colors",
+                      active === index ? "bg-active text-fg ring-line-strong" : "text-muted ring-line hover:bg-hover hover:text-fg",
                       !placed && "opacity-45",
                     )}
                   >
-                    <span
-                      className={cx(
-                        "flex h-5 shrink-0 items-center gap-1.5 rounded px-1.5 font-mono text-[11px] tabular ring-1",
-                        active === index ? "text-fg ring-line-strong" : "text-muted ring-line group-hover:text-fg",
-                      )}
-                    >
-                      <span className="size-1.5 shrink-0 rounded-full" style={{ background: file.color }} />
-                      {block.label}
-                    </span>
-                    {cue && (
-                      <span className={cx("min-w-0 truncate text-[12px]", active === index ? "text-fg/80" : "text-faint group-hover:text-muted")} title={cue}>
-                        {cue}
-                      </span>
-                    )}
+                    <span className="size-1.5 shrink-0 rounded-full" style={{ background: file.color }} />
+                    {block.label}
                   </button>
                 );
               })}

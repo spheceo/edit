@@ -1,16 +1,12 @@
 // The account menu at the top right (your avatar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens.
 
-import { Bug, Check, Copy, Ellipsis, LogIn, LogOut, RotateCw, ScrollText, Settings, UserRound } from "lucide-react";
+import { Bug, Ellipsis, LogIn, LogOut, ScrollText, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { loadAccount, signIn, signOut, useAccount } from "../lib/account";
-import { chooseProvider, useAgent, type AgentModel, type AgentProvider, type AgentStatus } from "../lib/agent";
-import { fetchRetrying } from "../lib/api";
 import { closeDialog, openDialog, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
-import { writeSetting } from "../lib/storage";
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
-import { ClaudeMark, OpenAIMark } from "./AgentPanel";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { StartedBy } from "./StartedBy";
 import { cx, IconButton, Modal, Select, Tabs } from "./ui";
@@ -78,7 +74,6 @@ export function AppDialogs() {
       <Modal open={open === "settings"} onClose={closeDialog} width={480}>
         <DialogHeader title="Settings" />
         <div className="flex max-h-[72vh] flex-col gap-6 overflow-y-auto px-6 pb-6">
-          <ToolSettings />
           <UpdateSettings />
         </div>
       </Modal>
@@ -257,158 +252,6 @@ function ReportDialog() {
   );
 }
 
-interface Clis {
-  claude?: AgentStatus;
-  codex?: AgentStatus;
-  provider?: AgentProvider;
-}
-
-/** The CLIs Edit drives: whether each is installed and signed in, and which one runs the agent. */
-function ToolSettings() {
-  const [clis, setClis] = useState<Clis | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [switching, setSwitching] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-
-  const check = async () => {
-    setChecking(true);
-    try {
-      const next = (await (await fetchRetrying("/api/agent/clis")).json()) as Clis;
-      setClis(next);
-      const status = next.provider === "codex" ? next.codex : next.claude;
-      if (status) useAgent.setState({ status });
-      if (status?.ready) {
-        const { models } = (await (await fetchRetrying("/api/agent/models")).json()) as { models: AgentModel[] };
-        if (models?.length) {
-          writeSetting("edit.agent.models", JSON.stringify(models));
-          useAgent.setState({ models });
-        }
-      }
-    } catch {
-      // Unreachable: keep what we showed.
-    } finally {
-      setChecking(false);
-    }
-  };
-  useEffect(() => {
-    void check();
-  }, []);
-
-  const provider: AgentProvider = clis?.provider === "codex" ? "codex" : "claude";
-  const pick = (next: AgentProvider) => {
-    if (next === provider || switching) return;
-    setSwitching(true);
-    setProblem(null);
-    void chooseProvider(next)
-      .then(() => setClis((current) => ({ ...current, provider: next })))
-      .catch((thrown: Error) => setProblem(thrown.message))
-      .finally(() => setSwitching(false));
-  };
-  return (
-    <Group
-      title="Tools"
-      action={
-        <button
-          type="button"
-          title="Check again"
-          onClick={() => void check()}
-          disabled={checking}
-          className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
-        >
-          <RotateCw size={12} className={checking ? "animate-spin" : undefined} />
-        </button>
-      }
-    >
-      <Card>
-        <Tool
-          icon={<ClaudeMark size={15} />}
-          name="Claude Code"
-          role={provider === "claude" ? "Runs the agent, names speakers" : "Names speakers"}
-          status={clis?.claude}
-          detail={[clis?.claude?.email, clis?.claude?.plan].filter(Boolean).join(" · ")}
-          login="claude auth login"
-          install="curl -fsSL https://claude.ai/install.sh | bash"
-        />
-        <Tool
-          icon={<OpenAIMark size={16} />}
-          name="Codex"
-          role={provider === "codex" ? "Runs the agent, checks subtitles against the footage" : "Checks subtitles against the footage"}
-          status={clis?.codex}
-          login="codex login"
-          install="npm install -g @openai/codex"
-        />
-        <Line label="Agent" last>
-          <Tabs
-            id="agent-provider"
-            value={provider}
-            tabs={[
-              { value: "claude", label: "Claude Code" },
-              { value: "codex", label: "Codex" },
-            ]}
-            onChange={pick}
-          />
-        </Line>
-      </Card>
-      {problem && <p className="mt-2 text-[12px] text-danger">{problem}</p>}
-    </Group>
-  );
-}
-
-/** One CLI: its version and sign-in, or the command that fixes it. */
-function Tool({
-  icon,
-  name,
-  role,
-  status,
-  detail,
-  login,
-  install,
-}: {
-  icon: ReactNode;
-  name: string;
-  role: string;
-  status?: AgentStatus;
-  detail?: string;
-  login: string;
-  install: string;
-}) {
-  const state = status?.state ?? (status?.ready ? "ready" : status ? "missing" : undefined);
-  const version = status?.version?.match(/\d+(\.\d+)+/)?.[0];
-  const fix = state === "logged_out" ? login : state === "missing" ? `${install} && ${login}` : null;
-  return (
-    <div className="flex flex-col gap-2 border-b border-line px-3 py-3">
-      <div className="flex items-center gap-3">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised text-fg ring-1 ring-line">{icon}</span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span className="text-[13px] font-medium">{name}</span>
-            {version && <span className="font-mono text-[11px] text-faint">{version}</span>}
-          </div>
-          <div className="truncate text-[11px] text-muted">{[role, state === "ready" ? detail : ""].filter(Boolean).join(" · ")}</div>
-        </div>
-        <StatusPill state={state} />
-      </div>
-      {fix && <Fix command={fix} />}
-    </div>
-  );
-}
-
-/** A command to run in Terminal, copied on click. */
-function Fix({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      title="Copy"
-      onClick={() => void copyText(command).then(setCopied)}
-      className="ml-11 flex min-w-0 items-center gap-2 self-start rounded-md border border-line bg-black/40 px-2 py-1 font-mono text-[11px] text-muted hover:text-fg"
-    >
-      <span className="truncate">{command}</span>
-      {copied ? <Check size={12} className="shrink-0 text-success" /> : <Copy size={12} className="shrink-0" />}
-    </button>
-  );
-}
-
 /** This build and the update channel: Nightly (every nightly as it’s out) or Stable (releases only). */
 function UpdateSettings() {
   const status = useUpdate((state) => state.status);
@@ -473,18 +316,6 @@ function Group({ title, action, children }: { title: string; action?: ReactNode;
 
 function Card({ children }: { children: ReactNode }) {
   return <div className="overflow-hidden rounded-xl bg-black ring-1 ring-line">{children}</div>;
-}
-
-function StatusPill({ state }: { state?: string }) {
-  const [label, tone] =
-    state === "ready"
-      ? ["Ready", "bg-success-soft text-success"]
-      : state === "logged_out"
-        ? ["Signed out", "bg-warning-soft text-warning"]
-        : state === "missing"
-          ? ["Not installed", "bg-danger-soft text-danger"]
-          : ["Checking…", "bg-hover text-muted"];
-  return <span className={cx("shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium", tone)}>{label}</span>;
 }
 
 function Line({ label, children, last }: { label: string; children: ReactNode; last?: boolean }) {

@@ -26,7 +26,6 @@ import { rate } from "../lib/types";
 const MEDIA_WIDTH = 280;
 const SIDE_WIDTH = 296;
 const AGENT_WIDTH = 340;
-const SCRIPT_WIDTH = 440;
 
 /** A panel that springs open and closed, keeping its gap to the viewer. */
 /** Panels keep their share of the window: sized for a ~1640 px wide window and
@@ -82,8 +81,6 @@ export function Editor({ id }: { id: string }) {
   const showMedia = useEditor((state) => state.showMedia);
   const showInspector = useEditor((state) => state.showInspector);
   const showAgent = useEditor((state) => state.showAgent);
-  // The script reads better wider than the other side tabs.
-  const wide = useEditor((state) => state.sideTab === "script" || state.sideTab === "downloads");
   const timelineHeight = useEditor((state) => state.timelineHeight);
   const [resizing, setResizing] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -154,7 +151,7 @@ export function Editor({ id }: { id: string }) {
             <SlideIn show={showMedia} width={MEDIA_WIDTH} side="left">
               <MediaPanel onImport={() => setImporting(true)} onResearch={() => setResearching(true)} />
             </SlideIn>
-            <SlideIn show={showInspector} width={wide ? SCRIPT_WIDTH : SIDE_WIDTH} side="left">
+            <SlideIn show={showInspector} width={SIDE_WIDTH} side="left">
               <SidePanel />
             </SlideIn>
             <Viewer />

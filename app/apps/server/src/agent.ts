@@ -285,7 +285,7 @@ export class Agents implements seams.AgentPanel {
   private asks = new Map<string, Ask>();
   /** The last "ready" status and when it was found (see `status`). */
   private ready: [number, Json] | null = null;
-  /** The provider new turns go to (Settings → Agent; `<home>/agent/provider.json`). */
+  /** The provider new turns go to: Claude unless the API chose Codex since Edit started. */
   private chosen: Provider = DEFAULT_PROVIDER;
   /** Claude Code's models, cached a day like Codex's (`<home>/agent/claude-models.json`). */
   private claudeCatalog: { fetched_ms: number; models: claude.ModelInfo[] } | null = null;
@@ -326,12 +326,8 @@ export class Agents implements seams.AgentPanel {
       models = null;
     }
     this.modelCache = models;
-    try {
-      const saved = JSON.parse(fs.readFileSync(join(this.dir, "provider.json"), "utf8")) as { provider?: unknown };
-      if (saved.provider === "codex" || saved.provider === "claude") this.chosen = saved.provider;
-    } catch {
-      // Not chosen yet: the default.
-    }
+    // Every start is on Claude (Oct 24: Codex is hidden from Settings); a
+    // Codex chosen through the API (an experiment) lasts until Edit restarts.
     try {
       const value = JSON.parse(fs.readFileSync(join(this.dir, "claude-models.json"), "utf8")) as { fetched_ms?: unknown; models?: unknown };
       if (typeof value.fetched_ms === "number" && Array.isArray(value.models)) {
@@ -351,11 +347,6 @@ export class Agents implements seams.AgentPanel {
   setProvider(provider: Provider): void {
     this.chosen = provider;
     this.ready = null;
-    try {
-      writeAtomic(join(this.dir, "provider.json"), JSON.stringify({ provider }));
-    } catch (error) {
-      diag.warn("agent", `saving the agent provider: ${diag.messageOf(error)}`);
-    }
   }
 
   /**
@@ -633,6 +624,11 @@ export class Agents implements seams.AgentPanel {
         chat.generation = this.nextGeneration++;
         chat.halted = false;
         chat.retries = 0;
+        // Edit picks the model: the panel sends none, so a model chosen in an
+        // older build isn't kept. A caller naming one (the teaching loop) gets
+        // it, and Edit's own retries and follow-ups stay on it.
+        chat.model = model;
+        chat.effort = effort;
       }
       // A retried turn stays with the provider it ran on, whatever's chosen since.
       const provider = generation !== null && chat.provider !== null ? chat.provider : this.chosen;

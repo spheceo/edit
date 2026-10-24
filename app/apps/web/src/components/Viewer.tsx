@@ -140,7 +140,7 @@ export function Viewer() {
         )}
         {!error && empty && importing !== null && (
           <button
-            onClick={() => useEditor.getState().setSideTab("downloads")}
+            onClick={() => useEditor.getState().setMediaTab("downloads")}
             className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[13px]"
           >
             <span className={cx("text-muted", job?.state !== "failed" && "shimmer")}>{importing.line}</span>

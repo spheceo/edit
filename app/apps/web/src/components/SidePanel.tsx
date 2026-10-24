@@ -1,22 +1,17 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef } from "react";
 
-import { importProgress } from "../lib/import_progress";
 import { useEditor, type SideTab } from "../lib/store";
 import { Inspector } from "./Inspector";
-import { Library } from "./Library";
 import { Presets } from "./Presets";
-import { ScriptDownloads, ScriptPanel } from "./ScriptPanel";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { Tabs } from "./ui";
 
-/** Info (inspector), Presets, Library, Transcript, Script and (while a script imports) Downloads, next to the media bin. */
+/** Info (inspector), Presets and Transcript, next to the media bin. */
 export function SidePanel() {
   const tab = useEditor((state) => state.sideTab);
   const setTab = useEditor((state) => state.setSideTab);
   const selection = useEditor((state) => state.selection);
-  const job = useEditor((state) => state.scriptJob);
-  const downloading = Boolean(job && job.state !== "done");
 
   // Picking something on the timeline while browsing presets shows its settings.
   const previous = useRef(selection);
@@ -25,11 +20,6 @@ export function SidePanel() {
     previous.current = selection;
     if (picked && useEditor.getState().sideTab === "presets") setTab("info");
   }, [selection, setTab]);
-
-  // Downloads finished: back to the script they were for.
-  useEffect(() => {
-    if (!downloading && useEditor.getState().sideTab === "downloads") setTab("script");
-  }, [downloading, setTab]);
 
   return (
     <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
@@ -41,10 +31,7 @@ export function SidePanel() {
           tabs={[
             { value: "info", label: "Info" },
             { value: "presets", label: "Presets" },
-            { value: "library", label: "Library" },
             { value: "transcript", label: "Transcript" },
-            { value: "script", label: "Script" },
-            ...(downloading && job ? [{ value: "downloads" as const, label: job.state === "failed" ? "Downloads ⚠" : `Downloads ${Math.round(importProgress(job).fraction * 100)}%` }] : []),
           ]}
         />
       </div>
@@ -59,12 +46,12 @@ export function SidePanel() {
         >
           {tab === "info" ? (
             <Inspector />
-          ) : tab === "script" ? (
-            <ScriptPanel />
-          ) : tab === "downloads" ? (
-            <ScriptDownloads />
+          ) : tab === "presets" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              <Presets />
+            </div>
           ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">{tab === "presets" ? <Presets /> : tab === "library" ? <Library /> : <TranscriptPanel />}</div>
+            <TranscriptPanel />
           )}
         </motion.div>
       </AnimatePresence>

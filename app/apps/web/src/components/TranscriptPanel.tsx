@@ -1,4 +1,4 @@
-import { AudioLines, CircleAlert, RotateCcw } from "lucide-react";
+import { AudioLines, ChevronRight, CircleAlert, RotateCcw, Search } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
@@ -7,6 +7,7 @@ import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import type { Project, Transcript } from "../lib/types";
 import { toggleMenu } from "./ContextMenu";
+import { displayNames } from "./MediaPanel";
 import { Button, cx, Spinner } from "./ui";
 import { rate } from "../lib/types";
 
@@ -119,6 +120,20 @@ function markWord(span: HTMLElement, index: number, active: number) {
   span.classList.toggle("opacity-55", index > active);
 }
 
+/** A search's words, lower case, punctuation off. */
+function searchTerms(query: string) {
+  return query.toLowerCase().split(/\s+/).map(normal).filter(Boolean);
+}
+
+const normal = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, "");
+
+/** Whether `text` holds the search: every word of it, in order, for a phrase; any one for a single word (`word`). */
+function matches(text: string, terms: string[], word = false) {
+  const said = normal(text);
+  if (word) return terms.some((term) => said.includes(term));
+  return said.includes(terms.join(" "));
+}
+
 const clock = (frame: number, fps: number) => {
   const seconds = Math.floor(frame / fps);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -129,6 +144,10 @@ export function TranscriptPanel() {
   const statuses = useEditor((state) => state.media);
   const toast = useEditor((state) => state.toast);
   const [version, setVersion] = useState(0);
+  const [query, setQuery] = useState("");
+  // The clips still to transcribe, folded away until asked for.
+  const [open, setOpen] = useState(false);
+  const names = useMemo(() => displayNames(project), [project.media]);
   const list = useRef<HTMLDivElement>(null);
   const fps = rate(project.settings);
   const { clips, tracks } = project;
@@ -243,42 +262,70 @@ export function TranscriptPanel() {
 
   const pending = [...heard, ...unplaced].filter((media) => statuses[media.id]?.transcript !== "ready");
   const waiting = pending.filter((media) => (statuses[media.id]?.transcript ?? "pending") === "pending");
+  const working = pending.filter((media) => statuses[media.id]?.transcript === "working").length;
   const error = pending.map((media) => statuses[media.id]?.transcript_error).find(Boolean);
+  const terms = searchTerms(query);
+  const shown = terms.length ? grouped.filter((phrase) => matches(phrase.words.map(({ word }) => word.text).join(" "), terms)) : grouped;
   return (
-    <div className="flex flex-col gap-4">
-      {pending.length > 0 && (
-        <div className="rounded-xl bg-black p-1 ring-1 ring-line">
-          <div className="flex items-center justify-between px-2 py-1.5">
-            <span className="text-[12px] text-muted">
-              {pending.length} {pending.length === 1 ? "clip" : "clips"} not transcribed
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 p-2">
+        <label className="flex h-8 items-center gap-2 rounded-lg border border-line bg-black px-2.5 text-[12px] focus-within:border-muted">
+          <Search size={13} className="shrink-0 text-faint" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Escape") setQuery("");
+            }}
+            placeholder="Search what’s said"
+            aria-label="Search the transcript"
+            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint"
+          />
+          {terms.length > 0 && (
+            <span className="shrink-0 font-mono text-[11px] text-faint tabular">
+              {shown.length} {shown.length === 1 ? "match" : "matches"}
             </span>
+          )}
+        </label>
+      </div>
+      {pending.length > 0 && (
+        <div className="mx-2 mb-2 shrink-0 rounded-xl bg-black p-1 ring-1 ring-line">
+          <div className="flex items-center justify-between gap-2 pl-1">
+            <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex min-w-0 items-center gap-1 py-1.5 text-[12px] text-muted hover:text-fg">
+              <ChevronRight size={13} className={cx("shrink-0 transition-transform duration-150", open && "rotate-90")} />
+              <span className="truncate">
+                {pending.length} {pending.length === 1 ? "clip" : "clips"} not transcribed{working ? ` · ${working} going` : ""}
+              </span>
+            </button>
             {waiting.length > 1 && (
-              <Button size="sm" variant="primary" onClick={() => waiting.forEach((media) => void start(media.id))}>
+              <Button size="sm" variant="ghost" onClick={() => waiting.forEach((media) => void start(media.id))}>
                 Transcribe all
               </Button>
             )}
           </div>
-          {pending.map((media) => {
-            const stage = statuses[media.id]?.transcript ?? "pending";
-            return (
-              <div key={media.id} className="flex h-9 items-center gap-2 rounded-lg px-2 hover:bg-hover">
-                <AudioLines size={13} className={cx("shrink-0", stage === "failed" ? "text-danger" : "text-faint")} />
-                <span className="min-w-0 flex-1 truncate text-[12px]" title={media.name}>
-                  {media.name}
-                </span>
-                {stage === "working" ? (
-                  <span className="flex items-center gap-1.5 text-[11px] text-muted">
-                    <Spinner /> Transcribing
+          {open &&
+            pending.map((media) => {
+              const stage = statuses[media.id]?.transcript ?? "pending";
+              return (
+                <div key={media.id} className="flex h-8 items-center gap-2 rounded-lg px-2 hover:bg-hover">
+                  <AudioLines size={13} className={cx("shrink-0", stage === "failed" ? "text-danger" : "text-faint")} />
+                  <span className="min-w-0 flex-1 truncate text-[12px]" title={media.name}>
+                    {names.get(media.id) ?? media.name}
                   </span>
-                ) : (
-                  <Button size="sm" variant="ghost" onClick={() => void start(media.id)}>
-                    {stage === "failed" ? <RotateCcw size={12} /> : null}
-                    {stage === "failed" ? "Retry" : "Transcribe"}
-                  </Button>
-                )}
-              </div>
-            );
-          })}
+                  {stage === "working" ? (
+                    <span className="flex items-center gap-1.5 text-[11px] text-muted">
+                      <Spinner /> Transcribing
+                    </span>
+                  ) : (
+                    <Button size="sm" variant="ghost" onClick={() => void start(media.id)}>
+                      {stage === "failed" ? <RotateCcw size={12} /> : null}
+                      {stage === "failed" ? "Retry" : "Transcribe"}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
           {error && (
             <p className="flex items-start gap-1.5 px-2 pt-1 pb-1.5 text-[11px] leading-relaxed text-danger/90">
               <CircleAlert size={11} className="mt-0.5 shrink-0" />
@@ -287,9 +334,10 @@ export function TranscriptPanel() {
           )}
         </div>
       )}
-      <div ref={list} className="flex flex-col gap-4 px-1 pb-4">
-        {grouped.map((phrase, number) => {
-          const newVoice = phrase.speaker && phrase.speaker !== grouped[number - 1]?.speaker;
+      <div ref={list} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 pt-1 pb-4">
+        {shown.map((phrase) => {
+          const number = grouped.indexOf(phrase);
+          const newVoice = phrase.speaker && (terms.length > 0 || phrase.speaker !== grouped[number - 1]?.speaker);
           return (
             <div key={phrase.words[0].index} className="group">
               <div className="mb-0.5 flex items-center gap-2">
@@ -344,7 +392,10 @@ export function TranscriptPanel() {
                         preview.seek(Math.ceil(word.frame - 0.5));
                       }}
                       // As if nothing’s said yet; markWord sets the highlight.
-                      className="cursor-pointer rounded-[4px] px-[1px] text-white opacity-55 transition-[color,background,opacity] duration-100 hover:bg-hover"
+                      className={cx(
+                        "cursor-pointer rounded-[4px] px-[1px] text-white opacity-55 transition-[color,background,opacity] duration-100 hover:bg-hover",
+                        terms.length > 0 && matches(word.text, terms, true) && "underline decoration-[#ffff00] decoration-2 underline-offset-[3px]",
+                      )}
                     >
                       {word.text}
                     </span>{" "}
@@ -354,7 +405,8 @@ export function TranscriptPanel() {
             </div>
           );
         })}
-        {!grouped.length && !pending.length && <p className="text-[12px] text-muted">No speech was found in the clips on the timeline.</p>}
+        {terms.length > 0 && !shown.length && <p className="px-1 text-[12px] text-muted">Nobody says “{query.trim()}” on the timeline.</p>}
+        {!terms.length && !grouped.length && !pending.length && <p className="text-[12px] text-muted">No speech was found in the clips on the timeline.</p>}
       </div>
     </div>
   );

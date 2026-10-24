@@ -864,7 +864,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
     setStarting(one.id);
     try {
       const { project } = await api.importWriter(one.id);
-      useEditor.getState().setSideTab("downloads");
+      useEditor.getState().setMediaTab("downloads");
       onClose();
       navigate(`/p/${project}`);
     } catch (error) {
@@ -908,7 +908,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
       const { project } = await api.createProject({ name, style, ...FORMAT });
       if (script) {
         await api.attachScript(project.id, url);
-        useEditor.getState().setSideTab("downloads");
+        useEditor.getState().setMediaTab("downloads");
       }
       onClose();
       navigate(`/p/${project.id}`);

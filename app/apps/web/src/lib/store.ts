@@ -48,7 +48,9 @@ export interface Toast {
 }
 
 export type Tool = "select" | "razor";
-export type SideTab = "info" | "presets" | "library" | "transcript" | "script" | "downloads";
+export type SideTab = "info" | "presets" | "transcript";
+/** The left panel: the media bin, the script beside it, and its downloads while they run. */
+export type MediaTab = "media" | "script" | "downloads";
 
 interface EditorState {
   project: Project | null;
@@ -66,10 +68,11 @@ interface EditorState {
   tool: Tool;
   snapping: boolean;
   showMedia: boolean;
-  /** The Info / Elements / Transcript panel. */
+  /** The Info / Presets / Transcript panel. */
   showInspector: boolean;
   showAgent: boolean;
   sideTab: SideTab;
+  mediaTab: MediaTab;
   /** The project's script import (footage downloads), while one exists. */
   scriptJob: ScriptJob | null;
   timelineHeight: number;
@@ -93,6 +96,7 @@ interface EditorState {
   setTool(tool: Tool): void;
   toggle(key: "snapping" | "showMedia" | "showInspector" | "showAgent"): void;
   setSideTab(tab: SideTab): void;
+  setMediaTab(tab: MediaTab): void;
   setTimelineHeight(height: number): void;
   /** Back to the default height (the divider's double-click). */
   resetTimelineHeight(): void;
@@ -200,7 +204,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   showMedia: true,
   showInspector: true,
   showAgent: readSetting("edit.showAgent") !== "false",
-  sideTab: (["info", "presets", "library", "transcript", "script"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
+  sideTab: (["info", "presets", "transcript"] as const).find((tab) => tab === readSetting("edit.sideTab")) ?? "info",
+  mediaTab: readSetting("edit.mediaTab") === "script" ? "script" : "media",
   scriptJob: null,
   timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
   toasts: [],
@@ -310,6 +315,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   setSideTab: (sideTab) => {
     writeSetting("edit.sideTab", sideTab);
     set({ sideTab, showInspector: true });
+  },
+  setMediaTab: (mediaTab) => {
+    if (mediaTab !== "downloads") writeSetting("edit.mediaTab", mediaTab);
+    set({ mediaTab, showMedia: true });
   },
   setTimelineHeight: (height) => {
     writeSetting("edit.timelineHeight", String(Math.round(height)));
@@ -467,7 +476,7 @@ export async function syncScriptJob(id: string) {
     const { job, unfinished } = await api.scriptJob(id);
     if (useEditor.getState().project?.id !== id) return;
     const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing" || job.state === "voicing");
-    useEditor.setState(running ? { scriptJob: job, sideTab: "downloads" } : { scriptJob: job });
+    useEditor.setState(running ? { scriptJob: job, mediaTab: "downloads", showMedia: true } : { scriptJob: job });
     // A failed run waits for Retry; an import that stopped part-way (blocks never
     // placed) carries on by itself. A placed block whose clip is gone was removed
     // on purpose (a cut-in card replaced by B-roll): never put it back.

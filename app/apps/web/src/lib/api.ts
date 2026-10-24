@@ -93,17 +93,6 @@ export interface FsListing {
   places: { name: string; path: string }[];
 }
 
-/** A sound in the team's library (Google Drive). */
-export interface LibrarySound {
-  /** The Drive file id. */
-  id: string;
-  name: string;
-  kind: "music" | "sfx";
-  category: string;
-  note?: string;
-  bytes: number;
-}
-
 /** An image found by research, waiting for review (or reviewed). */
 export interface FoundImage {
   id: string;
@@ -166,10 +155,6 @@ export const api = {
   /** Footage from a Google Drive folder or file link: downloaded on the machine running Edit, then imported. */
   importDrive: (id: string, url: string, place: boolean, origin: string) =>
     request<{ rev: number; added: string[]; errors: string[]; project: Project }>("POST", `/api/projects/${id}/import-drive`, { url, place, origin }),
-  library: (refresh = false) => request<{ sounds: LibrarySound[]; guide: string }>("GET", `/api/library${refresh ? "?refresh=true" : ""}`),
-  /** Downloads a library sound (first time) and adds it to the project's media. */
-  importLibrary: (id: string, sound: string, origin: string) =>
-    request<{ rev: number; media: string; project: Project }>("POST", `/api/projects/${id}/library`, { sound, origin }),
   research: (id: string) =>
     request<{ items: FoundImage[]; articles: FoundArticle[]; collecting: boolean }>("GET", `/api/projects/${id}/research`),
   /** Deletes the found images with a status (unreviewed or rejected). */

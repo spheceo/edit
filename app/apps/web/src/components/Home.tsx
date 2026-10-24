@@ -1,6 +1,6 @@
 import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { editStyles, useAccount } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
@@ -72,18 +72,12 @@ export function Home() {
   const cloudSubtitled = cloudKept.filter((project) => project.summary?.subtitles === true);
   const cloudEdits = cloudKept.filter((project) => project.summary?.subtitles !== true);
   const cloudEditsAll = cloudOnly.filter((project) => project.summary?.subtitles !== true).length;
-  // The two edits worked on last, big at the top, while nothing narrows the list
-  // (from the cloud too: a Mac that has none here yet still gets them).
-  const narrowed = words !== "" || style !== null;
-  const newest = [
-    ...edits.filter((project) => !project.problem).map((project) => ({ at: project.modified_ms, local: project as ProjectSummary | null, cloud: null as CloudProject | null })),
-    ...cloudEdits.map((project) => ({ at: project.updated_ms, local: null as ProjectSummary | null, cloud: project as CloudProject | null })),
-  ].sort((a, b) => b.at - a.at);
-  const continuing = narrowed ? [] : newest.slice(0, 2);
-  const rest = edits.filter((project) => !continuing.some((one) => one.local === project));
-  const restCloud = cloudEdits.filter((project) => !continuing.some((one) => one.cloud === project));
   const showEdits = kind !== "subtitled";
-  const showSubtitled = kind !== "edits";
+  // One table, newest change first, local and cloud-only projects together.
+  const rows: Listed[] = [
+    ...(showEdits ? edits : subtitled).map((project) => ({ at: project.modified_ms, local: project, cloud: null })),
+    ...(showEdits ? cloudEdits : cloudSubtitled).map((project) => ({ at: project.updated_ms, local: null, cloud: project })),
+  ].sort((a, b) => b.at - a.at);
   const cardProps = (project: ProjectSummary) => ({
     project,
     onChanged: refresh,
@@ -192,49 +186,9 @@ export function Home() {
               </div>
             </div>
 
-            {continuing.length > 0 && showEdits && (
-              <section className="mt-8">
-                <SectionTitle>Continue</SectionTitle>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {continuing.map((one, index) =>
-                    one.local !== null ? (
-                      <ProjectCard key={one.local.id} index={index} big {...cardProps(one.local)} />
-                    ) : (
-                      <CloudCard key={one.cloud!.id} project={one.cloud!} index={index} big onChanged={refresh} />
-                    ),
-                  )}
-                </div>
-              </section>
-            )}
-
-            {showEdits && (rest.length > 0 || restCloud.length > 0) && (
-              <section className="mt-9">
-                <SectionTitle count={rest.length + restCloud.length}>{continuing.length > 0 ? "More edits" : "Edits"}</SectionTitle>
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4">
-                  {rest.map((project, index) => (
-                    <ProjectCard key={project.id} index={index} {...cardProps(project)} />
-                  ))}
-                  {restCloud.map((project, index) => (
-                    <CloudCard key={project.id} project={project} index={rest.length + index} onChanged={refresh} />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {showSubtitled && subtitled.length + cloudSubtitled.length > 0 && (
-              <section className="mt-8">
-                <div className="overflow-hidden rounded-xl border border-line">
-                  {subtitled.map((project) => (
-                    <ProjectRow key={project.id} {...cardProps(project)} />
-                  ))}
-                  {cloudSubtitled.map((project) => (
-                    <CloudRow key={project.id} project={project} />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {(showEdits ? edits.length + cloudEdits.length : 0) + (showSubtitled ? subtitled.length + cloudSubtitled.length : 0) === 0 && (
+            {rows.length > 0 ? (
+              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} />
+            ) : (
               <p className="mt-16 text-center text-muted">Nothing matches{words ? ` “${query.trim()}”` : ""}.</p>
             )}
           </>
@@ -247,41 +201,19 @@ export function Home() {
 
 type Kind = "edits" | "subtitled";
 
+/** A row of Home's table: a project on this Mac, or one only in the cloud. */
+type Listed = { at: number; local: ProjectSummary; cloud: null } | { at: number; local: null; cloud: CloudProject };
+
 /** Which list Home shows (remembered on this browser). */
 const KIND = "edit.home.kind";
 
 /** Each kind of video’s colour (its dot on cards and filters). */
 const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#c4a7ff" };
 
-function SectionTitle({ children, count }: { children: React.ReactNode; count?: number }) {
-  return (
-    <h2 className="mb-3 flex items-baseline gap-1.5 text-[13px] font-medium text-muted">
-      {children}
-      {count !== undefined && <span className="text-faint tabular">{count}</span>}
-    </h2>
-  );
-}
-
-/**
- * The card’s picture: the server’s pick (plain footage running, no cut-in,
- * graphic or cut on screen, its file here; the same until the project
- * changes), null when it has none.
- */
-function coverFrame(project: ProjectSummary): number | null {
-  if (project.duration_frames <= 0) return null;
-  return project.cover_frame ?? null;
-}
-
-/** A card with no picture: a dark wash of its style’s colour. */
-function wash(style: Style): string {
-  const colour = STYLE_COLOURS[style] ?? STYLE_COLOURS.bodycam;
-  return `radial-gradient(120% 90% at 20% 0%, ${colour}33 0%, transparent 60%), radial-gradient(90% 80% at 100% 100%, ${colour}1f 0%, transparent 55%), #0b0b0b`;
-}
-
-/** A quiet mark at the end of a card’s line: it isn’t on this Mac yet (opening it downloads it). */
+/** A quiet mark among a row’s chips: its footage isn’t on this Mac yet (opening it downloads it). */
 function NotHere({ title }: { title: string }) {
   return (
-    <span title={title} className="ml-auto flex shrink-0 items-center gap-1 pl-2 text-white/55">
+    <span title={title} className="flex shrink-0 items-center px-1 text-faint">
       <CloudDownload size={13} />
     </span>
   );
@@ -300,7 +232,7 @@ function Notice({ tone, text, title }: NoticeProps) {
     <span
       title={title}
       className={cx(
-        "flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium",
+        "flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium",
         tone === "info" ? "text-fg" : tone === "bad" ? "text-danger" : "text-warning",
       )}
     >
@@ -471,7 +403,7 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
     return (
       <span
         title={state.archived.error ?? "Archived on Repack: its footage and exports were freed; the project and its transcripts are kept"}
-        className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-black/75 px-2 text-[12px] font-medium text-muted"
+        className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium text-muted"
       >
         <Archive size={12} />
         {state.archived.restoring ? "Restoring…" : "Archived"}
@@ -486,7 +418,7 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
   return (
     <>
       {state.approved !== null && (
-        <span title={`Version ${state.approved} was approved on its review`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium text-success">
+        <span title={`Version ${state.approved} was approved on its review`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-success">
           <Check size={12} />
           Approved v{state.approved}
         </span>
@@ -494,14 +426,14 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
       {state.approved === null && state.feedback > 0 && (
         <span
           title={`${state.feedback} open note${state.feedback === 1 ? "" : "s"} on its Repack review`}
-          className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium text-info"
+          className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info"
         >
           <MessageSquare size={12} />
           {state.feedback} {state.feedback === 1 ? "note" : "notes"}
         </span>
       )}
       {state.complete && !state.exported && (
-        <span title="The edit is finished, but what it is now hasn’t been exported" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium text-warning">
+        <span title="The edit is finished, but what it is now hasn’t been exported" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
           <FileVideo size={12} />
           Not exported
         </span>
@@ -510,133 +442,168 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
   );
 }
 
-/** An edit: a frame of it with the title over a black gradient, as a streaming service’s tile. */
-function ProjectCard({ project, onChanged, cloudOn, status, remote, state, index, big = false }: CardProps & { index: number; big?: boolean }) {
-  const card = useProject(project, onChanged, cloudOn, status, remote);
-  const seconds = project.duration_frames / project.fps;
-  const styleLabel = STYLES.find((option) => option.value === project.style)?.label ?? "Bodycam";
-  const picture = !project.problem && coverFrame(project) !== null;
+/** When a project last changed, as Writer heads its list: today needs no heading. */
+function changedLabel(ms: number) {
+  const day = (time: number) => new Date(time).setHours(0, 0, 0, 0);
+  const days = Math.round((day(Date.now()) - day(ms)) / 86_400_000);
+  return days <= 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "This week" : days < 31 ? "This month" : "Older";
+}
+
+/** Name, status, length, when it last changed and its ⋯: the columns every row lines up on. */
+const COLUMNS = "grid grid-cols-[minmax(0,2.6fr)_minmax(0,1.3fr)_64px_92px_30px] items-center gap-4";
+
+/** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */
+function ProjectTable({
+  rows,
+  cardProps,
+  onChanged,
+  subtitled,
+}: {
+  rows: Listed[];
+  cardProps: (project: ProjectSummary) => CardProps;
+  onChanged: () => void;
+  subtitled: boolean;
+}) {
   return (
-    <>
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ ...spring, delay: Math.min(index, 12) * 0.03 }}
-        className="group cursor-pointer"
-        onClick={card.open}
-      >
-        <div
-          className={cx(
-            "relative aspect-video overflow-hidden rounded-xl border border-line bg-panel transition-[border-color,transform] duration-200 group-hover:border-line-strong",
-            big && "md:aspect-[16/8]",
-          )}
-        >
-          {picture ? (
-            <img
-              src={`/api/projects/${project.id}/cover/${coverFrame(project)}.jpg?max=${big ? 1280 : 720}&v=${project.modified_ms}`}
-              loading="lazy"
-              alt=""
-              className="absolute inset-0 size-full object-cover opacity-0 transition-[opacity,transform] duration-500 group-hover:scale-[1.03]"
-              onLoad={(event) => event.currentTarget.classList.remove("opacity-0")}
-            />
-          ) : (
-            <div className="absolute inset-0" style={{ background: wash(project.style) }} />
-          )}
-          {/* The black gradient the title sits on. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[78%] bg-gradient-to-t from-black via-black/85 via-45% to-transparent" />
-          <div className={cx("absolute inset-x-0 bottom-0", big ? "p-5" : "p-3.5")}>
-            {card.nameInput ?? (
-              <div className={cx("line-clamp-2 font-semibold tracking-[-0.01em] text-white drop-shadow", big ? "text-[19px] leading-tight" : "text-[14px] leading-snug")}>
-                {project.name}
-              </div>
-            )}
-            <div className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-white/70 tabular">
-              <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[project.style] ?? STYLE_COLOURS.bodycam }} />
-              {project.problem ? (
-                <span className="truncate" title={project.problem}>
-                  {project.problem}
-                </span>
-              ) : (
-                <span className="truncate">
-                  {styleLabel} · {shortDuration(seconds)} · {ago(project.modified_ms)}
-                </span>
-              )}
-              {card.mostlyRemote && <NotHere title="Its footage downloads when you open it" />}
-              <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} className="ml-auto" />
-            </div>
-          </div>
-          {(card.cloudNews || card.drive || card.notice || (state && (state.archived !== null || state.approved !== null || state.feedback > 0 || (state.complete && !state.exported)))) && (
-            <div className="absolute top-2.5 left-2.5 flex gap-1">
-              {card.notice && <Notice {...card.notice} />}
-              <StateChips state={state} projectId={project.id} onChanged={onChanged} />
-              {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
-              {card.drive && (
-                <button
-                  onClick={card.driveMenu}
-                  title={`On Drive: ${card.drive.name}`}
-                  className="flex h-[22px] items-center rounded-full bg-black/75 px-2 text-[12px] font-medium text-success hover:bg-black"
-                >
-                  On Drive ↗
-                </button>
-              )}
-            </div>
-          )}
-          <button
-            title="More"
-            onClick={card.menu}
-            className="absolute top-2.5 right-2.5 flex size-7 items-center justify-center rounded-md bg-black/70 text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-fg"
-          >
-            <Ellipsis size={15} />
-          </button>
-        </div>
-      </motion.div>
-      {card.dialogs}
-    </>
+    <div role="table" aria-label="Projects" className="mt-6 overflow-hidden rounded-xl border border-line">
+      <div role="row" className={cx(COLUMNS, "h-10 bg-panel px-4 text-[12px] font-medium text-muted")}>
+        <span role="columnheader">Name</span>
+        <span role="columnheader">Status</span>
+        <span role="columnheader" className="text-right">
+          Length
+        </span>
+        <span role="columnheader" className="text-right">
+          Updated
+        </span>
+        <span role="columnheader" className="sr-only">
+          Actions
+        </span>
+      </div>
+      {rows.map((row, index) => {
+        const label = changedLabel(row.at);
+        const heading = label !== "Today" && (index === 0 || changedLabel(rows[index - 1]!.at) !== label);
+        return (
+          <Fragment key={row.local?.id ?? row.cloud!.id}>
+            {heading && <div className="border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">{label}</div>}
+            {row.local !== null ? <TableRow {...cardProps(row.local)} subtitled={subtitled} /> : <CloudTableRow project={row.cloud} onChanged={onChanged} />}
+          </Fragment>
+        );
+      })}
+    </div>
   );
 }
 
-/** A subtitled video: a row in the list (they’re mostly opened for their Drive link). */
-function ProjectRow({ project, onChanged, cloudOn, status, remote, state }: CardProps) {
-  const card = useProject(project, onChanged, cloudOn, status, remote);
-  const seconds = project.duration_frames / project.fps;
-  const picture = !project.problem && coverFrame(project) !== null;
+/** A project on this Mac: its name, what's worth a word about it, and its ⋯. */
+function TableRow({ subtitled, ...props }: CardProps & { subtitled: boolean }) {
+  const { project, onChanged, remote, state } = props;
+  const card = useProject(project, onChanged, props.cloudOn, props.status, remote);
   return (
     <>
-      <div onClick={card.open} className="group flex h-14 cursor-pointer items-center gap-3 border-t border-line px-3 first:border-t-0 hover:bg-hover">
-        <div className="flex h-9 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-panel">
-          {picture ? (
-            <img src={`/api/projects/${project.id}/cover/${coverFrame(project)}.jpg?max=192&v=${project.modified_ms}`} loading="lazy" alt="" className="size-full object-cover" />
-          ) : (
-            <div className="size-full" style={{ background: wash(project.style) }} />
+      <div role="row" onClick={card.open} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
+        <div role="cell" className="flex min-w-0 items-center gap-2.5">
+          <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[project.style] ?? STYLE_COLOURS.bodycam }} title={STYLES.find((option) => option.value === project.style)?.label} />
+          {card.nameInput ?? (
+            <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.problem ?? project.name}>
+              {project.name}
+            </span>
           )}
+          <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} size={24} className="ml-auto shrink-0" />
         </div>
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {card.nameInput ?? <div className="truncate font-medium">{project.name}</div>}
+        <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
           {card.notice && <Notice {...card.notice} />}
           <StateChips state={state} projectId={project.id} onChanged={onChanged} />
           {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
-          <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} size={24} className="ml-auto" />
-        </div>
-        <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{shortDuration(seconds)}</span>
-        <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.modified_ms)}</span>
-        <span className="w-24 shrink-0 text-right text-[12px]">
           {card.drive ? (
-            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className="text-success/90 hover:text-success">
+            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className="flex h-[22px] items-center rounded-full bg-raised px-2 text-[12px] font-medium text-success hover:bg-hover">
               On Drive ↗
             </button>
           ) : (
-            <span className="text-faint">Not uploaded</span>
+            subtitled && <span className="text-[12px] text-faint">Not uploaded</span>
           )}
+          {card.mostlyRemote && <NotHere title="Its footage downloads when you open it" />}
+        </div>
+        <span role="cell" className="text-right text-[13px] text-secondary tabular">
+          {project.problem ? "" : shortDuration(project.duration_frames / project.fps)}
+        </span>
+        <span role="cell" className="text-right text-[13px] text-secondary">
+          {ago(project.modified_ms)}
         </span>
         <button
           title="More"
           onClick={card.menu}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-fg"
+          className="flex size-[30px] items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
         >
           <Ellipsis size={15} />
         </button>
       </div>
       {card.dialogs}
+    </>
+  );
+}
+
+/** A project only in the cloud: opening it downloads it to this Mac. */
+function CloudTableRow({ project, onChanged }: { project: CloudProject; onChanged: () => void }) {
+  const [deleting, setDeleting] = useState(false);
+  const toast = useEditor((state) => state.toast);
+  const summary = project.summary ?? {};
+  const style = (summary.style as Style | undefined) ?? "bodycam";
+  const seconds = summary.durationFrames && summary.fps ? summary.durationFrames / summary.fps : null;
+  const remove = async () => {
+    setDeleting(false);
+    try {
+      await api.deleteProject(project.id);
+    } catch (error) {
+      toast(`Couldn’t delete “${project.name}”: ${(error as Error).message}`, "error");
+    }
+    onChanged();
+  };
+  return (
+    <>
+      <div role="row" onClick={() => navigate(`/p/${project.id}`)} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
+        <div role="cell" className="flex min-w-0 items-center gap-2.5">
+          <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[style] ?? STYLE_COLOURS.bodycam }} />
+          <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.name}>
+            {project.name}
+          </span>
+          <StartedBy by={project.created_by} projectId={project.id} size={24} className="ml-auto shrink-0" />
+        </div>
+        <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
+          {project.holder && <CloudBadge editor={project.holder} />}
+          <span className="flex items-center gap-1 text-[12px] text-faint" title="Not on this Mac yet: opening it downloads it">
+            <CloudDownload size={13} /> Not on this Mac
+          </span>
+        </div>
+        <span role="cell" className="text-right text-[13px] text-secondary tabular">
+          {seconds !== null ? shortDuration(seconds) : ""}
+        </span>
+        <span role="cell" className="text-right text-[13px] text-secondary" title={`by ${project.updated_by}`}>
+          {ago(project.updated_ms)}
+        </span>
+        <button
+          title="More"
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleMenu(event.currentTarget, [{ label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) }], { width: 160 });
+          }}
+          className="flex size-[30px] items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
+        >
+          <Ellipsis size={15} />
+        </button>
+      </div>
+      <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
+        <div className="p-6">
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Delete “{project.name}”?</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">It’s deleted from the cloud, for everyone on the team. It isn’t on this Mac, so no copy is kept here.</p>
+          <div className="mt-[22px] flex justify-end gap-2">
+            <Button variant="subtle" onClick={() => setDeleting(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void remove()}>
+              Delete everywhere
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }
@@ -651,7 +618,7 @@ function CloudBadge({ status, editor }: { status?: CloudStatus; editor: string |
         ? [CloudOff, "Not synced", "Changes saved on this Mac haven’t reached the cloud yet."]
         : [CloudCheck, "Cloud", "In the team’s cloud"];
   return (
-    <div title={title} className="flex h-[22px] items-center gap-1 rounded-full bg-black/75 px-2 text-[12px] font-medium text-fg">
+    <div title={title} className="flex h-[22px] items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-fg">
       <Icon size={13} className={editor ? "text-warning" : undefined} />
       {text}
     </div>
@@ -704,110 +671,6 @@ function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSumm
         </div>
       </div>
     </Modal>
-  );
-}
-
-/** A subtitled video only in the cloud: a row as the others, opening it downloads it. */
-function CloudRow({ project }: { project: CloudProject }) {
-  const summary = project.summary ?? {};
-  const seconds = summary.durationFrames && summary.fps ? summary.durationFrames / summary.fps : null;
-  return (
-    <div onClick={() => navigate(`/p/${project.id}`)} className="group flex h-14 cursor-pointer items-center gap-3 border-t border-line px-3 first:border-t-0 hover:bg-hover">
-      <div className="relative h-9 w-16 shrink-0 overflow-hidden rounded-md" style={{ background: wash((summary.style as Style | undefined) ?? "bodycam") }}>
-        <img src={`/api/cloud/projects/${project.id}/cover.jpg?v=${project.updated_ms}`} loading="lazy" alt="" className="absolute inset-0 size-full object-cover" onError={(event) => event.currentTarget.remove()} />
-      </div>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <div className="truncate font-medium">{project.name}</div>
-        {project.holder && <CloudBadge editor={project.holder} />}
-        <StartedBy by={project.created_by} projectId={project.id} size={24} className="ml-auto" />
-      </div>
-      <span className="w-16 shrink-0 text-right text-[12px] text-muted tabular">{seconds !== null ? shortDuration(seconds) : ""}</span>
-      <span className="w-20 shrink-0 text-right text-[12px] text-faint">{ago(project.updated_ms)}</span>
-      <span className="flex w-24 shrink-0 items-center justify-end gap-1 text-[12px] text-faint" title="Not on this Mac yet: opening it downloads it">
-        <CloudDownload size={13} /> Not here
-      </span>
-      <span className="size-7 shrink-0" />
-    </div>
-  );
-}
-
-/** A project only in the cloud: opening it downloads it to this Mac. */
-function CloudCard({ project, index, onChanged, big = false }: { project: CloudProject; index: number; onChanged: () => void; big?: boolean }) {
-  const [deleting, setDeleting] = useState(false);
-  const toast = useEditor((state) => state.toast);
-  const summary = project.summary ?? {};
-  const style = STYLES.find((option) => option.value === summary.style)?.label;
-  const seconds = summary.durationFrames && summary.fps ? summary.durationFrames / summary.fps : null;
-  const remove = async () => {
-    setDeleting(false);
-    try {
-      await api.deleteProject(project.id);
-    } catch (error) {
-      toast(`Couldn’t delete “${project.name}”: ${(error as Error).message}`, "error");
-    }
-    onChanged();
-  };
-  return (
-    <>
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ ...spring, delay: Math.min(index, 12) * 0.03 }}
-        className="group cursor-pointer"
-        onClick={() => navigate(`/p/${project.id}`)}
-      >
-        <div className={cx("relative aspect-video overflow-hidden rounded-xl border border-line bg-panel transition-[border-color] duration-200 group-hover:border-line-strong", big && "md:aspect-[16/8]")}>
-          <div className="absolute inset-0" style={{ background: wash((summary.style as Style | undefined) ?? "bodycam") }} />
-          <img
-            src={`/api/cloud/projects/${project.id}/cover.jpg?v=${project.updated_ms}`}
-            loading="lazy"
-            alt=""
-            className="absolute inset-0 size-full object-cover opacity-0 transition-[opacity,transform] duration-500 group-hover:scale-[1.03]"
-            onLoad={(event) => event.currentTarget.classList.remove("opacity-0")}
-            onError={(event) => event.currentTarget.remove()}
-          />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[78%] bg-gradient-to-t from-black via-black/85 via-45% to-transparent" />
-          <div className={cx("absolute inset-x-0 bottom-0", big ? "p-5" : "p-3.5")}>
-            <div className={cx("line-clamp-2 font-semibold tracking-[-0.01em] text-white drop-shadow", big ? "text-[19px] leading-tight" : "text-[14px] leading-snug")}>{project.name}</div>
-            <div className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-white/70 tabular">
-              <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[(summary.style as Style | undefined) ?? "bodycam"] ?? STYLE_COLOURS.bodycam }} />
-              <span className="truncate">{[style, seconds !== null ? shortDuration(seconds) : null, `${ago(project.updated_ms)} by ${project.updated_by}`].filter(Boolean).join(" · ")}</span>
-              <NotHere title="Not on this Mac yet: opening it downloads it" />
-              <StartedBy by={project.created_by} projectId={project.id} className="ml-auto" />
-            </div>
-          </div>
-          {project.holder && (
-            <div className="absolute top-2.5 left-2.5 flex gap-1">
-              <CloudBadge editor={project.holder} />
-            </div>
-          )}
-          <button
-            title="More"
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleMenu(event.currentTarget, [{ label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) }], { width: 160 });
-            }}
-            className="absolute top-2.5 right-2.5 flex size-7 items-center justify-center rounded-md bg-black/70 text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-fg"
-          >
-            <Ellipsis size={15} />
-          </button>
-        </div>
-      </motion.div>
-      <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
-        <div className="p-6">
-          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Delete “{project.name}”?</h2>
-          <p className="mt-1 text-[13px] leading-relaxed text-muted">It’s deleted from the cloud, for everyone on the team. It isn’t on this Mac, so no copy is kept here.</p>
-          <div className="mt-[22px] flex justify-end gap-2">
-            <Button variant="subtle" onClick={() => setDeleting(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete everywhere
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    </>
   );
 }
 

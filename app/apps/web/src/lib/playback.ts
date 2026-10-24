@@ -134,7 +134,10 @@ class Preview {
   get diagnostics() {
     return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.renderedFrame,
       videoCacheBytes: this.decoder.pictures.bytes, videoCacheFrames: this.decoder.pictures.size,
-      audioCacheBytes: this.decoder.sound.bytes, scheduledAudio: this.scheduled.size, mediaReads: this.decoder.network };
+      audioCacheBytes: this.decoder.sound.bytes, scheduledAudio: this.scheduled.size, mediaReads: this.decoder.network,
+      // Whether sound can come out at all: a context that never started (or was suspended) plays nothing.
+      audioOutput: this.audio ? { state: this.audio.state, sampleRate: this.audio.sampleRate, currentTime: Math.round(this.audio.currentTime * 100) / 100 } : null,
+      clockRunning: this.runningClock };
   }
 
   onStatus = (listener: Listener) => {

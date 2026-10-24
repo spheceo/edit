@@ -748,7 +748,8 @@ async function mediaFile(context: Context): Promise<Response> {
     case "proxy":
     case "audio": {
       const proxy = kind === "proxy" ? paths.proxy : paths.audio;
-      const preview = named === undefined || named.startsWith("preview~");
+      // ("preview" with no stamp: a status that came without one, as nightly-17 served it.)
+      const preview = named === undefined || named === "preview" || named.startsWith("preview~");
       file = preview && isFile(paths.proxyDone) && isFile(proxy) ? proxy : source;
       break;
     }

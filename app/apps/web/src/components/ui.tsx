@@ -205,8 +205,8 @@ export function Select<T extends string | number>({
         )
       }
       className={cx(
-        "flex w-full min-w-0 items-center gap-1 rounded-md text-[12px] text-fg transition-colors",
-        className ?? "h-6 justify-end px-1.5 hover:bg-hover",
+        "flex min-w-0 items-center gap-1 rounded-md text-fg transition-colors",
+        className ?? "h-6 w-full justify-end px-1.5 text-[12px] hover:bg-hover",
       )}
     >
       <span className="truncate">{current?.label ?? String(value)}</span>

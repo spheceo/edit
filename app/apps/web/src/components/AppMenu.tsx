@@ -9,7 +9,7 @@ import { buildReport, closeReport, copyText, openReport, useReport } from "../li
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { StartedBy } from "./StartedBy";
-import { cx, IconButton, Modal, Select, Tabs } from "./ui";
+import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
 
 export function AppMenu() {
   const account = useAccount((state) => state.account);
@@ -71,11 +71,8 @@ export function AppDialogs() {
   }, []);
   return (
     <>
-      <Modal open={open === "settings"} onClose={closeDialog} width={480}>
-        <DialogHeader title="Settings" />
-        <div className="flex max-h-[72vh] flex-col gap-6 overflow-y-auto px-6 pb-6">
-          <UpdateSettings />
-        </div>
+      <Modal open={open === "settings"} onClose={closeDialog} width={500}>
+        <SettingsDialog />
       </Modal>
       <Modal open={open === "logs"} onClose={closeDialog} width={920}>
         <DialogHeader title="Logs" />
@@ -252,8 +249,9 @@ function ReportDialog() {
   );
 }
 
-/** This build and the update channel: Nightly (every nightly as it’s out) or Stable (releases only). */
-function UpdateSettings() {
+/** Edit's settings, laid out as Writer's: who's signed in, then updates; the build and Done at the foot. */
+function SettingsDialog() {
+  const person = useAccount((state) => (state.account?.signed_in ? state.account.person : null));
   const status = useUpdate((state) => state.status);
   const [error, setError] = useState<string | null>(null);
   useEffect(watchUpdates, []);
@@ -261,36 +259,42 @@ function UpdateSettings() {
     setError(null);
     chooseChannel(channel).catch((reason: Error) => setError(reason.message));
   };
+  const said =
+    status && !status.enabled
+      ? "A dev build: it doesn’t update itself. Pull and rebuild."
+      : status?.latest
+        ? `${status.latest} is out: update from the button at the top. Edit restarts itself; your work is saved.`
+        : status?.channel === "stable"
+          ? "Up to date. Stable moves only on a release."
+          : "Up to date. Edit looks for a new build every minute.";
   return (
-    <Group title="Updates">
-      <Card>
-        <Line label="Version">
-          <span className="font-mono text-[12px]">{status?.current ?? "—"}</span>
-        </Line>
-        <Line label="Channel" last>
-          <div className="w-44">
+    <>
+      <DialogHeader title="Settings" />
+      <div className="flex max-h-[72vh] flex-col gap-[18px] overflow-y-auto px-6">
+        {person && <p className="text-[13px] text-muted">Signed in as {person.email}</p>}
+        <Group title="Updates">
+          <Row name="Channel" detail={said} bad={error ?? undefined}>
             <Select
               value={status?.channel ?? "nightly"}
               options={[
                 { value: "nightly", label: "Nightly" },
-                { value: "stable", label: "Stable (releases only)" },
+                { value: "stable", label: "Stable" },
               ]}
               onChange={pick}
+              className="h-[34px] min-w-[128px] shrink-0 justify-between rounded-lg border border-line-strong bg-bg pr-2.5 pl-3 text-[13px] hover:border-muted"
             />
-          </div>
-        </Line>
-      </Card>
-      <p className="mt-2 px-1 text-[12px] leading-relaxed text-muted">
-        {status && !status.enabled
-          ? "This is a dev build: it doesn’t update itself. Pull and rebuild."
-          : status?.latest
-            ? `${status.latest} is out: update from the button at the top. Edit restarts itself; your work is saved.`
-            : status?.channel === "stable"
-              ? "Up to date. Stable moves only on a release; a nightly you’re on now waits for the next one."
-              : "Up to date. Nightlies are pre-releases, out as soon as they’re built; one click at the top installs a new one."}
-      </p>
-      {error && <p className="mt-2 px-1 text-[12px] text-danger">{error}</p>}
-    </Group>
+          </Row>
+        </Group>
+      </div>
+      <div className="flex items-center gap-3 px-6 pt-5 pb-6">
+        <span className="text-[13px] text-faint" title={status?.enabled ? "Built by the release workflow" : "A dev build: it never updates itself"}>
+          Edit {status?.current ?? ""}
+        </span>
+        <Button variant="primary" className="ml-auto" onClick={closeDialog}>
+          Done
+        </Button>
+      </div>
+    </>
   );
 }
 
@@ -302,27 +306,26 @@ function DialogHeader({ title }: { title: string }) {
   );
 }
 
-function Group({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+/** A titled group of rows, as Writer's Settings lays them out. */
+function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col">
-      <div className="mb-2 flex h-6 items-center justify-between px-1">
-        <span className="text-[13px] font-medium text-muted">{title}</span>
-        {action}
-      </div>
-      {children}
+      <h3 className="mb-2 text-[12px] font-medium text-muted">{title}</h3>
+      <div className="flex flex-col rounded-[10px] border border-line bg-panel">{children}</div>
     </section>
   );
 }
 
-function Card({ children }: { children: ReactNode }) {
-  return <div className="overflow-hidden rounded-xl bg-black ring-1 ring-line">{children}</div>;
-}
-
-function Line({ label, children, last }: { label: string; children: ReactNode; last?: boolean }) {
+/** One setting: what it is and how it stands on the left, its control on the right. */
+function Row({ name, detail, bad, children }: { name: string; detail?: ReactNode; bad?: string; children?: ReactNode }) {
   return (
-    <div className={cx("flex h-11 items-center justify-between gap-4 px-3 text-[12px]", !last && "border-b border-line")}>
-      <span className="shrink-0 text-muted">{label}</span>
-      <span className="flex min-w-0 justify-end text-fg">{children}</span>
+    <div className="flex min-h-[52px] items-center gap-3.5 px-3 py-2.5 [&+&]:border-t [&+&]:border-line">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-[13px]">
+        <span className="font-medium">{name}</span>
+        {detail && <span className="text-[12px] leading-[1.45] text-muted">{detail}</span>}
+        {bad && <span className="text-[12px] leading-[1.45] text-danger">{bad}</span>}
+      </div>
+      {children}
     </div>
   );
 }

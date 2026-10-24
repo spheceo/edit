@@ -84,7 +84,8 @@ def build_web():
     return web
 
 
-@app.function(image=image, cpu=(1, 1), memory=(512, 512), timeout=120)
+@app.function(image=image, cpu=(1, 1), memory=(512, 512), timeout=120,
+              secrets=[modal.Secret.from_name("edit-proxies-token")])
 @modal.asgi_app()
 def endpoint():
     return build_web()

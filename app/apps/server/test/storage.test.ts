@@ -37,3 +37,24 @@ test("an export is confirmed only when the cloud object matches its size exactly
     expect(down[0]!.status).toBe("local-only");
   } finally { cleanup(); }
 });
+
+test("migrateMediaFiles deletes only size-verified copies with a known cloud original", async () => {
+  const { migrateMediaFiles } = await import("../src/storage.ts");
+  const { dir, cleanup } = fixtureHome("migrate");
+  try {
+    const verified = `${dir}/a.mp4`; write(verified, Buffer.alloc(10));
+    const wrong = `${dir}/b.mp4`; write(wrong, Buffer.alloc(10));
+    const unknown = `${dir}/c.mp4`; write(unknown, Buffer.alloc(10));
+    const keys = new Map([[verified, "edit/originals/sha256/a/a.mp4"], [wrong, "edit/originals/sha256/b/b.mp4"]]);
+    const head = async (key: string) => ({ size: key.endsWith("a/a.mp4") ? 10 : 11 });
+    const dry = await migrateMediaFiles([verified, wrong, unknown], (p) => keys.get(p) ?? null, head, true);
+    expect(dry.deletedBytes).toBe(10);
+    expect(fs.existsSync(verified)).toBe(true);
+    const done = await migrateMediaFiles([verified, wrong, unknown], (p) => keys.get(p) ?? null, head, false);
+    expect(done.deleted).toEqual([verified]);
+    expect(done.kept.length).toBe(2);
+    expect(fs.existsSync(verified)).toBe(false);
+    expect(fs.existsSync(wrong)).toBe(true);
+    expect(fs.existsSync(unknown)).toBe(true);
+  } finally { cleanup(); }
+});

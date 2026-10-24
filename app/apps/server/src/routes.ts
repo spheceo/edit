@@ -30,7 +30,8 @@ import { canonical, expandHome, extension, fileName, fileStem, isFile, join, par
 import { DEFAULT_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
-import { storageReport, verifyExports } from "./storage.ts";
+import { listFiles, migrateMediaFiles, storageReport, verifyExports } from "./storage.ts";
+import { readLocalOriginals } from "./cloud_media.ts";
 import { missingMedia, UpdateError } from "./store.ts";
 import * as archive from "./archive.ts";
 import * as avatars from "./avatars.ts";
@@ -102,6 +103,7 @@ export function buildRouter(): Router<App> {
     .post("/api/projects/{id}/export/cancel", cancelExport)
     .get("/api/projects/{id}/exports", projectExports)
     .get("/api/storage", async ({ app }) => json({ ...storageReport(app.store.home), exports: await verifyExports(app.store.home) }))
+    .post("/api/storage/migrate-media", migrateMedia)
     .post("/api/cache/clean", cleanTheCache)
     .post("/api/projects/{id}/exports/delete", deleteProjectExport);
   router
@@ -980,6 +982,24 @@ async function exportEncoders({ app }: Context): Promise<Response> {
 }
 
 /** Cleans the cache now (`dry_run`: only says what would go); cache_cleanup.ts. */
+/** Verified migration of `<home>/media`: delete only R2-verified copies (see storage.migrateMediaFiles). */
+async function migrateMedia(context: Context): Promise<Response> {
+  const given = (await optionalBody(context)) ?? {};
+  const dryRun = field<boolean>(given, "dry_run", "boolean") ?? false;
+  const home = context.app.store.home;
+  const keys = new Map<string, string>();
+  for (const [key, entry] of Object.entries(readLocalOriginals(context.app.store.cacheDir()))) keys.set(entry.path, key);
+  for (const summary of context.app.store.list()) {
+    const live = context.app.store.get(summary.id);
+    if (live === null) continue;
+    for (const media of live.project.media) {
+      if (media.cloud?.original !== undefined && !keys.has(media.path)) keys.set(media.path, media.cloud.original);
+    }
+  }
+  const result = await migrateMediaFiles(listFiles(join(home, "media")), (path) => keys.get(path) ?? null, undefined, dryRun);
+  return json({ ...result, kept: result.kept.slice(0, 100) });
+}
+
 async function cleanTheCache(context: Context): Promise<Response> {
   const given = (await optionalBody(context)) ?? {};
   const dryRun = field<boolean>(given, "dry_run", "boolean") ?? false;

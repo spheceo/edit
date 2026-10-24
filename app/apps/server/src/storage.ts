@@ -100,6 +100,63 @@ export async function verifyExports(
   return out;
 }
 
+export interface MigrationResult {
+  checked: number;
+  deletedBytes: number;
+  deleted: string[];
+  kept: { path: string; reason: string }[];
+}
+
+/**
+ * Verified migration of Edit's media copies: a local file is deleted only
+ * when `keyFor` names its cloud original and R2 holds an object of exactly
+ * its size. Anything else is kept, with the reason. `keyFor` must only name
+ * copies Edit made (registry-tracked downloads, cloud media) — never a
+ * user's own file.
+ */
+export async function migrateMediaFiles(
+  files: string[],
+  keyFor: (path: string) => string | null,
+  head: (key: string) => Promise<{ size: number } | null> = (key) => cloud.head(key),
+  dryRun = false,
+): Promise<MigrationResult> {
+  const out: MigrationResult = { checked: 0, deletedBytes: 0, deleted: [], kept: [] };
+  for (const path of files) {
+    out.checked += 1;
+    let size: number;
+    try { size = fs.statSync(path).size; } catch { out.kept.push({ path, reason: "missing" }); continue; }
+    const key = keyFor(path);
+    if (key === null) { out.kept.push({ path, reason: "no cloud original known" }); continue; }
+    let found: { size: number } | null = null;
+    try { found = await head(key); } catch { found = null; }
+    if (found === null) { out.kept.push({ path, reason: "not in the cloud" }); continue; }
+    if (found.size !== size) { out.kept.push({ path, reason: `size differs (local ${size}, cloud ${found.size})` }); continue; }
+    if (!dryRun) {
+      try { fs.rmSync(path, { force: true }); } catch { out.kept.push({ path, reason: "could not delete" }); continue; }
+      if (fs.existsSync(path)) { out.kept.push({ path, reason: "could not delete" }); continue; }
+    }
+    out.deleted.push(path);
+    out.deletedBytes += size;
+  }
+  return out;
+}
+
+/** Every file under `dir`, recursively (empty when absent). */
+export function listFiles(dir: string): string[] {
+  const out: string[] = [];
+  const walkDir = (path: string) => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(path, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = join(path, entry.name);
+      if (entry.isDirectory()) walkDir(full);
+      else if (entry.isFile()) out.push(full);
+    }
+  };
+  walkDir(dir);
+  return out.sort();
+}
+
 /** The full readout for `home`: per-section bytes, the budget, and export confirmations. */
 export function storageReport(home: string): StorageReport {
   const names = ["cache", "media", "uploads", "library", "projects", "exports", "jobs"];

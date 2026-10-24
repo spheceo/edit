@@ -1,0 +1,7 @@
+# The oldest macOS Edit runs on (Edit.app's minimumSystemVersion). Unset, the
+# cc crate compiled mac_media.m for the build machine's macOS, so classes newer
+# than that (VTFrameProcessor, macOS 15.4) were bound strongly and the addon
+# wouldn't load on macOS 15.3: the server died and the window stayed black
+# (nightly-13, Oct 24). At 13.0 they're weak and `@available` guards them.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "13.0"

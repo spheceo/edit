@@ -145,9 +145,16 @@ jobs:
             x86_64-apple-darwin) bun_target=bun-darwin-x64 ;;
           esac
           bun install --frozen-lockfile
+          touch "$RUNNER_TEMP/addon-start"
           (cd crates/edit-native && bun install --frozen-lockfile \
             && bunx napi build --release --target ${{ matrix.target }} --dts index.d.ts \
             && codesign -s - -f edit-native.node)
+          # C and Objective-C built for a newer macOS than Edit's oldest (13.0,
+          # .cargo/config.toml) bind newer classes strongly: the addon then
+          # won't load there and the window stays black (nightly-13 on 15.3).
+          newer="$(find "target/${{ matrix.target }}/release/build" -path '*/out/*.a' -newer "$RUNNER_TEMP/addon-start" \
+            -exec sh -c 'otool -l "$1" | awk -v f="$1" "/ minos / && \$2+0 > 13 {print f\": macOS \" \$2}"' _ {} \; | sort -u)"
+          if [ -n "$newer" ]; then echo "built for a newer macOS than 13.0:"; echo "$newer"; exit 1; fi
           cargo build --release --locked -p edit-window --target ${{ matrix.target }}
           codesign -s - -f "target/${{ matrix.target }}/release/edit-window"
           bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node \

@@ -1,7 +1,7 @@
 // Repack reviews of an edit (docs/plans/2026-10-22-share-review-handoff.md):
 // an export shared to a Repack link, where anyone with it comments at a
 // moment of the video (as on Frame.io, which it replaces); the notes followed
-// here while Edit runs; the agent set on them by itself two minutes after a
+// here while Edit runs; the agent set on them by itself five minutes after a
 // reviewer's last note; and each fix's changed stretch of the timeline kept
 // with its note, so the timeline shows what the agent changed for whom and
 // why ("did the agent actually do what we said we wanted it to do?").
@@ -40,7 +40,7 @@ const FILE = "reviews.json";
 /** How often Repack is asked for new notes while Edit runs. */
 export const POLL_MS = 45_000;
 /** A reviewer's notes are fixed together: this long after the last one. */
-export const SETTLE_MS = 120_000;
+export const SETTLE_MS = 5 * 60_000;
 /** A note claimed this long ago and never resolved may be tried again… */
 const RETRY_MS = 30 * 60_000;
 /** …this many times in all; then it's left for the team, saying so (the audit, Oct 23: a new Opus turn every 30 minutes, forever). */

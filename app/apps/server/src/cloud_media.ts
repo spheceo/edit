@@ -65,7 +65,7 @@ import * as youtube from "./youtube.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { canonical, extension, fileStem, isFile, join, parent } from "./paths.ts";
-import { mediaOf } from "./project.ts";
+import { libraryKindOf, mediaOf } from "./project.ts";
 import { charCount, debugStr, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Excerpt, Made, Original, Originals } from "./seams.ts";
@@ -1242,6 +1242,8 @@ async function ensureLocalNow(app: App, id: string): Promise<void> {
   }
   // After the proxies: analysis goes in the folder named after each media's file here.
   await fetchAnalysis(app, id);
+  // Music and sound effects say so on the media, not just by their path (never transcribed).
+  await seams.library.tagSounds(app, id).catch(() => {});
   const live = app.store.get(id);
   const left = live === null ? [] : stranded(live.project);
   const one = left.length === 1;
@@ -1337,6 +1339,9 @@ async function fetchProxies(app: App, id: string, round = 0): Promise<void> {
           replaced += 1;
           continue;
         }
+        // The library's own folder said what it was; the cache's won't.
+        const library = libraryKindOf(media.path);
+        if (library !== null && media.library === undefined) media.library = library;
         media.path = local;
         media.cloud.proxy = key;
       }

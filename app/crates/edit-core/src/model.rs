@@ -358,6 +358,21 @@ pub struct Media {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub cloud: Option<CloudMedia>,
+    /// From the team's sound library: music or a sound effect, heard and never
+    /// transcribed. Kept here because a cloud copy's `path` (the cache's
+    /// `originals/sha256/…`) no longer says it came from `library/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub library: Option<LibraryKind>,
+}
+
+/// Which half of the team's sound library a sound is from.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryKind {
+    Music,
+    Sfx,
 }
 
 /// Where a cloud media's files are on R2 (keys under `edit/`).

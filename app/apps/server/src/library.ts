@@ -32,7 +32,7 @@ import * as relay from "./relay.ts";
 import type { AudioClip, Clip, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { join } from "./paths.ts";
-import { fps as fpsOf, isSoundEffect, mediaOf } from "./project.ts";
+import { fps as fpsOf, isSoundEffect, libraryKindOf, mediaOf } from "./project.ts";
 import { debugStrings, lines, serdeParse, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Sound } from "./seams.ts";
@@ -391,16 +391,20 @@ export async function importSound(app: App, project: string, soundId: string, or
   if (mediaId === undefined) throw new Error(`couldn't import ${sound.name}: ${debugStrings(errors)}`);
   const live = app.store.get(project);
   const media = live === null ? undefined : mediaOf(live.project, mediaId);
-  if (
+  const hit =
     media !== undefined &&
     (media.markers ?? []).length === 0 &&
     sound.kind === "sfx" &&
     (media.duration <= HIT_SECONDS || seams.sfx.MOMENT.test(sound.name))
-  ) {
-    const hit = await loudest(path);
+      ? await loudest(path)
+      : null;
+  if (media !== undefined && (media.library !== sound.kind || hit !== null)) {
     await app.store.update(project, origin, (edited) => {
       const target = edited.media.find((item) => item.id === mediaId);
-      if (target !== undefined && (target.markers ?? []).length === 0) {
+      if (target === undefined) return;
+      // Its path stops saying so once the project is a cloud copy elsewhere.
+      target.library = sound.kind;
+      if (hit !== null && (target.markers ?? []).length === 0) {
         target.markers = [{ time: hit, name: seams.sfx.HIT, note: "" }];
       }
     });
@@ -409,6 +413,40 @@ export async function importSound(app: App, project: string, soundId: string, or
 }
 
 export { importSound as import };
+
+/**
+ * Tags `project`'s library sounds that lost the tag's evidence: placed before
+ * Media had `library`, then repointed to the cloud cache on this machine, so
+ * neither path nor tag says music or sound effect. Matched by file name
+ * against the library listing (one read, cached); a project this machine
+ * can't write (another holds it) is left for the machine that can.
+ */
+export async function tagSounds(app: App, project: string): Promise<void> {
+  const untagged = (app.store.get(project)?.project.media ?? []).filter((media) => media.kind === "audio" && media.library === undefined);
+  if (untagged.length === 0) return;
+  let kinds = new Map<string, "music" | "sfx">();
+  try {
+    kinds = new Map((await (app.library as Library).list(false)).sounds.map((sound) => [safeName(sound.file), sound.kind]));
+  } catch {
+    // No listing (signed out, offline): their paths still say so where they're the library's.
+  }
+  const tags = new Map<string, "music" | "sfx">();
+  for (const media of untagged) {
+    const kind = libraryKindOf(media.path) ?? kinds.get(media.name);
+    if (kind !== undefined && kind !== null) tags.set(media.id, kind);
+  }
+  if (tags.size === 0) return;
+  try {
+    await app.store.update(project, "cloud", (edited) => {
+      for (const media of edited.media) {
+        const kind = tags.get(media.id);
+        if (kind !== undefined && media.library === undefined) media.library = kind;
+      }
+    });
+  } catch (error) {
+    diag.warn("library", `${project}: tagging library sounds: ${diag.messageOf(error)}`);
+  }
+}
 
 /**
  * How loud `seconds` of a sound from `from` are, in LUFS: integrated over

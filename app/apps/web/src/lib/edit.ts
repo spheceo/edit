@@ -924,7 +924,8 @@ export function removeUnusedMedia(project: Project) {
 /** The media bin's folders. Files sort into them by kind; nothing is moved on disk. */
 export const MEDIA_FOLDERS = [
   { id: "footage", label: "Footage" },
-  { id: "audio", label: "Audio" },
+  { id: "audio", label: "Voice & audio" },
+  { id: "music", label: "Music" },
   { id: "sfx", label: "Sound effects" },
   { id: "images", label: "Images" },
 ] as const;
@@ -933,19 +934,23 @@ export type MediaFolder = (typeof MEDIA_FOLDERS)[number]["id"];
 
 export function folderOf(media: Media): MediaFolder {
   if (media.kind === "image") return "images";
-  if (media.kind === "audio") return isSoundEffect(media) && !/[\\/]library[\\/]music[\\/]/.test(media.path) ? "sfx" : "audio";
+  if (media.kind === "audio") {
+    const library = media.library ?? (/[\\/]library[\\/]music[\\/]/.test(media.path) ? "music" : undefined);
+    return library === "music" ? "music" : isSoundEffect(media) ? "sfx" : "audio";
+  }
   return "footage";
 }
 
 /** Audio this short is a sound effect, not something said (seconds); as Media::is_sound_effect. */
 const SOUND_EFFECT_SECONDS = 3;
 
-/** A sound effect (a bundled sound, one from the team's library, or any very short audio): heard, never transcribed. */
+/** A sound effect or music (a bundled sound, one from the team's library, or any very short audio): heard, never transcribed. */
 export function isSoundEffect(media: Media) {
   // Bundled sounds live in <Edit's home>/sfx (apps/server/src/sfx.ts), the
   // library's in <Edit's home>/library/<music|sfx>/<checksum>.
   return (
     media.kind === "audio" &&
-    (media.duration <= SOUND_EFFECT_SECONDS || /[\\/]sfx[\\/][^\\/]+$/.test(media.path) || /[\\/]library[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+$/.test(media.path))
+    (media.library !== undefined ||
+      media.duration <= SOUND_EFFECT_SECONDS || /[\\/]sfx[\\/][^\\/]+$/.test(media.path) || /[\\/]library[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+$/.test(media.path))
   );
 }

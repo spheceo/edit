@@ -318,7 +318,14 @@ const SOUND_EFFECT_SECONDS = 3.0;
  * short audio): it's heard, never transcribed.
  */
 export function isSoundEffect(media: Media): boolean {
-  return media.kind === "audio" && (media.duration <= SOUND_EFFECT_SECONDS || inSfxFolder(media.path));
+  return media.kind === "audio" && (media.library !== undefined || media.duration <= SOUND_EFFECT_SECONDS || inSfxFolder(media.path));
+}
+
+/** The library half a file in `<home>/library/<music|sfx>/<checksum>/` is from; null elsewhere. */
+export function libraryKindOf(path: string): "music" | "sfx" | null {
+  const parts = path.split(/[/\\]/).reverse();
+  if (parts[3] !== "library") return null;
+  return parts[2] === "music" ? "music" : parts[2] === "sfx" ? "sfx" : null;
 }
 
 /**

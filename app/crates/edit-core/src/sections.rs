@@ -285,7 +285,9 @@ impl Media {
     /// very short audio): it's heard, never transcribed.
     pub fn is_sound_effect(&self) -> bool {
         self.kind == MediaKind::Audio
-            && (self.duration <= SOUND_EFFECT_SECONDS || in_sfx_folder(&self.path))
+            && (self.library.is_some()
+                || self.duration <= SOUND_EFFECT_SECONDS
+                || in_sfx_folder(&self.path))
     }
 }
 
@@ -301,6 +303,7 @@ fn in_sfx_folder(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LibraryKind;
     use serde_json::json;
 
     #[test]
@@ -448,5 +451,11 @@ mod tests {
         .is_sound_effect());
         assert!(!sound("/x/library/voiceover.wav", 42.0).is_sound_effect());
         assert!(!sound("/x/voiceover.wav", 42.0).is_sound_effect());
+        // A library sound on another machine: the cache's path, the tag kept.
+        let cached = "/Users/them/.edit/cache/cloud/originals/sha256/ab12/Tension - Blue Saga.mp3";
+        assert!(!sound(cached, 190.0).is_sound_effect());
+        let mut music = sound(cached, 190.0);
+        music.library = Some(LibraryKind::Music);
+        assert!(music.is_sound_effect());
     }
 }

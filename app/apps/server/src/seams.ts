@@ -870,6 +870,7 @@ export interface LibrarySeam {
   gainTo(project: Project, clip: Clip, target: number): Promise<number>;
   import(app: App, project: string, sound: string, origin: string): Promise<[string, Sound]>;
   loudness(path: string, from: number, seconds: number): Promise<number>;
+  tagSounds(app: App, project: string): Promise<void>;
 }
 
 // broll.ts, drive.ts and library.ts (and agent.ts, which

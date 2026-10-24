@@ -356,6 +356,7 @@ mod tests {
             has_audio: true,
             markers: Vec::new(),
             cloud: None,
+            library: None,
         });
         let (v1, v2, a1) = (
             project.tracks[0].id.clone(),

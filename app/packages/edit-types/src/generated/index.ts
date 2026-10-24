@@ -22,6 +22,7 @@ export type * from "./Handle";
 export type * from "./Keyframe";
 export type * from "./Leader";
 export type * from "./LeaderAttach";
+export type * from "./LibraryKind";
 export type * from "./Marker";
 export type * from "./Media";
 export type * from "./MediaKind";

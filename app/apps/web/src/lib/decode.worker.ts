@@ -1,6 +1,6 @@
 import { ALL_FORMATS, AudioSampleSink, EncodedPacketSink, Input, StreamSource, VideoSampleSink, type VideoSample } from "mediabunny";
 import { stretchAudio } from "./audio-stretch";
-import { forgetBlocks, network, rangeReader, setStreaming } from "./range-source";
+import { forgetBlocks, network, onRead, rangeReader, setStreaming } from "./range-source";
 import { AUDIO_CHUNK_SECONDS, type DecodeJob, type DecodeRequest, type DecodeResponse, type PcmChunk } from "./decoder.protocol";
 
 // No DOM or audio context in this worker. Only demux, decode and transferable resources.
@@ -8,6 +8,16 @@ const scope = self as unknown as {
   onmessage: ((event: MessageEvent<DecodeRequest>) => void) | null;
   postMessage(message: DecodeResponse, transfer?: Transferable[]): void;
 };
+// While a file is slow to arrive (read from the cloud), say so once a second:
+// silence with work waiting is how the page tells a hung decoder (decoder.ts).
+let saidAlive = 0;
+onRead(() => {
+  const now = performance.now();
+  if (now - saidAlive < 1000) return;
+  saidAlive = now;
+  scope.postMessage({ type: "alive", network: { ...network } });
+});
+
 interface File {
   input: Input;
   video?: Promise<{ sink: VideoSampleSink; packets: EncodedPacketSink; first: number }>;

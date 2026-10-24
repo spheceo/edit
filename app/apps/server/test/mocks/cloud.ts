@@ -246,14 +246,15 @@ export class CloudMock {
       return new Response("<Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>", { status: 404 });
     }
     const etag = etagOf(data);
-    const range = /^bytes=(\d+)-$/.exec(request.headers.get("range") ?? "");
+    const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
     // R2 ignores If-Range: a range is always served (Edit checks the ETag itself).
     if (range !== null) {
       const from = Number(range[1]);
       if (from >= data.length) return new Response(null, { status: 416, headers: { etag } });
-      return new Response(data.subarray(from), {
+      const to = range[2] === "" ? data.length - 1 : Math.min(data.length - 1, Number(range[2]));
+      return new Response(data.subarray(from, to + 1), {
         status: 206,
-        headers: { etag, "content-range": `bytes ${from}-${data.length - 1}/${data.length}` },
+        headers: { etag, "content-range": `bytes ${from}-${to}/${data.length}`, "content-length": String(to + 1 - from) },
       });
     }
     return new Response(data, { status: 200, headers: { etag } });

@@ -635,3 +635,24 @@ test("streamKey names the proxy for playback kinds and nothing else", async () =
   expect(streamKey({}, "proxy")).toBeNull();
   expect(streamKey({ proxy: "not-a-key" }, "proxy")).toBeNull();
 });
+
+test("the preview reads a medium not on this Mac through the server: ranges from R2, never a redirect, one signature for many reads", async () => {
+  // The bucket has no CORS policy, so the page's read of a redirect failed (Oct 24, "Loading frame…").
+  const key = "edit/proxies/sha256/stream-test.mp4";
+  const bytes = new Uint8Array(200_000).map((_, index) => index % 251);
+  mock.cloud.objects.set(key, bytes);
+  const signedBefore = mock.calls("/v1/cloud/r2/url", "POST").length;
+  const read = (range: string) => cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x", { headers: { range } }), { proxy: key }, "audio");
+  const first = (await read("bytes=1000-1999"))!;
+  expect(first.status).toBe(206);
+  expect(first.headers.get("location")).toBeNull();
+  expect(first.headers.get("content-range")).toBe("bytes 1000-1999/200000");
+  expect([...new Uint8Array(await first.arrayBuffer())]).toEqual([...bytes.subarray(1000, 2000)]);
+  const second = (await read("bytes=150000-150099"))!;
+  expect([...new Uint8Array(await second.arrayBuffer())]).toEqual([...bytes.subarray(150000, 150100)]);
+  // Signed once: a block read is one round trip to R2, not the relay's as well.
+  expect(mock.calls("/v1/cloud/r2/url", "POST").length - signedBefore).toBe(1);
+  // Not a playback file, or no proxy in the cloud: nothing to stream.
+  expect(await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x"), { proxy: key }, "thumbs")).toBeNull();
+  expect(await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x"), null, "proxy")).toBeNull();
+});

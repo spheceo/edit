@@ -1191,17 +1191,64 @@ export function streamKey(cloudMedia: { proxy?: string } | null | undefined, kin
   return key !== null && cloud.validKey(key) ? key : null;
 }
 
-/** A fresh presigned streaming URL for a cloud medium (each ask re-signs, so a long session never expires). */
-export async function streamUrl(cloudMedia: { proxy?: string } | null | undefined, kind: string): Promise<string | null> {
-  const key = streamKey(cloudMedia, kind);
-  if (key === null || !cloud.enabled()) return null;
-  return getUrl(key, 6 * HOUR);
+/** Signed streaming URLs by key, kept until an hour before they lapse: a block read costs R2's round trip, not the relay's too. */
+const signedStreams = new Map<string, { url: string; until: number }>();
+
+async function streamingUrl(key: string): Promise<string> {
+  const known = signedStreams.get(key);
+  if (known !== undefined && Date.now() < known.until) return known.url;
+  const url = await getUrl(key, 6 * HOUR);
+  signedStreams.set(key, { url, until: Date.now() + 5 * HOUR * 1000 });
+  return url;
 }
 
 /**
- * Fetches one medium's proxy on first use (lazy `ensureLocal`): projects no
- * longer download every proxy on open; playback streams meanwhile.
+ * A cloud medium's bytes for the preview, read from R2 by this server (the
+ * range asked, passed through): never a redirect, since the bucket has no
+ * CORS policy for the page (Repack proxies it for the same reason), so the
+ * page's read of a redirect failed every time, its decoder retried in silence
+ * and the preview sat on "Loading frame…" until the file happened to come
+ * down (Oct 24). Null when it has no proxy in the cloud.
  */
+export async function streamFromCloud(request: Request, cloudMedia: { proxy?: string } | null | undefined, kind: string): Promise<Response | null> {
+  const key = streamKey(cloudMedia, kind);
+  if (key === null || !cloud.enabled()) return null;
+  const range = request.headers.get("range");
+  for (let attempt = 0; ; attempt++) {
+    const answer = await fetch(await streamingUrl(key), { headers: range === null ? {} : { range }, signal: request.signal });
+    // A signature that lapsed early (a clock off): signed again, once.
+    if (answer.status === 403 && attempt === 0) {
+      void answer.body?.cancel();
+      signedStreams.delete(key);
+      continue;
+    }
+    const headers = new Headers({ "cache-control": "no-cache" });
+    for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"]) {
+      const value = answer.headers.get(name);
+      if (value !== null) headers.set(name, value);
+    }
+    return new Response(answer.body, { status: answer.status, headers });
+  }
+}
+
+/** Lazy fetches under way, by project and media: every block read asks, one download answers. */
+const fetchingNow = new Map<string, Promise<void>>();
+
+/**
+ * The medium the preview is reading from the cloud comes down now, ahead of
+ * the project's other proxies (ensureLocal's queue, three at a time), so the
+ * playhead's file is local in seconds rather than whenever its turn comes.
+ */
+export function fetchSoon(app: App, id: string, mediaId: string): void {
+  const name = `${id}/${mediaId}`;
+  if (fetchingNow.has(name)) return;
+  const running = ensureMediaLocal(app, id, mediaId)
+    .catch((error: unknown) => diag.warn("cloud", `${id}: fetching ${mediaId} for playback: ${failure(error)}`))
+    .finally(() => fetchingNow.delete(name));
+  fetchingNow.set(name, running);
+}
+
+/** Fetches one medium's proxy now (`fetchSoon`, for playback); the preview streams it meanwhile. */
 export async function ensureMediaLocal(app: App, id: string, mediaId: string): Promise<void> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");

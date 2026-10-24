@@ -22,4 +22,6 @@ export type DecodeResponse =
   | { type: "video"; id: number; key: string; time: number; frame: VideoFrame; rough?: boolean }
   | { type: "audio"; id: number; key: string; chunk: number; speed: number; pcm: PcmChunk }
   | { type: "done"; id: number; lane: string; network?: NetworkStats }
-  | { type: "error"; id: number; key: string; lane: string; error: string };
+  | { type: "error"; id: number; key: string; lane: string; error: string }
+  /** Reads are arriving (at most once a second): a slow file isn't a hung decoder. */
+  | { type: "alive"; network: NetworkStats };

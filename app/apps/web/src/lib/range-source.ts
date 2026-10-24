@@ -50,6 +50,10 @@ const sizes = new Map<string, number>();
 /** Recently used blocks of every file (`url#index`), oldest first. */
 const blocks = new Map<string, Promise<Uint8Array>>();
 
+/** Told after each read that arrives (the worker's sign of life while a slow file loads). */
+let arrived: (() => void) | null = null;
+export function onRead(listener: (() => void) | null) { arrived = listener; }
+
 /** Whether reads are for playback (sequential: read ahead) or a scrub (only what's asked). */
 let streaming = false;
 export function setStreaming(on: boolean) { streaming = on; }
@@ -90,6 +94,7 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
         network.bytes += body.byteLength;
         network.ms += took;
         network.slowestMs = Math.max(network.slowestMs, took);
+        arrived?.();
         return response.status === 200 ? body.slice(start, end) : body;
       } catch (error) {
         clearTimeout(timer);

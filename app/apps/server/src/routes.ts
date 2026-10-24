@@ -742,10 +742,14 @@ async function mediaFile(context: Context): Promise<Response> {
   let file: string;
   switch (kind) {
     // Until the proxy exists, stream the original (fine for H.264/HEVC MP4/MOV).
+    // One URL, one file: the page names the preview it reads (`v=preview~…`),
+    // else it reads the source, even once a preview appears under it (the
+    // page's cached blocks of one file read as another's stalled its decoder).
     case "proxy":
     case "audio": {
       const proxy = kind === "proxy" ? paths.proxy : paths.audio;
-      file = isFile(paths.proxyDone) && isFile(proxy) ? proxy : source;
+      const preview = named === undefined || named.startsWith("preview~");
+      file = preview && isFile(paths.proxyDone) && isFile(proxy) ? proxy : source;
       break;
     }
     // Only once it exists: the client asks for it by name when it's ready, so
@@ -772,10 +776,14 @@ async function mediaFile(context: Context): Promise<Response> {
       throw notFound("unknown media file");
   }
   if (!isFile(file)) {
-    // Stream the proxy from R2 rather than downloading it whole first;
-    // each ask re-signs, so a long session's URL never expires.
-    const url = await cloudMedia.streamUrl(media.cloud, kind).catch(() => null);
-    if (url !== null) return Response.redirect(url, 302);
+    // Not on this Mac yet: its bytes come from R2 through here, and its proxy
+    // comes down now, ahead of the project's others.
+    if (media.cloud !== undefined && media.cloud !== null) cloudMedia.fetchSoon(app, params.id!, media.id);
+    const streamed = await cloudMedia.streamFromCloud(context.request, media.cloud, kind).catch((error: unknown) => {
+      diag.warn("cloud", `streaming ${media.name}: ${diag.messageOf(error)}`);
+      return null;
+    });
+    if (streamed !== null) return streamed;
     throw notFound("not ready");
   }
   let response = serveFile(context.request, file);

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
+import { parent } from "../src/paths.ts";
 
 import type { App } from "../src/app.ts";
 import { ExportRegistry, resumeSnapshot } from "../src/exports.ts";
@@ -145,6 +146,16 @@ test.skipIf(ffmpeg === null)("an upload streams to the project's media folder an
     const statuses = (await (await send(`/api/projects/${id}/media-status`)).json()) as { media: Record<string, { stamps: unknown }> };
     const paths = app.media.paths(media.path);
     expect(statuses.media[mediaId]!.stamps).toEqual({ light: fileStamp(paths.light), preview: fileStamp(paths.proxyDone) });
+    // One URL, one file: once a preview is made, the source's URL still serves the source;
+    // the preview comes under its own (`v=preview~<stamp>`). The page's cached blocks of
+    // one file read as another's stalled its decoder (Oct 24).
+    fs.mkdirSync(parent(paths.audio)!, { recursive: true });
+    fs.writeFileSync(paths.audio, "the preview's sound");
+    fs.writeFileSync(paths.proxyDone, "");
+    const asSource = await send(`/api/projects/${id}/media/${mediaId}/audio?v=source`);
+    expect(Buffer.from(await asSource.arrayBuffer()).equals(bytes)).toBe(true);
+    const asPreview = await send(`/api/projects/${id}/media/${mediaId}/audio?v=preview~${fileStamp(paths.proxyDone)}`);
+    expect(await asPreview.text()).toBe("the preview's sound");
   } finally {
     cleanup();
   }

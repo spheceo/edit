@@ -64,7 +64,7 @@ export class Decoder {
       this.heard[kind] = performance.now();
       worker.onmessage = ({ data }: MessageEvent<DecodeResponse>) => {
         this.heard[kind] = performance.now();
-        if (data.type === "done" && data.network) this.network[kind] = data.network;
+        if ((data.type === "done" || data.type === "alive") && data.network) this.network[kind] = data.network;
         if (generation === this.generation) this.receive(data);
         else if (data.type === "video") data.frame.close();
       };
@@ -109,6 +109,7 @@ export class Decoder {
   }
 
   private receive(data: DecodeResponse) {
+    if (data.type === "alive") return;
     if (data.type === "video") {
       if (!this.files.has(data.key)) { data.frame.close(); return; }
       let bytes: number;

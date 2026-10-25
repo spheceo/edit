@@ -40,6 +40,19 @@ test("commentary audit catches music over source audio and uncovered narration, 
   expect(issues(p)).toEqual([]);
 });
 
+test("blurred text backdrops over most of the narration are flagged; a few key phrases are not", () => {
+  const p = project("essay"); p.style = "commentary";
+  p.media.push(media({ id: "vo", name: "VO", kind: "audio", path: "/vo.wav", duration: 40, has_audio: true }), media({ id: "source", name: "Source", kind: "video", path: "/source.mp4", duration: 40, width: 1920, height: 1080, has_audio: false }));
+  p.clips.push(clip({ id: "narration", type: "audio", media: "vo", track: "a1", start: 0, duration: 1200 }), clip({ id: "picture", type: "video", media: "source", track: "v1", start: 0, duration: 1200 }));
+  p.script = { source: "writer:w", blocks: [{ kind: "narration", text: "Words", voiceover: "narration" }] };
+  for (let at = 0; at < 1200; at += 240) text(p, { text: "KEY PHRASE", start: at, end: at + 150, blur: true });
+  expect(issues(p).find((i) => i.kind === "commentary_text_heavy")).toMatchObject({ share: 0.63, backdrops: 5 });
+  p.clips = p.clips.filter((c) => c.name !== "Janitor · text backdrop" || c.start < 240);
+  expect(issues(p).map((i) => i.kind)).not.toContain("commentary_text_heavy");
+  text(p, { text: "NO BLUR UNLESS ASKED", start: 300, end: 400 });
+  expect(p.clips.filter((c) => c.name === "Janitor · text backdrop")).toHaveLength(1);
+});
+
 test("commentary compositions keep the whole phrase stable, use strong Bezier arrival, and never create source sound", () => {
   const p = project("motion"); p.style = "commentary";
   p.media.push(media({ id: "photo", name: "Photo", kind: "image", path: "/photo.jpg", duration: 0, width: 1200, height: 800, has_audio: false }));

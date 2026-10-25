@@ -33,7 +33,9 @@ export function text(p: Project, a: Args): Args {
   const [start, end] = span(a); const d = end - start; const h = p.settings.height;
   if (typeof a.text !== "string" || a.text.trim() === "") throw new Error("commentary_text needs text");
   const made: string[] = [];
-  if (a.blur !== false) made.push(push(p, { type: "adjustment", name: "Janitor · text backdrop", start, duration: d,
+  // Opt-in: blurring by default put 58% of the N3on trial's narration under a
+  // dimmed blur, hiding the B-roll the phrase was meant to sit on.
+  if (a.blur === true) made.push(push(p, { type: "adjustment", name: "Janitor · text backdrop", start, duration: d,
     blur: { radius: 22 * h / 1080 }, grade: { exposure: -0.7, vignette: 0.35 }, fade_in: 8, fade_out: 8 }));
   const preset = ["soft", "typewriter", "slide", "pop"].includes(String(a.motion)) ? String(a.motion) : "soft";
   const y = number(a, "y", 0); const size = number(a, "size", 76);

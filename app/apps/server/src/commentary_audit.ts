@@ -1,6 +1,27 @@
 import type { Clip, Project } from "./model.ts";
 import { clipEnd, mediaOf, trackOf } from "./project.ts";
 
+/** Most of the narration a blurred text backdrop may cover: emphasis is selective. */
+export const TEXT_BACKDROP_SHARE = 0.25;
+
+type Span = [number, number];
+
+function union(spans: Span[]): Span[] {
+  const out: Span[] = [];
+  for (const [a, b] of [...spans].sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1];
+    if (last !== undefined && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+function overlap(a: Span[], b: Span[]): number {
+  let total = 0;
+  for (const [s, e] of a) for (const [t, u] of b) total += Math.max(0, Math.min(e, u) - Math.max(s, t));
+  return total;
+}
+
 export function outline(p: Project): Record<string, unknown>[] {
   const groups = new Map<string, { heading: string; start: number; end: number; cut_ins: number[]; source_clips: number }>();
   let count = 0;
@@ -44,6 +65,13 @@ export function issues(p: Project): Record<string, unknown>[] {
     if ((c.type === "text" || c.type === "solid") && /^Cut-in \d+$/u.test(c.name ?? "")) out.push({ kind: "commentary_placeholder", clip: c.id, start: c.start, fix: "remove the import's linked narration placeholder card/text as you replace it with visual coverage and selective editorial text" });
     if (c.type === "video" && c.link && c.duration > 20 * p.settings.fps && !Object.keys(c.keyframes ?? {}).length) out.push({ kind: "commentary_static_source", clip: c.id, start: c.start, end: clipEnd(c), fix: "motivate a punch-in/out or slow camera move within this long source excerpt" });
   }
+  // Selective text: a blurred text backdrop over most of the narration hides its pictures.
+  const said = union(narration.map((c): Span => [c.start, clipEnd(c)]));
+  const dimmed = union(live.filter((c) => c.name === "Janitor · text backdrop").map((c): Span => [c.start, clipEnd(c)]));
+  const total = said.reduce((sum, [a, b]) => sum + b - a, 0);
+  const under = overlap(said, dimmed);
+  if (total > 0 && under / total > TEXT_BACKDROP_SHARE) out.push({ kind: "commentary_text_heavy", start: dimmed[0]?.[0] ?? 0, share: Math.round((under / total) * 100) / 100, backdrops: live.filter((c) => c.name === "Janitor · text backdrop").length,
+    fix: `blurred text backdrops cover ${Math.round((under / total) * 100)}% of the narration: keep only each chapter's key phrases (a quarter at most), delete the rest's backdrop and text so the B-roll is seen` });
   // Exact repeated portions of a moving source, not a person's recurring portrait.
   const uses = live.filter((c): c is Extract<Clip, { type: "video" }> => c.type === "video" && mediaOf(p, c.media)?.kind === "video" && !/backdrop/u.test(c.name ?? ""));
   const flagged = new Set<string>();

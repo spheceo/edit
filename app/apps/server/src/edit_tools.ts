@@ -1304,7 +1304,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
  * people, which need a clean copy). cut_mid_word is one extend_clip.
  */
 const FIXABLE = [
-  "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_static_source", "commentary_repeated_range",
+  "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_static_source", "commentary_repeated_range", "commentary_text_heavy",
   "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
@@ -1314,7 +1314,7 @@ const FIXABLE = [
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */
-const WHOLE_EDIT = ["blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source"];
+const WHOLE_EDIT = ["blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_text_heavy"];
 
 /**
  * Edit's follow-up after a whole edit that left three or more fixable flags (or one of WHOLE_EDIT's)

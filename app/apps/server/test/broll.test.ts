@@ -384,6 +384,40 @@ test.skipIf(ffmpeg === null || ffprobe === null)("a slowed clip is smoothed into
   }
 });
 
+test.skipIf(ffmpeg === null || ffprobe === null)("a streamed cloud clip is cut to a local file before smoothing, and the cut removed", async () => {
+  const { app, cleanup, dir } = fixtureHome("smooth-stream");
+  const file = `${dir}/clip.mp4`;
+  makeFile(["-f", "lavfi", "-i", "testsrc=size=160x90:rate=30:duration=2", "-pix_fmt", "yuv420p"], file);
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(Bun.file(file)) });
+  const native = app.native as { smoothSupported: () => boolean; smoothSlowMotion: (input: string, ...rest: unknown[]) => Promise<unknown> };
+  const seen: [string, boolean][] = [];
+  native.smoothSupported = () => true;
+  native.smoothSlowMotion = async (input) => {
+    seen.push([input, fs.existsSync(input)]);
+    throw new Error("No video track");
+  };
+  try {
+    const url = `http://127.0.0.1:${server.port}/api/cloud/preview?key=edit%2Fproxies%2Fclip.mp4`;
+    const live = app.store.create("p", { width: 320, height: 180, fps: 30 });
+    const project = structuredClone(live.project) as Project;
+    project.media = [{ id: "m1", name: "clip.mp4", path: url, kind: "video", duration: 2, width: 160, height: 90, fps: 30, has_audio: false }];
+    project.clips = [{
+      id: "c1", track: project.tracks[0]!.id, start: 0, duration: 30, color: "blue", fade_in: 0, fade_out: 0,
+      type: "video", media: "m1", source_in: 0.5, speed: 0.5, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1,
+    } as VideoClip];
+    await app.store.replace(project.id, null, project, "test");
+    const done = (await broll.smoothSlowMotion(app, project.id, "c1")) as { seconds: number };
+    expect(done.seconds).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]![0].startsWith("http")).toBe(false);
+    expect(seen[0]![1]).toBe(true);
+    expect(fs.existsSync(seen[0]![0])).toBe(false);
+  } finally {
+    server.stop(true);
+    cleanup();
+  }
+});
+
 test.skipIf(ffmpeg === null)("a still becomes 30 s of footage, made once", async () => {
   const { cleanup, dir } = fixtureHome("still");
   try {

@@ -337,6 +337,7 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
   if (!isFile(out)) {
     // A few renders at a time (see `smoothingSlots`); the rest wait their turn.
     const slot = await smoothingSlots.acquire();
+    let local: string | null = null;
     try {
       {
         const partial = join(dir, `${stem}-${key}.partial.mp4`);
@@ -351,6 +352,28 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
           throw new Error(`${clipId} changed before smoothing started; skipped`);
         }
         const { width, height } = project.settings;
+        // A cloud media's path is the loopback stream: VideoToolbox opens only
+        // files ("No video track") and optical flow over HTTP ran out its time
+        // on every shot of the N3on commentary, hogging the CPU for 87 minutes.
+        // So the stretch is cut to a local file first, and removed after.
+        let input = source.path;
+        let inputIn = clip.source_in;
+        if (tools.isUrl(source.path)) {
+          const cutTo = join(dir, `${stem}-${key}.source.mp4`);
+          local = cutTo;
+          const cut = await diag.timeOnAsync("broll", "smooth: fetch stretch", source.name, () =>
+            ffmpeg(
+              ["-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", tools.protocols(source.path), ...tools.urlArgs(source.path),
+                "-ss", fixed(clip.source_in, 4), "-t", fixed(length, 4), "-i", source.path,
+                "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-threads", "2", cutTo],
+              timing.smoothLimitMs,
+              true,
+            ),
+          );
+          if (cut.timedOut || !cut.ok) throw new Error(`couldn't read the stretch to smooth: ${cut.timedOut ? "timed out" : tools.lastLine(cut.stderr)}; kept the original slowed clip`);
+          input = cutTo;
+          inputIn = 0;
+        }
         // VideoToolbox's frame rate conversion first (the GPU and Neural
         // Engine: 6 s of slowed bodycam in 8 s, FFmpeg's minterpolate 54 s),
         // FFmpeg's when it can't (an older macOS, a rotated phone video).
@@ -358,7 +381,7 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
           try {
             const bitrate = Math.max(4_000_000, Math.round((20_000_000 * width * height) / (1920 * 1080) * (fps / 30)));
             await diag.timeOnAsync("broll", "smooth: VideoToolbox", source.name, () =>
-              app.native.smoothSlowMotion(source.path, clip.source_in, length, speed, fps, width, height, bitrate, partial),
+              app.native.smoothSlowMotion(input, inputIn, length, speed, fps, width, height, bitrate, partial),
             );
             fs.renameSync(partial, out);
             return await swapInSmooth(app, projectId, clip, out, fps);
@@ -380,11 +403,11 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
             "-filter_threads",
             "1",
             "-ss",
-            fixed(clip.source_in, 4),
+            fixed(inputIn, 4),
             "-t",
             fixed(length, 4),
             "-i",
-            source.path,
+            input,
             "-an",
             "-vf",
             filter,
@@ -418,6 +441,7 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
         }
       }
     } finally {
+      if (local !== null) fs.rmSync(local, { force: true });
       slot();
     }
   }

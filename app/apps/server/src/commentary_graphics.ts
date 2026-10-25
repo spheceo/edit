@@ -69,7 +69,7 @@ export function card(p: Project, a: Args): Args {
   }
   const settle = Math.min(24, Math.floor(d / 3)); const y = number(a, "y", -15 * h / 1080);
   const photo = push(p, { ...common, name: "Janitor · source card", fade_in: 4, fade_out: 5,
-    frame: { color: [1, 1, 1, 1], width: 4 * h / 1080, shadow: 0.8, radius: 14 * h / 1080, glow: 0.4 }, transform: { scale, y, x: number(a, "x", 0) },
+    frame: { color: [1, 1, 1, 1], width: 8 * h / 1080, shadow: 0.8, radius: 14 * h / 1080, glow: 0.4 }, transform: { scale, y, x: number(a, "x", 0) },
     keyframes: { y: [...arrival(h * 0.65, y, settle), key(d - 1, y - 6 * h / 1080)], scale: [key(0, scale), key(d - 1, scale * 1.035)] } });
   made.push(photo);
   if (typeof a.label === "string" && a.label.trim()) made.push(push(p, { type: "text", name: "Janitor · source credit", text: a.label,

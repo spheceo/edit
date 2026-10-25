@@ -829,6 +829,8 @@ export async function youtubeOriginal(
 
 /** Commentary needs scenes, not whole streams. Existing cloud originals and
  * exact excerpts are reused; otherwise yt-dlp fetches bounded padded ranges. */
+const youtubeRanges = new Map<string, Promise<Excerpt>>();
+
 export async function youtubeExcerpts(home: string, cache: string, file: string, ranges: [number, number][], progress: (bytes: number, total: number | null, name: string) => void = () => {}): Promise<Excerpt[]> {
   const id = youtube.idOf(file);
   if (id === null) throw new Error("not a YouTube source");
@@ -838,23 +840,32 @@ export async function youtubeExcerpts(home: string, cache: string, file: string,
   const out: Excerpt[] = [];
   for (const [from, to] of spans) {
     const source = excerptSource(file, from, to);
-    const record = await getRecord(source); const original = readyOriginal(record); const proxyReady = readyProxy(record);
-    if (record !== null && original !== null && proxyReady !== null) {
-      const probe = await probeUrl(await getUrl(original, HOUR));
-      out.push({ path: previewPath(cache, proxyReady), from, to: Math.min(to, from + probe.duration), cloud: { path: previewPath(cache, proxyReady), name: record.name, probe, cloud: { source, original, proxy: proxyReady, size: record.size } } });
-      continue;
-    }
-    const dir = join(scratchDir(cache), `youtube-range-${id}-${millis(from)}-${millis(to)}`);
-    try {
-      const got = await youtube.downloadRange(home, id, [from, to], dir, progress);
-      const probe = await native().probe(got.path);
-      const key = `edit/excerpts/youtube/${id}/${millis(from)}-${millis(to)}.mp4`;
-      const proxy = proxyKey(source); if (proxy === null) throw new Error("no excerpt proxy key");
-      await putRecord({ source, name: got.name, originalKey: key, size: got.size });
-      await publish(got.path, probe, source, key, true, proxy, localPath(cache, proxy));
-      const path = previewPath(cache, proxy);
-      out.push({ path, from, to: Math.min(to, from + probe.duration), cloud: { path, name: got.name, probe, cloud: { source, original: key, proxy, size: got.size } } });
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    // A timed-out caller may retry a subset, or another project may ask for
+    // the same scene. Share the download AND publication before touching its
+    // scratch directory; batch-level MCP deduplication alone isn't enough.
+    const flightKey = `${cache}|${source}`;
+    const existing = youtubeRanges.get(flightKey);
+    if (existing !== undefined) { out.push(await existing); continue; }
+    const flight = (async (): Promise<Excerpt> => {
+      const record = await getRecord(source); const original = readyOriginal(record); const proxyReady = readyProxy(record);
+      if (record !== null && original !== null && proxyReady !== null) {
+        const probe = await probeUrl(await getUrl(original, HOUR));
+        return { path: previewPath(cache, proxyReady), from, to: Math.min(to, from + probe.duration), cloud: { path: previewPath(cache, proxyReady), name: record.name, probe, cloud: { source, original, proxy: proxyReady, size: record.size } } };
+      }
+      const dir = join(scratchDir(cache), `youtube-range-${id}-${millis(from)}-${millis(to)}`);
+      try {
+        const got = await youtube.downloadRange(home, id, [from, to], dir, progress);
+        const probe = await native().probe(got.path);
+        const key = `edit/excerpts/youtube/${id}/${millis(from)}-${millis(to)}.mp4`;
+        const proxy = proxyKey(source); if (proxy === null) throw new Error("no excerpt proxy key");
+        await putRecord({ source, name: got.name, originalKey: key, size: got.size });
+        await publish(got.path, probe, source, key, true, proxy, localPath(cache, proxy));
+        const path = previewPath(cache, proxy);
+        return { path, from, to: Math.min(to, from + probe.duration), cloud: { path, name: got.name, probe, cloud: { source, original: key, proxy, size: got.size } } };
+      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    })();
+    youtubeRanges.set(flightKey, flight);
+    try { out.push(await flight); } finally { if (youtubeRanges.get(flightKey) === flight) youtubeRanges.delete(flightKey); }
   }
   return out;
 }

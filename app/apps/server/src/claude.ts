@@ -144,6 +144,7 @@ export function baseOptions(binary: string, workspace: string): Options {
       CLAUDE_AGENT_SDK_CLIENT_APP: `edit/${VERSION}`,
       // caption_speakers and watch_footage watch footage with a model: minutes, not seconds.
       MCP_TOOL_TIMEOUT: "900000",
+      CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: "900000",
       // As for Codex (agent.ts): a model answers several times slower with
       // 300k tokens to read than 100k, so compact near 150k (the window less
       // the summary's room), not near the 1M a model may allow.

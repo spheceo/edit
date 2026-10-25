@@ -69,7 +69,7 @@ export async function capture(url: string, path: string, phrase = "", selector =
       const body = document.body.innerText;
       if (/^(Just a moment|Access denied|Sign in to X|Sign in to confirm)/i.test(body.trim())) return {error:'The site showed a login or bot check'};
       const r = element?.getBoundingClientRect();
-      return {title:document.title,url:location.href,selection:element?.innerText?.slice(0,500),rect:r?{x:Math.max(0,r.x-24),y:Math.max(0,r.y-24),width:Math.min(innerWidth-Math.max(0,r.x-24),r.width+48),height:Math.min(innerHeight-Math.max(0,r.y-24),r.height+48)}:null};
+      return {title:document.title,url:location.href,selection:element?.innerText?.slice(0,500),rect:r?{x:Math.max(0,r.x-12),y:Math.max(0,r.y-12),width:Math.min(innerWidth-Math.max(0,r.x-12),r.width+24),height:Math.min(innerHeight-Math.max(0,r.y-12),r.height+24)}:null};
     })()`, returnByValue: true });
     const data = (result.result as { value?: Record<string, unknown> } | undefined)?.value;
     if (data === undefined || data.error) throw new Error(String(data?.error ?? "the source page could not be read"));

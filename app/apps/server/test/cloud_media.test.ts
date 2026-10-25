@@ -35,6 +35,38 @@ const SETTINGS = { width: 1920, height: 1080, fps: 30 };
 const VIDEO: Probe = { kind: "video", duration: 12, width: 1920, height: 1080, fps: 30, has_audio: true };
 const SOUND: Probe = { kind: "audio", duration: 3, width: 0, height: 0, fps: 0, has_audio: true };
 
+test("overlapping commentary import batches share one excerpt download and cloud publication", async () => {
+  const fixture = fixtureHome("youtube-shared-range");
+  const previous = process.env.EDIT_YTDLP;
+  try {
+    const raw = createStub();
+    raw.probe = async () => VIDEO;
+    let encoded = 0;
+    raw.makeCloudProxy = async (source: string, _probe: Probe, out: string) => { encoded++; fs.copyFileSync(source, out); };
+    useNative(wrap(raw));
+    cloudMedia.configurePlayback(fixture.app);
+    const binary = `${fixture.dir}/yt-dlp`;
+    fs.writeFileSync(binary, `#!/bin/sh
+echo call >> '${fixture.dir}/calls'
+for arg in "$@"; do if [ "$prev" = '-P' ]; then out="$arg"; fi; prev="$arg"; done
+sleep 0.1
+printf 'video' > "$out/scene.mp4"
+echo "EDIT-FILE $out/scene.mp4"
+`, { mode: 0o755 });
+    process.env.EDIT_YTDLP = binary;
+    const request = () => cloudMedia.youtubeExcerpts(fixture.home, fixture.store.cacheDir(), "youtube:rangeTEST01", [[10, 20]]);
+    const [a, b] = await Promise.all([request(), request()]);
+    expect(a).toEqual(b);
+    expect(a[0]?.cloud?.cloud?.source).toBe("youtube:rangeTEST01#0-30000");
+    expect(fs.readFileSync(`${fixture.dir}/calls`, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(encoded).toBe(1);
+    expect(fs.readdirSync(cloudMedia.scratchDir(fixture.store.cacheDir()))).toEqual([]);
+  } finally {
+    if (previous === undefined) delete process.env.EDIT_YTDLP; else process.env.EDIT_YTDLP = previous;
+    fixture.cleanup();
+  }
+});
+
 /** A fixture whose addon "makes" a cloud proxy by copying the file (the stub has no encoder). */
 function home(name: string): Fixture & { proxies: string[] } {
   const fixture = fixtureHome(name);

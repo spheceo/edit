@@ -145,7 +145,7 @@ export async function call(
  * repeat joins the run in progress, a run past `answerAfterMs` answers that
  * it's still working, and the result waits for the next call to collect it.
  */
-const LONG = new Set(["caption_speakers", "mute_house_words", "add_subtitles", "repack_subtitles"]);
+const LONG = new Set(["caption_speakers", "mute_house_words", "add_subtitles", "repack_subtitles", "import_broll"]);
 
 export const longTiming = { answerAfterMs: 4 * 60 * 1000, keepMs: 15 * 60 * 1000 };
 

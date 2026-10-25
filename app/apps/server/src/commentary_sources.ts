@@ -127,7 +127,9 @@ registerTool("import_broll", async ({ app, args, projectId }) => {
   const ranges = args.ranges.map(rangeOf); // validate the entire batch before downloads
   const results: unknown[] = [];
   // Reuse one original for all ranges from that video; no persistent preview download.
-  for (const id of new Set(ranges.map((r) => youtube.videoId(r.url)!))) {
+  const sources = [...new Set(ranges.map((r) => youtube.videoId(r.url)!))];
+  for (let i = 0; i < sources.length; i += 2) {
+    await Promise.all(sources.slice(i, i + 2).map(async (id) => {
     const picks = ranges.filter((r) => youtube.videoId(r.url) === id);
     try {
       if (!cloud.enabled()) throw new Error("B-roll sourcing needs cloud storage; sign in to Edit");
@@ -143,6 +145,7 @@ registerTool("import_broll", async ({ app, args, projectId }) => {
         results.push(found);
       }
     } catch (error) { results.push({ url: `https://www.youtube.com/watch?v=${id}`, error: error instanceof Error ? error.message : String(error) }); }
+    }));
   }
   return text(stableStringify({ results, next: "Inspect each selected scene with look_at_media, then place its returned media/source_in. Source audio stays off under narration. Save actual frame observations with record_broll_observations." }));
 });

@@ -66,7 +66,13 @@ registerTool("search_broll", async ({ app, args, projectId }) => {
   if (args.queries.length === 0) {
     let inventory: unknown = {};
     try { inventory = JSON.parse(fs.readFileSync(join(app.store.home, "research", projectId, "broll.json"), "utf8")); } catch { /* no sources yet */ }
-    const [, ids, errors] = await importPaths(app, projectId, [wallpaper], false, "agent");
+    // Bun's embedded file is virtual; native ImageIO and realpath need a
+    // real file, as bundled sound effects do. Never pass /$bunfs to native I/O.
+    const bytes = new Uint8Array(await Bun.file(wallpaper).arrayBuffer());
+    const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 12);
+    const brand = join(app.store.home, "graphics", "commentary", `background-${hash}.png`);
+    if (!fs.existsSync(brand)) { fs.mkdirSync(parent(brand)!, { recursive: true }); fs.writeFileSync(brand, bytes); }
+    const [, ids, errors] = await importPaths(app, projectId, [brand], false, "agent");
     return text(stableStringify({ inventory, brand_background: ids[0] ?? null, errors }));
   }
   const limit = Math.max(1, Math.min(8, Number(args.per_query) || 5));

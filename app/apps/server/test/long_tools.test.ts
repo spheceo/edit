@@ -43,3 +43,19 @@ test("a piece heard as gibberish in many scripts is garbled; English isn't", asy
   const m91 = "reeesz 及其1 in szyst dменти 没azz1ěř consのでしょうか hmm not ovichific7дика Ziquementiquement 潇łaś затра jotenтельность herk po Jстилишко".split(" ").map((text) => ({ text }));
   expect(garbledShare(m91)).toBeGreaterThan(0.2);
 });
+
+test("B-roll batches answer promptly with a partial-inventory route while identical requests share their result", async () => {
+  const before = longTiming.importAnswerAfterMs;
+  longTiming.importAnswerAfterMs = 5;
+  try {
+    let finish: () => void = () => {};
+    let runs = 0;
+    const work = async () => { runs++; await new Promise<void>((resolve) => { finish = resolve; }); return text("source bank ready"); };
+    const first = await once("p|import_broll|test", "import_broll", work);
+    expect(first[0]?.type === "text" && first[0].text).toContain("completed ranges as they arrive");
+    const collect = once("p|import_broll|test", "import_broll", work);
+    finish();
+    expect(await collect).toEqual(text("source bank ready"));
+    expect(runs).toBe(1);
+  } finally { longTiming.importAnswerAfterMs = before; }
+});

@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 
 import type { App } from "../src/app.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
-import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, desktopsSparse, graphicsShort, registerEditingTools, resolveRefs } from "../src/edit_tools.ts";
+import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, desktopsSparse, graphicsShort, registerEditingTools, resolveRefs, unfinishedNote } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
@@ -283,6 +283,34 @@ test("markers, the project and the edit context read back as JSON", async () => 
   expect((byId.clips as { id: string }[])[0]!.id).toBe("c6");
   const transcript = JSON.parse(await said(app, "get_edit_context", { include_transcript: true })) as Record<string, unknown>;
   expect(transcript.transcript).toBe("No transcribed speech on the timeline.");
+});
+
+test("a long commentary overview keeps timeline clips visible and full production notes available by chapter", async () => {
+  const { app, id, fixture } = setUp("commentary-overview");
+  fixture.native.sections = () => ({ intro: null, intro_splits: 1, outro: null, parts: [] });
+  const narration = "A long narration paragraph with precise production requirements. ".repeat(20);
+  const note = "The complete anchored production note. ".repeat(40);
+  await fixture.store.update(id, "test", (p) => {
+    p.style = "commentary";
+    p.media.push(media({ id: "vo", name: "Narrator", path: "/vo.wav", kind: "audio", duration: 4, has_audio: true }), media({ id: "source", name: "Source", path: "/source.mp4", kind: "video", duration: 4 }));
+    p.script = { blocks: [] };
+    for (let i = 0; i < 82; i++) {
+      p.clips.push(clip({ id: `card${i}`, type: "solid", track: "v1", start: i * 100, duration: 100, name: `Cut-in ${i + 1}`, link: `link${i}`, fill: [0,0,0,1] }), clip({ id: `words${i}`, type: "text", track: "v2", start: i * 100, duration: 100, text: narration, link: `link${i}` }), clip({ id: `voice${i}`, type: "audio", track: "a4", start: i * 100, duration: 100, media: "vo" }));
+      p.script.blocks.push({ kind: "narration", text: narration, notes: [`Chapter: ${Math.floor(i / 10)}`, note], clip: `card${i}`, voiceover: `voice${i}` });
+    }
+    p.clips.push(clip({ id: "evidence", type: "video", track: "v1", start: 8200, duration: 100, media: "source" }));
+  });
+  const answer = await said(app, "get_edit_context");
+  const overview = JSON.parse(answer);
+  expect(answer.length).toBeLessThan(36_000);
+  expect(overview.clips.some((row: string) => row.startsWith("evidence V1 video [8200,8300)"))).toBe(true);
+  expect(overview.cut_ins).toHaveLength(82);
+  expect(overview.cut_ins[0].text.length).toBe(160);
+  expect(overview.audit.issue_counts.commentary_placeholder).toBe(82);
+  expect(unfinishedNote(app, id)?.note).toContain("commentary_placeholder");
+  const chapter = JSON.parse(await said(app, "get_edit_context", { start: 0, end: 3 }));
+  expect(chapter.cut_ins[0].text).toBe(narration);
+  expect(chapter.cut_ins[0].notes).toContain(note);
 });
 
 test("the edit context keeps to its budget, saying how many clips it left out", async () => {

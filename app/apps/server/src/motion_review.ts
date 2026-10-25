@@ -2,6 +2,7 @@
 // a short real timeline sample, let the existing audiovisual watcher inspect
 // it, cache its observations, then discard the temporary video.
 import * as fs from "node:fs";
+import { Semaphore } from "./media.ts";
 import { native } from "./native/index.ts";
 import { registerTool, text } from "./mcp/registry.ts";
 import { clipEnd, duration, fps } from "./project.ts";
@@ -10,9 +11,9 @@ import { jsonForSerde } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
 
-let reviewing = false;
-registerTool("review_motion", async ({ app, args, projectId }) => {
-  if (reviewing || app.exports.running()) throw new Error("an export/motion review is running; wait for it before reviewing another sample");
+const reviewSlot = new Semaphore(1);
+registerTool("review_motion", async ({ app, args, projectId }) => reviewSlot.with(async () => {
+  if (app.exports.running()) throw new Error("an export is running; wait for it before reviewing a sample");
   const p = app.store.get(projectId)?.project; if (!p) throw new Error("no such project");
   if (typeof args.start !== "number" || !Number.isFinite(args.start) || typeof args.end !== "number" || !Number.isFinite(args.end) || args.start < 0 || args.end <= args.start || args.end - args.start > 12) throw new Error("start/end must select at most 12 timeline seconds");
   const from = Math.round(args.start * fps(p)); const to = Math.min(duration(p), Math.round(args.end * fps(p)));
@@ -23,7 +24,6 @@ registerTool("review_motion", async ({ app, args, projectId }) => {
   const dir = join(app.store.home, "research", projectId, "motion"); fs.mkdirSync(dir, { recursive: true });
   const saved = join(dir, `${key}.json`); if (fs.existsSync(saved)) return text(fs.readFileSync(saved, "utf8"));
   const output = join(dir, `${key}.mp4`); const request = join(dir, `${key}.request.json`);
-  reviewing = true;
   try {
     const options = { ...native().exportDefaults(), format: "h264" as const, size: 480, range: [from, to - 1] as [number, number], quality: "balanced" as const, audio: true, loudness: null };
     const project = { json: jsonForSerde(p) }; const { plan } = native().exportPlan(project, options);
@@ -42,7 +42,6 @@ registerTool("review_motion", async ({ app, args, projectId }) => {
     const result = stableStringify({ start_seconds: args.start, end_seconds: args.end, observations, source: "Audiovisual model observations of a rendered sample; inspect concrete flags, not a whole-edit quality score." });
     fs.writeFileSync(saved, result); return text(result);
   } finally {
-    reviewing = false;
     fs.rmSync(output, { force: true }); fs.rmSync(request, { force: true });
   }
-});
+}));

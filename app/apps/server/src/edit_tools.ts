@@ -1304,6 +1304,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
  * people, which need a clean copy). cut_mid_word is one extend_clip.
  */
 const FIXABLE = [
+  "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_static_source", "commentary_repeated_range",
   "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
@@ -1313,7 +1314,7 @@ const FIXABLE = [
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */
-const WHOLE_EDIT = ["blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map"];
+const WHOLE_EDIT = ["blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source"];
 
 /**
  * Edit's follow-up after a whole edit that left three or more fixable flags (or one of WHOLE_EDIT's)
@@ -1427,11 +1428,15 @@ export function editContext(app: App, found: Live, args: Args): Args {
   const endGiven = num(args.end);
   const from = startGiven !== null ? asInt(round(startGiven * fps)) : (span?.[0] ?? null);
   const to = endGiven !== null ? asInt(round(endGiven * fps)) : (span?.[1] ?? null);
+  const overview = p.style === "commentary" && from === null && to === null && ids === null;
+  const narrationIds = new Set((p.script?.blocks ?? []).flatMap((b) => b.kind === "narration" ? [b.clip, b.voiceover].filter((id): id is string => typeof id === "string") : []));
+  const narrationLinks = new Set(p.clips.filter((c) => narrationIds.has(c.id)).flatMap((c) => c.link ? [c.link] : []));
   const inside = (start: number, end: number) => !(from !== null && end <= from) && !(to !== null && start >= to);
   const clips: Json[] = [];
   let subtitles = 0;
   for (const clip of p.clips) {
     if ((ids !== null && !ids.some((id) => id === clip.id)) || !inside(clip.start, clipEnd(clip))) continue;
+    if (overview && (narrationIds.has(clip.id) || (clip.link && narrationLinks.has(clip.link)))) continue;
     if (ids !== null) {
       // Asked for by id: the whole clip, keyframes too.
       clips.push(clip);
@@ -1468,7 +1473,7 @@ export function editContext(app: App, found: Live, args: Args): Args {
         voiceover: block.voiceover ?? null,
         start: placed?.start ?? null,
         end: placed === undefined ? null : clipEnd(placed),
-        words: voiceover === undefined ? null : cutInWords(app, p, voiceover),
+        words: overview || voiceover === undefined ? null : cutInWords(app, p, voiceover),
       });
     } else {
       const placed = typeof block.clip === "string" ? clipOf(p, block.clip) : undefined;
@@ -1541,6 +1546,22 @@ export function editContext(app: App, found: Live, args: Args): Args {
     audit,
     smoothing: hooks.smoothingPending(p.id),
   };
+  if (overview) {
+    context.overview = "Commentary overview: narration excerpts, chapter map and source/designed clips. Read start/end for ONE chapter's complete narration, notes, word times and clips as you compose it; do not read every chapter's word times up front.";
+    context.cut_ins = (context.cut_ins as Args[]).map(({ words: _words, notes, text, ...row }) => ({ ...row, text: takeChars(String(text), 160), notes_count: Array.isArray(notes) ? notes.length : 0 }));
+    context.footage_blocks = (context.footage_blocks as Args[]).map(({ notes, ...row }) => ({ ...row, notes_count: Array.isArray(notes) ? notes.length : 0 }));
+    context.media = p.media.filter((m) => m.kind !== "audio").map((m) => `${m.id} ${debugKind(m)} ${fixed(m.duration, 1)}s "${takeChars(m.name, 60)}"`);
+    const counts: Record<string, number> = {};
+    const examples: Args[] = [];
+    const seen: Record<string, number> = {};
+    for (const issue of fullAudit.issues) {
+      const kind = String(issue.kind);
+      counts[kind] = (counts[kind] ?? 0) + (typeof issue.more === "number" ? issue.more : typeof issue.lines === "number" ? issue.lines : 1);
+      seen[kind] = (seen[kind] ?? 0) + 1;
+      if (seen[kind]! <= 3 && issue.more === undefined) examples.push(issue);
+    }
+    context.audit = { ...audit, issues: examples, issue_counts: counts, overview_only: "up to three examples per kind; narrow start/end for the chapter's issues" };
+  }
   const markerSpan: [number, number] | null =
     from !== null || to !== null ? [from ?? 0, to ?? Number.MAX_SAFE_INTEGER] : null;
   const marked = markers.listing(p, markerSpan);

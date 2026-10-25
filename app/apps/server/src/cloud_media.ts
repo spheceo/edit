@@ -830,6 +830,7 @@ export async function youtubeOriginal(
 /** Commentary needs scenes, not whole streams. Existing cloud originals and
  * exact excerpts are reused; otherwise yt-dlp fetches bounded padded ranges. */
 const youtubeRanges = new Map<string, Promise<Excerpt>>();
+const youtubeRangeSlots = new Semaphore(2);
 
 export async function youtubeExcerpts(home: string, cache: string, file: string, ranges: [number, number][], progress: (bytes: number, total: number | null, name: string) => void = () => {}): Promise<Excerpt[]> {
   const id = youtube.idOf(file);
@@ -846,7 +847,7 @@ export async function youtubeExcerpts(home: string, cache: string, file: string,
     const flightKey = `${cache}|${source}`;
     const existing = youtubeRanges.get(flightKey);
     if (existing !== undefined) { out.push(await existing); continue; }
-    const flight = (async (): Promise<Excerpt> => {
+    const flight = youtubeRangeSlots.with(async (): Promise<Excerpt> => {
       const record = await getRecord(source); const original = readyOriginal(record); const proxyReady = readyProxy(record);
       if (record !== null && original !== null && proxyReady !== null) {
         const probe = await probeUrl(await getUrl(original, HOUR));
@@ -863,7 +864,7 @@ export async function youtubeExcerpts(home: string, cache: string, file: string,
         const path = previewPath(cache, proxy);
         return { path, from, to: Math.min(to, from + probe.duration), cloud: { path, name: got.name, probe, cloud: { source, original: key, proxy, size: got.size } } };
       } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-    })();
+    });
     youtubeRanges.set(flightKey, flight);
     try { out.push(await flight); } finally { if (youtubeRanges.get(flightKey) === flight) youtubeRanges.delete(flightKey); }
   }

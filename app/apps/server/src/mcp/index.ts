@@ -145,9 +145,9 @@ export async function call(
  * repeat joins the run in progress, a run past `answerAfterMs` answers that
  * it's still working, and the result waits for the next call to collect it.
  */
-const LONG = new Set(["caption_speakers", "mute_house_words", "add_subtitles", "repack_subtitles", "import_broll"]);
+const LONG = new Set(["caption_speakers", "mute_house_words", "add_subtitles", "repack_subtitles", "import_broll", "share_for_review"]);
 
-export const longTiming = { answerAfterMs: 4 * 60 * 1000, keepMs: 15 * 60 * 1000 };
+export const longTiming = { answerAfterMs: 4 * 60 * 1000, importAnswerAfterMs: 1500, keepMs: 15 * 60 * 1000 };
 
 type Flight = { promise: Promise<Content[]>; started: number; waiting: number; done: { at: number; content?: Content[]; error?: unknown } | null };
 
@@ -183,13 +183,14 @@ export async function once(key: string, name: string, work: () => Promise<Conten
   own.waiting += 1;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const late = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), longTiming.answerAfterMs);
+    timer = setTimeout(() => resolve(null), name === "import_broll" ? longTiming.importAnswerAfterMs : longTiming.answerAfterMs);
   });
   try {
     const answer = await Promise.race([own.promise, late]);
     if (answer !== null) return answer;
     const seconds = Math.round((Date.now() - own.started) / 1000);
-    return [{ type: "text", text: `${name} is still working in the background (${seconds} s so far): call ${name} again with the same arguments in a minute or two; it answers with this run's result and never runs it twice` }];
+    const meanwhile = name === "import_broll" ? ". search_broll {queries:[]} lists completed ranges as they arrive; inspect those or existing source footage and compose the current chapter while the rest download" : "";
+    return [{ type: "text", text: `${name} is still working in the background (${seconds} s so far): call ${name} again with the same arguments in a minute or two; it answers with this run's result and never runs it twice${meanwhile}` }];
   } finally {
     if (timer !== null) clearTimeout(timer);
     own.waiting -= 1;

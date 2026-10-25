@@ -41,7 +41,7 @@ export function issues(p: Project): Record<string, unknown>[] {
     if (gaps.length) out.push({ kind: "commentary_uncovered_narration", clip: voice.id, start: voice.start, end: clipEnd(voice), gaps, fix: "cover the narration with inspected, relevant footage/evidence; a black placeholder card is unfinished" });
   }
   for (const c of live) {
-    if (c.type === "text" && /^Cut-in \d+$/u.test(c.name ?? "")) out.push({ kind: "commentary_placeholder", clip: c.id, start: c.start, fix: "replace the import's full narration placeholder with visual coverage and selective editorial text" });
+    if ((c.type === "text" || c.type === "solid") && /^Cut-in \d+$/u.test(c.name ?? "")) out.push({ kind: "commentary_placeholder", clip: c.id, start: c.start, fix: "remove the import's linked narration placeholder card/text as you replace it with visual coverage and selective editorial text" });
     if (c.type === "video" && c.link && c.duration > 20 * p.settings.fps && !Object.keys(c.keyframes ?? {}).length) out.push({ kind: "commentary_static_source", clip: c.id, start: c.start, end: clipEnd(c), fix: "motivate a punch-in/out or slow camera move within this long source excerpt" });
   }
   // Exact repeated portions of a moving source, not a person's recurring portrait.

@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import type { Project } from "../src/model.ts";
 import * as fs from "node:fs";
 
-import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, posterSecond, read, waiting, type Note, type Version } from "../src/reviews.ts";
+import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, posterSecond, read, shareable, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import * as tools from "../src/tools.ts";
@@ -166,6 +166,19 @@ test("a note the auto-fix tried twice without a result isn't tried again: it's l
   expect(givenUp(state, "p1", later).map((note) => note.id)).toEqual(["b"]);
   // Not while its last try may still be running.
   expect(givenUp(state, "p1", 60_000)).toEqual([]);
+});
+
+test("a review shares the newest whole export, or a named export of the edit's opening, never a middle stretch", () => {
+  const whole = { path: "/whole.mp4", whole: true, start: 0 };
+  const opening = { path: "/first-6-min.mp4", whole: false, start: 0 };
+  const middle = { path: "/middle.mp4", whole: false, start: 900 };
+  const older = { path: "/older.mp4", whole: false };
+  expect(shareable([opening, whole], null)).toBe(whole);
+  expect(shareable([opening], null)).toBeUndefined();
+  expect(shareable([opening, whole], "/first-6-min.mp4")).toBe(opening);
+  expect(shareable([middle], "/middle.mp4")).toBeUndefined();
+  expect(shareable([older], "/older.mp4")).toBeUndefined();
+  expect(shareable([{ ...opening, missing: true }], "/first-6-min.mp4")).toBeUndefined();
 });
 
 test("a version's full-quality file sits beside its review copy, keeping the export's extension", () => {

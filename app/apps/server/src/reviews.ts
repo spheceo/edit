@@ -148,14 +148,23 @@ const sharing = new Map<string, string>();
  * poster to R2, then Repack's review (made the first time, a new version
  * under the same link after). Returns the link and the version.
  */
+/**
+ * The export a review shares: the newest whole one, or the one named, which
+ * may be the edit's opening only (a first look at a long edit: "only export
+ * like 6 minutes … that will be v1, maybe the full version can then be on v2").
+ */
+export function shareable<T extends { path: string; whole: boolean; start?: number; missing?: boolean }>(exported: T[], path: string | null): T | undefined {
+  const usable = exported.filter((one) => one.missing !== true);
+  return path === null ? usable.find((one) => one.whole) : usable.find((one) => one.path === path && (one.whole || one.start === 0));
+}
+
 export async function share(app: App, projectId: string, path: string | null, replace = false): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (the relay token)");
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
   const home = app.store.home;
-  const exported = listExports(home, projectId).filter((one) => one.whole && !one.missing);
-  const chosen = path === null ? exported[0] : exported.find((one) => one.path === path);
-  if (chosen === undefined) throw new Error(path === null ? "export the whole edit first: a review shares an export" : "that isn't one of this project's whole exports");
+  const chosen = shareable(listExports(home, projectId), path);
+  if (chosen === undefined) throw new Error(path === null ? "export the whole edit first: a review shares an export" : "that isn't one of this project's whole exports or an export of its opening");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
   // `replace`: the latest version's files are overwritten with this export
   // (same keys, so its link, number and notes stay) instead of a new version:
@@ -163,7 +172,8 @@ export async function share(app: App, projectId: string, path: string | null, re
   const latest = replace ? read(home).shared[projectId]?.versions.reduce<Version | null>((most, one) => (most === null || one.n > most.n ? one : most), null) : null;
   if (replace && (latest === null || latest === undefined)) throw new Error("nothing shared yet to replace");
   const exportedTimeline = chosen.timeline ?? timelineHash(live.project);
-  const timeline = latest?.timeline ?? exportedTimeline;
+  // An opening's files are its own: the whole edit of the same timeline shared later is another version.
+  const timeline = latest?.timeline ?? (chosen.whole ? exportedTimeline : `${exportedTimeline}-opening-${chosen.frames}`);
   let clips: [string, number, number][];
   try {
     clips = JSON.parse(fs.readFileSync(mapFile(home, exportedTimeline), "utf8")) as [string, number, number][];

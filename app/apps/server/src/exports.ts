@@ -72,6 +72,8 @@ export interface ExportRecord {
   /** Frames exported, and whether that was the whole edit. */
   frames: number;
   whole: boolean;
+  /** The first frame exported: an opening (0) can be shared as a preview. */
+  start?: number;
   format: string;
   /** The exported timeline's fingerprint (`timelineHash`): an edit since makes the project "not exported". */
   timeline?: string;
@@ -448,6 +450,7 @@ export class ExportRegistry implements seams.Exports {
           bytes,
           frames,
           whole: plan.start === 0 && plan.end >= duration(project),
+          start: plan.start,
           format: options.format,
           timeline: running.timeline,
         });
@@ -464,7 +467,7 @@ export class ExportRegistry implements seams.Exports {
           try {
             remember(this.home ?? store.home, id, {
               path: output, name: fileName(output) ?? output, finished_ms: nowMs(), seconds: took / 1000, bytes,
-              frames, whole: plan.start === 0 && plan.end >= duration(project), format: options.format, timeline: running.timeline, cloudKey: key,
+              frames, whole: plan.start === 0 && plan.end >= duration(project), start: plan.start, format: options.format, timeline: running.timeline, cloudKey: key,
             });
           } catch { /* the list keeps the local-only record */ }
           diag.info("export", `${id}: archived ${output} to ${key} and deleted the local copy`);

@@ -27,6 +27,7 @@ export const CAPABILITIES = {
   bodycam: "edit.bodycam",
   interrogation: "edit.interrogation",
   courtroom: "edit.courtroom",
+  commentary: "edit.commentary",
 } as const;
 
 /** Whether a capability id is one of the edit styles (voice-overs come with any of them). */
@@ -45,10 +46,11 @@ export function manifest() {
       { id: CAPABILITIES.bodycam, label: "Bodycam edits", description: "Full edits in the bodycam style: script import, cutting, voice-overs, the agent, research, maps, music, export and review.", group: "Kinds of video" },
       { id: CAPABILITIES.interrogation, label: "Interrogation edits", description: "Full edits in the interrogation style, voice-overs included.", group: "Kinds of video" },
       { id: CAPABILITIES.courtroom, label: "Courtroom edits", description: "Full edits in the courtroom style, voice-overs included.", group: "Kinds of video" },
+      { id: CAPABILITIES.commentary, label: "Commentary edits", description: "Narrated video essays, source clips, researched B-roll and motion graphics, voice-overs included.", group: "Kinds of video" },
     ],
     presets: [
       { id: "subtitles", label: "Subtitles only", capabilities: [CAPABILITIES.subtitles] },
-      { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.subtitles] },
+      { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.commentary, CAPABILITIES.subtitles] },
       { id: "full", label: "Everything", capabilities: Object.values(CAPABILITIES) },
     ],
   };

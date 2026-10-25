@@ -127,6 +127,22 @@ pub(crate) struct VideoReader {
 }
 
 impl VideoReader {
+    /// Small frames for Vision, using FFmpeg's ranged input for cloud media
+    /// and AVFoundation for local files, just as timeline rendering does.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn analysis(path: &Path, width: u32, height: u32) -> Self {
+        Self::open(Source {
+            key: DecodeKey {
+                path: path.to_path_buf(),
+                width,
+                height,
+                order: Order::Bgra,
+            },
+            fps: 30.0,
+            still: false,
+        })
+    }
+
     fn open(source: Source) -> Self {
         let (width, height) = (source.key.width, source.key.height);
         #[cfg(target_os = "macos")]

@@ -8,4 +8,12 @@ export type PhotoFrame = { width: number, color: Rgba,
 /**
  * How dark the shadow is under the photo (0 none, 1 black).
  */
-shadow: number, };
+shadow: number, 
+/**
+ * Rounded image corners, project pixels (zero keeps square corners).
+ */
+radius?: number, 
+/**
+ * Soft light around the white frame (zero is off).
+ */
+glow?: number, };

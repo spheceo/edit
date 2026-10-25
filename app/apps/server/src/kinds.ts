@@ -28,6 +28,7 @@ const LABELS: Record<string, [kind: string, grant: string]> = {
   "edit.bodycam": ["bodycam edits", "Bodycam edits"],
   "edit.interrogation": ["interrogation edits", "Interrogation edits"],
   "edit.courtroom": ["courtroom edits", "Courtroom edits"],
+  "edit.commentary": ["commentary edits", "Commentary edits"],
 };
 
 /**

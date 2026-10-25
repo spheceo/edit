@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { cleanCache } from "../src/cache_cleanup.ts";
+import { cleanCache, cleanCloudPreviews } from "../src/cache_cleanup.ts";
+import { playbackPath } from "../src/cloud_playback.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -187,5 +188,99 @@ test("cloud-cache proxies past the budget go oldest first, recent ones stay", ()
     cleanCache(app, false, Date.now(), { cacheBytes: 1500, freeBytes: 0, free: 1e12 });
     expect(fs.existsSync(`${cache}/cloud/proxies/drive/old.mp4`)).toBe(false);
     expect(fs.existsSync(`${cache}/cloud/proxies/drive/new.mp4`)).toBe(true);
+  } finally { cleanup(); }
+});
+
+test("cloud-only cleanup verifies R2, removes fresh previews and legacy aliases, and keeps paid analysis and pending uploads", async () => {
+  const { app, store, cleanup } = fixtureHome("cache-streamed");
+  try {
+    const cache = store.cacheDir();
+    const key = "edit/proxies/sha256/abc.mp4";
+    const local = cloudMedia.localPath(cache, key);
+    fs.mkdirSync(local.slice(0, local.lastIndexOf("/")), { recursive: true });
+    fs.writeFileSync(local, "video");
+    const alias = app.native.mediaKey(local);
+    const legacy = "0123456789abcdef";
+    const put = (name: string, bytes: string) => {
+      fs.mkdirSync(name.slice(0, name.lastIndexOf("/")), { recursive: true });
+      fs.writeFileSync(name, bytes);
+    };
+    put(`${cache}/${alias}/preview.mp4`, "preview");
+    put(`${cache}/${alias}/transcript.json`, '{"words":[]}');
+    put(`${cache}/${alias}/watch/keys.json`, JSON.stringify({ keys: [legacy] }));
+    put(`${cache}/${legacy}/preview-light.mp4`, "light");
+    put(`${cache}/${legacy}/watch/answer.json`, "paid answer");
+    const id = store.create("cloud", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await store.update(id, "test", (project) => {
+      project.media.push({ id: "m1", name: "clip", path: local, kind: "video", duration: 1, fps: 30, width: 2, height: 2, has_audio: false,
+        cloud: { source: "sha256:abc", original: "edit/originals/sha256/abc/a.mov", proxy: key, size: 10 } });
+    });
+    const head = async () => ({ size: 5 });
+    expect((await cleanCloudPreviews(app, true, head)).files).toBe(3);
+    expect(fs.existsSync(local)).toBe(true);
+    // A missing cloud copy, or an unreachable cloud, is not permission to delete.
+    expect((await cleanCloudPreviews(app, false, async () => null)).files).toBe(0);
+    expect((await cleanCloudPreviews(app, false, async () => { throw new Error("offline"); })).files).toBe(0);
+    // The persisted upload still needs its scratch file, even if R2 has an older object.
+    fs.writeFileSync(`${store.home}/jobs.json`, JSON.stringify([{ kind: "upload", args: { local } }]));
+    expect((await cleanCloudPreviews(app, false, head)).files).toBe(2);
+    expect(fs.existsSync(local)).toBe(true);
+    expect(fs.existsSync(`${cache}/${legacy}/watch/answer.json`)).toBe(true);
+    expect(fs.existsSync(`${cache}/${alias}/transcript.json`)).toBe(true);
+    const target = app.media.paths(playbackPath(key, app.port)).transcript;
+    expect(fs.readFileSync(target, "utf8")).toBe('{"words":[]}');
+    fs.writeFileSync(`${store.home}/jobs.json`, "[]");
+    // A size mismatch never removes the proxy itself.
+    expect((await cleanCloudPreviews(app, false, async () => ({ size: 6 }))).files).toBe(0);
+    expect((await cleanCloudPreviews(app, false, head)).files).toBe(1);
+    expect(fs.existsSync(local)).toBe(false);
+  } finally { cleanup(); }
+});
+
+test("a missing cloud proxy does not block orphan cleanup, but a missing local-only file still protects its previews", async () => {
+  const { app, store, cleanup } = fixtureHome("cache-cloud-missing");
+  try {
+    const id = store.create("cloud", { width: 2, height: 2, fps: 30 }).project.id;
+    await store.update(id, "test", (project) => {
+      project.media.push({ id: "m1", name: "cloud", path: "/not/here.mp4", kind: "video", duration: 1, fps: 30, width: 2, height: 2, has_audio: false,
+        cloud: { source: "sha256:abc", original: "edit/originals/sha256/abc/a.mov", proxy: "edit/proxies/sha256/abc.mp4", size: 1 } });
+    });
+    const path = `${store.cacheDir()}/0123456789abcdef/preview.mp4`;
+    fs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+    fs.writeFileSync(path, "video");
+    const old = (Date.now() - 5 * 86400_000) / 1000;
+    fs.utimesSync(path, old, old);
+    expect(cleanCache(app, true).files).toBe(1);
+    await store.update(id, "test", (project) => { delete project.media[0]!.cloud; });
+    expect(cleanCache(app, true).files).toBe(0);
+  } finally { cleanup(); }
+});
+
+test("explicit legacy migration removes completed orphan previews, never paid data, referenced media or incomplete work", async () => {
+  const { app, store, cleanup } = fixtureHome("cache-legacy");
+  try {
+    const cache = store.cacheDir();
+    const orphan = `${cache}/0123456789abcdef`;
+    const working = `${cache}/fedcba9876543210`;
+    for (const dir of [orphan, working]) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(`${orphan}/preview.done`, "");
+    fs.writeFileSync(`${orphan}/preview.mp4`, "video");
+    fs.writeFileSync(`${orphan}/preview-light.mp4`, "light");
+    fs.writeFileSync(`${orphan}/preview.m4a`, "sound");
+    fs.writeFileSync(`${orphan}/transcript.json`, "paid");
+    fs.writeFileSync(`${working}/preview.mp4`, "incomplete");
+    const id = store.create("local", { width: 2, height: 2, fps: 30 }).project.id;
+    await store.update(id, "test", (project) => {
+      project.media.push({ id: "m1", name: "source", path: `${orphan}/preview.mp4`, kind: "video", duration: 1, fps: 30, width: 2, height: 2, has_audio: false });
+    });
+    const head = async () => { throw new Error("an orphan needs no cloud request"); };
+    expect((await cleanCloudPreviews(app, true, head)).files).toBe(0);
+    expect((await cleanCloudPreviews(app, true, head, true)).files).toBe(3);
+    expect(fs.existsSync(`${orphan}/preview-light.mp4`)).toBe(true);
+    await cleanCloudPreviews(app, false, head, true);
+    expect(fs.existsSync(`${orphan}/preview.mp4`)).toBe(true);
+    expect(fs.existsSync(`${orphan}/transcript.json`)).toBe(true);
+    expect(fs.existsSync(`${orphan}/preview-light.mp4`)).toBe(false);
+    expect(fs.existsSync(`${working}/preview.mp4`)).toBe(true);
   } finally { cleanup(); }
 });

@@ -1,0 +1,13 @@
+---
+description: The complete commentary edit, from Writer handoff and visual sourcing to the finished mix and review.
+---
+
+Do the complete edit in this turn, stage by stage. One context read, one plan and one look per stage; batch independent source searches and timeline operations. Finish all chapters, not just an elaborate intro. Never wait for a VO recording: generate_voiceover if the import could not. Keep the Writer narration and sequence; its notes are instructions to the editor, not spoken text.
+
+1. Load research. Read the script notes and media once. Group the narration into visual beats by chapter: who/what, time period, action and purpose. Existing imported excerpts and supplied links first; search_broll for gaps, read_broll_source for candidate times, import_broll in batches, inspect their frames and record_broll_observations. Build a varied visual bank before composing; keep the beat/source clock/excerpt-relative clock straight.
+2. Load intro and transitions. Treat the written cold open and Intro as authored. Shape their images, pace, key phrases and source clips; no police teaser template. End on the central question, then begin chapter 1.
+3. Load cut-ins. Work chapter by chapter with get_edit_context narrowed by seconds (a broad essay context is too large). Cover every narration span with selected, inspected B-roll, evidence or a designed composition. Use one atomic plan per chapter; time changes at the words that motivate them. Source excerpts keep their intended quote. Add selective emphasis, evidence cards and chapter transitions; do not subtitle the entire narrator or mechanically repeat a 3-second talking-head loop.
+4. Load outro. Complete the final argument and authored ending.
+5. Load subtitles. Censor all house words; captions are selective for source speech that needs them, never blanket narration subtitles. Resolve tracking/censorship and legibility.
+6. Load music-and-sound. Level source speech to VO, beds only under narration, sound every motivated graphic gesture. Smooth any slow motion. One mix review across a narration/source boundary and a sound-heavy graphic.
+7. Load final-pass. Audit the entire edit, inspect a distributed contact sheet and motion samples, repair concrete defects. Complete requested export/share only after the full video is ready. Report duration, coverage, source gaps and the review link when requested; never claim a link before sharing succeeds.

@@ -168,16 +168,23 @@ pub enum Style {
     Bodycam,
     Interrogation,
     Courtroom,
+    Commentary,
 }
 
 impl Style {
-    pub const ALL: [Style; 3] = [Style::Bodycam, Style::Interrogation, Style::Courtroom];
+    pub const ALL: [Style; 4] = [
+        Style::Bodycam,
+        Style::Interrogation,
+        Style::Courtroom,
+        Style::Commentary,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Style::Bodycam => "bodycam",
             Style::Interrogation => "interrogation",
             Style::Courtroom => "courtroom",
+            Style::Commentary => "commentary",
         }
     }
 }
@@ -521,6 +528,28 @@ pub struct PhotoFrame {
     /// How dark the shadow is under the photo (0 none, 1 black).
     #[serde(default = "frame_shadow")]
     pub shadow: f32,
+    /// Rounded image corners, project pixels (zero keeps square corners).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub radius: f32,
+    /// Soft light around the white frame (zero is off).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub glow: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+}
+
+impl BlendMode {
+    pub fn is_normal(&self) -> bool {
+        *self == Self::Normal
+    }
 }
 
 fn frame_width() -> f32 {
@@ -614,6 +643,8 @@ pub enum ClipContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         frame: Option<PhotoFrame>,
+        #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
+        blend: BlendMode,
     },
     Audio {
         media: String,
@@ -1154,6 +1185,8 @@ pub enum TextPreset {
     None,
     /// Whole block fades in.
     Fade,
+    /// A soft character opacity sweep; the complete phrase keeps its geometry.
+    Soft,
     /// Glyphs rise and fade in one after another.
     Rise,
     /// Glyphs scale up from small with a slight overshoot.
@@ -1622,7 +1655,18 @@ pub struct Handle {
 /// Parameter paths that accept keyframes, per clip type.
 pub fn animatable_params(content: &ClipContent) -> &'static [&'static str] {
     match content {
-        ClipContent::Video { .. } => &["opacity", "x", "y", "scale", "rotation", "shake"],
+        ClipContent::Video { .. } => &[
+            "opacity",
+            "x",
+            "y",
+            "scale",
+            "rotation",
+            "shake",
+            "crop.left",
+            "crop.right",
+            "crop.top",
+            "crop.bottom",
+        ],
         ClipContent::Audio { .. } => &["volume_db"],
         ClipContent::Text { .. } => &[
             "opacity",
@@ -2216,11 +2260,19 @@ fn content_finite(content: &ClipContent) -> bool {
             transform,
             opacity,
             crop,
+            frame,
             ..
         } => {
             transform_finite(transform)
                 && opacity.is_finite()
                 && finite(&[crop.left, crop.right, crop.top, crop.bottom])
+                && frame.is_none_or(|f| {
+                    finite(&[f.width, f.shadow, f.radius, f.glow])
+                        && finite(&f.color.0)
+                        && f.width >= 0.0
+                        && f.radius >= 0.0
+                        && f.glow >= 0.0
+                })
         }
         ClipContent::Audio {
             volume_db, mutes, ..

@@ -11,6 +11,8 @@ import * as framing from "./framing.ts";
 import * as vignettes from "./vignettes.ts";
 import * as looks from "./looks.ts";
 import * as graphics from "./graphics.ts";
+import * as commentaryGraphics from "./commentary_graphics.ts";
+import * as commentaryAudit from "./commentary_audit.ts";
 import * as intro from "./intro_graphics.ts";
 import * as markBlurs from "./mark_blurs.ts";
 import * as typing from "./typing_sounds.ts";
@@ -414,6 +416,16 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       throw new Error(`${op} is retired: show pictures on the Windows screen (op desktop, or a desktop shot or picture shot in cover_cut_in), evidence on an evidence board`);
     case "date_title":
       return graphics.dateTitle(project, args);
+    case "commentary_text":
+      return commentaryGraphics.text(project, args);
+    case "commentary_card":
+      return commentaryGraphics.card(project, args);
+    case "commentary_chapter":
+      return commentaryGraphics.chapter(project, args);
+    case "commentary_look":
+      return commentaryGraphics.narrationLook(project, args);
+    case "commentary_profile":
+      return commentaryGraphics.profile(project, args);
     case "intro_captions":
       return intro.introCaptions(project, args);
     case "countdown":
@@ -1128,6 +1140,9 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     if ((clip.source_in ?? 0) + (clip.duration / fps) * (clip.speed ?? 1) > media.duration + 1 / fps) {
       issues.push({ kind: "source_exhausted", clip: clip.id });
     }
+  }
+  if (project.style === "commentary") {
+    return { issues: sortIssues([...issues, ...commentaryAudit.issues(project)]), frames: total, clips: project.clips.length };
   }
   // The same picture shown in more than one place in the video (the team:
   // "the same images again and again and again… it's just annoying").

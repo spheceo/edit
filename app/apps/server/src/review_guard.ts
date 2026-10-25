@@ -12,6 +12,10 @@ import * as diag from "./diag.ts";
 export const BLOCKED = new Set([
   "list_projects",
   "search_web",
+  "search_broll",
+  "read_broll_source",
+  "import_broll",
+  "capture_evidence",
   "read_page",
   "read_review",
   "add_article",

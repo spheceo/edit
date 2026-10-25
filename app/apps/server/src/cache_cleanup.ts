@@ -21,8 +21,11 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import * as cloud from "./cloud.ts";
+import { playbackPath } from "./cloud_playback.ts";
+import { Semaphore } from "./media.ts";
 import * as diag from "./diag.ts";
-import { readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
+import { carryAnalysis, localPath, readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { join } from "./paths.ts";
 import { localBudgetBytes } from "./storage.ts";
 
@@ -56,6 +59,135 @@ export interface CleanReport {
   files: number;
   bytes: number;
   removed: string[];
+}
+
+/**
+ * Remove acknowledged cloud previews, including their legacy cache aliases.
+ * Originals, paid analysis, directly referenced local media, and unfinished
+ * uploads are never candidates. HEAD is required, not just project metadata.
+ */
+export async function cleanCloudPreviews(
+  app: App,
+  dryRun: boolean,
+  head: (key: string) => Promise<{ size: number } | null> = (key) => cloud.head(key),
+  discardOrphanPreviews = false,
+): Promise<CleanReport> {
+  const report: CleanReport = { folders: 0, files: 0, bytes: 0, removed: [] };
+  const cache = app.store.cacheDir();
+  const paths = new Set<string>();
+  const referenced = new Set<string>();
+  const usedKeys = new Set<string>();
+  const sources = new Map<string, Set<string>>();
+  const add = (key: string, alias: string) => {
+    let aliases = sources.get(key);
+    if (aliases === undefined) sources.set(key, aliases = new Set());
+    aliases.add(alias);
+  };
+  // Read the saved locations before store.get normalises them for playback.
+  // An unreadable project makes the reference set incomplete: keep everything.
+  for (const name of safeList(join(app.store.home, "projects")).filter((name) => name.endsWith(".json"))) {
+    try {
+      const project = JSON.parse(fs.readFileSync(join(app.store.home, "projects", name), "utf8")) as {
+        media?: { path: string; kind: string; cloud?: { proxy?: string } | null }[];
+      };
+      for (const media of project.media ?? []) {
+        if (typeof media.path !== "string") return report;
+        referenced.add(media.path);
+        usedKeys.add(app.native.mediaKey(media.path));
+        if (media.cloud?.proxy === undefined || !cloud.validKey(media.cloud.proxy)) {
+          paths.add(media.path);
+          continue;
+        }
+        if (media.kind === "image") continue;
+        const key = media.cloud.proxy;
+        add(key, app.native.mediaKey(media.path));
+        add(key, app.native.mediaKey(localPath(cache, key)));
+        add(key, app.native.mediaKey(playbackPath(key, app.port)));
+        // Carry paid analysis before the old proxy's metadata (and key) goes.
+        if (!dryRun) carryAnalysis(cache, media.path, playbackPath(key, app.port));
+      }
+    } catch { return report; }
+  }
+  // Analysis carried from an original records its older media keys. Follow
+  // those aliases so migrating a project doesn't strand its old previews.
+  for (const aliases of sources.values()) {
+    for (const alias of aliases) {
+      try {
+        const value = JSON.parse(fs.readFileSync(join(cache, alias, "watch", "keys.json"), "utf8")) as { keys?: unknown };
+        if (Array.isArray(value.keys)) for (const key of value.keys) if (typeof key === "string" && /^[0-9a-f]{16}$/.test(key)) aliases.add(key);
+      } catch { /* no older analysis */ }
+    }
+  }
+  const pending = new Set<string>();
+  try {
+    const jobs = JSON.parse(fs.readFileSync(join(app.store.home, "jobs.json"), "utf8")) as { kind: string; args?: { local?: string } }[];
+    for (const job of jobs) if (job.kind === "upload" && typeof job.args?.local === "string") pending.add(job.args.local);
+  } catch {
+    if (fs.existsSync(join(app.store.home, "jobs.json"))) return report;
+  }
+  const removed = new Set<string>();
+  const slots = new Semaphore(3);
+  const candidatesWithFiles = [...sources].filter(([key, aliases]) =>
+    (key.startsWith("edit/proxies/") && fs.existsSync(localPath(cache, key))) ||
+    [...aliases].some((alias) => safeList(join(cache, alias)).some((name) => /^preview(?:-light)?\.(?:mp4|m4a)$/.test(name))),
+  );
+  const confirmedKeys = new Map(await Promise.all(candidatesWithFiles.map(([key]) => slots.with(async () => {
+    try { return [key, await head(key)] as const; } catch { return [key, null] as const; }
+  }))));
+  for (const [key, aliases] of sources) {
+    const confirmed = confirmedKeys.get(key) ?? null;
+    if (confirmed === null || confirmed.size <= 0) continue;
+    const candidates = new Set<string>();
+    if (key.startsWith("edit/proxies/")) {
+      const path = localPath(cache, key);
+      try { if (fs.statSync(path).size === confirmed.size) candidates.add(path); } catch { /* already cloud-only */ }
+    }
+    for (const alias of aliases) {
+      const dir = join(cache, alias);
+      for (const name of safeList(dir)) if (/^preview(?:-light)?\.(?:mp4|m4a|done)$/.test(name)) candidates.add(join(dir, name));
+    }
+    for (const path of candidates) {
+      if (removed.has(path) || paths.has(path) || pending.has(path) || uploadingNow(path)) continue;
+      try {
+        const stat = fs.lstatSync(path);
+        if (!stat.isFile()) continue;
+        if (!dryRun) fs.rmSync(path);
+        removed.add(path);
+        report.files += 1;
+        report.bytes += stat.size;
+        if (report.removed.length < 50) report.removed.push(path);
+      } catch { /* a concurrent job finished or removed it */ }
+    }
+  }
+  report.folders = new Set([...removed].map((path) => path.slice(0, path.lastIndexOf("/")))).size;
+  if (discardOrphanPreviews) {
+    // Explicit migration of the pre-cloud cache: only completed generated
+    // playback files in media-key folders which no saved media resolves to.
+    // These aren't source media. A disconnected source can rebuild its
+    // derived previews when it returns; keep the paid analysis beside them.
+    for (const alias of safeList(cache)) {
+      if (!/^[0-9a-f]{16}$/.test(alias) || usedKeys.has(alias) || app.media.busyKey(alias)) continue;
+      const dir = join(cache, alias);
+      // Both artifacts identify the old media processor's completed output.
+      if (!fs.existsSync(join(dir, "preview.done"))) continue;
+      for (const name of safeList(dir)) {
+        if (!/^preview(?:-light)?\.(?:mp4|m4a|done)$/.test(name)) continue;
+        const path = join(dir, name);
+        if (removed.has(path) || referenced.has(path) || pending.has(path)) continue;
+        try {
+          const stat = fs.lstatSync(path);
+          if (!stat.isFile()) continue;
+          if (!dryRun) fs.rmSync(path);
+          removed.add(path);
+          report.files += 1;
+          report.bytes += stat.size;
+          if (report.removed.length < 50) report.removed.push(path);
+        } catch { /* already gone */ }
+      }
+    }
+    report.folders = new Set([...removed].map((path) => path.slice(0, path.lastIndexOf("/")))).size;
+  }
+  return report;
 }
 
 /** Bytes under `path`, each file once however many hard links it has (a proxy and its preview are one file). */
@@ -105,11 +237,11 @@ function used(app: App): { paths: Set<string>; keys: Set<string>; saved: Map<str
   const saved = new Map<string, number>();
   const dir = join(app.store.home, "projects");
   for (const name of safeList(dir).filter((name) => name.endsWith(".json"))) {
-    let media: { path?: unknown }[] = [];
+    let media: { path?: unknown; cloud?: { proxy?: unknown } | null }[] = [];
     let at = 0;
     try {
       at = fs.statSync(join(dir, name)).mtimeMs;
-      const value = JSON.parse(fs.readFileSync(join(dir, name), "utf8")) as { media?: { path?: unknown }[] };
+      const value = JSON.parse(fs.readFileSync(join(dir, name), "utf8")) as { media?: { path?: unknown; cloud?: { proxy?: unknown } | null }[] };
       media = Array.isArray(value.media) ? value.media : [];
     } catch (error) {
       diag.warn("cache", `${name} won't read, so nothing it might use is cleaned (${diag.messageOf(error)})`);
@@ -120,7 +252,7 @@ function used(app: App): { paths: Set<string>; keys: Set<string>; saved: Map<str
       paths.add(item.path);
       // A missing file keys differently (no size or time): its folder would look unused.
       if (!fs.existsSync(item.path)) {
-        missing += 1;
+        if (typeof item.cloud?.proxy !== "string" || !cloud.validKey(item.cloud.proxy)) missing += 1;
         continue;
       }
       try {
@@ -304,15 +436,21 @@ export function cleanCache(
 
 /** Cleans now and then: a few minutes after the start, then hourly (a day of imports and exports filled the disk). */
 export function startCleaning(app: App): () => void {
-  const run = () => {
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
     try {
+      const cloud = await cleanCloudPreviews(app, false);
       const report = cleanCache(app, false);
+      report.bytes += cloud.bytes;
+      report.files += cloud.files;
       if (report.files > 0) {
         diag.info("cache", `freed ${(report.bytes / 1e9).toFixed(2)} GB: ${report.files} files in ${report.folders} media folders (no project uses them, half-written, or old projects' previews past the cache's limit)`);
       }
     } catch (error) {
       diag.warn("cache", `cleaning the cache: ${diag.messageOf(error)}`);
-    }
+    } finally { running = false; }
   };
   const first = setTimeout(run, 10 * 60 * 1000);
   const hourly = setInterval(run, 3600 * 1000);

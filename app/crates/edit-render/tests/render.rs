@@ -3,6 +3,107 @@
 use edit_core::*;
 use edit_render::{text::BUNDLED_FONTS, Renderer};
 
+#[test]
+#[allow(clippy::unwrap_used)]
+fn evidence_multiply_preserves_black_type_and_screen_adds_light() {
+    let Some(mut r) = renderer(32, 32) else {
+        return;
+    };
+    let ink: Vec<u8> = (0..32)
+        .flat_map(|_| {
+            (0..64).flat_map(|x| {
+                if x < 32 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 0, 255]
+                }
+            })
+        })
+        .collect();
+    r.upload_video_rgba("ink", 64, 32, &ink);
+    let overlay = Layer::Video {
+        clip: "ink".into(),
+        media: "ink".into(),
+        source_time: 0.0,
+        transform: Transform {
+            scale: 2.0,
+            ..Default::default()
+        },
+        opacity: 1.0,
+        crop: Default::default(),
+        frame: None,
+        blend: BlendMode::Multiply,
+    };
+    let mut scene = Scene {
+        width: 32,
+        height: 32,
+        layers: vec![
+            Layer::Solid {
+                color: Rgba([0.5, 0.5, 0.5, 1.0]),
+                opacity: 1.0,
+                gradient: None,
+            },
+            overlay,
+        ],
+    };
+    r.render(&scene);
+    let pixels = r.read_output().unwrap();
+    let red = &pixels[(16 * 32 + 4) * 4..][..4];
+    let black = &pixels[(16 * 32 + 28) * 4..][..4];
+    assert!(
+        (i32::from(red[0]) - 128).abs() < 3 && red[1] < 3 && red[2] < 3,
+        "red={red:?}"
+    );
+    assert!(black[0] < 3 && black[1] < 3 && black[2] < 3);
+    if let Layer::Video { blend, .. } = &mut scene.layers[1] {
+        *blend = BlendMode::Screen;
+    }
+    r.render(&scene);
+    let pixels = r.read_output().unwrap();
+    let lit = &pixels[(16 * 32 + 4) * 4..][..4];
+    assert!(lit[0] > 250 && (i32::from(lit[1]) - 128).abs() < 3);
+}
+
+#[test]
+#[allow(clippy::unwrap_used)]
+fn rounded_photo_corners_leave_the_background_visible() {
+    let Some(mut r) = renderer(64, 64) else {
+        return;
+    };
+    r.upload_video_rgba("picture", 1, 1, &[255, 255, 255, 255]);
+    let scene = Scene {
+        width: 64,
+        height: 64,
+        layers: vec![
+            Layer::Solid {
+                color: Rgba([0.0, 0.0, 1.0, 1.0]),
+                opacity: 1.0,
+                gradient: None,
+            },
+            Layer::Video {
+                clip: "picture".into(),
+                media: "picture".into(),
+                source_time: 0.0,
+                transform: Transform::default(),
+                opacity: 1.0,
+                crop: Default::default(),
+                blend: BlendMode::Normal,
+                frame: Some(PhotoFrame {
+                    width: 0.0,
+                    color: Rgba::WHITE,
+                    shadow: 0.0,
+                    radius: 18.0,
+                    glow: 0.0,
+                }),
+            },
+        ],
+    };
+    r.render(&scene);
+    let pixels = r.read_output().unwrap();
+    assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
+    assert_eq!(&pixels[(32 * 64 + 32) * 4..][..4], &[255, 255, 255, 255]);
+}
+
 // A test helper: failing here should fail the test.
 #[allow(clippy::unwrap_used)]
 fn renderer(width: u32, height: u32) -> Option<Renderer> {
@@ -58,6 +159,7 @@ fn keeps_uniforms_independent_beyond_512_draws() {
                 opacity: 1.0,
                 crop: Default::default(),
                 frame: None,
+                blend: Default::default(),
             })
             .collect(),
     };
@@ -116,6 +218,7 @@ fn renders_gradient_glowing_title_and_grade() {
                 opacity: 1.0,
                 crop: Default::default(),
                 frame: None,
+                blend: Default::default(),
             },
             Layer::Adjustment {
                 grade: Grade {
@@ -205,7 +308,7 @@ fn renders_repack_subtitle_style() {
         width: w,
         height: h,
         layers: vec![
-            Layer::Video { clip: "c1".into(), media: "m1".into(), source_time: 0.0, transform: Transform::default(), opacity: 1.0, crop: Default::default(), frame: None },
+            Layer::Video { clip: "c1".into(), media: "m1".into(), source_time: 0.0, transform: Transform::default(), opacity: 1.0, crop: Default::default(), frame: None, blend: Default::default() },
             Layer::Text {
                 clip: "s1".into(),
                 text: "This is how a subtitle looks in Repack's house style, wrapping onto a second line when it runs long".into(),
@@ -251,6 +354,7 @@ fn independent_moments_of_one_source_do_not_share_a_texture() {
         opacity: 1.0,
         crop: Default::default(),
         frame: None,
+        blend: Default::default(),
     };
     renderer.render(&Scene {
         width: 80,
@@ -292,6 +396,7 @@ fn crops_a_picture_and_fades_a_gradient() {
                     ..Crop::default()
                 },
                 frame: None,
+                blend: Default::default(),
             },
             // Black, clear at 60% across, full by 90%.
             Layer::Solid {
@@ -367,6 +472,7 @@ fn blurs_only_inside_the_region() {
         opacity: 1.0,
         crop: Default::default(),
         frame: None,
+        blend: Default::default(),
     };
     let word = Layer::Text {
         clip: "t1".into(),
@@ -512,6 +618,7 @@ fn bench_busy_frames() {
             opacity: 1.0,
             crop: Default::default(),
             frame: None,
+            blend: Default::default(),
         },
         Layer::Video {
             clip: "b".into(),
@@ -524,6 +631,7 @@ fn bench_busy_frames() {
             opacity: 1.0,
             crop: Default::default(),
             frame: None,
+            blend: Default::default(),
         },
     ];
     for index in 0..30 {
@@ -704,6 +812,7 @@ fn a_light_leak_warms_from_its_side_and_burns_toward_white() {
         opacity: 1.0,
         crop: Default::default(),
         frame: None,
+        blend: Default::default(),
     };
     let leak = |leak: f32| Layer::Adjustment {
         grade: Grade {

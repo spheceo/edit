@@ -9,8 +9,13 @@ for V in "$@"; do
   echo "== $R $V start $(date)"
   python3 $S/round.py $V $R > $L/rounds/$R-$V.log 2>&1
   P=$(python3 -c "import json; print(json.load(open('$L/rounds/$R/$V/meta.json'))['project'])")
-  python3 $S/score2.py $P $L/rounds/$R/$V/score.json > $L/rounds/$R/$V/score.txt 2>&1
-  python3 $S/frames.py $P $L/rounds/$R/$V/frames > $L/rounds/$R/$V/frames.log 2>&1
+  STYLE=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.edit/projects/$P.json'))).get('style','bodycam'))")
+  if [ "$STYLE" = commentary ]; then
+    python3 "$S/commentary_score.py" "$P" "$L/rounds/$R/$V" --frames > "$L/rounds/$R/$V/score.txt" 2>&1
+  else
+    python3 "$S/score2.py" "$P" "$L/rounds/$R/$V/score.json" > "$L/rounds/$R/$V/score.txt" 2>&1
+    python3 "$S/frames.py" "$P" "$L/rounds/$R/$V/frames" > "$L/rounds/$R/$V/frames.log" 2>&1
+  fi
   echo "== $R $V done $(date) $(grep -o 'saved.*' $L/rounds/$R-$V.log)"
 done
 echo "== $R all done $(date)"

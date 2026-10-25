@@ -6,6 +6,11 @@ declare module "*.wav" {
   export default path;
 }
 
+declare module "*.png" {
+  const path: string;
+  export default path;
+}
+
 // Markdown imported `with { type: "text" }` (the agent's text, agent.ts):
 // Bun gives its contents, carried inside the compiled binary.
 declare module "*.md" {

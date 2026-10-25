@@ -1570,7 +1570,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     // are waiting by the time the editing gets to them.
     const home = app.store.home;
     const researched = seams.research.articles(home, id).length > 0 || seams.research.items(home, id).length > 0;
-    if (laidOut && !recut && !researched) {
+    if (laidOut && !recut && !researched && now?.project.style !== "commentary") {
       try {
         await seams.agentPanel(app).send(id, RESEARCH, null, null);
       } catch (error) {
@@ -1657,6 +1657,11 @@ async function footageToDisk(app: App, id: string, index: number, file: string):
  */
 async function footageToCloud(app: App, id: string, index: number, file: string): Promise<Fetched> {
   const progress = fileProgress(app, id, index);
+  const live = app.store.get(id);
+  if (live?.project.style === "commentary" && youtube.idOf(file) !== null) {
+    const cut = await seams.cloudMedia.youtubeExcerpts(app.store.home, app.store.cacheDir(), file, fileRanges(live.project, file), progress);
+    return [cut.reduce((n, one) => n + (one.cloud?.cloud?.size ?? 0), 0), cut[0]?.cloud?.name ?? file, cut];
+  }
   const scratch = seams.cloudMedia.scratchDir(app.store.cacheDir());
   const [original, local] =
     youtube.idOf(file) !== null

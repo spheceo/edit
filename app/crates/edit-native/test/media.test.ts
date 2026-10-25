@@ -52,6 +52,39 @@ describe("probing", () => {
 });
 
 describe("previews", () => {
+  test("cloud ranges feed frame reads and Vision without any local video preview", async () => {
+    const file = Bun.file(clip);
+    const size = file.size;
+    let ranges = 0;
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
+      const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+      const from = range === null ? 0 : Number(range[1]);
+      const to = range?.[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+      if (range !== null) ranges++;
+      return new Response(file.slice(from, to + 1), { status: range === null ? 200 : 206,
+        headers: { "content-type": "video/mp4", "accept-ranges": "bytes", "content-length": String(to - from + 1), "connection": "close",
+          ...(range === null ? {} : { "content-range": `bytes ${from}-${to}/${size}` }) } });
+    } });
+    const source = `http://127.0.0.1:${server.port}/api/cloud/preview?key=edit%2Fproxies%2Fsha256%2Fnative-test.mp4`;
+    try {
+      expect(native.mediaKey(source)).toBe(native.mediaKey(source.replace(`:${server.port}/`, ":9999/")));
+      const probe = await native.probe(source);
+      const media = { ...probe, id: "cloud", name: "cloud.mp4", path: source };
+      const { image } = await native.mediaFrames({ media, start: 0, end: 1, count: 2, maxSide: 160, sheetColumns: 2, encode: "agent" });
+      expect(image.data.length).toBeGreaterThan(0);
+      if (process.platform === "darwin") {
+        expect(Object.keys(await native.facesDetect(source, [320, 180], [0, 1]))).toHaveLength(2);
+        expect(Object.keys(await native.screenTextDetect(source, [320, 180], [0, 1]))).toHaveLength(2);
+      }
+      await native.makePeaks(source, paths(source).peaks);
+      const [heard] = await native.loudnessSpans(source, [{ from: 0, seconds: 1 }]);
+      expect(heard.integrated).toBeGreaterThan(-40);
+      expect(heard.integrated).toBeLessThan(0);
+      expect(ranges).toBeGreaterThan(0);
+      for (const path of [paths(source).proxy, paths(source).audio, paths(source).light]) expect(existsSync(path)).toBe(false);
+    } finally { server.stop(true); }
+  }, 30_000);
+
   test("the preview reports progress and lands whole; then the light one", async () => {
     const probe = await native.probe(clip);
     const where = paths(clip);

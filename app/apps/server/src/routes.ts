@@ -9,11 +9,12 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
-import { cleanCache } from "./cache_cleanup.ts";
+import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
 import { importDrive } from "./drive_import.ts";
 import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
+import { PLAYBACK_ROUTE } from "./cloud_playback.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -98,6 +99,16 @@ export function buildRouter(): Router<App> {
   seams.captions.routes(router);
   seams.subtitles.routes(router);
   router
+    .get(PLAYBACK_ROUTE, async ({ request, query }) => {
+      const key = query.get("key") ?? "";
+      if (!cloud.validKey(key) || !/^edit\/(proxies|originals|excerpts)\//.test(key)) throw bad("invalid cloud preview key");
+      const response = await cloudMedia.streamFromCloud(request, { proxy: key }, "proxy");
+      if (response === null) throw new ApiError(503, "cloud previews need Edit's cloud connection");
+      // FFmpeg seeks by reopening the loopback HTTP input. Closing each
+      // range avoids its stale keep-alive connection on a backward seek.
+      response.headers.set("connection", "close");
+      return response;
+    })
     .get("/api/projects/{id}/media/{media}/{kind}", mediaFile)
     .get("/api/projects/{id}/frame/{frame}", framePng)
     .get("/api/projects/{id}/cover/{frame}", coverJpeg)
@@ -390,14 +401,14 @@ function listProjects({ app }: Context): Response {
   return json({ projects: app.store.visible() });
 }
 
-const STYLES: Style[] = ["bodycam", "interrogation", "courtroom"];
+const STYLES: Style[] = ["bodycam", "interrogation", "courtroom", "commentary"];
 
 async function createProject(context: Context): Promise<Response> {
   const given = await body(context);
   const name = field<string>(given, "name", "string", true);
   const style = given.style === undefined ? "bodycam" : given.style;
   if (typeof style !== "string" || !STYLES.includes(style as Style)) {
-    throw badShape(`style: unknown variant \`${String(style)}\`, expected one of \`bodycam\`, \`interrogation\`, \`courtroom\``);
+    throw badShape(`style: unknown variant \`${String(style)}\`, expected one of \`bodycam\`, \`interrogation\`, \`courtroom\`, \`commentary\``);
   }
   const size = (key: "width" | "height" | "fps") => {
     const value = field<number>(given, key, "u32");
@@ -722,6 +733,12 @@ async function mediaFile(context: Context): Promise<Response> {
   const media = live.project.media.find((item) => item.id === params.media);
   if (media === undefined) throw notFound("no such media");
   const kind = params.kind!;
+  // Cloud playback always reads R2, even while an obsolete local preview exists.
+  if (cloudMedia.streamKey(media.cloud, kind) !== null) {
+    const streamed = await cloudMedia.streamFromCloud(context.request, media.cloud, kind);
+    if (streamed === null) throw new ApiError(503, "cloud previews need Edit's cloud connection");
+    return streamed;
+  }
   const source = media.path;
   const paths = app.media.paths(source);
   // `v=<preview|light>~<stamp>`: the URL names one version of the file, so
@@ -781,7 +798,6 @@ async function mediaFile(context: Context): Promise<Response> {
   if (!isFile(file)) {
     // Not on this Mac yet: its bytes come from R2 through here, and its proxy
     // comes down now, ahead of the project's others.
-    if (media.cloud !== undefined && media.cloud !== null) cloudMedia.fetchSoon(app, params.id!, media.id);
     const streamed = await cloudMedia.streamFromCloud(context.request, media.cloud, kind).catch((error: unknown) => {
       diag.warn("cloud", `streaming ${media.name}: ${diag.messageOf(error)}`);
       return null;
@@ -1014,7 +1030,11 @@ async function migrateMedia(context: Context): Promise<Response> {
 async function cleanTheCache(context: Context): Promise<Response> {
   const given = (await optionalBody(context)) ?? {};
   const dryRun = field<boolean>(given, "dry_run", "boolean") ?? false;
-  return json(cleanCache(context.app, dryRun));
+  const discardOrphans = field<boolean>(given, "discard_orphan_previews", "boolean") ?? false;
+  const previews = await cleanCloudPreviews(context.app, dryRun, undefined, discardOrphans);
+  const other = cleanCache(context.app, dryRun);
+  return json({ files: previews.files + other.files, folders: previews.folders + other.folders, bytes: previews.bytes + other.bytes,
+    removed: [...previews.removed, ...other.removed].slice(0, 50) });
 }
 
 /** The project's exports, newest first (this machine's: each downloads from Edit, on the Mac or over Tailscale). */

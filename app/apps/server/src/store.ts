@@ -110,6 +110,14 @@ export class Store {
   private active: string | null = null;
   readonly events = new Events();
   private cloudHook: CloudHook | null = null;
+  private resolveMedia: ((project: Project) => void) | null = null;
+
+  /** Machine-local media locations, applied on every read and save, including cloud pulls. */
+  setMediaResolver(resolve: (project: Project) => void): void {
+    if (this.projects.size !== 0) throw new Error("configure media playback before loading projects");
+    this.resolveMedia = resolve;
+    this.summaries.clear();
+  }
 
   /**
    * The revision a project starts at when this server loads it: a different
@@ -341,6 +349,7 @@ export class Store {
     const project = read.project;
     // Files moved to (or back from) the media drive are found.
     this.currentLayout.resolveProject(project);
+    this.resolveMedia?.(project);
     const live: Live = { rev: this.firstRev, project: deepFreeze(project) };
     this.projects.set(id, live);
     this.summaries.delete(id);
@@ -414,6 +423,7 @@ export class Store {
     const id = project.id;
     if (!validId(id)) throw new Error(`not a project id: ${JSON.stringify(id)}`);
     this.currentLayout.resolveProject(project);
+    this.resolveMedia?.(project);
     const prepared = native().projectPrepare(id, jsonForSerde(project));
     for (let attempt = 0; attempt < 5; attempt++) {
       const current = this.load(id);
@@ -557,6 +567,7 @@ export class Store {
   /** `project` validated and serialized as saved; throws UpdateError "invalid". */
   private prepare(id: string, project: Project): Prepared {
     try {
+      this.resolveMedia?.(project);
       return native().projectPrepare(id, jsonForSerde(project));
     } catch (error) {
       throw new UpdateError("invalid", diag.messageOf(error));
@@ -586,6 +597,7 @@ export class Store {
 
   /** Validates and saves a project new to this store as `rev`; throws the reason. */
   private write(id: string, rev: number, project: Project): Live {
+    this.resolveMedia?.(project);
     return this.save(id, rev, native().projectPrepare(id, jsonForSerde(project)));
   }
 

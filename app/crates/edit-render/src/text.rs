@@ -54,8 +54,9 @@ impl FontBook {
     }
 }
 
-/// Fonts that ship with Edit (Geist, Montserrat and Reenie Beanie, a marker
-/// handwriting for notes on evidence; all SIL OFL 1.1).
+/// Fonts used by Edit. Geist, Montserrat and Reenie Beanie are SIL OFL 1.1.
+/// Akwe Pro is the team's commentary reference face; see assets/commentary/README.md
+/// for the review-build source and its separate distribution licence requirement.
 pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
     ("Montserrat", 600, "Montserrat-SemiBold.ttf"),
     ("Geist", 400, "Geist-Regular.ttf"),
@@ -66,11 +67,13 @@ pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
     ("Reenie Beanie", 400, "ReenieBeanie.ttf"),
     ("Geist Mono", 500, "GeistMono-Medium.ttf"),
     ("Geist Mono", 600, "GeistMono-SemiBold.ttf"),
+    ("Akwe Pro", 700, "AkwePro-Bold.otf"),
 ];
 
 #[cfg(feature = "bundled-fonts")]
 pub fn bundled_font_bytes(file: &str) -> Option<&'static [u8]> {
     Some(match file {
+        "AkwePro-Bold.otf" => include_bytes!("../fonts/AkwePro-Bold.otf"),
         "Geist-Regular.ttf" => include_bytes!("../fonts/Geist-Regular.ttf"),
         "Geist-Medium.ttf" => include_bytes!("../fonts/Geist-Medium.ttf"),
         "Geist-SemiBold.ttf" => include_bytes!("../fonts/Geist-SemiBold.ttf"),

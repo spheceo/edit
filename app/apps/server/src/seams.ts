@@ -57,6 +57,9 @@ import * as markersModule from "./markers.ts";
 import type { Box } from "./native/index.ts";
 import * as researchModule from "./research.ts";
 import * as scriptModule from "./script_tools.ts";
+import "./commentary_sources.ts";
+import "./evidence_highlight.ts";
+import "./motion_review.ts";
 import * as sfxModule from "./sfx.ts";
 import type { Store } from "./store.ts";
 import * as stylesModule from "./styles.ts";
@@ -160,6 +163,8 @@ export interface Originals {
 }
 
 export interface CloudMediaSeam {
+  youtubeExcerpts(home: string, cache: string, file: string, ranges: [number, number][], progress?: (bytes: number, total: number | null, name: string) => void): Promise<Excerpt[]>;
+  configurePlayback(app: App): void;
   /** Starts a backfill of cloud project `id` in the background. */
   backfillSoon(app: App, id: string): void;
   /** The media a script plays from Drive file `original`: an excerpt per span the `ranges` need. */

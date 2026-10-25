@@ -89,32 +89,13 @@ fn look(source: &Path, (width, height): (u32, u32), indexes: &[i64]) -> Result<T
     let parts = indexes.len().div_ceil(300).clamp(1, 3);
     let chunk = indexes.len().div_ceil(parts);
     let read = |part: &[i64]| -> Result<Read, String> {
-        let mut reader = crate::mac_media::Reader::open(&decode, wide, high)?;
-        let mut bgra = vec![0_u8; wide as usize * high as usize * 4];
+        let mut reader = crate::render::VideoReader::analysis(&decode, wide, high);
+
         let mut out = Vec::with_capacity(part.len());
         for &index in part {
             let time = index as f64 / RATE;
-            // As faces.rs: a failed read is tried once more on a fresh reader,
-            // else the whole look fails rather than caching "no text" for good.
-            if let Err(error) = reader.frame(time, &mut bgra, crate::render::Order::Bgra, false) {
-                crate::log::warn(
-                    "screen text",
-                    format!(
-                        "reading {} at {time:.2}s: {error}; opening it again",
-                        decode.display()
-                    ),
-                );
-                reader = crate::mac_media::Reader::open(&decode, wide, high)?;
-                reader
-                    .frame(time, &mut bgra, crate::render::Order::Bgra, false)
-                    .map_err(|error| {
-                        format!(
-                            "couldn't read {} at {time:.2}s to find text: {error}",
-                            decode.display()
-                        )
-                    })?;
-            }
-            let seen = crate::mac_media::text(&bgra, wide, high)?
+            let bgra = reader.frame_at(time)?;
+            let seen = crate::mac_media::text(bgra, wide, high)?
                 .into_iter()
                 .filter(|(_, sure, _)| *sure >= SURE)
                 .map(|(b, _, t)| Seen {

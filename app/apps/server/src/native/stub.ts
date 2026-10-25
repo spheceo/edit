@@ -12,6 +12,7 @@
 // Never ship it: `isReal()` says which one is loaded.
 
 import * as fs from "node:fs";
+import { playbackKey } from "../cloud_playback.ts";
 
 import { ANIMATABLE, type ClipType, type ExportOptions, type Format, type Probe, type Project } from "../model.ts";
 import { extension, join, stripPrefix, withExtension as replaceExtension } from "../paths.ts";
@@ -209,7 +210,11 @@ export function createStub(): Stub {
     return hash(`${name}\u0000${size}\u0000${modified}`);
   };
 
-  const mediaKey = (path: string) => keyOf(keyPath(path), path);
+  const mediaKey = (path: string) => {
+    const cloud = playbackKey(path);
+    const name = cloud === null ? path : `cloud:${encodeURIComponent(cloud)}`;
+    return keyOf(cloud === null ? keyPath(path) : name, name);
+  };
 
   const probe = async (path: string): Promise<Probe> => {
     const ext = extension(path)?.toLowerCase() ?? "";

@@ -128,7 +128,7 @@ export async function run(source: string, target: string, keyterms: readonly str
   const audio = withExtension(target, "ogg");
   // Asked before the media's other work has made its cache folder.
   fs.mkdirSync(target.slice(0, target.lastIndexOf("/")) || ".", { recursive: true });
-  await encode(["-protocol_whitelist", "file,pipe", "-i", source, "-map", "0:a:0"], audio, "could not extract audio");
+  await encode(["-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source), "-i", source, "-map", "0:a:0"], audio, "could not extract audio");
   let transcript: Transcript;
   try {
     const seconds = await lengthOf(audio);

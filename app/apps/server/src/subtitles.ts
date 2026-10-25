@@ -98,6 +98,11 @@ export const HOUSE_TERMS = [
 ] as const;
 /** Words whose sound is muted but which stay readable in the subtitles. */
 export const HOUSE_MUTE_ONLY = ["kill", "shot", "shoot", "drug", "drugs", "dead", "marijuana"] as const;
+/** Internet Janitor's additional terms: precise silence, first-letter stars. */
+export const COMMENTARY_TERMS = ["robbed", "robbery", "die", "dying", "death", "dead", "kill", "drug", "drugs", "marijuana", "murder", "shoot", "shot", "cunt", "faggot", "torture", "armed", "gun", "pussy"] as const;
+const commentaryTerms = [...HOUSE_TERMS, ...COMMENTARY_TERMS].map((entry) => {
+  const term = entry.split("=")[0]!.trim(); return `${term} = ${term[0]}${"*".repeat(Math.max(0, term.length - 1))}`;
+});
 /** Muted and starred out too, only in a heavy neglect case. */
 export const NEGLECT_TERMS = [
   "endangerment",
@@ -301,7 +306,7 @@ export function suggestions(words: TimedWord[], neglect: boolean, fromMs: number
     parts: string[];
   }
   let listed: Listed[] = [];
-  const add = (entry: string, starred: boolean) => {
+  const add = (entry: string, starred: boolean, override = false) => {
     const [term, display] = parseTerm(entry);
     const parts = tokens(term);
     const key = parts.join(" ");
@@ -309,7 +314,7 @@ export function suggestions(words: TimedWord[], neglect: boolean, fromMs: number
     const fresh: Listed = { key, term, display, starred, parts };
     const known = listed.findIndex((other) => other.key === key);
     if (known < 0) listed.push(fresh);
-    else if (!listed[known]!.starred) listed[known] = fresh;
+    else if (override || !listed[known]!.starred) listed[known] = fresh;
   };
   for (const entry of HOUSE_MUTE_ONLY) add(entry, false);
   if (neglect) {
@@ -317,7 +322,7 @@ export function suggestions(words: TimedWord[], neglect: boolean, fromMs: number
   }
   for (const entry of HOUSE_TERMS) add(entry, true);
   // A video's own words (a Doc's "Blur this"), muted and starred like the house's.
-  for (const entry of extra) add(entry, true);
+  for (const entry of extra) add(entry, true, entry.includes("="));
   // Longest first (a stable sort, as Rust's).
   listed = [...listed].sort((a, b) => b.parts.length - a.parts.length);
   const out: Suggestion[] = [];
@@ -1387,6 +1392,7 @@ export async function houseWords(
   neglect: boolean,
   extra: readonly string[] = [],
 ): Promise<HouseWords> {
+  if (project.style === "commentary") extra = [...commentaryTerms, ...extra];
   const fps = fpsOf(project);
   const sound: [Clip, boolean][] = [
     ...footageSound(project, from, to).map((clip) => [clip, false] as [Clip, boolean]),
@@ -1466,6 +1472,7 @@ export async function muteHouseWords(
   if (to <= from) throw new Error("the span is empty");
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
+  if (live.project.style === "commentary") extra = [...commentaryTerms, ...extra];
   const fps = fpsOf(live.project);
   let house = await houseWords(app, live.project, from, to, neglect, extra);
   // Words to leave unmuted where they're said: a "not muted" marker on the

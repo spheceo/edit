@@ -35,7 +35,8 @@ struct LayerUniforms {
     mode: u32,
     /// The Gaussian's sigma in pixels, for a box shadow.
     blur: f32,
-    _pad: [u32; 2],
+    corner_radius: f32,
+    _pad: u32,
     /// The part of the texture drawn (x0, y0, x1, y1; all of it 0, 0, 1, 1);
     /// for a gradient, where it starts and ends (x0 clear, y0 full).
     uv: [f32; 4],
@@ -206,6 +207,8 @@ pub struct Renderer {
     readback: Option<wgpu::Buffer>,
     layer_layout: wgpu::BindGroupLayout,
     over_pipeline: wgpu::RenderPipeline,
+    multiply_pipeline: wgpu::RenderPipeline,
+    screen_pipeline: wgpu::RenderPipeline,
     adjust_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     /// The blur's first pass into `blur_scratch`, then its second over the picture.
@@ -369,6 +372,36 @@ impl Renderer {
             Some(premultiplied_over),
             "edit over",
         );
+        let multiply_pipeline = make_pipeline(
+            &device,
+            &pipeline_layout,
+            &layer_shader,
+            ACCUM_FORMAT,
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Dst,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: premultiplied_over.alpha,
+            }),
+            "edit multiply",
+        );
+        let screen_pipeline = make_pipeline(
+            &device,
+            &pipeline_layout,
+            &layer_shader,
+            ACCUM_FORMAT,
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: premultiplied_over.alpha,
+            }),
+            "edit screen",
+        );
         let adjust_pipeline = make_pipeline(
             &device,
             &pipeline_layout,
@@ -462,6 +495,8 @@ impl Renderer {
             readback: None,
             layer_layout,
             over_pipeline,
+            multiply_pipeline,
+            screen_pipeline,
             adjust_pipeline,
             blur_pipeline,
             blur_accum_pipeline,
@@ -702,6 +737,7 @@ impl Renderer {
                     opacity,
                     crop,
                     frame,
+                    blend,
                     ..
                 } => {
                     let Some(video) = self.videos.get(clip).or_else(|| self.videos.get(media))
@@ -777,15 +813,53 @@ impl Renderer {
                                 None,
                             );
                         }
-                        if frame.width > 0.0 {
-                            let uniforms = quad_uniforms(
-                                &placed,
-                                outer,
-                                half_canvas,
-                                *opacity,
-                                frame.color.0,
-                                MODE_SOLID,
+                        if frame.glow > 0.0 && scale > 0.0 {
+                            let sigma = 9.0 * self.height as f32 / 1080.0 * scale;
+                            let reach = 3.0 * sigma / scale;
+                            let uniforms = LayerUniforms {
+                                blur: sigma.max(0.01),
+                                ..quad_uniforms(
+                                    &placed,
+                                    [outer[0] + 2.0 * reach, outer[1] + 2.0 * reach],
+                                    half_canvas,
+                                    *opacity,
+                                    [
+                                        frame.color.0[0],
+                                        frame.color.0[1],
+                                        frame.color.0[2],
+                                        frame.glow.clamp(0.0, 1.0),
+                                    ],
+                                    MODE_BOX_SHADOW,
+                                )
+                            };
+                            let offset = slots.push(
+                                &self.queue,
+                                &self.uniforms,
+                                bytemuck::bytes_of(&uniforms),
                             );
+                            let group = self.bind(&self.blank.view);
+                            draw(
+                                &mut encoder,
+                                &self.over_pipeline,
+                                &self.accum(current).view,
+                                &group,
+                                offset,
+                                4,
+                                None,
+                            );
+                        }
+                        if frame.width > 0.0 {
+                            let uniforms = LayerUniforms {
+                                corner_radius: (frame.radius + frame.width).max(0.0) * scale,
+                                ..quad_uniforms(
+                                    &placed,
+                                    outer,
+                                    half_canvas,
+                                    *opacity,
+                                    frame.color.0,
+                                    MODE_SOLID,
+                                )
+                            };
                             let offset = slots.push(
                                 &self.queue,
                                 &self.uniforms,
@@ -804,6 +878,8 @@ impl Renderer {
                         }
                     }
                     let uniforms = LayerUniforms {
+                        corner_radius: frame
+                            .map_or(0.0, |f| f.radius.max(0.0) * transform.scale.max(0.0)),
                         uv: [crop.left, crop.top, 1.0 - crop.right, 1.0 - crop.bottom],
                         ..quad_uniforms(
                             &placed,
@@ -819,7 +895,11 @@ impl Renderer {
                     let group = self.bind(&video.view);
                     draw(
                         &mut encoder,
-                        &self.over_pipeline,
+                        match blend {
+                            edit_core::BlendMode::Normal => &self.over_pipeline,
+                            edit_core::BlendMode::Multiply => &self.multiply_pipeline,
+                            edit_core::BlendMode::Screen => &self.screen_pipeline,
+                        },
                         &self.accum(current).view,
                         &group,
                         offset,
@@ -848,7 +928,8 @@ impl Renderer {
                             MODE_SOLID
                         },
                         blur: 0.0,
-                        _pad: [0; 2],
+                        corner_radius: 0.0,
+                        _pad: 0,
                         uv: gradient
                             .map_or(WHOLE, |gradient| [gradient.from, gradient.to, 0.0, 0.0]),
                     };
@@ -2160,7 +2241,8 @@ fn quad_uniforms(
         tint,
         mode,
         blur: 0.0,
-        _pad: [0; 2],
+        corner_radius: 0.0,
+        _pad: 0,
         uv: WHOLE,
     }
 }

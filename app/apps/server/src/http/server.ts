@@ -68,7 +68,7 @@ function font(context: RouteContext<App>): Response {
   const bytes = context.app.native.bundledFont(context.params.file ?? "");
   if (bytes === null) throw notFound("no such font");
   return new Response(bytes, {
-    headers: { "content-type": "font/ttf", "cache-control": "public, max-age=31536000, immutable" },
+    headers: { "content-type": (context.params.file ?? "").endsWith(".otf") ? "font/otf" : "font/ttf", "cache-control": "public, max-age=31536000, immutable" },
   });
 }
 

@@ -542,6 +542,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                     { value: "rise", label: "Rise" },
                     { value: "pop", label: "Pop" },
                     { value: "typewriter", label: "Typewriter" },
+                    { value: "soft", label: "Soft reveal" },
                     { value: "words", label: "Word by word" },
                     { value: "word", label: "One word at a time" },
                   ]}
@@ -579,7 +580,29 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             {transform}
           </>
         )}
-        {clip.type === "video" && transform}
+        {clip.type === "video" && <>
+          {transform}
+          <Section title="Picture">
+            <Row label="Blend">
+              <Select value={clip.blend ?? "normal"} onChange={(value) => once((live) => live.type === "video" && (live.blend = value))}
+                options={[{ value: "normal", label: "Normal" }, { value: "multiply", label: "Multiply" }, { value: "screen", label: "Screen" }]} />
+            </Row>
+            <Row label="Frame">
+              <Switch checked={clip.frame != null} onChange={(checked) => once((live) => {
+                if (live.type === "video") live.frame = checked ? { width: 4, color: [1, 1, 1, 1], shadow: 0.7, radius: 14, glow: 0.4 } : undefined;
+              })} />
+            </Row>
+            {clip.frame && <>
+              {field("Border", clip.frame.width, (c, v) => c.type === "video" && c.frame && (c.frame.width = v), { min: 0, max: 100, suffix: "px" })}
+              {field("Corners", clip.frame.radius ?? 0, (c, v) => c.type === "video" && c.frame && (c.frame.radius = v), { min: 0, max: 300, suffix: "px" })}
+              {field("Glow", clip.frame.glow ?? 0, (c, v) => c.type === "video" && c.frame && (c.frame.glow = v), { min: 0, max: 1, step: 0.05, precision: 2 })}
+              {field("Shadow", clip.frame.shadow, (c, v) => c.type === "video" && c.frame && (c.frame.shadow = v), { min: 0, max: 1, step: 0.05, precision: 2 })}
+            </>}
+          </Section>
+          <Section title="Crop">
+            {(["left", "right", "top", "bottom"] as const).map((side) => param(side[0]!.toUpperCase() + side.slice(1), `crop.${side}`, { min: 0, max: 98, scale: 100, step: 0.5, precision: 1, suffix: "%" }))}
+          </Section>
+        </>}
         {clip.type === "adjustment" && (
           <Section title="Shake">
             <Row label="Preset">

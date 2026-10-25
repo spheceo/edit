@@ -212,6 +212,17 @@ fn parse_rate(rate: Option<&str>) -> Option<f64> {
 /// file on the media drive is named by its place in the data folder
 /// (`media_drive::key_path`), so moving it there keeps its key.
 pub fn media_key(path: &Path) -> String {
+    // The loopback endpoint is only a range transport. Its port can change
+    // between machines; the immutable R2 key is the analysis identity.
+    if let Some(text) = path
+        .to_str()
+        .filter(|text| text.starts_with("http://127.0.0.1:"))
+    {
+        if let Some((_, key)) = text.split_once("/api/cloud/preview?key=") {
+            let name = format!("cloud:{}", key.split('&').next().unwrap_or(key));
+            return key_of(Path::new(&name), Path::new(&name));
+        }
+    }
     key_of(&crate::util::key_path(path), path)
 }
 
@@ -1048,9 +1059,10 @@ pub fn make_peaks(source: &Path, out: &Path) -> Result<(), String> {
             "-loglevel",
             "error",
             "-protocol_whitelist",
-            "file,pipe",
-            "-i",
+            crate::util::protocols(source),
         ])
+        .args(crate::util::url_args(source))
+        .arg("-i")
         .arg(source)
         .args([
             "-map",

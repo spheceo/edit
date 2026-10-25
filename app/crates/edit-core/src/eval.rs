@@ -19,6 +19,7 @@ pub enum Layer {
         opacity: f32,
         crop: Crop,
         frame: Option<PhotoFrame>,
+        blend: crate::BlendMode,
     },
     Text {
         clip: String,
@@ -161,14 +162,21 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 opacity,
                 crop,
                 frame,
+                blend,
             } => Layer::Video {
                 clip: clip.id.clone(),
                 media: media.clone(),
                 source_time: source_in + f64::from(local) / fps * speed,
                 transform: animated_transform(transform),
                 opacity: anim("opacity", *opacity) * fade,
-                crop: *crop,
+                crop: Crop {
+                    left: anim("crop.left", crop.left).clamp(0.0, 1.0),
+                    right: anim("crop.right", crop.right).clamp(0.0, 1.0),
+                    top: anim("crop.top", crop.top).clamp(0.0, 1.0),
+                    bottom: anim("crop.bottom", crop.bottom).clamp(0.0, 1.0),
+                },
                 frame: *frame,
+                blend: *blend,
             },
             ClipContent::Text {
                 text,
@@ -366,6 +374,8 @@ pub fn covers_frame(project: &Project, scene: &Scene, layer: &Layer) -> bool {
         transform,
         opacity,
         crop,
+        blend,
+        frame,
         ..
     } = layer
     else {
@@ -374,7 +384,9 @@ pub fn covers_frame(project: &Project, scene: &Scene, layer: &Layer) -> bool {
     let Some(media) = project.media(media) else {
         return false;
     };
-    if media.kind != MediaKind::Video
+    if frame.is_some_and(|f| f.radius > 0.0)
+        || *blend != crate::BlendMode::Normal
+        || media.kind != MediaKind::Video
         || *opacity < 0.999
         || !crop.is_none()
         || transform.rotation.abs() > 1e-3
@@ -825,6 +837,7 @@ pub fn glyph_reveal(
             let t = (local_frame / duration).clamp(0.0, 1.0);
             (ease(Ease::Out, t), 0.0, 1.0)
         }
+        TextPreset::Soft => (ease(Ease::Out, t), 0.0, 1.0),
         TextPreset::Rise => {
             let e = ease(Ease::Out, t);
             (e, (1.0 - e) * size * 0.35, 1.0)
@@ -842,6 +855,21 @@ pub fn glyph_reveal(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn soft_reveal_only_changes_character_opacity() {
+        let animation = crate::TextAnimation {
+            preset: crate::TextPreset::Soft,
+            duration: 10.0,
+            stagger: 2.0,
+        };
+        let before = super::glyph_reveal(&animation, 0.0, 2, 72.0);
+        let during = super::glyph_reveal(&animation, 9.0, 2, 72.0);
+        let after = super::glyph_reveal(&animation, 20.0, 2, 72.0);
+        assert_eq!(before, (0.0, 0.0, 1.0));
+        assert!(during.0 > 0.0 && during.0 < 1.0);
+        assert_eq!((during.1, during.2), (0.0, 1.0));
+        assert_eq!(after, (1.0, 0.0, 1.0));
+    }
     use super::*;
 
     fn project() -> Project {
@@ -882,6 +910,7 @@ mod tests {
                 opacity: 1.0,
                 crop: Default::default(),
                 frame: None,
+                blend: Default::default(),
             },
         });
         project.clips.push(Clip {
@@ -1009,6 +1038,7 @@ mod tests {
             opacity: 1.0,
             crop: Default::default(),
             frame: None,
+            blend: Default::default(),
         };
         let seen = evaluate_seen(&project, 40);
         assert_eq!(evaluate(&project, 40).layers.len(), 2);

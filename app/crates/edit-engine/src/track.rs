@@ -1008,9 +1008,10 @@ fn decode_ffmpeg(
             "-t",
             &format!("{:.4}", to - from),
             "-protocol_whitelist",
-            "file,pipe",
-            "-i",
+            crate::util::protocols(path),
         ])
+        .args(crate::util::url_args(path))
+        .arg("-i")
         .arg(path)
         .args([
             "-an",

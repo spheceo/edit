@@ -161,6 +161,7 @@ export function start(home: string, host: string | null, port: number): { app: A
     machine: hostname() ?? "this machine",
     services: { exports: new ExportRegistry(home), updater: new update.Updater(home) },
   });
+  seams.cloudMedia.configurePlayback(app);
   // Smoothing waits while an export runs (previews and proxies do in the addon).
   pauseForExports(() => app.exports.localRunning?.() ?? app.exports.running());
   // Slowed cut-in shots are smoothed unless asked not to, where it takes seconds.

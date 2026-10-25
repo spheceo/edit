@@ -208,7 +208,7 @@ type Listed = { at: number; local: ProjectSummary; cloud: null } | { at: number;
 const KIND = "edit.home.kind";
 
 /** Each kind of video’s colour (its dot on cards and filters). */
-const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#c4a7ff" };
+const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#c4a7ff", commentary: "#e5be72" };
 
 /** A quiet mark among a row’s chips: its footage isn’t on this Mac yet (opening it downloads it). */
 function NotHere({ title }: { title: string }) {
@@ -520,7 +520,7 @@ function TableRow({ subtitled, ...props }: CardProps & { subtitled: boolean }) {
           ) : (
             subtitled && <span className="text-[12px] text-faint">Not uploaded</span>
           )}
-          {card.mostlyRemote && <NotHere title="Its footage downloads when you open it" />}
+          {card.mostlyRemote && <NotHere title="Its footage streams from the cloud" />}
         </div>
         <span role="cell" className="text-right text-[13px] text-secondary tabular">
           {project.problem ? "" : shortDuration(project.duration_frames / project.fps)}

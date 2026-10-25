@@ -37,12 +37,66 @@ export interface WriterScript {
   kind?: string;
   clips?: { id: string; startMs: number; endMs: number; kind?: string; narration?: string; notes?: { text: string }[] }[];
   parts?: { title: string; startMs: number; durationMs: number; url?: string }[];
-  commentary?: unknown;
+  commentary?: {
+    sources?: { id: string; title: string; origin: string; role?: string }[];
+    draft?: {
+      open?: WriterExcerpt[];
+      sections: { heading: string; paragraphs: { id?: string; pieces: ({ kind: "say"; text: string } | (WriterExcerpt & { kind: "clip" }))[]; note?: string; marks?: { line: string; on: string }[] }[] }[];
+    };
+  } | null;
+}
+
+export interface WriterExcerpt {
+  source?: string;
+  video?: string;
+  link: string;
+  startMs: number;
+  endMs: number;
+  quote?: string;
+  verify?: string;
 }
 
 /** The house style a Writer script's kind edits in. */
 export function styleOf(kind: string | undefined): Style {
-  return kind === "courtroom" ? "courtroom" : kind === "foia" ? "bodycam" : "interrogation";
+  return kind === "commentary" ? "commentary" : kind === "courtroom" ? "courtroom" : kind === "foia" ? "bodycam" : "interrogation";
+}
+
+export function scriptStyle(given: WriterScript): Style {
+  return given.sourceKind === "commentary" || given.commentary != null ? "commentary" : styleOf(given.kind);
+}
+
+/** Preserve the writer's order, citations, verification requests and anchored
+ * production notes. These are editing inputs, never spoken as narration. */
+export function commentaryParsed(given: WriterScript): Parsed {
+  const draft = given.commentary?.draft;
+  if (draft === undefined) throw new Error("this commentary script has no finished draft yet");
+  const blocks: ScriptBlock[] = [];
+  const footage = (one: WriterExcerpt, notes: string[]) => {
+    const file = script.footageFile(one.link);
+    if (file === null || !Number.isFinite(one.startMs) || !Number.isFinite(one.endMs) || one.startMs < 0 || one.endMs <= one.startMs) {
+      throw new Error(`invalid commentary excerpt: ${one.video ?? one.link}`);
+    }
+    blocks.push({ kind: "footage", file, url: one.link, start: one.startMs / 1000, end: one.endMs / 1000,
+      label: `${mmss(one.startMs / 1000)} - ${mmss(one.endMs / 1000)}`,
+      notes: [...notes, `Source: ${one.source ?? ""} ${one.video ?? ""} ${one.link}`.trim(),
+        ...(one.quote ? [`Expected words (verify against the recording): ${one.quote}`] : []),
+        ...(one.verify ? [`Verify: ${one.verify}`] : [])] });
+  };
+  for (const one of draft.open ?? []) footage(one, ["Chapter: Cold open"]);
+  for (const section of draft.sections) {
+    for (const paragraph of section.paragraphs) {
+      const notes = [`Chapter: ${section.heading}`, ...(paragraph.id ? [`Writer paragraph: ${paragraph.id}`] : []),
+        ...(paragraph.note?.trim() ? [paragraph.note.trim()] : []),
+        ...(paragraph.marks ?? []).map((mark) => `At “${mark.on}”: ${mark.line}`)];
+      for (const piece of paragraph.pieces) {
+        if (piece.kind === "say") {
+          if (piece.text.trim() !== "") blocks.push({ kind: "narration", text: piece.text.trim(), notes: [...notes] });
+        } else footage(piece, notes);
+      }
+    }
+  }
+  if (blocks.length === 0) throw new Error("this commentary draft is empty");
+  return { title: given.title, blocks };
 }
 
 const mmss = (seconds: number) => {
@@ -57,7 +111,7 @@ const mmss = (seconds: number) => {
  */
 export function toParsed(given: WriterScript): Parsed {
   if (given.sourceKind === "commentary" || (given.commentary !== undefined && given.commentary !== null)) {
-    throw new Error("a commentary script has no footage of its own to edit; export its Google Doc and import that");
+    return commentaryParsed(given);
   }
   const parts = (given.parts ?? []).filter((part) => part.durationMs > 0);
   // The recordings on the script's clock, each with its file.
@@ -131,11 +185,11 @@ export async function list(
       updatedBy: typeof row.updatedBy === "string" ? row.updatedBy : null,
       // From Writer's library row: a built script has its footage cut into clips (a source being researched is one whole clip, or none).
       ...(() => {
-        const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown; kind?: unknown };
+        const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown; kind?: unknown; sourceKind?: unknown };
         const clips = typeof summary.clipCount === "number" ? summary.clipCount : 0;
         // Its kind of video, once Writer's row says it (as its script's `kind`).
-        const style = typeof summary.kind === "string" && summary.kind !== "" ? styleOf(summary.kind) : null;
-        return { clips, durationMs: typeof summary.durationMs === "number" ? summary.durationMs : 0, built: clips > 1, style };
+        const style = summary.sourceKind === "commentary" ? "commentary" : typeof summary.kind === "string" && summary.kind !== "" ? styleOf(summary.kind) : null;
+        return { clips, durationMs: typeof summary.durationMs === "number" ? summary.durationMs : 0, built: clips > 1 || (style === "commentary" && summary.status === "ready"), style };
       })(),
       // Sent to Edit from Writer ("Send to Edit"), and whether it changed since.
       handoff: (() => {
@@ -168,10 +222,16 @@ export async function fetchScript(id: string): Promise<WriterScript> {
 /** Makes an Edit project from a Writer script and starts its import (footage, transcripts, voice-over, layout). */
 export async function importScript(app: App, id: string): Promise<{ project: string }> {
   const given = await fetchScript(id);
-  if (!kinds.mayEdit(styleOf(given.kind))) throw new Error(kinds.cantMake(`edit.${styleOf(given.kind)}`));
+  const style = scriptStyle(given);
+  if (!kinds.mayEdit(style)) throw new Error(kinds.cantMake(`edit.${style}`));
   const parsed = toParsed(given);
-  const live = app.store.createAs(given.title, styleOf(given.kind), { width: 1920, height: 1080, fps: 30 });
+  const live = app.store.createAs(given.title, style, { width: 1920, height: 1080, fps: 30 });
   await app.store.update(live.project.id, "script", (project) => script.attach(project, `writer:${id}`, parsed));
+  if (style === "commentary") {
+    const dir = join(app.store.home, "research", live.project.id);
+    fs.mkdirSync(dir, { recursive: true });
+    writeAtomic(join(dir, "broll.json"), JSON.stringify({ writer: { id: given.id, title: given.title, sources: (given.commentary?.sources ?? []).filter((source) => source.role === "evidence") } }, null, 2));
+  }
   script.start(app, live.project.id, false);
   writeAtomic(join(app.store.home, "writer-imports.json"), JSON.stringify({ ...imports(app.store.home), [id]: live.project.id }));
   diag.info("script", `${given.title}: imported from Writer (${parsed.blocks.length} blocks)`);
@@ -193,7 +253,7 @@ export function routes(router: Router<App>): void {
   router.get("/api/writer/scripts/{id}", async ({ params }) => {
     try {
       const given = await fetchScript(params.id ?? "");
-      return sorted({ ...script.summary(toParsed(given)), title: given.title, style: styleOf(given.kind) });
+      return sorted({ ...script.summary(toParsed(given)), title: given.title, style: scriptStyle(given) });
     } catch (error) {
       throw new ApiError(400, diag.messageOf(error));
     }

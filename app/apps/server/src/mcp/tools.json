@@ -70,7 +70,7 @@
     "name": "get_edit_context"
   },
   {
-    "description": "Apply a complete section or a revision in ONE atomic save. Requires base_rev from get_edit_context; a stale revision or invalid operation saves NOTHING. Operations run in memory; intermediate overlaps are allowed if the final project validates. ALL times in a plan are FRAMES (the model's own units; get_edit_context's cut-in words are seconds: multiply by fps). op add takes clip with start and duration (required; omit id and track to choose them; track \"new\" makes one, in update too); update/delete/keyframes use select {ids?,track?,label?,media?,type?,name_prefix?,start?,end?} (all filters intersect); update takes patch, and moving or trimming one half of a linked pair moves the other with it, as delete removes both (unlinked: true to touch only the selected); keyframes takes param,keyframes; cover_cut_in takes the same cut_in/shots/look/into/push as cover_cut_in (a shot can be a desktop); transition builds a house transition at a cut in one line: kind drop (the vertical slam, 6 frames straddling at), flash (white, 6 frames, fading; with a shutter), dip (to black and back, frames 12 centred on at), open (the reverse dip that opens the video; no at), light_leak (warm orange light sweeping across and burning to white on the cut, 16 frames straddling at: the courtroom's flash) or burn (the picture burning out warm to near white and back, 12 frames straddling at, named \"Bridge flash\": the interrogation's); its sound goes in the batch; evidence_board builds a whole evidence board from start and end (frames: where the board begins and the next shot starts) and items [{media (an image's id), label (a short handwritten note, e.g. \"zip ties\"), at (the timeline frame of the first word that names it, the start of its phrase: that photo is centred and its shutter clicks then)}] (1–8, at increasing; illustrative: true adds a small \"Illustrative images\" in the corner; title: a handwritten heading over the first photo (\"Nevaeh's account\", \"Prior reports\"), written on as the board comes in; older plans' frames/pan per item still work): framed photos on paper and ONE continuous camera glide down them, easing a little as it passes each photo (to ~70% of its average speed) and picking up between (never a hold or a stop), picking up from a slow drift before the first and settling into one after the last, each note writing itself on as its photo arrives; returns end, centred and shutters: each photo's moment gets a \"board photo\" timeline marker and a quiet camera shutter whose click lands on it (shutters: false for none; a shutter already within 8 frames, such as the cut's, stands in) (EVIDENCE BOARD in the cut-ins skill); desktop builds the Windows screen (cut-ins skill), for what footage can't show: start, end (frames, at least 3 s), windows [{app photo_viewer|notepad|video_player, media (a picture for a photo_viewer, footage for a video_player), lines (a notepad's 1–6 short notes as the narration says them), at (the frame it opens) or said (the words naming it), x?, y? (centre, a share of the desktop), width?, z?, label? (\"illustrative image\"; never \"actual image\" in a window)}], open? (default true: the camera starts zoomed into a Video Player playing on from the footage before start, zooms out slowly, glides to each window as it opens, and at the end comes back to that same player, whose footage has changed to what plays after end, and zooms into it: the zoom out and in are the transitions), exit? (false: don't zoom back in): windows never overlap and a picture or footage is never in two windows; returns the windows and lines_at, marked \"desktop window opens\"/\"desktop line\" for clicks and typing; file_viewer {media, start, end, x, y (centre, px from the frame's centre), width (share of the frame, 0.28), name? (white monospace on its bottom edge: \"LARRY SCOTT\"), source_in? for footage} floats a photo or footage in a thin dark \"File Viewer\" frame over a map or a scene (the team's map references), easing in and drifting slowly; film_look {start, end, tag? (\"actual photo\", \"reenactment\", \"illustrative\": shown as \"[ACTUAL PHOTO]\" bottom left), soft_edges? (tilt-shift blur top and bottom), strength? \"light\"} lays the team's overlay over what plays beneath (a photo full frame, a B-roll shot): grain, faint scan lines, a faded print, a heavy vignette, less colour; fill_frame {clips?, start?, end?} scales every picture with black round it (the audit's letterboxed: a 3:2 tape, a portrait photo, a punch-in moved off its picture) up to fill the frame, each push and punch-in kept, x/y kept inside the picture; ease_vignettes {start?, end?} fades every vignette that snaps on or off (the audit's vignette_snaps) over 12 frames where no other vignette carries on; red_quote {text (their exact words) or lines (2–3), start, end, face [x, y] (a point on the speaker's head, px from the centre), at? [x, y], line_at?} the team's quote: red glowing words in curly quotes beside the speaker with a short red line to them, over the footage darkened and greyed with the light kept on them; annotate {start, end, notes [{text, at, point [x, y], from? [x, y]}] (1–5), tag?, look? (default true)} red handwritten notes with a line each to what they name in the picture beneath, written on one by one; call {start, end, color blue|red} a 911 call or voicemail: the picture darkened, a glowing waveform across it, the subtitles in the span turned into the caller's words under it (add subtitles first); markers takes add/remove as the markers tool; date_title builds the date cut-in's date from text (\"July 22, 2023\"), start and end: white Geist 600 ~120 centred with only the house drop shadow (no box, no glow), rising letter by letter and fading out, over an adjustment darkening the picture (darken: false leaves that out; the audit flags a boxed or glowing date as date_style); place_label builds the map's place label from text (the street or place only), start (the marker's reveal), end, map (the map's clip id) and building_track (as map_view returned it; building for a still): the house label (white Geist 600, opaque black box, red border, soft shadow) just above the building, pinned to it, fading in and out; title_collage builds a compilation's title card (a courtroom compilation, its title starting \"When…\") from title (the video's title; shown in capitals), photos (2–6 pictures' media ids, one per case: the person each is about; a still_frame of a hearing works), start, end, and optionally backdrop (a courtroom shot: footage, from backdrop_at seconds, or a picture): the photos cropped to one size and framed in white, half in a row above and the rest below, popping in one after another, the title between the rows in big white Geist 900 capitals with a soft glow, over the backdrop darkened and pushing in slowly (a dark wood-brown without one); the interrogation intro's graphics (Red Thread's look; INTERROGATION in your instructions): intro_captions {start, end, emphasis: [subtitle clip ids]} restyles the subtitles starting in the span as the teasers' captions: lines coming up word by word as they're said, flush left, in bodycam's caption look (glowing, on a see-through box with a soft drop shadow) in each speaker's colour, the emphasis lines (the lines that matter) in red words; photo_inset {media, name, start, end, corner? (top-left|top-right|bottom-left|bottom-right), size? (share of the height, 0.34), desaturate? (default true), source_in? for footage} a person's photo framed in white beside the person questioned, their name typed on above it, over the picture beneath gone black and white (who someone is, as they're named); map_pin {media, name, map (the map's clip id), building (map_view's), start, end} a photo pinned to the house on the map with a red line to its name; split_screen {left, right (media ids), start, end, tags? [\"NAME\", \"NAME\"], tag_colors?, left_in?/right_in? for footage} two faces side by side, each filling its half; countdown {start, end (the frame the interrogation tape rolls), label} \"INTERROGATION STARTS IN 01:18\" top left, ticking each second; fast_forward {start, end} over footage you play sped up there: black and white, the picture tearing in bursts, \"FF >>\" top right; pause {start, end, text, from?, side?} the room held still on the frame before (or `from`) with a slow push, greyed, the words typed small lower left (side \"right\" for lower right): a date, the story's turn or a line said over the interrogation, instead of words in the middle of the screen (add a shutter at start); disclaimer {start, end, text} \"DISCLAIMER\" in red over a short house text on black, ending where the tape rolls (only when the user asks for one); text_slam {text, start, end, color, darken} big red capitals coming up word by word as the narration says them over the picture darkened and grey; timeline_bar {from, to, start, end} two years in big red with a line drawing between them; date_title takes position \"bottom\" and place (the city, shown above the date) for the lower-third date over a top-down map; transition kind red_flash floods the picture red for 10 frames straddling at; blur_marks {clips?, leave? [the mark's text: one that isn't another outlet's, such as the court's own room tag or a camera label, left alone for good]} blurs every mark of another outlet still on screen (a channel's logo, a station's bug: the audit's watermarked_footage / watermarked_picture) with a blur stuck to its own shot, as a tracked mask: it starts and ends with the shot, follows its push-in, fades with its dissolve and is gone under a picture that covers it, and the still rectangles laid by hand over the same marks go (never lay a logo blur yourself; the audit flags a still one that outlives its shot as blur_off_shot); tidy_tracks needs no arguments. An operation's `as` names its result; later arguments use {\"$ref\":\"name\"} (added clip id) or {\"$ref\":\"name/shots/0/clip\"} (cover result). Examples: add as hero, then update select.ids [{\"$ref\":\"hero\"}]. dry_run validates without saving. Optional review_frames renders one contact sheet AFTER the commit; rendering failure is reported separately and never retries the edits. Returns revision, operation results, and mechanical issues. Prefer this over many batch/update calls.",
+    "description": "Apply a complete section or a revision in ONE atomic save. Requires base_rev from get_edit_context; a stale revision or invalid operation saves NOTHING. Operations run in memory; intermediate overlaps are allowed if the final project validates. ALL times in a plan are FRAMES (the model's own units; get_edit_context's cut-in words are seconds: multiply by fps). op add takes clip with start and duration (required; omit id and track to choose them; track \"new\" makes one, in update too); update/delete/keyframes use select {ids?,track?,label?,media?,type?,name_prefix?,start?,end?} (all filters intersect); update takes patch, and moving or trimming one half of a linked pair moves the other with it, as delete removes both (unlinked: true to touch only the selected); keyframes takes param,keyframes; cover_cut_in takes the same cut_in/shots/look/into/push as cover_cut_in (a shot can be a desktop); transition builds a house transition at a cut in one line: kind drop (the vertical slam, 6 frames straddling at), flash (white, 6 frames, fading; with a shutter), dip (to black and back, frames 12 centred on at), open (the reverse dip that opens the video; no at), light_leak (warm orange light sweeping across and burning to white on the cut, 16 frames straddling at: the courtroom's flash) or burn (the picture burning out warm to near white and back, 12 frames straddling at, named \"Bridge flash\": the interrogation's); its sound goes in the batch; evidence_board builds a whole evidence board from start and end (frames: where the board begins and the next shot starts) and items [{media (an image's id), label (a short handwritten note, e.g. \"zip ties\"), at (the timeline frame of the first word that names it, the start of its phrase: that photo is centred and its shutter clicks then)}] (1\u20138, at increasing; illustrative: true adds a small \"Illustrative images\" in the corner; title: a handwritten heading over the first photo (\"Nevaeh's account\", \"Prior reports\"), written on as the board comes in; older plans' frames/pan per item still work): framed photos on paper and ONE continuous camera glide down them, easing a little as it passes each photo (to ~70% of its average speed) and picking up between (never a hold or a stop), picking up from a slow drift before the first and settling into one after the last, each note writing itself on as its photo arrives; returns end, centred and shutters: each photo's moment gets a \"board photo\" timeline marker and a quiet camera shutter whose click lands on it (shutters: false for none; a shutter already within 8 frames, such as the cut's, stands in) (EVIDENCE BOARD in the cut-ins skill); desktop builds the Windows screen (cut-ins skill), for what footage can't show: start, end (frames, at least 3 s), windows [{app photo_viewer|notepad|video_player, media (a picture for a photo_viewer, footage for a video_player), lines (a notepad's 1\u20136 short notes as the narration says them), at (the frame it opens) or said (the words naming it), x?, y? (centre, a share of the desktop), width?, z?, label? (\"illustrative image\"; never \"actual image\" in a window)}], open? (default true: the camera starts zoomed into a Video Player playing on from the footage before start, zooms out slowly, glides to each window as it opens, and at the end comes back to that same player, whose footage has changed to what plays after end, and zooms into it: the zoom out and in are the transitions), exit? (false: don't zoom back in): windows never overlap and a picture or footage is never in two windows; returns the windows and lines_at, marked \"desktop window opens\"/\"desktop line\" for clicks and typing; file_viewer {media, start, end, x, y (centre, px from the frame's centre), width (share of the frame, 0.28), name? (white monospace on its bottom edge: \"LARRY SCOTT\"), source_in? for footage} floats a photo or footage in a thin dark \"File Viewer\" frame over a map or a scene (the team's map references), easing in and drifting slowly; film_look {start, end, tag? (\"actual photo\", \"reenactment\", \"illustrative\": shown as \"[ACTUAL PHOTO]\" bottom left), soft_edges? (tilt-shift blur top and bottom), strength? \"light\"} lays the team's overlay over what plays beneath (a photo full frame, a B-roll shot): grain, faint scan lines, a faded print, a heavy vignette, less colour; fill_frame {clips?, start?, end?} scales every picture with black round it (the audit's letterboxed: a 3:2 tape, a portrait photo, a punch-in moved off its picture) up to fill the frame, each push and punch-in kept, x/y kept inside the picture; ease_vignettes {start?, end?} fades every vignette that snaps on or off (the audit's vignette_snaps) over 12 frames where no other vignette carries on; red_quote {text (their exact words) or lines (2\u20133), start, end, face [x, y] (a point on the speaker's head, px from the centre), at? [x, y], line_at?} the team's quote: red glowing words in curly quotes beside the speaker with a short red line to them, over the footage darkened and greyed with the light kept on them; annotate {start, end, notes [{text, at, point [x, y], from? [x, y]}] (1\u20135), tag?, look? (default true)} red handwritten notes with a line each to what they name in the picture beneath, written on one by one; call {start, end, color blue|red} a 911 call or voicemail: the picture darkened, a glowing waveform across it, the subtitles in the span turned into the caller's words under it (add subtitles first); markers takes add/remove as the markers tool; date_title builds the date cut-in's date from text (\"July 22, 2023\"), start and end: white Geist 600 ~120 centred with only the house drop shadow (no box, no glow), rising letter by letter and fading out, over an adjustment darkening the picture (darken: false leaves that out; the audit flags a boxed or glowing date as date_style); place_label builds the map's place label from text (the street or place only), start (the marker's reveal), end, map (the map's clip id) and building_track (as map_view returned it; building for a still): the house label (white Geist 600, opaque black box, red border, soft shadow) just above the building, pinned to it, fading in and out; title_collage builds a compilation's title card (a courtroom compilation, its title starting \"When\u2026\") from title (the video's title; shown in capitals), photos (2\u20136 pictures' media ids, one per case: the person each is about; a still_frame of a hearing works), start, end, and optionally backdrop (a courtroom shot: footage, from backdrop_at seconds, or a picture): the photos cropped to one size and framed in white, half in a row above and the rest below, popping in one after another, the title between the rows in big white Geist 900 capitals with a soft glow, over the backdrop darkened and pushing in slowly (a dark wood-brown without one); the interrogation intro's graphics (Red Thread's look; INTERROGATION in your instructions): intro_captions {start, end, emphasis: [subtitle clip ids]} restyles the subtitles starting in the span as the teasers' captions: lines coming up word by word as they're said, flush left, in bodycam's caption look (glowing, on a see-through box with a soft drop shadow) in each speaker's colour, the emphasis lines (the lines that matter) in red words; photo_inset {media, name, start, end, corner? (top-left|top-right|bottom-left|bottom-right), size? (share of the height, 0.34), desaturate? (default true), source_in? for footage} a person's photo framed in white beside the person questioned, their name typed on above it, over the picture beneath gone black and white (who someone is, as they're named); map_pin {media, name, map (the map's clip id), building (map_view's), start, end} a photo pinned to the house on the map with a red line to its name; split_screen {left, right (media ids), start, end, tags? [\"NAME\", \"NAME\"], tag_colors?, left_in?/right_in? for footage} two faces side by side, each filling its half; countdown {start, end (the frame the interrogation tape rolls), label} \"INTERROGATION STARTS IN 01:18\" top left, ticking each second; fast_forward {start, end} over footage you play sped up there: black and white, the picture tearing in bursts, \"FF >>\" top right; pause {start, end, text, from?, side?} the room held still on the frame before (or `from`) with a slow push, greyed, the words typed small lower left (side \"right\" for lower right): a date, the story's turn or a line said over the interrogation, instead of words in the middle of the screen (add a shutter at start); disclaimer {start, end, text} \"DISCLAIMER\" in red over a short house text on black, ending where the tape rolls (only when the user asks for one); text_slam {text, start, end, color, darken} big red capitals coming up word by word as the narration says them over the picture darkened and grey; timeline_bar {from, to, start, end} two years in big red with a line drawing between them; date_title takes position \"bottom\" and place (the city, shown above the date) for the lower-third date over a top-down map; transition kind red_flash floods the picture red for 10 frames straddling at; blur_marks {clips?, leave? [the mark's text: one that isn't another outlet's, such as the court's own room tag or a camera label, left alone for good]} blurs every mark of another outlet still on screen (a channel's logo, a station's bug: the audit's watermarked_footage / watermarked_picture) with a blur stuck to its own shot, as a tracked mask: it starts and ends with the shot, follows its push-in, fades with its dissolve and is gone under a picture that covers it, and the still rectangles laid by hand over the same marks go (never lay a logo blur yourself; the audit flags a still one that outlives its shot as blur_off_shot); tidy_tracks needs no arguments. An operation's `as` names its result; later arguments use {\"$ref\":\"name\"} (added clip id) or {\"$ref\":\"name/shots/0/clip\"} (cover result). Examples: add as hero, then update select.ids [{\"$ref\":\"hero\"}]. dry_run validates without saving. Optional review_frames renders one contact sheet AFTER the commit; rendering failure is reported separately and never retries the edits. Returns revision, operation results, and mechanical issues. Prefer this over many batch/update calls. Commentary operations (all times frames): commentary_card {media,start,end,source_in?,background? (brand image media),label?,x?,y?,width?,height?,backdrop?} builds a sharp rounded glowing white-framed evidence image/video sliding up with a strong ease-out over a blurred dark copy or brand wallpaper, drifting gently; no source audio. commentary_text {text,start,end,motion? soft|slide|pop|typewriter,blur? (true),size? (76 at 1080),x?,y?,box?,align? left} makes selective house emphasis, fixed phrase geometry for soft character-opacity sweep, whole-block ease-out slide or pop. commentary_chapter {text,number,start,end} makes an episode-neutral chapter slate. commentary_look {start,end} puts subtle grain and vignette over narration visuals only. All remain editable layers; no mandatory Windows desktop for commentary. commentary_profile {media,name?,background?,start,end,lines:[{text,at}],size?} builds a portrait left and 1\u20135 short fact bullets right; at is each line\u2019s absolute timeline frame. The complete final list is laid out left aligned from the first frame, so its word-timed reveals never recenter.",
     "inputSchema": {
       "properties": {
         "base_rev": {
@@ -441,7 +441,7 @@
     "name": "update_clip"
   },
   {
-    "description": "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\") or by person (every clip of one person of the cast: one call recolours someone), optionally only on one track and within start/end (timeline seconds). E.g. one person's short name on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\"}}}}. A relabel or recolour then gives every person (label) one colour across the video, kept apart from everyone else's (subtitles, intro captions, \"Quote · <label>\" clips); the result lists them. With person and role, sets who they are in the story (their colour follows the team's code).",
+    "description": "Change many clips with one JSON merge patch (as update_clip) in one step: the same restyle, relabel or move on every clip it picks. Pick them by clip_ids, by label (subtitles and captions whose speaker label text is exactly this, e.g. \"Latricia Crawley:\") or by person (every clip of one person of the cast: one call recolours someone), optionally only on one track and within start/end (timeline seconds). E.g. one person's short name on all their subtitles: {label: \"Latricia Crawley:\", patch: {style: {label: {text: \"Latricia:\"}}}}. A relabel or recolour then gives every person (label) one colour across the video, kept apart from everyone else's (subtitles, intro captions, \"Quote \u00b7 <label>\" clips); the result lists them. With person and role, sets who they are in the story (their colour follows the team's code).",
     "inputSchema": {
       "properties": {
         "clip_ids": {
@@ -841,7 +841,7 @@
     "name": "media_transcript"
   },
   {
-    "description": "Make slowed video clips (speed below 1) play smoothly: the stretch of each one's media is rendered at that speed with new frames made between the real ones (motion interpolation, like After Effects' pixel-motion frame blending), and the clip then plays that at 1×. Timing is unchanged. Set the clip's speed and trim first; run again after changing them. Optical flow is expensive and optional; each render has a 120-second limit and they run one at a time. By default it returns at once and each swaps in when done (get_project's smoothing lists those still going; exports use the current timeline snapshot unless options.wait_for_smoothing is true).",
+    "description": "Make slowed video clips (speed below 1) play smoothly: the stretch of each one's media is rendered at that speed with new frames made between the real ones (motion interpolation, like After Effects' pixel-motion frame blending), and the clip then plays that at 1\u00d7. Timing is unchanged. Set the clip's speed and trim first; run again after changing them. Optical flow is expensive and optional; each render has a 120-second limit and they run one at a time. By default it returns at once and each swaps in when done (get_project's smoothing lists those still going; exports use the current timeline snapshot unless options.wait_for_smoothing is true).",
     "inputSchema": {
       "properties": {
         "clip_id": {
@@ -869,7 +869,7 @@
     "name": "smooth_slow_motion"
   },
   {
-    "description": "Cover a cut-in in one call, the house way (cut-ins skill): your shots from the cut-in's first frame to its last, each starting at its at (timeline seconds). A footage shot is picture only at its speed (default 0.8; 1 for an interrogation room), with ONE slow zoom across the whole cut-in (push [from, to], default 1 → 1.1: every shot continues it, never restarting), dissolving into the next between different moments, the B-roll look over the footage. A shot can instead be a desktop {windows, open?, exit?} (the desktop op's): the Windows screen for its span, opening zoomed into a Video Player that plays on from the shot before it and closing zoomed back into it on the footage after (the next shot, or the footage after the cut-in): no transition is needed on either side. A picture shot (an image media) goes on such a desktop in a Photo Viewer with its label. No transition into the cut-in unless into \"drop\"; the black card and its words go and the voice-over moves onto A1 in purple. Running it again on the same cut-in replaces what it placed. Returns each shot's clip id and span (a desktop's windows).",
+    "description": "Cover a cut-in in one call, the house way (cut-ins skill): your shots from the cut-in's first frame to its last, each starting at its at (timeline seconds). A footage shot is picture only at its speed (default 0.8; 1 for an interrogation room), with ONE slow zoom across the whole cut-in (push [from, to], default 1 \u2192 1.1: every shot continues it, never restarting), dissolving into the next between different moments, the B-roll look over the footage. A shot can instead be a desktop {windows, open?, exit?} (the desktop op's): the Windows screen for its span, opening zoomed into a Video Player that plays on from the shot before it and closing zoomed back into it on the footage after (the next shot, or the footage after the cut-in): no transition is needed on either side. A picture shot (an image media) goes on such a desktop in a Photo Viewer with its label. No transition into the cut-in unless into \"drop\"; the black card and its words go and the voice-over moves onto A1 in purple. Running it again on the same cut-in replaces what it placed. Returns each shot's clip id and span (a desktop's windows).",
     "inputSchema": {
       "properties": {
         "cut_in": {
@@ -1063,7 +1063,7 @@
     "name": "map_view"
   },
   {
-    "description": "Mark moments to plan sounds on (no arguments: list them). A moment in a source (add {name, note?, media, time: source seconds} or {name, note?, clip, frame: the timeline frame where that clip shows it}) stays on that moment however its clips move; a moment of the edit itself (add {name, note?, frame}) stays on the timeline. Then place sounds on them by name (add_sound_effect / add_from_library markers). remove [{name?, media?, frame?}] removes every match. Also an apply_edit_plan op. Evidence boards mark each photo themselves. Returns the markers now set (name@frame; name media@seconds → frames shown).",
+    "description": "Mark moments to plan sounds on (no arguments: list them). A moment in a source (add {name, note?, media, time: source seconds} or {name, note?, clip, frame: the timeline frame where that clip shows it}) stays on that moment however its clips move; a moment of the edit itself (add {name, note?, frame}) stays on the timeline. Then place sounds on them by name (add_sound_effect / add_from_library markers). remove [{name?, media?, frame?}] removes every match. Also an apply_edit_plan op. Evidence boards mark each photo themselves. Returns the markers now set (name@frame; name media@seconds \u2192 frames shown).",
     "inputSchema": {
       "properties": {
         "add": {
@@ -1776,7 +1776,7 @@
     "name": "generate_voiceover"
   },
   {
-    "description": "Speaks one cut-in's narration again with the house voice and puts the new take in place of its voice-over, played at the speed that fits the cut-in as it is (0.85–1.2), so nothing else on the timeline moves; the script's cut-in text follows. Give text to change the words: a word the narration gets wrong (\"himself\" for a woman: \"herself\"), a name misspoken. The whole cut-in's text, not just the changed words. Its mutes are cleared: run mute_house_words after. Costs a paid ElevenLabs line; a take too far off the cut-in's length is refused (reword nearer it).",
+    "description": "Speaks one cut-in's narration again with the house voice and puts the new take in place of its voice-over, played at the speed that fits the cut-in as it is (0.85\u20131.2), so nothing else on the timeline moves; the script's cut-in text follows. Give text to change the words: a word the narration gets wrong (\"himself\" for a woman: \"herself\"), a name misspoken. The whole cut-in's text, not just the changed words. Its mutes are cleared: run mute_house_words after. Costs a paid ElevenLabs line; a take too far off the cut-in's length is refused (reword nearer it).",
     "inputSchema": {
       "properties": {
         "cut_in": {
@@ -2000,7 +2000,7 @@
     "name": "one_line_subtitles"
   },
   {
-    "description": "Lays the intro's speaker captions (\"Caption · <who>\") out again the house way without retyping them: under the speaker's face only when the face detector sees it clearly through the line (followed by the detector, smoothed, never covering any face), else bottom middle (clear of faces). By default a caption keeps the face it already sits beside, if that face is clearly visible; one that sat on a face, or by none, goes bottom middle. Pass `under` for the lines where that isn't the speaker. Returns each caption's place and why. Seconds; default the whole timeline.",
+    "description": "Lays the intro's speaker captions (\"Caption \u00b7 <who>\") out again the house way without retyping them: under the speaker's face only when the face detector sees it clearly through the line (followed by the detector, smoothed, never covering any face), else bottom middle (clear of faces). By default a caption keeps the face it already sits beside, if that face is clearly visible; one that sat on a face, or by none, goes bottom middle. Pass `under` for the lines where that isn't the speaker. Returns each caption's place and why. Seconds; default the whole timeline.",
     "inputSchema": {
       "properties": {
         "end": {
@@ -2016,7 +2016,7 @@
           "type": "number"
         },
         "under": {
-          "description": "Clip id → \"bottom\" (the speaker is off screen or unclear), \"auto\", or [x, y]: a point on the speaker's face at the caption's first frame, project pixels from the top-left.",
+          "description": "Clip id \u2192 \"bottom\" (the speaker is off screen or unclear), \"auto\", or [x, y]: a point on the speaker's face at the caption's first frame, project pixels from the top-left.",
           "type": "object"
         }
       },
@@ -2365,5 +2365,249 @@
       "type": "object"
     },
     "name": "export"
+  },
+  {
+    "name": "search_broll",
+    "description": "Search YouTube in a batch for specific visual scenes matching narration beats; saves source leads and provenance. Titles are leads, inspect frames before use. Prefer original uploads, distinct settings, no baked captions or compilation logos. queries [] lists saved research/observations and imports the bundled brand wallpaper, returning brand_background media id.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8
+        },
+        "per_query": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    }
+  },
+  {
+    "name": "read_broll_source",
+    "description": "Read a YouTube source\u2019s metadata and timed English captions without downloading its footage. Narrow by phrase or source seconds start/end; at most 140 lines. Captions locate candidates, visual inspection verifies the shot.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "phrase": {
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "import_broll",
+    "description": "Import a batch of selected YouTube ranges through the shared cloud registry; reuses existing originals and streams previews. Returns media and source_in (excerpt-relative), source_offset (original clock), duration and purpose. Does not place or add source audio. Inspect with look_at_media before placing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "ranges": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "start": {
+                "type": "number"
+              },
+              "end": {
+                "type": "number"
+              },
+              "purpose": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "start",
+              "end",
+              "purpose"
+            ]
+          }
+        }
+      },
+      "required": [
+        "ranges"
+      ]
+    }
+  },
+  {
+    "name": "record_broll_observations",
+    "description": "Save what inspected B-roll frames actually show and which narration beat they illustrate. Keeps visual observations separate from title/caption leads; include scene boundaries, marks to crop/blur, and any unsuitable material.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "media": {
+                "type": "string"
+              },
+              "seen": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "media",
+              "seen",
+              "purpose"
+            ]
+          }
+        }
+      },
+      "required": [
+        "observations"
+      ]
+    }
+  },
+  {
+    "name": "capture_evidence",
+    "description": "Capture real source-page pixels. A private Chrome loads the public https URL, optionally finds phrase text or a CSS selector, scrolls it into view and crops it. Imports a real screenshot with source metadata, never reconstructed evidence. Inspect with look_at_media before placing as commentary_card; then highlight_evidence can animate a marker over actual words. A missing phrase fails rather than inventing content.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "phrase": {
+          "type": "string"
+        },
+        "selector": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "highlight_evidence",
+    "description": "Draw red marker ink over real screenshot words. on is commentary_card\u2019s photo clip id; rects are exact image-pixel boxes x/y/width/height. start/end in timeline frames stay inside that card. Strokes reveal sequentially, Multiply keeps the source\u2019s black text visible, and the marks inherit its slide/push and end with its shot. Does not alter or invent source text.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "on": {
+          "type": "string"
+        },
+        "start": {
+          "type": "integer"
+        },
+        "end": {
+          "type": "integer"
+        },
+        "draw_frames": {
+          "type": "integer"
+        },
+        "rects": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "width": {
+                "type": "number"
+              },
+              "height": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ]
+          }
+        }
+      },
+      "required": [
+        "on",
+        "rects"
+      ]
+    }
+  },
+  {
+    "name": "review_motion",
+    "description": "Watch a short rendered edit with sound. start/end are timeline seconds, at most 12s. Renders the actual shared compositor at 480p, asks the existing audiovisual watcher for concrete motion/audio/legibility observations, caches its answer and deletes the temporary video. Optional question focuses the review (a card reveal, text sweep, speech/music boundary). Advisory sample observations do not certify the whole edit. Do not recheck unchanged samples.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ]
+    }
   }
 ]

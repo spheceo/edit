@@ -401,9 +401,10 @@ fn analyse(path: &Path) -> Result<Blocks, String> {
             "error",
             "-nostdin",
             "-protocol_whitelist",
-            "file,pipe",
-            "-i",
+            crate::util::protocols(path),
         ])
+        .args(crate::util::url_args(path))
+        .arg("-i")
         .arg(path)
         .args([
             "-map",

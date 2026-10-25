@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
+import { playbackKey } from "./cloud_playback.ts";
 import { writeAtomic } from "./files.ts";
 import * as framing from "./framing.ts";
 import { isBug, message as crashMessage } from "./guard.ts";
@@ -167,6 +168,11 @@ export class Processor {
     this.statuses.delete(key);
   }
 
+  /** Native/background writers still own this media's generated files. */
+  busyKey(key: string): boolean {
+    return this.processing.has(key);
+  }
+
   status(source: string): MediaStatus {
     const known = this.statuses.get(mediaKey(source));
     return known !== undefined ? shown(known) : this.statusFromDisk(source);
@@ -181,11 +187,12 @@ export class Processor {
     } catch {
       thumbCount = 0;
     }
-    const proxied = isFile(paths.proxyDone);
+    const streamed = playbackKey(source) !== null;
+    const proxied = streamed || isFile(paths.proxyDone);
     return {
       proxy: proxied ? "ready" : "pending",
       proxy_progress: proxied ? 1 : 0,
-      light: isFile(paths.light) ? "ready" : "pending",
+      light: streamed ? "skipped" : isFile(paths.light) ? "ready" : "pending",
       thumbs: thumbCount > 0 && isFile(paths.thumbs) ? "ready" : "pending",
       thumb_count: thumbCount,
       peaks: isFile(paths.peaks) ? "ready" : "pending",
@@ -331,7 +338,7 @@ export class Processor {
     }
     // Then the light one, from the preview (already scaled and tagged).
     const proxied = this.status(source).proxy === "ready";
-    if (probe.kind !== "video") {
+    if (probe.kind !== "video" || playbackKey(source) !== null) {
       this.set(source, (s) => {
         s.light = "skipped";
       });
@@ -436,8 +443,9 @@ export const mediaHooks: { wholeTranscript: ((source: string, target: string) =>
  */
 export function sharedSourceOf(cache: string, path: string): string | null {
   const root = join(cache, "cloud", "proxies");
-  if (!path.startsWith(`${root}/`)) return null;
-  const rest = path.slice(root.length + 1);
+  const streamed = playbackKey(path);
+  if (streamed === null && !path.startsWith(`${root}/`)) return null;
+  const rest = streamed === null ? path.slice(root.length + 1) : streamed.replace(/^edit\/proxies\//, "");
   const excerpt = /^(drive|youtube)\/([^/]+)\/(\d+)-(\d+)\.mp4$/u.exec(rest);
   if (excerpt !== null) return `${excerpt[1]}:${excerpt[2]}#${excerpt[3]}-${excerpt[4]}`;
   const whole = /^(drive|youtube)\/([^/]+)\.mp4$/u.exec(rest);
@@ -477,7 +485,8 @@ export async function makeThumbs(source: string, probe: Probe, paths: CachePaths
     "-skip_frame",
     "nokey",
     "-protocol_whitelist",
-    "file,pipe",
+    tools.protocols(source),
+    ...tools.urlArgs(source),
     "-i",
     source,
     "-an",

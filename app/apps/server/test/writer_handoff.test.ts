@@ -36,6 +36,6 @@ test("a Writer script's clips become footage ranges of each recording and cut-in
 
 test("a script whose footage no other machine can fetch, or with none, says why", () => {
   expect(() => toParsed({ id: "x", title: "x", sourceKind: "file", sourceUrl: "/tmp/a.mp4", clips: [{ id: "c", startMs: 0, endMs: 1000 }] })).toThrow("only on the Mac that imported it");
-  expect(() => toParsed({ id: "x", title: "x", sourceKind: "commentary" })).toThrow("commentary script");
+  expect(() => toParsed({ id: "x", title: "x", sourceKind: "commentary" })).toThrow("commentary script has no finished draft");
   expect(() => toParsed({ id: "x", title: "x", sourceKind: "youtube", sourceUrl: "https://youtu.be/dslLBsHkVzE", clips: [] })).toThrow("no footage ranges");
 });

@@ -4,6 +4,9 @@ import * as fs from "node:fs";
 
 import * as cloud from "../src/cloud.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
+import { playbackKey, playbackPath } from "../src/cloud_playback.ts";
+import { buildRouter } from "../src/routes.ts";
+import { respond } from "../src/http/server.ts";
 import { testCloud } from "../src/cloud_projects.ts";
 import { mediaKey, sharedSourceOf } from "../src/media.ts";
 import type { Media, Probe, Project } from "../src/model.ts";
@@ -43,6 +46,7 @@ function home(name: string): Fixture & { proxies: string[] } {
     fs.copyFileSync(source, out);
   };
   useNative(wrap(raw));
+  cloudMedia.configurePlayback(fixture.app);
   return { ...fixture, proxies };
 }
 
@@ -200,7 +204,8 @@ test("files from a disk: a sound goes up as itself, footage with a proxy made on
     const sound = `${dir}/take.wav`;
     fs.writeFileSync(sound, "RIFF-a-sound");
     const madeSound = await cloudMedia.importLocal(cache, sound, SOUND, "take.wav");
-    expect(madeSound.path).toBe(sound);
+    expect(madeSound.path).toBe(playbackPath(madeSound.cloud!.original, app.port));
+    expect(fs.existsSync(sound)).toBe(true);
     expect(madeSound.cloud!.proxy).toBe(madeSound.cloud!.original);
     expect(mock.cloud.text(madeSound.cloud!.original)).toBe("RIFF-a-sound");
     expect(mock.cloud.contentTypes.get(madeSound.cloud!.original)).toBe("audio/wav");
@@ -221,13 +226,13 @@ test("files from a disk: a sound goes up as itself, footage with a proxy made on
 
     const made = await cloudMedia.importLocal(cache, video, VIDEO, "interview.mov");
     const hex = made.cloud!.source.slice("sha256:".length);
-    expect(made.path).toBe(fs.realpathSync(`${cache}/cloud/proxies/sha256/${hex}.mp4`));
-    expect(cloudMedia.isLocalCopy(cache, made.path)).toBe(true);
+    expect(made.path).toBe(playbackPath(`edit/proxies/sha256/${hex}.mp4`, app.port));
     expect(made.cloud).toEqual({ source: `sha256:${hex}`, original: `edit/originals/sha256/${hex}/interview.mov`, proxy: `edit/proxies/sha256/${hex}.mp4`, size: 15 });
     // The import answered with the proxy made; the uploads go on behind it, noted so a restart carries on.
     const noted = () => (JSON.parse(fs.readFileSync(`${fixture.home}/jobs.json`, "utf8")) as { kind: string }[]).filter((job) => job.kind === "upload");
     expect(noted().length).toBe(1);
     await cloudMedia.uploaded(video);
+    expect(fs.existsSync(cloudMedia.localPath(cache, made.cloud!.proxy!))).toBe(false);
     expect(noted()).toEqual([]);
     expect(mock.cloud.objects.has(made.cloud!.original) && mock.cloud.objects.has(made.cloud!.proxy!)).toBe(true);
     expect(await cloudMedia.getRecord(made.cloud!.source)).toMatchObject({ originalReady: true, proxyReady: true });
@@ -269,7 +274,7 @@ test("files from a disk: a sound goes up as itself, footage with a proxy made on
   }
 });
 
-test("ensure_local fetches the proxies another machine made, saves where they are even read-only, and names what's missing", async () => {
+test("opening cloud media streams proxies without downloads, including read-only projects, and fetches shared analysis", async () => {
   const fixture = home("cloud-ensure");
   const { store, app, cleanup } = fixture;
   try {
@@ -295,7 +300,8 @@ test("ensure_local fetches the proxies another machine made, saves where they ar
     for (const id of ids) {
       await cloudMedia.ensureLocal(app, id);
       const path = store.get(id)!.project.media[0]!.path;
-      expect(cloudMedia.isLocalCopy(cache, path) && fs.readFileSync(path, "utf8") === "a proxy").toBe(true);
+      expect(playbackKey(path)).toBe("edit/proxies/sha256/beef.mp4");
+      expect(fs.existsSync(cloudMedia.localPath(cache, "edit/proxies/sha256/beef.mp4"))).toBe(false);
     }
     // …and the analysis kenobi shared came too.
     const local = store.get(ids[0]!)!.project.media[0]!.path;
@@ -321,48 +327,38 @@ test("ensure_local fetches the proxies another machine made, saves where they ar
   }
 });
 
-test("a media replaced while its proxy downloads keeps its own source and gets its own proxy", async () => {
-  const fixture = home("cloud-replaced");
+test("cloud playback ignores obsolete local previews and repeated ranges never download proxies", async () => {
+  const fixture = home("cloud-playback");
   const { store, app, cleanup } = fixture;
   try {
-    const cache = store.cacheDir();
-    mock.cloud.put("edit/proxies/sha256/aaaa.mp4", "proxy A");
-    mock.cloud.put("edit/proxies/sha256/bbbb.mp4", "proxy B");
-    const cloudOf = (hex: string) => ({ source: `sha256:${hex}`, original: `edit/originals/sha256/${hex}/clip.mov`, proxy: `edit/proxies/sha256/${hex}.mp4`, size: 7 });
-    const id = store.create("replaced", SETTINGS).project.id;
+    const key = "edit/proxies/sha256/range-test.mp4";
+    mock.cloud.put(key, "the cloud video");
+    const id = store.create("stream", SETTINGS).project.id;
     await store.update(id, "test", (project) => {
-      project.media.push({ ...media("m1", "/elsewhere/a.mp4"), cloud: cloudOf("aaaa") });
+      project.media.push({ ...media("m1", "/elsewhere/a.mp4"), cloud: { source: "sha256:range-test", original: "edit/originals/sha256/range-test/a.mov", proxy: key, size: 15 } });
     });
-    testCloud(fixture.home, [[id, null]]).attach(store);
-    let release = () => {};
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let started = () => {};
-    const downloading = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    mock.cloud.beforeGet = async (key) => {
-      if (key !== "edit/proxies/sha256/aaaa.mp4") return;
-      started();
-      await held;
-    };
-    const ensured = cloudMedia.ensureLocal(app, id);
-    await downloading;
-    // Source A becomes B under the same media id while A's proxy downloads.
-    await store.update(id, "test", (project) => {
-      project.media[0] = { ...media("m1", "/elsewhere/b.mp4"), cloud: cloudOf("bbbb") };
-    });
-    release();
-    await ensured;
-    const after = store.get(id)!.project.media[0]!;
-    expect(after.cloud).toEqual(cloudOf("bbbb"));
-    expect(cloudMedia.isLocalCopy(cache, after.path)).toBe(true);
-    expect(fs.readFileSync(after.path, "utf8")).toBe("proxy B");
-  } finally {
-    mock.cloud.beforeGet = null;
-    cleanup();
-  }
+    const source = store.get(id)!.project.media[0]!.path;
+    const paths = app.media.paths(source);
+    fs.mkdirSync(paths.proxy.slice(0, paths.proxy.lastIndexOf("/")), { recursive: true });
+    fs.writeFileSync(paths.proxy, "obsolete local video");
+    fs.writeFileSync(paths.proxyDone, "");
+    const router = buildRouter();
+    for (const kind of ["proxy", "audio", "light"]) {
+      const response = (await respond(app, router, new Request(`http://localhost:7700/api/projects/${id}/media/m1/${kind}`, { headers: { host: "localhost:7700", range: "bytes=4-8" } }), null))!;
+      expect(response.status).toBe(206);
+      expect(await response.text()).toBe("cloud");
+      expect(response.headers.get("content-range")).toBe("bytes 4-8/15");
+    }
+    const native = (await respond(app, router, new Request(playbackPath(key, app.port), { headers: { host: "127.0.0.1:7700", range: "bytes=10-14" } }), null))!;
+    expect(native.status).toBe(206);
+    expect(await native.text()).toBe("video");
+    expect(fs.existsSync(cloudMedia.localPath(store.cacheDir(), key))).toBe(false);
+    expect(app.media.status(source)).toMatchObject({ proxy: "ready", light: "skipped" });
+    expect(mediaKey(playbackPath(key, 7700))).toBe(mediaKey(playbackPath(key, 8800)));
+    const pulled = structuredClone(store.get(id)!.project);
+    pulled.media[0]!.path = playbackPath(key, 9999);
+    expect(store.putFromCloud(pulled, "cloud").project.media[0]!.path).toBe(source);
+  } finally { cleanup(); }
 });
 
 test("exports read the originals through presigned URLs, share the proxy's waveform, and refuse a file only another machine has", async () => {
@@ -432,7 +428,7 @@ test("the backfill puts what Edit made in the cloud, says what it did, and waits
     expect(done).toEqual({ analysis_shared: 0, failed: [], missing: [], skipped: ["map.mp4 (a map still rendering)"], uploaded: [{ media: "m1", name: "smooth.mp4" }] });
     const saved = store.get(id)!.project.media[0]!;
     // A short render is its own proxy.
-    expect(saved.path).toBe(shot);
+    expect(playbackKey(saved.path)).toBe(saved.cloud!.original);
     expect(saved.cloud!.proxy).toBe(saved.cloud!.original);
     expect(mock.cloud.text(saved.cloud!.original)).toBe("a smoothed shot");
     // Nothing left to do.

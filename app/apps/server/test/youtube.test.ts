@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 
 import type { ScriptBlock } from "../src/model.ts";
 import { parse, REUSE } from "../src/script.ts";
-import { download, fileOf, idOf, startOf, timing, videoId } from "../src/youtube.ts";
+import { download, downloadRange, fileOf, idOf, startOf, timing, videoId } from "../src/youtube.ts";
 import { scratch } from "./helpers/home.ts";
 
 type Footage = Extract<ScriptBlock, { kind: "footage" }>;
@@ -98,6 +98,7 @@ function fakeYtdlp(dir: string, refusals: number): string {
     script,
     `#!/bin/sh
 n=$(cat "${count}" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${count}"
+printf '%s\\n' "$@" > "${dir}/args"
 for arg in "$@"; do case "$prev" in -P) out="$arg";; --ffmpeg-location) ff="$arg";; esac; prev="$arg"; done
 # As yt-dlp: FFmpeg by a bare name isn't found, and the streams stay unmerged.
 case "$ff" in /*) ;; *) echo "EDIT-FILE $out/never-merged.mp4"; exit 0;; esac
@@ -149,4 +150,17 @@ test("a_video_youtube_keeps_refusing_fails_saying_so", async () => {
     if (proxy !== undefined) process.env.PROXY_URL = proxy;
     cleanup();
   }
+});
+
+test("a visual excerpt requests an exact bounded section and rejects an entire-stream range", async () => {
+  const { dir, cleanup } = scratch("youtube-range");
+  try {
+    fakeYtdlp(dir, 0); process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+    const got = await downloadRange(dir, "abcdefghijk", [6250.5, 6267], `${dir}/out`);
+    expect(fs.readFileSync(got.path, "utf8")).toBe("video");
+    const args = fs.readFileSync(`${dir}/args`, "utf8").split("\n");
+    expect(args[args.indexOf("--download-sections") + 1]).toBe("*6250.5-6267");
+    expect(args).toContain("--force-keyframes-at-cuts");
+    await expect(downloadRange(dir, "abcdefghijk", [0, 3600], `${dir}/long`)).rejects.toThrow("at most 10 minutes");
+  } finally { cleanup(); }
 });

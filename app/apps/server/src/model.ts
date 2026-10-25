@@ -78,6 +78,7 @@ export const STYLES: { value: Style; label: string }[] = [
   { value: "bodycam", label: "Bodycam" },
   { value: "interrogation", label: "Interrogation" },
   { value: "courtroom", label: "Courtroom" },
+  { value: "commentary", label: "Commentary" },
 ];
 
 /** A script import's footage downloads (apps/server/src/script.ts `Job`). */
@@ -161,7 +162,7 @@ export interface Transcript {
 }
 
 export const ANIMATABLE: Record<ClipType, string[]> = {
-  video: ["opacity", "x", "y", "scale", "rotation", "shake"],
+  video: ["opacity", "x", "y", "scale", "rotation", "shake", "crop.left", "crop.right", "crop.top", "crop.bottom"],
   audio: ["volume_db"],
   text: ["opacity", "x", "y", "scale", "rotation", "shake", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"],
   adjustment: ["opacity", "shake", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "glitch", "blur", "blur.x", "blur.y", "blur.width", "blur.height"],

@@ -1,6 +1,9 @@
-// Footage of cloud projects: originals and proxies on R2
-// (`cloud.ts`), only the small proxies on this machine. A media's `cloud` says
-// where its files are; its `path` is this machine's copy of the proxy.
+// Footage of cloud projects: originals and playback proxies live on R2.
+// Browser playback forwards ranges without a disk copy. Native tools read a
+// credential-free loopback input backed by the same ranges; media keys use
+// the immutable cloud object, independent of this machine's port.
+// Images and compact analysis can be cached locally. Proxies made here are
+// temporary upload inputs and are removed only after upload acknowledgement.
 //
 // Cloud mode is on when `cloud.enabled()` (a relay token is set); without it
 // nothing here runs and media work as before.
@@ -37,7 +40,8 @@
 //
 // This machine's copy of a key is `<cache>/cloud/<key without edit/>`
 // (`localPath`), so another machine finds (or fetches) the same file in its
-// own cache: `ensureLocal`. Exports read the originals (`forExport`).
+// own cache for images; video and sound stream. `ensureLocal` prepares
+// playback metadata and shared analysis. Exports read originals (`forExport`).
 // Scratch files (an excerpt between cutting and uploading) live in
 // `<cache>/cloud/tmp` and are removed when done or failed.
 //
@@ -54,6 +58,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
+import { playbackKey, playbackPath } from "./cloud_playback.ts";
 import { proxyJob, requestProxy } from "./cloud_proxy.ts";
 import * as diag from "./diag.ts";
 import * as endpoints from "./endpoints.ts";
@@ -97,6 +102,33 @@ const HOUR = 3600;
 const PARALLEL = 3;
 /** Analysis files fetched at once per source (each a few KB). */
 const ANALYSIS_AT_ONCE = 8;
+const playbackPorts = new Map<string, number>();
+const previewPath = (cache: string, key: string) => playbackPath(key, playbackPorts.get(cache) ?? 7700);
+
+/** Install before the store loads projects: native tools read the same cloud ranges as the browser. */
+export function configurePlayback(app: App): void {
+  playbackPorts.set(app.store.cacheDir(), app.port);
+  app.store.setMediaResolver((project) => {
+    for (const media of project.media) {
+      if (media.kind === "image" || media.cloud == null) continue;
+      const key = streamKey(media.cloud, "proxy");
+      if (key === null) continue; // An upload still needs its local source.
+      const path = playbackPath(key, app.port);
+      if (media.path === path) continue;
+      carryAnalysis(app.store.cacheDir(), media.path, path);
+      // Small, rebuildable metadata survives the move too; never copy a video.
+      const from = app.media.paths(media.path);
+      const to = app.media.paths(path);
+      for (const name of ["peaks", "thumbs", "thumbsMeta"] as const) {
+        if (!isFile(to[name]) && isFile(from[name])) {
+          fs.mkdirSync(parent(to[name])!, { recursive: true });
+          fs.copyFileSync(from[name], to[name]);
+        }
+      }
+      media.path = path;
+    }
+  });
+}
 
 /**
  * What this module uses of the script package (its seam), here so tests can
@@ -562,6 +594,9 @@ async function runUpload(upload: Upload): Promise<void> {
   if (upload.proxy !== null && upload.local !== null) {
     await cloud.uploadFile(upload.local, upload.proxy);
     await putRecord({ source: upload.source, proxyKey: upload.proxy, proxyReady: true });
+    // Only an acknowledged cloud proxy is disposable. A failed upload keeps
+    // this scratch file for the persisted upload job to retry.
+    fs.rmSync(upload.local, { force: true });
   }
 }
 
@@ -623,6 +658,7 @@ async function publish(
     if (proxied !== null) throw proxied;
     await cloud.uploadFile(local, proxy);
     await putRecord({ source, proxyKey: proxy, proxyReady: true });
+    fs.rmSync(local, { force: true });
   } catch (error) {
     if (makeHere) fs.rmSync(local, { force: true });
     throw error;
@@ -663,7 +699,9 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
     if (needOriginal || readyProxy(record) === null) {
       await putRecord({ source, originalReady: true, proxyKey: originalKey, proxyReady: true, duration: probe.duration });
     }
-    return { path, name, probe, cloud: { source, original: originalKey, proxy: originalKey, size } };
+    const made = probe.kind === "image" ? path : previewPath(cache, originalKey);
+    carryAnalysis(cache, path, made);
+    return { path: made, name, probe, cloud: { source, original: originalKey, proxy: originalKey, size } };
   }
   // Exports read this very file while it's here; elsewhere, its sound copy.
   rememberLocalOriginal(cache, originalKey, path);
@@ -679,10 +717,9 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
       await cloud.uploadFile(path, originalKey);
       await putRecord({ source, originalReady: true, size });
     }
-    await fetchKey(proxy, local);
   } else if (process.env.EDIT_CLOUD_PROXY === "1") {
     // Cloud-first: the original goes up once, the proxy is made in the
-    // cloud, and playback streams it (Phase 3) until a fetch caches it.
+    // cloud, and playback streams it without a local copy.
     // No worker answer: fall back to making it here, as before.
     if (needOriginal) {
       await cloud.uploadFile(path, originalKey);
@@ -690,14 +727,13 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
     }
     const asked = await requestProxy(proxyJob(source, originalKey, proxy, probe.width ?? 0, probe.height ?? 0));
     if (asked.state === "preparing") {
-      return { path: local, name, probe, cloud: { source, original: originalKey, proxy, size } };
+      return { path: previewPath(cache, proxy), name, probe, cloud: { source, original: originalKey, proxy, size } };
     }
-    if (asked.state === "ready") await fetchKey(proxy, local);
-    else await publish(path, probe, source, originalKey, false, proxy, local, later);
+    if (asked.state === "unavailable") await publish(path, probe, source, originalKey, false, proxy, local, later);
   } else {
     await publish(path, probe, source, originalKey, needOriginal, proxy, local, later);
   }
-  const made = canonical(local);
+  const made = previewPath(cache, proxy);
   carryAnalysis(cache, path, made);
   return { path: made, name, probe, cloud: { source, original: originalKey, proxy, size } };
 }
@@ -789,6 +825,38 @@ export async function youtubeOriginal(
   if (duration !== null) done.duration = duration;
   await putRecord(done);
   return [{ file, source, key, name, size: got.size }, got.path];
+}
+
+/** Commentary needs scenes, not whole streams. Existing cloud originals and
+ * exact excerpts are reused; otherwise yt-dlp fetches bounded padded ranges. */
+export async function youtubeExcerpts(home: string, cache: string, file: string, ranges: [number, number][], progress: (bytes: number, total: number | null, name: string) => void = () => {}): Promise<Excerpt[]> {
+  const id = youtube.idOf(file);
+  if (id === null) throw new Error("not a YouTube source");
+  const whole = await getRecord(file); const originalKey = readyOriginal(whole);
+  if (whole !== null && originalKey !== null) return driveExcerpts(cache, { file, source: file, key: originalKey, name: whole.name, size: whole.size }, ranges);
+  const spans = scriptParts.spans(ranges, Number.MAX_SAFE_INTEGER);
+  const out: Excerpt[] = [];
+  for (const [from, to] of spans) {
+    const source = excerptSource(file, from, to);
+    const record = await getRecord(source); const original = readyOriginal(record); const proxyReady = readyProxy(record);
+    if (record !== null && original !== null && proxyReady !== null) {
+      const probe = await probeUrl(await getUrl(original, HOUR));
+      out.push({ path: previewPath(cache, proxyReady), from, to: Math.min(to, from + probe.duration), cloud: { path: previewPath(cache, proxyReady), name: record.name, probe, cloud: { source, original, proxy: proxyReady, size: record.size } } });
+      continue;
+    }
+    const dir = join(scratchDir(cache), `youtube-range-${id}-${millis(from)}-${millis(to)}`);
+    try {
+      const got = await youtube.downloadRange(home, id, [from, to], dir, progress);
+      const probe = await native().probe(got.path);
+      const key = `edit/excerpts/youtube/${id}/${millis(from)}-${millis(to)}.mp4`;
+      const proxy = proxyKey(source); if (proxy === null) throw new Error("no excerpt proxy key");
+      await putRecord({ source, name: got.name, originalKey: key, size: got.size });
+      await publish(got.path, probe, source, key, true, proxy, localPath(cache, proxy));
+      const path = previewPath(cache, proxy);
+      out.push({ path, from, to: Math.min(to, from + probe.duration), cloud: { path, name: got.name, probe, cloud: { source, original: key, proxy, size: got.size } } });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+  return out;
 }
 
 /** How often a cloud copy is asked how far it's got, and how long it may sit still before this Mac takes over. */
@@ -989,9 +1057,7 @@ async function wholeMedia(cache: string, original: Original, url: string): Promi
   const proxy = ready ?? proxyKey(original.source);
   if (proxy === null) throw new Error("no proxy key");
   const local = localPath(cache, proxy);
-  if (ready !== null) {
-    await fetchKey(proxy, local);
-  } else {
+  if (ready === null) {
     const madeHere = !isFile(local);
     try {
       if (madeHere) {
@@ -1002,13 +1068,14 @@ async function wholeMedia(cache: string, original: Original, url: string): Promi
       }
       await cloud.uploadFile(local, proxy);
       await putRecord({ source: original.source, proxyKey: proxy, proxyReady: true });
+      fs.rmSync(local, { force: true });
     } catch (error) {
       if (madeHere) fs.rmSync(local, { force: true });
       throw error;
     }
   }
   return {
-    path: canonical(local),
+    path: previewPath(cache, proxy),
     name: original.name,
     probe,
     cloud: { source: original.source, original: original.key, proxy, size: original.size },
@@ -1037,10 +1104,8 @@ async function excerptMedia(
   if (record !== null && readyKey !== null && readyProxyKey !== null) {
     // Its full-quality file says what the media is (the proxy is smaller).
     const probe = await probeUrl(await getUrl(readyKey, HOUR));
-    const local = localPath(cache, readyProxyKey);
-    await fetchKey(readyProxyKey, local);
     return {
-      path: canonical(local),
+      path: previewPath(cache, readyProxyKey),
       name: record.name,
       probe,
       cloud: { source, original: readyKey, proxy: readyProxyKey, size: Math.max(Math.trunc(record.size), 0) },
@@ -1057,7 +1122,7 @@ async function excerptMedia(
     const size = sizeOf(scratch);
     await putRecord({ source, name, originalKey: key, size });
     await publish(scratch, probe, source, key, true, proxy, local);
-    return { path: canonical(local), name, probe, cloud: { source, original: key, proxy, size } };
+    return { path: previewPath(cache, proxy), name, probe, cloud: { source, original: key, proxy, size } };
   } finally {
     fs.rmSync(scratch, { force: true });
   }
@@ -1173,16 +1238,6 @@ export async function restoreHere(app: App, id: string, progress: (bytes: number
 // ---------------------------------------------------------------------------
 // Opening a cloud project here.
 
-/**
- * Makes every cloud media of project `id` playable here: fetches proxies this
- * machine doesn't have yet and points their `path` at them. Called when a
- * cloud project is opened (it may have been edited on another machine).
- * Media whose file is here are left alone; a proxy already in this machine's
- * cache isn't fetched again. The analysis other machines shared comes too
- * (`fetchAnalysis`). Media that are neither here nor in the cloud (made on a
- * machine that hasn't backfilled them yet) are named in the error and in the
- * project's cloud status (`missing`), never silently left out.
- */
 /** The R2 key playback streams for a cloud medium: its proxy (sound and light views use it too). */
 export function streamKey(cloudMedia: { proxy?: string } | null | undefined, kind: string): string | null {
   if (cloudMedia === null || cloudMedia === undefined) return null;
@@ -1231,43 +1286,7 @@ export async function streamFromCloud(request: Request, cloudMedia: { proxy?: st
   }
 }
 
-/** Lazy fetches under way, by project and media: every block read asks, one download answers. */
-const fetchingNow = new Map<string, Promise<void>>();
-
-/**
- * The medium the preview is reading from the cloud comes down now, ahead of
- * the project's other proxies (ensureLocal's queue, three at a time), so the
- * playhead's file is local in seconds rather than whenever its turn comes.
- */
-export function fetchSoon(app: App, id: string, mediaId: string): void {
-  const name = `${id}/${mediaId}`;
-  if (fetchingNow.has(name)) return;
-  const running = ensureMediaLocal(app, id, mediaId)
-    .catch((error: unknown) => diag.warn("cloud", `${id}: fetching ${mediaId} for playback: ${failure(error)}`))
-    .finally(() => fetchingNow.delete(name));
-  fetchingNow.set(name, running);
-}
-
-/** Fetches one medium's proxy now (`fetchSoon`, for playback); the preview streams it meanwhile. */
-export async function ensureMediaLocal(app: App, id: string, mediaId: string): Promise<void> {
-  const live = app.store.get(id);
-  if (live === null) throw new Error("no such project");
-  const media = live.project.media.find((item) => item.id === mediaId);
-  if (media === undefined || media.cloud === undefined || media.cloud === null || isFile(media.path)) return;
-  let key = streamKey(media.cloud, "proxy");
-  if (key === null) {
-    const record = await getRecord(media.cloud.source).catch(() => null);
-    key = readyProxy(record);
-  }
-  if (key === null) throw new Error(`${media.name} is still being prepared in the cloud`);
-  const local = localPath(app.store.cacheDir(), key);
-  await fetchKey(key, local);
-  await app.store.update(id, "cloud", (project) => {
-    const item = project.media.find((one) => one.id === mediaId);
-    if (item !== undefined && !isFile(item.path)) { item.path = canonical(local); item.cloud!.proxy = key; }
-  });
-}
-
+/** Prepares cloud playback locations and cached analysis; only still images are downloaded. */
 export function ensureLocal(app: App, id: string): Promise<void> {
   // One at a time per project: a second ask (another open, a pull) shares it.
   const running = ensuring.get(id);
@@ -1283,11 +1302,11 @@ const ensuring = new Map<string, Promise<void>>();
 async function ensureLocalNow(app: App, id: string): Promise<void> {
   let fetched: string | null = null;
   try {
-    await fetchProxies(app, id);
+    await preparePlayback(app, id);
   } catch (error) {
     fetched = failure(error);
   }
-  // After the proxies: analysis goes in the folder named after each media's file here.
+  // Shared analysis is keyed by the streamed input, without requiring a video file.
   await fetchAnalysis(app, id);
   // Music and sound effects say so on the media, not just by their path (never transcribed).
   await seams.library.tagSounds(app, id).catch(() => {});
@@ -1307,18 +1326,19 @@ async function ensureLocalNow(app: App, id: string): Promise<void> {
 }
 
 /**
- * Fetches the proxies of `id`'s cloud media that aren't here (`ensureLocal`).
- * A media replaced while its proxy downloaded (another source under the same
- * id) isn't given the old one; its own is fetched in another round.
+ * Resolves cloud playback keys and this machine's inputs. Still images use
+ * ImageIO and need a local copy; video and audio never fetch their proxies.
+ * Media replaced during the lookup are resolved again for their new source.
  */
-async function fetchProxies(app: App, id: string, round = 0): Promise<void> {
+async function preparePlayback(app: App, id: string, round = 0): Promise<void> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
   const cache = app.store.cacheDir();
   // Media whose file isn't here: (media id, name, source, proxy key if known).
   const missing: [string, string, string, string | null][] = [];
   for (const media of live.project.media) {
-    if (isFile(media.path) || media.cloud === undefined || media.cloud === null) continue;
+    if (media.cloud == null || (media.kind === "image" && isFile(media.path))) continue;
+    if (playbackKey(media.path) === media.cloud.proxy) continue;
     missing.push([media.id, media.name, media.cloud.source, media.cloud.proxy ?? null]);
   }
   if (missing.length === 0) return;
@@ -1344,7 +1364,8 @@ async function fetchProxies(app: App, id: string, round = 0): Promise<void> {
       unready.push(name);
       continue;
     }
-    jobs.push([media, key, localPath(cache, key), source]);
+    const item = mediaOf(live.project, media);
+    jobs.push([media, key, item?.kind === "image" ? localPath(cache, key) : playbackPath(key, app.port), source]);
   }
   // Three at a time; the ones already in this machine's cache cost nothing.
   const results: ({ ok: [string, string, string, string] } | { error: string })[] = [];
@@ -1353,12 +1374,12 @@ async function fetchProxies(app: App, id: string, round = 0): Promise<void> {
     results.push(
       ...(await Promise.all(
         batch.map(async ([media, key, local, source]) => {
-          if (!isFile(local) && !enabled) {
+          if (!enabled && !isFile(local)) {
             return { error: `${key} isn't on this machine and Edit isn't signed in (the cloud needs it)` };
           }
           try {
-            await diag.timeOnAsync("cloud", "cloud: fetch proxy", key, () => fetchKey(key, local));
-            return { ok: [media, key, canonical(local), source] as [string, string, string, string] };
+            if (playbackKey(local) === null) await diag.timeOnAsync("cloud", "cloud: fetch image", key, () => fetchKey(key, local));
+            return { ok: [media, key, playbackKey(local) === null ? canonical(local) : local, source] as [string, string, string, string] };
           } catch (error) {
             return { error: failure(error) };
           }
@@ -1382,13 +1403,14 @@ async function fetchProxies(app: App, id: string, round = 0): Promise<void> {
         const media = project.media.find((item) => item.id === mediaId);
         if (media?.cloud === undefined || media.cloud === null) continue;
         // Still the media it was fetched for, and still not here.
-        if (media.cloud.source !== source || isFile(media.path)) {
+        if (media.cloud.source !== source) {
           replaced += 1;
           continue;
         }
         // The library's own folder said what it was; the cache's won't.
         const library = libraryKindOf(media.path);
         if (library !== null && media.library === undefined) media.library = library;
+        carryAnalysis(cache, media.path, local);
         media.path = local;
         media.cloud.proxy = key;
       }
@@ -1418,14 +1440,14 @@ async function fetchProxies(app: App, id: string, round = 0): Promise<void> {
         }
       }
     }
-    // Previews, thumbnails and waveforms for the files now here.
+    // Compact thumbnails and waveforms; streamed inputs never make local previews.
     for (const [mediaId] of found) {
       const media = mediaOf(saved, mediaId);
-      if (media !== undefined && isFile(media.path)) app.media.ensure(media.path, probeOf(media));
+      if (media !== undefined) app.media.ensure(media.path, probeOf(media));
     }
   }
   if (replaced > 0 && round < 3) {
-    await fetchProxies(app, id, round + 1);
+    await preparePlayback(app, id, round + 1);
   }
   if (errors.length > 0) {
     diag.warn("cloud", `${id}: ${errors.join("; ")}`);
@@ -2030,7 +2052,7 @@ function analysisDirs(app: App, id: string): [string, string, string][] {
   const out: [string, string, string][] = [];
   for (const media of live.project.media) {
     if (media.kind !== "video" && media.kind !== "audio") continue;
-    if (media.cloud === undefined || media.cloud === null || !isFile(media.path)) continue;
+    if (media.cloud === undefined || media.cloud === null) continue;
     const key = mediaKey(media.path);
     out.push([media.cloud.source, join(cache, key), key]);
   }

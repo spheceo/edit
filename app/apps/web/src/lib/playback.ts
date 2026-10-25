@@ -28,6 +28,7 @@ export const playhead = new Playhead();
 /** Same faces the native renderer bundles (crates/edit-render/src/text.rs). */
 /** Bundled typefaces: [family, weight, file] (mirrors edit-render BUNDLED_FONTS). */
 export const FONTS: [string, number, string][] = [
+  ["Akwe Pro", 700, "AkwePro-Bold.otf"],
   ["Geist", 400, "Geist-Regular.ttf"],
   ["Geist", 500, "Geist-Medium.ttf"],
   ["Geist", 600, "Geist-SemiBold.ttf"],

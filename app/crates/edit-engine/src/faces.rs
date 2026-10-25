@@ -103,33 +103,13 @@ fn look(
     let parts = indexes.len().div_ceil(400).clamp(1, 3);
     let chunk = indexes.len().div_ceil(parts);
     let read = |part: &[i64]| -> Result<Seen, String> {
-        let mut reader = crate::mac_media::Reader::open(&decode, wide, high)?;
-        let mut bgra = vec![0_u8; wide as usize * high as usize * 4];
+        let mut reader = crate::render::VideoReader::analysis(&decode, wide, high);
+
         let mut out = Vec::with_capacity(part.len());
         for &index in part {
             let time = index as f64 / RATE;
-            // The reader holds its last picture past the end, so a failure is
-            // real: tried once more on a fresh reader, else the whole look
-            // fails rather than caching "no faces" for good.
-            if let Err(error) = reader.frame(time, &mut bgra, crate::render::Order::Bgra, false) {
-                crate::log::warn(
-                    "faces",
-                    format!(
-                        "reading {} at {time:.2}s: {error}; opening it again",
-                        decode.display()
-                    ),
-                );
-                reader = crate::mac_media::Reader::open(&decode, wide, high)?;
-                reader
-                    .frame(time, &mut bgra, crate::render::Order::Bgra, false)
-                    .map_err(|error| {
-                        format!(
-                            "couldn't read {} at {time:.2}s to find faces: {error}",
-                            decode.display()
-                        )
-                    })?;
-            }
-            let faces = crate::mac_media::faces(&bgra, wide, high)?
+            let bgra = reader.frame_at(time)?;
+            let faces = crate::mac_media::faces(bgra, wide, high)?
                 .into_iter()
                 .filter(|[_, y0, _, y1, sure]| *sure >= SURE && y1 - y0 >= SMALLEST)
                 .map(|[x0, y0, x1, y1, _]| {

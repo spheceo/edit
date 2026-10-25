@@ -477,6 +477,10 @@ type Getter = (clip: Clip) => number;
 type Setter = (clip: Clip, value: number) => void;
 
 const params: Record<string, [Getter, Setter]> = {
+  "crop.left": [(c) => c.type === "video" ? (c.crop?.left ?? 0) : 0, (c, v) => { if(c.type === "video") c.crop = {...{left:0,right:0,top:0,bottom:0,...c.crop},left:v}; }],
+  "crop.right": [(c) => c.type === "video" ? (c.crop?.right ?? 0) : 0, (c, v) => { if(c.type === "video") c.crop = {...{left:0,right:0,top:0,bottom:0,...c.crop},right:v}; }],
+  "crop.top": [(c) => c.type === "video" ? (c.crop?.top ?? 0) : 0, (c, v) => { if(c.type === "video") c.crop = {...{left:0,right:0,top:0,bottom:0,...c.crop},top:v}; }],
+  "crop.bottom": [(c) => c.type === "video" ? (c.crop?.bottom ?? 0) : 0, (c, v) => { if(c.type === "video") c.crop = {...{left:0,right:0,top:0,bottom:0,...c.crop},bottom:v}; }],
   opacity: [(c) => ("opacity" in c ? c.opacity : 1), (c, v) => "opacity" in c && (c.opacity = v)],
   x: [(c) => ("transform" in c ? c.transform.x : 0), (c, v) => "transform" in c && (c.transform.x = v)],
   y: [(c) => ("transform" in c ? c.transform.y : 0), (c, v) => "transform" in c && (c.transform.y = v)],
@@ -530,7 +534,7 @@ const params: Record<string, [Getter, Setter]> = {
 /** Mirrors edit-core::animatable_params. */
 function animatableParams(clip: Clip): string[] {
   switch (clip.type) {
-    case "video": return ["x", "y", "scale", "rotation", "shake", "opacity"];
+    case "video": return ["x", "y", "scale", "rotation", "shake", "opacity", "crop.left", "crop.right", "crop.top", "crop.bottom"];
     case "text": return ["x", "y", "scale", "rotation", "shake", "opacity", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"];
     case "adjustment": return ["shake", "glitch", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "leak", "leak_x", "blur", "blur.x", "blur.y", "blur.width", "blur.height", "opacity"];
     case "solid": return ["opacity"];

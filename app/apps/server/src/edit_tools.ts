@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import { clipColorFrom, clipFrom, defaultTextAnimation, defaultTextStyle, defaultTransform, keyframesFrom, textAnimationFrom, textStyleFrom, transformFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
+import * as commentaryAudit from "./commentary_audit.ts";
 import { FRAME_SCALE, frameKey as screenFrameKey } from "./desktop_screen.ts";
 import * as diag from "./diag.ts";
 import * as editPlan from "./edit_plan.ts";
@@ -1247,7 +1248,12 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   const sections = onProject((input) => native().sections(input));
   const parts = sections.parts;
   const teasers = parts.filter((part) => part.kind === "intro").map((part): [number, number] => [part.start, part.end]);
-  const extra = [
+  const extra = project.style === "commentary" ? [
+    ...hooks.offScript(project, heard),
+    ...hooks.cutMidWord(project, heard),
+    ...soundEffectsLong(project),
+    ...(markBlurs.offShot(project) as Json[]),
+  ] : [
     ...hooks.calloutTiming(project, heard),
     ...hooks.offScript(project, heard),
     ...hooks.textNotSaid(project, heard),
@@ -1527,6 +1533,7 @@ export function editContext(app: App, found: Live, args: Args): Args {
     tracks,
     sections,
     media,
+    ...(p.style === "commentary" ? { chapters: commentaryAudit.outline(p) } : {}),
     speaker_line_counts: speakers,
     subtitles_in_span: subtitles,
     footage_blocks: footage,

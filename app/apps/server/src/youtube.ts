@@ -239,6 +239,7 @@ async function runYtdlp(
   dir: string,
   proxy: string | null,
   progress: (bytes: number, total: number | null, name: string) => void,
+  range: [number, number] | null = null,
 ): Promise<{ path: string | null; stderr: string }> {
   const runtime = runtimeArgs();
   const command = [
@@ -261,6 +262,7 @@ async function runYtdlp(
     proxy === null ? FORMAT : PROXY_FORMAT,
     "--merge-output-format",
     "mp4",
+    ...(range === null ? [] : ["--download-sections", `*${range[0]}-${range[1]}`, "--force-keyframes-at-cuts"]),
     ...ffmpegArgs(),
     ...runtime,
     "-P",
@@ -311,8 +313,29 @@ async function runYtdlp(
       }
     }
   };
-  const [, stderr, code] = await Promise.all([lines(), new Response(child.stderr).text(), child.exited]);
+  const timer = range === null ? null : setTimeout(() => child.kill(), 12 * 60_000);
+  let stderr: string;
+  let code: number;
+  try { [, stderr, code] = await Promise.all([lines(), new Response(child.stderr).text(), child.exited]); }
+  finally { if (timer !== null) clearTimeout(timer); }
   if (code !== 0 || path === null) return { path: null, stderr };
   if (!fs.existsSync(path)) return { path: null, stderr: `${stderr}\nERROR: yt-dlp finished without the file it named` };
   return { path, stderr };
+}
+
+/** Download only a selected stretch, with exact cuts. Never fall back to a
+ * whole stream: visual sourcing must not materialize hours for a few seconds. */
+export async function downloadRange(home: string, id: string, range: [number, number], dir: string, progress: (bytes: number, total: number | null, name: string) => void = () => {}): Promise<Downloaded> {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id) || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0] || range[1] - range[0] > 600) throw new Error("YouTube excerpt needs a valid video and a source range of at most 10 minutes");
+  fs.mkdirSync(dir, { recursive: true });
+  const binary = await ytdlp(home); const proxy = process.env.PROXY_URL?.trim() ?? "";
+  const routes = [null, ...(proxy ? [proxy] : [])];
+  let failure = "";
+  for (const route of routes) {
+    const result = await runYtdlp(binary, `https://www.youtube.com/watch?v=${id}`, dir, route, progress, range);
+    if (result.path !== null) return { path: result.path, name: result.path.slice(dir.length + 1), size: fs.statSync(result.path).size };
+    failure = errorLine(result.stderr);
+    if (!refused(result.stderr)) break;
+  }
+  throw new Error(`YouTube excerpt ${id} ${range[0]}–${range[1]} couldn't be downloaded: ${failure}`);
 }

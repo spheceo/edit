@@ -61,6 +61,8 @@ const PHOTO_FRAME = struct("PhotoFrame", [
   field("width", "f32", 12),
   field("color", rgba, [0.08, 0.08, 0.08, 1]),
   field("shadow", "f32", 0.55),
+  field("radius", "f32", 0, isZero),
+  field("glow", "f32", 0, isZero),
 ]);
 
 const MUTE = struct("Mute", [required("from", "f64"), required("to", "f64")]);
@@ -120,7 +122,7 @@ export const TEXT_STYLE = struct("TextStyle", [
 ]);
 
 export const TEXT_ANIMATION = struct("TextAnimation", [
-  field("preset", enumOf("TextPreset", ["none", "fade", "rise", "pop", "typewriter", "words", "word"]), "none"),
+  field("preset", enumOf("TextPreset", ["none", "fade", "soft", "rise", "pop", "typewriter", "words", "word"]), "none"),
   field("duration", "f32", 12),
   field("stagger", "f32", 1.5),
 ]);
@@ -219,6 +221,7 @@ const VARIANTS: Record<(typeof CLIP_TYPES)[number], Struct> = {
     field("opacity", "f32", 1),
     nested("crop", CROP, cropIsNone),
     optional("frame", { struct: PHOTO_FRAME }),
+    field("blend", enumOf("BlendMode", ["normal", "multiply", "screen"]), "normal", (v) => v === "normal"),
   ]),
   audio: struct("Audio", [
     required("media", "string"),

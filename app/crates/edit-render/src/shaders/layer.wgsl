@@ -14,7 +14,7 @@ struct Layer {
     mode: u32,
     // Box shadow: the Gaussian's sigma in pixels.
     blur: f32,
-    _p1: u32,
+    corner_radius: f32,
     _p2: u32,
     // The part of the texture drawn (x0, y0, x1, y1): a crop. A gradient: clear
     // at x = uv.x, full at x = uv.y (shares of the quad's width).
@@ -66,9 +66,13 @@ fn box_blur(p: vec2f, half: vec2f, sigma: f32) -> f32 {
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
     let texel = textureSampleLevel(tex, samp, in.uv, 0.0);
+    let r = clamp(u.corner_radius, 0.0, min(u.size.x, u.size.y) * 0.5);
+    let q = abs((in.corner - 0.5) * u.size) - (u.size * 0.5 - r);
+    let distance = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - r;
+    let mask = select(1.0, 1.0 - smoothstep(-0.75, 0.75, distance), r > 0.0);
     switch u.mode {
         case 1u: {
-            return vec4f(u.tint.rgb * u.tint.a, u.tint.a) * u.opacity;
+            return vec4f(u.tint.rgb * u.tint.a, u.tint.a) * u.opacity * mask;
         }
         case 2u: {
             let a = min(texel.a * u.tint.a * u.opacity, 1.0);
@@ -96,7 +100,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
             return vec4f(u.tint.rgb * a, a);
         }
         default: {
-            return vec4f(texel.rgb * texel.a, texel.a) * u.opacity;
+            return vec4f(texel.rgb * texel.a, texel.a) * u.opacity * mask;
         }
     }
 }

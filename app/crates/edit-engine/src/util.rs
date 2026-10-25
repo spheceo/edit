@@ -119,7 +119,11 @@ pub fn url_args(path: &Path) -> &'static [&'static str] {
     ];
     if !is_url(path) {
         &[]
-    } else if *FOUND.get_or_init(|| Path::new(SYSTEM).is_file()) {
+    } else if path
+        .to_str()
+        .is_some_and(|text| text.starts_with("https://"))
+        && *FOUND.get_or_init(|| Path::new(SYSTEM).is_file())
+    {
         &[
             "-ca_file",
             SYSTEM,

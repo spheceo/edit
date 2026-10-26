@@ -13,10 +13,18 @@ build that actually restarted. No command is replayed after an ambiguous crash.
 
 The update uses the owner's configured release channel, verifies the existing
 release signature/checksum and refuses an active export, Drive upload or agent
-turn. It cannot start a closed app. Remote agent turns are disabled until a
+turn. If work starts during the download, the restart waits for it to finish.
+The operator endpoint accepts direct loopback CLI connections only; Tailscale,
+proxy and browser requests cannot borrow the host's signed-in admin account.
+Disabling support takes effect locally even when offline, with cloud revocation
+retried later. Signing out closes the authenticated subscription. It cannot
+start a closed app. Remote agent turns are disabled until a
 spending limit is implemented and accepted. The Convex functions and the relay
-support-config route and the Accounts token claim must be deployed before this can work, and the owner needs
-to install the first build containing it by the usual update path.
+support-config route and the Accounts token claim must be deployed before this
+can work, and the owner needs to install the first build containing it by the
+usual update path. Deploy Accounts first and refresh Feedback sessions before
+deploying Convex: the shared deployment now checks the signed `app_id` for both
+Feedback and Edit. Deploy the relay and receiver build after those changes.
 
 `edit support` is a client for an Edit the owner has already shared over
 Tailscale. It creates no listener and does not pair devices, change a Mac's

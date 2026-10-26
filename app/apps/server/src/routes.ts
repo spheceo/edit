@@ -389,18 +389,23 @@ async function updateInstall({ app }: Context): Promise<Response> {
 }
 
 /** Shared by the local update route and an explicitly enabled remote request. */
-export async function installUpdate(app: App) {
-  let uploading = false;
-  try {
-    uploading = seams.drive.uploading();
-  } catch (error) {
-    if (!seams.isUnavailable(error)) throw error;
-  }
-  if (app.exports.running() || uploading) {
+export async function installUpdate(app: App, remote = false) {
+  const workRunning = () => {
+    let uploading = false;
+    try {
+      uploading = seams.drive.uploading();
+    } catch (error) {
+      if (!seams.isUnavailable(error)) throw error;
+    }
+    return app.exports.running() || uploading;
+  };
+  const agentRunning = () => remote && ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() ?? false);
+  if (workRunning()) {
     throw new ApiError(409, "an export or Drive upload is running; update when it's done");
   }
+  if (agentRunning()) throw new ApiError(409, "an agent turn is running; update when it's done");
   try {
-    return await app.updater.install();
+    return await app.updater.install(remote ? () => !workRunning() && !agentRunning() : undefined);
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

@@ -89,6 +89,18 @@ async function checkAvailable(): Promise<void> {
 
 const state: State = { home: null, access: null, expires: 0, person: null, perms: [], admin: false, kept: false, pending: null, device: null, problem: null, refreshing: null, timer: null };
 
+/** Session observers close authenticated connections on sign-out or account changes. */
+const sessionObservers = new Set<() => void>();
+export function onSessionChange(observer: () => void): () => void {
+  sessionObservers.add(observer);
+  return () => sessionObservers.delete(observer);
+}
+function sessionChanged(): void {
+  for (const observer of sessionObservers) {
+    try { observer(); } catch (error) { diag.warn("accounts", diag.messageOf(error)); }
+  }
+}
+
 /** Whether this Edit has a sign-in (signed in, or a kept one being renewed): the cloud is on. */
 export function hasSession(): boolean {
   return state.access !== null || state.kept;
@@ -212,6 +224,7 @@ async function take(home: string, value: Tokens): Promise<void> {
   };
   state.problem = null;
   schedule(home);
+  sessionChanged();
 }
 
 function schedule(home: string): void {
@@ -231,6 +244,7 @@ function forget(problem: string | null): void {
   state.problem = problem;
   if (state.timer !== null) clearTimeout(state.timer);
   state.timer = null;
+  sessionChanged();
 }
 
 /**

@@ -20,11 +20,11 @@ export function nowMs(): number {
  * whole. Synchronous: a project's commit must land before anything else can
  * read or write it.
  */
-export function writeAtomic(path: string, bytes: string | Uint8Array): void {
+export function writeAtomic(path: string, bytes: string | Uint8Array, mode?: number): void {
   const tmp = `${path}.${process.pid}-${nextFileId()}.tmp`;
   let fd: number | null = null;
   try {
-    fd = fs.openSync(tmp, "wx");
+    fd = fs.openSync(tmp, "wx", mode);
     fs.writeFileSync(fd, bytes);
     fs.fsyncSync(fd);
     fs.closeSync(fd);

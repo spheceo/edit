@@ -164,11 +164,11 @@ export class Updater implements UpdaterSeam {
   }
 
   /** Starts installing the newest release; the server restarts into it when done. */
-  async install(): Promise<Status> {
-    return this.start();
+  async install(canRestart?: () => boolean): Promise<Status> {
+    return this.start(canRestart);
   }
 
-  start(): Status {
+  start(canRestart?: () => boolean): Status {
     if (!enabled()) throw new Error("this build doesn't update itself; pull and rebuild");
     if (this.phase !== "idle") return this.snapshot();
     const release = this.latest;
@@ -187,6 +187,9 @@ export class Updater implements UpdaterSeam {
         console.log(`edit: updated to ${release.tag}; restarting`);
         // Let the request that started this (and a status poll) answer first.
         await Bun.sleep(500);
+        // A remote request may have been accepted while idle, then downloaded
+        // while the owner started work. Recheck immediately before exec.
+        while (canRestart && !canRestart()) await Bun.sleep(1000);
         restart(exe);
       } catch (error) {
         const said = diag.messageOf(error);

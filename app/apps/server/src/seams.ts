@@ -117,7 +117,7 @@ export interface Exports {
 /** Self-update. */
 export interface Updater {
   status(): Promise<Json>;
-  install(): Promise<Json>;
+  install(canRestart?: () => boolean): Promise<Json>;
   /** "nightly" or "stable". */
   setChannel(channel: string): Promise<Json>;
 }

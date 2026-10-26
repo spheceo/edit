@@ -12,6 +12,8 @@ export const DEFAULT_BODY_LIMIT = 2 << 20;
 export interface RouteContext<C> {
   app: C;
   request: Request;
+  /** Socket peer, never a forwarded header. Null/absent for in-process calls. */
+  peerAddress?: string | null;
   url: URL;
   /** The pattern that matched ("/api/projects/{id}"). */
   route: string;

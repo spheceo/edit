@@ -139,6 +139,22 @@ test("signing out revokes the refresh token there and forgets it here", async ()
   expect(Object.values(kept())).toEqual([]);
 });
 
+test("session observers see sign-in and sign-out and can unsubscribe", async () => {
+  fs.writeFileSync(join(dir, "keychain.json"), JSON.stringify({}));
+  const owners: (string | null)[] = [];
+  const unsubscribe = accounts.onSessionChange(() => owners.push(accounts.creator()?.sub ?? null));
+  try {
+    const authorize = new URL(accounts.begin(app));
+    challenges.set("observer-code", authorize.searchParams.get("code_challenge")!);
+    await accounts.finish(app, new URLSearchParams({ code: "observer-code", state: authorize.searchParams.get("state")! }));
+    await accounts.signOut(app);
+    expect(owners).toEqual(["person-1", null]);
+    unsubscribe();
+    accounts.resetForTests();
+    expect(owners).toHaveLength(2);
+  } finally { unsubscribe(); }
+});
+
 test("a refusal from the site (not on the list) is said, not signed in", async () => {
   const authorize = new URL(accounts.begin(app));
   const done = await accounts.finish(app, new URLSearchParams({ error: "access_denied", error_description: "Ask an admin to add you.", state: authorize.searchParams.get("state")! }));

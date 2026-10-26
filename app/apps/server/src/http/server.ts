@@ -94,6 +94,7 @@ export async function respond(
         const answer = await match.route.handler({
           app,
           request,
+          peerAddress: server?.requestIP(request)?.address ?? null,
           url,
           route,
           params: match.params,

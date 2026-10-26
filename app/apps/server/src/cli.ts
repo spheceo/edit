@@ -13,6 +13,7 @@ import { fail, start } from "./serve.ts";
 import * as tools from "./tools.ts";
 import { runCli as updateCli } from "./update.ts";
 import { BUILD } from "./version.ts";
+import { runSupport } from "./support_cli.ts";
 import { adoptShellEnv, portTaken, runWindow, windowHelper } from "./window.ts";
 
 export const DEFAULT_PORT = 7700;
@@ -40,6 +41,8 @@ USAGE
       now, through the running Edit (it also happens by itself after saves).
   edit update
       Install the newest release (the editor also offers it, one click).
+  edit support <command> --url https://<device>.<tailnet>.ts.net
+      Inspect or help an owner's already-shared Edit; \`edit support help\` says more.
   edit --version
 
 ENV
@@ -146,6 +149,10 @@ export async function main(args: string[]): Promise<void> {
       await updateCli(env !== undefined ? env : defaultHome());
       return;
     }
+    case "support":
+      try { console.log(await runSupport(args.slice(1))); }
+      catch (error) { fail(diag.messageOf(error)); }
+      return;
     case "--version":
     case "-V":
     case "version":

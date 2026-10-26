@@ -2,6 +2,8 @@
 // smoothing, stills and transcripts.
 
 import * as fs from "node:fs";
+import * as os from "node:os";
+import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
@@ -431,4 +433,15 @@ test.skipIf(ffmpeg === null)("a still becomes 30 s of footage, made once", async
   } finally {
     cleanup();
   }
+});
+
+test("a cut found at two frames a second is found again to the frame", async () => {
+  const dir = fs.mkdtempSync(join(os.tmpdir(), "exact-cut-"));
+  const file = join(dir, "cut.mp4");
+  // A cut at 1.3667 s (41 frames of one picture, then another).
+  const made = Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=1.3667", "-f", "lavfi", "-i", "smptebars=size=320x240:rate=30:duration=2",
+    "-filter_complex", "[0][1]concat=n=2:v=1[v]", "-map", "[v]", "-c:v", "libx264", file]);
+  expect(made.exitCode).toBe(0);
+  expect(Math.abs((await broll.exactCut(file, 1.5)) - 1.3667)).toBeLessThan(0.04);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -1248,6 +1248,32 @@ export function soundEffectsLong(project: Project): Json[] {
   return out;
 }
 
+/**
+ * A short, sharp sound played from the top of its file when its hit comes
+ * later (`sfx_late_hit`): the Canon shutter's two focus beeps and 0.37 s of
+ * near-silence played first, so the click landed 11 frames after the flash
+ * it was for (the team, N3on v1: "It has two peaks at the start, which I
+ * think is the focusing, and then the shutter begins"). A whoosh or riser
+ * builds up to its hit on purpose and is left alone.
+ */
+export function soundEffectsLateHit(project: Project): Json[] {
+  const fps = project.settings.fps;
+  const out: Json[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || clip.volume_db <= -40 || trackOf(project, clip.track)?.muted === true) continue;
+    const media = project.media.find((one) => one.id === clip.media);
+    if (media === undefined || media.kind !== "audio" || !/shutter|camera|click|impact|\bhit\b|boom|thud|slam|stinger/iu.test(`${clip.name ?? ""} ${media.name}`) || /whoosh|swoosh|riser|build/iu.test(media.name)) continue;
+    const hit = (media.markers ?? []).find((one) => one.name === sfx.HIT)?.time;
+    if (hit === undefined || hit - clip.source_in <= LATE_HIT) continue;
+    const late = Math.round(((hit - clip.source_in) / clip.speed) * fps);
+    out.push({ kind: "sfx_late_hit", clip: clip.id, start: clip.start, frames_late: late,
+      fix: `its hit lands ${late} frames after the clip starts, after a lead-in nobody wants: set source_in to ${round((hit - 0.1) * 100) / 100} and start it ${Math.round((0.1 / clip.speed) * fps)} frames before the moment it's for` });
+  }
+  return out;
+}
+/** Seconds of a sharp sound's file before its hit that may play first. */
+const LATE_HIT = 0.2;
+
 /** What an arrest sounds like in bodycam footage. */
 const ARREST = /\b(you'?re|you are) (now )?under arrest\b|\bunder arrest\b|\bcuff (you|her|him)\b|\bhands behind your back\b/iu;
 
@@ -1301,6 +1327,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...hooks.offScript(project, heard),
     ...hooks.cutMidWord(project, heard),
     ...soundEffectsLong(project),
+    ...soundEffectsLateHit(project),
     ...(markBlurs.offShot(project) as Json[]),
   ] : [
     ...hooks.calloutTiming(project, heard),
@@ -1320,6 +1347,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...viewersOverCuts(project),
     ...(markBlurs.offShot(project) as Json[]),
     ...soundEffectsLong(project),
+    ...soundEffectsLateHit(project),
     ...(typing.typingSoundsOff(project) as Json[]),
     ...(pointerIssues(project) as Json[]),
     // The house rule (one_line.ts): what's left over from before it, or couldn't be split.
@@ -1355,13 +1383,13 @@ export function audited(app: App, project: Project, rev: number | null): Args {
 const FIXABLE = [
   "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_static_source", "commentary_repeated_range", "commentary_text_heavy",
   "commentary_flash", "commentary_short_card", "commentary_source_overuse", "commentary_graphics_monotony",
-  "commentary_punch_overuse", "commentary_label_overuse", "commentary_sound_without_picture",
+  "commentary_punch_overuse", "commentary_label_overuse", "commentary_sound_without_picture", "commentary_leak_overuse",
   "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
-  "blur_off_shot", "sfx_long", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "viewer_over_cut",
+  "blur_off_shot", "sfx_long", "sfx_late_hit", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "viewer_over_cut",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */

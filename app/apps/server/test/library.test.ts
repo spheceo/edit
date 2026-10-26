@@ -179,8 +179,9 @@ test("add_from_library downloads once, marks a short effect's hit and places it 
     expect(media.markers?.[0]?.time).toBe(0.25);
     const clip = saved.clips.find((item) => item.type === "audio") as AudioClip;
     expect(clip.volume_db).toBe(-2);
-    // Its hit (0.25 s in) on 2 s.
-    expect(clip.start).toBe(Math.round((2 - 0.25) * 30));
+    // Its hit (0.25 s in) on 2 s, playing from just before it (0.1 s), not the file's quiet start.
+    expect(clip.start).toBe(Math.round((2 - 0.1) * 30));
+    expect(clip.source_in).toBeCloseTo(0.15);
     const downloads = mock.calls("/www.googleapis.com/drive/v3/files/boom").length;
     await library.importSound(app, project, "boom", "agent");
     expect(mock.calls("/www.googleapis.com/drive/v3/files/boom").length).toBe(downloads);

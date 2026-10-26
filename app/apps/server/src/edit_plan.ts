@@ -498,8 +498,9 @@ export function setKeyframes(clip: Clip, keyframes: Record<string, Keyframe[]>):
  * the audit's repetitive_transitions leaves them alone.
  */
 function transition(project: Project, args: Args): Json {
+  if (str(args.kind) === "dissolve") return dissolve(project, args);
   const kind = str(args.kind);
-  if (kind === null) throw new Error("transition needs kind: drop, flash, red_flash, dip, open, light_leak or burn");
+  if (kind === null) throw new Error("transition needs kind: drop, flash, red_flash, dip, open, light_leak, burn or dissolve");
   const at = int(args.at);
   const cut = () => {
     if (at === null) throw new Error(`a ${kind} needs at (the cut's frame)`);
@@ -586,6 +587,36 @@ function transition(project: Project, args: Args): Json {
   const params = Object.keys(keys).sort(compareKeys);
   if (params.length > 0) fields.keyframes = Object.fromEntries(params.map((param) => [param, keys[param]!]));
   project.clips.push(clipOrSay(fields, `${kind}: `));
+  return id;
+}
+
+/**
+ * A clean cross-dissolve into the shot that starts at `at` (the team, N3on
+ * v1: "either a clean cut without the morphing between, or we put a clean
+ * cross-dissolve"): `frames` (12) of the incoming shot's lead-in, from just
+ * before its first frame, fade in over the outgoing one, then the incoming
+ * clip carries on from the same frame, so nothing else moves. Picture only;
+ * the incoming shot needs that much footage before its in-point.
+ */
+function dissolve(project: Project, args: Args): Json {
+  const at = int(args.at);
+  if (at === null) throw new Error("a dissolve needs at (the cut's frame)");
+  const fps = project.settings.fps;
+  const index = (track: string) => project.tracks.findIndex((one) => one.id === track);
+  const incoming = project.clips.filter((clip) => clip.type === "video" && clip.start === at && trackOf(project, clip.track)?.hidden !== true)
+    .sort((a, b) => index(b.track) - index(a.track))[0];
+  if (incoming === undefined || incoming.type !== "video") throw new Error(`no shot starts at frame ${at} to dissolve into`);
+  const outgoing = project.clips.some((clip) => clip.type === "video" && clip.id !== incoming.id && clip.start < at && clip.start + clip.duration >= at);
+  if (!outgoing) throw new Error(`nothing plays before frame ${at} to dissolve from`);
+  // As long as asked, as far as the footage before its in-point allows.
+  const room = Math.floor((incoming.source_in / incoming.speed) * fps);
+  const frames = Math.min(int(args.frames) ?? 12, room, at);
+  if (frames < 4) throw new Error(`the shot at ${at} starts at its footage's first frame: no lead-in to dissolve with (trim its in-point later, or cut)`);
+  const id = freshId(project, "c");
+  project.clips.push(clipOrSay({ id, type: "video", name: `Dissolve · ${incoming.id}`, media: incoming.media, track: addTrack(project, "video"),
+    start: at - frames, duration: frames, source_in: incoming.source_in - (frames / fps) * incoming.speed, speed: incoming.speed,
+    transform: incoming.transform, opacity: incoming.opacity, ...(incoming.crop ? { crop: incoming.crop } : {}), ...(incoming.frame ? { frame: incoming.frame } : {}),
+    fade_in: frames, fade_out: 0 }, "dissolve: "));
   return id;
 }
 

@@ -60,6 +60,9 @@ async function listLibrary({ app, args }: ToolCall): Promise<Content[]> {
   return text(out);
 }
 
+/** Sounds whose moment is one sharp hit: nothing before it should play. */
+const SHARP = /shutter|camera|click|impact|\bhit\b|boom|thud|slam|stinger/iu;
+
 async function addFromLibrary({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const soundId = typeof args.id === "string" ? args.id : null;
   if (soundId === null) throw new Error("id is required");
@@ -78,6 +81,11 @@ async function addFromLibrary({ app, args, projectId }: ToolCall): Promise<Conte
       seconds = seams.sfx.HIT_PLAY;
       lead ??= Math.min(hit, (seams.sfx.HIT_PLAY * 2) / 3);
       if (fadeOut === 0.0) fadeOut = 0.25;
+    } else if (seconds === null && sound.kind === "sfx" && media !== undefined && hit !== undefined && hit > 0.2 && SHARP.test(sound.name) && !/whoosh|swoosh|riser|build/iu.test(sound.name)) {
+      // A short sharp sound whose hit comes late (a camera's focus beeps
+      // before its shutter) plays from just before the hit, on the cut.
+      lead ??= 0.1;
+      seconds = media.duration - (hit - lead);
     }
   }
   let volumeDb = num(args.volume_db) ?? 0.0;

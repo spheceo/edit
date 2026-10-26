@@ -24,6 +24,7 @@ import { clipMedia, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts"
 import * as relay from "./relay.ts";
 import { compareStrings, display, fixed, round, serdeParse, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
+import * as seats from "./seats.ts";
 import { stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
 import type { Transcript } from "./transcribe.ts";
@@ -298,6 +299,26 @@ function backfillSoon(app: App, projectId: string): void {
  * interpolation, like After Effects' pixel-motion frame blending), and the
  * clip plays that at normal speed. Same timing, no stutter.
  */
+/**
+ * A cut found at two frames a second (`seats.cutsOf`), to the frame: the
+ * biggest scene change FFmpeg sees within half a second of it, or the rough
+ * time when it sees none.
+ */
+export async function exactCut(source: string, rough: number): Promise<number> {
+  const from = Math.max(rough - 0.6, 0);
+  const remote = tools.isUrl(source) ? ["-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source)] : [];
+  const found = await ffmpeg(["-hide_banner", "-loglevel", "info", ...remote, "-ss", fixed(from, 3), "-t", "1.2", "-i", source, "-an",
+    "-vf", "scale=160:-2,select='gte(scene,0.25)',metadata=print", "-f", "null", "-"], 30_000, true);
+  let best: [number, number] | null = null;
+  let at: number | null = null;
+  for (const line of found.stderr.split("\n")) {
+    const time = /pts_time:([\d.]+)/u.exec(line); if (time) at = Number(time[1]);
+    const score = /lavfi\.scene_score=([\d.]+)/u.exec(line);
+    if (score && at !== null && (best === null || Number(score[1]) > best[1])) best = [from + at, Number(score[1])];
+  }
+  return best === null ? rough : best[0];
+}
+
 export async function smoothSlowMotion(app: App, projectId: string, clipId: string): Promise<Json> {
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
@@ -314,6 +335,22 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
   // Interpolation loses a few frames at the ends: render a little more than
   // the clip plays, so the result always covers it at 1×.
   const length = (clip.duration / fps + 0.25) * speed;
+  // A cut in the footage inside that stretch: interpolating across it morphs
+  // one scene into the next (the team, N3on v1: "with how we're slowing
+  // footage down, it kind of causes this weird morph between clips"). A clip
+  // played across one is refused; one ending at a cut renders up to it and
+  // holds its last frame for the extra.
+  let cuts = seats.cachedCuts(source.path);
+  if (cuts === null) {
+    try { cuts = await seats.cutsOf(source.path); } catch { cuts = []; }
+  }
+  // Those are found at two frames a second: the ones near this stretch to the frame.
+  cuts = await Promise.all(cuts.filter((cut) => cut > clip.source_in - 0.6 && cut < clip.source_in + length + 0.6).map((cut) => exactCut(source.path, cut)));
+  const played = clip.source_in + (clip.duration / fps) * speed;
+  const crossed = cuts.find((cut) => cut > clip.source_in + 0.02 && cut < played - 0.02);
+  if (crossed !== undefined) throw new Error(`${clipId} plays across a cut in its footage ${fixed(crossed - clip.source_in, 2)} s in: split it at the cut (or trim it to one side) before smoothing; smoothing across a cut morphs one scene into the next`);
+  const tail = cuts.find((cut) => cut >= played - 0.02 && cut < clip.source_in + length);
+  const stop = tail === undefined ? length : Math.max(tail - clip.source_in - 0.04, 0.1);
   const dir = join(app.store.uploadsDir(projectId), "smooth");
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -332,6 +369,8 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
     fixed(length, 4),
     fixed(speed, 4),
     display(fps),
+    // Held at a cut: another render than one interpolated into the next scene.
+    ...(tail === undefined ? [] : [`held-at-${fixed(stop, 4)}`]),
   ]);
   const out = join(dir, `${stem}-${fixed(speed, 2)}x-${key}.mp4`);
   if (!isFile(out)) {
@@ -358,13 +397,15 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
         // So the stretch is cut to a local file first, and removed after.
         let input = source.path;
         let inputIn = clip.source_in;
-        if (tools.isUrl(source.path)) {
+        if (tools.isUrl(source.path) || tail !== undefined) {
           const cutTo = join(dir, `${stem}-${key}.source.mp4`);
           local = cutTo;
+          const remote = tools.isUrl(source.path) ? ["-protocol_whitelist", tools.protocols(source.path), ...tools.urlArgs(source.path)] : [];
+          const hold = tail === undefined ? [] : ["-vf", `tpad=stop_mode=clone:stop_duration=${fixed(length - stop + 0.1, 3)}`];
           const cut = await diag.timeOnAsync("broll", "smooth: fetch stretch", source.name, () =>
             ffmpeg(
-              ["-hide_banner", "-loglevel", "error", "-y", "-protocol_whitelist", tools.protocols(source.path), ...tools.urlArgs(source.path),
-                "-ss", fixed(clip.source_in, 4), "-t", fixed(length, 4), "-i", source.path,
+              ["-hide_banner", "-loglevel", "error", "-y", ...remote,
+                "-ss", fixed(clip.source_in, 4), "-t", fixed(stop, 4), "-i", source.path, ...hold,
                 "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-threads", "2", cutTo],
               timing.smoothLimitMs,
               true,

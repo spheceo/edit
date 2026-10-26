@@ -177,6 +177,10 @@ function framed(p: Project, a: { media: string; source_in?: number; start: numbe
     frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: a.radius / scale }, transform: { x: a.x, y: a.y, scale },
     keyframes: { x: arrival(from, a.x, settle), scale: [key(0, scale), key(d - 1, scale * 1.02)] } });
 }
+/** A region cut from a screenshot (still_frame crop): a video's frame cut that way already shows its own length. */
+function screenshotCut(p: Project, id: unknown): boolean {
+  return typeof id === "string" && / \d+-\d+-\d+x\d+\.png$/u.test(mediaOf(p, id)?.name ?? "");
+}
 function picture(p: Project, id: unknown, what: string): NonNullable<ReturnType<typeof mediaOf>> {
   const m = typeof id === "string" ? mediaOf(p, id) : undefined;
   if (m === undefined || m.kind === "audio") throw new Error(`${what} needs picture media`);
@@ -208,7 +212,8 @@ export function youtube(p: Project, a: Args): Args {
   const left = -(thumbW + gap + textW) / 2; const cx = left + thumbW / 2; const col = left + thumbW + gap; const cy = number(a, "y", -h * 0.06);
   const thumb = framed(p, { media: m.id, source_in: number(a, "source_in", 0), start, end, x: cx, y: cy, width: thumbW, height: thumbH, name: "Janitor · YouTube frame", radius: 22 * k });
   made.push(thumb);
-  if (typeof a.duration === "string" && a.duration.trim()) {
+  // "On these image thumbnails, there already is a time, and now we're adding the time ourselves."
+  if (typeof a.duration === "string" && a.duration.trim() && !screenshotCut(p, a.media)) {
     const size = 26 * k; const width = measured(a.duration, size, 600);
     made.push(push(p, { type: "text", name: "Janitor · YouTube length", text: a.duration, start: start + 10, duration: d - 10, fade_in: 6, fade_out: 5,
       style: { font: UI, weight: 600, size, color: [1, 1, 1, 1], tracking: 0, line_height: 1.2, glow: { enabled: false }, background: { color: [0, 0, 0, 1], opacity: 0.8, pad_x: 9 * k, pad_y: 5 * k } },
@@ -243,7 +248,7 @@ export function youtubeList(p: Project, a: Args): Args {
   laid.forEach(({ one, lines }, i) => {
     const at = start + 6 * i; const cy = top + rowH * i + rowH / 2; const cx = left + thumbW / 2;
     made.push(framed(p, { media: one.media as string, source_in: typeof one.source_in === "number" ? one.source_in : 0, start: at, end, x: cx, y: cy, width: thumbW, height: thumbH, name: "Janitor · YouTube frame", radius: 18 * k }));
-    if (typeof one.duration === "string" && one.duration.trim()) {
+    if (typeof one.duration === "string" && one.duration.trim() && !screenshotCut(p, one.media)) {
       const size = 22 * k; const width = measured(one.duration, size, 600);
       made.push(push(p, { type: "text", name: "Janitor · YouTube length", text: one.duration, start: at + 8, duration: end - at - 8, fade_in: 6, fade_out: 5,
         style: { font: UI, weight: 600, size, color: [1, 1, 1, 1], tracking: 0, line_height: 1.2, glow: { enabled: false }, background: { color: [0, 0, 0, 1], opacity: 0.8, pad_x: 8 * k, pad_y: 4 * k } },

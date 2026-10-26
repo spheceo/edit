@@ -716,3 +716,17 @@ test("an actual-image label over a window is flagged; over a full-frame picture 
   ]);
   expect(kinds(p, "actual_label_in_window").map((issue) => issue.text)).toEqual(["(actual image)"]);
 });
+
+test("a dissolve fades the incoming shot's lead-in over the outgoing one, and the shot carries on from the same frame", () => {
+  const p = project("plan");
+  p.media.push(media({ id: "a", name: "A", path: "/a.mp4", kind: "video", duration: 60, width: 1920, height: 1080 }), media({ id: "b", name: "B", path: "/b.mp4", kind: "video", duration: 60, width: 1920, height: 1080 }));
+  apply(p, [
+    { op: "add", clip: { type: "video", media: "a", track: "v1", start: 0, duration: 100, source_in: 5 } },
+    { op: "add", clip: { id: "in", type: "video", media: "b", track: "v1", start: 100, duration: 100, source_in: 10, speed: 0.8 } },
+    { op: "transition", kind: "dissolve", at: 100 },
+  ]);
+  const lead = p.clips.find((c) => (c.name ?? "").startsWith("Dissolve"))!;
+  expect(lead).toMatchObject({ start: 88, duration: 12, fade_in: 12, media: "b" });
+  expect((lead as VideoClip).source_in).toBeCloseTo(10 - (12 / 30) * 0.8);
+  expect(() => apply(p, [{ op: "transition", kind: "dissolve", at: 0 }])).toThrow();
+});

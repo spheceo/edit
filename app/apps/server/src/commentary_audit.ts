@@ -104,7 +104,7 @@ function sourceOf(p: Project, media: string): string {
 /** The picture on top from cut to cut: each run is one shot as the viewer sees it (a card over footage is the card). */
 export function shots(p: Project, live: Clip[] = p.clips.filter((c) => !trackOf(p, c.track)?.hidden)): { id: string; from: number; to: number }[] {
   const index = new Map(p.tracks.map((t, i) => [t.id, i]));
-  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur/u.test(c.name ?? "")) || c.type === "solid");
+  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve/u.test(c.name ?? "")) || c.type === "solid");
   const cuts = [...new Set(pictures.flatMap((c) => [c.start, clipEnd(c)]))].sort((a, b) => a - b);
   const runs: { id: string; from: number; to: number }[] = [];
   for (let i = 0; i + 1 < cuts.length; i++) {
@@ -124,6 +124,8 @@ export const PUNCH_WINDOW = 60;
 export const BROLL_PUNCHES = 2;
 /** Two corner labels closer than this: the label is a rare comic beat, not the emphasis style. */
 export const LABEL_GAP = 180;
+/** Two light leaks closer than this. */
+export const LEAK_GAP = 90;
 
 /** The team's N3on v1 notes that a structural check can see: flashes, unreadable cards, recycled footage and recycled graphics. */
 function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
@@ -167,6 +169,10 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
   const labels = live.filter((c) => c.name === "Janitor · corner label").sort((a, b) => a.start - b.start);
   for (let i = 1; i < labels.length; i++) if (labels[i]!.start - labels[i - 1]!.start < LABEL_GAP * fps) out.push({ kind: "commentary_label_overuse", clip: labels[i]!.id, start: labels[i]!.start,
     fix: "a corner label is a rare comic beat stating the obvious; big emphasis is commentary_text in the middle (\"have the sort of drop-shadow big text be in the middle instead\")" });
+  // "We are not going to have light leaks for most of the video": a few, on the biggest turns.
+  const leaks = live.filter((c) => c.name === "Janitor · light leak" || c.name === "Light leak").sort((a, b) => a.start - b.start);
+  for (let i = 1; i < leaks.length; i++) if (leaks[i]!.start - leaks[i - 1]!.start < LEAK_GAP * fps) out.push({ kind: "commentary_leak_overuse", clip: leaks[i]!.id, start: leaks[i]!.start,
+    fix: "light leaks are rare, for a chapter's start or the story's biggest turn; cut here, or a clean dissolve (transition kind dissolve)" });
   // "if we're having camera shutter effects without any sort of flash on screen, that is weird."
   const flashes = live.filter((c) => c.type !== "audio" && /flash|leak|burn|card|photo|board|shutter|post|YouTube frame/iu.test(c.name ?? ""));
   for (const c of live) {

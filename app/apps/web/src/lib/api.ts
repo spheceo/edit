@@ -208,7 +208,7 @@ export const api = {
     request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/review/share`, path === undefined ? {} : { path }),
   /** Approves the latest shared version: the review closes and the other versions' files (and their exports here) are deleted. */
   /** Share: exports the whole edit, then puts it on the project's review link (a new version after the first). */
-  shareProject: (id: string, options: ExportOptions) => request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/share`, { options }),
+  shareProject: (id: string, options: ExportOptions, replace = false) => request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/share`, { options, replace }),
   /** A reset the agent is asking about (`reset_edit`), and the user's answer to it. */
   resetAsked: (id: string) => request<{ pending: { asked_ms: number } | null }>("GET", `/api/projects/${id}/reset`),
   answerReset: (id: string, accept: boolean) => request<{ answered: boolean }>("POST", `/api/projects/${id}/reset`, { accept }),

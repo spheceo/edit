@@ -158,7 +158,7 @@ export function shareable<T extends { path: string; whole: boolean; start?: numb
   return path === null ? usable.find((one) => one.whole) : usable.find((one) => one.path === path && (one.whole || one.start === 0));
 }
 
-export async function share(app: App, projectId: string, path: string | null, replace = false): Promise<{ url: string; version: number }> {
+export async function share(app: App, projectId: string, path: string | null, replace = false, compress = false): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (the relay token)");
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
@@ -214,6 +214,21 @@ export async function share(app: App, projectId: string, path: string | null, re
       diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);
       return { url: shared.url, version: latest.n };
     }
+    if (compress) {
+      // Every revision so far becomes this one, v1, on the same link: the
+      // other versions go and their notes move onto v1 (Repack's reviews:compress).
+      sharing.set(projectId, "making it v1");
+      const durationMs = Math.round((chosen.frames / fps) * 1000);
+      const answer = (await cloud.mutation("reviews:compress", {
+        sourceId: projectId, key: `${prefix}/video.mp4`, meta: { fps, durationMs, timeline, fullKey, posterKey: `${prefix}/poster.jpg`, ...extra }, by: app.machine,
+      })) as { reviewId: string; url: string; version: number; removed: number[] };
+      update(home, (state) => {
+        state.shared[projectId] = { reviewId: answer.reviewId, url: answer.url, versions: [{ n: 1, timeline, path: chosen.path, fps, durationMs, clips }] };
+      });
+      fs.rmSync(copy, { force: true });
+      diag.info("review", `${live.project.name}: compressed to v1 (removed v${answer.removed.join(", v")}) at ${answer.url}`);
+      return { url: answer.url, version: 1 };
+    }
     sharing.set(projectId, "publishing");
     const durationMs = Math.round((chosen.frames / fps) * 1000);
     const answer = (await cloud.mutation("reviews:publish", {
@@ -245,7 +260,13 @@ export async function share(app: App, projectId: string, path: string | null, re
  * first time and a new version under it after. It runs on with nobody
  * watching; the review's `sharing` says how it's going.
  */
-export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>): Promise<{ url: string; version: number }> {
+/**
+ * `replace` (the person sharing asks for it, never the agent: a revision put
+ * over a version by mistake loses what the team saw) puts the export over the
+ * latest version instead of adding one: "new revisions replace the one version
+ * they are on… everything up till now on v1".
+ */
+export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>, replace = false): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
   // Remembered for the share after a Ready for changes: the house settings, not this span or its chapters.
@@ -291,7 +312,7 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
   } finally {
     sharing.delete(projectId);
   }
-  return share(app, projectId, path);
+  return share(app, projectId, path, replace);
 }
 
 /**
@@ -1290,10 +1311,23 @@ export function routes(router: Router<App>): void {
     const id = context.params.id ?? "";
     if (context.app.store.get(id) === null) throw new ApiError(404, "no such project");
     const options = typeof given?.options === "object" && given.options !== null && !Array.isArray(given.options) ? (given.options as Partial<ExportOptions>) : {};
-    const started = exportAndShare(context.app, id, options);
+    const started = exportAndShare(context.app, id, options, given?.replace === true);
     started.catch((error: unknown) => diag.warn("review", `sharing ${id}: ${diag.messageOf(error)}`));
     // Refused at once (already sharing, no cloud) says so; else it runs on.
     const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 300))]).catch((error: unknown) => {
+      throw new ApiError(400, diag.messageOf(error));
+    });
+    return sorted(first === null ? { started: true } : first.done);
+  });
+  // The person sharing (never the agent): the newest export of the opening or
+  // whole edit becomes the review's only version, v1, with every note kept.
+  router.post("/api/projects/{id}/review/compress", async (context) => {
+    const given = (await readJson<unknown>(context).catch(() => ({}))) as Record<string, unknown>;
+    const id = context.params.id ?? "";
+    const path = typeof given?.path === "string" ? given.path : null;
+    const started = share(context.app, id, path, false, true);
+    started.catch((error: unknown) => diag.warn("review", `compressing ${id}: ${diag.messageOf(error)}`));
+    const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))]).catch((error: unknown) => {
       throw new ApiError(400, diag.messageOf(error));
     });
     return sorted(first === null ? { started: true } : first.done);

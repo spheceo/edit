@@ -26,6 +26,8 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [starting, setStarting] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  // Put this revision over the latest version (same number, same link) instead of adding one.
+  const [replace, setReplace] = useState(false);
   const sections = preview.sections;
   const chapters = useMemo(() => (project ? scriptChapters(project, sections) : []), [project, sections]);
   const id = project?.id ?? "";
@@ -81,7 +83,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       const span: [number, number] = [0, duration];
       const embedded = chaptersInSpan(chapters, span, rate(project.settings));
       const options: ExportOptions = { ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [] };
-      await api.shareProject(project.id, options);
+      await api.shareProject(project.id, options, replace && latest !== null);
       setReview(await api.review(project.id));
     } catch (error) {
       setProblem((error as Error).message);
@@ -168,11 +170,17 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
               </span>
             )}
           </div>
+          {link && latest !== null && (
+            <label className="flex items-center gap-1.5 text-[12px] text-muted" title={`Puts this export over v${latest}: same number, same link, instead of a new version`}>
+              <input type="checkbox" checked={replace} disabled={busy} onChange={(event) => setReplace(event.target.checked)} />
+              Replace v{latest}
+            </label>
+          )}
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
           <Button variant="primary" disabled={busy || projectDuration(project) <= 0} onClick={() => void share()}>
-            {busy ? "Sharing…" : link && latest !== null ? `Share v${latest + 1}` : "Share"}
+            {busy ? "Sharing…" : link && latest !== null ? (replace ? `Replace v${latest}` : `Share v${latest + 1}`) : "Share"}
           </Button>
         </div>
       </div>

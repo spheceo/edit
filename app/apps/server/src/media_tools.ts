@@ -439,6 +439,15 @@ function agentChatRoute(context: RouteContext<App>): Response {
   return sortedJson(seams.agentPanel(context.app).chat(id));
 }
 
+async function agentRetryClaudeRoute(context: RouteContext<App>): Promise<Response> {
+  const panel = seams.agentPanel(context.app);
+  if (!panel.retryClaude) throw bad("Claude recovery is not available");
+  const given = await body(context, "ClaudeRetry", ["user"]);
+  try {
+    return sortedJson({ ok: true, resumed: await panel.retryClaude(context.params.id ?? "", given.user!) });
+  } catch (error) { failed(error); }
+}
+
 async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
   const { app } = context;
   const id = context.params.id ?? "";
@@ -510,6 +519,7 @@ export function routes(router: Router<App>): void {
   router.post("/api/agent/provider", agentProviderRoute);
   router.get("/api/projects/{id}/agent", agentChatRoute);
   router.post("/api/projects/{id}/agent", agentSendRoute);
+  router.post("/api/projects/{id}/agent/retry-claude", agentRetryClaudeRoute);
   router.post("/api/projects/{id}/agent/stop", agentStopRoute);
   router.post("/api/projects/{id}/agent/reset", agentResetRoute);
   router.get("/api/maps/{token}", mapPageRoute, { bodyLimit: MAP_LIMIT });

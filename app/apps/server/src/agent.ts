@@ -78,6 +78,8 @@ export interface Chat {
   heard: number;
   /** Edit ended the running turn itself (stopped, stalled, quitting): a Codex turn id arriving after is interrupted. */
   dropped: boolean;
+  /** A message already resumed or explicitly cancelled: never adopt it again from old history. */
+  authRecoveryUser: string | null;
 }
 
 export interface Model {
@@ -110,6 +112,7 @@ function freshChat(): Chat {
     on: null,
     heard: 0,
     dropped: false,
+    authRecoveryUser: null,
   };
 }
 
@@ -134,6 +137,10 @@ function entryJson(item: Entry): Record<string, unknown> {
   out.at = item.at;
   out.updated = item.updated;
   return out;
+}
+
+function authFailure(item: Entry): boolean {
+  return item.kind === "error" && (claude.signInProblem(item.text) || item.text === claude.SIGN_IN_AGAIN || /^Claude (needs to sign in again|still rejected its sign-in)/u.test(item.text));
 }
 
 /** A `json!` value as Rust sent it out: keys sorted. */
@@ -362,13 +369,12 @@ export class Agents implements seams.AgentPanel {
   setProvider(provider: Provider): void {
     this.chosen = provider;
     this.ready = null;
-    if (provider !== "claude") { this.authPending.clear(); this.saveAuthPending(); }
+    if (provider !== "claude") { this.cancelClaudeRetries(); }
   }
 
   claudeSetup(action?: SupportAction | "cancel"): SupportStatus {
     if (action === "cancel") {
-      this.authPending.clear();
-      this.saveAuthPending();
+      this.cancelClaudeRetries();
       return this.claudeSupport.cancel();
     }
     return action ? this.claudeSupport.start(action) : this.claudeSupport.status();
@@ -377,6 +383,46 @@ export class Agents implements seams.AgentPanel {
   private saveAuthPending(): void {
     try { writeAtomic(join(this.dir, "claude-pending.json"), JSON.stringify([...this.authPending])); }
     catch (error) { diag.warn("claude", `saving the waiting message: ${diag.messageOf(error)}`); }
+  }
+
+  private cancelClaudeRetries(): void {
+    for (const project of new Set([...this.chats.keys(), ...this.authPending.keys()])) {
+      const chat = this.withChat(project);
+      chat.authRecoveryUser = chat.entries.findLast((item) => item.kind === "user")?.id ?? null;
+      this.save(project);
+    }
+    this.authPending.clear();
+    this.saveAuthPending();
+  }
+
+  /** A pre-nightly-21 failure has no waiting-message receipt. Only the open
+   * conversation may adopt it, after verification newer than that failure. */
+  private legacyClaudeRetry(project: string): string | null {
+    const chat = this.withChat(project);
+    const verified = this.claudeSupport.status();
+    const last = chat.entries.at(-1);
+    const user = chat.entries.findLast((item) => item.kind === "user");
+    if (this.chosen !== "claude" || chat.provider !== "claude" || chat.running || chat.halted || this.authPending.has(project)) return null;
+    if (!last || !user || chat.authRecoveryUser === user.id || !authFailure(last) || last.status === "done") return null;
+    if (verified.phase !== "ready" || verified.checkedAt === null || last.updated > verified.checkedAt) return null;
+    return user.id;
+  }
+
+  /** POST from the open conversation only. The expected user id and saved
+   * receipt make concurrent refreshes and repeated requests harmless. */
+  async retryClaude(project: string, userId: string): Promise<boolean> {
+    if (this.store.get(project) === null) throw new Error("no such project");
+    await this.store.mayWrite(project);
+    if (this.legacyClaudeRetry(project) !== userId) return false;
+    const chat = this.withChat(project);
+    const user = chat.entries.find((item) => item.id === userId)!;
+    const after = chat.entries.slice(chat.entries.indexOf(user) + 1);
+    chat.authRecoveryUser = userId;
+    this.save(project);
+    this.authPending.set(project, { user: userId, text: user.text, model: chat.model, effort: chat.effort, continued: after.some((item) => item.kind === "tool"), retried: false });
+    this.saveAuthPending();
+    await this.resumeAfterClaudeLogin();
+    return true;
   }
 
   private waitForClaudeLogin(project: string, generation: number, text: string, continued: boolean): boolean {
@@ -410,6 +456,12 @@ export class Agents implements seams.AgentPanel {
         await this.store.mayWrite(project);
         if (this.withChat(project) !== chat || chat.halted || chat.running || chat.entries.findLast((item) => item.kind === "user")?.id !== pending.user) continue;
         this.authRetried.add(project);
+        chat.authRecoveryUser = pending.user;
+        const userAt = chat.entries.findIndex((item) => item.id === pending.user);
+        for (const item of chat.entries.slice(userAt + 1)) if (authFailure(item) && item.status !== "done") {
+          this.upsert(project, { ...item, status: "done", detail: item.detail ?? item.text, text: "Claude sign-in restored. Continuing your message." });
+        }
+        this.save(project);
         chat.model = pending.model;
         chat.effort = pending.effort;
         const prompt = pending.continued ? `(Edit, automatically) Claude's sign-in was renewed after this turn stopped. Continue the user's request below. Read get_edit_context first and check what is already done before making changes; do not repeat completed work.\n\n${pending.text}` : pending.text;
@@ -627,7 +679,7 @@ export class Agents implements seams.AgentPanel {
 
   private save(project: string): void {
     const chat = this.withChat(project);
-    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, entries: chat.entries.map(entryJson) };
+    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, entries: chat.entries.map(entryJson) };
     try {
       writeAtomic(this.store.chatPath(project), JSON.stringify(snapshot));
     } catch {
@@ -637,7 +689,7 @@ export class Agents implements seams.AgentPanel {
 
   chat(project: string): Json {
     const chat = this.withChat(project);
-    return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort });
+    return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, auth_retry: this.legacyClaudeRetry(project) });
   }
 
   reset(project: string): void {
@@ -1243,6 +1295,8 @@ export class Agents implements seams.AgentPanel {
     this.authPending.delete(project);
     this.saveAuthPending();
     const chat = this.withChat(project);
+    chat.authRecoveryUser = chat.entries.findLast((item) => item.kind === "user")?.id ?? null;
+    this.save(project);
     chat.halted = true;
     if (chat.running) {
       // Should the agent never end it (an interrupt lost, a process hung), the turn is ended here.
@@ -1688,6 +1742,7 @@ export function readChat(text: string): Chat {
   chat.provider = provider === "claude" || provider === "codex" ? provider : chat.thread !== null ? "codex" : null;
   chat.model = option("model");
   chat.effort = option("effort");
+  chat.authRecoveryUser = option("authRecoveryUser");
   const entries = given.entries;
   if (entries !== undefined) {
     if (!Array.isArray(entries)) throw new Error("entries: invalid type, expected a sequence");

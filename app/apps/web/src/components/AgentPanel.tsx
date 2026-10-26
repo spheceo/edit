@@ -394,9 +394,10 @@ function Empty({ title, detail, children }: { title: string; detail: string; chi
 
 function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean; fresh?: boolean }) {
   if (entry.kind === "error") {
+    const resolved = entry.status === "done";
     return (
-      <div className="flex items-start gap-2 rounded-lg bg-danger-soft px-2.5 py-2 text-[12px] text-danger">
-        <CircleAlert size={13} className="mt-px shrink-0" />
+      <div className={cx("flex items-start gap-2 rounded-lg px-2.5 py-2 text-[12px]", resolved ? "bg-raised text-muted" : "bg-danger-soft text-danger")}>
+        {resolved ? <Check size={13} className="mt-px shrink-0" /> : <CircleAlert size={13} className="mt-px shrink-0" />}
         <span>{entry.text}</span>
       </div>
     );

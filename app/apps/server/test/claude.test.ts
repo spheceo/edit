@@ -486,3 +486,87 @@ test("a project that moved to another Mac is not edited after sign-in", async ()
     expect(agents.withChat(project).entries.at(-1)?.text).toContain("another Mac");
   } finally { home.store.mayWrite = original; agents.shutdown(); home.cleanup(); }
 });
+
+function oldAuthChat(home: ReturnType<typeof fixtureHome>, project: string, tool = false, error = "Failed to authenticate. API Error: 401 OAuth access token is invalid") {
+  fs.writeFileSync(home.store.chatPath(project), JSON.stringify({ provider: "claude", thread: "old-session", model: null, effort: null, entries: [
+    { id: "old-user", kind: "user", text: "Research this case", at: 1, updated: 1 },
+    ...(tool ? [{ id: "old-tool", kind: "tool", text: "{}", tool: "collect_images", status: "done", at: 2, updated: 2 }] : []),
+    { id: "old-error", kind: "error", text: error, at: 3, updated: 3 },
+  ] }));
+}
+
+test("the open pre-update failed message resumes once after verification, with no duplicate user or active old error", async () => {
+  const home = fixtureHome("claude-old-message");
+  const { agents, asked, queries } = agentsWith(home);
+  const recovery = browserRecovery(agents);
+  try {
+    const project = home.store.create("Old login", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const other = home.store.create("Other old login", { width: 1920, height: 1080, fps: 30 }).project.id;
+    oldAuthChat(home, project);
+    oldAuthChat(home, other);
+    expect(agents.chat(project)).toMatchObject({ auth_retry: null });
+    recovery.finishLogin();
+    agents.claudeSetup("login");
+    await agents.claudeSupport.settled();
+    await settle();
+    // Nightly 21's screenshot: ready, old 401 still there, no waiting receipt.
+    expect(asked).toHaveLength(0);
+    expect(agents.chat(project)).toMatchObject({ auth_retry: "old-user" });
+    const claimed = await Promise.all([agents.retryClaude(project, "old-user"), agents.retryClaude(project, "old-user")]);
+    expect(claimed.filter(Boolean)).toHaveLength(1);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.prompt).toBe("Research this case");
+    expect(asked[0]!.options.resume).toBe("old-session");
+    expect(agents.withChat(project).entries.filter((item) => item.kind === "user")).toHaveLength(1);
+    expect(agents.withChat(project).entries.find((item) => item.id === "old-error")).toMatchObject({ status: "done", text: "Claude sign-in restored. Continuing your message." });
+    expect(agents.withChat(other).running).toBe(false);
+    queries[0]!.push({ type: "result", subtype: "success", is_error: false });
+    queries[0]!.end();
+    await settle();
+    expect(await agents.retryClaude(project, "old-user")).toBe(false);
+    expect(asked).toHaveLength(1);
+  } finally { agents.shutdown(); home.cleanup(); }
+});
+
+test("pre-update recovery continues around completed tools, and Stop remains cancelled after a restart", async () => {
+  const home = fixtureHome("claude-old-message-stop");
+  let { agents, asked } = agentsWith(home);
+  const recovery = browserRecovery(agents);
+  try {
+    const project = home.store.create("Old login", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const stopped = home.store.create("Stopped login", { width: 1920, height: 1080, fps: 30 }).project.id;
+    oldAuthChat(home, project, true);
+    oldAuthChat(home, stopped);
+    recovery.finishLogin();
+    agents.claudeSetup("login");
+    await agents.claudeSupport.settled();
+    await agents.stop(stopped);
+    expect(await agents.retryClaude(project, "old-user")).toBe(true);
+    expect(asked[0]!.prompt).toContain("check what is already done");
+    expect(asked[0]!.prompt).toContain("Research this case");
+    agents.shutdown();
+    ({ agents, asked } = agentsWith(home));
+    expect(agents.chat(stopped)).toMatchObject({ auth_retry: null });
+    expect(await agents.retryClaude(stopped, "old-user")).toBe(false);
+    expect(asked).toHaveLength(0);
+  } finally { agents.shutdown(); home.cleanup(); }
+});
+
+test("verification must follow the failure, and unrelated errors are never adopted", async () => {
+  const home = fixtureHome("claude-old-message-guard");
+  const { agents, asked } = agentsWith(home);
+  const recovery = browserRecovery(agents);
+  try {
+    const project = home.store.create("Old login", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const other = home.store.create("Other error", { width: 1920, height: 1080, fps: 30 }).project.id;
+    oldAuthChat(home, project);
+    oldAuthChat(home, other, false, "API Error: 529 overloaded");
+    recovery.finishLogin();
+    agents.claudeSetup("login");
+    await agents.claudeSupport.settled();
+    agents.withChat(project).entries.at(-1)!.updated = Number.MAX_SAFE_INTEGER;
+    expect(await agents.retryClaude(project, "old-user")).toBe(false);
+    expect(await agents.retryClaude(other, "old-user")).toBe(false);
+    expect(asked).toHaveLength(0);
+  } finally { agents.shutdown(); home.cleanup(); }
+});

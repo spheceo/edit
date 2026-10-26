@@ -10,8 +10,9 @@ Choose each beat's composition from the reference's whole vocabulary, never the 
 
 The guide's animations, each with its tool:
 - **Animation 1 (an article, post or comment quoted in the narration):** a real screenshot cropped to it with highlight_evidence on the quoted words. Give its card `push` to zoom in while it highlights, the guide's livelier variant.
-- **Animation 2 (a channel):** commentary_channel, once per channel.
-- **Animation 3 (an old photo of a person sliding up during their story):** commentary_card.
+- **Animation 2 (a channel with the note "Rotate"):** commentary_rotate. The channel page's dark-mode screenshot, in a slight 3D tilt that slowly turns.
+- **Animation 3 (a channel brought up over its person):** commentary_channel. Use one of the two once per channel.
+- **Animation 3, otherwise (an old photo of a person sliding up during their story):** commentary_card.
 - **Animation 4 (a person and short facts):** commentary_profile, dash bullets in capitals.
 - **Animation 6 (a place):** commentary_location.
 - **Animation 7 (a slide-down transition on narration, now and then):** commentary_slide, with whoosh-3.

@@ -215,3 +215,11 @@ test("the guide's pieces: red words beside white, a location bottom left, a labe
   expect(down.keyframes?.y?.[0]?.value).toBe(-1080);
   expect(down.keyframes?.y?.at(-1)).toMatchObject({ frame: 14, value: 0 });
 });
+
+test("Rotate's filter turns a plane larger than the frame in perspective and crops it to the frame", async () => {
+  const { rotateFilter } = await import("../src/evidence_highlight.ts");
+  const filter = rotateFilter(1920, 1080, 30, 3, -14, -6, 1.04, 0.82);
+  expect(filter).toContain("pad=2688:1512");
+  expect(filter).toContain("sense=destination:eval=frame,crop=1920:1080");
+  expect(filter).toContain("min((in/30)/3.000,1)");
+});

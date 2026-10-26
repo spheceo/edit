@@ -152,6 +152,13 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
       ops.push({ op: "update", select: { ids: [id] }, patch });
     },
     text(words: string, o: Op & { id?: string; from: Time; to: Time }) {
+      // Only new words or timing update the clip; a new look (red, size, blur, motion…) rebuilds it.
+      const look = Object.keys(o).some((key) => !["id", "from", "to"].includes(key));
+      if (typeof o.id === "string" && byId.has(o.id) && look) {
+        const { id, ...rest } = o;
+        graphic("commentary_text", { ...rest, text: words, ids: [id] });
+        return null;
+      }
       if (typeof o.id === "string" && byId.has(o.id)) {
         const [start, end] = span(o, "text");
         ops.push({ op: "update", select: { ids: [o.id] }, patch: { text: words, start, duration: end - start } });
@@ -178,6 +185,12 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
       rebuild(o);
       const { from: _f, to: _t, ids: _i, ...rest } = o;
       ops.push({ op: "@tool", tool: "commentary_channel", args: { ...rest, start, end } });
+    },
+    /** A channel page's screenshot in a slight 3D tilt that slowly turns (the guide's Animation 2); runs after the plan (it renders first). */
+    rotate(mediaId: string, o: Op & { from: Time; to: Time }) {
+      const [start, end] = span(o, "rotate");
+      const { from: _f, to: _t, ...rest } = o;
+      ops.push({ op: "@tool", tool: "commentary_rotate", args: { ...rest, media: mediaOf(mediaId).id, start, end } });
     },
     /** A bundled sound (whoosh-3, shutter) with its hit on `at`. */
     sfx: (name: string, at: Time, volume_db?: number) => { ops.push({ op: "@tool", tool: "add_sound_effect", args: { sound: name, times: [seconds(at)], ...(volume_db !== undefined ? { volume_db } : {}) } }); },
@@ -216,7 +229,7 @@ export const REFERENCE = `// Edit Script: the timeline as TypeScript. Times are 
 // chapter(title, {from, to, number?}); profile({from, to, media, name?, lines}); look({from, to})
 // text(…, {red: ["BAD VIDEOS"]}) colours the critical words red; label(words, {from, to, near?: [x, y], typewriter?}) sits beside the person it's about
 // location("Luton, England", {from, to}) bottom left; icon(media, {from, to, name?, role?}) pops up over the blurred picture; channel({from, to, name, handle?, subscribers?, description?, avatar?, subscribe?, caption?})
-// slide(at) the next picture slides down from the top (with sfx("whoosh-3", at)); card(media, {…, push: 1.15}) zooms in while you highlight it; sfx(name, at, volume_db?) a bundled sound
+// rotate(media, {from, to, from_deg…}) a channel page's screenshot tilting slowly in 3D (once per channel); slide(at) the next picture slides down from the top (with sfx("whoosh-3", at)); card(media, {…, push: 1.15}) zooms in while you highlight it; sfx(name, at, volume_db?) a bundled sound
 // Any of those given ids: [...] (a composition's layers as read_edit lists them) rebuilds it.
 // punch(id, {at: [times], on: [x, y] | "centre", scales?}); leak(at, brandLightLeakMedia); dissolve(at, frames?); flash(at)
 // op(raw)  any apply_edit_plan operation (frames), e.g. op({op: "blur_marks", clips: [id], leave: ["RIP N3ON"]}) to keep a mark that's the point unblurred. Library functions saved with save_graphic are in scope by name.

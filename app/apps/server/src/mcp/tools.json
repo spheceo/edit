@@ -2935,5 +2935,49 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "name": "commentary_rotate",
+    "description": "A channel's page in a slight 3D tilt that slowly turns. The guide's Animation 2 (\"Rotate\"): the page's dark-mode screenshot held on the YouTube ground (#1B1B1C), its plane turning about its vertical axis in perspective (default -14\u00b0 to -6\u00b0, the right side away) with a slow push, rendered as a video and placed full frame. Once per channel in a video; not for every mention.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "media": {
+          "type": "string",
+          "description": "The channel page's screenshot (image media)."
+        },
+        "start": {
+          "type": "integer"
+        },
+        "end": {
+          "type": "integer"
+        },
+        "from": {
+          "type": "number",
+          "description": "Degrees at the start (default -14)."
+        },
+        "to": {
+          "type": "number",
+          "description": "Degrees at the end (default -6)."
+        },
+        "push": {
+          "type": "number",
+          "description": "Scale at the end (default 1.04)."
+        },
+        "width": {
+          "type": "number",
+          "description": "The screenshot's share of the frame's width (default 0.82)."
+        }
+      },
+      "required": [
+        "media",
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
   }
 ]

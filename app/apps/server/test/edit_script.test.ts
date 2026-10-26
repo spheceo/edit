@@ -47,3 +47,10 @@ test("read_edit lists clips as re-runnable calls with what's seen, and the lints
   expect(text).toContain("// says @2.1: the most hated streamer.");
   expect(forTests.lints(ctx())[0]).toContain("doesn't fit its words: no N3on");
 });
+
+test("a text re-run with a new look is rebuilt; with only new words or timing it's updated", async () => {
+  const look = await evalScript({ code: `text("MOST HATED", { id: "c2", from: 3, to: 5, red: ["HATED"] });`, library: [], context: ctx(), run: "t" });
+  expect(look.ops.map((o) => o.op)).toEqual(["delete", "commentary_text"]);
+  const words = await evalScript({ code: `text("THE MOST HATED", { id: "c2", from: 3, to: 5 });`, library: [], context: ctx(), run: "t" });
+  expect(words.ops.map((o) => o.op)).toEqual(["update"]);
+});

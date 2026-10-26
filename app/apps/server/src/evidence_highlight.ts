@@ -8,6 +8,7 @@ import type { Keyframe, Project, VideoClip } from "./model.ts";
 import { addTrack, clipEnd, freshId, mediaOf, sample } from "./project.ts";
 import { join } from "./paths.ts";
 import { stableStringify } from "./stable.ts";
+import * as tools from "./tools.ts";
 
 export interface Rect { x: number; y: number; width: number; height: number; }
 export function rectOf(value: unknown, width: number, height: number): Rect {
@@ -152,4 +153,55 @@ registerTool("commentary_channel", async ({ app, args, projectId }) => {
   if (ids[0] === undefined) throw new Error(errors.join("; "));
   const [, made] = await app.store.update(projectId, "agent", (project) => commentaryGraphics.channel(project, args, ids[0]!));
   return text(stableStringify({ ...made, note: "A channel as its page header shows it, rising in over the footage; the caption below is the editorial line." }));
+});
+
+/**
+ * The guide's Animation 2 ("Rotate"): a channel's page, screenshotted in dark
+ * mode, held on the YouTube ground with a slight 3D tilt that slowly turns
+ * (the user, Oct 26: "a slight 3D tilt (perspective) that slowly turns… yes
+ * exactly this") and a slow push. The renderer moves pictures in 2D, so the
+ * turn is rendered as a short video: the screenshot on a plane, rotated about
+ * its vertical axis in perspective, frame by frame (FFmpeg's perspective
+ * filter maps the plane's corners); the plane is larger than the frame and
+ * cropped, so its edge never shows. Degrees: negative turns the right side away.
+ */
+export function rotateFilter(width: number, height: number, fps: number, seconds: number, from: number, to: number, push: number, share: number): string {
+  // The plane: 1.4x the frame, the screenshot `share` of the frame's width in its middle.
+  const [W, H] = [Math.round(width * 1.4 / 2) * 2, Math.round(height * 1.4 / 2) * 2];
+  const focal = 1.6 * width;
+  const progress = `min((in/${fps})/${seconds.toFixed(3)},1)`;
+  const angle = `((${from})+((${to})-(${from}))*${progress})*PI/180`;
+  const zoom = `(1+(${push - 1})*${progress})`;
+  const x = (sx: number) => `(${W / 2}+(${sx})*${zoom}*cos(${angle})*${focal}/(${focal}+(${sx})*${zoom}*sin(${angle})))`;
+  const y = (sx: number, sy: number) => `(${H / 2}+(${sy})*${zoom}*${focal}/(${focal}+(${sx})*${zoom}*sin(${angle})))`;
+  const corners = [[-W / 2, -H / 2], [W / 2, -H / 2], [-W / 2, H / 2], [W / 2, H / 2]] as const;
+  const points = corners.flatMap(([sx, sy], i) => [`x${i}='${x(sx)}'`, `y${i}='${y(sx, sy)}'`]).join(":");
+  const shot = Math.round(width * share / 2) * 2;
+  return `scale=${shot}:-2,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x1B1B1C,perspective=${points}:sense=destination:eval=frame,crop=${width}:${height},format=yuv420p`;
+}
+
+registerTool("commentary_rotate", async ({ app, args, projectId }) => {
+  const p = app.store.get(projectId)?.project; if (!p) throw new Error("no such project");
+  const m = typeof args.media === "string" ? mediaOf(p, args.media) : undefined;
+  if (m === undefined || m.kind !== "image") throw new Error("commentary_rotate needs media: the channel page's screenshot (an image; still_frame crop or capture_evidence)");
+  const [start, end] = [args.start, args.end];
+  if (typeof start !== "number" || typeof end !== "number" || !Number.isInteger(start) || !Number.isInteger(end) || end - start < 12) throw new Error("start/end are timeline frames, at least 12 apart");
+  const { width, height, fps } = p.settings; const seconds = (end - start) / fps;
+  const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  const filter = rotateFilter(width, height, fps, seconds, num(args.from, -14), num(args.to, -6), Math.min(Math.max(num(args.push, 1.04), 1), 1.3), Math.min(Math.max(num(args.width, 0.82), 0.3), 1));
+  const dir = join(app.store.uploadsDir(projectId), "rotate"); fs.mkdirSync(dir, { recursive: true });
+  const out = join(dir, `rotate-${m.id}-${Bun.hash(filter).toString(16).slice(0, 10)}.mp4`);
+  if (!fs.existsSync(out)) {
+    const remote = tools.isUrl(m.path) ? ["-protocol_whitelist", tools.protocols(m.path), ...tools.urlArgs(m.path)] : [];
+    await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...remote, "-loop", "1", "-framerate", String(fps), "-t", seconds.toFixed(3), "-i", m.path,
+      "-vf", filter, "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-r", String(fps), "-movflags", "+faststart", out]);
+  }
+  const [, ids, errors] = await importPaths(app, projectId, [out], false, "agent");
+  if (ids[0] === undefined) throw new Error(errors.join("; "));
+  const [, made] = await app.store.update(projectId, "agent", (project) => {
+    const id = freshId(project, "c");
+    project.clips.push(clipFrom({ id, type: "video", name: "Janitor · rotate", media: ids[0], track: addTrack(project, "video"), start, duration: end - start, source_in: 0, fade_in: 3, fade_out: 4 }));
+    return id;
+  });
+  return text(stableStringify({ clip: made, media: ids[0], note: "Rendered as a video (the turn is 3D); once per channel in a video. Put it on a cut, a light leak or flash before it if the beat wants one." }));
 });

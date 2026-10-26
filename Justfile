@@ -19,6 +19,9 @@ dev *args:
 ffmpeg *args:
     @just --justfile app/Justfile ffmpeg {{args}}
 
+quickjs *args:
+    @just --justfile app/Justfile quickjs {{args}}
+
 native *args:
     @just --justfile app/Justfile native {{args}}
 

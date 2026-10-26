@@ -84,10 +84,13 @@ test("a_reused_video_plays_whole_after_its_narration", () => {
 });
 
 const restore = process.env.EDIT_YTDLP;
+const restoreQjs = process.env.EDIT_QJS;
 timing.pause = async () => {};
 afterEach(() => {
   if (restore === undefined) delete process.env.EDIT_YTDLP;
   else process.env.EDIT_YTDLP = restore;
+  if (restoreQjs === undefined) delete process.env.EDIT_QJS;
+  else process.env.EDIT_QJS = restoreQjs;
 });
 
 /** A yt-dlp stand-in: refuses `refusals` times (a bot check), then writes the file and says where. */
@@ -146,6 +149,106 @@ test("a_video_youtube_keeps_refusing_fails_saying_so", async () => {
     const failed = await download(dir, "abcdefghijk", `${dir}/out`, () => {}).catch((error: Error) => error.message);
     expect(failed).toContain("couldn't be downloaded");
     expect(failed).toContain("not a bot");
+  } finally {
+    if (proxy !== undefined) process.env.PROXY_URL = proxy;
+    cleanup();
+  }
+});
+
+/**
+ * A yt-dlp stand-in that fails call by call: `failures[n]` is the stderr of
+ * call n+1 (the last one repeats); a call past them writes the file.
+ */
+function fakeScripted(dir: string, failures: string[]): string {
+  const script = `${dir}/yt-dlp`;
+  const count = `${dir}/calls`;
+  const arms = failures
+    .map((stderr, index) => `  ${index + 1}) printf '%s\\n' '${stderr}' >&2; exit 1;;`)
+    .join("\n");
+  fs.writeFileSync(
+    script,
+    `#!/bin/sh
+n=$(cat "${count}" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${count}"
+printf '%s\\n' "$@" > "${dir}/args"
+for arg in "$@"; do case "$prev" in -P) out="$arg";; --ffmpeg-location) ff="$arg";; esac; prev="$arg"; done
+case "$ff" in /*) ;; *) echo "EDIT-FILE $out/never-merged.mp4"; exit 0;; esac
+case $n in
+${arms}
+esac
+if [ $n -le ${failures.length} ]; then printf '%s\\n' '${failures[failures.length - 1] ?? ""}' >&2; exit 1; fi
+echo "EDIT 1024 1024 NA Some title"
+printf 'video' > "$out/Some title [abcdefghijk].mp4"
+echo "EDIT-FILE $out/Some title [abcdefghijk].mp4"
+`,
+    { mode: 0o755 },
+  );
+  return count;
+}
+
+test("gives yt-dlp the bundled qjs as its javascript runtime, never a storyboard format", async () => {
+  const { dir, cleanup } = scratch("youtube-qjs");
+  try {
+    fakeYtdlp(dir, 0);
+    process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+    process.env.EDIT_QJS = `${dir}/qjs-aarch64-apple-darwin`;
+    await download(dir, "abcdefghijk", `${dir}/out`, () => {});
+    const args = fs.readFileSync(`${dir}/args`, "utf8").split("\n");
+    expect(args[args.indexOf("--js-runtimes") + 1]).toBe(`quickjs:${dir}/qjs-aarch64-apple-darwin`);
+    const format = args[args.indexOf("-f") + 1]!;
+    expect(format.endsWith("/b[vcodec!=none]")).toBe(true);
+    expect(format.endsWith("/b")).toBe(false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an installed runtime serves when there is no bundled qjs", async () => {
+  const { dir, cleanup } = scratch("youtube-installed");
+  try {
+    fakeYtdlp(dir, 0);
+    process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+    delete process.env.EDIT_QJS;
+    await download(dir, "abcdefghijk", `${dir}/out`, () => {});
+    const args = fs.readFileSync(`${dir}/args`, "utf8").split("\n");
+    // Whichever of deno/node/bun/quickjs this Mac has, named with its path
+    // (a bare name would leave a Dock-launched Edit with nothing to run).
+    expect(args[args.indexOf("--js-runtimes") + 1]).toMatch(/^(deno|node|bun|quickjs):\//);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a route withholding formats or giving only images falls through to the next", async () => {
+  for (const [name, stderr] of [
+    ["format", "ERROR: [youtube] abc: Requested format is not available. Use --list-formats for a list of available formats"],
+    ["images", "ERROR: Only images are available for download. use --list-formats to see them"],
+    ["runtime", "WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default\nERROR: [youtube] abc: Requested format is not available"],
+  ] as const) {
+    const { dir, cleanup } = scratch(`youtube-${name}`);
+    try {
+      const calls = fakeScripted(dir, [stderr]);
+      process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+      const got = await download(dir, "abcdefghijk", `${dir}/out`, () => {});
+      expect(fs.readFileSync(got.path, "utf8")).toBe("video");
+      expect(fs.readFileSync(calls, "utf8").trim()).toBe("2");
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test("a final failure quotes the ERROR line, not a WARNING before it", async () => {
+  const { dir, cleanup } = scratch("youtube-final");
+  const proxy = process.env.PROXY_URL;
+  delete process.env.PROXY_URL;
+  try {
+    fakeScripted(dir, [
+      "WARNING: [youtube] No supported JavaScript runtime could be found. Only deno is enabled by default\nERROR: [youtube] abc: Private video",
+    ]);
+    process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+    const failed = await download(dir, "abcdefghijk", `${dir}/out`, () => {}).catch((error: Error) => error.message);
+    expect(failed).toContain("Private video");
+    expect(failed).not.toContain("No supported JavaScript runtime");
   } finally {
     if (proxy !== undefined) process.env.PROXY_URL = proxy;
     cleanup();

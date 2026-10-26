@@ -18,6 +18,36 @@ export function ffprobe(): string {
   return cached("ffprobe", "EDIT_FFPROBE");
 }
 
+/**
+ * The qjs (QuickJS-ng) Edit ships beside `edit` as yt-dlp's JavaScript
+ * runtime (`youtube.ts`): `EDIT_QJS`, else `qjs-<target>` beside the binary
+ * or in Edit.app's Resources, fetched by `scripts/fetch-quickjs.sh`; null on
+ * a Mac with no bundled copy (a dev run), where an installed runtime serves.
+ */
+export function qjs(): string | null {
+  const given = process.env.EDIT_QJS;
+  if (given !== undefined && given !== "") return given;
+  const triple =
+    process.platform === "darwin" && process.arch === "arm64"
+      ? "aarch64-apple-darwin"
+      : process.platform === "darwin" && process.arch === "x64"
+        ? "x86_64-apple-darwin"
+        : null;
+  if (triple === null) return null;
+  let beside: string | null = null;
+  try {
+    beside = parent(fs.realpathSync(process.execPath));
+  } catch {
+    beside = null;
+  }
+  if (beside === null) return null;
+  const name = `qjs-${triple}`;
+  for (const candidate of [join(beside, name), join(beside, "../Resources", name)]) {
+    if (isFile(candidate)) return candidate;
+  }
+  return null;
+}
+
 /** Whether the FFmpeg in use is the one shipped with Edit. */
 export function bundled(): boolean {
   return isAbsolute(ffmpeg());

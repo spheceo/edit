@@ -8,10 +8,11 @@
 //
 // yt-dlp: `EDIT_YTDLP`, else on PATH, else `<home>/bin/yt-dlp` (the release
 // for macOS from GitHub, checked against its SHA2-256SUMS, fetched on first
-// use). YouTube is asked straight from this Mac; when it refuses (a bot check,
-// 403s), and `PROXY_URL` is set (Repack's download proxy; `just dev` borrows
-// it), once more through the proxy. The proxy URL is a credential: never in a
-// log line or an error.
+// use). Every run names a JavaScript runtime (`--js-runtimes` below), which
+// YouTube extraction now needs. YouTube is asked straight from this Mac; when
+// it refuses (a bot check, 403s) or a route gives no video, and `PROXY_URL`
+// is set (Repack's download proxy; `just dev` borrows it), once more through
+// the proxy. The proxy URL is a credential: never in a log line or an error.
 
 import * as fs from "node:fs";
 
@@ -121,16 +122,35 @@ function ffmpegArgs(): string[] {
 }
 
 /**
- * yt-dlp's JavaScript runtime for YouTube's challenges: Deno by default; Node
- * or Bun when that's what this Mac has; else the compiled `edit` itself, which
- * is Bun under BUN_BE_BUN=1 (see `runtimeEnv`), so a Mac needs none installed.
+ * yt-dlp's JavaScript runtime for YouTube's challenges, named explicitly
+ * with its path (`--js-runtimes <name>:<path>`): without one YouTube hands
+ * back only storyboard images and no video, and yt-dlp enables only deno by
+ * default. The qjs bundled with Edit (`tools.qjs`, QuickJS-ng) first, so a
+ * packaged Edit always has one; then a runtime installed on this Mac (deno,
+ * node, bun, quickjs); then, in a compiled build with none of those, the
+ * `edit` binary itself, which is Bun under BUN_BE_BUN=1 (see `runtimeEnv`).
+ * Nobody using Edit installs a runtime for this.
  */
+function jsRuntime(): [name: string, path: string] | null {
+  const bundled = tools.qjs();
+  if (bundled !== null) return ["quickjs", bundled];
+  for (const [name, program] of [
+    ["deno", "deno"],
+    ["node", "node"],
+    ["bun", "bun"],
+    ["quickjs", "qjs"],
+    ["quickjs", "quickjs"],
+  ] as const) {
+    const path = Bun.which(program);
+    if (path !== null) return [name, path];
+  }
+  if (compiled()) return ["bun", process.execPath];
+  return null;
+}
+
 function runtimeArgs(): string[] {
-  if (Bun.which("deno") !== null) return [];
-  if (Bun.which("node") !== null) return ["--js-runtimes", "node"];
-  if (Bun.which("bun") !== null) return ["--js-runtimes", "bun"];
-  if (compiled()) return ["--js-runtimes", `bun:${process.execPath}`];
-  return [];
+  const runtime = jsRuntime();
+  return runtime === null ? [] : ["--js-runtimes", `${runtime[0]}:${runtime[1]}`];
 }
 
 /** yt-dlp's environment: BUN_BE_BUN=1 when it runs `edit` as its Bun. */
@@ -141,19 +161,35 @@ function runtimeEnv(args: string[]): Record<string, string | undefined> | undefi
 // H.264 (the hardware decodes it everywhere; YouTube's AV1 doesn't on an M1)
 // over plain HTTPS, up to 1080p, with the original sound: yt-dlp ranks the
 // original track above YouTube's dubs. A progressive MP4 when there's no DASH.
-const FORMAT = "bv*[vcodec^=avc1][height<=1080][protocol=https]+ba[ext=m4a][protocol=https]/b[vcodec^=avc1][ext=mp4]/bv*[height<=1080]+ba/b";
+// The last resort still asks for a video: a route YouTube is withholding
+// formats from offers only storyboards, and a bare `b` would take one and
+// call it a download.
+const FORMAT = "bv*[vcodec^=avc1][height<=1080][protocol=https]+ba[ext=m4a][protocol=https]/b[vcodec^=avc1][ext=mp4]/bv*[height<=1080]+ba/b[vcodec!=none]";
 /** Through the paid proxy ($1/GB): at most 720p, about half the bytes of 1080p (the audit, Oct 23). */
-const PROXY_FORMAT = "bv*[vcodec^=avc1][height<=720][protocol=https]+ba[ext=m4a][protocol=https]/b[vcodec^=avc1][ext=mp4][height<=720]/bv*[height<=720]+ba/b[height<=720]/b";
+const PROXY_FORMAT = "bv*[vcodec^=avc1][height<=720][protocol=https]+ba[ext=m4a][protocol=https]/b[vcodec^=avc1][ext=mp4][height<=720]/bv*[height<=720]+ba/b[height<=720][vcodec!=none]";
 
 /** Whether yt-dlp's words say YouTube refused this Mac (worth the proxy). */
 function refused(stderr: string): boolean {
   return /not a bot|HTTP Error 403|HTTP Error 429|Sign in to confirm|page needs to be reloaded/i.test(stderr);
 }
 
+/**
+ * Whether this route gave no video (formats withheld, only storyboard images
+ * offered, or no JavaScript runtime to answer YouTube's challenge): another
+ * route — a fresh proxy exit, this Mac again — may still get one, so it is
+ * retried like a refusal, never the final word on its own. Read on the ERROR
+ * line, not the whole output: a WARNING naming the missing runtime beside a
+ * real error (a private video) must not make that error retryable.
+ */
+function noVideo(stderr: string): boolean {
+  return /requested format is not available|only images are available|did not produce a video|javascript runtime/i.test(errorLine(stderr));
+}
+
 /** yt-dlp's error line, without anything credential-like. */
 function errorLine(stderr: string): string {
   const lines = stderr.split("\n").filter((line) => line.trim() !== "");
-  const error = lines.reverse().find((line) => line.startsWith("ERROR:")) ?? lines[0] ?? "yt-dlp failed";
+  // Say the ERROR, not a WARNING that happened to come first in its output.
+  const error = [...lines].reverse().find((line) => line.toUpperCase().includes("ERROR")) ?? lines[lines.length - 1] ?? "yt-dlp failed";
   return diag.scrub(error.replace(/^ERROR:\s*/, "").replace(/https?:\/\/[^\s@]*@[^\s]*/g, "<proxy>"));
 }
 
@@ -226,7 +262,7 @@ async function downloadNow(
     }
     failure = errorLine(result.stderr);
     const last = attempt === routes.length - 1;
-    if (last || !refused(result.stderr)) break;
+    if (last || !(refused(result.stderr) || noVideo(result.stderr))) break;
     diag.warn("youtube", `${id}: ${failure}; trying again${routes[attempt + 1] === null ? "" : " through the proxy"}`);
     await timing.pause(attempt === 0 ? 3000 : 1000);
   }
@@ -318,8 +354,11 @@ async function runYtdlp(
   let code: number;
   try { [, stderr, code] = await Promise.all([lines(), new Response(child.stderr).text(), child.exited]); }
   finally { if (timer !== null) clearTimeout(timer); }
-  if (code !== 0 || path === null) return { path: null, stderr };
-  if (!fs.existsSync(path)) return { path: null, stderr: `${stderr}\nERROR: yt-dlp finished without the file it named` };
+  if (code !== 0) return { path: null, stderr };
+  // yt-dlp said yes and made nothing (a route withholding formats can hand
+  // back only storyboards): say so in words the retry above reads.
+  if (path === null) return { path: null, stderr: `${stderr}\nERROR: The download did not produce a video.` };
+  if (!fs.existsSync(path)) return { path: null, stderr: `${stderr}\nERROR: The download did not produce a video (yt-dlp finished without the file it named).` };
   return { path, stderr };
 }
 
@@ -335,7 +374,7 @@ export async function downloadRange(home: string, id: string, range: [number, nu
     const result = await runYtdlp(binary, `https://www.youtube.com/watch?v=${id}`, dir, route, progress, range);
     if (result.path !== null) return { path: result.path, name: result.path.slice(dir.length + 1), size: fs.statSync(result.path).size };
     failure = errorLine(result.stderr);
-    if (!refused(result.stderr)) break;
+    if (!refused(result.stderr) && !noVideo(result.stderr)) break;
   }
   throw new Error(`YouTube excerpt ${id} ${range[0]}–${range[1]} couldn't be downloaded: ${failure}`);
 }

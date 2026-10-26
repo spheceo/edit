@@ -5,8 +5,8 @@
 #
 #   scripts/package-app.sh <target> <package dir> <out dir>
 #
-# <package dir> holds edit, edit-ffmpeg and edit-ffprobe (the release workflow's
-# package/). Writes <out>/Edit-<target>.zip (+ .sha256) and
+# <package dir> holds edit, edit-ffmpeg, edit-ffprobe and qjs-<target> (the
+# release workflow's package/). Writes <out>/Edit-<target>.zip (+ .sha256) and
 # <out>/Edit-<Apple-Silicon|Intel>.dmg.
 #
 # Signing: with MACOS_CERTIFICATE (a Developer ID Application .p12, base64) and
@@ -34,7 +34,7 @@ trap 'rm -rf "$work"; if [[ -n "${keychain:-}" ]]; then security list-keychains 
 
 echo "==> Edit.app ($target)"
 (cd "$root/crates/edit-window" && bunx @tauri-apps/cli@2.12.4 build --target "$target" --bundles app --config \
-  "{\"bundle\":{\"resources\":{\"$pkg/edit-ffmpeg\":\"edit-ffmpeg\",\"$pkg/edit-ffprobe\":\"edit-ffprobe\",\"$pkg/edit\":\"edit\"}}}")
+  "{\"bundle\":{\"resources\":{\"$pkg/edit-ffmpeg\":\"edit-ffmpeg\",\"$pkg/edit-ffprobe\":\"edit-ffprobe\",\"$pkg/qjs-$target\":\"qjs-$target\",\"$pkg/edit\":\"edit\"}}}")
 built="${CARGO_TARGET_DIR:-$root/target}/$target/release/bundle/macos/Edit.app"
 app="$work/Edit.app"
 ditto "$built" "$app"
@@ -59,9 +59,13 @@ if [[ -n "${MACOS_CERTIFICATE:-}" ]]; then
 fi
 # Inside out: the programs in Resources, then the app (its own executable and seal).
 codesign --force "${runtime[@]}" -s "$identity" --entitlements "$here/dmg/edit.entitlements" "$app/Contents/Resources/edit"
-codesign --force "${runtime[@]}" -s "$identity" "$app/Contents/Resources/edit-ffmpeg" "$app/Contents/Resources/edit-ffprobe"
+codesign --force "${runtime[@]}" -s "$identity" "$app/Contents/Resources/edit-ffmpeg" "$app/Contents/Resources/edit-ffprobe" "$app/Contents/Resources/qjs-$target"
 codesign --force "${runtime[@]}" -s "$identity" "$app"
 codesign --verify --deep --strict "$app"
+# qjs must start as signed too: it is yt-dlp's JavaScript runtime, and a copy
+# that can't run leaves YouTube imports with no video and no plain reason.
+[[ "$("$app/Contents/Resources/qjs-$target" --version </dev/null 2>&1)" == 0.* ]] || { echo "the signed qjs-$target didn't start" >&2; exit 1; }
+echo "==> qjs starts as signed"
 
 # The signed server must start and answer before anything ships: a Bun-compiled
 # binary can hang at start under the hardened runtime (Writer's, Bun 1.4.4, Oct 23),

@@ -177,12 +177,16 @@ jobs:
           curl -fsS http://127.0.0.1:7799/api/health | grep -q '"name":"edit"'
           curl -fsS -X POST http://127.0.0.1:7799/mcp -H 'content-type: application/json' \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q '"serverInfo"'
-      # FFmpeg ships beside `edit` (apps/server/src/tools.ts), pinned in scripts/ffmpeg.sh;
-      # kept between runs so a build doesn't need its host up (ffmpeg.sh skips a matching copy).
+      # FFmpeg and qjs (yt-dlp's JavaScript runtime) ship beside `edit`
+      # (apps/server/src/tools.ts), pinned in scripts/ffmpeg.sh and
+      # scripts/fetch-quickjs.sh; kept between runs so a build doesn't need
+      # their hosts up (both scripts skip a matching copy).
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: app/ffmpeg
-          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('app/scripts/ffmpeg.sh') }}
+          path: |
+            app/ffmpeg
+            app/quickjs
+          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('app/scripts/ffmpeg.sh', 'app/scripts/fetch-quickjs.sh') }}
       - name: Package
         run: |
           set -euo pipefail
@@ -191,7 +195,15 @@ jobs:
           scripts/ffmpeg.sh "${{ matrix.target }}" ffmpeg
           cp ffmpeg/ffmpeg package/edit-ffmpeg
           cp ffmpeg/ffprobe package/edit-ffprobe
-          tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe
+          scripts/fetch-quickjs.sh "${{ matrix.target }}" quickjs
+          cp "quickjs/qjs-${{ matrix.target }}" package/
+          # Only the build for this runner's own architecture can be run to
+          # check it starts (the Intel one is cross-compiled; Edit.app's
+          # packaging starts it under Rosetta where that's installed).
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            "package/qjs-${{ matrix.target }}" --version
+          fi
+          tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe "qjs-${{ matrix.target }}"
           (cd dist && shasum -a 256 "$name" > "$name.sha256")
           echo "NAME=$name" >> "$GITHUB_ENV"
       # Edit.app, the zip installed apps update from, and the disk image (scripts/package-app.sh):

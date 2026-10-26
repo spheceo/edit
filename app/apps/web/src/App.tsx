@@ -4,6 +4,7 @@ import { AppDialogs } from "./components/AppMenu";
 import { ContextMenuHost } from "./components/ContextMenu";
 import { Editor } from "./components/Editor";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ExportActivity } from "./components/ExportActivity";
 import { Home } from "./components/Home";
 import { SignInGate } from "./components/SignInScreen";
 import { Toasts } from "./components/Toasts";
@@ -30,6 +31,7 @@ export function App() {
         </motion.div>
       </AnimatePresence>
       <Toasts />
+      <ExportActivity />
       <AppDialogs />
       <ContextMenuHost />
     </MotionConfig>

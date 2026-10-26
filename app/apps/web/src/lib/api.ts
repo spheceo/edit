@@ -135,6 +135,18 @@ export interface ExportRecord {
   missing: boolean;
 }
 
+/** Jobs on this Mac, independent of the project open in the editor. */
+export interface ExportActivity {
+  id: string;
+  name: string;
+  path: string;
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
+  progress: number;
+  backend: "local" | "cloud" | "modal";
+  updated_ms: number;
+  error?: string;
+}
+
 export const api = {
   projects: () => request<{ projects: ProjectSummary[] }>("GET", "/api/projects"),
   createProject: (body: { name: string; style: Style; width: number; height: number; fps: number }) =>
@@ -181,6 +193,7 @@ export const api = {
   revealExport: (path: string) => request<{ ok: boolean }>("POST", "/api/exports/reveal", { path }),
   /** The project's exports on the machine running Edit, newest first. */
   exports: (id: string) => request<ExportRecord[]>("GET", `/api/projects/${id}/exports`),
+  exportActivity: () => request<ExportActivity[]>("GET", "/api/exports/activity"),
   /** Deletes one of them (its file too); the list after. */
   deleteExport: (id: string, path: string) => request<ExportRecord[]>("POST", `/api/projects/${id}/exports/delete`, { path }),
   transcribe: (id: string, media: string) => request<{ status: MediaStatus }>("POST", `/api/projects/${id}/media/${media}/transcribe`),

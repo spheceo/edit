@@ -109,7 +109,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
-  const progress = exportState?.state === "running" ? `Exporting… ${Math.round(exportState.progress * 100)}%` : sharing ? `${sharing[0]!.toUpperCase()}${sharing.slice(1)}…` : null;
+  const progress = exportState?.state === "queued" ? "Export queued · you can keep editing" : exportState?.state === "running" ? `Exporting… ${Math.round(exportState.progress * 100)}%` : sharing ? `${sharing[0]!.toUpperCase()}${sharing.slice(1)}…` : null;
 
   return (
     <Modal open={open} onClose={onClose} width={500}>

@@ -2,10 +2,65 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, deleteExport, ExportRegistry, listExports } from "../src/exports.ts";
+import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, listExports, resumeSnapshot } from "../src/exports.ts";
+import type { Project } from "../src/model.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { clip } from "./helpers/model.ts";
+
+test("local exports queue across projects, preserve snapshots and advance after failure or queued cancellation", async () => {
+  const { dir, home, store, app, native, cleanup } = fixtureHome("queued-exports");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const started: { name: string; quality: string }[] = [];
+  const releases = new Map<string, () => void>();
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job) => {
+    const name = JSON.parse(job.project.json).name as string;
+    started.push({ name, quality: job.options.quality });
+    let cancel = false;
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    releases.set(name, release);
+    return { cancel: () => { cancel = true; release(); }, wait: async () => { await wait; if (cancel) throw new Error("cancelled"); if (name === "first") throw new Error("Fixture encoder failed"); fs.writeFileSync(job.output, "export"); return { seconds: 1, bytes: 6 }; } };
+  });
+  try {
+    const projects: Project[] = [];
+    for (const name of ["first", "cancelled", "third"]) {
+      const id = store.create(name, { width: 64, height: 36, fps: 30 }).project.id;
+      await store.update(id, "test", p => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+      projects.push(structuredClone(store.get(id)!.project));
+    }
+    const options = native.exportDefaults();
+    for (const project of projects) await registry.start(store, app.library, project, options, `${dir}/${project.name}.mp4`, { backend: "local", drive: false, keepLocal: true });
+    expect(started.map(one => one.name)).toEqual(["first"]);
+    expect(registry.activity().map(one => [one.name, one.state]).sort()).toEqual([["cancelled", "queued"], ["first", "running"], ["third", "queued"]]);
+    const third = projects[2]!;
+    await store.update(third.id, "test", p => { p.name = "edited while exporting"; });
+    third.name = "mutated caller draft";
+    const quality = options.quality;
+    options.quality = quality === "small" ? "high" : "small";
+    expect(JSON.parse(fs.readFileSync(`${home}/jobs/export-${third.id}.json`, "utf8")).name).toBe("third");
+    expect(resumeSnapshot(home, third.id, { snapshot: `${home}/jobs/export-${third.id}.json` })?.name).toBe("third");
+    expect(registry.cancel(projects[1]!.id)).toBe(true);
+    expect(registry.activity().find(one => one.id === projects[1]!.id)?.state).toBe("cancelled");
+    expect(fs.existsSync(`${home}/jobs/export-${projects[1]!.id}.json`)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(`${home}/jobs.json`, "utf8")).some((job: { project: string }) => job.project === projects[1]!.id)).toBe(false);
+    releases.get("first")!();
+    for (let tries = 0; !releases.has("third") && tries < 100; tries++) await Bun.sleep(1);
+    expect(started).toEqual([{ name: "first", quality }, { name: "third", quality }]);
+    expect(registry.activity().find(one => one.id === projects[0]!.id)).toMatchObject({ state: "failed", error: "Fixture encoder failed" });
+    releases.get("third")!();
+    for (let tries = 0; registry.running() && tries < 100; tries++) await Bun.sleep(1);
+    expect(registry.running()).toBe(false);
+    expect(registry.activity().find(one => one.id === third.id)?.state).toBe("done");
+    expect(fs.existsSync(`${home}/jobs/export-${third.id}.json`)).toBe(false);
+  } finally {
+    for (const release of releases.values()) release();
+    render.mockRestore(); archive.mockRestore(); plan.mockRestore(); cleanup();
+  }
+});
 
 test("a project's exports stay listed across restarts and only a listed one is deleted", () => {
   const home = fs.mkdtempSync(`${os.tmpdir()}/edit-exports-`);

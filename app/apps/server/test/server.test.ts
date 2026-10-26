@@ -263,9 +263,10 @@ test("an export runs one at a time, tells clients how it goes, and only its file
     const started = await send(`/api/projects/${id}/export`, jsonBody("POST", { path: output, options: { format: "h264" } }));
     const { path } = (await started.json()) as { path: string };
     expect(path).toBe(`${fs.realpathSync(dir)}/out/teen.mp4`);
+    expect(await (await send("/api/exports/activity")).json()).toMatchObject([{ id, name: "Teen: the edit?", state: "running", path }]);
     const second = await send(`/api/projects/${id}/export`, jsonBody("POST", { path: output }));
     expect(await second.json()).toEqual({
-      error: "an export is already running; wait for it or cancel it before starting another",
+      error: "this project already has an export running",
     });
     const busy = await send("/api/update", { method: "POST" });
     expect([busy.status, await busy.json()]).toEqual([409, { error: "an export or Drive upload is running; update when it's done" }]);

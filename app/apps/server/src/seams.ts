@@ -98,7 +98,7 @@ export function isUnavailable(error: unknown): boolean {
 // ---------------------------------------------------------------------------
 // Shell, server core, shipping
 
-/** One export at a time; what was exported since the server started (exports.ts). */
+/** Multiple project jobs; local renders are queued to preserve editing resources. */
 export interface Exports {
   /** Starts exporting `project` to `path` (or its default); returns where it goes. */
   start(store: Store, library: Library, project: Project, options: ExportOptions, path: string | null, extra?: StartExtra): Promise<string>;
@@ -110,6 +110,8 @@ export interface Exports {
   localRunning?(): boolean;
   /** Whether `path` is a file exported since the server started (only those are handed out). */
   exported(path: string): boolean;
+  /** All active jobs and recent outcomes on this Mac. */
+  activity?(): import("./exports.ts").ExportActivity[];
 }
 
 /** Self-update. */

@@ -294,7 +294,8 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
       const stop = app.store.subscribe((event) => {
         const one = event as { type?: string; id?: string; state?: string; progress?: number; path?: string; error?: string };
         if (one.type !== "export" || one.id !== projectId) return;
-        if (one.state === "running") sharing.set(projectId, `exporting ${Math.round((one.progress ?? 0) * 100)}%`);
+        if (one.state === "queued") sharing.set(projectId, "queued for export");
+        else if (one.state === "running") sharing.set(projectId, `exporting ${Math.round((one.progress ?? 0) * 100)}%`);
         else if (one.state === "done" && one.path !== undefined) {
           stop();
           resolve(one.path);

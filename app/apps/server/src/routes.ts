@@ -121,6 +121,10 @@ export function buildRouter(): Router<App> {
     .post("/api/projects/{id}/exports/delete", deleteProjectExport);
   router
     .get("/api/export/encoders", exportEncoders)
+    .get("/api/exports/activity", ({ app }) => {
+      const visible = new Set(app.store.visible().map(project => project.id));
+      return json((app.exports.activity?.() ?? []).filter(job => visible.has(job.id)));
+    })
     .get("/api/exports/file", exportedFile)
     .post("/api/exports/reveal", revealExport);
   seams.script.routes(router);

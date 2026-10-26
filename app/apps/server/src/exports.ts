@@ -1,4 +1,4 @@
-// The server's export registry: one export at a time on this Mac and any
+// The server's export registry: a durable queue on this Mac and any
 // number in the cloud (Modal's sections, `modal_exports.ts`, when it's on and
 // worth it), their
 // `export` events, the files it may hand out, and the Drive upload after a
@@ -54,6 +54,21 @@ interface Running {
   /** What it exports, as `timelineHash`. */
   timeline: string;
   keepLocal: boolean;
+  queued: boolean;
+  cancelQueued?: () => void;
+}
+
+/** Export jobs across projects, including the recent outcomes. Local jobs
+ * queue for one renderer: each renderer owns several decoder/frame buffers. */
+export interface ExportActivity {
+  id: string;
+  name: string;
+  path: string;
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
+  progress: number;
+  backend: Backend;
+  updated_ms: number;
+  error?: string;
 }
 
 /**
@@ -219,6 +234,9 @@ export function deleteExport(home: string, id: string, path: string): void {
 
 export class ExportRegistry implements seams.Exports {
   private jobs = new Map<string, Running>();
+  private localActive = false;
+  private localQueue: { running: Running; start: () => void }[] = [];
+  private recent = new Map<string, ExportActivity>();
   /** Files exported since the server started, newest last: the only ones it hands out or reveals. */
   private finished: string[] = [];
 
@@ -235,13 +253,38 @@ export class ExportRegistry implements seams.Exports {
   }
 
   localRunning(): boolean {
-    return [...this.jobs.values()].some(job => !job.remote);
+    return this.localActive;
+  }
+
+  activity(): ExportActivity[] {
+    return [...this.recent.values()].map(one => ({ ...one })).sort((a, b) => b.updated_ms - a.updated_ms);
+  }
+
+  private publish(store: Store, project: Project, running: Running, state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}): void {
+    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, backend: running.backend, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}) });
+    // Keep every active job and only the latest completed outcomes.
+    const ended = [...this.recent.values()].filter(one => one.state !== "queued" && one.state !== "running").sort((a, b) => b.updated_ms - a.updated_ms);
+    for (const old of ended.slice(20)) this.recent.delete(old.id);
+    store.emit({ type: "export", id: project.id, state, progress, path: running.output, ...extra });
+  }
+
+  private drain(): void {
+    if (this.localActive) return;
+    while (this.localQueue.length) {
+      const next = this.localQueue.shift()!;
+      if (next.running.cancelled) continue;
+      this.localActive = true;
+      next.running.queued = false;
+      next.start();
+      return;
+    }
   }
 
   cancel(project: string): boolean {
     const running = this.jobs.get(project);
     if (running === undefined) return false;
     running.cancelled = true;
+    if (running.queued) running.cancelQueued?.();
     running.job?.cancel();
     return true;
   }
@@ -311,9 +354,6 @@ export class ExportRegistry implements seams.Exports {
     const whole = ["h264", "hevc", "prores"].includes(options.format) && plan.start === 0 && plan.end >= duration(project) && plan.end > 0;
     if (extra.drive === true && !whole) throw new Error("only a whole video export (MP4 or MOV) uploads to Drive");
     const remote = backend !== "local";
-    if (!remote && this.localRunning()) {
-      throw new Error("an export is already running; wait for it or cancel it before starting another");
-    }
     if (this.jobs.has(project.id)) throw new Error("this project already has an export running");
     if ([...this.jobs.values()].some(job => job.output === path)) throw new Error("another export is writing this output path");
     let snapshot: string | null = null;
@@ -323,8 +363,7 @@ export class ExportRegistry implements seams.Exports {
         fs.mkdirSync(join(this.home, "jobs"), { recursive: true });
         writeAtomic(snapshot, jsonForSerde(project));
       } catch (error) {
-        diag.warn("export", `couldn't keep ${project.id}'s timeline for a restart: ${ioMessage(error)}`);
-        snapshot = null;
+        throw new Error(`couldn't keep this export's timeline for a restart: ${ioMessage(error)}`);
       }
     }
     const args = {
@@ -332,7 +371,11 @@ export class ExportRegistry implements seams.Exports {
       ...(cloudJob === undefined ? {} : { cloudJob }), ...(extra.drive === undefined ? {} : { drive: extra.drive }), ...(snapshot === null ? {} : { snapshot }),
     };
     const key = jobs.begin(this.home, "export", project.id, args);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project), keepLocal: extra.keepLocal === true };
+    // Own the snapshot in memory too: a caller changing its draft or options
+    // after enqueueing must never change the export that was accepted.
+    project = structuredClone(project);
+    options = structuredClone(options);
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project), keepLocal: extra.keepLocal === true, queued: !remote };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -345,7 +388,24 @@ export class ExportRegistry implements seams.Exports {
         throw error;
       }
     }
-    void this.run(store, library, project, options, plan, path, running, upload);
+    if (remote) void this.run(store, library, project, options, plan, path, running, upload);
+    else {
+      running.cancelQueued = () => {
+        this.localQueue = this.localQueue.filter(one => one.running !== running);
+        this.publish(store, project, running, "cancelled", 0);
+        this.jobs.delete(project.id);
+        jobs.end(this.home, running.key);
+        if (snapshot !== null) fs.rmSync(snapshot, { force: true });
+      };
+      this.localQueue.push({ running, start: () => {
+        void this.run(store, library, project, options, plan, path, running, upload, () => {
+          this.localActive = false;
+          this.drain();
+        });
+      } });
+      if (this.localActive) this.publish(store, project, running, "queued", 0);
+      this.drain();
+    }
     return path;
   }
 
@@ -358,11 +418,10 @@ export class ExportRegistry implements seams.Exports {
     output: string,
     running: Running,
     upload: boolean,
+    releaseLocal?: () => void,
   ): Promise<void> {
     const id = project.id;
-    const emit = (state: string, progress: number, extra: Record<string, unknown> = {}) => {
-      store.emit({ type: "export", id, state, progress, path: output, ...extra });
-    };
+    const emit = (state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}) => this.publish(store, project, running, state, progress, extra);
     emit("running", 0);
     const started = performance.now();
     let result: { ok: true } | { ok: false; error: string };
@@ -425,6 +484,9 @@ export class ExportRegistry implements seams.Exports {
       result = { ok: true };
     } catch (error) {
       result = { ok: false, error: diag.messageOf(error) };
+    } finally {
+      // Archiving/uploading a completed file doesn't occupy the renderer.
+      releaseLocal?.();
     }
     const frames = Math.max(plan.end - plan.start, 0);
     const took = performance.now() - started;

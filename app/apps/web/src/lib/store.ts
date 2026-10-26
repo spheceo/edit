@@ -21,7 +21,7 @@ export const clientId = `ui-${Math.random().toString(36).slice(2, 10)}`;
 const HISTORY_LIMIT = 200;
 
 export interface ExportState {
-  state: "running" | "done" | "failed" | "cancelled";
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
   progress: number;
   path: string;
   error?: string;

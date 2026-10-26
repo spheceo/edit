@@ -178,11 +178,16 @@ export function webLayout(p: Project, nodes: WebNode[]): WebLayout {
   const { width: W, height: H } = p.settings; const k = H / 1080;
   const rings = [nodes.filter((n) => (n.ring ?? 1) !== 2), nodes.filter((n) => n.ring === 2)];
   const out: WebLayout["nodes"] = [];
+  const inner = Math.max(rings[0]!.length, 1);
   rings.forEach((ring, r) => {
-    const [rx, ry] = r === 0 ? [0.27 * W, 0.29 * H] : [0.42 * W, 0.40 * H];
-    const [w, h] = r === 0 ? [260 * k, 170 * k] : [230 * k, 150 * k];
+    const [rx, ry] = r === 0 ? [0.27 * W, 0.29 * H] : [0.41 * W, 0.34 * H];
+    const [w, h] = r === 0 ? [260 * k, 170 * k] : [220 * k, 140 * k];
     ring.forEach((_, i) => {
-      const angle = (-Math.PI / 2) + (2 * Math.PI * (i + (r === 1 ? 0.5 : 0))) / ring.length;
+      // The outer ring sits in the gaps between the inner one, spread round
+      // them, never straight above or below the middle where tags would stack.
+      const gap = ring.length <= inner ? Math.floor(((i + 0.5) * inner) / ring.length) : i;
+      const angle = r === 0 ? (-Math.PI / 2) + (2 * Math.PI * i) / ring.length
+        : (-Math.PI / 2) + (2 * Math.PI * (gap + 0.5)) / (ring.length <= inner ? inner : ring.length);
       const x = Math.cos(angle) * rx; const y = Math.sin(angle) * ry;
       // An outer picture hangs off the nearest inner one.
       let parent = -1;
@@ -275,7 +280,8 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
       void outer;
       out.push(framed(node, n.w, n.h, n.x, n.y, at, null, "Janitor · web picture"));
       if (node.name) out.push(tag(node.name, n.x, n.y + n.h / 2 + 24 * k, at + 4));
-      if (node.blur === true) blurs.push({ x: n.x, y: n.y + 12 * k, w: n.w + 30 * k, h: n.h + 70 * k, at });
+      // The picture and its tag under one blur, with room past both for its feather.
+      if (node.blur === true) blurs.push({ x: n.x, y: n.y + 22 * k, w: n.w + 50 * k, h: n.h + 110 * k, at });
     });
     // The lines run under every picture: their tracks go down just above the ground's.
     const groundTrack = project.clips.find((one) => one.id === out[0])!.track;

@@ -22,6 +22,7 @@ import { extension, join, startsWith, withExtension, canonical } from "./paths.t
 import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as transcribe from "./transcribe.ts";
+import { writeCaptionTranscript } from "./youtube_captions.ts";
 
 export type { Probe } from "./model.ts";
 
@@ -404,6 +405,8 @@ export class Processor {
     const shared = again ? null : sharedSourceOf(this.store.cacheDir(), source);
     const hear = async () => {
       if (shared !== null && mediaHooks.wholeTranscript !== null && (await mediaHooks.wholeTranscript(shared, target).catch(() => false))) return;
+      const captions = this.captionSource(source);
+      if (captions !== null && await writeCaptionTranscript(this.store.home, captions, target)) return;
       await transcribe.run(source, target, keyterms, again);
     };
     void diag
@@ -431,6 +434,26 @@ export class Processor {
         },
       );
     return this.status(source);
+  }
+
+  /** Resolve the original source and excerpt clock from saved provenance,
+   * never from a display filename (a joined master is not one YouTube video). */
+  private captionSource(path: string): string | null {
+    const shared = sharedSourceOf(this.store.cacheDir(), path);
+    if (shared?.startsWith("youtube:")) return shared;
+    for (const id of this.store.usingMedia(path)) {
+      const project = this.store.get(id)?.project;
+      const media = project?.media.find((item) => item.path === path);
+      if (!project || !media) continue;
+      if (media.cloud?.source.startsWith("youtube:")) return media.cloud.source;
+      const blocks = project.script?.blocks.filter((block) => block.kind === "footage" && block.media === media.id) ?? [];
+      const block = blocks[0];
+      if (block?.kind !== "footage" || !/^youtube:[A-Za-z0-9_-]{11}$/u.test(block.file)) continue;
+      const offset = block.media_start ?? 0;
+      if (!blocks.every((one) => one.kind === "footage" && one.file === block.file && (one.media_start ?? 0) === offset)) continue;
+      return `${block.file}#${Math.round(offset * 1000)}-${Math.round((offset + media.duration) * 1000)}`;
+    }
+    return null;
   }
 }
 

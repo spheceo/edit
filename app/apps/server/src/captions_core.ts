@@ -53,7 +53,7 @@ export async function transcriptOf(app: App, media: Media, project?: Project): P
         }
         const transcript = parseTranscript(text);
         const asked = `${path}\n${names.map((name) => name.toLowerCase()).sort().join("\n")}`;
-        if (!covers(transcript.keyterms, names) && !reheard.has(asked)) {
+        if (transcript.model !== "youtube-captions" && !covers(transcript.keyterms, names) && !reheard.has(asked)) {
           reheard.add(asked);
           diag.info("media", `${media.name}: heard again with the case's names (${names.length})`);
           app.media.transcribe(path, true, joined(names, transcript.keyterms ?? []), true);

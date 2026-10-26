@@ -275,6 +275,10 @@ interface TurnUsage {
 }
 
 export class Agents implements seams.AgentPanel {
+  /** Remote updates wait for all agent turns to finish. */
+  hasRunningTurns(): boolean {
+    return [...this.chats.values()].some((chat) => chat.running);
+  }
   readonly claudeSupport: ClaudeSupport;
   /** Failed messages survive app restarts, but never Stop, New Chat or a newer message. */
   private authPending = new Map<string, { text: string; user: string; model: string | null; effort: string | null; continued: boolean; retried: boolean }>();

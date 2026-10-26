@@ -1,6 +1,6 @@
 # Remote device commands
 
-Edit can receive support commands without an inbound connection to the Mac. This is a design, not an implemented feature.
+Edit can receive support commands without an inbound connection to the Mac. The update receiver is implemented; remote agent turns remain disabled pending an enforceable spending limit. Rollout and use are described in `docs/remote-support.md`.
 
 Each installation needs a stable device identity and an owner-controlled way to enable, disable and revoke support. A live, authenticated Convex query can deliver pending commands while Edit is running. Edit currently calls Convex through the relay, which keeps a shared service credential; that credential must not be given to clients. Direct subscriptions need a narrowly scoped device credential and Convex authorization, or a subscription-capable relay that enforces the same boundary. Operator identity and permissions must be checked independently of the device identity. The owner must be able to see who requested an action and revoke access.
 

@@ -87,7 +87,7 @@ const callable = (path: string, kind: string) =>
 
 /** Each cloud route's permission: `use` for all of them (accounts' contract v2); null for a route that isn't one. */
 function permissionOf(route: string): Permission | null {
-  if (route === "ai/chat" || route === "google/token" || route === "convex" || route.startsWith("r2/") || route.startsWith("jobs/")) return "use";
+  if (route === "ai/chat" || route === "google/token" || route === "convex" || route === "support-config" || route.startsWith("r2/") || route.startsWith("jobs/")) return "use";
   return null;
 }
 
@@ -109,6 +109,11 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
     return json(400, { error: "Send a JSON object." });
   }
   const route = url.pathname.slice("/v1/cloud/".length);
+  if (route === "support-config") {
+    if (found.kind !== "person") return json(403, { error: "Sign in to Edit." });
+    if (!env.CONVEX_URL || !env.CONVEX_URL.startsWith("https://")) return json(503, { error: "Remote support is not configured." });
+    return json(200, { url: env.CONVEX_URL });
+  }
   if (route === "convex") return convex(body, env, found);
   if (route === "google/token") {
     try {

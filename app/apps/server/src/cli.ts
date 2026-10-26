@@ -43,6 +43,8 @@ USAGE
       Install the newest release (the editor also offers it, one click).
   edit support <command> --url https://<device>.<tailnet>.ts.net
       Inspect or help an owner's already-shared Edit; \`edit support help\` says more.
+  edit remote enable|disable|devices|update|history [device-id]
+      Enable remote support on this Edit, or manage remote updates as an admin.
   edit --version
 
 ENV
@@ -110,6 +112,21 @@ export async function main(args: string[]): Promise<void> {
     case "mcp":
       console.log(mcpText(flag("--port") ?? String(DEFAULT_PORT)));
       return;
+    case "remote": {
+      const action = args[1];
+      if (!action || !["enable", "disable", "devices", "update", "history"].includes(action) || (["update", "history"].includes(action) && !args[2])) fail("use edit remote enable|disable|devices|update|history [device-id]");
+      try {
+        const response = await fetch(`http://127.0.0.1:${port()}/api/remote-support`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action, ...(["update", "history"].includes(action) ? { device: args[2] } : {}) }),
+          signal: AbortSignal.timeout(30000),
+        });
+        const value = await response.json() as { error?: unknown };
+        if (!response.ok) fail(typeof value.error === "string" ? value.error : "remote support request failed");
+        console.log(JSON.stringify(value, null, 2));
+      } catch (error) { fail(diag.messageOf(error)); }
+      return;
+    }
     case "script-eval":
       // One Edit Script, run apart from the server (run_edit starts it).
       void scriptEval().then(() => process.exit(0), (error: unknown) => { console.error(error); process.exit(1); });

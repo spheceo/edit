@@ -44,6 +44,7 @@ import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
 import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
+import * as remoteSupport from "./remote_support.ts";
 
 type Context = RouteContext<App>;
 
@@ -73,6 +74,7 @@ export function buildRouter(): Router<App> {
   reviews.routes(router);
   reset.routes(router);
   accounts.routes(router);
+  remoteSupport.routes(router);
   windowFocus.routes(router);
   writerHandoff.routes(router);
   archive.routes(router);
@@ -383,6 +385,11 @@ async function updateChannel(context: Context): Promise<Response> {
 
 /** Downloads the newest release and restarts into it. */
 async function updateInstall({ app }: Context): Promise<Response> {
+  return json(await installUpdate(app));
+}
+
+/** Shared by the local update route and an explicitly enabled remote request. */
+export async function installUpdate(app: App) {
   let uploading = false;
   try {
     uploading = seams.drive.uploading();
@@ -393,7 +400,7 @@ async function updateInstall({ app }: Context): Promise<Response> {
     throw new ApiError(409, "an export or Drive upload is running; update when it's done");
   }
   try {
-    return json(await app.updater.install());
+    return await app.updater.install();
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

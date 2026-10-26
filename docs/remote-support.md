@@ -1,5 +1,23 @@
 # Supporting an Edit on another Mac
 
+## Convex remote updates
+
+This source tree also supports owner-enabled remote updates over a live Convex
+subscription. The owner's app must be running, signed in, and on a build that
+contains the receiver. From its terminal, the owner runs `edit remote enable`;
+`edit remote disable` revokes access and cancels queued updates. An admin on
+another running, signed-in Edit can run `edit remote devices`, then
+`edit remote update <device-id>` and `edit remote history <device-id>`. A request
+expires after an hour. Status records distinguish a claimed update from a new
+build that actually restarted. No command is replayed after an ambiguous crash.
+
+The update uses the owner's configured release channel, verifies the existing
+release signature/checksum and refuses an active export, Drive upload or agent
+turn. It cannot start a closed app. Remote agent turns are disabled until a
+spending limit is implemented and accepted. The Convex functions and the relay
+support-config route and the Accounts token claim must be deployed before this can work, and the owner needs
+to install the first build containing it by the usual update path.
+
 `edit support` is a client for an Edit the owner has already shared over
 Tailscale. It creates no listener and does not pair devices, change a Mac's
 network access, install updates or execute shell commands. The shared Edit keeps

@@ -30,7 +30,7 @@ export interface ScriptContext {
   clips: ScriptClip[];
   shots: ScriptShot[];
   words: ScriptWord[];
-  media: { id: string; name: string; kind: string; duration: number; width: number; height: number }[];
+  media: { id: string; name: string; kind: string; duration: number; width: number; height: number; cuts?: number[] }[];
 }
 export type Op = Record<string, unknown>;
 
@@ -111,9 +111,17 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
       throw new Error(`the narration doesn't say "${word}" after ${from.toFixed(1)}s in this span (words lists what it says)`);
     },
     /** A picture-only shot of `media` (B-roll): from/to on the timeline, source_in in the media's seconds. */
-    shot(mediaId: string, o: { id?: string; from: Time; to: Time; source_in?: number; speed?: number; name?: string; track?: string; scale?: number; x?: number; y?: number }) {
+    shot(mediaId: string, o: { id?: string; from: Time; to: Time; source_in?: number; speed?: number; name?: string; track?: string; scale?: number; x?: number; y?: number; fill?: boolean }) {
       const m = mediaOf(mediaId);
       const [start, end] = span(o, "shot");
+      // fill: as large as covers the frame (scale 1 only fits it: a photo of another shape would sit in black).
+      if (o.fill === true && o.scale === undefined) {
+        const fit = Math.min(ctx.project.width / Math.max(m.width, 1), ctx.project.height / Math.max(m.height, 1));
+        o = { ...o, scale: Math.max(ctx.project.width / (m.width * fit), ctx.project.height / (m.height * fit)) * 1.004 };
+      }
+      if (m.kind === "video" && o.source_in !== undefined && m.duration > 0 && o.source_in + ((end - start) / fps) * (o.speed ?? 1) > m.duration + 0.05) {
+        throw new Error(`shot: ${m.name} is ${m.duration.toFixed(2)} s long; from ${o.source_in} it runs out ${(o.source_in + ((end - start) / fps) * (o.speed ?? 1) - m.duration).toFixed(2)} s early (shorter, slower, or an earlier source_in)`);
+      }
       const fields: Op = { type: "video", media: m.id, start, duration: end - start, source_in: o.source_in ?? 0, speed: o.speed ?? 1,
         ...(o.name ? { name: o.name } : {}), ...(o.track ? { track: o.track } : {}),
         ...(o.scale !== undefined || o.x !== undefined || o.y !== undefined ? { transform: { x: o.x ?? 0, y: o.y ?? 0, scale: o.scale ?? 1.004, rotation: 0 } } : {}) };
@@ -183,11 +191,11 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
 
 /** The reference an agent writes against (the language's declarations). */
 export const REFERENCE = `// Edit Script: the timeline as TypeScript. Times are timeline seconds (12.5) or "m:ss.s".
-// Reading: project {title, fps, width, height, rev, span:[from,to], duration}; clips (every clip in the span: id, type, name, track, from, to, media, source_in, speed, text);
+// Reading: project {title, fps, width, height, rev, span:[from,to], duration}; clips (every clip in the span: id, type, name, track, from, to, media, source_in, speed, text); media's cuts are the source seconds its scene changes (where known);
 // shots (what's on screen cut to cut: id, from, to, facts? {sees, text, people, empty, fits, why} from describe_shots); words (the narration: {text, at}); media ({id, name, kind, duration, width, height}).
 // said(word | "two words", after?) → seconds the narration says it. sec("1:02.5") → 62.5. note(msg) shows in the result.
 // Writing (queued; the whole script saves as one plan, or nothing if it throws or doesn't validate):
-// shot(media, {id?, from, to, source_in?, speed?, name?, scale?, x?, y?})  picture-only shot (B-roll); with an existing id it updates that clip
+// shot(media, {id?, from, to, source_in?, speed?, name?, scale?, x?, y?, fill?})  picture-only shot (B-roll); fill: true covers the frame (a photo of another shape); with an existing id it updates that clip; refuses a source that runs out
 // trim(id, {from?, to?})  move a clip's edges, its source following; remove(...ids); update(id, patch)
 // text(words, {id?, from, to, motion?, size?, x?, y?, blur?, box?, align?})  centred emphasis (commentary_text)
 // card(media, {from, to, ...commentary_card}); youtube({from, to, media, title, channel, meta?, duration?, avatar?}); youtubeList({from, to, items})
@@ -195,5 +203,5 @@ export const REFERENCE = `// Edit Script: the timeline as TypeScript. Times are 
 // chapter(title, {from, to, number?}); profile({from, to, media, name?, lines}); look({from, to})
 // Any of those given ids: [...] (a composition's layers as read_edit lists them) rebuilds it.
 // punch(id, {at: [times], on: [x, y] | "centre", scales?}); leak(at, brandLightLeakMedia); dissolve(at, frames?); flash(at)
-// op(raw)  any apply_edit_plan operation (frames). Library functions saved with save_graphic are in scope by name.
+// op(raw)  any apply_edit_plan operation (frames), e.g. op({op: "blur_marks", clips: [id], leave: ["RIP N3ON"]}) to keep a mark that's the point unblurred. Library functions saved with save_graphic are in scope by name.
 // Plain TypeScript otherwise: loops, helpers, const. No imports, no I/O.`;

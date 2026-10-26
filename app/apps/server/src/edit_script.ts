@@ -28,6 +28,7 @@ import { native } from "./native/index.ts";
 import { join, parent } from "./paths.ts";
 import { clipEnd, mediaOf, trackOf } from "./project.ts";
 import { REFERENCE, type Op, type ScriptContext } from "./script_runtime.ts";
+import * as seats from "./seats.ts";
 import { stableStringify } from "./stable.ts";
 
 type Args = Record<string, unknown>;
@@ -112,7 +113,10 @@ export function context(app: App, projectId: string, from: number, to: number): 
   return {
     project: { id: p.id, title: p.name, fps, width: p.settings.width, height: p.settings.height, rev, span: [from, to], duration: r(Math.max(0, ...p.clips.map(clipEnd))) },
     clips, shots, words: narration(app, p, from, to),
-    media: p.media.map((m) => ({ id: m.id, name: m.name, kind: m.kind, duration: Math.round(m.duration * 100) / 100, width: m.width, height: m.height })),
+    media: p.media.map((m) => {
+      const cuts = m.kind === "video" ? seats.cachedCuts(m.path) : null;
+      return { id: m.id, name: m.name, kind: m.kind, duration: Math.round(m.duration * 100) / 100, width: m.width, height: m.height, ...(cuts && cuts.length ? { cuts } : {}) };
+    }),
   };
 }
 
@@ -233,13 +237,22 @@ export async function evaluate(code: string, ctx: ScriptContext, lib: { name: st
 }
 
 /** The compiler's own checks after a run: what describe_shots said doesn't fit, or shows nothing. */
-export function lints(ctx: ScriptContext): string[] {
+export function lints(ctx: ScriptContext, p?: Project): string[] {
   const out: string[] = [];
   for (const s of ctx.shots) {
     const f = s.facts as unknown as Facts | undefined;
     if (f === undefined) continue;
     if (f.fits === "no") out.push(`error ${s.id} @${s.from}–${s.to}: the picture doesn't fit its words: ${f.why} (sees: ${f.sees})`);
     else if (f.empty) out.push(`error ${s.id} @${s.from}–${s.to}: shows no subject (sees: ${f.sees})`);
+    else if (f.fits === "unsure") out.push(`warning ${s.id} @${s.from}–${s.to}: may not fit its words: ${f.why}`);
+  }
+  // A photo shown bare, smaller than the frame: black around it ("I only saw that because I rendered the frame").
+  if (p !== undefined) for (const c of p.clips) {
+    if (c.type !== "video" || /^Janitor|^Dissolve|evidence|Mark blur/u.test(c.name ?? "") || clipEnd(c) / p.settings.fps <= ctx.project.span[0] || c.start / p.settings.fps >= ctx.project.span[1]) continue;
+    const m = mediaOf(p, c.media); if (m === undefined || m.kind !== "image" || trackOf(p, c.track)?.hidden) continue;
+    const fit = Math.min(p.settings.width / Math.max(m.width, 1), p.settings.height / Math.max(m.height, 1));
+    const cover = Math.max(p.settings.width / (m.width * fit), p.settings.height / (m.height * fit));
+    if (c.transform.scale < cover * 0.98 && c.frame === undefined) out.push(`error ${c.id} @${(c.start / p.settings.fps).toFixed(2)}: a photo shown bare without filling the frame (black around it): shot({id, fill: true}) or a card`);
   }
   const undescribed = ctx.shots.filter((s) => !s.facts).length;
   if (undescribed) out.push(`info: ${undescribed} shot(s) here aren't described; describe_shots checks each picture against its words`);
@@ -282,7 +295,11 @@ registerTool("run_edit", async ({ app, args, projectId }) => {
   const tools = result.ops.filter((op) => op.op === "@tool");
   const dryRun = args.dry_run === true;
   let applied: Args = { saved: false, operations: 0 };
-  if (plan.length > 0) {
+  if (plan.length === 0) {
+    // Nothing to change still shows the stretch's issues: the audit of it as it is.
+    const { audited } = await import("./edit_tools.ts");
+    applied = { audit: audited(app, p, null) };
+  } else {
     const apply = handlerFor("apply_edit_plan"); if (apply === undefined) throw new Error("apply_edit_plan isn't available");
     // The plan's operation n back to the script line that queued it.
     const planLines = result.ops.map((op, i) => [op, result.lines?.[i] ?? null] as const).filter(([op]) => op.op !== "@tool").map(([, line]) => line);
@@ -307,22 +324,35 @@ registerTool("run_edit", async ({ app, args, projectId }) => {
     const at = typeof i.start === "number" ? i.start : typeof i.at === "number" ? i.at : null;
     return at !== null && at / fps >= from - 1 && at / fps <= to + 1;
   }) : [];
+  // The compiler looks at what changed: shots new since the last description are described now (describe: false skips it).
+  let described: string[] | null = null;
+  if (!dryRun && plan.length + tools.length > 0 && args.describe !== false) {
+    try { described = await describe(app, projectId, from, to, false, 16); } catch (error) { described = [`describing failed: ${diag.messageOf(error)}`]; }
+  }
   const now = context(app, projectId, from, to);
   return text(stableStringify({
     saved: !dryRun && plan.length + tools.length > 0, dry_run: dryRun, rev: applied.rev ?? rev, operations: plan.length, tools: after, notes: result.notes,
-    results: applied.results, issues_here: issues, lints: lints(now),
+    results: applied.results, issues_here: issues, ...(described ? { described } : {}), lints: lints(now, liveProject(app, projectId).project),
   }));
 });
 
 registerTool("describe_shots", async ({ app, args, projectId }) => {
   const { project: p } = liveProject(app, projectId);
   const [from, to] = spanOf(p, args);
+  const described = await describe(app, projectId, from, to, args.refresh === true, 60);
+  if (described === null) return text(`every shot in ${from}–${to}s is described; refresh: true to look again`);
+  return text(`${described.length} shots described (${DESCRIBER}); read_edit and run_edit show them, run_edit's lints flag the ones that don't fit:\n${described.join("\n")}`);
+});
+
+/** Describes the stretch's shots that aren't yet (or all, refresh): their lines, or null when there were none to do. */
+async function describe(app: App, projectId: string, from: number, to: number, refresh: boolean, limit: number): Promise<string[] | null> {
+  const { project: p } = liveProject(app, projectId);
   const ctx = context(app, projectId, from, to);
   const fps = p.settings.fps;
   const facts = readFacts(app, projectId);
   const seen = observations(app, projectId);
-  const todo = ctx.shots.filter((s) => (args.refresh === true || s.facts === undefined) && s.to - s.from >= 0.15).slice(0, 60);
-  if (todo.length === 0) return text(`every shot in ${from}–${to}s is described; refresh: true to look again`);
+  const todo = ctx.shots.filter((s) => (refresh || s.facts === undefined) && s.to - s.from >= 0.15).slice(0, limit);
+  if (todo.length === 0) return null;
   const frames = todo.map((s) => Math.floor(((s.from + s.to) / 2) * fps));
   const pictures = await native().renderFrames({ project: { json: JSON.stringify(p) }, frames, maxSide: 768, priority: "agent", encode: "agent" });
   const described: string[] = [];
@@ -361,8 +391,8 @@ registerTool("describe_shots", async ({ app, args, projectId }) => {
   }
   fs.mkdirSync(parent(factsFile(app, projectId))!, { recursive: true });
   writeAtomic(factsFile(app, projectId), JSON.stringify(facts));
-  return text(`${described.length} shots described (${DESCRIBER}); read_edit and run_edit show them, run_edit's lints flag the ones that don't fit:\n${described.join("\n")}`);
-});
+  return described;
+}
 
 registerTool("save_graphic", ({ app, args }) => {
   if (typeof args.name !== "string" || !/^[a-z][A-Za-z0-9]{1,40}$/u.test(args.name)) throw new Error("name is a function name, camelCase (youtubeCard)");

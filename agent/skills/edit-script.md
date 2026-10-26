@@ -18,7 +18,7 @@ Edit Script is the timeline as TypeScript. It's the fastest way to see a stretch
    - a shot that doesn't fit its words;
    - a shot that shows nothing.
 
-   dry_run checks without saving.
+   dry_run checks without saving; a script that changes nothing (`note(...)` only) returns the stretch's issues as they are. A saving run describes the shots it changed, so its lints judge your new pictures at once. `media` items carry their scene `cuts` (source seconds) where known: start a shot after one and end it before the next. `shot({fill: true})` covers the frame (a photo of another shape would sit in black); a shot whose source runs out is refused.
 4. **save_graphic** keeps a function you wrote (a composition you'll reuse: a stat reveal, a two-post comparison) for every script in every project. read_edit lists the library.
 
 Work a chapter at a time: read_edit, describe_shots, one run_edit that fixes what you found, then read_edit and describe_shots again on what changed, until the lints are clean.

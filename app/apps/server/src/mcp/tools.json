@@ -2784,7 +2784,7 @@
   },
   {
     "name": "run_edit",
-    "description": "Run an Edit Script. TypeScript over the stretch start\u2013end: read project, clips, shots (with facts), words and media; write with shot, trim, remove, update, text, card, youtube, youtubeList, tweet, label, bumper, chapter, punch, leak, dissolve, flash, op and the saved library (edit_script_reference has the declarations). Everything it queues saves as one plan, or nothing when it throws (the error gives its line) or doesn't validate. Returns the plan's results, the audit's issues in that stretch and the lints: shots describe_shots found don't fit their words or show nothing. dry_run to check without saving.",
+    "description": "Run an Edit Script. TypeScript over the stretch start\u2013end: read project, clips, shots (with facts), words and media; write with shot, trim, remove, update, text, card, youtube, youtubeList, tweet, label, bumper, chapter, punch, leak, dissolve, flash, op and the saved library (edit_script_reference has the declarations). Everything it queues saves as one plan, or nothing when it throws (the error gives its line) or doesn't validate. Returns the plan's results, the audit's issues in that stretch and the lints: shots describe_shots found don't fit their words or show nothing. dry_run to check without saving. After a saving run the shots it changed are described (describe: false skips that), so a misfit comes back as a lint at once; a script that changes nothing still returns the stretch's issues.",
     "inputSchema": {
       "properties": {
         "project_id": {
@@ -2805,6 +2805,10 @@
         },
         "dry_run": {
           "description": "Check without saving. Default false.",
+          "type": "boolean"
+        },
+        "describe": {
+          "description": "Describe the shots it changed after saving. Default true.",
           "type": "boolean"
         }
       },

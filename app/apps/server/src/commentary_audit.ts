@@ -133,7 +133,8 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   const fps = p.settings.fps;
   // "a quick 1-second frame of neon, and then it goes over to Megan Fox… We cannot have mistakes like that."
-  const runs = shots(p, live);
+  // A house flash or dip is a transition, not a picture flashing up.
+  const runs = shots(p, live).filter((run) => !/^(Flash|Dip|Drop|Bridge flash|Light leak|Red flash)/u.test(live.find((c) => c.id === run.id)?.name ?? ""));
   for (let i = 1; i + 1 < runs.length; i++) {
     const run = runs[i]!;
     if (run.to - run.from >= FLASH_FRAMES || runs[i - 1]!.id === run.id || runs[i + 1]!.id === run.id) continue;

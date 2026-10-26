@@ -82,5 +82,71 @@ export function issues(p: Project): Record<string, unknown>[] {
     if (overlap < 2.5 || flagged.has(b.id)) continue;
     flagged.add(b.id); out.push({ kind: "commentary_repeated_range", clip: b.id, earlier: a.id, start: b.start, seconds: Math.round(overlap * 10) / 10, fix: "choose a distinct scene matching this beat, unless this is a deliberate short callback" });
   }
+  out.push(...pacing(p, live));
+  return out;
+}
+
+/** Shortest a card may be up: its slide takes most of a second, then it must be read. */
+export const CARD_MIN_SECONDS = 2.5;
+/** A picture showing for fewer frames than this between two others is a flash, not a shot. */
+export const FLASH_FRAMES = 8;
+/** One source's shots starting within this many seconds... */
+export const OVERUSE_WINDOW = 60;
+/** ...this many times is the same footage again and again. */
+export const OVERUSE_USES = 3;
+
+/** The source video a media was cut from: excerpts of one YouTube video are one source. */
+function sourceOf(p: Project, media: string): string {
+  const name = mediaOf(p, media)?.name ?? "";
+  return /\[([\w-]{11})\]/u.exec(name)?.[1] ?? media;
+}
+
+/** The team's N3on v1 notes that a structural check can see: flashes, unreadable cards, recycled footage and recycled graphics. */
+function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const fps = p.settings.fps;
+  const index = new Map(p.tracks.map((t, i) => [t.id, i]));
+  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker/u.test(c.name ?? "")) || c.type === "solid");
+  // "a quick 1-second frame of neon, and then it goes over to Megan Fox… We cannot have mistakes like that."
+  const cuts = [...new Set(pictures.flatMap((c) => [c.start, clipEnd(c)]))].sort((a, b) => a - b);
+  const runs: { id: string; from: number; to: number }[] = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const [from, to] = [cuts[i]!, cuts[i + 1]!];
+    const top = pictures.filter((c) => c.start <= from && clipEnd(c) >= to).sort((a, b) => (index.get(b.track) ?? 0) - (index.get(a.track) ?? 0))[0];
+    if (top === undefined) continue;
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.id === top.id && last.to === from) last.to = to;
+    else runs.push({ id: top.id, from, to });
+  }
+  for (let i = 1; i + 1 < runs.length; i++) {
+    const run = runs[i]!;
+    if (run.to - run.from >= FLASH_FRAMES || runs[i - 1]!.id === run.id || runs[i + 1]!.id === run.id) continue;
+    out.push({ kind: "commentary_flash", clip: run.id, start: run.from, frames: run.to - run.from, between: [runs[i - 1]!.id, runs[i + 1]!.id],
+      fix: "butt the pictures either side together (or hold one of them over the gap): a picture flashing up for a few frames reads as a mistake" });
+  }
+  const cards = live.filter((c) => c.name === "Janitor · source card" && c.duration < CARD_MIN_SECONDS * fps);
+  for (const c of cards) out.push({ kind: "commentary_short_card", clip: c.id, start: c.start, seconds: Math.round((c.duration / fps) * 10) / 10,
+    fix: `a card needs ${CARD_MIN_SECONDS}s or more to arrive and be read: hold it longer, or show the moment as footage instead` });
+  // "We're using all of the same clips."
+  const broll = live.filter((c): c is Extract<Clip, { type: "video" }> => c.type === "video" && /B-roll/u.test(c.name ?? "") && mediaOf(p, c.media)?.kind === "video").sort((a, b) => a.start - b.start);
+  const bySource = new Map<string, typeof broll>();
+  for (const c of broll) bySource.set(sourceOf(p, c.media), [...(bySource.get(sourceOf(p, c.media)) ?? []), c]);
+  for (const [source, uses] of bySource) {
+    let until = -1;
+    for (let i = 0; i + OVERUSE_USES - 1 < uses.length; i++) {
+      const window = uses.slice(i, i + OVERUSE_USES);
+      if (window[0]!.start < until || window[OVERUSE_USES - 1]!.start - window[0]!.start > OVERUSE_WINDOW * fps) continue;
+      const within = uses.filter((c) => c.start >= window[0]!.start && c.start - window[0]!.start <= OVERUSE_WINDOW * fps);
+      until = within[within.length - 1]!.start + 1;
+      out.push({ kind: "commentary_source_overuse", source, start: window[0]!.start, clips: within.map((c) => c.id), name: mediaOf(p, window[0]!.media)?.name,
+        fix: `${within.length} shots from one video inside ${OVERUSE_WINDOW}s: find other sources for these beats (the event itself, the people named, a different year or setting), keeping this one for the line that's about it` });
+    }
+  }
+  // "we use background blur, a box in the middle… the second one is just text in the middle, and that's it."
+  const graphics = live.filter((c) => /^Janitor · (source card|emphasis|YouTube frame|corner label|bumper avatar|light leak|profile facts)$/u.test(c.name ?? ""));
+  const punches = live.filter((c) => c.type === "video" && (c.keyframes?.scale ?? []).some((k) => k.ease === "hold"));
+  const plain = graphics.filter((c) => c.name === "Janitor · source card" || c.name === "Janitor · emphasis").length;
+  if (graphics.length >= 10 && plain / graphics.length >= 0.85) out.push({ kind: "commentary_graphics_monotony", start: graphics[0]!.start, cards_and_text: plain, graphics: graphics.length, punch_ins: punches.length,
+    fix: "nearly every graphic is a card or centred text: use the reference's other moves where they fit (commentary_youtube for a video talked about, highlight_evidence on a real post, commentary_punch on the words that land, commentary_label for a comic beat, commentary_leak on a turn), and show people in footage rather than cards" });
   return out;
 }

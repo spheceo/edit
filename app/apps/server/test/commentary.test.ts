@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { toParsed, scriptStyle } from "../src/writer_handoff.ts";
 import { issues } from "../src/commentary_audit.ts";
-import { card, narrationLook, profile, text } from "../src/commentary_graphics.ts";
+import { bumper, card, label, leak, narrationLook, profile, punch, text, youtube } from "../src/commentary_graphics.ts";
 import { markerPng, rectOf } from "../src/evidence_highlight.ts";
-import { rangeOf } from "../src/commentary_sources.ts";
+import { compactCount, rangeOf } from "../src/commentary_sources.ts";
+import { quoteCue } from "../src/script.ts";
 import { clip, media, project } from "./helpers/model.ts";
 
 test("commentary handoff preserves interleaved narration, reversed cold-open clips and anchored notes without voicing them", () => {
@@ -93,4 +94,61 @@ test("a requested narration look automatically avoids source excerpts and existi
   expect(p.clips.filter((c) => c.name === "Janitor · narration look").map((c) => [c.start, c.duration])).toEqual([[0,90],[180,60]]);
   narrationLook(p, { start: 0, end: 240 });
   expect(p.clips.filter((c) => c.name === "Janitor · narration look")).toHaveLength(2);
+});
+
+test("a Writer quote becomes its excerpt's cue words, so the cut starts where the quote does", () => {
+  expect(quoteCue("Something I have cool coming up… What? … Yeah. So, that's going to be sick.")).toEqual(["Something", "sick."]);
+  expect(quoteCue("  ")).toBeNull();
+  const parsed = toParsed({ id: "w", title: "E", sourceKind: "commentary", commentary: { draft: { sections: [{ heading: "1", paragraphs: [{ pieces: [
+    { kind: "clip" as const, link: "https://youtu.be/LtmN4iw362k", startMs: 0, endMs: 9000, quote: "Hello there … goodbye" }] }] }] } } });
+  expect(parsed.blocks[0]).toMatchObject({ words: ["Hello", "goodbye"] });
+});
+
+test("N3on v1's flashes, short cards, recycled sources and card-and-text-only graphics are flagged", () => {
+  const p = project("essay"); p.style = "commentary";
+  p.media.push(media({ id: "monkey", name: "N3on Returns To Monkey! [qXGbUquhQrE].mp4", kind: "video", path: "/m.mp4", duration: 300, width: 1920, height: 1080, has_audio: false }),
+    media({ id: "photo", name: "Photo", kind: "image", path: "/p.jpg", duration: 0, width: 1200, height: 800, has_audio: false }));
+  // Footage under two cards that leave a two-frame gap between them.
+  p.clips.push(clip({ id: "under", type: "video", media: "monkey", name: "Cut-in 1 · B-roll: stream", track: "v1", start: 0, duration: 300 }));
+  card(p, { media: "photo", start: 30, end: 100 });
+  card(p, { media: "photo", start: 102, end: 250 });
+  p.clips.push(clip({ id: "b2", type: "video", media: "monkey", name: "Cut-in 2 · B-roll: stream", track: "v1", start: 300, duration: 300, source_in: 20 }),
+    clip({ id: "b3", type: "video", media: "monkey", name: "Cut-in 3 · B-roll: stream", track: "v1", start: 600, duration: 300, source_in: 40 }));
+  const kinds = issues(p).map((i) => i.kind);
+  expect(kinds).toEqual(expect.arrayContaining(["commentary_flash", "commentary_short_card", "commentary_source_overuse"]));
+  expect(issues(p).find((i) => i.kind === "commentary_flash")).toMatchObject({ clip: "under", frames: 2 });
+  for (let at = 1000; at < 4000; at += 300) text(p, { text: "PHRASE", start: at, end: at + 60 });
+  expect(kinds.includes("commentary_graphics_monotony") || issues(p).some((i) => i.kind === "commentary_graphics_monotony")).toBe(true);
+});
+
+test("punch-ins jump and hold on the words, closing in on the point given", () => {
+  const p = project("punch"); p.style = "commentary";
+  p.media.push(media({ id: "v", name: "V", kind: "video", path: "/v.mp4", duration: 30, width: 1920, height: 1080, has_audio: false }));
+  p.clips.push(clip({ id: "shot", type: "video", media: "v", track: "v1", start: 100, duration: 200 }));
+  punch(p, { clip: "shot", at: [150, 220], x: 100, y: -50 });
+  const c = p.clips.find((one) => one.id === "shot")!;
+  expect(c.keyframes?.scale?.map((k) => [k.frame, Math.round(k.value * 100) / 100, k.ease])).toEqual([[0, 1, "hold"], [50, 1.12, "hold"], [120, 1.24, "hold"]]);
+  expect(c.keyframes?.x?.[1]?.value).toBeCloseTo(-12);
+  expect(() => punch(p, { clip: "shot", at: [150, 155] })).toThrow("12 frames");
+  expect(() => punch(p, { clip: "shot", at: [400] })).toThrow("inside the clip");
+});
+
+test("the YouTube reference, corner label, bumper and light leak are editable layers in the house's places", () => {
+  const p = project("refs"); p.style = "commentary";
+  p.media.push(media({ id: "thumb", name: "T", kind: "image", path: "/t.jpg", duration: 0, width: 1280, height: 720, has_audio: false }),
+    media({ id: "av", name: "A", kind: "image", path: "/a.png", duration: 0, width: 258, height: 258, has_audio: false }),
+    media({ id: "leak", name: "Leak", kind: "video", path: "/l.mp4", duration: 6, width: 1080, height: 1920, has_audio: true }));
+  const ref = youtube(p, { media: "thumb", avatar: "av", title: "THE TRUTH ABOUT EVERYTHING PART 2", channel: "Reggie", meta: "1.8M views • 6 days ago", duration: "9:53", start: 0, end: 120 });
+  const frame = p.clips.find((c) => c.id === ref.frame)!;
+  expect(frame.type === "video" && frame.transform.x).toBeLessThan(0);
+  expect(p.clips.filter((c) => c.type === "text").map((c) => c.type === "text" && c.text)).toEqual(expect.arrayContaining(["9:53", "1.8M views • 6 days ago", "Reggie"]));
+  label(p, { text: "*COMPLETE CRASHOUT*", start: 0, end: 60 });
+  const tag = p.clips.find((c) => c.name === "Janitor · corner label")!;
+  expect(tag.type === "text" && tag.transform.x < 0 && tag.transform.y < 0).toBe(true);
+  bumper(p, { avatar: "av", line: "Cleaning up the biggest stream on Twitch", subline: "(among many other charges)", start: 200, end: 320 });
+  expect(p.clips.some((c) => c.type === "text" && c.text === "CLEANING UP THE BIGGEST STREAM ON TWITCH")).toBe(true);
+  leak(p, { at: 500, media: "leak" });
+  expect(p.clips.find((c) => c.name === "Janitor · light leak")).toMatchObject({ start: 490, duration: 22, speed: 3.5, blend: "screen", transform: { rotation: 90 } });
+  expect(compactCount(1_812_345)).toBe("1.8M");
+  expect(compactCount(181_061)).toBe("181K");
 });

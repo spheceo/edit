@@ -6,6 +6,9 @@ import type { App } from "./app.ts";
 import { writeAtomic } from "./files.ts";
 import { importMade, importPaths } from "./import.ts";
 import wallpaper from "../../../assets/commentary/background.png" with { type: "file" };
+import avatarFile from "../../../assets/commentary/avatar.png" with { type: "file" };
+import subscribeFile from "../../../assets/commentary/subscribe.png" with { type: "file" };
+import leakFile from "../../../assets/commentary/light-leak.mp4" with { type: "file" };
 import { registerTool, text } from "./mcp/registry.ts";
 import { join, parent } from "./paths.ts";
 import * as cloud from "./cloud.ts";
@@ -68,12 +71,17 @@ registerTool("search_broll", async ({ app, args, projectId }) => {
     try { inventory = JSON.parse(fs.readFileSync(join(app.store.home, "research", projectId, "broll.json"), "utf8")); } catch { /* no sources yet */ }
     // Bun's embedded file is virtual; native ImageIO and realpath need a
     // real file, as bundled sound effects do. Never pass /$bunfs to native I/O.
-    const bytes = new Uint8Array(await Bun.file(wallpaper).arrayBuffer());
-    const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 12);
-    const brand = join(app.store.home, "graphics", "commentary", `background-${hash}.png`);
-    if (!fs.existsSync(brand)) { fs.mkdirSync(parent(brand)!, { recursive: true }); fs.writeFileSync(brand, bytes); }
-    const [, ids, errors] = await importPaths(app, projectId, [brand], false, "agent");
-    return text(stableStringify({ inventory, brand_background: ids[0] ?? null, errors }));
+    const brand = await Promise.all(([["background", wallpaper, "png"], ["avatar", avatarFile, "png"], ["subscribe", subscribeFile, "png"], ["light-leak", leakFile, "mp4"]] as const).map(async ([name, file, ext]) => {
+      const bytes = new Uint8Array(await Bun.file(file).arrayBuffer());
+      const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 12);
+      const path = join(app.store.home, "graphics", "commentary", `${name}-${hash}.${ext}`);
+      if (!fs.existsSync(path)) { fs.mkdirSync(parent(path)!, { recursive: true }); fs.writeFileSync(path, bytes); }
+      return path;
+    }));
+    // One at a time, so a file that fails never shifts the others' ids.
+    const ids: (string | null)[] = []; const errors: string[] = [];
+    for (const path of brand) { const [, made, failed] = await importPaths(app, projectId, [path], false, "agent"); ids.push(made[0] ?? null); errors.push(...failed); }
+    return text(stableStringify({ inventory, brand_background: ids[0] ?? null, brand_avatar: ids[1] ?? null, brand_subscribe: ids[2] ?? null, brand_light_leak: ids[3] ?? null, errors }));
   }
   const limit = Math.max(1, Math.min(8, Number(args.per_query) || 5));
   const results: unknown[] = [];
@@ -159,4 +167,48 @@ registerTool("record_broll_observations", ({ app, args, projectId }) => {
     keep(app, projectId, `observation:${one.media}`, { ...one, at: Date.now() });
   }
   return text("Saved frame observations and their narration purposes. These are the editor's observations, not an automatic claim of verification.");
+});
+
+/** A count as YouTube writes it: 181K, 1.8M. */
+export function compactCount(n: number): string {
+  const unit = n >= 1e9 ? [1e9, "B"] : n >= 1e6 ? [1e6, "M"] : n >= 1e3 ? [1e3, "K"] : [1, ""];
+  const value = n / (unit[0] as number);
+  return `${value >= 10 || unit[1] === "" ? Math.floor(value) : Math.floor(value * 10) / 10}${unit[1]}`;
+}
+
+async function fetchTo(url: string, path: string): Promise<boolean> {
+  try {
+    const answer = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    if (!answer.ok) return false;
+    fs.writeFileSync(path, new Uint8Array(await answer.arrayBuffer()));
+    return true;
+  } catch { return false; }
+}
+
+registerTool("youtube_reference", async ({ app, args, projectId }) => {
+  const id = typeof args.url === "string" ? youtube.videoId(args.url) : null;
+  if (id === null) throw new Error("url must be a YouTube video");
+  const dir = join(app.store.home, "research", projectId, "youtube", id);
+  fs.mkdirSync(dir, { recursive: true });
+  const info = JSON.parse(await run(app.store.home, ["--skip-download", "--dump-single-json", `https://www.youtube.com/watch?v=${id}`])) as Args;
+  const thumb = join(dir, "thumbnail.jpg");
+  const got = await fetchTo(`https://i.ytimg.com/vi/${id}/maxresdefault.jpg`, thumb) || await fetchTo(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`, thumb);
+  let avatar: string | null = null;
+  if (typeof info.channel_id === "string") {
+    try {
+      const channel = JSON.parse(await run(app.store.home, ["--flat-playlist", "--playlist-items", "0", "--dump-single-json", `https://www.youtube.com/channel/${info.channel_id}`])) as { thumbnails?: { id?: string; url?: string }[] };
+      const url = channel.thumbnails?.find((t) => t.id === "avatar_uncropped")?.url;
+      const path = join(dir, "avatar.jpg");
+      if (url !== undefined && await fetchTo(url, path)) avatar = path;
+    } catch { /* no avatar: the card shows the channel's name alone */ }
+  }
+  const paths = [...(got ? [thumb] : []), ...(avatar ? [avatar] : [])];
+  const ids: (string | undefined)[] = [];
+  for (const path of paths) ids.push((await importPaths(app, projectId, [path], false, "agent"))[1][0]);
+  const views = typeof info.view_count === "number" ? `${compactCount(info.view_count)} views` : null;
+  const date = typeof info.upload_date === "string" ? `${info.upload_date.slice(0, 4)}-${info.upload_date.slice(4, 6)}-${info.upload_date.slice(6, 8)}` : null;
+  const found = { url: `https://www.youtube.com/watch?v=${id}`, title: info.title, channel: info.channel ?? info.uploader, verified: info.channel_is_verified === true,
+    views, uploaded: date, duration: info.duration_string ?? null, thumbnail: got ? ids[0] ?? null : null, avatar: avatar ? ids[got ? 1 : 0] ?? null : null };
+  keep(app, projectId, `reference:${id}`, found);
+  return text(stableStringify({ ...found, note: "For commentary_youtube: media is the thumbnail or, better, an imported frame of the moment you're talking about (a video excerpt and its source_in); meta is what the card says under the title, e.g. \"1.8M views • 6 days ago\" as it stood at that point in the story (uploaded is the date), never invented numbers." }));
 });

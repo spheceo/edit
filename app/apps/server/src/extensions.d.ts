@@ -11,6 +11,11 @@ declare module "*.png" {
   export default path;
 }
 
+declare module "*.mp4" {
+  const path: string;
+  export default path;
+}
+
 // Markdown imported `with { type: "text" }` (the agent's text, agent.ts):
 // Bun gives its contents, carried inside the compiled binary.
 declare module "*.md" {

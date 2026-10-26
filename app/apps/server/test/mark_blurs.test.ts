@@ -108,3 +108,14 @@ test("a look's full-width band and blur_marks' own blur aren't blur_off_shot", (
   p.clips.push(band("e1", "Film look · soft edge", 1920) as Clip, band("m1", "Mark blur · fox8 · c1", 300) as Clip);
   expect(offShot(p)).toEqual([]);
 });
+
+test("a card's mark is blurred inside the card, never past its edge", () => {
+  const p = project();
+  const v1 = p.tracks.find((track) => track.kind === "video")!.id;
+  // A card at 60%: the logo's grown box would reach past its right edge.
+  const card = shot("card", v1, 0, 60, { name: "Janitor · source card", transform: { x: 0, y: 0, scale: 0.6, rotation: 0 } });
+  p.clips.push(card);
+  const [blur] = blursFor(p, card, p.media[0]!, { text: "logo", box: [0.9, 0.05, 1, 0.12] });
+  const right = blur!.blur!.x! + blur!.blur!.width! / 2;
+  expect(right).toBeLessThanOrEqual(1920 * 0.6 / 2 + 0.5);
+});

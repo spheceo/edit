@@ -53,6 +53,10 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
   const rects = args.rects.map((v) => rectOf(v, media.width, media.height));
   const start = typeof args.start === "number" && Number.isInteger(args.start) ? args.start : parent.start;
   const end = typeof args.end === "number" && Number.isInteger(args.end) ? args.end : clipEnd(parent);
+  // A dark post (X, a dark-mode page) keeps its white words white over the red
+  // with Screen, as the reference's tweet highlight does; Multiply would turn
+  // them red and leave the black ground black.
+  const dark = args.dark === true;
   const draw = typeof args.draw_frames === "number" ? Math.max(2, Math.min(60, Math.round(args.draw_frames))) : 14;
   if (start < parent.start || end > clipEnd(parent) || end <= start) throw new Error("the highlight must stay within its source card's frames");
   const dir = join(app.store.home, "research", projectId, "highlights"); fs.mkdirSync(dir, { recursive: true });
@@ -72,7 +76,7 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
       keyframes["crop.right"] = [{ frame: 0, value: Math.min(0.9999, 1 - r.x / media.width), ease: "linear" }, { frame: Math.min(draw, duration - 1), value: Math.max(0, 1 - (r.x + r.width) / media.width), ease: "linear" }];
       const id = freshId(project, "c");
       project.clips.push(clipFrom({ id, type: "video", name: "Janitor · evidence marker", media: ids[i], track: addTrack(project, "video"), start: at, duration,
-        source_in: 0, blend: "multiply", transform: original.transform, opacity: original.opacity, fade_out: Math.min(original.fade_out, duration - 1), keyframes }));
+        source_in: 0, blend: dark ? "screen" : "multiply", transform: original.transform, opacity: original.opacity, fade_out: Math.min(original.fade_out, duration - 1), keyframes }));
       made.push(id);
     }
     return made;

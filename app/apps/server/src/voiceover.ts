@@ -523,6 +523,20 @@ export function isVoiceover(project: Project, clip: Clip): boolean {
   );
 }
 
+/**
+ * The sound of the script's source excerpts playing in frames `[from, to)`, in
+ * order: the team (N3on v1): "the majority of the silence is cut out from the
+ * video… word, word, word, word… unless the silence makes sense for dramatic
+ * effect".
+ */
+export function excerptsIn(project: Project, from: number, to: number): Clip[] {
+  const placed = new Set((project.script?.blocks ?? []).flatMap((block) => (block.kind === "footage" && block.clip != null ? [block.clip] : [])));
+  const links = new Set(project.clips.filter((clip) => placed.has(clip.id) && clip.link != null).map((clip) => clip.link as string));
+  return project.clips
+    .filter((clip) => clip.type === "audio" && clip.start < to && clipEnd(clip) > from && (placed.has(clip.id) || (clip.link != null && links.has(clip.link))))
+    .sort((a, b) => a.start - b.start);
+}
+
 /** The voice-over clips playing in frames `[from, to)`, in order. */
 function voiceoversIn(project: Project, from: number, to: number): Clip[] {
   return project.clips
@@ -604,16 +618,18 @@ export function tightenPlan(
   to: number,
   maxPause: number,
   keep: number,
+  footage = false,
 ): [Pause[], Pause[]] {
   const cut: Pause[] = [];
   const left: Pause[] = [];
-  for (const clip of voiceoversIn(project, from, to)) {
+  for (const clip of footage ? excerptsIn(project, from, to) : voiceoversIn(project, from, to)) {
     const media = clipMedia(clip);
     const heard = media === null ? undefined : words.get(media);
     if (heard === undefined) continue;
     for (const pause of pauses(project, clip, heard, maxPause, keep)) {
       if (pause.from < from || pause.to > to) continue;
-      if (seams.subtitles.footageSound(project, pause.from, pause.to).length === 0) cut.push(pause);
+      // A source excerpt's own gap is cut with its picture (a jump cut, word to word).
+      if (footage || seams.subtitles.footageSound(project, pause.from, pause.to).length === 0) cut.push(pause);
       else left.push(pause);
     }
   }
@@ -647,17 +663,18 @@ export async function tighten(
   maxPause: number,
   keep: number,
   dryRun: boolean,
+  footage = false,
 ): Promise<Json> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
   const project = live.project;
   const fps = fpsOf(project);
   const [from, to] = span;
-  const media = voiceoversIn(project, from, to).flatMap((clip) => {
+  const media = (footage ? excerptsIn(project, from, to) : voiceoversIn(project, from, to)).flatMap((clip) => {
     const own = clipMedia(clip);
     return own === null ? [] : [own];
   });
-  if (media.length === 0) throw new Error("no voice-over plays in that span");
+  if (media.length === 0) throw new Error(footage ? "no source excerpt plays in that span" : "no voice-over plays in that span");
   const words = new Map<string, Word[]>();
   for (const mediaId of media) {
     if (words.has(mediaId)) continue;
@@ -677,11 +694,11 @@ export async function tighten(
   let left: Pause[];
   let removed: number;
   if (dryRun) {
-    [cut, left] = tightenPlan(project, words, from, to, maxPause, keep);
+    [cut, left] = tightenPlan(project, words, from, to, maxPause, keep, footage);
     removed = cut.reduce((total, pause) => total + (pause.to - pause.from), 0);
   } else {
     [, [cut, left, removed]] = await app.store.update(id, "agent", (project): [Pause[], Pause[], number] => {
-      const [cut, left] = tightenPlan(project, words, from, to, maxPause, keep);
+      const [cut, left] = tightenPlan(project, words, from, to, maxPause, keep, footage);
       return [cut, left, removePauses(project, cut)];
     });
   }

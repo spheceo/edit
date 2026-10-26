@@ -232,13 +232,15 @@ registerTool("tighten_voiceover", async ({ app, args, projectId }) => {
   const end = num(args.end);
   const from = start === null ? 0 : toI64(round(start * fps));
   const to = end === null ? projectDuration(project) : toI64(round(end * fps));
+  // Source excerpts are cut closer, word to word; a voice-over keeps its breaths.
+  const footage = args.footage === true;
   const pause = num(args.max_pause);
-  const maxPause = pause !== null && Number.isFinite(pause) && pause >= 0.2 ? pause : 0.7;
+  const maxPause = pause !== null && Number.isFinite(pause) && pause >= 0.2 ? pause : footage ? 0.4 : 0.7;
   const kept = num(args.keep);
-  const keep = Math.min(kept !== null && Number.isFinite(kept) && kept >= 0.1 ? kept : 0.35, maxPause);
+  const keep = Math.min(kept !== null && Number.isFinite(kept) && kept >= 0.1 ? kept : footage ? 0.15 : 0.35, maxPause);
   const dryRun = typeof args.dry_run === "boolean" ? args.dry_run : false;
   const done = await diag.timeAsync("voiceover", "tighten voice-over", () =>
-    voiceover.tighten(app, projectId, [from, to], maxPause, keep, dryRun),
+    voiceover.tighten(app, projectId, [from, to], maxPause, keep, dryRun, footage),
   );
   return text(stableStringify(done, 2));
 });

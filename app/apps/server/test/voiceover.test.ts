@@ -239,3 +239,13 @@ test("words_compare_loosely_only_when_long", () => {
   expect(same("on", "in")).toBe(false);
   expect(same("crash", "cash1x")).toBe(false);
 });
+
+test("footage tightening cuts a source excerpt's own gaps, word to word, and leaves the voice-over alone", () => {
+  const project = cutIn();
+  project.script = { source: "writer:w", blocks: [{ kind: "footage", file: "youtube:x", start: 40, end: 43, label: "", clip: "pic" }] } as unknown as Project["script"];
+  // The excerpt plays the bodycam from 40 s: "Stop" … 0.9 s … "now".
+  const heard = new Map([["m", [said("Stop", 40.1, 40.4), said("now", 41.3, 41.6)]]]);
+  const [cut] = tightenPlan(project, heard, 0, 400, 0.4, 0.15, true);
+  expect(cut.map((pause) => [pause.clip, pause.between])).toEqual([["snd", ["Stop", "now"]]]);
+  expect(tightenPlan(project, heard, 0, 400, 0.4, 0.15, false)[0]).toEqual([]);
+});

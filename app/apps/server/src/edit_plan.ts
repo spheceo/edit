@@ -426,6 +426,16 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return commentaryGraphics.narrationLook(project, args);
     case "commentary_profile":
       return commentaryGraphics.profile(project, args);
+    case "commentary_youtube":
+      return commentaryGraphics.youtube(project, args);
+    case "commentary_label":
+      return commentaryGraphics.label(project, args);
+    case "commentary_bumper":
+      return commentaryGraphics.bumper(project, args);
+    case "commentary_punch":
+      return commentaryGraphics.punch(project, args);
+    case "commentary_leak":
+      return commentaryGraphics.leak(project, args);
     case "intro_captions":
       return intro.introCaptions(project, args);
     case "countdown":

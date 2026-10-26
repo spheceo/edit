@@ -76,7 +76,8 @@ export function commentaryParsed(given: WriterScript): Parsed {
     if (file === null || !Number.isFinite(one.startMs) || !Number.isFinite(one.endMs) || one.startMs < 0 || one.endMs <= one.startMs) {
       throw new Error(`invalid commentary excerpt: ${one.video ?? one.link}`);
     }
-    blocks.push({ kind: "footage", file, url: one.link, start: one.startMs / 1000, end: one.endMs / 1000,
+    const words = script.quoteCue(one.quote);
+    blocks.push({ kind: "footage", file, url: one.link, start: one.startMs / 1000, end: one.endMs / 1000, ...(words ? { words } : {}),
       label: `${mmss(one.startMs / 1000)} - ${mmss(one.endMs / 1000)}`,
       notes: [...notes, `Source: ${one.source ?? ""} ${one.video ?? ""} ${one.link}`.trim(),
         ...(one.quote ? [`Expected words (verify against the recording): ${one.quote}`] : []),

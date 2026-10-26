@@ -32,6 +32,8 @@ const GROW = 0.15;
 const FEATHER = 10;
 /** Every blur this lays is named so; a re-run replaces them. */
 export const NAME = "Mark blur";
+/** Pictures shown only blurred (a card's backdrop): their marks can't be read. */
+const BLURRED_ALREADY = /card backdrop$/u;
 
 /** A picture clip's framing at a frame of the clip (its own seconds from its start). */
 /** A mark's box on the frame at a frame of the clip: centre x, y and size in project px. */
@@ -44,6 +46,26 @@ export function boxAt(project: Project, clip: VideoClip, media: Media, mark: wat
   const w = (x1 - x0) * mw * fit;
   const h = (y1 - y0) * mh * fit;
   return [((x0 + x1) / 2 - 0.5) * mw * fit + x, ((y0 + y1) / 2 - 0.5) * mh * fit + y, w * (1 + 2 * GROW) + 2 * FEATHER, h * (1 + 2 * GROW) + 2 * FEATHER];
+}
+
+/**
+ * A box kept inside the clip's own picture at a frame of the clip: a framed
+ * card's mark blurred past its border smeared the composition around it (the
+ * team, N3on v1: "if we did have to blur something, we would blur it within
+ * the square").
+ */
+export function insidePicture(project: Project, clip: VideoClip, media: Media, box: [number, number, number, number], frame: number): [number, number, number, number] {
+  const { width, height } = project.settings;
+  const [mw, mh] = [media.width || width, media.height || height];
+  const { x, y, scale } = framingAt(clip, frame);
+  const fit = Math.min(width / mw, height / mh) * scale;
+  const [pw, ph] = [mw * fit, mh * fit];
+  const left = Math.max(box[0] - box[2] / 2, x - pw / 2);
+  const right = Math.min(box[0] + box[2] / 2, x + pw / 2);
+  const top = Math.max(box[1] - box[3] / 2, y - ph / 2);
+  const bottom = Math.min(box[1] + box[3] / 2, y + ph / 2);
+  // Never 0: a blur without a width blurs the whole frame.
+  return [(left + right) / 2, (top + bottom) / 2, Math.max(right - left, 1), Math.max(bottom - top, 1)];
 }
 
 /** How much of a clip's own picture shows at a frame of the timeline (0–1): its fades and opacity. */
@@ -111,7 +133,12 @@ export function blursFor(project: Project, clip: VideoClip, media: Media, mark: 
   const alpha = visibility(project, clip);
   const out: AdjustmentClip[] = [];
   for (const [from, to] of shownRuns(alpha)) {
-    const boxes = alpha.map((_, frame) => boxAt(project, clip, media, mark.box, frame));
+    // A picture smaller than the frame (a card) keeps its blur inside it.
+    const inset = framingAt(clip, from).scale < 0.99;
+    const boxes = alpha.map((_, frame) => {
+      const box = boxAt(project, clip, media, mark.box, frame);
+      return inset ? insidePicture(project, clip, media, box, frame) : box;
+    });
     const [x, y, w, h] = boxes[from]!;
     const keyframes: Record<string, Keyframe[]> = {};
     const params = ["blur.x", "blur.y", "blur.width", "blur.height"] as const;
@@ -212,6 +239,9 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
   const ours = new Set(watermarks.ours(project));
   for (const clip of project.clips) {
     if (clip.type !== "video" || (only !== null && !only.has(clip.id)) || trackOf(project, clip.track)?.hidden === true) continue;
+    // A card's backdrop is its own picture blurred already: a mark's blur on it
+    // lay over the sharp card above (N3on v1's band across the card at 0:50).
+    if (BLURRED_ALREADY.test(clip.name ?? "")) continue;
     const media = mediaOf(project, clip.media);
     if (media === undefined || ours.has(media.id) || !watermarks.looksForMarks(media)) continue;
     const marks = watermarks.marksOf(project, media);

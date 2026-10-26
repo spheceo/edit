@@ -714,6 +714,18 @@ export function cueWords(found: string[]): [string, string] | null {
   return null;
 }
 
+/** A quote's first and last words as a range's cue: Writer's commentary
+ * excerpts start where their quote does (the team, N3on v1: "there's a second
+ * or two of talking beforehand… that's a much more natural point to start"). */
+export function quoteCue(quote: string | null | undefined): [string, string] | null {
+  const said = splitWhitespace((quote ?? "").replace(/[…]|\.{3}/g, " "));
+  const first = said[0];
+  const last = said.at(-1);
+  return first === undefined || last === undefined ? null : [first, last];
+}
+
+const EXPECTED = "Expected words (verify against the recording): ";
+
 // ---------------------------------------------------------------------------
 // Precise cuts: the Doc rounds ranges to the second, so each range is cut at
 // its first and last words as the transcript times them.
@@ -1803,11 +1815,12 @@ export async function realign(app: App, id: string): Promise<unknown[]> {
     if (!isSome(project.script)) return changed;
     const blocks = structuredClone(project.script.blocks);
     for (const block of blocks) {
-      if (block.kind !== "footage" || !isSome(block.media) || !isSome(block.words) || !isSome(block.clip)) continue;
+      const cue = block.kind === "footage" ? cueOf(block) : null;
+      if (block.kind !== "footage" || !isSome(block.media) || cue === null || !isSome(block.clip)) continue;
       const media = heard.get(block.media);
       if (media === undefined) continue;
       const offset = block.media_start ?? 0;
-      const [cutIn, cutOut] = align(media.words, media.peaks, block.words, block.start - offset, block.end - offset);
+      const [cutIn, cutOut] = align(media.words, media.peaks, cue, block.start - offset, block.end - offset);
       const found: [number, number] = [cutIn === null ? block.start : cutIn + offset, cutOut === null ? block.end : cutOut + offset];
       if (cutIn !== null || cutOut !== null) block.cut = found;
       else delete block.cut;
@@ -1857,6 +1870,14 @@ export async function realign(app: App, id: string): Promise<unknown[]> {
   return changed;
 }
 
+/** A footage range's cue words: the Doc's, else its Writer quote's (scripts handed over before quotes became cues). */
+function cueOf(block: ScriptBlock): [string, string] | null {
+  if (block.kind !== "footage") return null;
+  if (isSome(block.words)) return block.words;
+  const note = (block.notes ?? []).find((one) => one.startsWith(EXPECTED));
+  return note === undefined ? null : quoteCue(note.slice(EXPECTED.length));
+}
+
 /** What's said in a media file, and how loud it is moment to moment. */
 interface Heard {
   words: Word[];
@@ -1871,7 +1892,7 @@ interface Heard {
 async function transcripts(app: App, project: Project): Promise<Map<string, Heard>> {
   const used = new Set<string>();
   for (const block of project.script?.blocks ?? []) {
-    if (block.kind === "footage" && isSome(block.media) && isSome(block.words)) used.add(block.media);
+    if (block.kind === "footage" && isSome(block.media) && cueOf(block) !== null) used.add(block.media);
   }
   const media = project.media.filter((item) => used.has(item.id) && item.has_audio);
   // Listening for the case's names (names.ts: the script's narration and any research).

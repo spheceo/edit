@@ -101,13 +101,10 @@ function sourceOf(p: Project, media: string): string {
   return /\[([\w-]{11})\]/u.exec(name)?.[1] ?? media;
 }
 
-/** The team's N3on v1 notes that a structural check can see: flashes, unreadable cards, recycled footage and recycled graphics. */
-function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
-  const fps = p.settings.fps;
+/** The picture on top from cut to cut: each run is one shot as the viewer sees it (a card over footage is the card). */
+export function shots(p: Project, live: Clip[] = p.clips.filter((c) => !trackOf(p, c.track)?.hidden)): { id: string; from: number; to: number }[] {
   const index = new Map(p.tracks.map((t, i) => [t.id, i]));
-  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker/u.test(c.name ?? "")) || c.type === "solid");
-  // "a quick 1-second frame of neon, and then it goes over to Megan Fox… We cannot have mistakes like that."
+  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur/u.test(c.name ?? "")) || c.type === "solid");
   const cuts = [...new Set(pictures.flatMap((c) => [c.start, clipEnd(c)]))].sort((a, b) => a - b);
   const runs: { id: string; from: number; to: number }[] = [];
   for (let i = 0; i + 1 < cuts.length; i++) {
@@ -118,6 +115,22 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
     if (last !== undefined && last.id === top.id && last.to === from) last.to = to;
     else runs.push({ id: top.id, from, to });
   }
+  return runs;
+}
+
+/** Punch-ins on B-roll under the narration inside this window... */
+export const PUNCH_WINDOW = 60;
+/** ...beyond this many are too many ("when we're saying something, I don't think it makes too much sense… we're just overdoing it"). */
+export const BROLL_PUNCHES = 2;
+/** Two corner labels closer than this: the label is a rare comic beat, not the emphasis style. */
+export const LABEL_GAP = 180;
+
+/** The team's N3on v1 notes that a structural check can see: flashes, unreadable cards, recycled footage and recycled graphics. */
+function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const fps = p.settings.fps;
+  // "a quick 1-second frame of neon, and then it goes over to Megan Fox… We cannot have mistakes like that."
+  const runs = shots(p, live);
   for (let i = 1; i + 1 < runs.length; i++) {
     const run = runs[i]!;
     if (run.to - run.from >= FLASH_FRAMES || runs[i - 1]!.id === run.id || runs[i + 1]!.id === run.id) continue;
@@ -142,8 +155,28 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
         fix: `${within.length} shots from one video inside ${OVERUSE_WINDOW}s: find other sources for these beats (the event itself, the people named, a different year or setting), keeping this one for the line that's about it` });
     }
   }
+  // Punch-ins belong to a source clip where someone is talking; on B-roll under the narrator only now and then.
+  const punchedBroll = live.filter((c) => c.type === "video" && /B-roll/u.test(c.name ?? "") && (c.keyframes?.scale ?? []).some((k) => k.ease === "hold")).sort((a, b) => a.start - b.start);
+  for (let i = 0, until = -1; i + BROLL_PUNCHES < punchedBroll.length; i++) {
+    const group = punchedBroll.filter((c) => c.start >= punchedBroll[i]!.start && c.start - punchedBroll[i]!.start <= PUNCH_WINDOW * fps);
+    if (punchedBroll[i]!.start < until || group.length <= BROLL_PUNCHES) continue;
+    until = group[group.length - 1]!.start + 1;
+    out.push({ kind: "commentary_punch_overuse", start: group[0]!.start, clips: group.map((c) => c.id),
+      fix: `${group.length} punched-in B-roll shots inside ${PUNCH_WINDOW}s: keep punch-ins for source clips where someone is talking and the narration's sharpest lines, remove the rest (their scale keys)` });
+  }
+  const labels = live.filter((c) => c.name === "Janitor · corner label").sort((a, b) => a.start - b.start);
+  for (let i = 1; i < labels.length; i++) if (labels[i]!.start - labels[i - 1]!.start < LABEL_GAP * fps) out.push({ kind: "commentary_label_overuse", clip: labels[i]!.id, start: labels[i]!.start,
+    fix: "a corner label is a rare comic beat stating the obvious; big emphasis is commentary_text in the middle (\"have the sort of drop-shadow big text be in the middle instead\")" });
+  // "if we're having camera shutter effects without any sort of flash on screen, that is weird."
+  const flashes = live.filter((c) => c.type !== "audio" && /flash|leak|burn|card|photo|board|shutter|post|YouTube frame/iu.test(c.name ?? ""));
+  for (const c of live) {
+    if (c.type !== "audio" || trackOf(p, c.track)?.muted) continue;
+    const m = mediaOf(p, c.media); if (!/shutter|camera/iu.test(`${m?.name ?? ""} ${c.name ?? ""}`)) continue;
+    if (flashes.some((f) => Math.abs(f.start - c.start) <= 4 || (f.type === "adjustment" && f.start <= c.start + 4 && clipEnd(f) >= c.start - 4))) continue;
+    out.push({ kind: "commentary_sound_without_picture", clip: c.id, start: c.start, fix: "a shutter needs a flash or a photo arriving on that frame: add a flash transition at it, or remove the sound" });
+  }
   // "we use background blur, a box in the middle… the second one is just text in the middle, and that's it."
-  const graphics = live.filter((c) => /^Janitor · (source card|emphasis|YouTube frame|corner label|bumper avatar|light leak|profile facts)$/u.test(c.name ?? ""));
+  const graphics = live.filter((c) => /^Janitor · (source card|emphasis|YouTube frame|corner label|bumper avatar|light leak|profile facts|post text)$/u.test(c.name ?? ""));
   const punches = live.filter((c) => c.type === "video" && (c.keyframes?.scale ?? []).some((k) => k.ease === "hold"));
   const plain = graphics.filter((c) => c.name === "Janitor · source card" || c.name === "Janitor · emphasis").length;
   if (graphics.length >= 10 && plain / graphics.length >= 0.85) out.push({ kind: "commentary_graphics_monotony", start: graphics[0]!.start, cards_and_text: plain, graphics: graphics.length, punch_ins: punches.length,

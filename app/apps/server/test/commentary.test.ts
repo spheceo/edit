@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { toParsed, scriptStyle } from "../src/writer_handoff.ts";
 import { issues } from "../src/commentary_audit.ts";
-import { bumper, card, label, leak, narrationLook, profile, punch, text, youtube } from "../src/commentary_graphics.ts";
+import { bumper, card, label, leak, narrationLook, profile, punch, text, tweet, tweetLayout, youtube, youtubeList } from "../src/commentary_graphics.ts";
 import { markerPng, rectOf } from "../src/evidence_highlight.ts";
 import { compactCount, rangeOf } from "../src/commentary_sources.ts";
 import { quoteCue } from "../src/script.ts";
@@ -121,16 +121,55 @@ test("N3on v1's flashes, short cards, recycled sources and card-and-text-only gr
   expect(kinds.includes("commentary_graphics_monotony") || issues(p).some((i) => i.kind === "commentary_graphics_monotony")).toBe(true);
 });
 
-test("punch-ins jump and hold on the words, closing in on the point given", () => {
+test("punch-ins jump and hold on the words, closing in on the person named", () => {
   const p = project("punch"); p.style = "commentary";
   p.media.push(media({ id: "v", name: "V", kind: "video", path: "/v.mp4", duration: 30, width: 1920, height: 1080, has_audio: false }));
   p.clips.push(clip({ id: "shot", type: "video", media: "v", track: "v1", start: 100, duration: 200 }));
-  punch(p, { clip: "shot", at: [150, 220], x: 100, y: -50 });
+  expect(() => punch(p, { clip: "shot", at: [150] })).toThrow("x and y");
+  // A person in the bottom-left quarter of a call grid.
+  punch(p, { clip: "shot", at: [150, 220], x: -480, y: 270, scales: [1.6, 2] });
   const c = p.clips.find((one) => one.id === "shot")!;
-  expect(c.keyframes?.scale?.map((k) => [k.frame, Math.round(k.value * 100) / 100, k.ease])).toEqual([[0, 1, "hold"], [50, 1.12, "hold"], [120, 1.24, "hold"]]);
-  expect(c.keyframes?.x?.[1]?.value).toBeCloseTo(-12);
-  expect(() => punch(p, { clip: "shot", at: [150, 155] })).toThrow("12 frames");
-  expect(() => punch(p, { clip: "shot", at: [400] })).toThrow("inside the clip");
+  expect(c.keyframes?.scale?.map((k) => [k.frame, k.value, k.ease])).toEqual([[0, 1, "hold"], [50, 1.6, "hold"], [120, 2, "hold"]]);
+  // At 2x the quarter fills the frame: their point is brought to the centre.
+  expect(c.keyframes?.x?.[2]?.value).toBeCloseTo(960);
+  expect(c.keyframes?.y?.[2]?.value).toBeCloseTo(-540);
+  expect(() => punch(p, { clip: "shot", at: [150, 155], focus: "centre" })).toThrow("12 frames");
+  expect(() => punch(p, { clip: "shot", at: [400], focus: "centre" })).toThrow("inside the clip");
+});
+
+test("a rebuilt post's highlight bars sit on the phrase's own line, and a phrase not in the post is refused", () => {
+  const p = project("post"); p.style = "commentary";
+  const a = { name: "FearBuck", handle: "FearedBuck", time: "11h", text: "Kick Streamer N3on has been banned for threatening to R*pe & D*x a fan", highlight: ["threatening to R*pe & D*x a fan"], start: 0, end: 150 };
+  const laid = tweetLayout(p, a);
+  expect(laid.rects.length).toBeGreaterThanOrEqual(1);
+  for (const r of laid.rects) expect(r.x >= 0 && r.y >= 0 && r.x + r.width <= 1920 && r.y + r.height <= 1080).toBe(true);
+  const made = tweet(p, a, laid.rects.map((_, i) => `ink${i}`));
+  expect((made.clips as string[]).length).toBeGreaterThan(4);
+  expect(p.clips.find((c) => c.name === "Janitor · post highlight")).toMatchObject({ blend: "screen" });
+  expect(() => tweetLayout(p, { ...a, highlight: ["never said"] })).toThrow("isn't in the post");
+});
+
+test("a list of a channel's uploads arrives row by row", () => {
+  const p = project("list"); p.style = "commentary";
+  p.media.push(media({ id: "t", name: "T", kind: "image", path: "/t.png", duration: 0, width: 1280, height: 720, has_audio: false }));
+  youtubeList(p, { items: [{ media: "t", title: "He's Gone... (R.I.P)", meta: "1 month ago · 384K views", duration: "5:06" }, { media: "t", title: "YOU GUYS WILL NOT BE SEEING N3ON ANYMORE...", meta: "3 months ago · 369K views" }], start: 0, end: 150 });
+  const frames = p.clips.filter((c) => c.name === "Janitor · YouTube frame");
+  expect(frames.map((c) => c.start)).toEqual([0, 6]);
+  expect(() => youtubeList(p, { items: [{ media: "t", title: "one" }], start: 0, end: 150 })).toThrow("2–4");
+});
+
+test("punched-in B-roll, back-to-back corner labels and a shutter with no flash are flagged", () => {
+  const p = project("judgement"); p.style = "commentary";
+  p.media.push(media({ id: "v", name: "V", kind: "video", path: "/v.mp4", duration: 300, width: 1920, height: 1080, has_audio: false }),
+    media({ id: "click", name: "Camera Shutter Click 01.wav", kind: "audio", path: "/c.wav", duration: 1, has_audio: true }));
+  for (let i = 0; i < 4; i++) {
+    p.clips.push(clip({ id: `b${i}`, type: "video", media: "v", name: `Cut-in ${i} · B-roll: x`, track: "v1", start: i * 300, duration: 300, source_in: i * 20 }));
+    punch(p, { clip: `b${i}`, at: [i * 300 + 100], focus: "centre" });
+  }
+  label(p, { text: "*ONE*", start: 0, end: 60 }); label(p, { text: "*TWO*", start: 600, end: 660 });
+  p.clips.push(clip({ id: "snap", type: "audio", media: "click", track: "a1", start: 450, duration: 10 }));
+  const kinds = issues(p).map((i) => i.kind);
+  expect(kinds).toEqual(expect.arrayContaining(["commentary_punch_overuse", "commentary_label_overuse", "commentary_sound_without_picture"]));
 });
 
 test("the YouTube reference, corner label, bumper and light leak are editable layers in the house's places", () => {

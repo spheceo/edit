@@ -189,6 +189,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]> | Content[]][] = [
   ["tidy_tracks", tidyTracksTool],
   ["render_frame", renderFrame],
   ["contact_sheet", contactSheet],
+  ["check_shots", checkShots],
   ["look_at_media", lookAtMedia],
   ["export", exportTool],
 ];
@@ -689,7 +690,17 @@ async function stillFrame({ app, args, projectId }: ToolCall): Promise<Content[]
   }
   const out = join(dir, `${trim(label)} ${fixed(time, 2)}s.png`);
   await native().saveStill(structuredClone(media), time, out);
-  const [, added, errors] = await importPaths(app, projectId, [out], false, ORIGIN);
+  // A region of the frame (a screenshot's thumbnail, avatar or post), in the media's own pixels.
+  const crop = args.crop as { x?: unknown; y?: unknown; width?: unknown; height?: unknown } | undefined;
+  let saved = out;
+  if (crop !== undefined && crop !== null) {
+    const [x, y, w, h] = [crop.x, crop.y, crop.width, crop.height].map((v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v) : NaN));
+    if ([x, y, w, h].some((v) => Number.isNaN(v)) || x! < 0 || y! < 0 || w! < 8 || h! < 8 || x! + w! > (media.width || Infinity) + 1 || y! + h! > (media.height || Infinity) + 1) throw new Error("crop is {x,y,width,height} in the media's own pixels, inside the frame");
+    saved = join(dir, `${trim(label)} ${fixed(time, 2)}s ${x}-${y}-${w}x${h}.png`);
+    await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", out, "-vf", `crop=${w}:${h}:${x}:${y}`, saved]);
+    fs.rmSync(out, { force: true });
+  }
+  const [, added, errors] = await importPaths(app, projectId, [saved], false, ORIGIN);
   const still = added[0];
   if (still === undefined) throw new Error(`couldn't import the frame: ${debugStrings(errors)}`);
   return text(`saved the frame at ${fixed(time, 2)} s as image media ${still}`);
@@ -905,6 +916,44 @@ async function contactSheet({ app, args, projectId }: ToolCall): Promise<Content
   if (rendered === undefined) throw new Error("nothing was rendered");
   const times = frames.map((frame) => `${fixed(frame / fps, 2)}s`);
   return imageContent(rendered, `${count} frames, left-to-right then down: ${times.join(", ")}`);
+}
+
+/**
+ * One frame of every shot in a stretch, as the viewer sees it, with what's
+ * said over it: so each picture can be judged against its line (the team,
+ * N3on v1: "I'm not sure if the agent is able to verify its motion graphics
+ * and B-roll here… There is no Houston highlights anything here").
+ */
+async function checkShots({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  const found = live(app, projectId);
+  const p = found.project; const fps = fpsOf(p);
+  const start = num(args.start); const end = num(args.end);
+  if (start === null || end === null || end <= start) throw new Error("start and end are required (timeline seconds)");
+  if (end - start > 120) throw new Error("check at most 120 s at a time");
+  const [from, to] = [Math.floor(start * fps), Math.ceil(end * fps)];
+  const all = commentaryAudit.shots(p).filter((one) => one.to > from && one.from < to && one.to - one.from >= 4);
+  if (all.length === 0) throw new Error("no pictures in that stretch");
+  const picked = all.slice(0, 24);
+  // The narration's words on the timeline, from the voice-overs' transcripts.
+  const said: [number, string][] = [];
+  const voices = new Set((p.script?.blocks ?? []).flatMap((b) => (b.kind === "narration" && b.voiceover ? [b.voiceover] : [])));
+  for (const clip of p.clips) {
+    if (clip.type !== "audio" || clip.start >= to || clipEnd(clip) <= from || !(voices.has(clip.id) || (clip.name ?? "").startsWith("Voice-over"))) continue;
+    const media = p.media.find((own) => own.id === clip.media); if (media === undefined) continue;
+    const heard = readTranscript(app.media.paths(media.path).transcript); if (heard === null) continue;
+    const out = clip.source_in + (clip.duration / fps) * clip.speed;
+    for (const word of heard.words) if (word.end > clip.source_in && word.start < out) said.push([clip.start + ((word.start - clip.source_in) / clip.speed) * fps, trim(word.text)]);
+  }
+  const sheet = await onLiveAsync(found, (project) => native().renderFrames({ project, frames: picked.map((one) => asInt(Math.floor((one.from + one.to) / 2))), maxSide: native().SHEET_CELL, priority: "agent", encode: "agent", sheetColumns: 4 }));
+  const rendered = sheet[0]; if (rendered === undefined) throw new Error("nothing was rendered");
+  const rows = picked.map((one, i) => {
+    const c = p.clips.find((own) => own.id === one.id);
+    const m = c?.type === "video" ? p.media.find((own) => own.id === c.media) : undefined;
+    const words = said.filter(([at]) => at >= one.from && at < one.to).map(([, w]) => w).join(" ");
+    return `${i + 1}. ${fixed(one.from / fps, 1)}–${fixed(one.to / fps, 1)}s ${one.id} ${c?.name ?? c?.type ?? ""}${m ? ` [${m.name}]` : ""}: ${words === "" ? "(no narration: its own sound or a pause)" : `"${words}"`}`;
+  });
+  const more = all.length > picked.length ? ` ${all.length - picked.length} more shots after these: check from ${fixed(picked[picked.length - 1]!.to / fps, 1)}s.` : "";
+  return imageContent(rendered, `${picked.length} shots, left to right then down, each with what's said over it. For each: does the picture show the person, event or thing the words name? Replace any that don't (an empty place, the wrong person, a mark or caption that contradicts the line).${more}\n${rows.join("\n")}`);
 }
 
 async function lookAtMedia({ app, args, projectId }: ToolCall): Promise<Content[]> {
@@ -1306,6 +1355,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
 const FIXABLE = [
   "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_static_source", "commentary_repeated_range", "commentary_text_heavy",
   "commentary_flash", "commentary_short_card", "commentary_source_overuse", "commentary_graphics_monotony",
+  "commentary_punch_overuse", "commentary_label_overuse", "commentary_sound_without_picture",
   "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",

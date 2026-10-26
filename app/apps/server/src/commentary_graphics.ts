@@ -130,75 +130,260 @@ export function profile(p: Project, a: Args): Args {
   return { portrait: portrait.photo, facts: id, clips };
 }
 
-// Geist, which the renderer lets us measure, for compositions anchored at a
-// left edge (a centred text block can't be lined up otherwise).
+// Compositions anchored at a left edge are laid out with measured text (a
+// centred block can't be lined up otherwise): Geist directly, any font by
+// finding the narrowest width it stays on one line, as the renderer wraps it.
 const UI = "Geist";
-function measured(text: string, size: number, weight: number): number {
-  return native().textBlock(text, size, weight, 1.2)[0];
+const GUIDE = "Akwe Pro";
+export function widthOf(text: string, font: string, weight: number, size: number): number {
+  if (text === "") return 0;
+  if (font === UI) return native().textBlock(text, size, weight, 1.2)[0];
+  let [low, high] = [1, size * text.length + 8];
+  while (high - low > 0.5) {
+    const mid = (low + high) / 2;
+    if (native().textLines(text, font, weight, size, 0, mid).length <= 1) high = mid; else low = mid;
+  }
+  return high;
 }
-/** A left-aligned Geist line whose left edge is at `left` (project px from centre). */
-function uiLine(p: Project, a: { text: string; start: number; end: number; left: number; y: number; size: number; weight?: number; color?: number[]; name: string; fade?: number; glow?: boolean; box?: boolean }): string {
-  const weight = a.weight ?? 600; const width = measured(a.text, a.size, weight);
-  const k = p.settings.height / 1080;
-  return push(p, { type: "text", name: a.name, text: a.text, start: a.start, duration: a.end - a.start, fade_in: a.fade ?? 6, fade_out: 6,
-    style: { font: UI, weight, size: a.size, color: a.color ?? [1, 1, 1, 1], tracking: 0, line_height: 1.2, align: "left",
+function measured(text: string, size: number, weight: number): number {
+  return widthOf(text, UI, weight, size);
+}
+type Line = { text: string; start: number; end: number; left: number; y: number; size: number; weight?: number; font?: string; color?: number[]; name: string; fade?: number; glow?: boolean; box?: boolean; enter?: number };
+/** A left-aligned line whose left edge is at `left` (project px from centre), sliding in `enter` px with a strong ease-out. */
+function uiLine(p: Project, a: Line): string {
+  const weight = a.weight ?? 600; const font = a.font ?? UI; const width = widthOf(a.text, font, weight, a.size);
+  const k = p.settings.height / 1080; const x = a.left + width / 2; const d = a.end - a.start;
+  const enter = a.enter ?? 0; const settle = Math.min(16, Math.floor(d / 3));
+  return push(p, { type: "text", name: a.name, text: a.text, start: a.start, duration: d, fade_in: a.fade ?? 6, fade_out: 6,
+    style: { font, weight, size: a.size, color: a.color ?? [1, 1, 1, 1], tracking: 0, line_height: 1.2, align: "left",
       glow: a.glow ? { enabled: true, radius: 9 * k, strength: 0.3 } : { enabled: false },
+      shadow: { color: [0, 0, 0, 1], opacity: 0.6, distance: 3 * k, angle: 90, size: 1 * k, blur: 6 * k },
       ...(a.box ? { background: { color: [0, 0, 0, 1], opacity: 1, pad_x: 18 * k, pad_y: 8 * k } } : {}) },
-    transform: { x: a.left + width / 2, y: a.y } });
+    transform: { x, y: a.y }, ...(enter !== 0 ? { keyframes: { x: arrival(x + enter * k, x, settle) } } : {}) });
 }
 function dark(p: Project, start: number, end: number, name: string): string[] {
-  return [push(p, { type: "solid", name: `${name} backdrop`, start, duration: end - start, fill: [0.075, 0.075, 0.08, 1] }),
-    push(p, { type: "adjustment", name: `${name} texture`, start, duration: end - start, grade: { grain: 0.08, vignette: 0.45 } })];
+  // The channel's grey page: lighter in the middle, the vignette darkening its edges.
+  return [push(p, { type: "solid", name: `${name} backdrop`, start, duration: end - start, fill: [0.11, 0.11, 0.115, 1] }),
+    push(p, { type: "adjustment", name: `${name} texture`, start, duration: end - start, grade: { grain: 0.08, vignette: 0.55 } })];
+}
+/** A picture fitted into a w×h box at (x, y), rounded, sliding in from the left. */
+function framed(p: Project, a: { media: string; source_in?: number; start: number; end: number; x: number; y: number; width: number; height: number; name: string; radius: number; enter?: number }): string {
+  const m = mediaOf(p, a.media)!; const w = p.settings.width; const h = p.settings.height; const k = h / 1080; const d = a.end - a.start;
+  const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
+  const scale = Math.min(a.width / (m.width * fit), a.height / (m.height * fit));
+  const settle = Math.min(18, Math.floor(d / 3)); const from = a.x - (a.enter ?? 90) * k;
+  return push(p, { type: "video", media: m.id, source_in: a.source_in ?? 0, start: a.start, duration: d, name: a.name, fade_in: 6, fade_out: 5,
+    // A frame's radius is in the picture's own fitted pixels, before its scale.
+    frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: a.radius / scale }, transform: { x: a.x, y: a.y, scale },
+    keyframes: { x: arrival(from, a.x, settle), scale: [key(0, scale), key(d - 1, scale * 1.02)] } });
+}
+function picture(p: Project, id: unknown, what: string): NonNullable<ReturnType<typeof mediaOf>> {
+  const m = typeof id === "string" ? mediaOf(p, id) : undefined;
+  if (m === undefined || m.kind === "audio") throw new Error(`${what} needs picture media`);
+  return m;
 }
 
 /**
- * A referenced YouTube video, as the channel shows one (the team, N3on v1:
+ * A referenced YouTube video as the channel shows one (the team, N3on v1:
  * "a 'screenshot' of the video… some relevant point on the left… pull all the
- * other details from the YouTube API"): the video's frame or thumbnail on the
- * left with its length, its title, views and age, the channel's avatar and
- * name on the right, over the dark channel background. Editorial text below
- * is a separate commentary_text.
+ * other details from the YouTube API"; v1 revision: "we would like this
+ * centered… change the fonts to match the guide… having the video frame on
+ * the left animate in"): the video's frame, its length, title, views and age,
+ * the channel's avatar and name, centred as one group over the dark channel
+ * background. The details come from youtube_reference, or are read off a
+ * screenshot when the original is gone (still_frame crop gives its frame).
  */
 export function youtube(p: Project, a: Args): Args {
   const [start, end] = span(a); const d = end - start; const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
-  if (typeof a.media !== "string" || typeof a.title !== "string" || typeof a.channel !== "string") throw new Error("commentary_youtube needs media (the video's frame or thumbnail), title and channel (youtube_reference gives them)");
-  const m = mediaOf(p, a.media); if (m === undefined || m.kind === "audio") throw new Error("commentary_youtube needs picture media");
+  if (typeof a.title !== "string" || typeof a.channel !== "string") throw new Error("commentary_youtube needs media (the video's frame or thumbnail), title and channel (youtube_reference gives them)");
+  const m = picture(p, a.media, "commentary_youtube");
   const made = dark(p, start, end, "Janitor · YouTube");
-  const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
-  const thumbW = 0.555 * w; const thumbH = thumbW * 9 / 16;
-  const scale = Math.min(thumbW / (m.width * fit), thumbH / (m.height * fit));
-  const left = -w / 2 + 50 * k; const cx = left + thumbW / 2; const cy = number(a, "y", -h * 0.08);
-  const settle = Math.min(18, Math.floor(d / 3));
-  const thumb = push(p, { type: "video", media: m.id, source_in: number(a, "source_in", 0), start, duration: d, name: "Janitor · YouTube frame", fade_in: 5, fade_out: 5,
-    frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: 22 * k / scale }, transform: { x: cx, y: cy, scale },
-    keyframes: { scale: [...arrival(scale * 0.94, scale, settle), key(d - 1, scale * 1.02)] } });
+  const thumbW = 0.5 * w; const thumbH = thumbW * 9 / 16; const gap = 44 * k;
+  const titleSize = 50 * k; const metaSize = 30 * k; const chanSize = 32 * k; const avatarSize = 58 * k;
+  const lines = native().textLines(a.title, GUIDE, 700, titleSize, 0, 0.36 * w).slice(0, 3);
+  const meta = typeof a.meta === "string" && a.meta.trim() ? a.meta.trim() : null;
+  const avatar = typeof a.avatar === "string" ? mediaOf(p, a.avatar) : undefined;
+  const chanLeftPad = avatar?.kind === "image" ? avatarSize + 18 * k : 0;
+  const textW = Math.max(...lines.map((one) => widthOf(one, GUIDE, 700, titleSize)), meta ? measured(meta, metaSize, 400) : 0, chanLeftPad + widthOf(a.channel, GUIDE, 700, chanSize));
+  const left = -(thumbW + gap + textW) / 2; const cx = left + thumbW / 2; const col = left + thumbW + gap; const cy = number(a, "y", -h * 0.06);
+  const thumb = framed(p, { media: m.id, source_in: number(a, "source_in", 0), start, end, x: cx, y: cy, width: thumbW, height: thumbH, name: "Janitor · YouTube frame", radius: 22 * k });
   made.push(thumb);
   if (typeof a.duration === "string" && a.duration.trim()) {
     const size = 26 * k; const width = measured(a.duration, size, 600);
-    made.push(push(p, { type: "text", name: "Janitor · YouTube length", text: a.duration, start, duration: d, fade_in: 8, fade_out: 5,
+    made.push(push(p, { type: "text", name: "Janitor · YouTube length", text: a.duration, start: start + 10, duration: d - 10, fade_in: 6, fade_out: 5,
       style: { font: UI, weight: 600, size, color: [1, 1, 1, 1], tracking: 0, line_height: 1.2, glow: { enabled: false }, background: { color: [0, 0, 0, 1], opacity: 0.8, pad_x: 9 * k, pad_y: 5 * k } },
       transform: { x: cx + thumbW / 2 - 24 * k - width / 2, y: cy + thumbH / 2 - 34 * k } }));
   }
-  const col = cx + thumbW / 2 + 40 * k; const room = w / 2 - 40 * k - col;
-  const titleSize = 44 * k;
-  const lines = native().textLines(a.title, UI, 600, titleSize, 0, room).slice(0, 3);
-  let y = cy - thumbH / 2 + 30 * k;
-  const step = (size: number) => size * 1.25;
-  for (const line of lines) { made.push(uiLine(p, { text: line, start: start + 4, end, left: col, y, size: titleSize, name: "Janitor · YouTube title" })); y += step(titleSize); }
-  const meta = typeof a.meta === "string" && a.meta.trim() ? a.meta : null;
-  if (meta) { y += 6 * k; made.push(uiLine(p, { text: meta, start: start + 6, end, left: col, y, size: 30 * k, weight: 400, color: [0.67, 0.67, 0.67, 1], name: "Janitor · YouTube views" })); y += step(30 * k); }
-  y += 34 * k;
-  const avatar = typeof a.avatar === "string" ? mediaOf(p, a.avatar) : undefined; const size = 58 * k;
-  let nameLeft = col;
-  if (avatar !== undefined && avatar.kind === "image") {
-    const af = Math.min(w / Math.max(avatar.width, 1), h / Math.max(avatar.height, 1)); const as = size / (Math.max(avatar.width, avatar.height) * af);
-    made.push(push(p, { type: "video", media: avatar.id, source_in: 0, start: start + 8, duration: d - 8, name: "Janitor · YouTube avatar", fade_in: 6, fade_out: 5,
-      // A frame's radius is in the picture's own fitted pixels, before its scale.
-      frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: size / 2 / as }, transform: { x: col + size / 2, y, scale: as } }));
-    nameLeft = col + size + 18 * k;
-  }
-  made.push(uiLine(p, { text: a.channel, start: start + 8, end, left: nameLeft, y, size: 30 * k, weight: 500, color: [0.85, 0.85, 0.85, 1], name: "Janitor · YouTube channel" }));
+  let y = cy - thumbH / 2 + 34 * k;
+  lines.forEach((one, i) => { made.push(uiLine(p, { text: one, font: GUIDE, weight: 700, start: start + 5 + 2 * i, end, left: col, y, size: titleSize, name: "Janitor · YouTube title", enter: 36 })); y += titleSize * 1.22; });
+  if (meta) { y += 8 * k; made.push(uiLine(p, { text: meta, start: start + 9, end, left: col, y, size: metaSize, weight: 400, color: [0.68, 0.68, 0.68, 1], name: "Janitor · YouTube views", enter: 36 })); y += metaSize * 1.3; }
+  y += 36 * k;
+  if (avatar !== undefined && avatar.kind === "image") made.push(framed(p, { media: avatar.id, start: start + 12, end, x: col + avatarSize / 2, y, width: avatarSize, height: avatarSize, name: "Janitor · YouTube avatar", radius: avatarSize / 2, enter: 36 }));
+  made.push(uiLine(p, { text: a.channel, font: GUIDE, weight: 700, start: start + 12, end, left: col + chanLeftPad, y, size: chanSize, color: [0.88, 0.88, 0.88, 1], name: "Janitor · YouTube channel", enter: 36 }));
   return { frame: thumb, clips: made };
+}
+
+/**
+ * Several of a channel's videos as its page lists them (the fake-death
+ * uploads: "He's Gone… (R.I.P)", "YOU GUYS WILL NOT BE SEEING N3ON
+ * ANYMORE…", "I'm Alive…"), rebuilt from a screenshot in the channel style:
+ * each row's frame, title and "1 month ago · 384K views", rows arriving one
+ * after another.
+ */
+export function youtubeList(p: Project, a: Args): Args {
+  const [start, end] = span(a); const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
+  if (!Array.isArray(a.items) || a.items.length < 2 || a.items.length > 4) throw new Error("commentary_youtube_list needs 2–4 items [{media,source_in?,title,meta?,duration?}]");
+  const items = a.items.map((v) => { const one = v as Args; if (typeof one.title !== "string") throw new Error("each list item needs a title"); picture(p, one.media, "each list item"); return one; });
+  const made = dark(p, start, end, "Janitor · YouTube list");
+  const rowH = Math.min(250 * k, (h * 0.86) / items.length); const thumbH = rowH - 34 * k; const thumbW = thumbH * 16 / 9;
+  const titleSize = 44 * k; const metaSize = 28 * k; const gap = 36 * k;
+  const laid = items.map((one) => ({ one, lines: native().textLines(one.title as string, GUIDE, 700, titleSize, 0, 0.4 * w).slice(0, 2) }));
+  const textW = Math.max(...laid.flatMap(({ one, lines }) => [...lines.map((l) => widthOf(l, GUIDE, 700, titleSize)), typeof one.meta === "string" ? measured(one.meta, metaSize, 400) : 0]));
+  const left = -(thumbW + gap + textW) / 2; const top = -(rowH * items.length) / 2;
+  laid.forEach(({ one, lines }, i) => {
+    const at = start + 6 * i; const cy = top + rowH * i + rowH / 2; const cx = left + thumbW / 2;
+    made.push(framed(p, { media: one.media as string, source_in: typeof one.source_in === "number" ? one.source_in : 0, start: at, end, x: cx, y: cy, width: thumbW, height: thumbH, name: "Janitor · YouTube frame", radius: 18 * k }));
+    if (typeof one.duration === "string" && one.duration.trim()) {
+      const size = 22 * k; const width = measured(one.duration, size, 600);
+      made.push(push(p, { type: "text", name: "Janitor · YouTube length", text: one.duration, start: at + 8, duration: end - at - 8, fade_in: 6, fade_out: 5,
+        style: { font: UI, weight: 600, size, color: [1, 1, 1, 1], tracking: 0, line_height: 1.2, glow: { enabled: false }, background: { color: [0, 0, 0, 1], opacity: 0.8, pad_x: 8 * k, pad_y: 4 * k } },
+        transform: { x: cx + thumbW / 2 - 18 * k - width / 2, y: cy + thumbH / 2 - 26 * k } }));
+    }
+    let y = cy - thumbH / 2 + 28 * k;
+    lines.forEach((l) => { made.push(uiLine(p, { text: l, font: GUIDE, weight: 700, start: at + 4, end, left: left + thumbW + gap, y, size: titleSize, name: "Janitor · YouTube title", enter: 30 })); y += titleSize * 1.2; });
+    if (typeof one.meta === "string" && one.meta.trim()) made.push(uiLine(p, { text: one.meta.trim(), start: at + 7, end, left: left + thumbW + gap, y: y + 6 * k, size: metaSize, weight: 400, color: [0.68, 0.68, 0.68, 1], name: "Janitor · YouTube views", enter: 30 }));
+  });
+  return { clips: made };
+}
+
+/**
+ * A post on X rebuilt as our own graphic (the team, N3on v1 revision: "recreate
+ * the sort of Twitter UI here ourselves and maybe have a tiny bit of an
+ * animation… because it would be our own, the text would be much higher
+ * quality"): avatar, name, handle and time, the post's words and its picture,
+ * rising in together over the dark background. `highlight` phrases get a red
+ * bar sweeping in behind them ("from threatening to … a fan"); the bars are
+ * images the commentary_tweet tool draws from `inkRects`.
+ */
+export function tweetLayout(p: Project, a: Args): { rects: { x: number; y: number; width: number; height: number }[]; lines: string[]; size: number; left: number; textTop: number; lineH: number; cardW: number; top: number; mediaH: number } {
+  const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
+  if (typeof a.text !== "string" || a.text.trim() === "" || typeof a.name !== "string") throw new Error("commentary_tweet needs name and text (tweet_reference gives them, or read them off the screenshot)");
+  const media = typeof a.media === "string" ? mediaOf(p, a.media) : undefined;
+  const size = 50 * k; const room = 0.62 * w;
+  const lines = native().textLines(a.text.trim(), UI, 500, size, 0, room);
+  const block = native().textBlock(lines.join("\n"), size, 500, 1.3); const lineH = block[1] / Math.max(lines.length, 1);
+  let mediaH = 0; let mediaW = 0;
+  if (media !== undefined && media.kind !== "audio") {
+    const aspect = Math.max(media.width, 1) / Math.max(media.height, 1);
+    mediaH = Math.min(0.4 * h, room / aspect); mediaW = mediaH * aspect;
+  }
+  // The card is as wide as what's in it, centred.
+  const cardW = Math.max(block[0], mediaW, 88 * k + 22 * k + measured(a.name, 40 * k, 700)); const left = -cardW / 2;
+  const headH = 90 * k; const gap = 28 * k;
+  const total = headH + gap + block[1] + (mediaH > 0 ? gap + mediaH : 0);
+  const top = -total / 2; const textTop = top + headH + gap;
+  // Each phrase's bar, line by line, in canvas pixels from the top left.
+  const rects: { x: number; y: number; width: number; height: number }[] = [];
+  const phrases = Array.isArray(a.highlight) ? a.highlight.filter((v): v is string => typeof v === "string" && v.trim() !== "") : [];
+  const starts: number[] = []; let at = 0; for (const one of lines) { starts.push(at); at += one.length + 1; }
+  const joined = lines.join(" ");
+  for (const phrase of phrases) {
+    const found = joined.toLowerCase().indexOf(phrase.trim().toLowerCase());
+    if (found < 0) throw new Error(`highlight "${phrase}" isn't in the post's text as written`);
+    const stop = found + phrase.trim().length;
+    lines.forEach((one, i) => {
+      const from = Math.max(found, starts[i]!) - starts[i]!; const to = Math.min(stop, starts[i]! + one.length) - starts[i]!;
+      if (to <= from) return;
+      const x0 = left + measured(one.slice(0, from), size, 500); const x1 = left + measured(one.slice(0, to), size, 500);
+      const pad = 8 * k;
+      rects.push({ x: Math.max(0, Math.round(w / 2 + x0 - pad)), y: Math.max(0, Math.round(h / 2 + textTop + i * lineH + (lineH - size * 1.2) / 2)), width: Math.round(x1 - x0 + 2 * pad), height: Math.round(size * 1.2) });
+    });
+  }
+  return { rects, lines, size, left, textTop, lineH, cardW, top, mediaH };
+}
+
+export function tweet(p: Project, a: Args, inks: string[]): Args {
+  const [start, end] = span(a); const d = end - start; const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
+  const L = tweetLayout(p, a);
+  const made = dark(p, start, end, "Janitor · post");
+  const settle = Math.min(16, Math.floor(d / 3));
+  // Everything rises the same 40 px together, so the post arrives as one card.
+  const rise = (y: number) => ({ y: arrival(y + 40 * k, y, settle) });
+  const avatarSize = 88 * k; const headY = L.top + 45 * k;
+  const avatar = typeof a.avatar === "string" ? mediaOf(p, a.avatar) : undefined;
+  let nameLeft = L.left;
+  if (avatar !== undefined && avatar.kind === "image") {
+    const fit = Math.min(w / Math.max(avatar.width, 1), h / Math.max(avatar.height, 1)); const scale = avatarSize / (Math.max(avatar.width, avatar.height) * fit);
+    made.push(push(p, { type: "video", media: avatar.id, source_in: 0, start, duration: d, name: "Janitor · post avatar", fade_in: 6, fade_out: 5,
+      frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: avatarSize / 2 / scale }, transform: { x: L.left + avatarSize / 2, y: headY, scale }, keyframes: rise(headY) }));
+    nameLeft = L.left + avatarSize + 22 * k;
+  }
+  const text = (t: string, left: number, y: number, size: number, weight: number, color: number[], name: string) => {
+    const x = left + measured(t, size, weight) / 2;
+    return push(p, { type: "text", name, text: t, start, duration: d, fade_in: 6, fade_out: 5,
+      style: { font: UI, weight, size, color, tracking: 0, line_height: 1.3, align: "left", glow: { enabled: false } }, transform: { x, y }, keyframes: rise(y) });
+  };
+  made.push(text(a.name as string, nameLeft, headY - 20 * k, 40 * k, 700, [1, 1, 1, 1], "Janitor · post name"));
+  const handle = [typeof a.handle === "string" ? `@${a.handle.replace(/^@/u, "")}` : null, typeof a.time === "string" ? a.time : null].filter(Boolean).join(" · ");
+  if (handle) made.push(text(handle, nameLeft, headY + 24 * k, 32 * k, 400, [0.55, 0.57, 0.6, 1], "Janitor · post handle"));
+  // The words as one left-aligned block, laid out exactly as tweetLayout measured them.
+  const blockW = Math.max(...L.lines.map((one) => measured(one, L.size, 500)));
+  const blockY = L.textTop + (L.lineH * L.lines.length) / 2;
+  const words = push(p, { type: "text", name: "Janitor · post text", text: L.lines.join("\n"), start, duration: d, fade_in: 6, fade_out: 5,
+    style: { font: UI, weight: 500, size: L.size, color: [0.95, 0.95, 0.95, 1], tracking: 0, line_height: 1.3, align: "left", glow: { enabled: false } },
+    transform: { x: L.left + blockW / 2, y: blockY }, keyframes: rise(blockY) });
+  made.push(words);
+  if (L.mediaH > 0 && typeof a.media === "string") {
+    const y = L.textTop + L.lineH * L.lines.length + 28 * k + L.mediaH / 2;
+    const m = mediaOf(p, a.media)!; const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
+    const scale = Math.min(L.cardW / (m.width * fit), L.mediaH / (m.height * fit));
+    made.push(push(p, { type: "video", media: m.id, source_in: number(a, "source_in", 0), start, duration: d, name: "Janitor · post picture", fade_in: 6, fade_out: 5,
+      frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: 24 * k / scale }, transform: { x: L.left + (m.width * fit * scale) / 2, y, scale }, keyframes: rise(y) }));
+  }
+  // The red bars: drawn in over 12 frames each, one after another, once the post has settled; Screen keeps the white words white over them.
+  const draw = 12;
+  inks.forEach((ink, i) => {
+    const r = L.rects[i]!; const at = start + settle + 4 + i * draw; if (at >= end - 2) return;
+    made.push(push(p, { type: "video", media: ink, source_in: 0, start: at, duration: end - at, name: "Janitor · post highlight", blend: "screen", fade_out: 5,
+      transform: { x: 0, y: 0, scale: 1 }, crop: { left: 0, top: 0, bottom: 0, right: 1 - r.x / w },
+      keyframes: { "crop.right": [key(0, Math.min(0.9999, 1 - r.x / w)), key(draw, Math.max(0, 1 - (r.x + r.width) / w))] } }));
+  });
+  return { text: words, clips: made };
+}
+
+/**
+ * Punch-ins for emphasis: the shot cuts to a closer framing at each word
+ * that earns it and holds there, no animated zoom (the team, N3on v1: "it
+ * just cuts it and zooms in… punch-in, punch-in, and punch-in again. It is
+ * chosen so carefully based on what is being said"). Always into the person
+ * being talked about (v1 revision: "N3on is on the bottom-left corner. It
+ * should be punching into him"): `x`/`y` are that point (project px from
+ * centre); `focus: "centre"` only when they're in the middle. `at` are
+ * timeline frames inside the clip; `scales` the framing after each (default
+ * +15% a step).
+ */
+export function punch(p: Project, a: Args): Args {
+  const c = p.clips.find((one) => one.id === a.clip);
+  if (c?.type !== "video") throw new Error("commentary_punch needs clip: a video clip id");
+  if (!Array.isArray(a.at) || a.at.length < 1 || a.at.length > 4 || a.at.some((f) => typeof f !== "number" || !Number.isInteger(f) || f <= c.start || f >= clipEnd(c))) throw new Error("commentary_punch needs at: 1–4 timeline frames inside the clip");
+  const centred = a.focus === "centre" || a.focus === "center";
+  if (!centred && (typeof a.x !== "number" || typeof a.y !== "number")) throw new Error("commentary_punch needs x and y: the person being talked about, in project px from the frame's centre (look at the frame first); focus: \"centre\" only when they're in the middle");
+  const at = [...(a.at as number[])].sort((x, y) => x - y);
+  if (at.some((f, i) => i > 0 && f - at[i - 1]! < 12)) throw new Error("punch-ins need at least 12 frames between them");
+  const s0 = c.transform.scale; const fx = centred ? 0 : (a.x as number) - c.transform.x; const fy = centred ? 0 : (a.y as number) - c.transform.y;
+  const scales = Array.isArray(a.scales) && a.scales.length === at.length && a.scales.every((v) => typeof v === "number" && v >= 1 && v <= 2.5) ? a.scales as number[] : at.map((_, i) => 1 + 0.15 * (i + 1));
+  const w = p.settings.width; const h = p.settings.height;
+  // Hold keys: the framing jumps on the frame, as a cut does. The point
+  // closed in on moves toward the centre as far as the picture's edges allow.
+  const keys = (pick: (s: number) => number, base: number) => [key(0, base, "hold"), ...at.map((f, i) => key(f - c.start, pick(scales[i]!), "hold"))];
+  // The point is brought to the centre (it lands at f·s + shift), as far as the enlarged picture still fills the frame.
+  const shift = (s: number, f: number, half: number) => Math.max(-half * (s * s0 - 1), Math.min(half * (s * s0 - 1), -f * s));
+  const kf = { ...(c.keyframes ?? {}) } as Record<string, unknown>;
+  kf.scale = keys((s) => s0 * s, s0);
+  kf.x = keys((s) => c.transform.x + shift(s, fx, w / 2), c.transform.x);
+  kf.y = keys((s) => c.transform.y + shift(s, fy, h / 2), c.transform.y);
+  (c as { keyframes?: unknown }).keyframes = kf;
+  return { clip: c.id, punches: at.length };
 }
 
 /**
@@ -222,24 +407,30 @@ export function label(p: Project, a: Args): Args {
 
 /**
  * The channel bumper: the Internet Janitor avatar, name, tagline and a
- * Subscribe button over the dark channel page, with the intro's line under
- * it ("CLEANING UP THE BIGGEST STREAM ON TWITCH" / "(among many other
- * charges)"). Brand media come from search_broll {queries:[]}.
+ * Subscribe button, centred as one group over the dark channel page, with the
+ * episode's line under it ("CLEANING UP THE BIGGEST STREAM ON TWITCH" /
+ * "(among many other charges)"). Only where the narrator introduces himself
+ * or the channel, never as a chapter card ("we just showed the internet
+ * janitor branding. That made absolutely no sense"). Brand media come from
+ * search_broll {queries:[]}.
  */
 export function bumper(p: Project, a: Args): Args {
   const [start, end] = span(a); const d = end - start; const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
   const avatar = typeof a.avatar === "string" ? mediaOf(p, a.avatar) : undefined;
   if (avatar === undefined || avatar.kind !== "image") throw new Error("commentary_bumper needs avatar: search_broll {queries:[]}'s brand_avatar");
   const made = dark(p, start, end, "Janitor · bumper");
-  const size = 300 * k; const cy = -h * 0.12; const ax = -w * 0.3;
+  const name = typeof a.name === "string" ? a.name : "InternetJanitor";
+  const tagline = typeof a.tagline === "string" ? a.tagline : "Cleaning up the internet, one disaster at a time.";
+  const size = 300 * k; const gap = 60 * k; const nameSize = 112 * k; const tagSize = 34 * k;
+  const groupW = size + gap + Math.max(measured(name, nameSize, 700), measured(tagline, tagSize, 400), 230 * k);
+  const cy = -h * 0.12; const ax = -groupW / 2 + size / 2; const left = -groupW / 2 + size + gap;
   const af = Math.min(w / Math.max(avatar.width, 1), h / Math.max(avatar.height, 1)); const base = size / (Math.max(avatar.width, avatar.height) * af);
   const settle = Math.min(18, Math.floor(d / 3));
   made.push(push(p, { type: "video", media: avatar.id, source_in: 0, start, duration: d, name: "Janitor · bumper avatar", fade_in: 4, fade_out: 6,
     frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: size / 2 / base }, transform: { x: ax, y: cy, scale: base },
     keyframes: { scale: [...arrival(base * 0.85, base, settle), key(d - 1, base * 1.03)] } }));
-  const left = ax + size / 2 + 60 * k;
-  made.push(uiLine(p, { text: typeof a.name === "string" ? a.name : "InternetJanitor", start: start + 3, end, left, y: cy - 70 * k, size: 112 * k, weight: 700, name: "Janitor · bumper name", glow: true }));
-  made.push(uiLine(p, { text: typeof a.tagline === "string" ? a.tagline : "Cleaning up the internet, one disaster at a time.", start: start + 6, end, left, y: cy + 22 * k, size: 34 * k, weight: 400, color: [0.75, 0.75, 0.75, 1], name: "Janitor · bumper tagline" }));
+  made.push(uiLine(p, { text: name, start: start + 3, end, left, y: cy - 70 * k, size: nameSize, weight: 700, name: "Janitor · bumper name", glow: true, enter: 40 }));
+  made.push(uiLine(p, { text: tagline, start: start + 6, end, left, y: cy + 22 * k, size: tagSize, weight: 400, color: [0.75, 0.75, 0.75, 1], name: "Janitor · bumper tagline", enter: 40 }));
   const button = typeof a.subscribe === "string" ? mediaOf(p, a.subscribe) : undefined;
   if (button !== undefined && button.kind === "image") {
     const bw = 230 * k; const bf = Math.min(w / Math.max(button.width, 1), h / Math.max(button.height, 1)); const bs = bw / (button.width * bf);
@@ -249,33 +440,6 @@ export function bumper(p: Project, a: Args): Args {
   if (typeof a.line === "string" && a.line.trim()) made.push(...(text(p, { text: a.line.trim().toUpperCase(), start: start + 6, end, size: 64, motion: "soft", y: h * 0.32 }).clips as string[]));
   if (typeof a.subline === "string" && a.subline.trim()) made.push(...(text(p, { text: a.subline.trim(), start: start + 18, end, size: 42, motion: "soft", y: h * 0.4 }).clips as string[]));
   return { clips: made };
-}
-
-/**
- * Punch-ins for emphasis: the shot cuts to a closer framing at each word
- * that earns it and holds there, no animated zoom (the team, N3on v1: "it
- * just cuts it and zooms in… punch-in, punch-in, and punch-in again. It is
- * chosen so carefully based on what is being said"). `at` are timeline
- * frames inside the clip; `scales` the framing after each (default +12% a
- * step); `x`/`y` the point to close in on (project px from centre).
- */
-export function punch(p: Project, a: Args): Args {
-  const c = p.clips.find((one) => one.id === a.clip);
-  if (c?.type !== "video") throw new Error("commentary_punch needs clip: a video clip id");
-  if (!Array.isArray(a.at) || a.at.length < 1 || a.at.length > 4 || a.at.some((f) => typeof f !== "number" || !Number.isInteger(f) || f <= c.start || f >= clipEnd(c))) throw new Error("commentary_punch needs at: 1–4 timeline frames inside the clip");
-  const at = [...(a.at as number[])].sort((x, y) => x - y);
-  if (at.some((f, i) => i > 0 && f - at[i - 1]! < 12)) throw new Error("punch-ins need at least 12 frames between them");
-  const s0 = c.transform.scale; const fx = number(a, "x", 0); const fy = number(a, "y", 0);
-  const scales = Array.isArray(a.scales) && a.scales.length === at.length && a.scales.every((v) => typeof v === "number" && v >= 1 && v <= 2.5) ? a.scales as number[] : at.map((_, i) => 1 + 0.12 * (i + 1));
-  // Hold keys: the framing jumps on the frame, as a cut does. The point
-  // closed in on stays where it was.
-  const keys = (pick: (s: number) => number, base: number) => [key(0, base, "hold"), ...at.map((f, i) => key(f - c.start, pick(scales[i]!), "hold"))];
-  const kf = { ...(c.keyframes ?? {}) } as Record<string, unknown>;
-  kf.scale = keys((s) => s0 * s, s0);
-  kf.x = keys((s) => c.transform.x - fx * (s - 1), c.transform.x);
-  kf.y = keys((s) => c.transform.y - fy * (s - 1), c.transform.y);
-  (c as { keyframes?: unknown }).keyframes = kf;
-  return { clip: c.id, punches: at.length };
 }
 
 /**

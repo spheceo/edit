@@ -428,6 +428,8 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return commentaryGraphics.profile(project, args);
     case "commentary_youtube":
       return commentaryGraphics.youtube(project, args);
+    case "commentary_youtube_list":
+      return commentaryGraphics.youtubeList(project, args);
     case "commentary_label":
       return commentaryGraphics.label(project, args);
     case "commentary_bumper":

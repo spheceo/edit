@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import { deflateSync } from "node:zlib";
 import { clipFrom } from "./clips.ts";
+import * as commentaryGraphics from "./commentary_graphics.ts";
 import { importPaths } from "./import.ts";
 import { registerTool, text } from "./mcp/registry.ts";
 import type { Keyframe, Project, VideoClip } from "./model.ts";
@@ -82,4 +83,47 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
     return made;
   });
   return text(stableStringify({ clips: made, on: args.on, note: "Editable Multiply ink over the original screenshot; reveal follows source coordinates and inherits its motion. Confirm the rectangles cover the exact quoted words." }));
+});
+
+registerTool("commentary_tweet", async ({ app, args, projectId }) => {
+  const p = app.store.get(projectId)?.project; if (!p) throw new Error("no such project");
+  // Measured on the live project; the bars are drawn as images first, so the whole post saves once.
+  const layout = commentaryGraphics.tweetLayout(p, args);
+  const { width, height } = p.settings;
+  const dir = join(app.store.home, "research", projectId, "highlights"); fs.mkdirSync(dir, { recursive: true });
+  const paths = layout.rects.map((r, i) => {
+    const path = join(dir, `post-${Date.now()}-${i}.png`);
+    fs.writeFileSync(path, markerPng(width, height, { x: r.x, y: r.y, width: Math.min(r.width, width - r.x), height: Math.min(r.height, height - r.y) }));
+    return path;
+  });
+  const [, ids, errors] = paths.length ? await importPaths(app, projectId, paths, false, "agent") : [null, [] as string[], [] as string[]];
+  if (ids.length !== paths.length) throw new Error(errors.join("; "));
+  const [, made] = await app.store.update(projectId, "agent", (project) => commentaryGraphics.tweet(project, args, ids));
+  return text(stableStringify({ ...made, highlights: layout.rects.length, note: "Our own rebuild of a real post: its words exactly as posted (stars over the house words), never reworded. Check a frame: the bars should sit behind the highlighted words." }));
+});
+
+/** Plain text of an oEmbed post's paragraph. */
+export function postText(html: string): string {
+  const para = /<p[^>]*>([\s\S]*?)<\/p>/u.exec(html)?.[1] ?? "";
+  return para.replace(/<br\s*\/?>/gu, "\n").replace(/<a[^>]*>(pic\.twitter\.com[^<]*)<\/a>/gu, "").replace(/<[^>]+>/gu, "")
+    .replace(/&amp;/gu, "&").replace(/&lt;/gu, "<").replace(/&gt;/gu, ">").replace(/&quot;/gu, "\"").replace(/&#39;/gu, "'").replace(/&mdash;/gu, "—").trim();
+}
+
+registerTool("tweet_reference", async ({ app, args, projectId }) => {
+  if (typeof args.url !== "string" || !/^https:\/\/(x|twitter)\.com\/[^/]+\/status\/\d+/u.test(args.url)) throw new Error("url must be a post on x.com or twitter.com");
+  const answer = await fetch(`https://publish.twitter.com/oembed?omit_script=1&url=${encodeURIComponent(args.url)}`, { signal: AbortSignal.timeout(20_000) });
+  if (!answer.ok) throw new Error(`X wouldn't show that post (${answer.status}): it may be deleted or private; read its details off a screenshot instead`);
+  const post = await answer.json() as { author_name?: string; author_url?: string; html?: string };
+  const handle = post.author_url?.split("/").pop() ?? null;
+  const date = /<a [^>]*>([A-Z][a-z]+ \d{1,2}, \d{4})<\/a>\s*<\/blockquote>/u.exec(post.html ?? "")?.[1] ?? null;
+  let avatar: string | null = null;
+  if (handle !== null) {
+    const dir = join(app.store.home, "research", projectId, "posts"); fs.mkdirSync(dir, { recursive: true });
+    try {
+      const got = await fetch(`https://unavatar.io/x/${handle}?fallback=false`, { signal: AbortSignal.timeout(20_000) });
+      if (got.ok) { const path = join(dir, `avatar-${handle}.jpg`); fs.writeFileSync(path, new Uint8Array(await got.arrayBuffer())); avatar = (await importPaths(app, projectId, [path], false, "agent"))[1][0] ?? null; }
+    } catch { /* the post shows without its avatar */ }
+  }
+  return text(stableStringify({ url: args.url, name: post.author_name ?? null, handle, date, text: postText(post.html ?? ""), avatar,
+    note: "For commentary_tweet: name, handle, time (the date, or as the screenshot shows it), text exactly as posted, avatar; its picture from capture_evidence or a still_frame crop. highlight the phrase the narration is about." }));
 });

@@ -215,6 +215,7 @@ export async function ask(
   text: string,
   schema: Record<string, unknown> | null,
   timeoutMs: number,
+  images: { data: string; mime: string }[] = [],
 ): Promise<string> {
   const { query } = await sdk();
   const abort = new AbortController();
@@ -229,7 +230,14 @@ export async function ask(
   };
   if (EFFORTS.includes(effort)) options.effort = effort as Options["effort"];
   if (schema !== null) options.outputFormat = { type: "json_schema", schema };
-  const run = query({ prompt: text, options });
+  // Pictures go in one user message with the words (a frame sheet to describe).
+  const prompt = images.length === 0 ? text : (async function* (): AsyncGenerator<Sdk.SDKUserMessage> {
+    yield { type: "user", parent_tool_use_id: null, session_id: "", message: { role: "user", content: [
+      ...images.map((one) => ({ type: "image" as const, source: { type: "base64" as const, media_type: one.mime as "image/jpeg", data: one.data } })),
+      { type: "text" as const, text },
+    ] } } as Sdk.SDKUserMessage;
+  })();
+  const run = query({ prompt, options });
   let late = false;
   const timer = setTimeout(() => {
     late = true;

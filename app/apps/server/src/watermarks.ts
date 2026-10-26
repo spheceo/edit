@@ -250,6 +250,8 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
   const onFootage = new Map<string, { kind: string; media: string; text: string; inset?: true; clips: string[]; start: number; end: number; blur_box: number[]; fix: string }>();
   for (const clip of project.clips) {
     if (clip.type !== "video" || trackOf(project, clip.track)?.hidden === true) continue;
+    // A video or post shown as its page shows it (commentary_youtube, commentary_tweet): its length and title are the point, not a mark.
+    if (/^Janitor · (YouTube|post|bumper)/u.test(clip.name ?? "")) continue;
     const media = mediaOf(project, clip.media);
     // Found photos and footage only: Edit's own pictures (desktop windows, wallpaper, frames) carry no one's mark.
     if (media === undefined || ours.has(media.id)) continue;

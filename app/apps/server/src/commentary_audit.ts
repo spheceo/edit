@@ -104,7 +104,8 @@ function sourceOf(p: Project, media: string): string {
 /** The picture on top from cut to cut: each run is one shot as the viewer sees it (a card over footage is the card). */
 export function shots(p: Project, live: Clip[] = p.clips.filter((c) => !trackOf(p, c.track)?.hidden)): { id: string; from: number; to: number }[] {
   const index = new Map(p.tracks.map((t, i) => [t.id, i]));
-  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve/u.test(c.name ?? "")) || c.type === "solid");
+  // A composition is one shot: its backdrop stands for it while its layers arrive (a list's rows one after another).
+  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve|^Janitor · (YouTube|post|bumper|profile|source card)/u.test(c.name ?? "")) || c.type === "solid");
   const cuts = [...new Set(pictures.flatMap((c) => [c.start, clipEnd(c)]))].sort((a, b) => a - b);
   const runs: { id: string; from: number; to: number }[] = [];
   for (let i = 0; i + 1 < cuts.length; i++) {

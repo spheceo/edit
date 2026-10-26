@@ -2759,5 +2759,121 @@
       ],
       "type": "object"
     }
+  },
+  {
+    "name": "read_edit",
+    "description": "A stretch of the timeline as Edit Script code. Every clip is a call with its id (shot, text, youtube, card, tweet\u2026), what describe_shots saw in it, and the narration between them as // says comments. Edit a line and run it with run_edit to change that clip; at most 180 s at a time (default 120 from start).",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Timeline seconds.",
+          "type": "number"
+        },
+        "end": {
+          "description": "Timeline seconds.",
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "run_edit",
+    "description": "Run an Edit Script. TypeScript over the stretch start\u2013end: read project, clips, shots (with facts), words and media; write with shot, trim, remove, update, text, card, youtube, youtubeList, tweet, label, bumper, chapter, punch, leak, dissolve, flash, op and the saved library (edit_script_reference has the declarations). Everything it queues saves as one plan, or nothing when it throws (the error gives its line) or doesn't validate. Returns the plan's results, the audit's issues in that stretch and the lints: shots describe_shots found don't fit their words or show nothing. dry_run to check without saving.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "code": {
+          "description": "The script (TypeScript).",
+          "type": "string"
+        },
+        "start": {
+          "description": "Timeline seconds the script reads (clips, shots, words).",
+          "type": "number"
+        },
+        "end": {
+          "description": "Timeline seconds (at most 180 after start).",
+          "type": "number"
+        },
+        "dry_run": {
+          "description": "Check without saving. Default false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "describe_shots",
+    "description": "Frames into facts. Each shot in a stretch (at most 180 s) is rendered as seen and given to Sonnet 5.5 with the words said over it and what's known of its source; it says what's on screen, the visible text, who (from context, never faces), whether it's empty, and whether it fits its words. Saved per shot until the shot changes; read_edit shows them and run_edit's lints flag the misfits. refresh: true to look again.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        },
+        "refresh": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "save_graphic",
+    "description": "Keep a graphic you wrote as a function in the shared library. export function name(o) { \u2026 } built from Edit Script calls; every run_edit script in any project can call it by name, and read_edit lists the library.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "description": "camelCase function name."
+        },
+        "code": {
+          "type": "string",
+          "description": "TypeScript with export function <name>(\u2026)."
+        }
+      },
+      "required": [
+        "name",
+        "code"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "edit_script_reference",
+    "description": "Edit Script's declarations. Every call a run_edit script can make, its arguments and what it reads.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
   }
 ]

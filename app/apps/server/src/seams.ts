@@ -59,6 +59,7 @@ import * as researchModule from "./research.ts";
 import * as scriptModule from "./script_tools.ts";
 import "./commentary_sources.ts";
 import "./evidence_highlight.ts";
+import "./edit_script.ts";
 import "./motion_review.ts";
 import * as sfxModule from "./sfx.ts";
 import type { Store } from "./store.ts";

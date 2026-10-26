@@ -1073,17 +1073,20 @@ export class Agents implements seams.AgentPanel {
     schema: Json | null,
     timeoutMs: number,
   ): Promise<string> {
-    const texts = input.map((item) => {
-      const { type, text } = (item ?? {}) as { type?: unknown; text?: unknown };
-      if (type !== "text" || typeof text !== "string") throw new Error(`${model} through Claude Code takes text only`);
-      return text;
-    });
+    const texts: string[] = [];
+    const images: { data: string; mime: string }[] = [];
+    for (const item of input) {
+      const { type, text, data, mime } = (item ?? {}) as { type?: unknown; text?: unknown; data?: unknown; mime?: unknown };
+      if (type === "text" && typeof text === "string") texts.push(text);
+      else if (type === "image" && typeof data === "string") images.push({ data, mime: typeof mime === "string" ? mime : "image/jpeg" });
+      else throw new Error(`${model} through Claude Code takes text and images (base64 data) only`);
+    }
     const binary = await this.findClaude();
     if (binary === null) throw new Error("Claude Code isn't installed. Install it with `curl -fsSL https://claude.ai/install.sh | bash`, then `claude auth login`.");
     const workspace = join(this.dir, "workspace");
     fs.mkdirSync(workspace, { recursive: true });
     const shape = schema !== null && typeof schema === "object" && !Array.isArray(schema) ? (schema as Record<string, unknown>) : null;
-    return claude.ask(binary, workspace, model, effort, instructions, texts.join("\n\n"), shape, timeoutMs);
+    return claude.ask(binary, workspace, model, effort, instructions, texts.join("\n\n"), shape, timeoutMs, images);
   }
 
   /** Routes a notification to a one-off question; true when it was one. */

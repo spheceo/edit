@@ -317,7 +317,7 @@ export function youtubeList(p: Project, a: Args): Args {
  * bar sweeping in behind them ("from threatening to … a fan"); the bars are
  * images the commentary_tweet tool draws from `inkRects`.
  */
-export function tweetLayout(p: Project, a: Args): { rects: { x: number; y: number; width: number; height: number }[]; lines: string[]; size: number; left: number; textTop: number; lineH: number; cardW: number; top: number; mediaH: number } {
+export function tweetLayout(p: Project, a: Args): { rects: { x: number; y: number; width: number; height: number }[]; lines: string[]; size: number; left: number; textTop: number; lineH: number; cardW: number; top: number; mediaH: number; room: number } {
   const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
   if (typeof a.text !== "string" || a.text.trim() === "" || typeof a.name !== "string") throw new Error("commentary_tweet needs name and text (tweet_reference gives them, or read them off the screenshot)");
   const media = typeof a.media === "string" ? mediaOf(p, a.media) : undefined;
@@ -351,7 +351,7 @@ export function tweetLayout(p: Project, a: Args): { rects: { x: number; y: numbe
       rects.push({ x: Math.max(0, Math.round(w / 2 + x0 - pad)), y: Math.max(0, Math.round(h / 2 + textTop + i * lineH + (lineH - size * 1.2) / 2)), width: Math.round(x1 - x0 + 2 * pad), height: Math.round(size * 1.2) });
     });
   }
-  return { rects, lines, size, left, textTop, lineH, cardW, top, mediaH };
+  return { rects, lines, size, left, textTop, lineH, cardW, top, mediaH, room };
 }
 
 export function tweet(p: Project, a: Args, inks: string[]): Args {
@@ -381,8 +381,11 @@ export function tweet(p: Project, a: Args, inks: string[]): Args {
   // The words as one left-aligned block, laid out exactly as tweetLayout measured them.
   const blockW = Math.max(...L.lines.map((one) => measured(one, L.size, 500)));
   const blockY = L.textTop + (L.lineH * L.lines.length) / 2;
-  const words = push(p, { type: "text", name: "Janitor · post text", text: L.lines.join("\n"), start, duration: d, fade_in: 6, fade_out: 5,
-    style: { font: UI, weight: 500, size: L.size, color: [0.95, 0.95, 0.95, 1], tracking: 0, line_height: 1.3, align: "left", glow: { enabled: false } },
+  // The renderer wraps the post's own words at the width they were measured at, so the
+  // lines (and the bars on them) hold even when a word is starred later; words joined
+  // with newlines lost them when the house words were starred (Duke Dennis's post).
+  const words = push(p, { type: "text", name: "Janitor · post text", text: (a.text as string).trim(), start, duration: d, fade_in: 6, fade_out: 5,
+    style: { font: UI, weight: 500, size: L.size, color: [0.95, 0.95, 0.95, 1], tracking: 0, line_height: 1.3, align: "left", glow: { enabled: false }, max_width: L.room },
     transform: { x: L.left + blockW / 2, y: blockY }, keyframes: rise(blockY) });
   made.push(words);
   if (L.mediaH > 0 && typeof a.media === "string") {

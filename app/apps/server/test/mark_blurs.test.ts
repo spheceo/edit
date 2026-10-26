@@ -119,3 +119,11 @@ test("a card's mark is blurred inside the card, never past its edge", () => {
   const right = blur!.blur!.x! + blur!.blur!.width! / 2;
   expect(right).toBeLessThanOrEqual(1920 * 0.6 / 2 + 0.5);
 });
+
+test("the commentary brand kit is never looked at for another outlet's marks", async () => {
+  const { looksForMarks } = await import("../src/watermarks.ts");
+  const image = (name: string): Media => ({ ...media("b"), name, kind: "image" });
+  expect(looksForMarks(image("subscribe-07e3e2dd8ce4.png"))).toBe(false);
+  expect(looksForMarks({ ...media("l"), name: "light-leak-c8525c4032a9.mp4" })).toBe(false);
+  expect(looksForMarks(image("thumbnail.jpg"))).toBe(true);
+});

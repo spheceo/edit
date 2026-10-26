@@ -182,6 +182,8 @@ export function ours(project: Project): Set<string> {
 
 /** Whether a media is one marks are looked for on: found photos and footage, not Edit's own pictures. */
 export function looksForMarks(media: Media): boolean {
+  // The commentary brand kit (search_broll's): the bumper's own Subscribe button was blurred as another channel's call to action.
+  if (/^(background|avatar|subscribe|light-leak)-[0-9a-f]{12}\./u.test(media.name)) return false;
   return isFootage(media) || (media.kind === "image" && !/^(desktop|map|frame|board|paper)-/u.test(media.name));
 }
 

@@ -248,7 +248,7 @@ export async function ask(
       if (message.type !== "result") continue;
       const result = message as unknown as Record<string, unknown>;
       const error = resultError(result);
-      if (error !== null) throw new Error(error);
+      if (error !== null) throw new Error(signInProblem(error) ? SIGN_IN_AGAIN : error);
       if (result.structured_output !== undefined) return JSON.stringify(result.structured_output);
       return typeof result.result === "string" ? result.result : "";
     }
@@ -281,6 +281,16 @@ export function resultText(content: unknown): string {
 export const EFFORTS: string[] = ["low", "medium", "high", "xhigh", "max"];
 
 /** A finished query's error, or null when it succeeded. */
+/**
+ * What to say when Claude Code's sign-in has run out mid-turn: `claude auth
+ * status` can still say signed in while the token is refused (JJ, Oct 26:
+ * "Failed to authenticate… OAuth access token is invalid").
+ */
+export const SIGN_IN_AGAIN = "Claude Code's sign-in on this Mac has expired or was signed out. Open Terminal, run `claude`, type /login and sign in, then send your message again.";
+export function signInProblem(message: string): boolean {
+  return /failed to authenticate|oauth (access )?token|invalid (api|x-api) key|authentication_error|please run \/login|not logged in|\b401\b/iu.test(message);
+}
+
 export function resultError(result: Record<string, unknown>): string | null {
   if (result.subtype === "success" && result.is_error !== true) return null;
   const errors = Array.isArray(result.errors) ? result.errors.filter((said): said is string => typeof said === "string") : [];

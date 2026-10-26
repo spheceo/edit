@@ -569,7 +569,19 @@ export function narrationLines(project: Project): [string, string | null][] {
 async function speak(body: unknown, path: string): Promise<string | null> {
   const partial = withExtension(path, "partial");
   try {
-    const request = await relay.call("POST", "/v1/speech", body, partial, "voices");
+    // A connection dropped part way (JJ, Oct 26: "The socket connection was
+    // closed unexpectedly") is tried again, twice, before the line fails.
+    let request: string | null = null;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        request = await relay.call("POST", "/v1/speech", body, partial, "voices");
+        break;
+      } catch (error) {
+        if (attempt >= SPEAK_RETRIES || !(error instanceof Error) || !error.message.startsWith(relay.UNREACHABLE)) throw error;
+        diag.warn("voice", `speaking a line: ${error.message}; trying again`);
+        await timing.sleep(2000 * (attempt + 1));
+      }
+    }
     try {
       fs.renameSync(partial, path);
     } catch (error) {
@@ -581,6 +593,11 @@ async function speak(body: unknown, path: string): Promise<string | null> {
     throw error;
   }
 }
+
+/** Waits between tries (tests make them instant). */
+export const timing = { sleep: (ms: number) => Bun.sleep(ms) };
+/** Times a line is asked for again after the relay couldn't be reached. */
+const SPEAK_RETRIES = 2;
 
 export { SerdeError };
 

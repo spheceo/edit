@@ -868,6 +868,7 @@ export class Agents implements seams.AgentPanel {
     } else if (error === null) {
       error = "Claude Code stopped before the turn finished; send your message again.";
     }
+    if (error !== null && claude.signInProblem(error)) error = claude.SIGN_IN_AGAIN;
     const chat = this.withChat(project);
     if (chat.generation !== generation || !chat.running) return;
     if (chat.halted && error !== null) error = "Stopped.";

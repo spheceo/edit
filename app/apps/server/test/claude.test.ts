@@ -358,3 +358,10 @@ test("a chat saved mid-tool reads back with that tool stopped", () => {
     home.cleanup();
   }
 });
+
+test("a refused sign-in mid-turn is told as one to fix, not Anthropic's raw error", () => {
+  expect(claude.signInProblem("Failed to authenticate. API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth access token is invalid\"}}")).toBe(true);
+  expect(claude.signInProblem("Invalid API key · Please run /login")).toBe(true);
+  expect(claude.signInProblem("Claude Code stopped: it reached its limit of turns.")).toBe(false);
+  expect(claude.SIGN_IN_AGAIN).toContain("/login");
+});

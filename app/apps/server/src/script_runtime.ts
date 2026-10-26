@@ -168,6 +168,19 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
     chapter: (title: string, o: Op & { from: Time; to: Time; number?: number }) => graphic("commentary_chapter", { ...o, text: title }),
     profile: (o: Op & { from: Time; to: Time }) => graphic("commentary_profile", o),
     look: (o: { from: Time; to: Time }) => graphic("commentary_look", o),
+    location: (words: string, o: Op & { from: Time; to: Time }) => graphic("commentary_location", { ...o, text: words }),
+    icon: (mediaId: string, o: Op & { from: Time; to: Time }) => graphic("commentary_icon", { ...o, media: mediaOf(mediaId).id }),
+    /** The next picture slides down from the top on the cut at `at` (the guide's Animation 7); whoosh-3 goes with it. */
+    slide: (at: Time, frames?: number) => { ops.push({ op: "commentary_slide", at: f(at), ...(frames ? { frames } : {}) }); },
+    /** A channel's header over the footage, its caption below; runs after the plan (it draws its panel first). */
+    channel(o: Op & { from: Time; to: Time; ids?: unknown }) {
+      const [start, end] = span(o, "channel");
+      rebuild(o);
+      const { from: _f, to: _t, ids: _i, ...rest } = o;
+      ops.push({ op: "@tool", tool: "commentary_channel", args: { ...rest, start, end } });
+    },
+    /** A bundled sound (whoosh-3, shutter) with its hit on `at`. */
+    sfx: (name: string, at: Time, volume_db?: number) => { ops.push({ op: "@tool", tool: "add_sound_effect", args: { sound: name, times: [seconds(at)], ...(volume_db !== undefined ? { volume_db } : {}) } }); },
     /** Our own X post; runs after the plan saves (it draws its highlight bars first). */
     tweet(o: Op & { from: Time; to: Time; ids?: unknown }) {
       const [start, end] = span(o, "tweet");
@@ -201,6 +214,9 @@ export const REFERENCE = `// Edit Script: the timeline as TypeScript. Times are 
 // card(media, {from, to, ...commentary_card}); youtube({from, to, media, title, channel, meta?, duration?, avatar?}); youtubeList({from, to, items})
 // tweet({from, to, name, handle?, time?, text, avatar?, media?, highlight?: string[]}); label(words, {from, to}); bumper({from, to, avatar, subscribe?, line?})
 // chapter(title, {from, to, number?}); profile({from, to, media, name?, lines}); look({from, to})
+// text(…, {red: ["BAD VIDEOS"]}) colours the critical words red; label(words, {from, to, near?: [x, y], typewriter?}) sits beside the person it's about
+// location("Luton, England", {from, to}) bottom left; icon(media, {from, to, name?, role?}) pops up over the blurred picture; channel({from, to, name, handle?, subscribers?, description?, avatar?, subscribe?, caption?})
+// slide(at) the next picture slides down from the top (with sfx("whoosh-3", at)); card(media, {…, push: 1.15}) zooms in while you highlight it; sfx(name, at, volume_db?) a bundled sound
 // Any of those given ids: [...] (a composition's layers as read_edit lists them) rebuilds it.
 // punch(id, {at: [times], on: [x, y] | "centre", scales?}); leak(at, brandLightLeakMedia); dissolve(at, frames?); flash(at)
 // op(raw)  any apply_edit_plan operation (frames), e.g. op({op: "blur_marks", clips: [id], leave: ["RIP N3ON"]}) to keep a mark that's the point unblurred. Library functions saved with save_graphic are in scope by name.

@@ -183,7 +183,7 @@ export function ours(project: Project): Set<string> {
 /** Whether a media is one marks are looked for on: found photos and footage, not Edit's own pictures. */
 export function looksForMarks(media: Media): boolean {
   // The commentary brand kit (search_broll's): the bumper's own Subscribe button was blurred as another channel's call to action.
-  if (/^(background|avatar|subscribe|light-leak)-[0-9a-f]{12}\./u.test(media.name)) return false;
+  if (/^(background|avatar|subscribe|light-leak|background-motion)-[0-9a-f]{12}\./u.test(media.name)) return false;
   return isFootage(media) || (media.kind === "image" && !/^(desktop|map|frame|board|paper)-/u.test(media.name));
 }
 
@@ -251,7 +251,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
   for (const clip of project.clips) {
     if (clip.type !== "video" || trackOf(project, clip.track)?.hidden === true) continue;
     // A video or post shown as its page shows it (commentary_youtube, commentary_tweet): its length and title are the point, not a mark.
-    if (/^Janitor · (YouTube|post|bumper)/u.test(clip.name ?? "")) continue;
+    if (/^Janitor · (YouTube|post|bumper|channel|icon)/u.test(clip.name ?? "")) continue;
     const media = mediaOf(project, clip.media);
     // Found photos and footage only: Edit's own pictures (desktop windows, wallpaper, frames) carry no one's mark.
     if (media === undefined || ours.has(media.id)) continue;

@@ -25,9 +25,14 @@ function span(a: Args): [number, number] {
 export function textStyle(height: number, size = 72): Args {
   const k = height / 1080;
   return { font: "Akwe Pro", weight: 700, size: size * k, color: [1, 1, 1, 1],
-    glow: { enabled: true, radius: 9 * k, strength: 0.28 },
-    shadow: { color: [0, 0, 0, 1], opacity: 0.85, distance: 5 * k, angle: 90, size: 2 * k, blur: 8 * k }, max_width: 1560 * k };
+    glow: { enabled: true, radius: 9 * k, strength: 0.3 },
+    // The guide's look: a crisp dark shadow down and to the right, the text
+    // grown a little under it like a slight outer stroke, over a soft glow.
+    shadow: { color: [0, 0, 0, 1], opacity: 0.9, distance: 5 * k, angle: 135, size: 2.5 * k, blur: 2.5 * k }, max_width: 1560 * k };
 }
+
+/** Pure red, the reference's colour for the critical words ("EXAMPLES OF BAD VIDEOS"). */
+const RED = [1, 0, 0, 1];
 
 /** Selective emphasis. Full phrase geometry is stable during the soft sweep. */
 export function text(p: Project, a: Args): Args {
@@ -39,17 +44,41 @@ export function text(p: Project, a: Args): Args {
   if (a.blur === true) made.push(push(p, { type: "adjustment", name: "Janitor · text backdrop", start, duration: d,
     blur: { radius: 22 * h / 1080 }, grade: { exposure: -0.7, vignette: 0.35 }, fade_in: 8, fade_out: 8 }));
   const preset = ["soft", "typewriter", "slide", "pop"].includes(String(a.motion)) ? String(a.motion) : "soft";
-  const y = number(a, "y", 0); const size = number(a, "size", 76);
+  // Big, as the guide's emphasis is: most of a line across the frame.
+  const y = number(a, "y", 0); const size = number(a, "size", 96); const k = h / 1080;
   const settle = Math.min(22, Math.floor(d / 3));
-  const id = push(p, { type: "text", name: "Janitor · emphasis", text: a.text, start, duration: d,
-    fade_out: Math.min(9, d / 4), style: { ...textStyle(h, size), ...(a.align === "left" ? { align: "left" } : {}),
+  const layer = (words: string, x: number, color?: number[]) => push(p, { type: "text", name: "Janitor · emphasis", text: words, start, duration: d,
+    fade_out: Math.min(9, d / 4), style: { ...textStyle(h, size), ...(color ? { color } : {}), ...(a.align === "left" ? { align: "left" } : {}),
       ...(a.box === true ? { background: { color: [0, 0, 0, 1], opacity: 1, pad_x: 18, pad_y: 10 } } : {}) },
-    transform: { x: number(a, "x", 0), y },
+    transform: { x, y },
     animation: { preset: preset === "slide" || preset === "pop" ? "none" : preset, duration: 9, stagger: preset === "typewriter" ? 0.8 : 0.7 },
-    keyframes: preset === "slide" ? { y: [...arrival(y + 120 * h / 1080, y, settle), key(d - 1, y - 8 * h / 1080)] } :
+    keyframes: preset === "slide" ? { y: [...arrival(y + 120 * k, y, settle), key(d - 1, y - 8 * k)] } :
       preset === "pop" ? { scale: arrival(0.72, 1, settle) } : { y: [key(0, y + 9), key(d - 1, y - 9)] },
     fade_in: preset === "slide" || preset === "pop" ? 4 : 0 });
-  made.push(id); return { text: id, clips: made };
+  // Red for the critical words: the phrase in pieces side by side, laid out as one centred line.
+  const red = Array.isArray(a.red) ? a.red.filter((v): v is string => typeof v === "string" && v.trim() !== "") : [];
+  const pieces: [string, boolean][] = [];
+  let rest = a.text;
+  for (const want of red) {
+    const at = rest.toUpperCase().indexOf(want.toUpperCase());
+    if (at < 0) throw new Error(`red "${want}" isn't in the text`);
+    if (at > 0) pieces.push([rest.slice(0, at), false]);
+    pieces.push([rest.slice(at, at + want.length), true]); rest = rest.slice(at + want.length);
+  }
+  if (rest) pieces.push([rest, false]);
+  const kept = pieces.filter(([words]) => words.trim() !== "");
+  const space = red.length ? widthOf("A A", "Akwe Pro", 700, size * k) - widthOf("AA", "Akwe Pro", 700, size * k) : 0;
+  const widths = kept.map(([words]) => widthOf(words.trim(), "Akwe Pro", 700, size * k));
+  // A space between pieces where the phrase had one.
+  const gaps = kept.map(([words], i) => (i > 0 && (/^\s/u.test(words) || /\s$/u.test(kept[i - 1]![0])) ? space : 0));
+  const total = widths.reduce((sum, v) => sum + v, 0) + gaps.reduce((sum, v) => sum + v, 0);
+  if (red.length === 0 || total > 1560 * k) {
+    made.push(layer(a.text, number(a, "x", 0)));
+  } else {
+    let left = number(a, "x", 0) - total / 2;
+    kept.forEach(([words, isRed], i) => { left += gaps[i]!; made.push(layer(words.trim(), left + widths[i]! / 2, isRed ? RED : undefined)); left += widths[i]!; });
+  }
+  return { text: made[made.length - 1], clips: made };
 }
 
 /** A source still/video in a white frame, sharp over a blurred copy or brand
@@ -73,7 +102,8 @@ export function card(p: Project, a: Args): Args {
   const settle = Math.min(24, Math.floor(d / 3)); const y = number(a, "y", -15 * h / 1080);
   const photo = push(p, { ...common, name: "Janitor · source card", fade_in: 4, fade_out: 5,
     frame: { color: [1, 1, 1, 1], width: 8 * h / 1080, shadow: 0.8, radius: 14 * h / 1080, glow: 0.4 }, transform: { scale, y, x: number(a, "x", 0) },
-    keyframes: { y: [...arrival(h * 0.65, y, settle), key(d - 1, y - 6 * h / 1080)], scale: [key(0, scale), key(d - 1, scale * 1.035)] } });
+    // push: the guide's variant that zooms into the picture while it's highlighted ("to keep the composition a bit more dynamic").
+    keyframes: { y: [...arrival(h * 0.65, y, settle), key(d - 1, y - 6 * h / 1080)], scale: [key(0, scale), key(d - 1, scale * Math.min(Math.max(number(a, "push", 1.035), 1), 1.4))] } });
   made.push(photo);
   if (typeof a.label === "string" && a.label.trim()) made.push(push(p, { type: "text", name: "Janitor · source credit", text: a.label,
     start, duration: d, fade_in: 8, fade_out: 6, style: { ...textStyle(h, 27), glow: { enabled: false }, align: "left", max_width: w * 0.87 },
@@ -116,7 +146,7 @@ export function profile(p: Project, a: Args): Args {
   const lines = a.lines.map((v) => {
     const line = v as Args;
     if (typeof line.text !== "string" || line.text.trim() === "" || typeof line.at !== "number" || !Number.isInteger(line.at) || line.at < start || line.at >= end) throw new Error("each profile line needs text and at inside the graphic's frames");
-    return { text: `• ${line.text.trim()}`, at: line.at };
+    return { text: `- ${line.text.trim().toUpperCase()}`, at: line.at };
   });
   if (lines.some((v, i) => i > 0 && v.at <= lines[i - 1]!.at)) throw new Error("profile lines must be in increasing cue order");
   const portrait = card(p, { ...a, label: undefined, x: -w * 0.275, y: 0, width: 0.32, height: 0.72 });
@@ -402,12 +432,76 @@ export function label(p: Project, a: Args): Args {
   const size = number(a, "size", 74) * k; const text = a.text.trim();
   const right = a.corner === "top_right";
   const width = measured(text, size, 800);
-  const x = right ? w / 2 - 36 * k - width / 2 : -w / 2 + 36 * k + width / 2;
+  // The guide's Animation 8: "*Worked two jobs*" sits close to the person it's
+  // about (near: [x, y], project px from centre); else a top corner.
+  const near = Array.isArray(a.near) && a.near.length === 2 && a.near.every((v) => typeof v === "number") ? a.near as [number, number] : null;
+  const x = near ? Math.max(-w / 2 + 36 * k + width / 2, Math.min(w / 2 - 36 * k - width / 2, near[0])) : right ? w / 2 - 36 * k - width / 2 : -w / 2 + 36 * k + width / 2;
+  const y = near ? Math.max(-h / 2 + 40 * k, Math.min(h / 2 - 40 * k, near[1])) : -h / 2 + 34 * k + size * 0.6;
+  // Animation 8.1: typed in quickly over its black box.
+  const typed = a.typewriter === true;
   const id = push(p, { type: "text", name: "Janitor · corner label", text, start, duration: end - start, fade_in: 0, fade_out: 0,
     style: { font: UI, weight: 800, size, color: [1, 1, 1, 1], tracking: 0, line_height: 1.1, glow: { enabled: true, radius: 8 * k, strength: 0.3 },
       background: { color: [0, 0, 0, 1], opacity: 1, pad_x: 20 * k, pad_y: 10 * k } },
-    transform: { x, y: -h / 2 + 34 * k + size * 0.6 } });
+    transform: { x, y }, ...(typed ? { animation: { preset: "typewriter", duration: 6, stagger: 0.6 } } : {}) });
   return { clip: id, clips: [id] };
+}
+
+/**
+ * A location in the house text style in the bottom left corner, as the guide's
+ * Animation 6 has it ("LUTON, ENGLAND"): rising in, then fading.
+ */
+export function location(p: Project, a: Args): Args {
+  const [start, end] = span(a); const h = p.settings.height; const w = p.settings.width; const k = h / 1080; const d = end - start;
+  if (typeof a.text !== "string" || a.text.trim() === "") throw new Error("commentary_location needs text");
+  const words = a.text.trim().toUpperCase(); const size = number(a, "size", 58) * k;
+  const width = widthOf(words, GUIDE, 700, size); const x = -w / 2 + 34 * k + width / 2; const y = h / 2 - 34 * k - size * 0.55;
+  const id = push(p, { type: "text", name: "Janitor · location", text: words, start, duration: d, fade_in: 6, fade_out: 8,
+    style: { ...textStyle(h, size / k), align: "left" }, transform: { x, y }, keyframes: { y: arrival(y + 30 * k, y, Math.min(16, Math.floor(d / 3))) } });
+  return { clip: id, clips: [id] };
+}
+
+/**
+ * A flat icon (a platform's logo, a person silhouette) popping up over the
+ * blurred picture, with glow and shadow, and a name and role under it, as the
+ * guide's Animation 9 ("JAMES WARREN / FORMER CEO, BEAST INDUSTRIES").
+ */
+export function icon(p: Project, a: Args): Args {
+  const [start, end] = span(a); const h = p.settings.height; const w = p.settings.width; const k = h / 1080; const d = end - start;
+  const m = picture(p, a.media, "commentary_icon");
+  const made: string[] = [];
+  if (a.blur !== false) made.push(push(p, { type: "adjustment", name: "Janitor · icon backdrop", start, duration: d, blur: { radius: 30 * k }, grade: { exposure: -0.3, vignette: 0.3 }, fade_in: 6, fade_out: 6 }));
+  const size = number(a, "size", 420) * k; const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
+  const scale = size / (Math.max(m.width, m.height) * fit); const y = number(a, "y", (typeof a.name === "string" ? -70 : 0) * k);
+  const settle = Math.min(16, Math.floor(d / 3));
+  made.push(push(p, { type: "video", media: m.id, source_in: 0, start, duration: d, name: "Janitor · icon", fade_in: 3, fade_out: 6,
+    frame: { color: [1, 1, 1, 1], width: 0, shadow: 0.8, glow: 0.4 }, transform: { x: 0, y, scale }, keyframes: { scale: [...arrival(scale * 0.2, scale, settle), key(d - 1, scale * 1.03)] } }));
+  const below = y + (m.height * fit * scale) / 2 + 60 * k;
+  if (typeof a.name === "string" && a.name.trim()) made.push(push(p, { type: "text", name: "Janitor · icon name", text: a.name.trim().toUpperCase(), start: start + 6, duration: d - 6, fade_out: 6,
+    style: { ...textStyle(h, 76), font: UI, weight: 400 }, transform: { x: 0, y: below }, animation: { preset: "typewriter", duration: 6, stagger: 0.6 } }));
+  if (typeof a.role === "string" && a.role.trim()) made.push(push(p, { type: "text", name: "Janitor · icon role", text: a.role.trim().toUpperCase(), start: start + 12, duration: d - 12, fade_out: 6,
+    style: { ...textStyle(h, 40), font: UI, weight: 400 }, transform: { x: 0, y: below + 64 * k }, animation: { preset: "typewriter", duration: 6, stagger: 0.6 } }));
+  return { clips: made };
+}
+
+/**
+ * The guide's Animation 7: the next composition slides down from the very top
+ * on a cut, a smooth deliberate transition (the guide's speed curve: fast,
+ * then a long settle). `at` is the cut; the clip starting there (the top
+ * picture) slides in over `frames` (14). Put the bundled whoosh-3 on it with
+ * add_sound_effect: its loudest moment lands as the slide begins.
+ */
+export function slide(p: Project, a: Args): Args {
+  const at = a.at; const h = p.settings.height;
+  if (typeof at !== "number" || !Number.isInteger(at)) throw new Error("commentary_slide needs at: the cut's frame");
+  const index = (track: string) => p.tracks.findIndex((one) => one.id === track);
+  const incoming = p.clips.filter((c) => c.type === "video" && c.start === at).sort((x, y) => index(y.track) - index(x.track))[0];
+  if (incoming === undefined || incoming.type !== "video") throw new Error(`no picture starts at frame ${at} to slide in`);
+  const frames = Math.min(number(a, "frames", 14), Math.floor(incoming.duration / 2));
+  const y = incoming.transform.y;
+  const kf = { ...(incoming.keyframes ?? {}) } as Record<string, unknown>;
+  kf.y = [...arrival(y - h, y, frames)];
+  (incoming as { keyframes?: unknown }).keyframes = kf;
+  return { clip: incoming.id, frames };
 }
 
 /**
@@ -466,4 +560,56 @@ export function leak(p: Project, a: Args): Args {
   const id = push(p, { type: "video", media: m.id, name: "Janitor · light leak", source_in: 77 / 24, speed: 3.5, start: at - before, duration: before + after,
     blend: "screen", transform: { x: 0, y: 0, scale, rotation: 90 } });
   return { clip: id, clips: [id] };
+}
+
+
+/**
+ * A YouTube channel's header as a small dark panel over the footage, its
+ * caption below (the guide's Animation 3: CjTheseDays "faded in with a slide
+ * up animation, with the relevant text below 'MrBeast's Brother'"): avatar,
+ * name, "@handle · 4.1m subscribers", the description and Subscribe.
+ */
+export function channelLayout(p: Project, a: Args): { width: number; height: number; radius: number } {
+  if (typeof a.name !== "string" || a.name.trim() === "") throw new Error("commentary_channel needs name (youtube_reference with channel: true gives it)");
+  const k = p.settings.height / 1080;
+  return { width: Math.round(800 * k), height: Math.round(270 * k), radius: Math.round(24 * k) };
+}
+export function channel(p: Project, a: Args, panel: string): Args {
+  const [start, end] = span(a); const h = p.settings.height; const w = p.settings.width; const k = h / 1080; const d = end - start;
+  const L = channelLayout(p, a);
+  const settle = Math.min(16, Math.floor(d / 3));
+  const cy = number(a, "y", h * 0.2); const left = -L.width / 2;
+  const rise = (y: number) => ({ y: arrival(y + 60 * k, y, settle) });
+  const made: string[] = [];
+  const pm = mediaOf(p, panel)!; const pf = Math.min(w / Math.max(pm.width, 1), h / Math.max(pm.height, 1));
+  made.push(push(p, { type: "video", media: panel, source_in: 0, start, duration: d, name: "Janitor · channel panel", fade_in: 6, fade_out: 6,
+    frame: { color: [1, 1, 1, 1], width: 0, shadow: 0.6 }, transform: { x: 0, y: cy, scale: L.width / (pm.width * pf) }, keyframes: rise(cy) }));
+  const avatar = typeof a.avatar === "string" ? mediaOf(p, a.avatar) : undefined; const as = 190 * k;
+  let col = left + 40 * k;
+  if (avatar !== undefined && avatar.kind === "image") {
+    const af = Math.min(w / Math.max(avatar.width, 1), h / Math.max(avatar.height, 1)); const sc = as / (Math.max(avatar.width, avatar.height) * af);
+    made.push(push(p, { type: "video", media: avatar.id, source_in: 0, start, duration: d, name: "Janitor · channel avatar", fade_in: 6, fade_out: 6,
+      frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: as / 2 / sc }, transform: { x: col + as / 2, y: cy, scale: sc }, keyframes: rise(cy) }));
+    col += as + 30 * k;
+  }
+  const line = (t: string, y: number, size: number, weight: number, color: number[], name: string) => {
+    const x = col + measured(t, size, weight) / 2;
+    made.push(push(p, { type: "text", name, text: t, start, duration: d, fade_in: 6, fade_out: 6,
+      style: { font: UI, weight, size, color, tracking: 0, line_height: 1.2, align: "left", glow: { enabled: false } }, transform: { x, y }, keyframes: rise(y) }));
+  };
+  line(String(a.name).trim(), cy - 80 * k, 50 * k, 700, [1, 1, 1, 1], "Janitor · channel name");
+  const stats = [typeof a.handle === "string" ? `@${a.handle.replace(/^@/u, "")}` : null, typeof a.subscribers === "string" ? `${a.subscribers} subscribers` : null, typeof a.videos === "string" ? `${a.videos} videos` : null].filter(Boolean).join(" · ");
+  if (stats) line(stats, cy - 26 * k, 24 * k, 400, [0.7, 0.7, 0.7, 1], "Janitor · channel stats");
+  if (typeof a.description === "string" && a.description.trim()) {
+    const room = L.width / 2 - 30 * k - col; const said = native().textLines(a.description.trim(), UI, 400, 24 * k, 0, room)[0] ?? "";
+    line(said === a.description.trim() ? said : `${said.replace(/\s+\S*$/u, "")} …more`, cy + 14 * k, 24 * k, 400, [0.82, 0.82, 0.82, 1], "Janitor · channel description");
+  }
+  const button = typeof a.subscribe === "string" ? mediaOf(p, a.subscribe) : undefined;
+  if (button !== undefined && button.kind === "image") {
+    const bw = 150 * k; const bf = Math.min(w / Math.max(button.width, 1), h / Math.max(button.height, 1)); const bs = bw / (button.width * bf); const by = cy + 72 * k;
+    made.push(push(p, { type: "video", media: button.id, source_in: 0, start, duration: d, name: "Janitor · channel subscribe", fade_in: 6, fade_out: 6,
+      frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: (bw * button.height / button.width) / 2 / bs }, transform: { x: col + bw / 2, y: by, scale: bs }, keyframes: rise(by) }));
+  }
+  if (typeof a.caption === "string" && a.caption.trim()) made.push(...(text(p, { text: a.caption.trim().toUpperCase(), start: start + 6, end, size: 52, motion: "soft", y: cy + L.height / 2 + 50 * k }).clips as string[]));
+  return { clips: made };
 }

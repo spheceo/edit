@@ -9,6 +9,7 @@ import wallpaper from "../../../assets/commentary/background.png" with { type: "
 import avatarFile from "../../../assets/commentary/avatar.png" with { type: "file" };
 import subscribeFile from "../../../assets/commentary/subscribe.png" with { type: "file" };
 import leakFile from "../../../assets/commentary/light-leak.mp4" with { type: "file" };
+import motionFile from "../../../assets/commentary/background-motion.mp4" with { type: "file" };
 import { registerTool, text } from "./mcp/registry.ts";
 import { join, parent } from "./paths.ts";
 import * as cloud from "./cloud.ts";
@@ -71,7 +72,7 @@ registerTool("search_broll", async ({ app, args, projectId }) => {
     try { inventory = JSON.parse(fs.readFileSync(join(app.store.home, "research", projectId, "broll.json"), "utf8")); } catch { /* no sources yet */ }
     // Bun's embedded file is virtual; native ImageIO and realpath need a
     // real file, as bundled sound effects do. Never pass /$bunfs to native I/O.
-    const brand = await Promise.all(([["background", wallpaper, "png"], ["avatar", avatarFile, "png"], ["subscribe", subscribeFile, "png"], ["light-leak", leakFile, "mp4"]] as const).map(async ([name, file, ext]) => {
+    const brand = await Promise.all(([["background", wallpaper, "png"], ["avatar", avatarFile, "png"], ["subscribe", subscribeFile, "png"], ["light-leak", leakFile, "mp4"], ["background-motion", motionFile, "mp4"]] as const).map(async ([name, file, ext]) => {
       const bytes = new Uint8Array(await Bun.file(file).arrayBuffer());
       const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 12);
       const path = join(app.store.home, "graphics", "commentary", `${name}-${hash}.${ext}`);
@@ -81,7 +82,7 @@ registerTool("search_broll", async ({ app, args, projectId }) => {
     // One at a time, so a file that fails never shifts the others' ids.
     const ids: (string | null)[] = []; const errors: string[] = [];
     for (const path of brand) { const [, made, failed] = await importPaths(app, projectId, [path], false, "agent"); ids.push(made[0] ?? null); errors.push(...failed); }
-    return text(stableStringify({ inventory, brand_background: ids[0] ?? null, brand_avatar: ids[1] ?? null, brand_subscribe: ids[2] ?? null, brand_light_leak: ids[3] ?? null, errors }));
+    return text(stableStringify({ inventory, brand_background: ids[0] ?? null, brand_avatar: ids[1] ?? null, brand_subscribe: ids[2] ?? null, brand_light_leak: ids[3] ?? null, brand_background_motion: ids[4] ?? null, errors }));
   }
   const limit = Math.max(1, Math.min(8, Number(args.per_query) || 5));
   const results: unknown[] = [];
@@ -185,9 +186,24 @@ async function fetchTo(url: string, path: string): Promise<boolean> {
   } catch { return false; }
 }
 
+/** A channel's header details for commentary_channel: its name, handle, subscribers, description and avatar. */
+async function channelReference(app: App, projectId: string, url: string): Promise<Args> {
+  const info = JSON.parse(await run(app.store.home, ["--flat-playlist", "--playlist-items", "0", "--dump-single-json", url])) as Args & { thumbnails?: { id?: string; url?: string }[] };
+  const handle = typeof info.uploader_id === "string" && info.uploader_id.startsWith("@") ? info.uploader_id.slice(1) : null;
+  const dir = join(app.store.home, "research", projectId, "youtube", `channel-${String(info.channel_id ?? info.id ?? "x")}`); fs.mkdirSync(dir, { recursive: true });
+  let avatar: string | null = null;
+  const pic = info.thumbnails?.find((t) => t.id === "avatar_uncropped")?.url;
+  if (pic !== undefined && await fetchTo(pic, join(dir, "avatar.jpg"))) avatar = (await importPaths(app, projectId, [join(dir, "avatar.jpg")], false, "agent"))[1][0] ?? null;
+  const found = { url, name: info.channel ?? info.title, handle, subscribers: typeof info.channel_follower_count === "number" ? compactCount(info.channel_follower_count).toLowerCase() : null,
+    verified: info.channel_is_verified === true, description: typeof info.description === "string" ? info.description.split("\n")[0] : null, avatar };
+  keep(app, projectId, `reference:${url}`, found);
+  return { ...found, note: "For commentary_channel: name, handle, subscribers, description, avatar, the brand kit's subscribe button, and caption (the editorial line under it)." };
+}
+
 registerTool("youtube_reference", async ({ app, args, projectId }) => {
+  if (typeof args.url === "string" && /youtube\.com\/(@|channel\/|c\/)/u.test(args.url)) return text(stableStringify(await channelReference(app, projectId, args.url)));
   const id = typeof args.url === "string" ? youtube.videoId(args.url) : null;
-  if (id === null) throw new Error("url must be a YouTube video");
+  if (id === null) throw new Error("url must be a YouTube video or channel");
   const dir = join(app.store.home, "research", projectId, "youtube", id);
   fs.mkdirSync(dir, { recursive: true });
   const info = JSON.parse(await run(app.store.home, ["--skip-download", "--dump-single-json", `https://www.youtube.com/watch?v=${id}`])) as Args;

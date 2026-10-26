@@ -127,7 +127,7 @@ const q = (v: unknown) => JSON.stringify(v);
 const family = (name: string): string | null =>
   /^Janitor · YouTube list/u.test(name) ? "youtubeList" : /^Janitor · YouTube/u.test(name) ? "youtube" : /^Janitor · post/u.test(name) ? "tweet"
     : /^Janitor · bumper/u.test(name) ? "bumper" : /^Janitor · (source card|card backdrop|source credit)/u.test(name) ? "card"
-    : /^Janitor · chapter/u.test(name) ? "chapter" : /^Janitor · profile/u.test(name) ? "profile" : null;
+    : /^Janitor · chapter/u.test(name) ? "chapter" : /^Janitor · profile/u.test(name) ? "profile" : /^Janitor · channel/u.test(name) ? "channel" : null;
 
 export function listing(ctx: ScriptContext, library: string[]): string {
   const lines: string[] = [];

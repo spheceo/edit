@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 
 import shutterWav from "../../../assets/sfx/shutter.wav" with { type: "file" };
+import whoosh3 from "../../../assets/sfx/whoosh-3.mp3" with { type: "file" };
 
 import { ioMessage, writeAtomic } from "./files.ts";
 import type { Marker } from "./model.ts";
@@ -40,6 +41,10 @@ export interface Sound {
 export const SOUNDS: Sound[] = [
   // The middle of the shutter, so it straddles the cut.
   { name: "shutter", file: "shutter.wav", source: shutterWav, hit: 0.085 },
+  // The Internet Janitor guide's "Whoosh - 3.mp3" for image slide-down
+  // transitions: almost a second of build-up, its loudest moment (0.95 s)
+  // landing as the animation begins.
+  { name: "whoosh-3", file: "whoosh-3.mp3", source: whoosh3, hit: 0.95 },
 ];
 
 /** The markers a sound comes with. */

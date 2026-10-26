@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { toParsed, scriptStyle } from "../src/writer_handoff.ts";
 import { issues } from "../src/commentary_audit.ts";
-import { bumper, card, label, leak, narrationLook, profile, punch, text, tweet, tweetLayout, youtube, youtubeList } from "../src/commentary_graphics.ts";
+import { bumper, card, icon, label, leak, location, narrationLook, profile, punch, slide, text, tweet, tweetLayout, youtube, youtubeList } from "../src/commentary_graphics.ts";
 import { markerPng, rectOf } from "../src/evidence_highlight.ts";
 import { compactCount, rangeOf } from "../src/commentary_sources.ts";
 import { quoteCue } from "../src/script.ts";
@@ -71,7 +71,7 @@ test("portrait fact reveals retain one complete left-aligned layout and the prod
   p.media.push(media({ id: "person", name: "Person", kind: "image", path: "/person.jpg", duration: 0, width: 600, height: 900, has_audio: false }));
   const result = profile(p, { media: "person", name: "NAME", start: 100, end: 500, lines: [{ text: "FIRST FACT", at: 130 }, { text: "A LONGER SECOND FACT", at: 250 }] });
   const facts = p.clips.find((c) => c.id === result.facts)!;
-  expect(facts).toMatchObject({ type: "text", text: "• FIRST FACT\n\n• A LONGER SECOND FACT", style: { align: "left" }, animation: { preset: "words" }, word_times: [30,32,34,150,152,154,156,158] });
+  expect(facts).toMatchObject({ type: "text", text: "- FIRST FACT\n\n- A LONGER SECOND FACT", style: { align: "left" }, animation: { preset: "words" }, word_times: [30,32,34,150,152,154,156,158] });
   expect(() => profile(p, { media: "person", start: 100, end: 200, lines: [{ text: "Late", at: 250 }] })).toThrow("inside the graphic");
 });
 
@@ -190,4 +190,28 @@ test("the YouTube reference, corner label, bumper and light leak are editable la
   expect(p.clips.find((c) => c.name === "Janitor · light leak")).toMatchObject({ start: 490, duration: 22, speed: 3.5, blend: "screen", transform: { rotation: 90 } });
   expect(compactCount(1_812_345)).toBe("1.8M");
   expect(compactCount(181_061)).toBe("181K");
+});
+
+test("the guide's pieces: red words beside white, a location bottom left, a label beside its person, an icon popping up, a slide down", () => {
+  const p = project("guide"); p.style = "commentary";
+  p.media.push(media({ id: "v", name: "V", kind: "video", path: "/v.mp4", duration: 30, width: 1920, height: 1080, has_audio: false }),
+    media({ id: "logo", name: "Logo", kind: "image", path: "/l.png", duration: 0, width: 512, height: 512, has_audio: false }));
+  const made = text(p, { text: "EXAMPLES OF BAD VIDEOS", red: ["BAD VIDEOS"], start: 0, end: 90 });
+  const layers = (made.clips as string[]).map((id) => p.clips.find((c) => c.id === id)!).filter((c) => c.type === "text");
+  expect(layers.map((c) => c.type === "text" && c.text)).toEqual(["EXAMPLES OF", "BAD VIDEOS"]);
+  expect(layers[1]!.type === "text" && layers[1]!.style.color).toEqual([1, 0, 0, 1]);
+  expect(layers[0]!.type === "text" && layers[1]!.type === "text" && layers[0]!.transform.x < layers[1]!.transform.x).toBe(true);
+  expect(() => text(p, { text: "NOTHING", red: ["ELSE"], start: 0, end: 30 })).toThrow("isn't in the text");
+  location(p, { text: "Luton, England", start: 100, end: 200 });
+  const place = p.clips.find((c) => c.name === "Janitor · location")!;
+  expect(place.type === "text" && place.text === "LUTON, ENGLAND" && place.transform.x < 0 && place.transform.y > 0).toBe(true);
+  label(p, { text: "*WORKED TWO JOBS*", near: [300, 100], typewriter: true, start: 0, end: 60 });
+  expect(p.clips.find((c) => c.name === "Janitor · corner label")).toMatchObject({ transform: { x: 300, y: 100 }, animation: { preset: "typewriter" } });
+  icon(p, { media: "logo", name: "James Warren", role: "Former CEO, Beast Industries", start: 300, end: 400 });
+  expect(p.clips.filter((c) => (c.name ?? "").startsWith("Janitor · icon")).length).toBe(4);
+  p.clips.push(clip({ id: "next", type: "video", media: "v", track: "v1", start: 500, duration: 90 }));
+  slide(p, { at: 500 });
+  const down = p.clips.find((c) => c.id === "next")!;
+  expect(down.keyframes?.y?.[0]?.value).toBe(-1080);
+  expect(down.keyframes?.y?.at(-1)).toMatchObject({ frame: 14, value: 0 });
 });

@@ -105,7 +105,7 @@ function sourceOf(p: Project, media: string): string {
 export function shots(p: Project, live: Clip[] = p.clips.filter((c) => !trackOf(p, c.track)?.hidden)): { id: string; from: number; to: number }[] {
   const index = new Map(p.tracks.map((t, i) => [t.id, i]));
   // A composition is one shot: its backdrop stands for it while its layers arrive (a list's rows one after another).
-  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve|^Janitor · (YouTube|post|bumper|profile|source card)/u.test(c.name ?? "")) || c.type === "solid");
+  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve|^Janitor · (YouTube|post|bumper|profile|source card|channel|icon)/u.test(c.name ?? "")) || c.type === "solid");
   const cuts = [...new Set(pictures.flatMap((c) => [c.start, clipEnd(c)]))].sort((a, b) => a - b);
   const runs: { id: string; from: number; to: number }[] = [];
   for (let i = 0; i + 1 < cuts.length; i++) {
@@ -184,7 +184,7 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
     out.push({ kind: "commentary_sound_without_picture", clip: c.id, start: c.start, fix: "a shutter needs a flash or a photo arriving on that frame: add a flash transition at it, or remove the sound" });
   }
   // "we use background blur, a box in the middle… the second one is just text in the middle, and that's it."
-  const graphics = live.filter((c) => /^Janitor · (source card|emphasis|YouTube frame|corner label|bumper avatar|light leak|profile facts|post text)$/u.test(c.name ?? ""));
+  const graphics = live.filter((c) => /^Janitor · (source card|emphasis|YouTube frame|corner label|bumper avatar|light leak|profile facts|post text|channel panel|icon|location)$/u.test(c.name ?? ""));
   const punches = live.filter((c) => c.type === "video" && (c.keyframes?.scale ?? []).some((k) => k.ease === "hold"));
   const plain = graphics.filter((c) => c.name === "Janitor · source card" || c.name === "Janitor · emphasis").length;
   if (graphics.length >= 10 && plain / graphics.length >= 0.85) out.push({ kind: "commentary_graphics_monotony", start: graphics[0]!.start, cards_and_text: plain, graphics: graphics.length, punch_ins: punches.length,

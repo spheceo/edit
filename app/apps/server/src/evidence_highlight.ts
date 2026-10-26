@@ -40,6 +40,20 @@ export function markerPng(width: number, height: number, rect: Rect): Uint8Array
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }
 
+/** A rounded panel (our own graphic's ground: a channel card), antialiased at its corners. */
+export function panelPng(width: number, height: number, radius: number, rgba: [number, number, number, number]): Uint8Array {
+  const stride = width * 4 + 1; const raw = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    // Distance outside the rounded rectangle (negative inside).
+    const dx = Math.max(radius - x - 0.5, x + 0.5 - (width - radius), 0); const dy = Math.max(radius - y - 0.5, y + 0.5 - (height - radius), 0);
+    const outside = Math.hypot(dx, dy) - radius;
+    const alpha = Math.min(1, Math.max(0, 0.5 - outside));
+    const at = y * stride + 1 + x * 4; raw[at] = rgba[0]; raw[at + 1] = rgba[1]; raw[at + 2] = rgba[2]; raw[at + 3] = Math.round(rgba[3] * alpha);
+  }
+  const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
+  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
 function on(p: Project, id: string): VideoClip {
   const c = p.clips.find((c) => c.id === id);
   if (c?.type !== "video" || mediaOf(p, c.media)?.kind !== "image") throw new Error("on must be an image clip (commentary_card returns photo)");
@@ -126,4 +140,16 @@ registerTool("tweet_reference", async ({ app, args, projectId }) => {
   }
   return text(stableStringify({ url: args.url, name: post.author_name ?? null, handle, date, text: postText(post.html ?? ""), avatar,
     note: "For commentary_tweet: name, handle, time (the date, or as the screenshot shows it), text exactly as posted, avatar; its picture from capture_evidence or a still_frame crop. highlight the phrase the narration is about." }));
+});
+
+registerTool("commentary_channel", async ({ app, args, projectId }) => {
+  const p = app.store.get(projectId)?.project; if (!p) throw new Error("no such project");
+  const layout = commentaryGraphics.channelLayout(p, args);
+  const dir = join(app.store.home, "graphics", "commentary"); fs.mkdirSync(dir, { recursive: true });
+  const path = join(dir, `channel-panel-${layout.width}x${layout.height}.png`);
+  if (!fs.existsSync(path)) fs.writeFileSync(path, panelPng(layout.width, layout.height, layout.radius, [33, 33, 33, 255]));
+  const [, ids, errors] = await importPaths(app, projectId, [path], false, "agent");
+  if (ids[0] === undefined) throw new Error(errors.join("; "));
+  const [, made] = await app.store.update(projectId, "agent", (project) => commentaryGraphics.channel(project, args, ids[0]!));
+  return text(stableStringify({ ...made, note: "A channel as its page header shows it, rising in over the footage; the caption below is the editorial line." }));
 });

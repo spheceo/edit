@@ -72,8 +72,15 @@ The web build rebuilt WASM successfully. Workspace Rust Clippy and tests passed
 addon's 33 tests and typecheck. The final focused import/handoff/real-FFmpeg suite
 passed 21 tests before final integration review. Review added coverage for the
 relay's duplicate thumbnail URL and a single reused Doc reached through Trello.
-Generated types were rebuilt and committed. Full `just check` is run after the
-integration commit so its clean-git generated-type checks apply.
+Generated types were rebuilt and committed. Final integration runs full
+`just check` after the commit so its clean-git generated-type checks apply.
+
+Integration review also reproduced an existing render-cache test failure: a
+one-cut trim can move a content anchor below the minimum chunk length, so its
+assumption that every later chunk stays reusable was incorrect. A separate
+test-only commit trims at an established chunk boundary and verifies every
+remaining chunk is reused, with the existing pixel/audio verification retained.
+The targeted real export regression passed; rendering behavior is unchanged.
 
 Coverage includes the screenshot's four-case shape, labeled attachments,
 checklists/comments, distinct cases sharing a recording, mixed single-line paste,

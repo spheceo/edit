@@ -29,6 +29,7 @@ import * as seams from "./seams.ts";
 import { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as update from "./update.ts";
+import { BUILD, NIGHTLY, RELEASE } from "./version.ts";
 
 /** A place to listen: an IP and port, as Rust's SocketAddr shows it ("127.0.0.1:7700", "[::1]:7700"). */
 export interface Address {
@@ -223,6 +224,9 @@ export function start(home: string, host: string | null, port: number): { app: A
   }
   if (servers.length === 0) fail(`nothing to listen on (is port ${port} taken?)`);
   console.log(`edit: data in ${home}`);
+  // First start of each installed nightly only (also works when an older
+  // updater installed this build). Ordinary launches do no maintenance.
+  if (RELEASE && NIGHTLY !== null && !process.env.CI && process.env.EDIT_CLAUDE_MAINTENANCE !== "0") seams.agentPanel(app).claudeSupport?.afterNightly(BUILD);
   resumeJobs(app);
   // Once listening: the agents reach Edit's MCP on this port.
   try {

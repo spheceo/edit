@@ -405,6 +405,16 @@ async function agentClisRoute(context: RouteContext<App>): Promise<Response> {
   return sortedJson(panel.clis ? await panel.clis() : { claude: await panel.status() });
 }
 
+async function claudeSetupRoute(context: RouteContext<App>): Promise<Response> {
+  const panel = seams.agentPanel(context.app);
+  if (!panel.claudeSetup) throw bad("Claude setup is not available");
+  if (context.request.method === "GET") return sortedJson(panel.claudeSetup());
+  const given = await body(context, "ClaudeSetup", ["action"]);
+  const action = given.action;
+  if (action !== "diagnose" && action !== "repair" && action !== "login" && action !== "cancel") throw bad("action: expected diagnose, repair, login or cancel");
+  return sortedJson(panel.claudeSetup(action));
+}
+
 async function agentModelsRoute(context: RouteContext<App>): Promise<Response> {
   const refresh = refreshQuery(context);
   try {
@@ -494,6 +504,8 @@ export function routes(router: Router<App>): void {
   router.post("/api/projects/{id}/drive", driveUploadRoute);
   router.get("/api/agent", agentStatusRoute);
   router.get("/api/agent/clis", agentClisRoute);
+  router.get("/api/agent/claude", claudeSetupRoute);
+  router.post("/api/agent/claude", claudeSetupRoute);
   router.get("/api/agent/models", agentModelsRoute);
   router.post("/api/agent/provider", agentProviderRoute);
   router.get("/api/projects/{id}/agent", agentChatRoute);

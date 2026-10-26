@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { copyText } from "../lib/diagnostics";
 import { cx } from "./ui";
+import { ClaudeSetupCard } from "./ClaudeSetupCard";
 
 interface SetupCheck {
   id: string;
@@ -36,7 +37,7 @@ export function SetupCard() {
   }, []);
 
   const missing = checks?.filter((item) => !item.ok) ?? [];
-  if (missing.length === 0) return null;
+  if (missing.length === 0) return <ClaudeSetupCard />;
   return (
     <div className="mt-8 rounded-xl border border-warning/25 bg-warning-soft p-4">
       <div className="flex items-center gap-2">
@@ -51,7 +52,7 @@ export function SetupCard() {
         </button>
       </div>
       <div className="mt-2 flex flex-col gap-2">
-        {missing.map((item) => (
+        {missing.map((item) => item.id === "claude" ? <ClaudeSetupCard key={item.id} initial /> : (
           <div key={item.id} className="flex items-center gap-3 text-[13px]">
             <div className="min-w-0 flex-1">
               <span className="text-fg">{item.title}</span> <span className="text-muted">is missing. {item.why}</span>

@@ -365,3 +365,124 @@ test("a refused sign-in mid-turn is told as one to fix, not Anthropic's raw erro
   expect(claude.signInProblem("Claude Code stopped: it reached its limit of turns.")).toBe(false);
   expect(claude.SIGN_IN_AGAIN).toContain("/login");
 });
+
+function browserRecovery(agents: Agents) {
+  let authenticated = false;
+  let finishLogin!: () => void;
+  let opened!: () => void;
+  const opening = new Promise<void>((resolve) => { opened = resolve; });
+  const login = new Promise<void>((resolve) => { finishLogin = resolve; });
+  let logins = 0;
+  agents.claudeSupport.runtime = {
+    find: async () => "/test/claude",
+    async run(command, _cwd, signal) {
+      if (command[1] === "auth" && command[2] === "login") {
+        logins++;
+        opened();
+        await Promise.race([login, new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))]);
+        authenticated = true;
+        return { code: 0, out: "Login successful" };
+      }
+      if (command[1] === "auth") return { code: 0, out: '{"loggedIn":true,"authMethod":"claude.ai"}' };
+      if (command[1] === "-p") return { code: authenticated ? 0 : 1, out: JSON.stringify({ type: "result", subtype: "success", is_error: !authenticated, result: authenticated ? "OK" : "authentication_error: OAuth access token is invalid (401)" }) };
+      return { code: 0, out: "Healthy" };
+    },
+  };
+  return { opening, finishLogin, logins: () => logins };
+}
+
+test("an auth refusal opens one login and resends the saved message once without duplicating the chat", async () => {
+  const home = fixtureHome("claude-sign-in-replay");
+  const { agents, asked, queries } = agentsWith(home);
+  const recovery = browserRecovery(agents);
+  try {
+    const project = home.store.create("Login", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await agents.send(project, "Research this case", null, null);
+    queries[0]!.push({ type: "system", subtype: "init", session_id: "saved-session" });
+    queries[0]!.push({ type: "result", subtype: "success", is_error: true, result: "authentication_error: OAuth access token is invalid (401)" });
+    queries[0]!.end();
+    await recovery.opening;
+    expect(agents.withChat(project).running).toBe(false);
+    expect(agents.claudeSetup().phase).toBe("signing_in");
+    recovery.finishLogin();
+    await agents.claudeSupport.settled();
+    await settle();
+    expect(asked).toHaveLength(2);
+    expect(asked[1]!.prompt).toBe("Research this case");
+    expect(asked[1]!.options.resume).toBe("saved-session");
+    expect(agents.withChat(project).entries.filter((item) => item.kind === "user")).toHaveLength(1);
+    expect(recovery.logins()).toBe(1);
+    // A second rejection stays actionable without opening another browser.
+    queries[1]!.push({ type: "result", subtype: "success", is_error: true, result: "authentication_error: 401" });
+    queries[1]!.end();
+    await settle();
+    expect(recovery.logins()).toBe(1);
+    expect(agents.claudeSetup().phase).toBe("needs_login");
+  } finally { agents.shutdown(); home.cleanup(); }
+});
+
+test("Stop and New Chat discard a message waiting for sign-in", async () => {
+  for (const cancel of ["stop", "reset"] as const) {
+    const home = fixtureHome(`claude-sign-in-${cancel}`);
+    const { agents, asked, queries } = agentsWith(home);
+    const recovery = browserRecovery(agents);
+    try {
+      const project = home.store.create("Login", { width: 1920, height: 1080, fps: 30 }).project.id;
+      await agents.send(project, "Research this case", null, null);
+      queries[0]!.push({ type: "result", subtype: "success", is_error: true, result: "authentication_error: 401" });
+      queries[0]!.end();
+      await recovery.opening;
+      if (cancel === "stop") await agents.stop(project); else agents.reset(project);
+      recovery.finishLogin();
+      await agents.claudeSupport.settled();
+      await settle();
+      expect(asked).toHaveLength(1);
+      expect(agents.withChat(project).running).toBe(false);
+    } finally { agents.shutdown(); home.cleanup(); }
+  }
+});
+
+test("a message awaiting sign-in survives a restart", async () => {
+  const home = fixtureHome("claude-sign-in-restart");
+  let { agents, asked, queries } = agentsWith(home);
+  const recovery = browserRecovery(agents);
+  try {
+    const project = home.store.create("Login", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await agents.send(project, "Research this case", null, null);
+    queries[0]!.push({ type: "result", subtype: "success", is_error: true, result: "authentication_error: 401" });
+    queries[0]!.end();
+    await recovery.opening;
+    agents.shutdown();
+    await agents.claudeSupport.settled();
+    ({ agents, asked, queries } = agentsWith(home));
+    const next = browserRecovery(agents);
+    agents.claudeSetup("login");
+    await next.opening;
+    next.finishLogin();
+    await agents.claudeSupport.settled();
+    await settle();
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.prompt).toBe("Research this case");
+    expect(agents.withChat(project).entries.filter((item) => item.kind === "user")).toHaveLength(1);
+  } finally { agents.shutdown(); home.cleanup(); }
+});
+
+test("a project that moved to another Mac is not edited after sign-in", async () => {
+  const home = fixtureHome("claude-sign-in-lock");
+  const { agents, asked, queries } = agentsWith(home);
+  const recovery = browserRecovery(agents);
+  const original = home.store.mayWrite;
+  try {
+    const project = home.store.create("Login", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await agents.send(project, "Research this case", null, null);
+    queries[0]!.push({ type: "result", subtype: "success", is_error: true, result: "authentication_error: 401" });
+    queries[0]!.end();
+    await recovery.opening;
+    home.store.mayWrite = async () => { throw new Error("Project is now open on another Mac"); };
+    recovery.finishLogin();
+    await agents.claudeSupport.settled();
+    await settle();
+    expect(asked).toHaveLength(1);
+    expect(agents.withChat(project).entries.at(-1)?.text).toContain("another Mac");
+  } finally { home.store.mayWrite = original; agents.shutdown(); home.cleanup(); }
+});

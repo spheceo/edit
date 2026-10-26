@@ -78,7 +78,7 @@ if [[ -n "$server" ]]; then
   perl -e 'alarm shift; exec @ARGV' "$limit" "${run[@]}" "$server" --version || { echo "the signed edit didn't answer --version within ${limit}s" >&2; exit 1; }
   home="$work/smoke-home"
   mkdir -p "$home"
-  EDIT_KEYCHAIN_FILE="$home/keychain.json" EDIT_ADOPT_SHELL_ENV=1 EDIT_NO_BROWSER=1 "${run[@]}" "$server" serve --home "$home" --port 7797 >"$work/smoke.log" 2>&1 &
+  EDIT_KEYCHAIN_FILE="$home/keychain.json" EDIT_ADOPT_SHELL_ENV=1 EDIT_NO_BROWSER=1 EDIT_CLAUDE_MAINTENANCE=0 "${run[@]}" "$server" serve --home "$home" --port 7797 >"$work/smoke.log" 2>&1 &
   smoke=$!
   answered=0
   for _ in $(seq 1 $((limit * 2))); do

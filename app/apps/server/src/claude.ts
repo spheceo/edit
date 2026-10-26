@@ -38,6 +38,16 @@ const DEFAULT_EFFORT = "medium";
 /** How long a CLI's `--version` or sign-in check may take before it's taken as not working. */
 export const CHECK_MS = 20_000;
 
+// A verified browser login may replace a stale inherited token for Edit's
+// children only. Never change the user's shell or read their credentials.
+let storedLogin = false;
+export function useStoredLogin(value: boolean): void { storedLogin = value; }
+export function environment(from: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...from, DISABLE_AUTOUPDATER: "1" };
+  if (storedLogin) for (const key of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]) delete env[key];
+  return env;
+}
+
 /**
  * Runs a CLI's quick check (`--version`, `auth status`) and says how it went:
  * its exit code (null when it couldn't start or was stopped) and what it
@@ -47,7 +57,7 @@ export const CHECK_MS = 20_000;
 export async function runCheck(command: string[], timeoutMs = CHECK_MS): Promise<{ code: number | null; out: string }> {
   let child: Bun.Subprocess<"ignore", "pipe", "ignore">;
   try {
-    child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: environment() });
   } catch {
     return { code: null, out: "" };
   }
@@ -137,7 +147,7 @@ export function baseOptions(binary: string, workspace: string): Options {
     strictMcpConfig: true,
     settings: { disableAllHooks: true },
     env: {
-      ...process.env,
+      ...environment(),
       ENABLE_CLAUDEAI_MCP_SERVERS: "false",
       CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
       CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",

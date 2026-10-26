@@ -804,6 +804,9 @@ export interface Agents {
  * answer only `status` and `ask`.
  */
 export interface AgentPanel extends Agents {
+  /** Local Claude maintenance, diagnosis and browser sign-in (no credential data). */
+  claudeSetup?(action?: import("./claude_support.ts").SupportAction | "cancel"): import("./claude_support.ts").SupportStatus;
+  claudeSupport?: { afterNightly(build: string): void; settled(): Promise<void> };
   /** The models the user's Codex offers (cached a day; `refresh` asks now). */
   models(refresh: boolean): Promise<Json>;
   /** A project's chat: its entries, whether a turn is running, its model and effort. */

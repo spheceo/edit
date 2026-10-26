@@ -253,6 +253,7 @@ function diagnostics({ app }: Context): Response {
     timings: diag.timings(),
     uptime: diag.human(diag.uptime()),
     version: BUILD,
+    claude: seams.agentPanel(app).claudeSetup?.() ?? null,
   });
 }
 

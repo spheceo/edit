@@ -27,10 +27,76 @@ export interface AgentStatus {
   email?: string;
   plan?: string;
   /** "missing" (not installed), "logged_out" or "ready". */
-  state?: "missing" | "logged_out" | "ready";
+  state?: "missing" | "logged_out" | "ready" | ClaudeSupport["phase"];
   error?: string;
   path?: string;
   version?: string | null;
+}
+
+export interface ClaudeSupport {
+  phase: "idle" | "updating" | "checking" | "signing_in" | "ready" | "needs_login" | "error";
+  message: string;
+  error: string | null;
+  url: string | null;
+  path: string | null;
+  version: string | null;
+  checkedAt: number | null;
+  checks: { name: string; ok: boolean; detail: string }[];
+}
+export const useClaudeSupport = create<{ status: ClaudeSupport | null; error: string | null }>(() => ({ status: null, error: null }));
+export const claudeBusy = (status: ClaudeSupport | null) => Boolean(status && ["updating", "checking", "signing_in"].includes(status.phase));
+
+let supportWatchers = 0;
+let supportTimer: ReturnType<typeof setTimeout> | undefined;
+let supportFlight: Promise<void> | null = null;
+
+export function refreshClaudeSupport(): Promise<void> {
+  if (supportFlight) return supportFlight;
+  const flight = (async () => {
+    const before = useClaudeSupport.getState().status?.phase;
+    const wasReady = useAgent.getState().status?.ready;
+    const status = await json<ClaudeSupport>(await fetchRetrying("/api/agent/claude"));
+    useClaudeSupport.setState({ status, error: null });
+    const agent = await json<AgentStatus>(await fetchRetrying("/api/agent"));
+    if (useAgent.getState().status?.provider !== "codex") useAgent.setState({ status: agent });
+    if (before !== status.phase || !wasReady) {
+      if (status.phase === "ready") {
+        const project = useAgent.getState().project;
+        if (project) await openAgent(project);
+      }
+    }
+  })().catch((error: unknown) => useClaudeSupport.setState({ error: error instanceof Error ? error.message : String(error) })).finally(() => {
+    if (supportFlight === flight) supportFlight = null;
+  });
+  supportFlight = flight;
+  return flight;
+}
+
+/** All setup cards share one poll; GET observes state and never runs a diagnosis. */
+export function watchClaudeSupport() {
+  supportWatchers++;
+  if (supportWatchers === 1) void pollClaudeSupport();
+  return () => { supportWatchers--; if (!supportWatchers) clearTimeout(supportTimer); };
+}
+
+async function pollClaudeSupport() {
+  await refreshClaudeSupport();
+  clearTimeout(supportTimer);
+  if (supportWatchers) supportTimer = setTimeout(() => void pollClaudeSupport(), claudeBusy(useClaudeSupport.getState().status) ? 1000 : 15_000);
+}
+
+export async function setupClaude(action: "diagnose" | "repair" | "login" | "cancel") {
+  try {
+    const status = await json<ClaudeSupport>(await fetchRetrying("/api/agent/claude", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action }),
+    }));
+    useClaudeSupport.setState({ status, error: null });
+    await refreshClaudeSupport();
+    clearTimeout(supportTimer);
+    if (supportWatchers) supportTimer = setTimeout(() => void pollClaudeSupport(), 1000);
+  } catch (error) {
+    useClaudeSupport.setState({ error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 interface AgentState {
@@ -142,6 +208,11 @@ export const newChat = () => {
 
 /** Live events from the server (see store.ts connectEvents). */
 export function applyAgentEvent(event: { project: string; event: string; [key: string]: unknown }) {
+  if (event.event === "claude") {
+    useClaudeSupport.setState({ status: event.support as ClaudeSupport, error: null });
+    void refreshClaudeSupport();
+    return;
+  }
   const state = useAgent.getState();
   if (event.project !== state.project) return;
   const now = Date.now();

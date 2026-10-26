@@ -14,7 +14,7 @@ import * as seams from "./seams.ts";
 import { onRestart } from "./update.ts";
 
 /** The keys a Finder launch lacks that Edit needs: Homebrew's PATH (FFmpeg, Codex) and the library's sign-in. */
-const KEYS = ["PATH", "GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET", "GOOGLE_DOCS_REFRESH_TOKEN"];
+const KEYS = ["PATH", "CLAUDE_CONFIG_DIR", "GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET", "GOOGLE_DOCS_REFRESH_TOKEN"];
 
 /**
  * Opened from Finder, the app gets launchd's bare environment: no Homebrew on

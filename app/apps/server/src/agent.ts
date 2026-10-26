@@ -15,6 +15,7 @@
 import * as fs from "node:fs";
 
 import * as claude from "./claude.ts";
+import { ClaudeSupport, type SupportAction, type SupportStatus } from "./claude_support.ts";
 import * as diag from "./diag.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { nowMs, writeAtomic } from "./files.ts";
@@ -267,6 +268,10 @@ interface TurnUsage {
 }
 
 export class Agents implements seams.AgentPanel {
+  readonly claudeSupport: ClaudeSupport;
+  /** Failed messages survive app restarts, but never Stop, New Chat or a newer message. */
+  private authPending = new Map<string, { text: string; user: string; model: string | null; effort: string | null; continued: boolean; retried: boolean }>();
+  private authRetried = new Set<string>();
   /** Each project's automatic follow-ups for the user's last message: its generation, how many, the flags left at the last. */
   private followedUp = new Map<string, { generation: number; sent: number; count: number }>();
   /** Token use of each project's running turn. */
@@ -313,6 +318,10 @@ export class Agents implements seams.AgentPanel {
     private port: number,
   ) {
     this.dir = join(home, "agent");
+    this.claudeSupport = new ClaudeSupport(home, () => this.resumeAfterClaudeLogin(), () => {
+      this.ready = null;
+      this.emit("", { event: "claude", support: this.claudeSupport.status() });
+    });
     try {
       fs.mkdirSync(this.dir, { recursive: true });
     } catch {
@@ -326,6 +335,12 @@ export class Agents implements seams.AgentPanel {
       models = null;
     }
     this.modelCache = models;
+    try {
+      const saved: unknown = JSON.parse(fs.readFileSync(join(this.dir, "claude-pending.json"), "utf8"));
+      if (Array.isArray(saved)) for (const [project, pending] of saved) {
+        if (typeof project === "string" && typeof pending?.text === "string" && typeof pending?.user === "string") this.authPending.set(project, pending);
+      }
+    } catch { /* No message waiting for sign-in. */ }
     // Every start is on Claude (Oct 24: Codex is hidden from Settings); a
     // Codex chosen through the API (an experiment) lasts until Edit restarts.
     try {
@@ -347,6 +362,63 @@ export class Agents implements seams.AgentPanel {
   setProvider(provider: Provider): void {
     this.chosen = provider;
     this.ready = null;
+    if (provider !== "claude") { this.authPending.clear(); this.saveAuthPending(); }
+  }
+
+  claudeSetup(action?: SupportAction | "cancel"): SupportStatus {
+    if (action === "cancel") {
+      this.authPending.clear();
+      this.saveAuthPending();
+      return this.claudeSupport.cancel();
+    }
+    return action ? this.claudeSupport.start(action) : this.claudeSupport.status();
+  }
+
+  private saveAuthPending(): void {
+    try { writeAtomic(join(this.dir, "claude-pending.json"), JSON.stringify([...this.authPending])); }
+    catch (error) { diag.warn("claude", `saving the waiting message: ${diag.messageOf(error)}`); }
+  }
+
+  private waitForClaudeLogin(project: string, generation: number, text: string, continued: boolean): boolean {
+    const chat = this.withChat(project);
+    if (chat.generation !== generation || chat.halted || this.quitting) return false;
+    const user = chat.entries.findLast((item) => item.kind === "user");
+    if (!user) return false;
+    const retried = this.authRetried.has(project);
+    this.authPending.set(project, { text, user: user.id, model: chat.model, effort: chat.effort, continued, retried });
+    this.saveAuthPending();
+    this.finish(project, retried ? "Claude still rejected its sign-in. Your message is saved; choose Check Claude to continue." : "Claude needs to sign in again. Your message is saved and will continue after sign-in.");
+    this.claudeSupport.authenticationFailed();
+    // One automatic recovery per user request; a second failure is actionable,
+    // never an endless series of browser windows and duplicate messages.
+    if (!retried) this.claudeSupport.start("login");
+    return true;
+  }
+
+  private async resumeAfterClaudeLogin(): Promise<void> {
+    this.ready = null;
+    this.claudeCatalog = null;
+    for (const [project, pending] of [...this.authPending]) {
+      const chat = this.withChat(project);
+      if (this.quitting || this.chosen !== "claude") return;
+      if (chat.running) continue;
+      this.authPending.delete(project);
+      this.saveAuthPending();
+      if (chat.halted || this.store.get(project) === null || chat.entries.findLast((item) => item.kind === "user")?.id !== pending.user) continue;
+      try {
+        // A cloud lock may have moved while the browser was open.
+        await this.store.mayWrite(project);
+        if (this.withChat(project) !== chat || chat.halted || chat.running || chat.entries.findLast((item) => item.kind === "user")?.id !== pending.user) continue;
+        this.authRetried.add(project);
+        chat.model = pending.model;
+        chat.effort = pending.effort;
+        const prompt = pending.continued ? `(Edit, automatically) Claude's sign-in was renewed after this turn stopped. Continue the user's request below. Read get_edit_context first and check what is already done before making changes; do not repeat completed work.\n\n${pending.text}` : pending.text;
+        await this.sendTurn(project, prompt, pending.model, pending.effort, chat.generation, true);
+      } catch (error) {
+        this.upsert(project, entry({ id: newId("error"), kind: "error", text: `Claude is signed in, but the message could not continue: ${diag.messageOf(error)}` }));
+        this.save(project);
+      }
+    }
   }
 
   /**
@@ -354,6 +426,12 @@ export class Agents implements seams.AgentPanel {
    * `state` is "missing", "logged_out" or "ready".
    */
   async status(): Promise<Json> {
+    if (this.chosen === "claude") {
+      const support = this.claudeSupport.status();
+      if (["updating", "checking", "signing_in", "needs_login", "error"].includes(support.phase)) {
+        return { provider: "claude", ready: false, state: support.phase, error: support.error, support };
+      }
+    }
     const now = timing.now();
     const cached = stillReady(this.ready, now);
     if (cached !== null) return cached;
@@ -365,7 +443,9 @@ export class Agents implements seams.AgentPanel {
   /** Settings: whether each CLI Edit drives (Claude Code, Codex for `ask`) is installed and signed in, and which runs the agent. */
   async clis(): Promise<Json> {
     const [claudeStatus, codexStatus] = await Promise.all([claude.checkClaude(), checkCodex()]);
-    return sorted({ claude: sorted(claudeStatus), codex: codexStatus, provider: this.chosen });
+    const support = this.claudeSupport.status();
+    const blocked = !["idle", "ready"].includes(support.phase);
+    return sorted({ claude: { ...claudeStatus, support, ...(blocked ? { ready: false, state: support.phase, error: support.error ?? support.message } : {}) }, codex: codexStatus, provider: this.chosen });
   }
 
   /** The running app-server, started (and initialized) when there's none. */
@@ -561,6 +641,9 @@ export class Agents implements seams.AgentPanel {
   }
 
   reset(project: string): void {
+    this.authPending.delete(project);
+    this.saveAuthPending();
+    this.authRetried.delete(project);
     const chat = this.withChat(project);
     // A turn still running would go on editing with nothing on screen to show it.
     if (chat.running) {
@@ -604,6 +687,7 @@ export class Agents implements seams.AgentPanel {
     model: string | null,
     effort: string | null,
     generation: number | null,
+    replay = false,
   ): Promise<void> {
     if (this.store.get(project) === null) throw new Error("no such project");
     let sending = this.sending.get(project);
@@ -619,6 +703,9 @@ export class Agents implements seams.AgentPanel {
       if (generation !== null && (chat.generation !== generation || chat.halted)) return;
       if (chat.running) throw new Error("the agent is still working; stop it or wait");
       if (generation === null) {
+        this.authPending.delete(project);
+        this.saveAuthPending();
+        this.authRetried.delete(project);
         // A review fix, Edit's follow-up to one, or the team's own message (review_guard.ts).
         reviewGuard.turnStarts(project, text);
         chat.generation = this.nextGeneration++;
@@ -642,9 +729,10 @@ export class Agents implements seams.AgentPanel {
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
       try {
-        await this.prepareTurn(project, text, model, effort, current, provider);
+        await this.prepareTurn(project, text, model, effort, current, provider, replay);
       } catch (error) {
         const said = isBug(error) ? crashed("the agent turn", error) : diag.messageOf(error);
+        if (provider === "claude" && claude.signInProblem(said) && this.waitForClaudeLogin(project, current, text, false)) return;
         const now = this.withChat(project);
         if (now.generation === current && now.running) this.finish(project, said);
         throw new Error(said);
@@ -661,10 +749,11 @@ export class Agents implements seams.AgentPanel {
     effort: string | null,
     generation: number,
     provider: Provider,
+    replay = false,
   ): Promise<void> {
     const live = this.store.get(project);
     if (live === null) throw new Error("no such project");
-    if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation);
+    if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation, replay);
     const codex = await this.codex();
     const chat = this.withChat(project);
     if (!stillOn(chat, generation)) throw new Error("Stopped.");
@@ -769,12 +858,28 @@ export class Agents implements seams.AgentPanel {
    * pre-approved, the instructions as its system prompt, and its messages
    * mapped onto the chat as they stream in.
    */
-  private async claudeTurn(project: string, text: string, model: string | null, effort: string | null, generation: number): Promise<void> {
+  private async claudeTurn(project: string, text: string, model: string | null, effort: string | null, generation: number, replay = false): Promise<void> {
     const live = this.store.get(project);
     if (live === null) throw new Error("no such project");
-    const binary = await this.findClaude();
-    if (binary === null) throw new Error("Claude Code isn't installed. Install it, then run `claude auth login`.");
     const chat = this.withChat(project);
+    if (chat.provider !== "claude") {
+      // A rejected login may occur before the CLI starts. Its waiting message
+      // still belongs to Claude, including a chat previously run on Codex.
+      chat.thread = null;
+      chat.model = model;
+      chat.effort = effort;
+      chat.provider = "claude";
+    }
+    if (!replay) this.upsert(project, entry({ id: newId("user"), kind: "user", text }));
+    this.save(project);
+    // The once-per-nightly update finishes before a new CLI is started.
+    // Sign-in failures below keep this already-visible message for recovery.
+    await this.claudeSupport.settled();
+    if (!stillOn(chat, generation)) throw new Error("Stopped.");
+    const setup = this.claudeSupport.status();
+    if (setup.phase === "needs_login") throw new Error("Claude authentication_error: sign-in required");
+    const binary = await this.findClaude();
+    if (binary === null) throw new Error("Claude Code isn't installed. Choose Set up Claude.");
     if (chat.provider !== "claude") {
       // Codex's thread and model names mean nothing to Claude Code.
       chat.thread = null;
@@ -805,7 +910,6 @@ export class Agents implements seams.AgentPanel {
     const now = this.withChat(project);
     if (!stillOn(now, generation)) throw new Error("Stopped.");
     now.provider = "claude";
-    this.upsert(project, entry({ id: newId("user"), kind: "user", text }));
     this.save(project);
     this.emit(project, { event: "status", running: true });
     await this.runClaude(project, generation, text, options);
@@ -826,7 +930,7 @@ export class Agents implements seams.AgentPanel {
             const { resume: _gone, ...rest } = options;
             return this.runClaude(project, generation, `${SESSION_GONE}\n\n${text}`, rest);
           };
-    void this.followClaude(project, generation, new ClaudeTurn(nowMs()), running, fresh);
+    void this.followClaude(project, generation, new ClaudeTurn(nowMs()), running, fresh, text);
     const after = this.withChat(project);
     // Stop can arrive while the query starts.
     if (after.generation !== generation || after.halted || !after.running) await running.interrupt().catch(() => undefined);
@@ -839,6 +943,7 @@ export class Agents implements seams.AgentPanel {
     turn: ClaudeTurn,
     running: claude.Query,
     fresh: (() => Promise<void>) | null,
+    text: string,
   ): Promise<void> {
     let error: string | null = null;
     let result: Record<string, unknown> | null = null;
@@ -868,7 +973,7 @@ export class Agents implements seams.AgentPanel {
     } else if (error === null) {
       error = "Claude Code stopped before the turn finished; send your message again.";
     }
-    if (error !== null && claude.signInProblem(error)) error = claude.SIGN_IN_AGAIN;
+    if (error !== null && claude.signInProblem(error) && this.waitForClaudeLogin(project, generation, text, turn.tools > 0)) return;
     const chat = this.withChat(project);
     if (chat.generation !== generation || !chat.running) return;
     if (chat.halted && error !== null) error = "Stopped.";
@@ -1135,6 +1240,8 @@ export class Agents implements seams.AgentPanel {
   }
 
   async stop(project: string): Promise<void> {
+    this.authPending.delete(project);
+    this.saveAuthPending();
     const chat = this.withChat(project);
     chat.halted = true;
     if (chat.running) {
@@ -1245,6 +1352,7 @@ export class Agents implements seams.AgentPanel {
    * restart carries them on.
    */
   shutdown(): void {
+    this.claudeSupport.close();
     if (this.watchdog !== null) {
       clearInterval(this.watchdog);
       this.watchdog = null;

@@ -36,6 +36,7 @@ import {
   openAgent,
   providerName,
   sendToAgent,
+  setupClaude,
   stopAgent,
   useAgent,
   type AgentEntry,
@@ -44,6 +45,7 @@ import { buildTurns, callTitle, formatWorked, groupSummary, type Turn } from "..
 import { api, useMachine } from "../lib/api";
 import { useEditor } from "../lib/store";
 import { Button, cx, IconButton } from "./ui";
+import { ClaudeSetupCard } from "./ClaudeSetupCard";
 
 /** Claude’s mark (Simple Icons’ path), in Claude’s orange: the agent runs on the user’s Claude Code. */
 export function ClaudeMark({ size = 16 }: { size?: number }) {
@@ -101,12 +103,15 @@ export function AgentPanel() {
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-1.5 pl-3.5">
         <AgentMark size={15} />
         <span className="font-medium">{providerName(status)}</span>
-        {status?.ready !== false && (
+        {status?.provider !== "codex" && <IconButton label="Check Claude" className="ml-auto" onClick={() => void setupClaude("diagnose")}><Wrench size={14} /></IconButton>}
+        {entries.length > 0 && (
           <IconButton label="New chat" className="ml-auto" disabled={busy || !entries.length} onClick={newChat}>
             <SquarePen size={14} />
           </IconButton>
         )}
       </div>
+
+      {entries.length > 0 && status?.provider !== "codex" && <ClaudeSetupCard />}
 
       <div
         ref={list}
@@ -116,7 +121,7 @@ export function AgentPanel() {
         }}
         className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
       >
-        {!loaded ? null : status && !status.ready ? (
+        {!loaded ? null : !entries.length && status && !status.ready ? (
           status.provider === "codex" ? <SetupCodex /> : <SetupClaude />
         ) : !entries.length ? (
           <Empty title={`Edit with ${providerName(status)}`} detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
@@ -310,41 +315,7 @@ function ToolCall({ call }: { call: AgentEntry }) {
 
 /** Claude Code missing or signed out: the steps to fix it on the machine running Edit, and a re-check. */
 function SetupClaude() {
-  const status = useAgent((state) => state.status);
-  const project = useAgent((state) => state.project);
-  const machine = useMachine();
-  const [checking, setChecking] = useState(false);
-  const missing = status?.state !== "logged_out";
-  const steps = missing ? ["curl -fsSL https://claude.ai/install.sh | bash", "claude auth login"] : ["claude auth login"];
-  return (
-    <div className="flex min-h-full flex-col justify-center px-1">
-      <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-raised text-fg ring-1 ring-line">
-        <ClaudeMark size={20} />
-      </span>
-      <div className="mt-3 text-center font-medium">{missing ? "Install Claude Code to use the agent" : "Sign in to Claude Code"}</div>
-      <p className="mx-auto mt-1 max-w-[260px] text-center text-[12px] leading-relaxed text-muted">
-        Edit runs Claude Code on your own Claude plan or API key, on <span className="text-fg">{machine}</span>. Run this there:
-      </p>
-      <div className="mt-4 flex flex-col gap-1.5">
-        {steps.map((step, index) => (
-          <CopyLine key={step} index={steps.length > 1 ? index + 1 : undefined} text={step} />
-        ))}
-      </div>
-      <button
-        type="button"
-        disabled={checking || !project}
-        onClick={() => {
-          if (!project) return;
-          setChecking(true);
-          void openAgent(project).finally(() => setChecking(false));
-        }}
-        className="mx-auto mt-4 flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-medium text-muted ring-1 ring-line transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
-      >
-        <RotateCw size={12} className={checking ? "animate-spin" : undefined} />
-        {checking ? "Checking…" : "Check again"}
-      </button>
-    </div>
-  );
+  return <ClaudeSetupCard initial />;
 }
 
 /** Codex missing or signed out: the steps to fix it on the machine running Edit, and a re-check. */

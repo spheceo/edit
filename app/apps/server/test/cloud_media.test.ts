@@ -206,6 +206,15 @@ test("records_read_convex_values", () => {
   expect(Math.trunc(record.size)).toBe(1234);
 });
 
+test("Writer folder masters resolve by content identity and require the matching ready original", async () => {
+  const source = `sha256:${"b".repeat(64)}`;
+  const key = `edit/originals/sha256/${"b".repeat(64)}/00.mp4`;
+  mock.cloud.convex.media.set(source, { source, name: "Folder master", originalKey: key, originalReady: true, proxyReady: false, size: 100, createdAt: 1, updatedAt: 1 });
+  expect(await cloudMedia.registeredOriginal(source, key)).toEqual({ source, file: source, key, name: "Folder master", size: 100 });
+  await expect(cloudMedia.registeredOriginal(source, "edit/originals/wrong.mp4")).rejects.toThrow("does not match");
+  await expect(cloudMedia.registeredOriginal(`sha256:${"c".repeat(64)}`)).rejects.toThrow("not uploaded yet");
+});
+
 test("exports_fetch_only_what_the_span_uses", async () => {
   const project: Project = {
     ...newProject("p", "p", SETTINGS),

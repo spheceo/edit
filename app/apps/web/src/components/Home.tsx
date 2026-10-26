@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 
 import { editStyles, useAccount } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
+import { hasImportLinks, importPaste } from "../lib/import-input";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
@@ -676,8 +677,6 @@ function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSumm
 
 type Preview = Awaited<ReturnType<typeof api.scriptPreview>>;
 
-const DOC = /docs\.google\.com\/document\/d\//;
-
 /** One field (a name for a blank project, or a Google Doc link to start from its script) and the kind of video. */
 /** `only`: the kind of video Home is filtered to: its Writer scripts are the ones listed, and a new project is that kind. */
 function NewProject({ open, onClose, only = null }: { open: boolean; onClose: () => void; only?: Style | null }) {
@@ -692,7 +691,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
   const [scripts, setScripts] = useState<WriterScriptRow[] | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const url = text.trim();
-  const script = DOC.test(url);
+  const script = hasImportLinks(url);
 
   // A fresh dialog each time, with Writer’s scripts as they are now.
   useEffect(() => {
@@ -791,12 +790,21 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
           void create();
         }}
       >
-        <input
+        <textarea
           autoFocus
+          rows={3}
           value={text}
-          placeholder="Name a project, paste a Google Doc, or find a Writer script"
+          placeholder="Name a project, find a Writer script, or paste case links (Docs, Drive, YouTube, Trello)"
           onChange={(event) => setText(event.target.value)}
-          className="h-11 w-full rounded-lg bg-transparent px-3 text-[14px] outline-none placeholder:text-faint"
+          onPaste={(event) => {
+            const plain = event.clipboardData.getData("text/plain");
+            const pasted = importPaste(event.clipboardData.getData("text/html"), plain);
+            if (pasted === plain) return;
+            event.preventDefault();
+            const node = event.currentTarget;
+            setText(text.slice(0, node.selectionStart) + pasted + text.slice(node.selectionEnd));
+          }}
+          className="w-full resize-y rounded-lg bg-transparent px-3 py-2 text-[14px] outline-none placeholder:text-faint"
         />
         {script && (
           <div className="truncate px-3 pb-2 text-[12px] text-muted">
@@ -804,11 +812,10 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
               <span className="text-danger">{preview.error}</span>
             ) : preview?.result ? (
               <span className="tabular">
-                <span className="text-fg">{preview.result.title || "Untitled script"}</span> · {preview.result.files} Drive{" "}
-                {preview.result.files === 1 ? "file" : "files"} · {preview.result.narration} cut-ins · {shortDuration(preview.result.seconds)}
+                <span className="text-fg">{preview.result.title || "Untitled script"}</span> · {preview.result.files} {preview.result.files === 1 ? "source" : "sources"} · {preview.result.narration} cut-ins · {preview.result.whole ? "duration after import" : shortDuration(preview.result.seconds)}
               </span>
             ) : (
-              <span className="shimmer">Reading the Doc…</span>
+              <span className="shimmer">Reading the case links…</span>
             )}
           </div>
         )}

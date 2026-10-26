@@ -123,7 +123,7 @@ test.skipIf(ffmpeg === null || ffprobe === null)(
       ]);
       expect(await http("POST", "/api/scripts/preview", { url: "https://example.com/doc" })).toEqual([
         400,
-        { error: "Paste a Google Docs link (docs.google.com/document/d/…)." },
+        { error: "Paste Google Docs scripts, Google Drive folders or files, YouTube videos, or a Trello card." },
       ]);
       expect((await http("POST", "/api/scripts/preview", {}))[0]).toBe(422);
       const id = app.store.create("Kent crash", { width: 1920, height: 1080, fps: 30 }).project.id;
@@ -181,6 +181,33 @@ test.skipIf(ffmpeg === null || ffprobe === null)(
   },
   60_000,
 );
+
+test.skipIf(ffmpeg === null || ffprobe === null)("mixed input lays out a whole new source and the reused Doc's unchanged ranges and cut-in", async () => {
+  const [{ app, cleanup }] = withAgents("compilation-layout");
+  mock.doc("REUSEabcdefghijk", DOC);
+  try {
+    const http = serve(app);
+    const url = `Case 1: https://drive.google.com/file/d/${FILE}/view\nCase 2 (reuse): https://docs.google.com/document/d/REUSEabcdefghijk/edit`;
+    const [previewStatus, preview] = await http("POST", "/api/scripts/preview", { url });
+    expect(previewStatus).toBe(200);
+    expect(preview).toMatchObject({ files: 1, footage: 3, narration: 1, whole: 1 });
+    const id = app.store.create("Compilation", { width: 1920, height: 1080, fps: 30 }).project.id;
+    expect((await http("POST", `/api/projects/${id}/script`, { url }))[0]).toBe(200);
+    const deadline = Date.now() + 30_000;
+    while (!["done", "failed"].includes(app.scripts.get(id)?.state ?? "") && Date.now() < deadline) await Bun.sleep(20);
+    expect(app.scripts.get(id)?.state).toBe("done");
+    const project = app.store.get(id)!.project;
+    const blocks = project.script!.blocks;
+    expect(blocks[0]).toMatchObject({ kind: "footage", start: 0 });
+    expect(blocks[0]!.kind === "footage" && blocks[0]!.end).toBeGreaterThanOrEqual(420);
+    expect(blocks[1]).toMatchObject({ kind: "footage", start: 5, end: 10 });
+    expect(blocks[2]).toMatchObject({ kind: "narration", text: "On July 13, Kent police were called." });
+    expect(blocks[3]).toMatchObject({ kind: "footage", start: 300, end: 305 });
+    expect(blocks[1]!.kind === "footage" && blocks[1]!.cut).toBeUndefined();
+    const pictures = project.clips.filter((clip) => clip.type === "video");
+    expect(pictures.map((clip) => clip.type === "video" ? clip.source_in : -1)).toEqual([0, 5, 300]);
+  } finally { cleanup(); }
+}, 40_000);
 
 test("the voice-over routes answer", async () => {
   const [{ app, cleanup }] = withAgents("voice-routes");

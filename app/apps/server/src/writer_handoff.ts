@@ -23,6 +23,7 @@ import * as kinds from "./kinds.ts";
 import type { Router } from "./http/router.ts";
 import type { ScriptBlock, Style } from "./model.ts";
 import * as script from "./script.ts";
+import { markReusedScript, parseScriptText } from "./compilation_input.ts";
 import type { Parsed } from "./seams.ts";
 import { writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
@@ -35,8 +36,9 @@ export interface WriterScript {
   sourceKind?: string;
   sourceUrl?: string;
   kind?: string;
-  clips?: { id: string; startMs: number; endMs: number; kind?: string; narration?: string; notes?: { text: string }[] }[];
-  parts?: { title: string; startMs: number; durationMs: number; url?: string }[];
+  clips?: { id: string; startMs: number; endMs: number; kind?: string; narration?: string; reuse?: string; notes?: { text: string }[] }[];
+  parts?: { title: string; startMs: number; durationMs: number; url?: string; reuse?: string; mediaSource?: string; originalKey?: string }[];
+  reuses?: { url: string; after: number; title?: string; script?: string; scriptTitle?: string; scriptText?: string; scriptBlocks?: ScriptBlock[] }[];
   commentary?: {
     sources?: { id: string; title: string; origin: string; role?: string }[];
     draft?: {
@@ -116,7 +118,7 @@ export function toParsed(given: WriterScript): Parsed {
   }
   const parts = (given.parts ?? []).filter((part) => part.durationMs > 0);
   // The recordings on the script's clock, each with its file.
-  const files: { start: number; end: number; url: string; file: string }[] = [];
+  const files: { start: number; end: number; url: string; file: string; originalKey?: string }[] = [];
   if (parts.length === 0) {
     const url = given.sourceUrl ?? "";
     const file = script.footageFile(url);
@@ -124,17 +126,35 @@ export function toParsed(given: WriterScript): Parsed {
     files.push({ start: 0, end: Number.MAX_SAFE_INTEGER, url, file });
   } else {
     for (const part of parts) {
-      const file = part.url === undefined ? null : script.footageFile(part.url);
+      const shared = part.mediaSource;
+      if (shared !== undefined && (!/^sha256:[a-fA-F0-9]{64}$/u.test(shared) || !part.originalKey?.startsWith(`edit/originals/sha256/${shared.slice(7)}/`) || part.originalKey.includes(".."))) throw new Error(`"${part.title}" has an invalid shared folder master`);
+      const file = shared ?? (part.url === undefined ? null : script.footageFile(part.url));
       if (file === null) throw new Error(`"${part.title}" has no Drive or YouTube link: import it in Writer from Drive or YouTube to hand it over`);
-      files.push({ start: part.startMs, end: part.startMs + part.durationMs, url: part.url!, file });
+      files.push({ start: part.startMs, end: part.startMs + part.durationMs, url: part.url ?? "", file, ...(shared ? { originalKey: part.originalKey } : {}) });
     }
   }
   const blocks: ScriptBlock[] = [];
+  const reused = new Set<string>();
+  const appendReuse = (url: string) => {
+    if (reused.has(url)) return;
+    const reuse = given.reuses?.find((one) => one.url === url);
+    if (script.docId(url) !== null || (script.footageFile(url) === null && reuse?.script && script.docId(reuse.script) !== null)) {
+      const parsed = reuse?.scriptBlocks ? { title: reuse.scriptTitle ?? "", blocks: structuredClone(reuse.scriptBlocks) } : reuse?.scriptText ? parseScriptText(reuse.scriptText, reuse.scriptTitle) : null;
+      if (!parsed || !parsed.blocks.some((block) => block.kind === "footage")) throw new Error("The reused case has no complete linked script text. Finish syncing it in Writer; the narration summary cannot rebuild it.");
+      blocks.push(...markReusedScript(parsed, reuse?.script ?? url).blocks);
+    } else {
+      const file = script.footageFile(url);
+      if (file === null) throw new Error(`The reused video has no supported footage link: ${url}`);
+      blocks.push({ kind: "footage", url, file, start: 0, end: 1, label: script.REUSE, notes: [`Reuse: ${url}`] });
+    }
+    reused.add(url);
+  };
   for (const clip of given.clips ?? []) {
     const notes = (clip.notes ?? []).map((note) => note.text.trim()).filter((text) => text !== "");
     if (clip.kind === "cut-in") {
       const text = (clip.narration ?? "").trim();
-      if (text !== "") blocks.push({ kind: "narration", text, ...(notes.length > 0 ? { notes } : {}) });
+      if (text !== "" && !(clip.reuse && text === "REUSE")) blocks.push({ kind: "narration", text, ...(notes.length > 0 ? { notes } : {}) });
+      if (clip.reuse) appendReuse(clip.reuse);
       continue;
     }
     // One range of each recording the clip plays over; its notes go with the first.
@@ -151,13 +171,33 @@ export function toParsed(given: WriterScript): Parsed {
         start,
         end,
         label: `${mmss(start)} - ${mmss(end)}`,
-        ...(first && notes.length > 0 ? { notes } : {}),
+        ...((first && notes.length > 0) || one.originalKey ? { notes: [...(first ? notes : []), ...(one.originalKey ? [`Shared original: ${one.originalKey}`] : [])] } : {}),
       });
       first = false;
     }
   }
+  if (given.reuses?.some((reuse) => !reused.has(reuse.url))) throw new Error("A reused case has no transition on the Writer timeline. Build the compilation in Writer before importing it.");
   if (!blocks.some((block) => block.kind === "footage")) throw new Error("it has no footage ranges yet: build the script in Writer first");
   return { title: given.title, blocks };
+}
+
+/** Older Writer versions kept only a narration summary; read the original
+ * Doc rather than silently using that summary as the finished script. */
+export async function resolveWriterCases(given: WriterScript, read = script.fetchDoc): Promise<WriterScript> {
+  const resolved = structuredClone(given);
+  for (const reuse of resolved.reuses ?? []) {
+    if (reuse.scriptText) continue;
+    if (script.docId(reuse.url) === null) {
+      if (script.footageFile(reuse.url) === null && reuse.script) throw new Error("The earlier case's selected script text is missing. Sync it again in Writer; its whole compilation Doc cannot replace the selected case.");
+      continue;
+    }
+    const id = script.docId(reuse.script ?? reuse.url);
+    if (id === null) throw new Error("The reused case is missing its earlier script link.");
+    const [html, title] = await read(id);
+    reuse.scriptBlocks = script.parse(html).blocks;
+    reuse.scriptTitle ??= title;
+  }
+  return resolved;
 }
 
 /** Which Writer scripts were made into which Edit projects here (`<home>/writer-imports.json`). */
@@ -225,7 +265,7 @@ export async function importScript(app: App, id: string): Promise<{ project: str
   const given = await fetchScript(id);
   const style = scriptStyle(given);
   if (!kinds.mayEdit(style)) throw new Error(kinds.cantMake(`edit.${style}`));
-  const parsed = toParsed(given);
+  const parsed = toParsed(await resolveWriterCases(given));
   const live = app.store.createAs(given.title, style, { width: 1920, height: 1080, fps: 30 });
   await app.store.update(live.project.id, "script", (project) => script.attach(project, `writer:${id}`, parsed));
   if (style === "commentary") {
@@ -254,7 +294,7 @@ export function routes(router: Router<App>): void {
   router.get("/api/writer/scripts/{id}", async ({ params }) => {
     try {
       const given = await fetchScript(params.id ?? "");
-      return sorted({ ...script.summary(toParsed(given)), title: given.title, style: scriptStyle(given) });
+      return sorted({ ...script.summary(toParsed(await resolveWriterCases(given))), title: given.title, style: scriptStyle(given) });
     } catch (error) {
       throw new ApiError(400, diag.messageOf(error));
     }

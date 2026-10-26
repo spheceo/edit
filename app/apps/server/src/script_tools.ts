@@ -25,6 +25,7 @@ import * as research from "./research.ts";
 import * as review from "./review.ts";
 import { display, fixed, round, toI64, trim } from "./rust.ts";
 import * as script from "./script.ts";
+import { readCompilation } from "./compilation_input.ts";
 import { field, read, readStruct, required, SerdeError, type Struct } from "./serde.ts";
 import { stableStringify } from "./stable.ts";
 import { changesFrom, narrationLines } from "./voice.ts";
@@ -470,27 +471,12 @@ async function researchReview(context: RouteContext<App>): Promise<Response> {
 const SCRIPT_BODY: Struct = { name: "ScriptBody", fields: [required("url", "string")] };
 
 /** Reads a Google Doc script on this machine (it fetches as the Doc's public link). */
-async function readScript(url: string): Promise<script.Parsed> {
-  const id = script.docId(url);
-  if (id === null) throw bad("Paste a Google Docs link (docs.google.com/document/d/…).");
-  let html: string;
-  let title: string;
+async function readScript(url: string, app: App): Promise<script.Parsed> {
   try {
-    [html, title] = await script.fetchDoc(id);
+    return await readCompilation(url, app);
   } catch (error) {
     throw badOf(error);
   }
-  const parsed = script.parse(html);
-  if (parsed.title === "") parsed.title = title;
-  try {
-    await script.joinCases(parsed);
-  } catch (error) {
-    throw badOf(error);
-  }
-  if (!parsed.blocks.some((block) => block.kind === "footage")) {
-    throw bad("No footage timestamps linked to Google Drive files were found in that Doc.");
-  }
-  return parsed;
 }
 
 async function scriptAttach(context: RouteContext<App>): Promise<Response> {
@@ -506,7 +492,7 @@ async function scriptAttach(context: RouteContext<App>): Promise<Response> {
   // A script makes a full edit: only of a style the signed-in person may edit (kinds.ts).
   const style = app.store.get(id)?.project.style;
   if (style !== undefined && !kinds.mayEdit(style)) throw new ApiError(403, kinds.cantMake(`edit.${style}`));
-  const parsed = await readScript(url);
+  const parsed = await readScript(url, app);
   let live;
   try {
     [live] = await app.store.update(id, "script", (project) => script.attach(project, trim(url), parsed));
@@ -630,7 +616,7 @@ export function researchRoutes(router: Router<App>): void {
 export function routes(router: Router<App>): void {
   router.post("/api/scripts/preview", async (context) => {
     const given = await body(context, SCRIPT_BODY);
-    return sortedJson(script.summary(await readScript(given.url as string)));
+    return sortedJson(script.summary(await readScript(given.url as string, context.app)));
   });
   router.post("/api/projects/{id}/script", scriptAttach);
   router.get("/api/projects/{id}/script/job", ({ app, params }) => {

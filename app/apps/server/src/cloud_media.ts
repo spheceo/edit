@@ -235,6 +235,15 @@ export async function getRecord(source: string): Promise<Record_ | null> {
   }
 }
 
+/** Writer's full-quality folder master, already shared in the registry. */
+export async function registeredOriginal(source: string, expectedKey?: string): Promise<Original> {
+  if (!/^sha256:[a-fA-F0-9]{64}$/u.test(source)) throw new Error("invalid shared master source");
+  const record = await getRecord(source);
+  if (record === null || !record.originalReady || !cloud.validKey(record.originalKey)) throw new Error("The folder master is not uploaded yet. Finish syncing the script in Writer, then retry.");
+  if (expectedKey !== undefined && record.originalKey !== expectedKey) throw new Error("Writer's folder master does not match its shared original. Sync the script again.");
+  return { file: source, source, key: record.originalKey, name: record.name, size: record.size };
+}
+
 export async function listRecords(sources: string[]): Promise<Record_[]> {
   const value = await cloud.query("edit:listMedia", { sources });
   const out: Record_[] = [];

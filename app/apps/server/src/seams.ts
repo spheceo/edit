@@ -164,6 +164,7 @@ export interface Originals {
 }
 
 export interface CloudMediaSeam {
+  registeredOriginal(source: string, expectedKey?: string): Promise<Original>;
   youtubeExcerpts(home: string, cache: string, file: string, ranges: [number, number][], progress?: (bytes: number, total: number | null, name: string) => void): Promise<Excerpt[]>;
   configurePlayback(app: App): void;
   /** Starts a backfill of cloud project `id` in the background. */

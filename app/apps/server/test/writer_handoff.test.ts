@@ -2,7 +2,8 @@
 
 import { expect, test } from "bun:test";
 
-import { styleOf, toParsed, type WriterScript } from "../src/writer_handoff.ts";
+import { resolveWriterCases, styleOf, toParsed, type WriterScript } from "../src/writer_handoff.ts";
+import { reusedScriptBlock } from "../src/project.ts";
 
 test("a Writer script's clips become footage ranges of each recording and cut-ins, notes and edit: notes kept", () => {
   const joined: WriterScript = {
@@ -38,4 +39,68 @@ test("a script whose footage no other machine can fetch, or with none, says why"
   expect(() => toParsed({ id: "x", title: "x", sourceKind: "file", sourceUrl: "/tmp/a.mp4", clips: [{ id: "c", startMs: 0, endMs: 1000 }] })).toThrow("only on the Mac that imported it");
   expect(() => toParsed({ id: "x", title: "x", sourceKind: "commentary" })).toThrow("commentary script has no finished draft");
   expect(() => toParsed({ id: "x", title: "x", sourceKind: "youtube", sourceUrl: "https://youtu.be/dslLBsHkVzE", clips: [] })).toThrow("no footage ranges");
+});
+
+test("a reused Doc expands its full script after its transition without rewriting ranges or cut-ins", () => {
+  const doc = "https://docs.google.com/document/d/1EarlierScriptAbcdef/edit";
+  const source = "https://youtu.be/dslLBsHkVzE";
+  const original = "https://drive.google.com/file/d/1OriginalFootageAbcdef/view";
+  const text = `Earlier case\n\n(00:12 - 00:18) <${original}>\n\nThe finished words must stay exactly as written.\n\n(01:23 - 01:29) <${original}>`;
+  const parsed = toParsed({ id: "comp", title: "Compilation", sourceUrl: source, sourceKind: "compilation",
+    clips: [
+      { id: "c1", startMs: 0, endMs: 5000 },
+      { id: "c2", startMs: 0, endMs: 3000, kind: "cut-in", narration: "In another case…", reuse: doc },
+    ], reuses: [{ url: doc, after: 1, script: doc, scriptTitle: "Earlier case", scriptText: text }],
+  });
+  expect(parsed.blocks.map((block) => block.kind === "footage" ? [block.file, block.start, block.end] : block.text)).toEqual([
+    ["youtube:dslLBsHkVzE", 0, 5], "In another case…", ["1OriginalFootageAbcdef", 12, 18], "The finished words must stay exactly as written.", ["1OriginalFootageAbcdef", 83, 89],
+  ]);
+  expect(parsed.blocks.slice(2).every(reusedScriptBlock)).toBe(true);
+});
+
+test("an explicitly reused finished video is whole, while a reused Doc never falls back to its short narration summary", () => {
+  const source = "https://youtu.be/dslLBsHkVzE";
+  const base: WriterScript = { id: "comp", title: "Compilation", sourceKind: "compilation", sourceUrl: source,
+    clips: [{ id: "c1", startMs: 0, endMs: 5000 }, { id: "c2", startMs: 0, endMs: 3000, kind: "cut-in", reuse: source }], reuses: [{ url: source, after: 1 }],
+  };
+  expect(toParsed(base).blocks.at(-1)).toMatchObject({ kind: "footage", file: "youtube:dslLBsHkVzE", label: "Reuse (the whole video)" });
+  const doc = "https://docs.google.com/document/d/1EarlierScriptAbcdef/edit";
+  base.clips![1]!.reuse = doc;
+  base.reuses = [{ url: doc, after: 1 }];
+  expect(() => toParsed(base)).toThrow("complete linked script text");
+});
+
+test("older Writer reuse records fetch their original Doc rather than dropping the case", async () => {
+  const doc = "https://docs.google.com/document/d/1EarlierScriptAbcdef/edit";
+  const input: WriterScript = { id: "x", title: "x", reuses: [{ url: doc, after: 1, script: doc }] };
+  const prepared = await resolveWriterCases(input, async (id) => {
+    expect(id).toBe("1EarlierScriptAbcdef");
+    return ['<html><body><p><a href="https://youtu.be/dslLBsHkVzE">00:01 - 00:03</a></p><p>Keep the original words.</p></body></html>', "Earlier case"];
+  });
+  expect(prepared.reuses?.[0]?.scriptBlocks?.[1]).toMatchObject({ kind: "narration", text: "Keep the original words." });
+  expect(input.reuses?.[0]?.scriptBlocks).toBeUndefined();
+});
+
+test("a Writer folder case uses its complete shared-master clock and original, never its first recording", () => {
+  const hash = "a".repeat(64);
+  const key = `edit/originals/sha256/${hash}/00.mp4`;
+  const parsed = toParsed({ id: "w", title: "Folder case", sourceKind: "compilation",
+    parts: [{ title: "All recordings", startMs: 0, durationMs: 120_000, url: "https://drive.google.com/drive/folders/1WholeFolderAbcdef", mediaSource: `sha256:${hash}`, originalKey: key }],
+    clips: [{ id: "across-recordings", startMs: 58_000, endMs: 65_000 }],
+  });
+  expect(parsed.blocks[0]).toMatchObject({ file: `sha256:${hash}`, start: 58, end: 65, notes: [`Shared original: ${key}`] });
+});
+
+test("a reused earlier Trello case rebuilds the saved selected Doc section while keeping its original reuse URL", async () => {
+  const url = "https://trello.com/c/AbCd1234/earlier-compilation";
+  const doc = "https://docs.google.com/document/d/1EarlierScriptAbcdef/edit";
+  const source = "https://youtu.be/dslLBsHkVzE";
+  const input: WriterScript = { id: "x", title: "x", sourceUrl: source,
+    clips: [{ id: "transition", startMs: 0, endMs: 1000, kind: "cut-in", reuse: url }],
+    reuses: [{ url, after: 1, script: doc, scriptText: `(00:12 - 00:18) <${source}>\nKeep this selected case's words.` }],
+  };
+  expect(toParsed(input).blocks).toMatchObject([{ start: 12, end: 18 }, { text: "Keep this selected case's words." }]);
+  expect(input.reuses?.[0]?.url).toBe(url);
+  delete input.reuses![0]!.scriptText;
+  await expect(resolveWriterCases(input, async () => { throw new Error("must not fetch the whole compilation"); })).rejects.toThrow("selected script text is missing");
 });

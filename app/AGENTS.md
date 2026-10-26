@@ -74,6 +74,8 @@ The long-running server (`/tmp/run/edit`, started by `/tmp/run/serve.sh` on :770
 
 ## Checks
 
+Compilation entry points use `apps/server/src/compilation_input.ts`: ordered Docs, Drive folders/files, YouTube and Trello case lists, including rich clipboard links. Trello is read through the Writer relay's fixed GET endpoints with the person's Edit bearer (`EDIT_WRITER_RELAY_URL` overrides the base for tests); that relay must include the reviewed Edit-audience grant change. `writer_handoff.ts` reads full `reuses[].scriptText`, never its shortened narration; selected earlier cases must include their exact section. Reused script blocks keep source ranges and finished cut-in words, and skip automatic cue alignment. Only an explicitly supplied finished video is whole untouched reuse. A Writer folder's `parts[].mediaSource` (`sha256:<master hash>`) and `originalKey` select its shared full-resolution master; `parts[].url` remains the folder and must never be resolved to its first recording. Rebuild native and WASM after changing accepted script source IDs.
+
 `just check` (fmt, clippy `-D warnings`, tests, typecheck). The render test in `crates/edit-render/tests` needs a GPU; it writes PNGs to `target/render-tests/` for eyeballing.
 
 Preview/export parity can be verified in a browser: `window.__edit.preview.engine.render(frame)` then read the canvas, and compare with `GET /api/projects/{id}/frame/{frame}.png` — graphics-only frames are byte-identical.

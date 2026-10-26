@@ -805,7 +805,7 @@ export function validateProject(project: Project, options: { people?: boolean } 
   const unique = (items: { id: string }[]) => items.every((item) => item.id.length > 0) && new Set(items.map((item) => item.id)).size === items.length;
   if (!unique(project.tracks) || !unique(project.media) || !unique(project.clips)) return `IDs must be nonempty and unique within each collection`;
   if (project.media.some((media) => media.duration < 0 || media.fps < 0 || media.markers?.some((marker) => marker.time < 0))) return `media timing must be nonnegative`;
-  if (project.script?.blocks.some((block) => block.kind === "footage" && (!/^([a-zA-Z0-9_-]{1,200}|youtube:[a-zA-Z0-9_-]{11})$/.test(block.file) || block.start < 0 || block.end <= block.start))) return `script footage needs a Drive ID or YouTube video and positive source range`;
+  if (project.script?.blocks.some((block) => block.kind === "footage" && (!/^([a-zA-Z0-9_-]{1,200}|youtube:[a-zA-Z0-9_-]{11}|sha256:[a-fA-F0-9]{64})$/.test(block.file) || block.start < 0 || block.end <= block.start))) return `script footage needs a Drive ID, YouTube video or shared master and positive source range`;
   const tracks = new Map(project.tracks.map((track) => [track.id, track]));
   const byTrack = new Map<string, Clip[]>();
   for (const clip of project.clips) {

@@ -191,7 +191,7 @@ export const api = {
     request<Transcript>("POST", `/api/projects/${id}/media/${media}/speakers`, { voice, role }),
   /** Reads a Google Doc script (on the server, as its public link) without importing it. */
   scriptPreview: (url: string) =>
-    request<{ title: string; footage: number; narration: number; files: number; seconds: number }>("POST", "/api/scripts/preview", { url }),
+    request<{ title: string; footage: number; narration: number; files: number; seconds: number; whole?: number }>("POST", "/api/scripts/preview", { url }),
   /** Attaches a Doc's script to a project and starts downloading its footage. */
   attachScript: (id: string, url: string) => request<{ rev: number; project: Project; job: ScriptJob | null }>("POST", `/api/projects/${id}/script`, { url }),
   scriptJob: (id: string) => request<{ job: ScriptJob | null; unfinished: boolean }>("GET", `/api/projects/${id}/script/job`),

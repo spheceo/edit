@@ -15,6 +15,7 @@ import type {
   Project,
   Settings,
   Style,
+  ScriptBlock,
   Track,
   TrackKind,
 } from "./model.ts";
@@ -218,6 +219,11 @@ export function subtitledSpans(project: Project, start: number, end: number): [n
 
 /** The label of a script block that plays a finished video of ours whole (a narration's "Reuse: <link>" note). */
 export const REUSE_LABEL = "Reuse (the whole video)";
+export const WHOLE_SOURCE_LABEL = "Source (the whole video)";
+export const REUSED_SCRIPT_NOTE = "Reused script (preserve ranges and cut-in words): ";
+export function reusedScriptBlock(block: ScriptBlock): boolean {
+  return (block.notes ?? []).some((note) => note.startsWith(REUSED_SCRIPT_NOTE));
+}
 
 /** The media of the finished videos a script reuses whole (their subtitles and mutes are burned in). */
 export function reusedMedia(project: Project): Set<string> {

@@ -6,7 +6,7 @@ export type ScriptBlock = { "kind": "footage",
  */
 url: string, 
 /**
- * The file's id (a Drive file id, or `youtube:<video id>`): ranges of one file share it.
+ * The source (Drive id, `youtube:<video id>`, or `sha256:<hash>` for a shared master).
  */
 file: string, start: number, end: number, 
 /**

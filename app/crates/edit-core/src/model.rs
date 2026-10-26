@@ -262,7 +262,7 @@ pub enum ScriptBlock {
     Footage {
         /// The link as written (a Google Drive file or a YouTube video).
         url: String,
-        /// The file's id (a Drive file id, or `youtube:<video id>`): ranges of one file share it.
+        /// The source (Drive id, `youtube:<video id>`, or `sha256:<hash>` for a shared master).
         file: String,
         start: f64,
         end: f64,
@@ -1956,9 +1956,12 @@ impl Project {
                     let youtube = file
                         .strip_prefix("youtube:")
                         .is_some_and(|id| id.len() == 11 && id_chars(id));
-                    if !drive && !youtube {
+                    let shared = file.strip_prefix("sha256:").is_some_and(|hash| {
+                        hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    });
+                    if !drive && !youtube && !shared {
                         return Err(
-                            "script file must be a Google Drive ID or youtube:<video id>, without path separators"
+                            "script file must be a Google Drive ID, youtube:<video id> or sha256:<hash>, without path separators"
                                 .to_owned(),
                         );
                     }
@@ -2441,10 +2444,13 @@ mod validation_tests {
         };
         assert!(with("1H9hY3w4LjzWlSAqY8hfp3I5Ft5PP0X9Y").is_ok());
         assert!(with("youtube:MeT7tyZqfiw").is_ok());
+        assert!(with(&format!("sha256:{}", "a".repeat(64))).is_ok());
         for bad in [
             "youtube:short",
             "youtube:../../etc/x",
             "drive:abc",
+            "sha256:short",
+            "sha256:../../etc/x",
             "../x",
             "",
         ] {

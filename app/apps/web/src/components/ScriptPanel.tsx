@@ -6,6 +6,7 @@ import { ArrowUpRight, CircleAlert, FileText, RotateCw, Scissors } from "lucide-
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "../lib/api";
+import { importPaste } from "../lib/import-input";
 import { CLIP_HEX } from "../lib/colors";
 import { clipEnd, withLinked } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
@@ -311,17 +312,26 @@ function AttachScript({ project }: { project: Project }) {
       </span>
       <div className="mt-3 text-center font-medium">Follow a script</div>
       <p className="mx-auto mt-1 max-w-[280px] text-center text-[12px] leading-relaxed text-muted">
-        Paste a Google Doc. Edit downloads the footage it links (Drive or YouTube) and lays out each range, with cut-ins for the narration.
+        Paste a script or a compilation's case links: Google Docs, Drive folders or files, YouTube, or a Trello card. Existing scripts keep their ranges and cut-in words. Mark a finished video “reuse” to keep it whole.
       </p>
-      <input
+      <textarea
+        rows={4}
         value={url}
         onChange={(event) => setUrl(event.target.value)}
-        placeholder="https://docs.google.com/document/d/…"
-        className="mt-4 h-9 w-full rounded-lg border border-line bg-black px-3 text-[13px] outline-none placeholder:text-faint focus:border-muted"
+        placeholder="Case 1: https://drive.google.com/drive/folders/…\nCase 2 (reuse): https://docs.google.com/document/d/…"
+        onPaste={(event) => {
+          const plain = event.clipboardData.getData("text/plain");
+          const pasted = importPaste(event.clipboardData.getData("text/html"), plain);
+          if (pasted === plain) return;
+          event.preventDefault();
+          const node = event.currentTarget;
+          setUrl(url.slice(0, node.selectionStart) + pasted + url.slice(node.selectionEnd));
+        }}
+        className="mt-4 w-full resize-y rounded-lg border border-line bg-black px-3 py-2 text-[13px] outline-none placeholder:text-faint focus:border-muted"
       />
       {error && <p className="mt-2 text-[12px] text-danger">{error}</p>}
       <Button type="submit" variant="primary" className="mt-3 self-center" disabled={busy || !url.trim()}>
-        {busy ? "Reading the Doc…" : "Import script"}
+        {busy ? "Reading the case links…" : "Import"}
       </Button>
     </form>
   );

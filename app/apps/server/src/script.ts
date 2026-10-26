@@ -22,7 +22,7 @@ import { importMade, importPaths } from "./import.ts";
 import * as mediaModule from "./media.ts";
 import { cloudEnabled } from "./relay.ts";
 import type { ClipColor, Project, Script, ScriptBlock, ScriptJob, TextStyle, TrackKind } from "./model.ts";
-import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freshId, marksCut, mediaOf, REUSE_LABEL } from "./project.ts";
+import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freshId, marksCut, mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL, REUSED_SCRIPT_NOTE, reusedScriptBlock } from "./project.ts";
 import { fileName, fileStem, extension as pathExtension, join, parent } from "./paths.ts";
 import { byteLength, charCount, display, f32, isAlphanumeric, isWhitespace, parseHex, round, splitWhitespace, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
@@ -504,7 +504,9 @@ export const REUSE = REUSE_LABEL;
  * this script here: <Doc link>"): the Doc's id, else null.
  */
 export function caseScript(note: string): string | null {
-  if (!/\bscript\b/i.test(note)) return null;
+  const reuse = /^reuse:\s*(\S+)/i.exec(note)?.[1];
+  if (reuse && footageFile(reuse)) return null; // Explicit finished video, not both it and its earlier script.
+  if (!/\bscript\b/i.test(note) && !reuse) return null;
   const link = /https:\/\/docs\.google\.com\/document\/d\/[\w-]+\S*/.exec(note)?.[0];
   return link === undefined ? null : docId(link);
 }
@@ -520,6 +522,10 @@ export async function joinCases(parsed: Parsed, read: (id: string) => Promise<st
   for (const { after, doc } of [...cases].reverse()) {
     const blocks = parse(await read(doc)).blocks;
     if (!blocks.some((block) => block.kind === "footage")) throw new Error(`The case script ${doc} has no footage timestamps linked to Google Drive or YouTube.`);
+    for (const block of blocks) {
+      block.notes = [...(block.notes ?? []), `${REUSED_SCRIPT_NOTE}https://docs.google.com/document/d/${doc}/edit`];
+      if (block.kind === "footage") { delete block.words; delete block.cut; }
+    }
     parsed.blocks.splice(after, 0, ...blocks);
   }
   return parsed;
@@ -1416,7 +1422,7 @@ export function clock(seconds: number): string {
 /** The ranges (seconds) a project's script plays from one file. */
 function fileRanges(project: Project, file: string): [number, number][] {
   return (project.script?.blocks ?? []).flatMap((block): [number, number][] =>
-    block.kind === "footage" && block.file === file ? [[block.start, block.label === REUSE ? Number.MAX_SAFE_INTEGER : block.end]] : [],
+    block.kind === "footage" && block.file === file ? [[block.start, block.label === REUSE || block.label === WHOLE_SOURCE_LABEL ? Number.MAX_SAFE_INTEGER : block.end]] : [],
   );
 }
 
@@ -1511,6 +1517,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       setFileState(app, id, index, "downloading");
       const fileBegan = timing.now();
       try {
+        if (file.startsWith("sha256:") && !cloudEnabled()) throw new Error("A shared folder master needs Edit's cloud connection. Sign in and retry.");
         const [bytes, name, cut] = cloudEnabled()
           ? await footageToCloud(app, id, index, file)
           : await footageToDisk(app, id, index, file);
@@ -1675,8 +1682,10 @@ async function footageToCloud(app: App, id: string, index: number, file: string)
     return [cut.reduce((n, one) => n + (one.cloud?.cloud?.size ?? 0), 0), cut[0]?.cloud?.name ?? file, cut];
   }
   const scratch = seams.cloudMedia.scratchDir(app.store.cacheDir());
+  const shared = file.startsWith("sha256:");
+  const expectedKey = live?.project.script?.blocks.find((block) => block.kind === "footage" && block.file === file)?.notes?.find((note) => note.startsWith("Shared original: "))?.slice("Shared original: ".length);
   const [original, local] =
-    youtube.idOf(file) !== null
+    shared ? [await seams.cloudMedia.registeredOriginal(file, expectedKey), null] : youtube.idOf(file) !== null
       ? await diag.timeOnAsync("script", "script: youtube to cloud", file, () =>
           seams.cloudMedia.youtubeOriginal(app.store.home, file, scratch, progress),
         )
@@ -1747,7 +1756,7 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
       );
       if (found === undefined) continue;
       // A reused video plays to its end.
-      if (block.label === REUSE && found.from === 0) block.end = found.to;
+      if ((block.label === REUSE || block.label === WHOLE_SOURCE_LABEL) && found.from === 0) block.end = found.to;
       const mediaId = byPath.get(found.path);
       if (mediaId === undefined) continue;
       block.media = mediaId;
@@ -1766,7 +1775,7 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
   });
   await app.store.update(id, "script", (project) => {
     for (const block of project.script?.blocks ?? []) {
-      if (block.kind !== "footage" || !isSome(block.words)) continue;
+      if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.words)) continue;
       const media = isSome(block.media) ? heard.get(block.media) : undefined;
       if (media === undefined) continue;
       const offset = block.media_start ?? 0;
@@ -1816,7 +1825,7 @@ export async function realign(app: App, id: string): Promise<unknown[]> {
     const blocks = structuredClone(project.script.blocks);
     for (const block of blocks) {
       const cue = block.kind === "footage" ? cueOf(block) : null;
-      if (block.kind !== "footage" || !isSome(block.media) || cue === null || !isSome(block.clip)) continue;
+      if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.media) || cue === null || !isSome(block.clip)) continue;
       const media = heard.get(block.media);
       if (media === undefined) continue;
       const offset = block.media_start ?? 0;
@@ -1872,7 +1881,7 @@ export async function realign(app: App, id: string): Promise<unknown[]> {
 
 /** A footage range's cue words: the Doc's, else its Writer quote's (scripts handed over before quotes became cues). */
 function cueOf(block: ScriptBlock): [string, string] | null {
-  if (block.kind !== "footage") return null;
+  if (block.kind !== "footage" || reusedScriptBlock(block)) return null;
   if (isSome(block.words)) return block.words;
   const note = (block.notes ?? []).find((one) => one.startsWith(EXPECTED));
   return note === undefined ? null : quoteCue(note.slice(EXPECTED.length));
@@ -2114,20 +2123,22 @@ export function attach(project: Project, source: string, parsed: Parsed): void {
 }
 
 /** How much a script holds, for the import dialog's preview. */
-export function summary(parsed: Parsed): { files: number; footage: number; narration: number; seconds: number; title: string } {
+export function summary(parsed: Parsed): { files: number; footage: number; narration: number; seconds: number; title: string; whole?: number } {
   const files: string[] = [];
   let footage = 0;
   let narration = 0;
   let seconds = 0;
+  let whole = 0;
   for (const block of parsed.blocks) {
     if (block.kind === "footage") {
       footage += 1;
-      seconds += block.end - block.start;
+      if (block.label === REUSE || block.label === WHOLE_SOURCE_LABEL) whole++;
+      else seconds += block.end - block.start;
       if (!files.includes(block.file)) files.push(block.file);
     } else {
       narration += 1;
       seconds += CUT_IN_SECONDS;
     }
   }
-  return { files: files.length, footage, narration, seconds, title: parsed.title };
+  return { files: files.length, footage, narration, seconds, title: parsed.title, ...(whole ? { whole } : {}) };
 }

@@ -192,6 +192,25 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
       const { from: _f, to: _t, ...rest } = o;
       ops.push({ op: "@tool", tool: "commentary_rotate", args: { ...rest, media: mediaOf(mediaId).id, start, end } });
     },
+    /** A red arrow drawn to a person with their name at its tail; track: {time, box} follows them. Runs after the plan. */
+    arrow(words: string, o: Op & { from: Time; to: Time; at?: [number, number]; track?: { time: Time; box: number[] } }) {
+      const [start, end] = span(o, "arrow");
+      const { from: _f, to: _t, ...rest } = o;
+      const track = o.track ? { ...o.track, time: seconds(o.track.time) } : undefined;
+      ops.push({ op: "@tool", tool: "commentary_arrow", args: { ...rest, ...(track ? { track } : {}), text: words, start, end } });
+    },
+    /** The spider web: centre {media, name}, nodes [{media, name?, blur?, at?: Time, ring?}]. Runs after the plan. */
+    web(o: Op & { from: Time; to: Time; centre: Op; nodes: (Op & { at?: Time })[] }) {
+      const [start, end] = span(o, "web");
+      const { from: _f, to: _t, nodes, ...rest } = o;
+      ops.push({ op: "@tool", tool: "commentary_web", args: { ...rest, nodes: nodes.map((n) => ({ ...n, ...(n.at !== undefined ? { at: f(n.at) } : {}) })), start, end } });
+    },
+    /** A source clip's last words (from `at`) warp out in reverb over black, then a pause. Runs after the plan. */
+    reverbOut: (id: string, at: Time, o: Op = {}) => { ops.push({ op: "@tool", tool: "commentary_reverb_out", args: { ...o, clip: id, from: f(at) } }); },
+    /** The full-screen video `id` pulls back into the YouTube watch page from `at`. */
+    player: (id: string, o: Op & { at: Time; end?: Time }) => { const { at, end, ...rest } = o; ops.push({ op: "commentary_player", ...rest, clip: id, at: f(at), ...(end !== undefined ? { end: f(end) } : {}) }); },
+    /** A number counting up fast over a screenshot's number. */
+    counter: (o: Op & { from: Time; to: Time; count: [number, number] }) => { const [start, end] = span(o, "counter"); const { from: _f, to: _t, count, ...rest } = o; ops.push({ op: "commentary_counter", ...rest, from: count[0], to: count[1], start, end }); },
     /** A bundled sound (whoosh-3, shutter) with its hit on `at`. */
     sfx: (name: string, at: Time, volume_db?: number) => { ops.push({ op: "@tool", tool: "add_sound_effect", args: { sound: name, times: [seconds(at)], ...(volume_db !== undefined ? { volume_db } : {}) } }); },
     /** Our own X post; runs after the plan saves (it draws its highlight bars first). */
@@ -229,6 +248,8 @@ export const REFERENCE = `// Edit Script: the timeline as TypeScript. Times are 
 // chapter(title, {from, to, number?}); profile({from, to, media, name?, lines}); look({from, to})
 // text(…, {red: ["BAD VIDEOS"]}) colours the critical words red; label(words, {from, to, near?: [x, y], typewriter?}) sits beside the person it's about
 // location("Luton, England", {from, to}) bottom left; icon(media, {from, to, name?, role?}) pops up over the blurred picture; channel({from, to, name, handle?, subscribers?, description?, avatar?, subscribe?, caption?})
+// arrow(words, {from, to, at?: [x, y], side?, track?: {time, box}}) red arrow to a person, following them; web({from, to, centre: {media, name}, nodes: [{media, name, blur?, at?, ring?}]}) the spider web
+// reverbOut(sourceClip, at, {tail?, hold?}) last words warp out over black; player(videoClip, {at, title, channel, subscribers?, meta?, avatar?, subscribe?}) pull back into the YouTube page; counter({from, to, count: [57, 35632], x, y, size?})
 // rotate(media, {from, to, from_deg…}) a channel page's screenshot tilting slowly in 3D (once per channel); slide(at) the next picture slides down from the top (with sfx("whoosh-3", at)); card(media, {…, push: 1.15}) zooms in while you highlight it; sfx(name, at, volume_db?) a bundled sound
 // Any of those given ids: [...] (a composition's layers as read_edit lists them) rebuilds it.
 // punch(id, {at: [times], on: [x, y] | "centre", scales?}); leak(at, brandLightLeakMedia); dissolve(at, frames?); flash(at)

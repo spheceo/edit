@@ -127,7 +127,8 @@ const q = (v: unknown) => JSON.stringify(v);
 const family = (name: string): string | null =>
   /^Janitor · YouTube list/u.test(name) ? "youtubeList" : /^Janitor · YouTube/u.test(name) ? "youtube" : /^Janitor · post/u.test(name) ? "tweet"
     : /^Janitor · bumper/u.test(name) ? "bumper" : /^Janitor · (source card|card backdrop|source credit)/u.test(name) ? "card"
-    : /^Janitor · chapter/u.test(name) ? "chapter" : /^Janitor · profile/u.test(name) ? "profile" : /^Janitor · channel/u.test(name) ? "channel" : null;
+    : /^Janitor · chapter/u.test(name) ? "chapter" : /^Janitor · profile/u.test(name) ? "profile" : /^Janitor · channel/u.test(name) ? "channel"
+    : /^Janitor · web/u.test(name) ? "web" : /^Janitor · player/u.test(name) ? "player" : /^Janitor · (arrow|counter)/u.test(name) ? name.slice(10).split(" ")[0]! : null;
 
 export function listing(ctx: ScriptContext, library: string[]): string {
   const lines: string[] = [];
@@ -140,12 +141,14 @@ export function listing(ctx: ScriptContext, library: string[]): string {
   const used = new Set<string>();
   const rows: [number, string][] = [];
   // Compositions: a backdrop and the layers of its family that arrive with it.
-  for (const anchor of ctx.clips.filter((c) => /backdrop$/u.test(c.name) && family(c.name) !== null)) {
+  for (const anchor of ctx.clips.filter((c) => /backdrop$|web ground$|player page$/u.test(c.name) && family(c.name) !== null)) {
     if (used.has(anchor.id)) continue;
     const kind = family(anchor.name)!;
     // A list's rows are YouTube layers too.
     const mine = (c: { name: string }) => family(c.name) === kind || (kind === "youtubeList" && family(c.name) === "youtube");
-    const layers = ctx.clips.filter((c) => mine(c) && c.from >= anchor.from - 0.01 && c.from < anchor.from + 1.2 && c.to <= anchor.to + 0.1 && !used.has(c.id));
+    // A web's people and a player's page arrive through its whole span.
+    const window = kind === "web" || kind === "player" ? anchor.to - anchor.from : 1.2;
+    const layers = ctx.clips.filter((c) => mine(c) && c.from >= anchor.from - 0.01 && c.from < anchor.from + window && c.to <= anchor.to + 0.1 && !used.has(c.id));
     for (const c of layers) used.add(c.id);
     const textOf = (pattern: RegExp, among = layers) => among.filter((c) => pattern.test(c.name)).map((c) => (c.text ?? "").replace(/\s*\n\s*/gu, " ").trim()).filter((v) => v !== "").join(" ");
     const pic = layers.find((c) => /frame|source card|picture/u.test(c.name));

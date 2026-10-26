@@ -34,27 +34,40 @@ export function textStyle(height: number, size = 72): Args {
 /** Pure red, the reference's colour for the critical words ("EXAMPLES OF BAD VIDEOS"). */
 const RED = [1, 0, 0, 1];
 
-/** Selective emphasis. Full phrase geometry is stable during the soft sweep. */
+/**
+ * Selective emphasis. By default the phrase pops up whole, scaling from small
+ * with the guide's ease, over the picture already blurred behind it (the
+ * team, N3on v1: "We can make the text pop up seem a lot more clean. It
+ * looks really cheaply made now": the words had been up over sharp footage
+ * before the blur came in, and a phrase with red words swept in as separate
+ * pieces). A short phrase is bigger. soft/typewriter sweep the letters in.
+ */
 export function text(p: Project, a: Args): Args {
   const [start, end] = span(a); const d = end - start; const h = p.settings.height;
   if (typeof a.text !== "string" || a.text.trim() === "") throw new Error("commentary_text needs text");
   const made: string[] = [];
   // Opt-in: blurring by default put 58% of the N3on trial's narration under a
   // dimmed blur, hiding the B-roll the phrase was meant to sit on.
-  if (a.blur === true) made.push(push(p, { type: "adjustment", name: "Janitor · text backdrop", start, duration: d,
-    blur: { radius: 22 * h / 1080 }, grade: { exposure: -0.7, vignette: 0.35 }, fade_in: 8, fade_out: 8 }));
-  const preset = ["soft", "typewriter", "slide", "pop"].includes(String(a.motion)) ? String(a.motion) : "soft";
-  // Big, as the guide's emphasis is: most of a line across the frame.
-  const y = number(a, "y", 0); const size = number(a, "size", 96); const k = h / 1080;
-  const settle = Math.min(22, Math.floor(d / 3));
-  const layer = (words: string, x: number, color?: number[]) => push(p, { type: "text", name: "Janitor · emphasis", text: words, start, duration: d,
-    fade_out: Math.min(9, d / 4), style: { ...textStyle(h, size), ...(color ? { color } : {}), ...(a.align === "left" ? { align: "left" } : {}),
+  const blurred = a.blur === true;
+  if (blurred) made.push(push(p, { type: "adjustment", name: "Janitor · text backdrop", start, duration: d,
+    blur: { radius: 16 * h / 1080 }, grade: { exposure: -0.45, vignette: 0.3 }, fade_in: 6, fade_out: 8 }));
+  // The words arrive once the picture behind them has gone soft.
+  const from = blurred ? Math.min(start + 5, end - 12) : start; const dd = end - from;
+  const preset = ["soft", "typewriter", "slide", "pop"].includes(String(a.motion)) ? String(a.motion) : "pop";
+  // Big, as the guide's emphasis is; a short phrase bigger still.
+  const size = number(a, "size", a.text.trim().length <= 16 ? 120 : 96); const y = number(a, "y", 0); const k = h / 1080;
+  const settle = Math.min(14, Math.floor(dd / 3));
+  // gx: the group's middle, which pieces of one phrase scale about together.
+  const gx = number(a, "x", 0);
+  const layer = (words: string, x: number, color: number[] | undefined, delay: number) => push(p, { type: "text", name: "Janitor · emphasis", text: words, start: from + delay, duration: dd - delay,
+    fade_out: Math.min(9, dd / 4), style: { ...textStyle(h, size), ...(color ? { color } : {}), ...(a.align === "left" ? { align: "left" } : {}),
       ...(a.box === true ? { background: { color: [0, 0, 0, 1], opacity: 1, pad_x: 18, pad_y: 10 } } : {}) },
     transform: { x, y },
     animation: { preset: preset === "slide" || preset === "pop" ? "none" : preset, duration: 9, stagger: preset === "typewriter" ? 0.8 : 0.7 },
-    keyframes: preset === "slide" ? { y: [...arrival(y + 120 * k, y, settle), key(d - 1, y - 8 * k)] } :
-      preset === "pop" ? { scale: arrival(0.72, 1, settle) } : { y: [key(0, y + 9), key(d - 1, y - 9)] },
-    fade_in: preset === "slide" || preset === "pop" ? 4 : 0 });
+    keyframes: preset === "slide" ? { y: [...arrival(y + 120 * k, y, settle), key(dd - 1, y - 8 * k)] } :
+      preset === "pop" ? { scale: [...arrival(0.55, 1, settle), key(dd - 1, 1.03)], x: [...arrival(gx + (x - gx) * 0.55, x, settle), key(dd - 1, gx + (x - gx) * 1.03)] }
+        : { y: [key(0, y + 9), key(dd - 1 - delay, y - 9)] },
+    fade_in: preset === "slide" || preset === "pop" ? 5 : 0 });
   // Red for the critical words: the phrase in pieces side by side, laid out as one centred line.
   const red = Array.isArray(a.red) ? a.red.filter((v): v is string => typeof v === "string" && v.trim() !== "") : [];
   const pieces: [string, boolean][] = [];
@@ -73,10 +86,14 @@ export function text(p: Project, a: Args): Args {
   const gaps = kept.map(([words], i) => (i > 0 && (/^\s/u.test(words) || /\s$/u.test(kept[i - 1]![0])) ? space : 0));
   const total = widths.reduce((sum, v) => sum + v, 0) + gaps.reduce((sum, v) => sum + v, 0);
   if (red.length === 0 || total > 1560 * k) {
-    made.push(layer(a.text, number(a, "x", 0)));
+    made.push(layer(a.text, gx, undefined, 0));
   } else {
-    let left = number(a, "x", 0) - total / 2;
-    kept.forEach(([words, isRed], i) => { left += gaps[i]!; made.push(layer(words.trim(), left + widths[i]! / 2, isRed ? RED : undefined)); left += widths[i]!; });
+    // A letter sweep carries on from one piece into the next; a pop or slide moves them together.
+    let left = gx - total / 2; let delay = 0;
+    kept.forEach(([words, isRed], i) => {
+      left += gaps[i]!; made.push(layer(words.trim(), left + widths[i]! / 2, isRed ? RED : undefined, preset === "soft" || preset === "typewriter" ? delay : 0));
+      left += widths[i]!; delay += Math.round(words.trim().length * 0.7);
+    });
   }
   return { text: made[made.length - 1], clips: made };
 }
@@ -611,5 +628,105 @@ export function channel(p: Project, a: Args, panel: string): Args {
       frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: (bw * button.height / button.width) / 2 / bs }, transform: { x: col + bw / 2, y: by, scale: bs }, keyframes: rise(by) }));
   }
   if (typeof a.caption === "string" && a.caption.trim()) made.push(...(text(p, { text: a.caption.trim().toUpperCase(), start: start + 6, end, size: 52, motion: "soft", y: cy + L.height / 2 + 50 * k }).clips as string[]));
+  return { clips: made };
+}
+
+/**
+ * The video playing full screen pulls back, smoothly and still playing, into
+ * the YouTube watch page around it: title, channel, subscribe (the team,
+ * N3on v1: "a zoom out effect where it turns into like you are watching the
+ * video from YouTube in not full screen… This should not be a cut, but a
+ * smooth zoom out where it all looks smooth and the video keeps running").
+ * `clip` is the full-screen video; `at` the frame the pull-back starts;
+ * every layer of the page moves as one camera.
+ */
+export function player(p: Project, a: Args): Args {
+  const c = p.clips.find((one) => one.id === a.clip);
+  if (c?.type !== "video") throw new Error("commentary_player needs clip: the full-screen video clip");
+  const at = typeof a.at === "number" ? Math.round(a.at) : c.start;
+  const end = typeof a.end === "number" ? Math.round(a.end) : clipEnd(c);
+  if (at < c.start || at >= end - 12 || end > clipEnd(c)) throw new Error("at…end must sit inside the clip, at least 12 frames");
+  if (typeof a.title !== "string" || typeof a.channel !== "string") throw new Error("commentary_player needs title and channel (youtube_reference gives them)");
+  const w = p.settings.width; const h = p.settings.height; const k = h / 1080;
+  const frames = Math.min(Math.max(number(a, "frames", 24), 10), Math.floor((end - at) / 2));
+  // The page as YouTube lays it out at 1080p (theatre-like: the player wide, the details under it).
+  const pw = 0.66 * w; const ph = pw * 9 / 16; const left = -pw / 2 - 0.12 * w; const top = -h / 2 + 0.05 * h;
+  const pc: [number, number] = [left + pw / 2, top + ph / 2];
+  // Camera: S from "the player fills the frame" to 1, the player's centre from the frame's to its own.
+  const S0 = Math.max(w / pw, h / ph);
+  const ease = (t: number) => { const u = Math.min(Math.max(t, 0), 1); return 1 - Math.pow(1 - u, 3.2); };
+  const camera = (f: number) => { const e = ease(f / frames); const S = S0 + (1 - S0) * e; return { S, cx: pc[0] * e, cy: pc[1] * e }; };
+  const bake = (from: number, base: (S: number, cx: number, cy: number) => { x: number; y: number; scale: number }) => {
+    const keys: Record<string, ReturnType<typeof key>[]> = { x: [], y: [], scale: [] };
+    for (let f = 0; f <= frames; f += 2) { const { S, cx, cy } = camera(f); const v = base(S, cx, cy); keys.x!.push(key(from + f, v.x)); keys.y!.push(key(from + f, v.y)); keys.scale!.push(key(from + f, v.scale)); }
+    return keys;
+  };
+  const made: string[] = [];
+  const page = push(p, { type: "solid", name: "Janitor · player page", start: at, duration: end - at, fill: [0.059, 0.059, 0.059, 1] });
+  made.push(page);
+  // The video: its own framing scaled by the camera, its centre carried to the player's.
+  const m = mediaOf(p, c.media)!; const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
+  const coverNow = c.transform.scale; const inPlayer = Math.min(pw / (m.width * fit), ph / (m.height * fit));
+  const vkeys = bake(at - c.start, (S, cx, cy) => ({ x: cx, y: cy, scale: inPlayer * S }));
+  // Full-screen until `at`, on its own framing.
+  for (const name of ["x", "y", "scale"] as const) vkeys[name]!.unshift(key(0, name === "scale" ? coverNow : c.transform[name]), key(Math.max(0, at - c.start - 1), name === "scale" ? coverNow : c.transform[name]));
+  // Rounded like YouTube's player once it's small.
+  (c as { keyframes?: unknown }).keyframes = { ...(c.keyframes ?? {}), ...vkeys };
+  (c as { frame?: unknown }).frame = { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: 14 * k / inPlayer };
+  // A layer of the page at (x, y) with its own scale, moving with the camera.
+  const onPage = (fields: Args, x: number, y: number, scale = 1) => {
+    const id = push(p, { ...fields, start: at, duration: end - at, transform: { x, y, scale } });
+    const clip = p.clips.find((one) => one.id === id)!;
+    (clip as { keyframes?: unknown }).keyframes = bake(0, (S, cx, cy) => ({ x: cx + (x - pc[0]) * S, y: cy + (y - pc[1]) * S, scale: scale * S }));
+    made.push(id); return id;
+  };
+  const textOn = (t: string, x: number, y: number, size: number, weight: number, color: number[], name: string) =>
+    onPage({ type: "text", name, text: t, style: { font: "Geist", weight, size, color, tracking: 0, line_height: 1.2, align: "left", glow: { enabled: false } } }, x + widthOf(t, "Geist", weight, size) / 2, y);
+  const titleSize = 34 * k; let y = top + ph + 40 * k;
+  const lines = native().textLines(a.title, "Geist", 700, titleSize, 0, pw).slice(0, 2);
+  for (const line of lines) { textOn(line, left, y, titleSize, 700, [0.95, 0.95, 0.95, 1], "Janitor · player title"); y += titleSize * 1.3; }
+  y += 30 * k; const avatarSize = 64 * k; let col = left;
+  const avatar = typeof a.avatar === "string" ? mediaOf(p, a.avatar) : undefined;
+  if (avatar !== undefined && avatar.kind === "image") {
+    const af = Math.min(w / Math.max(avatar.width, 1), h / Math.max(avatar.height, 1)); const as = avatarSize / (Math.max(avatar.width, avatar.height) * af);
+    onPage({ type: "video", name: "Janitor · player avatar", media: avatar.id, source_in: 0, frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: avatarSize / 2 / as } }, col + avatarSize / 2, y, as);
+    col += avatarSize + 18 * k;
+  }
+  textOn(a.channel, col, y - 12 * k, 28 * k, 700, [0.95, 0.95, 0.95, 1], "Janitor · player channel");
+  if (typeof a.subscribers === "string") textOn(`${a.subscribers} subscribers`, col, y + 20 * k, 22 * k, 400, [0.67, 0.67, 0.67, 1], "Janitor · player subscribers");
+  const button = typeof a.subscribe === "string" ? mediaOf(p, a.subscribe) : undefined;
+  if (button !== undefined && button.kind === "image") {
+    const bw = 150 * k; const bf = Math.min(w / Math.max(button.width, 1), h / Math.max(button.height, 1)); const bs = bw / (button.width * bf);
+    const bx = col + Math.max(widthOf(a.channel, "Geist", 700, 28 * k), typeof a.subscribers === "string" ? widthOf(`${a.subscribers} subscribers`, "Geist", 400, 22 * k) : 0) + 40 * k + bw / 2;
+    onPage({ type: "video", name: "Janitor · player subscribe", media: button.id, source_in: 0, frame: { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: (bw * button.height / button.width) / 2 / bs } }, bx, y, bs);
+  }
+  if (typeof a.meta === "string" && a.meta.trim()) textOn(a.meta.trim(), left, y + avatarSize / 2 + 42 * k, 24 * k, 500, [0.85, 0.85, 0.85, 1], "Janitor · player views");
+  // The video stays above the page.
+  const order = (id: string) => p.tracks.findIndex((t) => t.id === p.clips.find((one) => one.id === id)?.track);
+  if (order(c.id) < order(page)) { (c as { track: string }).track = addTrack(p, "video"); }
+  return { clip: c.id, clips: made };
+}
+
+/**
+ * A number counting up fast, as a live viewer count climbing (the team, N3on
+ * v1: "his live kick viewer count, where you make it so it's 57 and then make
+ * an effect where it rapidly increases… up to like 35632"): `x`/`y` over the
+ * number in a screenshot, in its own type, easing out as it nears the end.
+ */
+export function counter(p: Project, a: Args): Args {
+  const [start, end] = span(a); const h = p.settings.height; const k = h / 1080;
+  const from = number(a, "from", 0); const to = number(a, "to", 1000);
+  const frames = Math.min(Math.max(number(a, "frames", 40), 6), end - start);
+  const step = 2; const size = number(a, "size", 56) * k;
+  const style = { font: typeof a.font === "string" ? a.font : "Geist", weight: number(a, "weight", 700), size, color: Array.isArray(a.color) ? a.color : [1, 1, 1, 1], tracking: 0, line_height: 1.1,
+    glow: { enabled: false }, ...(a.box !== false ? { background: { color: Array.isArray(a.background) ? a.background : [0.09, 0.09, 0.1, 1], opacity: 1, pad_x: 10 * k, pad_y: 4 * k } } : {}) };
+  const fmt = (v: number) => `${typeof a.prefix === "string" ? a.prefix : ""}${a.separator === false ? String(v) : v.toLocaleString("en-US")}${typeof a.suffix === "string" ? a.suffix : ""}`;
+  const made: string[] = [];
+  const x = number(a, "x", 0); const y = number(a, "y", 0);
+  for (let f = 0; f < frames; f += step) {
+    const u = f / frames; const v = Math.round(from + (to - from) * (1 - Math.pow(1 - u, 2.4)));
+    made.push(push(p, { type: "text", name: "Janitor · counter", text: fmt(v), start: start + f, duration: step, style, transform: { x, y } }));
+  }
+  made.push(push(p, { type: "text", name: "Janitor · counter", text: fmt(Math.round(to)), start: start + frames, duration: end - start - frames, fade_out: 6, style, transform: { x, y }, keyframes: { scale: [key(0, 1.12), key(8, 1)] } }));
   return { clips: made };
 }

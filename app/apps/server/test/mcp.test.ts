@@ -30,12 +30,12 @@ test("tool_reference_is_one_short_line_per_tool", () => {
   const reference = toolReference();
   expect(reference.trimEnd().split("\n").length).toBe(TOOLS.length);
   expect(reference).toContain("- apply_edit_plan(base_rev: integer, operations: array, ");
-  // Commentary's posts, video references and shot checks, and Edit Script, came in Oct 26.
-  expect(reference.length).toBeLessThan(19_500);
+  // Commentary's posts, video references and shot checks, Edit Script and the team's effects, came in Oct 26.
+  expect(reference.length).toBeLessThan(21_000);
 });
 
 test("every tool takes project_id; the instructions list the skills", () => {
-  expect(TOOLS.length).toBe(85);
+  expect(TOOLS.length).toBe(88);
   for (const tool of TOOLS) {
     expect(tool.inputSchema.type).toBe("object");
     expect(tool.inputSchema.properties.project_id).toEqual({

@@ -430,6 +430,10 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return commentaryGraphics.youtube(project, args);
     case "commentary_youtube_list":
       return commentaryGraphics.youtubeList(project, args);
+    case "commentary_player":
+      return commentaryGraphics.player(project, args);
+    case "commentary_counter":
+      return commentaryGraphics.counter(project, args);
     case "commentary_location":
       return commentaryGraphics.location(project, args);
     case "commentary_icon":

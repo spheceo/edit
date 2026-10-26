@@ -9,6 +9,7 @@ import { addTrack, clipEnd, freshId, mediaOf, sample } from "./project.ts";
 import { join } from "./paths.ts";
 import { stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
+import "./commentary_effects.ts";
 
 export interface Rect { x: number; y: number; width: number; height: number; }
 export function rectOf(value: unknown, width: number, height: number): Rect {
@@ -36,6 +37,17 @@ export function markerPng(width: number, height: number, rect: Rect): Uint8Array
     const wave = Math.sin((x - rect.x) / 23) * 0.65;
     const alpha = Math.min(1, Math.max(0, Math.min(y - rect.y + 1 - wave, rect.y + rect.height - y + wave)));
     const at = y * stride + 1 + x * 4; raw[at] = 255; raw[at + 3] = Math.round(245 * alpha);
+  }
+  const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
+  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+/** An RGBA picture as PNG bytes, from a pixel function (0–255 each). */
+export function rgbaPng(width: number, height: number, pixel: (x: number, y: number) => [number, number, number, number] | null): Uint8Array {
+  const stride = width * 4 + 1; const raw = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const v = pixel(x, y); if (v === null || v[3] <= 0) continue;
+    const at = y * stride + 1 + x * 4; raw[at] = v[0]; raw[at + 1] = v[1]; raw[at + 2] = v[2]; raw[at + 3] = Math.min(255, Math.round(v[3]));
   }
   const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);

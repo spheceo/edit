@@ -118,7 +118,8 @@ export async function place(app: App, id: string, given: string[] | null): Promi
         unread();
         return;
       }
-      const [media, words, match] = best;
+      const [media, words, aligned] = best;
+      const match = widen(wanted, words.map((word) => normalize(word.text)), aligned);
       // Breathing room, without reaching into the words around it.
       const first = words[match.first];
       const last = words[match.last];
@@ -457,6 +458,25 @@ export interface Found {
   first: number;
   last: number;
   matched: number;
+}
+
+/**
+ * A match widened over the block's edge words the alignment left out when
+ * the recording says them a little differently: the script's "He's streamed
+ * with Kanye West" read as "He streamed…" lost its "He" (the team, N3on v1:
+ * "you have cut out 'he' in the voice over… It makes it sound really cheap").
+ * An edge word comes back when it's one spoken word for one written one and
+ * one starts the other ("he" in "hes").
+ */
+export function widen(written: string[], heard: string[], match: Found): Found {
+  const near = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a !== "" && b !== "" && (a.startsWith(b) || b.startsWith(a) || same(a, b));
+  const out = { ...match };
+  // Which written words the ends were aligned to: the nearest matching ones.
+  const firstWritten = written.findIndex((word) => same(word, heard[match.first] ?? ""));
+  const lastWritten = written.length - 1 - [...written].reverse().findIndex((word) => same(word, heard[match.last] ?? ""));
+  for (let i = firstWritten - 1; i >= 0 && out.first > 0 && near(written[i], heard[out.first - 1]); i--) out.first -= 1;
+  if (lastWritten < written.length) for (let i = lastWritten + 1; i < written.length && out.last + 1 < heard.length && near(written[i], heard[out.last + 1]); i++) out.last += 1;
+  return out;
 }
 
 export function find(written: string[], heard: string[]): Found | null {

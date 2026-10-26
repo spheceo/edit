@@ -22,7 +22,14 @@ The guide's animations, each with its tool:
 - **Animation 11 (a video from a channel's list):** commentary_youtube or commentary_youtube_list.
 - **Animation 12 (when the blurred-picture card is getting repetitive):** the same pictures on the brand's moving background, commentary_card `background: brand_background_motion`.
 
-Emphasis text is big (the default size) with the house glow, crisp shadow and slight stroke. The words that carry the blow can be red (`red: ["BAD VIDEOS"]`). Over a bright or busy picture, use `blur: true` so it reads: the guide blurs "the background… to avoid making the text unreadable".
+The team's named effects (M, N3on v1), each a tool:
+- **commentary_arrow:** a red arrow drawn to a person with their name or role at its tail, whenever someone on screen needs naming ("an arrow pop up with text towards the left where it says 'Paramount CEO'"). On a moving camera, give it `track` (their box) so "the arrow and text tracks them as the camera moves past". Prefer a picture of the people together with an arrow to the one named ("an image of Adin and n3on together in the early days. And then add an red arrow with text towards Adin") over a card with a small caption.
+- **commentary_web:** the spider web for a network of people behind someone. Close-up pictures, the subject in the middle, the inner circle around, each arriving as they're named. Keep a few blurred, name and all: "so it looks kind of intriguing".
+- **commentary_player:** when a YouTube video plays full screen, pull back into its watch page, "a smooth zoom out where it all looks smooth and the video keeps running", not a cut.
+- **commentary_counter:** a number that should feel big counts up over its screenshot ("57 and then… rapidly increases… up to like 35632").
+- **commentary_reverb_out:** a cold open that ends on a line is not cut off: its last words warp out in reverb over a fade to black, a pause, then the narration ("The quick cut here makes it seem cheap").
+
+**Text pops up clean:** the blur goes in first, then the whole phrase scales up as one, with the guide's ease. Never letters over sharp footage before the blur. **No near-still shots:** a menu screen or frozen frame reads as "the same irrelevant still frame". **No stray frames between transitions:** "a small frame of something else in between… makes it look buggy". Go straight into the next composition. Emphasis text is big (the default size) with the house glow, crisp shadow and slight stroke. The words that carry the blow can be red (`red: ["BAD VIDEOS"]`). Over a bright or busy picture, use `blur: true` so it reads: the guide blurs "the background… to avoid making the text unreadable".
 
 After composing each chapter, check_shots over it (two minutes at a time) and replace every shot whose picture doesn't show what its words name; a caption, title or graphic that says something else is wrong too ("it mentions a Houston highlights thing. There is no Houston highlights anything here"). What good looks like, in the team's words: the run from Kanye West to Megan Fox, each person named shown in real footage with him at the word that names them.
 

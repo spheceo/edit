@@ -10,6 +10,7 @@ import { footageSound, muteOf, suggestions, timedWords, writeMutes } from "../sr
 import type { Word } from "../src/transcribe.ts";
 import {
   find,
+  widen,
   garbled,
   isVoiceover,
   pauses,
@@ -248,4 +249,12 @@ test("footage tightening cuts a source excerpt's own gaps, word to word, and lea
   const [cut] = tightenPlan(project, heard, 0, 400, 0.4, 0.15, true);
   expect(cut.map((pause) => [pause.clip, pause.between])).toEqual([["snd", ["Stop", "now"]]]);
   expect(tightenPlan(project, heard, 0, 400, 0.4, 0.15, false)[0]).toEqual([]);
+});
+
+test("a block's first word said a little differently stays in its voice-over", () => {
+  const written = ["hes", "streamed", "with", "kanye", "west"];
+  const heard = ["the", "planet", "he", "streamed", "with", "kanye", "west", "collaborated"];
+  const aligned = find(written, heard)!;
+  expect(aligned.first).toBe(3);
+  expect(widen(written, heard, aligned)).toMatchObject({ first: 2, last: 6 });
 });

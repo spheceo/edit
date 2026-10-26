@@ -2805,9 +2805,9 @@ mod tests {
 
     /// 100 one-second cuts alternating red and blue (`blue_at` makes those
     /// clips blue instead), each with its sound.
-    fn cuts(red: &Path, blue: &Path, blue_at: &[i64], skip_first: bool) -> Project {
+    fn cuts(red: &Path, blue: &Path, blue_at: &[i64], skip_first: i64) -> Project {
         let mut clips = Vec::new();
-        let first = i64::from(skip_first);
+        let first = skip_first;
         for index in first..100 {
             let blue_here = index % 2 == 1 || blue_at.contains(&index);
             let media = if blue_here { "b" } else { "r" };
@@ -2861,7 +2861,7 @@ mod tests {
     /// A chunked re-export copies what didn't change out of the last export
     /// and gives the same file a whole export would: every frame, the sound
     /// the length of the picture; a trim near the start leaves later chunks
-    /// as they were.
+    /// as they were when the trim ends on a chunk boundary.
     #[cfg(target_os = "macos")]
     #[test]
     fn a_re_export_redoes_only_the_chunks_that_changed() {
@@ -2886,7 +2886,7 @@ mod tests {
             .unwrap();
             output
         };
-        let first = cuts(&red, &blue, &[], false);
+        let first = cuts(&red, &blue, &[], 0);
         let one = run(&first, "one.mp4");
         let made = manifest(&cache);
         assert!(made.chunks.len() >= 2, "{:?}", made.chunks);
@@ -2895,7 +2895,7 @@ mod tests {
         // Clip 96 (frames 2880 to 2909) turns blue: the chunk it's in is new,
         // and every chunk that ends before it is copied as it was. (A chunk
         // may or may not end on its first frame now: content decides.)
-        let changed = cuts(&red, &blue, &[96], false);
+        let changed = cuts(&red, &blue, &[96], 0);
         let two = run(&changed, "two.mp4");
         let again = manifest(&cache);
         assert_eq!(again.output, two);
@@ -2949,15 +2949,18 @@ mod tests {
             "{}",
             duration(&two, "a:0")
         );
-        // The first cut trimmed away: everything after moves 30 frames earlier,
-        // and every chunk after the first is one the last export had.
-        let trimmed = cuts(&red, &blue, &[96], true);
+        // Trim exactly the first chunk. Trimming only one cut can move an
+        // anchor below MIN_SECONDS and legitimately change later boundaries;
+        // which cut is an anchor varies with the source's content key.
+        let removed = again.chunks[0].frames;
+        assert_eq!(removed % 30, 0);
+        let skipped = removed / 30;
+        let trimmed = cuts(&red, &blue, &[96], skipped);
         let three = run(&trimmed, "three.mp4");
         let last = manifest(&cache);
         assert!(
             last.chunks
                 .iter()
-                .skip(1)
                 .all(|chunk| again.chunks.iter().any(|old| old.key == chunk.key)),
             "{:?} against {:?}",
             last.chunks,
@@ -2966,13 +2969,13 @@ mod tests {
         shows(
             &three,
             |frame| {
-                let index = frame / 30 + 1;
+                let index = frame / 30 + skipped as usize;
                 index % 2 == 1 || index == 96
             },
-            2970,
+            (3000 - removed) as usize,
         );
         assert!(
-            (duration(&three, "a:0") - 99.0).abs() < 0.05,
+            (duration(&three, "a:0") - (100.0 - removed as f64 / 30.0)).abs() < 0.05,
             "{}",
             duration(&three, "a:0")
         );

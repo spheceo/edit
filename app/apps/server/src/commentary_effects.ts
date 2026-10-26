@@ -265,9 +265,13 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
     // Each person arrives at their `at` (the word naming them), else one after another; their line draws out to them first.
     let next = start + 22;
     const blurs: { x: number; y: number; w: number; h: number; at: number }[] = [];
+    const arrived: number[] = [];
     L.nodes.forEach((n, i) => {
       const node = nodes.filter((one) => (one.ring ?? 1) !== 2).concat(nodes.filter((one) => one.ring === 2))[i]!;
-      const at = typeof node.at === "number" ? Math.max(start + 18, Math.min(end - 20, node.at)) : next; next = at + 8;
+      let at = typeof node.at === "number" ? Math.max(start + 18, Math.min(end - 20, node.at)) : next; next = at + 8;
+      // An outer person comes after the one they hang off, so their line never starts from empty space.
+      if (n.parent >= 0) at = Math.min(end - 20, Math.max(at, (arrived[n.parent] ?? at) + 10));
+      arrived[i] = at;
       const parent = n.parent < 0 ? { x: 0, y: 0 } : L.nodes[n.parent]!;
       const across = Math.abs(n.x - parent.x) >= Math.abs(n.y - parent.y);
       const side = across ? (n.x > parent.x ? "crop.right" : "crop.left") : (n.y > parent.y ? "crop.bottom" : "crop.top");

@@ -260,6 +260,13 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
     await seams.broll.waitForMaps(app, projectId, 60_000).catch((error: unknown) => {
       if (!seams.isUnavailable(error)) throw error;
     });
+    // Slowed shots still being smoothed would go out stuttering or half
+    // swapped (N3on's fourth preview was shared with 16 still rendering).
+    sharing.set(projectId, "waiting for slowed shots");
+    await seams.broll.waitForSmoothing(projectId, 20 * 60_000).catch((error: unknown) => {
+      if (!seams.isUnavailable(error)) throw error;
+    });
+    sharing.set(projectId, "exporting");
     const live = app.store.get(projectId);
     if (live === null) throw new Error("no such project");
     const finished = new Promise<string>((resolve, reject) => {

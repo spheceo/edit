@@ -94,7 +94,8 @@ export function cardSources(card: TrelloCard): CompilationSource[] {
   const out = [...description];
   for (const item of extra) {
     const numbered = /^\d+$/u.test(item.case);
-    if (out.some((one) => one.url === item.url && (!numbered || one.case === item.case))) continue;
+    const duplicate = out.find((one) => one.url === item.url && (!numbered || one.case === item.case));
+    if (duplicate) { duplicate.reuse ||= item.reuse; continue; }
     const before = numbered ? out.findIndex((one) => /^\d+$/u.test(one.case) && Number(one.case) > Number(item.case)) : -1;
     if (before < 0) out.push(item); else out.splice(before, 0, item);
   }

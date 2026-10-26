@@ -64,16 +64,13 @@ scripts; finished video reuse requires an explicit video input.
 
 ## Verification
 
-Passed server and web typechecking, 676 server tests (7 optional tests skipped),
-145 web tests, 36 core tests, Rust formatting and core Clippy. Subsequent focused
-tests cover the final attachment/reference and Trello-origin reuse adjustments.
-The web build rebuilt WASM successfully. Workspace Rust Clippy and tests passed
-(115 tests, 5 optional tests ignored), as did WASM Clippy and the rebuilt native
-addon's 33 tests and typecheck. The final focused import/handoff/real-FFmpeg suite
-passed 21 tests before final integration review. Review added coverage for the
-relay's duplicate thumbnail URL and a single reused Doc reached through Trello.
-Generated types were rebuilt and committed. Final integration runs full
-`just check` after the commit so its clean-git generated-type checks apply.
+Full `just check` passed on `main`: 681 server tests (7 optional tests skipped),
+145 web tests, 115 workspace Rust tests (5 optional tests ignored), 33 rebuilt
+native-addon tests, formatting, workspace/WASM Clippy, all typechecks and the
+clean-git generated-type checks. The web build also rebuilt WASM successfully.
+Final focused import/handoff/real-FFmpeg tests passed 22 tests. Review added
+coverage for the relay's duplicate thumbnail URL, a single reused Doc reached
+through Trello, and explicit reuse supplied by a duplicate attachment label.
 
 Integration review also reproduced an existing render-cache test failure: a
 one-cut trim can move a content anchor below the minimum chunk length, so its

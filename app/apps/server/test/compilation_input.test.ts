@@ -36,6 +36,7 @@ test("numbered attachments fill missing case slots while reference links and sma
   expect(sources.map((one) => one.url)).toEqual([folder, video, doc]);
   expect(cardSources({ desc: `Case 1: ${video}`, attachments: [{ name: "Case 2", url: video }] }).map((one) => one.case)).toEqual(["1", "2"]);
   expect(cardSources({ desc: `Case 1: ${video}`, attachmentLabels: [`Thumbnail <${other}>`], attachments: [other] }).map((one) => one.url)).toEqual([video]);
+  expect(cardSources({ desc: `Case 1: ${video}`, attachmentLabels: [`Case 1 (reuse) <${video}>`], attachments: [video] })[0]?.reuse).toBe(true);
 });
 
 test("a single reused Doc from a Trello card keeps range protection while a normal standalone Doc remains editable", async () => {

@@ -2,6 +2,17 @@
 
 ## Released and deployed
 
+The current release is
+[nightly-24](https://github.com/spheceo/edit/releases/tag/nightly-24), source
+`0e4b21638c7f20a75bf2f691ad91681ed17aeb64`. It adds the narration source-boundary
+fix found during recovery to the rollout below. Its
+[workflow](https://github.com/spheceo/edit/actions/runs/40481183426) passed for
+Apple Silicon and Intel, including app packaging, and published all ten assets.
+The downloaded Apple Silicon archive passed SHA-256 verification, printed
+`edit nightly-24`, and served health/diagnostics from an isolated temporary home
+with diagnostics identifying `nightly-24`. The local development server was
+also rebuilt and restarted onto the corrected source while idle.
+
 Edit [nightly-23](https://github.com/spheceo/edit/releases/tag/nightly-23)
 contains the remote-update receiver, the reviewed recovery/authentication fixes,
 YouTube-caption support already on main, and the missing-case insertion feature.
@@ -41,6 +52,11 @@ route is deployed. All source changes were committed and pushed.
   The first claim succeeded, a duplicate claim was rejected, and a terminal
   receipt was visible. This transport test explicitly recorded that **no app
   update was executed**. Its temporary device is disabled.
+- The rebuilt local editor's actual `edit remote devices` CLI authenticated
+  successfully. A browser-Origin request to the operator API was refused with
+  HTTP 403. The inventory still contained only the disabled verification device.
+- Deployed Accounts' sign-in page and existing `site.js` both returned HTTP 200;
+  Feedback's sign-in page also returned 200.
 
 This verifies release packaging, identity, transport, exclusive claiming and
 receipts. It does not verify another Mac replacing its actual running process.

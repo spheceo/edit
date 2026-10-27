@@ -34,7 +34,7 @@ again, send one explicit continuation to each project's normal agent:
 
 ## JJ's Mac
 
-Install [nightly-23 or later](https://github.com/spheceo/edit/releases/tag/nightly-23)
+Install [nightly-24](https://github.com/spheceo/edit/releases/tag/nightly-24)
 through Edit's normal updater/installer, keep it running and signed in, then
 run `edit remote enable` once on that Mac. With the application bundle installed
 at the usual location, its CLI is

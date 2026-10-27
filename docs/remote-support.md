@@ -35,7 +35,7 @@ sign-in or a new account permission.
 
 ## Existing access and current blocker
 
-The deployed services, nightly-23, live transport test and JJ project evidence
+The deployed services, nightly-24, live transport test and JJ project evidence
 are recorded in [the 27 October rollout](remote-support-rollout-2026-10-27.md).
 
 Edit already listens on loopback and its Tailscale address when available, and

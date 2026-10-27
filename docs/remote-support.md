@@ -35,16 +35,21 @@ sign-in or a new account permission.
 
 ## Existing access and current blocker
 
+The deployed services, nightly-23, live transport test and JJ project evidence
+are recorded in [the 27 October rollout](remote-support-rollout-2026-10-27.md).
+
 Edit already listens on loopback and its Tailscale address when available, and
 its UI, diagnostics and project agent APIs can be used over that connection.
 Host/Origin checks protect the local APIs; Tailscale ACLs control which other
 devices can reach them. There is no separate per-operator pairing/authentication
 layer in the existing server. Do not expose this local app on the public internet.
 
-The inspected tailnet inventory did not identify JJ's Mac. His two failing
-project names/IDs and an owner-shared endpoint are still needed. No connection to
-an assumed JJ device, remote update, paid agent turn or project repair was run.
-Installing a local code change does not update JJ's installed nightly.
+The inspected tailnet inventory did not identify JJ's Mac, and the live support
+inventory contained no JJ receiver. Three shared projects have now been
+identified and backed up for repair through the operator's normal local Edit.
+Their cloud snapshots do not include JJ's local errors. No connection to JJ's
+Mac, remote update or remote agent turn has been performed. Installing a local
+code change does not update JJ's installed nightly.
 
 ## Owner setup and operator commands
 

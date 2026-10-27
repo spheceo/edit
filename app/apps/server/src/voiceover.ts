@@ -133,12 +133,20 @@ export async function place(app: App, id: string, given: string[] | null, only?:
         unread();
         return;
       }
-      drop(index);
       const ending = match.first > 0 ? words[match.first - 1]?.end : undefined;
       const starting = words[match.last + 1]?.start;
       const from = Math.max(first.start - LEAD, ending === undefined ? 0 : (ending + first.start) / 2, 0);
-      const to = Math.min(last.end + TAIL, starting === undefined ? Number.MAX_VALUE : (last.end + starting) / 2);
-      const length = Math.trunc(Math.max(round((to - from) * fps), 1));
+      const recording = recordings.find((item) => item.id === media)!;
+      const to = Math.min(recording.duration, last.end + TAIL, starting === undefined ? Number.MAX_VALUE : (last.end + starting) / 2);
+      // A transcript can end at the file's edge. Keep only whole frames that
+      // exist; adding the trailing pause used to extend narration into silence.
+      const available = Math.floor((recording.duration - from) * fps + 1e-7);
+      if (available < 1) {
+        unread();
+        return;
+      }
+      const length = Math.min(available, Math.trunc(Math.max(round((to - from) * fps), 1)));
+      drop(index);
 
       // The cut-in (and its words) takes the voice-over's length; what follows moves.
       const delta = length - card.duration;

@@ -3,7 +3,9 @@
 2026-10-27. Reviewed Edit's committed receiver (`e6f89ba9`), Repack's Convex
 commands (`0d5c30e`) and Accounts' token claim (`55d4d51`). The initial
 implementation had substantive correctness and authorization defects. It had
-not been validated against a live second machine.
+not been validated against a live second machine. Subsequent deployment,
+release and live transport verification are recorded in
+[the rollout record](remote-support-rollout-2026-10-27.md).
 
 ## Findings and corrections
 
@@ -27,12 +29,13 @@ Convex authorization, claim exclusion, revocation, idempotent completion and
 cross-app identity separation are checked using an in-memory handler harness;
 the Repack repository's normal checks are run separately.
 
-The full Edit typecheck still has the pre-existing uncommitted
-`case_insertion.test.ts` fixture error (missing media `name`). A check excluding
-only that file passes; those unrelated changes are not part of this review.
+At review time, the full Edit typecheck still had the uncommitted
+`case_insertion.test.ts` fixture error (missing media `name`). This was fixed
+in `88571f6f`; the full server typecheck and suite now pass, and the user-approved
+case-insertion feature is included in nightly-23.
 
-This review does not deploy services, publish a nightly or test a remote Mac's
-actual process replacement. Deployment and a controlled two-machine update
-smoke test remain required before calling the feature operational. Remote
+The review itself did not deploy services or publish a nightly. Those rollout
+steps are now complete; a controlled two-machine update smoke test still
+remains before claiming a remote Mac's actual process replacement works. Remote
 agent turns remain unimplemented, consistent with the earlier decision to
 leave paid remote work unavailable pending an enforceable spending limit.

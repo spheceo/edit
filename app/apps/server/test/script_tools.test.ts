@@ -297,20 +297,21 @@ test("place_voiceovers with some recordings keeps the cut-ins they don't read", 
   const [{ app, cleanup, home }] = withAgents("voiceover-partial");
   try {
     const id = app.store.create("Case", { width: 1920, height: 1080, fps: 30 }).project.id;
-    const take = (name: string, words: string[]) => {
+    const take = (name: string, words: string[], spacing = 0.5) => {
       const path = `${home}/${name}.mp3`;
       fs.writeFileSync(path, name);
       const transcript = app.media.paths(path).transcript;
       fs.mkdirSync(transcript.slice(0, transcript.lastIndexOf("/")), { recursive: true });
-      const said = words.map((text, index) => ({ text, start: index * 0.5, end: index * 0.5 + 0.4, speaker: "speaker_0" }));
+      const said = words.map((text, index) => ({ text, start: index * spacing, end: index * spacing + spacing - 0.1, speaker: "speaker_0" }));
       fs.writeFileSync(transcript, JSON.stringify({ model: "scribe_v2", language: "eng", words: said }));
       return path;
     };
-    const first = take("first", ["the", "detectives", "kept", "asking", "about", "him"]);
+    const first = take("first", ["the", "detectives", "kept", "asking", "about", "him"], 2.5);
     const second = take("second", ["she", "never", "saw", "the", "file", "coming"]);
     await app.store.update(id, "test", (project) => {
       project.media.push(
-        { id: "a1", name: "first", path: first, kind: "audio", duration: 20, width: 0, height: 0, fps: 0, has_audio: true },
+        // The last word ends at 14.9 s: the trailing pause must fit inside the file.
+        { id: "a1", name: "first", path: first, kind: "audio", duration: 14.92, width: 0, height: 0, fps: 0, has_audio: true },
         { id: "a2", name: "second", path: second, kind: "audio", duration: 20, width: 0, height: 0, fps: 0, has_audio: true },
       );
       const track = project.tracks[0]!.id;
@@ -338,6 +339,9 @@ test("place_voiceovers with some recordings keeps the cut-ins they don't read", 
       });
     await call({});
     expect(voiced()).toEqual(["a1", "a2"]);
+    const placed = app.store.get(id)!.project.clips.find((clip) => clip.type === "audio" && clip.media === "a1");
+    expect(placed?.duration).toBe(447);
+    expect(placed?.type === "audio" && placed.source_in + placed.duration / 30 <= 14.92).toBe(true);
     // A new take of the first cut-in only: the second keeps its voice-over.
     const answer = await call({ media_ids: ["a1"] });
     expect(answer).toContain("its voice-over stays");

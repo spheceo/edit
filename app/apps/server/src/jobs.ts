@@ -16,7 +16,7 @@ import * as diag from "./diag.ts";
 import { nowMs, readState, writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 
-export type Kind = "export" | "drive" | "smooth" | "watch" | "upload" | "map";
+export type Kind = "export" | "drive" | "smooth" | "watch" | "upload" | "map" | "case";
 
 export interface Job {
   /** One job per key: kind, project and what in it (a clip). */

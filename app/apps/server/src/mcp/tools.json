@@ -2981,6 +2981,49 @@
     }
   },
   {
+    "name": "insert_compilation_case",
+    "description": "Add one missing case to an already laid-out compilation without resetting the edit. Downloads new Drive folder/file, YouTube or a finished script Doc, inserts it at a clean timeline boundary, and shifts later work intact. at is FRAMES from get_edit_context, usually after the existing compilation opening for case 1. request_id is a stable unique identifier: retry the same id, never duplicate the case. intro is the new case's researched opening/transition narration; it is voiced only for this case. Docs retain their original ranges and finished cut-in words. before_block is the optional zero-based script insertion index when removed clips make the order ambiguous. This may take minutes; failures leave a retryable pending case and keep the existing edit. Then research/watch this case, update the compilation opening and finish the new case's joins with the appropriate skills.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "case_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "before_block": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "title": {
+          "type": "string"
+        },
+        "intro": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "request_id",
+        "case_number",
+        "at"
+      ]
+    }
+  },
+  {
     "name": "commentary_arrow",
     "description": "A red arrow drawn toward a person with their name at its tail. The words pop up, then the arrow draws from them to the person (the team: an arrow with text toward the left saying \"Paramount CEO\"; \"a red arrow with text towards Adin, which says Adin Ross\"). at: [x, y] the person's point (project px from the centre); side: where the words sit (left, right, above, below); track: {time, box: [x0, y0, x1, y1] top-left project px, boxes?} instead of at keeps arrow and words on the person as the camera moves (track_region), the arrow's point on the box's centre.",
     "inputSchema": {

@@ -352,6 +352,7 @@ export interface VoiceoverSeam {
   anyPlaced(project: Project): boolean;
   /** Speaks the script's cut-ins with the house voice and lays the takes on them. */
   generate(app: App, id: string): Promise<Json>;
+  generateCase(app: App, id: string, request: string): Promise<Json>;
   isVoiceover(project: Project, clip: Clip): boolean;
   place(app: App, id: string, media: string[] | null): Promise<Json>;
   send(app: App, voiceId: string, id: string): Promise<Json>;

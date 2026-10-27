@@ -19,6 +19,7 @@ import { addTrack, clipEnd, clipMedia, clipOf, fps as fpsOf, freshId, isSoundEff
 import { join } from "./paths.ts";
 import { debugStrings, f32Saved, isAlphanumeric, isWhitespace, jsonForSerde, round, splitWhitespace, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
+import { caseNarration } from "./case_insertion.ts";
 import type { Word } from "./transcribe.ts";
 
 /** Lead-in kept before the first word and tail after the last (seconds). */
@@ -45,7 +46,7 @@ function replaceContents(target: Project, source: Project): void {
  * Places voice-overs on the cut-ins: `media` (default: audio that isn't on the
  * timeline and isn't a sound effect). Placing again replaces what it placed.
  */
-export async function place(app: App, id: string, given: string[] | null): Promise<Json> {
+export async function place(app: App, id: string, given: string[] | null, only?: Set<string>): Promise<Json> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
   const project = live.project;
@@ -90,6 +91,11 @@ export async function place(app: App, id: string, given: string[] | null): Promi
     const report: Json[] = [];
     const voiceovers = new Map<number, string>();
     blocks.forEach((block, index) => {
+      if (block.kind === "narration" && only && (!block.clip || !only.has(block.clip))) {
+        const kept = previous.get(index);
+        if (kept && clipOf(project, kept)) voiceovers.set(index, kept);
+        return;
+      }
       if (block.kind !== "narration" || block.clip === undefined || block.clip === null) return;
       const found = clipOf(project, block.clip);
       if (found === undefined) return;
@@ -137,6 +143,15 @@ export async function place(app: App, id: string, given: string[] | null): Promi
       // The cut-in (and its words) takes the voice-over's length; what follows moves.
       const delta = length - card.duration;
       const oldEnd = clipEnd(card);
+      if (only) {
+        for (const marker of project.markers ?? []) if (marker.frame >= oldEnd) marker.frame += delta;
+        for (const segment of project.segments ?? []) {
+          if (segment.start >= oldEnd) segment.start += delta;
+          if (segment.end >= oldEnd) segment.end += delta;
+        }
+        if (project.mark_in != null && project.mark_in >= oldEnd) project.mark_in += delta;
+        if (project.mark_out != null && project.mark_out >= oldEnd) project.mark_out += delta;
+      }
       for (const other of project.clips) {
         const partner = other.id === card.id || (card.link !== undefined && card.link !== null && other.link === card.link);
         if (partner) other.duration = length;
@@ -240,11 +255,24 @@ export async function generate(app: App, id: string): Promise<Json> {
   return send(app, project.id, id);
 }
 
+/** Speak only this inserted case, keeping all earlier takes and cut-ins. */
+export async function generateCase(app: App, id: string, request: string): Promise<Json> {
+  const live = app.store.get(id);
+  if (!live) throw new Error("no such project");
+  const blocks = caseNarration(live.project, request);
+  if (!blocks.length) return { media: [] };
+  const targets = blocks.flatMap((block) => block.clip ? [block.clip] : []);
+  if (targets.length !== blocks.length) throw new Error("Lay out the new case's cut-ins before voicing them.");
+  const voice = app.voices.forProject(`${live.project.name} (case ${request})`, id, blocks.map((block, index) => [block.text, `Added case line ${index + 1}`]));
+  for (const line of voice.lines) if (line.chosen === null) await app.voices.generate(voice.id, line.id);
+  return send(app, voice.id, id, targets);
+}
+
 /**
  * Puts a voice-over's chosen takes into video project `id` and lays them on its
  * cut-ins (matched by their words, as with any recorded voice-over).
  */
-export async function send(app: App, voiceId: string, id: string): Promise<Json> {
+export async function send(app: App, voiceId: string, id: string, targets?: string[]): Promise<Json> {
   const voice = app.voices.get(voiceId);
   const takes = app.voices.chosenTakes(voiceId);
   if (takes.length === 0) throw new Error("No lines have a chosen take yet.");
@@ -264,7 +292,7 @@ export async function send(app: App, voiceId: string, id: string): Promise<Json>
   }
   const [, added, errors] = await importPaths(app, id, paths, false, "voice");
   if (added.length === 0) throw new Error(`Couldn't import the takes: ${debugStrings(errors)}`);
-  const report = await diag.timeAsync("voice", "voice: place in a project", () => place(app, id, [...added]));
+  const report = await diag.timeAsync("voice", "voice: place in a project", () => place(app, id, [...added], targets ? new Set(targets) : undefined));
   return { media: added, report };
 }
 

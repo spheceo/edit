@@ -25,7 +25,8 @@ import * as research from "./research.ts";
 import * as review from "./review.ts";
 import { display, fixed, round, toI64, trim } from "./rust.ts";
 import * as script from "./script.ts";
-import { readCompilation } from "./compilation_input.ts";
+import { readCompilation, sourceKind } from "./compilation_input.ts";
+import { hasCase, pendingCase, queueCase } from "./case_insertion.ts";
 import { field, read, readStruct, required, SerdeError, type Struct } from "./serde.ts";
 import { stableStringify } from "./stable.ts";
 import { changesFrom, narrationLines } from "./voice.ts";
@@ -267,6 +268,39 @@ registerTool("generate_voiceover", async ({ app, projectId }) => {
   if (voiceover.anyPlaced(live.project)) throw new Error("the cut-ins already have voice-overs: revoice_cut_in changes one");
   const done = await diag.timeAsync("voiceover", "generate a voice-over", () => voiceover.generate(app, projectId));
   return text(stableStringify(done));
+});
+
+registerTool("insert_compilation_case", async ({ app, args, projectId }) => {
+  const request = typeof args.request_id === "string" ? args.request_id : "";
+  const at = num(args.at);
+  const number = num(args.case_number);
+  const source = typeof args.source === "string" ? args.source.trim() : "";
+  if (!request || at === null || number === null || !source) throw new Error("source, request_id, case_number and at (timeline frames) are required.");
+  if (sourceKind(source) === null || /\s/u.test(source)) throw new Error("source must be one complete Drive, YouTube, Google Doc or Trello URL.");
+  const live = app.store.get(projectId);
+  if (!live) throw new Error("no such project");
+  if (!kinds.mayEdit(live.project.style)) throw new Error(kinds.cantMake(`edit.${live.project.style}`));
+  await app.store.mayWrite(projectId);
+  const running = app.scripts.get(projectId);
+  if (running && ["downloading", "transcribing", "placing", "voicing"].includes(running.state)) throw new Error("Wait for the project's current script import to finish.");
+  if (!hasCase(live.project, request)) {
+    // A supplied finished Doc is reused exactly, also when it is the only
+    // source being added to an already edited compilation.
+    const input = script.docId(source) ? `REUSE ${source}` : source;
+    const parsed = await readCompilation(input, app);
+    await app.store.update(projectId, ORIGIN, (project) => queueCase(project, parsed, {
+      id: request, at, number,
+      ...(typeof args.title === "string" ? { title: args.title } : {}),
+      ...(typeof args.intro === "string" ? { intro: args.intro } : {}),
+      ...(typeof args.before_block === "number" ? { before: args.before_block } : {}),
+    }));
+  }
+  if (pendingCase(app.store.get(projectId)!.project)) await script.start(app, projectId, false);
+  else await voiceover.generateCase(app, projectId, request);
+  const saved = app.store.get(projectId)!;
+  const job = app.scripts.get(projectId);
+  return text(stableStringify({ request_id: request, rev: saved.rev, job, pending: pendingCase(saved.project) !== null,
+    then: "Read the updated edit context. Research/watch the added case, finish its intro and transition, update the compilation opening to include it, then edit/audit only the new case and its joins. Preserve every other case and every reused script's finished words." }));
 });
 
 registerTool("revoice_cut_in", async ({ app, args, projectId }) => {
@@ -515,7 +549,7 @@ async function scriptResume(context: RouteContext<App>): Promise<Response> {
     throw new ApiError(423, diag.messageOf(error));
   }
   const live = projectOr404(app, id);
-  if (!recut && script.laidOut(live.project)) throw new ApiError(409, "this script's import finished: Re-cut to lay it out again");
+  if (!recut && script.laidOut(live.project) && !pendingCase(live.project)) throw new ApiError(409, "this script's import finished: Re-cut to lay it out again");
   script.start(app, id, recut);
   return sortedJson({ job: app.scripts.get(id) });
 }

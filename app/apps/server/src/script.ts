@@ -30,6 +30,8 @@ import type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 import * as tools from "./tools.ts";
 import type { Word } from "./transcribe.ts";
 import * as youtube from "./youtube.ts";
+import { finishCase, pendingCase } from "./case_insertion.ts";
+import * as durableJobs from "./jobs.ts";
 
 export type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 
@@ -1449,6 +1451,7 @@ export function unfinished(project: Project): boolean {
   if (script === undefined || script === null) return false;
   // Laid out once (every range is placed in one go, after the downloads): finished,
   // whatever's been removed or never came since. Only a Re-cut lays it out again.
+  if (pendingCase(project)) return true;
   if (laidOut(project)) return false;
   // Only blocks never placed: one placed and since removed was removed on purpose.
   return missingFiles(project).length > 0 || script.blocks.some((block) => !placed(project, block));
@@ -1496,7 +1499,9 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
   const live = app.store.get(projectId);
   if (live === null) return null;
   // A finished import is never resumed (only a Re-cut lays it out again).
-  if (!recut && laidOut(live.project)) return null;
+  const inserting = pendingCase(live.project);
+  if (recut && inserting) throw new Error("Finish the pending case insertion before Re-cut.");
+  if (!recut && laidOut(live.project) && !inserting) return null;
   // The job belongs to the script it started with: one attached since stops it.
   const source = live.project.script?.source ?? null;
   const files = missingFiles(live.project);
@@ -1505,6 +1510,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     files: files.map((file) => ({ file, bytes: 0, state: "queued" })),
   };
   if (!app.scripts.claim(app, projectId, job)) return null;
+  const durable = inserting ? durableJobs.begin(app.store.home, "case", projectId, { request: inserting.id }) : null;
   const id = projectId;
   const work = async () => {
     // As tokio::spawn: the job runs after the caller has answered with it (files still queued).
@@ -1555,6 +1561,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     let result: string | null = null;
     try {
       if ((app.store.get(id)?.project.script?.source ?? null) !== source) throw new Error("another script was attached while this one was importing: this import stops");
+      if (inserting && done.length !== files.length) throw new Error("The new case is not fully downloaded. Retry it; the existing edit has not been moved.");
       await diag.timeAsync("script", "script: lay out", () => place(app, id, done, recut));
     } catch (error) {
       if (isBug(error)) throw error;
@@ -1566,12 +1573,12 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     // Oct 22): a recording added later takes its place (place_voiceovers).
     const now = app.store.get(id);
     const unvoiced = now !== null && !seams.voiceover.anyPlaced(now.project);
-    if (laidOut && unvoiced) {
+    if (laidOut && (unvoiced || inserting)) {
       app.scripts.set(app, id, (job) => {
         job.state = "voicing";
       });
       try {
-        await diag.timeAsync("script", "script: voice-over", () => seams.voiceover.generate(app, id));
+        await diag.timeAsync("script", "script: voice-over", () => inserting ? seams.voiceover.generateCase(app, id, inserting.id) : seams.voiceover.generate(app, id));
       } catch (error) {
         if (isBug(error)) throw error;
         result = `The voice-over couldn't be made: ${diag.messageOf(error)}`;
@@ -1589,7 +1596,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     // are waiting by the time the editing gets to them.
     const home = app.store.home;
     const researched = seams.research.articles(home, id).length > 0 || seams.research.items(home, id).length > 0;
-    if (laidOut && !recut && !researched && now?.project.style !== "commentary") {
+    if (laidOut && !recut && !inserting && !researched && now?.project.style !== "commentary") {
       try {
         await seams.agentPanel(app).send(id, RESEARCH, null, null);
       } catch (error) {
@@ -1603,7 +1610,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       job.state = "failed";
       job.error = isBug(error) ? crashed("the script import", error) : diag.messageOf(error);
     });
-  });
+  }).finally(() => { if (durable) durableJobs.end(app.store.home, durable); });
 }
 
 /** A file's download progress, into its row of the job (a few times a second). */
@@ -1743,8 +1750,10 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
   const [live] = await app.store.update(id, "script", (project) => {
     // Which media each range plays from.
     const byPath = new Map(project.media.map((media) => [media.path, media.id]));
+    const inserting = pendingCase(project);
     for (const block of project.script?.blocks ?? []) {
       if (block.kind !== "footage") continue;
+      if (inserting && placed(project, block)) continue;
       // Scripts read before cue words existed get them from their notes.
       if (block.words === undefined || block.words === null) {
         const words = cueWords(block.notes ?? []);
@@ -1774,7 +1783,10 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
     job.state = "placing";
   });
   await app.store.update(id, "script", (project) => {
+    const inserting = pendingCase(project);
+    const previous = new Set(project.clips.map((clip) => clip.id));
     for (const block of project.script?.blocks ?? []) {
+      if (inserting && placed(project, block)) continue;
       if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.words)) continue;
       const media = isSome(block.media) ? heard.get(block.media) : undefined;
       if (media === undefined) continue;
@@ -1791,6 +1803,7 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
     if (recut) clearLayout(project);
     else if (outOfOrder(project)) throw new Error("some ranges came in after the rest was laid out: Re-cut to lay the script out again (it starts the layout over)");
     layOut(project);
+    if (inserting) finishCase(project, previous);
   });
 }
 
@@ -1901,6 +1914,7 @@ interface Heard {
 async function transcripts(app: App, project: Project): Promise<Map<string, Heard>> {
   const used = new Set<string>();
   for (const block of project.script?.blocks ?? []) {
+    if (pendingCase(project) && placed(project, block)) continue;
     if (block.kind === "footage" && isSome(block.media) && cueOf(block) !== null) used.add(block.media);
   }
   const media = project.media.filter((item) => used.has(item.id) && item.has_audio);

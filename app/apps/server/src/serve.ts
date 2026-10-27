@@ -266,6 +266,10 @@ function resumeJobs(app: App): void {
     return live.project;
   };
   void jobs.resume(app.store.home, {
+    case: (job) => {
+      project(job.project);
+      void seams.script.start(app, job.project, false);
+    },
     export: async (job) => {
       const { options, output, backend, cloudRequest, cloudJob, drive } = job.args as unknown as { options: ExportOptions; output: string } & StartExtra;
       // The timeline it was started with, not edits made since.

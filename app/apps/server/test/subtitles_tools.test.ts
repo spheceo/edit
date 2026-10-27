@@ -413,3 +413,40 @@ test("add_subtitles keeps a line relabelled on its own when it runs over it agai
     cleanup();
   }
 });
+
+test("subtitle recovery fills uncovered lines and preserves manual text, placement, colours and audio mutes on repeated runs", async () => {
+  const { app, dir, store, cleanup } = fixtureHome("subtitle-recovery");
+  try {
+    const id = await footage(app, dir);
+    expect((await call(app, "add_subtitles", { project_id: id, end: 2.8 })).isError).toBe(false);
+    await store.update(id, "test", (project) => {
+      const subtitle = project.clips.find((clip): clip is TextClip => clip.type === "text")!;
+      subtitle.text = "A deliberately corrected line.";
+      subtitle.transform.y = -180;
+      subtitle.keyframes = { x: [{ frame: 0, value: 30, ease: "linear" }] };
+      (project.clips.find((clip) => clip.id === "a") as AudioClip).mutes = [{ from: 8, to: 8.5 }];
+    });
+    const before = structuredClone(store.get(id)!.project.clips);
+    for (let run = 0; run < 2; run++) {
+      const reply = await call(app, "add_subtitles", { project_id: id, missing_only: true });
+      expect(reply.isError).toBe(false);
+      expect(reply.text).toContain('"missing_only":true');
+      const after = store.get(id)!.project;
+      for (const clip of before) expect(after.clips.find((one) => one.id === clip.id)).toEqual(clip);
+      expect(after.clips.filter((clip) => clip.type === "text").map((clip) => clip.type === "text" && clip.text)).toEqual(["A deliberately corrected line.", "Okay."]);
+    }
+  } finally { cleanup(); }
+});
+
+test("subtitle recovery respects captioned and narration segments", async () => {
+  const { app, dir, store, cleanup } = fixtureHome("subtitle-recovery-segments");
+  try {
+    const id = await footage(app, dir);
+    await store.update(id, "test", (project) => {
+      project.segments = [{ start: 0, end: 84, kind: "captioned" }, { start: 84, end: 900, kind: "footage" }];
+    });
+    const reply = await call(app, "add_subtitles", { project_id: id, missing_only: true });
+    expect(reply.isError).toBe(false);
+    expect(store.get(id)!.project.clips.filter((clip) => clip.type === "text").map((clip) => clip.type === "text" && clip.text)).toEqual(["Okay."]);
+  } finally { cleanup(); }
+});

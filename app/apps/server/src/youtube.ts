@@ -148,13 +148,13 @@ function jsRuntime(): [name: string, path: string] | null {
   return null;
 }
 
-function runtimeArgs(): string[] {
+export function runtimeArgs(): string[] {
   const runtime = jsRuntime();
   return runtime === null ? [] : ["--js-runtimes", `${runtime[0]}:${runtime[1]}`];
 }
 
 /** yt-dlp's environment: BUN_BE_BUN=1 when it runs `edit` as its Bun. */
-function runtimeEnv(args: string[]): Record<string, string | undefined> | undefined {
+export function runtimeEnv(args: string[]): Record<string, string | undefined> | undefined {
   return args.some((arg) => arg.startsWith("bun:")) ? { ...process.env, BUN_BE_BUN: "1" } : undefined;
 }
 

@@ -1786,7 +1786,7 @@
     "name": "speed_voiceover"
   },
   {
-    "description": "Speaks every cut-in with the house voice and lays the takes on them, as a script import does: for an edit whose import made none (or one that failed). Refused once any cut-in has a voice-over. Costs paid ElevenLabs lines.",
+    "description": "Recover missing narration on untouched import cut-ins with the house voice. Reuses completed takes and preserves every placed voice-over; removed or redesigned cut-ins are reported for review. Safe to repeat after a partial import. Costs paid ElevenLabs lines only where a saved take is missing; use revoice_cut_in to replace an existing line.",
     "inputSchema": {
       "properties": {
         "project_id": {
@@ -1961,7 +1961,7 @@
     "name": "caption_speakers"
   },
   {
-    "description": "Plain subtitles for everything said (Repack's style): bottom middle unless a face is there, no animation, no tracking, each line under its person's label and colour (one colour per person across the video). Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words (in their other forms too: punched, hitting) are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and in every other text on the timeline; some are muted but stay readable. Replaces subtitles and mutes it made before in that span, keeping the label and colour each voice's subtitles had (your relabels survive a re-run); a new subtitle over one moved, resized or keyframed by hand keeps that position and size. Then it moves any subtitle that would cover a face (found in the footage under it, cached per file) to the first clear place: bottom left or right, else top middle, left or right (place_subtitles; off_faces in the result). Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, every mute (term, timeline time, starred) and each person's colour.",
+    "description": "Plain subtitles for footage speech after the intro, or fill missing lines with missing_only:true during recovery. Locked bottom middle, no animation or tracking, each line under its person's label and colour (one colour per person across the video). Made from the footage's own sound, skipping throwaway lines and the narrator, radio and background talk, and snapping to cuts. The house words (in their other forms too: punched, hitting) are muted in the footage's sound (`mutes` on its audio clips) and starred out on screen (\"f***\"), in the subtitles and in every other text on the timeline; some are muted but stay readable. Replaces subtitles and mutes it made before in that span, keeping the label and colour each voice's subtitles had (your relabels survive a re-run); a new subtitle over one moved, resized or keyframed by hand keeps that position and size. Ordinary replacement runs lock subtitles to bottom middle (off_faces in the result); missing_only preserves existing placement. Defaults to after the intro: from the cut-in before the full footage to the end of the timeline. Returns the subtitles placed, how many kept a hand adjustment, every mute (term, timeline time, starred) and each person's colour. For recovery, missing_only:true adds only lines with no overlap with existing subtitles/captions, preserving their text, labels, timing, placement and audio mutes. Run mute_house_words after final text changes. Narrow to confirmed unfinished spans; deliberate subtitle deletions cannot be inferred automatically.",
     "inputSchema": {
       "properties": {
         "end": {
@@ -1979,6 +1979,10 @@
         "start": {
           "description": "Seconds on the timeline (default: the end of the intro).",
           "type": "number"
+        },
+        "missing_only": {
+          "type": "boolean",
+          "description": "Add missing lines without replacing existing subtitles or captions (recovery). Default false."
         }
       },
       "required": [],
@@ -3154,6 +3158,23 @@
         "from"
       ],
       "type": "object"
+    }
+  },
+  {
+    "name": "recover_project",
+    "description": "Inspect an existing partial edit without reimporting or rebuilding it. Returns missing transcripts, narration status, cached subtitle coverage, removed/unplaced blocks and blockers. prepare:true transcribes missing footage via caption-first YouTube/shared/Scribe and generates only missing narration on untouched import cards, reusing takes. It never repeats later editing stages: load resume-edit and continue those from current context. Completed transcripts, voice-overs and deliberate removals are preserved; redesigned cut-ins need review.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string",
+          "description": "Defaults to the project open in the UI."
+        },
+        "prepare": {
+          "type": "boolean",
+          "description": "Fill missing transcripts and safe missing narration. Default false (read-only)."
+        }
+      }
     }
   }
 ]

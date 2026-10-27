@@ -290,6 +290,7 @@ export interface ScriptJobs {
 }
 
 export interface ScriptSeam {
+  readonly CUT_IN_SECONDS: number;
   attach(project: Project, source: string, parsed: Parsed): void;
   /** "1h02m03s": a time in an excerpt's name (seconds rounded, half away from zero). */
   clock(seconds: number): string;
@@ -351,7 +352,7 @@ export interface VoiceoverSeam {
   /** Whether any cut-in already plays a voice-over. */
   anyPlaced(project: Project): boolean;
   /** Speaks the script's cut-ins with the house voice and lays the takes on them. */
-  generate(app: App, id: string): Promise<Json>;
+  generate(app: App, id: string, missingOnly?: boolean): Promise<Json>;
   generateCase(app: App, id: string, request: string): Promise<Json>;
   isVoiceover(project: Project, clip: Clip): boolean;
   place(app: App, id: string, media: string[] | null): Promise<Json>;
@@ -655,7 +656,7 @@ export interface CaptionsSeam {
   placeCaptions(app: App, projectId: string, from: number, to: number, under: Map<string, Under>): Promise<Json>;
   /** A known speaker's first name; a short role when no name is known. */
   subtitleName(name: string): string;
-  subtitles(app: App, projectId: string, from: number, to: number, neglect: boolean): Promise<Json>;
+  subtitles(app: App, projectId: string, from: number, to: number, neglect: boolean, missingOnly?: boolean): Promise<Json>;
   /** A media's transcript, transcribing it first if needed. */
   /** A media's transcript; given the project, heard with the case's names (names.ts). */
   transcriptOf(app: App, media: Media, project?: Project): Promise<Transcript>;

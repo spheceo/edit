@@ -70,19 +70,27 @@ const flights = new Map<string, Promise<Transcript | null>>();
 async function fetchCaptions(home: string, id: string, dir: string): Promise<Transcript | null> {
   fs.mkdirSync(dir, { recursive: true });
   const binary = await youtube.ytdlp(home);
-  const path = join(dir, "captions.en-orig.json3");
-  fs.rmSync(path, { force: true });
-  const child = Bun.spawn([binary, "--skip-download", "--no-playlist", "--no-warnings", "--quiet", "--write-auto-subs", "--sub-langs", "en-orig", "--sub-format", "json3", "-o", join(dir, "captions"), `https://www.youtube.com/watch?v=${id}`], { stdout: "ignore", stderr: "pipe" });
+  const paths = ["en-orig", "en", "en-US", "en-GB"].map((language) => join(dir, `captions.${language}.json3`));
+  for (const path of paths) fs.rmSync(path, { force: true });
+  const runtime = youtube.runtimeArgs();
+  const child = Bun.spawn([binary, ...runtime, "--skip-download", "--no-playlist", "--no-warnings", "--quiet", "--write-subs", "--write-auto-subs", "--sub-langs", "en-orig,en,en-US,en-GB", "--sub-format", "json3", "-o", join(dir, "captions"), `https://www.youtube.com/watch?v=${id}`], { stdout: "ignore", stderr: "pipe", env: youtube.runtimeEnv(runtime) });
   const stderr = new Response(child.stderr).text();
   const timeout = setTimeout(() => child.kill("SIGKILL"), 120_000);
   try {
-    const code = await child.exited;
+    await child.exited;
     await stderr;
-    if (code !== 0 || !fs.existsSync(path)) return null;
-    return parseCaptions(JSON.parse(fs.readFileSync(path, "utf8")) as Json3);
+    // A later track may fail after a usable one was already written. Prefer
+    // original-language word captions; never invent precise times from lines.
+    for (const path of paths) {
+      try {
+        const transcript = parseCaptions(JSON.parse(fs.readFileSync(path, "utf8")) as Json3);
+        if (transcript) return transcript;
+      } catch { /* This track is absent or invalid; try the next English one. */ }
+    }
+    return null;
   } finally {
     clearTimeout(timeout);
-    fs.rmSync(path, { force: true });
+    for (const path of paths) fs.rmSync(path, { force: true });
   }
 }
 

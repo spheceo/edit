@@ -74,6 +74,7 @@ export function OpenAIMark({ size = 16 }: { size?: number }) {
 
 export function AgentPanel() {
   const projectId = useEditor((state) => state.project?.id);
+  const hasScript = useEditor((state) => !!state.project?.script);
   const { status, entries, running, loaded } = useAgent();
   const busy = running;
   const list = useRef<HTMLDivElement>(null);
@@ -135,6 +136,17 @@ export function AgentPanel() {
       </div>
 
       {projectId && <ResetCard projectId={projectId} />}
+      {hasScript && loaded && status?.ready && (
+        <button
+          type="button"
+          className="mx-3 mb-2 rounded-lg border border-line px-3 py-2 text-left text-[12px] text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
+          disabled={busy}
+          title="Recover missing transcripts and narration, then continue unfinished editing stages while preserving completed work."
+          onClick={() => void sendToAgent("Resume this edit from the current timeline. Load resume-edit, recover missing transcripts and voice-overs using saved work, then finish the remaining editing stages across every case. Preserve completed subtitles, narration, graphics, music, trims and deliberate deletions. Do not reset, reimport or re-cut. Report blockers and unresolved speaker checks.")}
+        >
+          Resume edit <span className="text-muted">· recover missing work</span>
+        </button>
+      )}
       {!(status && !status.ready) && <Composer disabled={!status?.ready} />}
     </section>
   );

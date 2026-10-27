@@ -571,3 +571,41 @@ test("without a gateway key of its own, the watcher asks through the relay with 
     put();
   }
 });
+
+test("caption turns go through the normal visual speaker/cast verification and reuse its completed receipt", async () => {
+  const { app, dir, cleanup } = fixtureHome("watch-captions");
+  write(`${dir}/ffmpeg`, '#!/bin/sh\nfor a; do out="$a"; done\nprintf x > "$out"\n');
+  fs.chmodSync(`${dir}/ffmpeg`, 0o755);
+  const previous = process.env.EDIT_FFMPEG;
+  process.env.EDIT_FFMPEG = `${dir}/ffmpeg`;
+  tools.forget();
+  try {
+    const id = await subtitled(app, dir);
+    const transcript: Transcript = { model: "youtube-captions", language: "en", words: TRANSCRIPT.words.map((word, index) => ({ ...word, speaker: index < 3 ? "caption_turn_1" : "caption_turn_2" })) };
+    const path = app.media.paths(`${dir}/interview.mp4`).transcript;
+    write(path, serialize(transcript));
+    mock.gatewayAnswer = JSON.stringify({
+      people: [{ id: "A", look: "grey suit", where: "left", on_screen: true, name: "", role: "leader" }, { id: "B", look: "hoodie", where: "right", on_screen: true, name: "Tyler", role: "suspect" }],
+      lines: [{ n: 0, who: "A", sure: "high", or: null }, { n: 1, who: "B", sure: "high", or: null }], segments: [], background: [],
+    });
+    mock.castAnswer = JSON.stringify({ people: [{ name: null, title: "Detective", role: "leader", members: [0] }, { name: "Tyler", title: "Suspect", role: "suspect", members: [1] }] });
+    const call = async () => await dispatch(app, { id: 1, method: "tools/call", params: { name: "watch_footage", arguments: { project_id: id } } }, null) as { result: { isError: boolean; content: { text: string }[] } };
+    const first = await call();
+    expect(first.result.isError).toBe(false);
+    const verified = JSON.parse(fs.readFileSync(path, "utf8")) as Transcript;
+    expect(verified.model).toBe("youtube-captions");
+    expect(verified.words.map(({ text, start, end }) => ({ text, start, end }))).toEqual(transcript.words.map(({ text, start, end }) => ({ text, start, end })));
+    const voice = verified.words[3]!.speaker!;
+    expect(verified.speakers?.[voice]).toBe("Tyler (Suspect)");
+    expect(verified.roles?.[voice]).toBe("suspect");
+    const count = mock.calls("/v1/chat/completions").length;
+    const second = await call();
+    expect(JSON.parse(second.result.content[0]!.text.slice("watched: ".length))).toMatchObject({ cached: 1, cost: 0, failed: [] });
+    expect(mock.calls("/v1/chat/completions")).toHaveLength(count);
+    expect(mock.calls("/v1/transcribe")).toHaveLength(0);
+  } finally {
+    mock.castAnswer = null;
+    if (previous === undefined) delete process.env.EDIT_FFMPEG; else process.env.EDIT_FFMPEG = previous;
+    tools.forget(); cleanup();
+  }
+});

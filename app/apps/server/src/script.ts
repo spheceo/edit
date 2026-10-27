@@ -1572,13 +1572,12 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     // A courtroom video's too (the team couldn't get one made for Judge EXPLODES,
     // Oct 22): a recording added later takes its place (place_voiceovers).
     const now = app.store.get(id);
-    const unvoiced = now !== null && !seams.voiceover.anyPlaced(now.project);
-    if (laidOut && (unvoiced || inserting)) {
+    if (laidOut) {
       app.scripts.set(app, id, (job) => {
         job.state = "voicing";
       });
       try {
-        await diag.timeAsync("script", "script: voice-over", () => inserting ? seams.voiceover.generateCase(app, id, inserting.id) : seams.voiceover.generate(app, id));
+        await diag.timeAsync("script", "script: voice-over", () => inserting ? seams.voiceover.generateCase(app, id, inserting.id) : seams.voiceover.generate(app, id, true));
       } catch (error) {
         if (isBug(error)) throw error;
         result = `The voice-over couldn't be made: ${diag.messageOf(error)}`;

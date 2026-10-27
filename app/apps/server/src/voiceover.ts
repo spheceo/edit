@@ -46,7 +46,7 @@ function replaceContents(target: Project, source: Project): void {
  * Places voice-overs on the cut-ins: `media` (default: audio that isn't on the
  * timeline and isn't a sound effect). Placing again replaces what it placed.
  */
-export async function place(app: App, id: string, given: string[] | null, only?: Set<string>): Promise<Json> {
+export async function place(app: App, id: string, given: string[] | null, only?: Set<string>, expected?: Map<string, string>): Promise<Json> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
   const project = live.project;
@@ -90,8 +90,13 @@ export async function place(app: App, id: string, given: string[] | null, only?:
 
     const report: Json[] = [];
     const voiceovers = new Map<number, string>();
+    // Check the recovery snapshot once, before placing the first line ripples
+    // later placeholders. Re-checking after each ripple would skip those lines.
+    const permitted = expected === undefined ? only : new Set(narrationRecovery(project)
+      .flatMap((line) => line.state === "missing" && line.clip &&
+        expected.get(line.clip) === narrationSnapshot(project, line.clip) ? [line.clip] : []));
     blocks.forEach((block, index) => {
-      if (block.kind === "narration" && only && (!block.clip || !only.has(block.clip))) {
+      if (block.kind === "narration" && permitted && (!block.clip || !permitted.has(block.clip))) {
         const kept = previous.get(index);
         if (kept && clipOf(project, kept)) voiceovers.set(index, kept);
         return;
@@ -249,7 +254,16 @@ export async function place(app: App, id: string, given: string[] | null, only?:
  * takes on them: the last step of a script import. A voice-over an earlier run
  * left half spoken carries on instead of starting again.
  */
-export async function generate(app: App, id: string): Promise<Json> {
+export async function generate(app: App, id: string, missingOnly = false): Promise<Json> {
+  if (missingOnly) {
+    let active = recoveries.get(app);
+    if (!active) { active = new Map(); recoveries.set(app, active); }
+    const running = active.get(id);
+    if (running) return running;
+    const work = generateMissing(app, id).finally(() => active!.delete(id));
+    active.set(id, work);
+    return work;
+  }
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
   const lines = seams.voice.narrationLines(live.project);
@@ -261,6 +275,54 @@ export async function generate(app: App, id: string): Promise<Json> {
     if (line.chosen === null) await app.voices.generate(project.id, line.id);
   }
   return send(app, project.id, id);
+}
+
+const recoveries = new WeakMap<App, Map<string, Promise<Json>>>();
+
+/** Only untouched import placeholders may be resized automatically. A deleted
+ * voice-over or redesigned cut-in is editorial intent, not an unfinished import. */
+interface NarrationRecovery { cut_in: number; clip?: string; state: "placed" | "missing" | "review"; why?: string }
+export function narrationRecovery(project: Project): NarrationRecovery[] {
+  let number = 0;
+  return (project.script?.blocks ?? []).flatMap((block): NarrationRecovery[] => {
+    if (block.kind !== "narration" || !trim(block.text)) return [];
+    const cut_in = ++number;
+    const card = clipOf(project, block.clip ?? "");
+    if (clipOf(project, block.voiceover ?? "")?.type === "audio") return [{ cut_in, clip: block.clip ?? undefined, state: "placed" as const }];
+    const untouched = !block.voiceover && card?.type === "solid" && /^Cut-in \d+$/u.test(card.name ?? "") &&
+      card.duration === round(seams.script.CUT_IN_SECONDS * fpsOf(project)) && card.link &&
+      !trackOf(project, card.track)?.locked && card.fill.every((value, index) => value === (index === 3 ? 1 : 0)) &&
+      project.clips.some((clip) => clip.type === "text" && clip.link === card.link && clip.text === block.text) &&
+      !project.clips.some((clip) => clip.link === card.link && trackOf(project, clip.track)?.locked) &&
+      !project.clips.some((clip) => clip.id !== card.id && clip.link !== card.link &&
+        (trackOf(project, clip.track)?.kind === "video" || (clip.type === "audio" &&
+          (isVoiceover(project, clip) || (mediaOf(project, clip.media)?.kind === "audio" && !isSoundEffect(mediaOf(project, clip.media)!))))) &&
+        clip.start < clipEnd(card) && clipEnd(clip) > card.start);
+    return [{ cut_in, ...(card ? { clip: card.id } : {}), state: untouched ? "missing" as const : "review" as const,
+      ...(!untouched ? { why: "Removed or edited cut-in/voice-over: preserve it and inspect before changing." } : {}) }];
+  });
+}
+
+function narrationSnapshot(project: Project, id: string): string {
+  const card = clipOf(project, id);
+  return JSON.stringify(project.clips.filter((clip) => clip.id === id || (card?.link && clip.link === card.link)));
+}
+
+async function generateMissing(app: App, id: string): Promise<Json> {
+  const live = app.store.get(id);
+  if (!live) throw new Error("no such project");
+  const state = narrationRecovery(live.project);
+  const targets = state.flatMap((line) => line.state === "missing" && line.clip ? [line.clip] : []);
+  if (!targets.length) return { media: [], narration: state };
+  const expected = new Map(targets.map((clip) => [clip, narrationSnapshot(live.project, clip)]));
+  // Keep the full list so an interrupted import finds the same saved takes;
+  // only unvoiced lines are spoken/imported/placed.
+  const voice = app.voices.forProject(`${live.project.name} (voice-over)`, id, seams.voice.narrationLines(live.project));
+  const numbers = new Set(state.filter((line) => line.state === "missing").map((line) => line.cut_in));
+  const chosen = new Set(app.voices.chosenTakes(voice.id).map(([number]) => number));
+  for (const [index, line] of voice.lines.entries()) if (numbers.has(index + 1) && !chosen.has(index + 1)) await app.voices.generate(voice.id, line.id);
+  const done = await send(app, voice.id, id, targets, numbers, expected);
+  return { result: done, narration: narrationRecovery(app.store.get(id)!.project) };
 }
 
 /** Speak only this inserted case, keeping all earlier takes and cut-ins. */
@@ -280,9 +342,9 @@ export async function generateCase(app: App, id: string, request: string): Promi
  * Puts a voice-over's chosen takes into video project `id` and lays them on its
  * cut-ins (matched by their words, as with any recorded voice-over).
  */
-export async function send(app: App, voiceId: string, id: string, targets?: string[]): Promise<Json> {
+export async function send(app: App, voiceId: string, id: string, targets?: string[], numbers?: Set<number>, expected?: Map<string, string>): Promise<Json> {
   const voice = app.voices.get(voiceId);
-  const takes = app.voices.chosenTakes(voiceId);
+  const takes = app.voices.chosenTakes(voiceId).filter(([number]) => numbers === undefined || numbers.has(number));
   if (takes.length === 0) throw new Error("No lines have a chosen take yet.");
   if (app.store.get(id) === null) throw new Error("no such project");
   const dir = join(app.store.uploadsDir(id), "voice-over");
@@ -300,7 +362,7 @@ export async function send(app: App, voiceId: string, id: string, targets?: stri
   }
   const [, added, errors] = await importPaths(app, id, paths, false, "voice");
   if (added.length === 0) throw new Error(`Couldn't import the takes: ${debugStrings(errors)}`);
-  const report = await diag.timeAsync("voice", "voice: place in a project", () => place(app, id, [...added], targets ? new Set(targets) : undefined));
+  const report = await diag.timeAsync("voice", "voice: place in a project", () => place(app, id, [...added], targets ? new Set(targets) : undefined, expected));
   return { media: added, report };
 }
 

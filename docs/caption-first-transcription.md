@@ -4,7 +4,7 @@ Edit's media processor now tries the original video's word-timed English
 automatic captions before sending audio to ElevenLabs. A previously cached local
 or shared transcript still wins; it is never discarded to repeat work.
 
-`app/apps/server/src/youtube_captions.ts` fetches `en-orig` JSON3 with the same
+`app/apps/server/src/youtube_captions.ts` fetches word-timed `en-orig`, `en`, `en-US` or `en-GB` JSON3, using the bundled JavaScript runtime and the same
 yt-dlp installation used for footage. It caches one transcript per original video,
 deduplicates concurrent requests, and temporarily caches unavailable results so
 each excerpt does not repeat the lookup. The fetch has a two-minute deadline and
@@ -32,5 +32,5 @@ completed-transcript reuse. No paid request or production import was made.
 Writer's corresponding all-format expansion is documented separately in its
 `docs/caption-first-expansion.md`; it extends the already-present courtroom
 caption/turn implementation to compilation, interrogation and bodycam sources.
-Neither app was released or deployed by this change. Live YouTube availability
+The initial caption-first change did not release either app. The follow-up Edit recovery/nightly work is documented in `docs/project-recovery.md`. Live YouTube availability
 and project-level visual subject accuracy still require normal review.

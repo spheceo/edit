@@ -49,6 +49,8 @@ import {
   mediaOf,
   sample,
   subtitlesTrack,
+  subtitledSpans,
+  trackOf,
 } from "./project.ts";
 import { chars, f32, fixed, isAlphanumeric, jsonForSerde, round, serdeParse, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
@@ -806,7 +808,7 @@ export function starredText(line: Line, found: Found[]): string {
  * and mutes made before in that span, keeping where and how big subtitles
  * moved by hand were.
  */
-export async function subtitles(app: App, projectId: string, from: number, to: number, neglect: boolean): Promise<unknown> {
+export async function subtitles(app: App, projectId: string, from: number, to: number, neglect: boolean, missingOnly = false): Promise<unknown> {
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
   const run = seams.subtitles.beginRun(projectId);
@@ -815,6 +817,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
   // A subtitle across either edge of the span is made again whole: replaced
   // but not remade, it was lost (extend_clip's spans dropped the line over each edge).
   for (const clip of project.clips) {
+    if (missingOnly) break;
     if ((clip.name ?? null)?.startsWith(SUBTITLE) !== true) continue;
     if (clip.start < from && clipEnd(clip) > from) from = clip.start;
     if (clip.start < to && clipEnd(clip) > to) to = clipEnd(clip);
@@ -859,12 +862,13 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
   const transform: Transform = { x: 0, y: f32(f32(height) * f32(0.4)), scale: 1, rotation: 0 };
   if (!seams.subtitles.latestRun(projectId, run)) return seams.subtitles.SUPERSEDED;
   const [saved, [placed, kept, starred, people]] = await app.store.update(projectId, "agent", (project) => {
+    const preserved = missingOnly ? new Map(project.clips.map((clip) => [clip.id, JSON.stringify(clip)])) : null;
     // Who each transcript voice was made out to be (a relabel: "Mother" →
     // "Tabitha:") and their colour: a re-run keeps them.
     const relabelled = relabels(project);
     const old = new Set(
       project.clips
-        .filter((clip) => (clip.name ?? null)?.startsWith(SUBTITLE) === true && clip.start < to && clipEnd(clip) > from)
+        .filter((clip) => !missingOnly && (clip.name ?? null)?.startsWith(SUBTITLE) === true && clip.start < to && clipEnd(clip) > from)
         .map((clip) => clip.id),
     );
     const moved = project.clips
@@ -881,7 +885,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
       return [{ who, start: clip.start, end: clipEnd(clip), label: clip.style.label.text, color: [...clip.style.label.color] as Rgba, person: clip.person }];
     });
     project.clips = project.clips.filter((clip) => !old.has(clip.id));
-    seams.subtitles.writeMutes(project, house.mutes);
+    if (!missingOnly) seams.subtitles.writeMutes(project, house.mutes);
     const snap = toI64(round(SNAP * fps));
     const least = toI64(round(MIN_SUBTITLE * fps));
     // Last line first, so each knows where the next one it must give way to starts.
@@ -942,6 +946,13 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
     let freeFrom = 0;
     for (const [index, line, slotStart, end] of kept) {
       let start = Math.max(slotStart, freeFrom);
+      if (missingOnly && !subtitledSpans(project, from, to).some(([a, b]) => a <= start && end <= b)) continue;
+      // Recovery never replaces, trims, shifts or talks over existing text,
+      // even on another/hidden subtitle track. Check the live project here:
+      // a user may have added a line while transcripts were being fetched.
+      if (missingOnly && project.clips.some((clip) => clip.type === "text" &&
+        (trackOf(project, clip.track)?.subtitles || /^(Subtitle|Caption)/u.test(clip.name ?? "")) &&
+        clip.start < end && clipEnd(clip) > start)) continue;
       let busy: number | null = null;
       for (const clip of project.clips) {
         if (clip.track === track && clip.start < end && start < clipEnd(clip)) busy = Math.max(busy ?? clipEnd(clip), clipEnd(clip));
@@ -997,18 +1008,24 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
       placed += 1;
     }
     // Every other text on screen too (captions, callouts, charges), all of the video.
-    const starred = seams.subtitles.starOnScreen(project, 0, Number.MAX_SAFE_INTEGER, neglect, [], house.kept);
+    const starred = missingOnly ? 0 : seams.subtitles.starOnScreen(project, 0, Number.MAX_SAFE_INTEGER, neglect, [], house.kept);
     // One colour per person across the video (their captions and quotes too).
     const people = seams.people.oneColourPerPerson(project);
-    liftTextOverBlurs(project);
+    if (preserved && project.clips.some((clip) => preserved.has(clip.id) && preserved.get(clip.id) !== JSON.stringify(clip))) {
+      throw new Error("Subtitle recovery would change an existing person's styling. Existing work was preserved; inspect the speaker labels/roles before adding these lines.");
+    }
+    if (!missingOnly) liftTextOverBlurs(project);
     return [placed, carriedOver, starred, people] as const;
   });
   // All at the bottom middle, none moved to a face (the user, Oct 21: "they
   // must be locked to the bottom middle"), a hand-moved one put back too.
   let offFaces: unknown;
   try {
-    const [, locked] = await app.store.update(projectId, "agent", (project) => seams.subtitles.lockSubtitles(project, from, to));
-    offFaces = { kept_bottom_middle: true, moved_back: locked };
+    if (missingOnly) offFaces = { existing_placement_preserved: true };
+    else {
+      const [, locked] = await app.store.update(projectId, "agent", (project) => seams.subtitles.lockSubtitles(project, from, to));
+      offFaces = { kept_bottom_middle: true, moved_back: locked };
+    }
   } catch (error) {
     if (isBug(error)) throw error;
     offFaces = { error: diag.messageOf(error) };
@@ -1023,7 +1040,8 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
     placed,
     kept_hand_adjustments: kept,
     texts_starred: starred,
-    mutes: house.listed,
+    mutes: missingOnly ? [] : house.listed,
+    ...(missingOnly ? { missing_only: true, pending_mutes: house.listed, note: "Existing subtitles and audio mutes preserved. Run mute_house_words after the final text changes." } : {}),
     people,
   };
 }

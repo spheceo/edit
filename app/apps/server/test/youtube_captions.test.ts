@@ -30,9 +30,9 @@ test("the existing subject watcher can map separate caption turns back to the sa
   expect(["caption_turn_1", "caption_turn_3"]).toContain(voices.get("A") ?? "");
 });
 
-function fake(home: string, payload: unknown) {
+function fake(home: string, payload: unknown, language = "en-orig", exitCode = 0) {
   const file = `${home}/yt-dlp`;
-  fs.writeFileSync(file, `#!/usr/bin/env bun\nconst args = process.argv.slice(2);\nconst out = args[args.indexOf('-o') + 1];\nawait Bun.write(${JSON.stringify(`${home}/calls`)}, String(Number(await Bun.file(${JSON.stringify(`${home}/calls`)}).text().catch(() => '0')) + 1));\n${payload === null ? "" : `await Bun.write(out + '.en-orig.json3', ${JSON.stringify(JSON.stringify(payload))});`}\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!/usr/bin/env bun\nconst args = process.argv.slice(2);\nconst out = args[args.indexOf('-o') + 1];\nawait Bun.write(${JSON.stringify(`${home}/args.json`)}, JSON.stringify(args));\nawait Bun.write(${JSON.stringify(`${home}/calls`)}, String(Number(await Bun.file(${JSON.stringify(`${home}/calls`)}).text().catch(() => '0')) + 1));\n${payload === null ? "" : `await Bun.write(out + ${JSON.stringify(`.${language}.json3`)}, ${JSON.stringify(JSON.stringify(payload))});`}\nprocess.exitCode = ${exitCode};\n`, { mode: 0o755 });
   return file;
 }
 
@@ -118,4 +118,34 @@ test.skipIf(Bun.which("ffmpeg") === null)("a YouTube source without usable capti
     if (previous === undefined) delete process.env.EDIT_YTDLP; else process.env.EDIT_YTDLP = previous;
     restore(); mock.stop(); home.cleanup();
   }
+});
+
+test("alternate English word captions work in existing cloud-backed projects without script blocks or re-hearing finished media", async () => {
+  const home = fixtureHome("caption-existing-cloud");
+  const previous = process.env.EDIT_YTDLP;
+  try {
+    // A later requested track failed after this usable track was written.
+    process.env.EDIT_YTDLP = fake(home.dir, data, "en-US", 1);
+    const source = `${home.dir}/old-cloud-proxy.mp4`;
+    fs.writeFileSync(source, "existing imported proxy; no decode needed");
+    const id = home.store.create("Existing", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await home.store.update(id, "test", (project) => {
+      project.media.push(media({ id: "m", name: "Earlier YouTube import", path: source, kind: "video", duration: 1, has_audio: true, cloud: { source: "youtube:abcdefghijk#10000-11000", original: "edit/originals/youtube/abcdefghijk.mp4", proxy: "edit/proxies/youtube/abcdefghijk/10000-11000.mp4", size: 100 } }));
+    });
+    home.app.media.transcribe(source, true);
+    const deadline = Date.now() + 5000;
+    while (home.app.media.status(source).transcript === "working" && Date.now() < deadline) await Bun.sleep(5);
+    expect(home.app.media.status(source).transcript).toBe("ready");
+    const target = home.app.media.paths(source).transcript;
+    const transcript = JSON.parse(fs.readFileSync(target, "utf8"));
+    expect(transcript).toMatchObject({ model: MODEL, words: [{ text: "Hello", start: 0.1 }, { text: "there.", start: 0.6 }] });
+    const args = JSON.parse(fs.readFileSync(`${home.dir}/args.json`, "utf8")) as string[];
+    expect(args).toContain("--js-runtimes");
+    expect(args).toContain("--write-subs");
+    expect(args).toContain("--write-auto-subs");
+    expect(args).toContain("en-orig,en,en-US,en-GB");
+    home.app.media.transcribe(source, true);
+    expect(fs.readFileSync(`${home.dir}/calls`, "utf8")).toBe("1");
+    expect(JSON.parse(fs.readFileSync(target, "utf8"))).toEqual(transcript);
+  } finally { if (previous === undefined) delete process.env.EDIT_YTDLP; else process.env.EDIT_YTDLP = previous; home.cleanup(); }
 });

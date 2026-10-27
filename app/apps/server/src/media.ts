@@ -393,6 +393,12 @@ export class Processor {
    */
   transcribe(source: string, hasAudio: boolean, keyterms: readonly string[] = [], again = false): MediaStatus {
     const current = this.entry(source);
+    // Shared analysis can arrive after status() first saw this file. It is
+    // still completed work and must win over a new caption/paid request.
+    if (!again && current.transcript !== "working" && isFile(this.paths(source).transcript)) {
+      current.transcript = "ready";
+      delete current.transcript_error;
+    }
     if (!hasAudio || current.transcript === "working" || (current.transcript === "ready" && !again)) return shown(current);
     // Claimed before anything can wait: two requests cannot start the same
     // paid transcription between status() and set().

@@ -124,3 +124,77 @@ test.skipIf(ffmpeg === null || Bun.which("ffprobe") === null)(
     }
   },
 );
+
+test.skipIf(ffmpeg === null || Bun.which("ffprobe") === null)("partial narration recovery keeps placed takes, reuses saved takes and survives repeated concurrent requests", async () => {
+  const { app, dir, cleanup } = fixtureHome("voice-recovery");
+  try {
+    const tone = `${dir}/tone.mp3`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=f=440:d=2", "-c:a", "libmp3lame", tone]).exitCode).toBe(0);
+    const lines = ["Police arrived at the house", "Then the call came in", "The officers checked the recording"];
+    const spoken: string[] = [];
+    mock.on("POST", "/v1/speech", (request) => {
+      spoken.push((request.json() as { text: string }).text);
+      return new Response(fs.readFileSync(tone), { headers: { "content-type": "audio/mpeg" } });
+    });
+    let heard = 1;
+    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(lines[heard++]!.split(" "))));
+    const id = app.store.create("Partial", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await app.store.update(id, "test", (project) => {
+      project.script = { blocks: lines.map((text) => ({ kind: "narration", text })) };
+      layOut(project);
+      const first = project.script.blocks[0]!;
+      if (first.kind !== "narration") throw new Error("narration");
+      project.media.push({ id: "recorded", name: "User recording", path: tone, kind: "audio", duration: 2, width: 0, height: 0, fps: 0, has_audio: true });
+      project.clips.push({ id: "recorded", type: "audio", track: project.tracks.find((track) => track.kind === "audio")!.id, media: "recorded", start: 0, duration: 45, source_in: 0.1, speed: 1.1, volume_db: -3, mutes: [{ from: 0.3, to: 0.4 }], color: "green", fade_in: 0, fade_out: 0 });
+      first.voiceover = "recorded";
+      project.markers = [{ frame: 270, name: "end" }];
+    });
+    const before = structuredClone(app.store.get(id)!.project);
+    const voice = app.voices.forProject("Partial (voice-over)", id, lines.map((text, index) => [text, `Cut-in ${index + 1}`]));
+    // An interrupted import already paid for line 2, but never placed it.
+    await app.voices.generate(voice.id, voice.lines[1]!.id);
+    expect(spoken).toEqual([lines[1]!]);
+    await Promise.all([generate(app, id, true), generate(app, id, true)]);
+    const after = app.store.get(id)!.project;
+    expect(spoken).toEqual([lines[1]!, lines[2]!]);
+    expect(after.clips.find((clip) => clip.id === "recorded")).toEqual(before.clips.find((clip) => clip.id === "recorded"));
+    expect(after.script!.blocks.every((block) => block.kind === "narration" && block.voiceover && after.clips.some((clip) => clip.id === block.voiceover))).toBe(true);
+    expect(after.media.filter((media) => media.name.includes("Cut-in 1"))).toHaveLength(0);
+    const completed = structuredClone(after);
+    await generate(app, id, true);
+    expect(app.store.get(id)!.project).toEqual(completed);
+    expect(spoken).toHaveLength(2);
+  } finally { cleanup(); }
+});
+
+test.skipIf(ffmpeg === null || Bun.which("ffprobe") === null)("recovery preserves a cut-in edited while its missing take is being generated", async () => {
+  const { app, dir, cleanup } = fixtureHome("voice-recovery-concurrent-edit");
+  try {
+    const tone = `${dir}/tone.mp3`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=f=440:d=2", "-c:a", "libmp3lame", tone]).exitCode).toBe(0);
+    mock.on("POST", "/v1/speech", () => new Response(fs.readFileSync(tone), { headers: { "content-type": "audio/mpeg" } }));
+    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer("Police arrived at the house".split(" "))));
+    const id = app.store.create("In progress", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await app.store.update(id, "test", (project) => {
+      project.script = { blocks: [{ kind: "narration", text: "Police arrived at the house" }] };
+      layOut(project);
+    });
+    const speak = app.voices.generate.bind(app.voices);
+    app.voices.generate = async (voice, line) => {
+      const done = await speak(voice, line);
+      await app.store.update(id, "user", (project) => {
+        const block = project.script!.blocks[0]!;
+        const card = project.clips.find((clip) => clip.id === block.clip)!;
+        card.duration = 120;
+      });
+      return done;
+    };
+    await generate(app, id, true);
+    const after = app.store.get(id)!.project;
+    const block = after.script!.blocks[0]!;
+    expect(block.kind === "narration" && block.voiceover).toBeUndefined();
+    expect(after.clips.find((clip) => clip.id === block.clip)!.duration).toBe(120);
+    expect(after.clips.filter((clip) => clip.name === "Voice-over")).toHaveLength(0);
+    expect(app.voices.chosenTakes((app.voices.list()[0] as { id: string }).id)).toHaveLength(1);
+  } finally { cleanup(); }
+});

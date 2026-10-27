@@ -31,6 +31,7 @@ import { field, read, readStruct, required, SerdeError, type Struct } from "./se
 import { stableStringify } from "./stable.ts";
 import { changesFrom, narrationLines } from "./voice.ts";
 import * as voiceover from "./voiceover.ts";
+import * as recovery from "./recovery.ts";
 
 export * from "./script.ts";
 
@@ -263,10 +264,12 @@ registerTool("speed_voiceover", async ({ app, args, projectId }) => {
 });
 
 registerTool("generate_voiceover", async ({ app, projectId }) => {
-  const live = app.store.get(projectId);
-  if (live === null) throw new Error("no such project");
-  if (voiceover.anyPlaced(live.project)) throw new Error("the cut-ins already have voice-overs: revoice_cut_in changes one");
-  const done = await diag.timeAsync("voiceover", "generate a voice-over", () => voiceover.generate(app, projectId));
+  const done = await diag.timeAsync("voiceover", "generate missing voice-overs", () => voiceover.generate(app, projectId, true));
+  return text(stableStringify(done));
+});
+
+registerTool("recover_project", async ({ app, args, projectId }) => {
+  const done = await diag.timeAsync("script", "recover project", () => recovery.recover(app, projectId, args.prepare === true));
   return text(stableStringify(done));
 });
 

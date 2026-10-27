@@ -31,6 +31,9 @@ native-compiled *args:
 native-test *args:
     @just --justfile app/Justfile native-test {{args}}
 
+nightly *args:
+    @just --justfile app/Justfile nightly {{args}}
+
 publish *args:
     @just --justfile app/Justfile publish {{args}}
 

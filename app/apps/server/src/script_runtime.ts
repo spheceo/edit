@@ -199,7 +199,7 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
       const track = o.track ? { ...o.track, time: seconds(o.track.time) } : undefined;
       ops.push({ op: "@tool", tool: "commentary_arrow", args: { ...rest, ...(track ? { track } : {}), text: words, start, end } });
     },
-    /** The spider web: centre {media, name}, nodes [{media, name?, blur?, at?: Time, ring?}]. Runs after the plan. */
+    /** The spider web: centre {media, name}, nodes [{media, name?, blur?, at?: Time, ring?, slot?}]. Runs after the plan. */
     web(o: Op & { from: Time; to: Time; centre: Op; nodes: (Op & { at?: Time })[] }) {
       const [start, end] = span(o, "web");
       const { from: _f, to: _t, nodes, ...rest } = o;
@@ -248,7 +248,7 @@ export const REFERENCE = `// Edit Script: the timeline as TypeScript. Times are 
 // chapter(title, {from, to, number?}); profile({from, to, media, name?, lines}); look({from, to})
 // text(…, {red: ["BAD VIDEOS"]}) colours the critical words red; label(words, {from, to, near?: [x, y], typewriter?}) sits beside the person it's about
 // location("Luton, England", {from, to}) bottom left; icon(media, {from, to, name?, role?}) pops up over the blurred picture; channel({from, to, name, handle?, subscribers?, description?, avatar?, subscribe?, caption?})
-// arrow(words, {from, to, at?: [x, y], side?, track?: {time, box}}) red arrow to a person, following them; web({from, to, centre: {media, name}, nodes: [{media, name, blur?, at?, ring?}]}) the spider web
+// arrow(words, {from, to, at?: [x, y], side?, track?: {time, box}}) red arrow to a person, following them; web({from, to, centre: {media, name}, nodes: [{media, name, blur?, at?, ring?, slot?}]}) the spider web (8–12 pictures, as the reference)
 // reverbOut(sourceClip, at, {tail?, hold?}) last words warp out over black; player(videoClip, {at, title, channel, subscribers?, meta?, avatar?, subscribe?}) pull back into the YouTube page; counter({from, to, count: [57, 35632], x, y, size?})
 // rotate(media, {from, to, from_deg…}) a channel page's screenshot tilting slowly in 3D (once per channel); slide(at) the next picture slides down from the top (with sfx("whoosh-3", at)); card(media, {…, push: 1.15}) zooms in while you highlight it; sfx(name, at, volume_db?) a bundled sound
 // Any of those given ids: [...] (a composition's layers as read_edit lists them) rebuilds it.

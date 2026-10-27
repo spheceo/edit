@@ -15,12 +15,24 @@ test("an arrow ends on the person's point, its words beyond its tail on the side
   expect(() => forTests.arrowLayout(p, { text: "x" })).toThrow("needs at");
 });
 
-test("the web puts up to six around the middle and hangs the outer ring off the nearest of them", () => {
+test("the web takes the reference's places: around the middle first, an outer one beside the inner one before it, strings out of the middle and on out", () => {
   const p = project("web");
-  const L = forTests.webLayout(p, [{ media: "a" }, { media: "b" }, { media: "c" }, { media: "d", ring: 2 }]);
-  expect(L.nodes.map((n) => n.ring)).toEqual([1, 1, 1, 2]);
-  expect(L.nodes[0]!.y).toBeLessThan(0);
-  expect(L.nodes[3]!.parent).toBeGreaterThanOrEqual(0);
+  const L = forTests.webLayout(p, [{ media: "a" }, { media: "b" }, { media: "c" }, { media: "d" }, { media: "e", ring: 2 }]);
+  expect(L.nodes.map((n) => n.slot)).toEqual(["ul", "ur", "ll", "lr", "br"]);
+  // Fewer pictures fill the frame: the board grows.
+  const full = forTests.webLayout(p, Array.from({ length: 12 }, (_, i) => ({ media: `m${i}` })));
+  expect(L.fit).toBeGreaterThan(full.fit * 1.2);
+  // Lopsided (one outer picture, lower right), it's framed on what's there: the middle sits up and to the left.
+  expect(L.offset[0]).toBeLessThan(0);
+  expect(L.offset[1]).toBeLessThan(0);
+  // Four strings out of the middle, one from the lower right out to its outer picture.
+  expect(L.edges.filter((e) => e.from === -1).length).toBe(4);
+  expect(L.edges.some((e) => e.from === 3 && e.to === 4)).toBe(true);
+  // A string out of the middle leaves its side's middle and lands on the picture's nearest corner.
+  const toUpperLeft = L.edges.find((e) => e.from === -1 && e.to === 0)!;
+  expect(toUpperLeft.a[1]).toBeCloseTo(0);
+  expect(toUpperLeft.b[0]).toBeCloseTo(L.nodes[0]!.x + L.nodes[0]!.w / 2);
+  expect(toUpperLeft.b[1]).toBeCloseTo(L.nodes[0]!.y + L.nodes[0]!.h / 2);
 });
 
 test("the full-screen video pulls back into the YouTube page as one camera, still playing", () => {

@@ -136,11 +136,14 @@ graphics. No final movie was exported. Resume instructions are in
 
 ## Machine access and remaining feature scope
 
-JJ has not registered a receiver in the live support inventory, and no
+At the nightly-24 rollout, JJ had not registered a receiver in the live support inventory, and no
 owner-shared JJ endpoint was found in the available tailnet. His Mac has not
 been updated or restarted by this rollout. He needs to install nightly-23 by
 the normal updater/installer, remain signed in and running, and opt in with
-`edit remote enable` once. Later update commands can use Convex without
+`edit remote enable` once. This terminal activation requirement was subsequently
+removed in [nightly-25](remote-support-automatic-registration.md): first startup
+while signed in now registers automatically, preserving existing disables.
+Later update commands can use Convex without
 Tailscale. A closed app cannot receive them.
 
 The repairs in this rollout run against the unlocked shared project copies on

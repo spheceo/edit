@@ -5,10 +5,11 @@ import { join } from "node:path";
 import type { ConvexClient } from "convex/browser";
 import { getFunctionName } from "convex/server";
 import type { App } from "../src/app.ts";
-import { authTokenFetcher, disable, execute, recover, routes } from "../src/remote_support.ts";
+import { authTokenFetcher, disable, execute, prepareEnrollment, recover, registerAutomatically, routes } from "../src/remote_support.ts";
 import { Router } from "../src/http/router.ts";
 import { listen, respond } from "../src/http/server.ts";
 import { RemoteCommandReceipts } from "../src/remote_commands.ts";
+import { BUILD } from "../src/version.ts";
 const NEXT = "nightly-99999";
 const item = (id = "cmd1") => ({ commandId: id, deviceId: "device1", kind: "update" as const, expiresAt: Date.now() + 60_000 });
 
@@ -18,7 +19,7 @@ function fixture(running = false) {
   const calls: Record<string, unknown>[] = [];
   let installs = 0;
   const cloud = { state: "pending", loseClaim: false, loseFinish: false, refuseInstall: false, waitForClaim: null as Promise<void> | null, canRestart: undefined as (() => boolean) | undefined };
-  const app = { store: { home }, agents: { hasRunningTurns: () => running }, exports: { running: () => false }, updater: {
+  const app = { machine: "Test Mac", store: { home }, agents: { hasRunningTurns: () => running }, exports: { running: () => false }, updater: {
     status: async () => ({ enabled: true, phase: installs ? "downloading" : "idle", latest: NEXT }),
     install: async (canRestart?: () => boolean) => { if (cloud.refuseInstall) throw new Error("Cannot install update"); cloud.canRestart = canRestart; installs++; return {}; },
   } } as unknown as App;
@@ -46,6 +47,92 @@ function fixture(running = false) {
       fs.rmSync(home, { recursive: true, force: true });
     },
   };
+}
+
+test("first sign-in persists one device before registration; signed-out startup does nothing", async () => {
+  const f = fixture();
+  const path = join(f.home, "remote-support.json");
+  try {
+    fs.rmSync(path);
+    expect(prepareEnrollment(f.app, null).enabled).toBe(false);
+    expect(fs.existsSync(path)).toBe(false);
+    const first = prepareEnrollment(f.app, "owner");
+    expect(first).toMatchObject({ enabled: true, owner: "owner", enrolling: true });
+    expect(fs.statSync(path).mode & 0o777).toBe(0o600);
+    expect(prepareEnrollment(f.app, "owner")).toEqual(first);
+    const calls: unknown[] = [];
+    const c = { mutation: async (ref: Parameters<typeof getFunctionName>[0], args: unknown) => {
+      expect(getFunctionName(ref)).toBe("editSupport:register");
+      expect(JSON.parse(fs.readFileSync(path, "utf8")).device).toBe(first.device);
+      calls.push(args);
+      return { enabled: true };
+    } } as unknown as ConvexClient;
+    await registerAutomatically(f.app, c, () => true);
+    expect(calls).toEqual([{ deviceId: first.device, label: "Test Mac", build: BUILD, enabled: true, onlyIfNew: true }]);
+    expect(prepareEnrollment(f.app, "owner")).toMatchObject({ enabled: true, enrolling: false, device: first.device });
+    await registerAutomatically(f.app, c, () => true);
+    expect(calls).toHaveLength(1);
+  } finally { await f.clean(); }
+});
+
+test("automatic enrollment never replaces a saved disable, another owner or a corrupt preference", async () => {
+  const f = fixture();
+  const path = join(f.home, "remote-support.json");
+  try {
+    disable(f.app);
+    const off = fs.readFileSync(path, "utf8");
+    expect(prepareEnrollment(f.app, "new-owner").enabled).toBe(false);
+    expect(fs.readFileSync(path, "utf8")).toBe(off);
+    fs.writeFileSync(path, JSON.stringify({ device: "device1", owner: "old-owner", enabled: true }));
+    expect(prepareEnrollment(f.app, "new-owner").owner).toBe("old-owner");
+    fs.writeFileSync(path, "invalid saved preference");
+    expect(prepareEnrollment(f.app, "owner").enabled).toBe(false);
+    expect(fs.readFileSync(path, "utf8")).toBe("invalid saved preference");
+  } finally { await f.clean(); }
+});
+
+test("lost automatic registration acknowledgement retries the same identity and honors cloud revocation", async () => {
+  const f = fixture();
+  const path = join(f.home, "remote-support.json");
+  try {
+    fs.rmSync(path);
+    const first = prepareEnrollment(f.app, "owner");
+    let attempts = 0;
+    const c = { mutation: async (_ref: unknown, args: { deviceId: string; onlyIfNew: boolean }) => {
+      expect(args.deviceId).toBe(first.device);
+      expect(args.onlyIfNew).toBe(true);
+      if (++attempts === 1) throw new Error("Registration acknowledgement lost");
+      return { enabled: false };
+    } } as unknown as ConvexClient;
+    await expect(registerAutomatically(f.app, c, () => true)).rejects.toThrow("Registration acknowledgement lost");
+    expect(prepareEnrollment(f.app, "owner")).toEqual(first);
+    await registerAutomatically(f.app, c, () => true);
+    expect(prepareEnrollment(f.app, "owner")).toMatchObject({ enabled: false, enrolling: false, device: first.device });
+    await registerAutomatically(f.app, c, () => true);
+    expect(attempts).toBe(2);
+  } finally { await f.clean(); }
+});
+
+for (const revoke of ["disable", "sign out"] as const) {
+  test(`${revoke} while automatic registration is in flight cannot enable the receiver`, async () => {
+    const f = fixture();
+    const path = join(f.home, "remote-support.json");
+    let release!: (value: { enabled: boolean }) => void;
+    try {
+      fs.rmSync(path);
+      const first = prepareEnrollment(f.app, "owner");
+      const c = { mutation: () => new Promise(resolve => { release = resolve; }) } as unknown as ConvexClient;
+      let current = true;
+      const registering = registerAutomatically(f.app, c, () => current);
+      if (revoke === "disable") disable(f.app);
+      else current = false;
+      release({ enabled: true });
+      await registering;
+      expect(prepareEnrollment(f.app, "owner")).toMatchObject(revoke === "disable"
+        ? { enabled: false, enrolling: false, pendingDisable: true }
+        : first);
+    } finally { release?.({ enabled: true }); await f.clean(); }
+  });
 }
 
 test("an update is claimed once and confirmed after restart", async () => {

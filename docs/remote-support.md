@@ -2,16 +2,20 @@
 
 ## Convex remote updates
 
-This source tree also supports owner-enabled remote updates over a live Convex
-subscription. The owner's app must be running, signed in, and on a build that
-contains the receiver. From its terminal, the owner runs `edit remote enable`;
-`edit remote disable` revokes access and cancels queued updates. An admin on
+Nightly-25 and later automatically register signed-in team
+devices for remote updates over a live Convex subscription. No terminal setup is
+needed: install the new nightly, open Edit and sign in. The app must stay running.
+Nightly-24 and earlier required `edit remote enable`; their published binaries
+are unchanged. An existing explicit disable or cloud revocation stays off after
+updating, restarting or reconnecting. `edit remote disable` revokes access and
+cancels queued updates; `edit remote enable` explicitly turns it back on. An admin on
 another running, signed-in Edit can run `edit remote devices`, then
 `edit remote update <device-id>` and `edit remote history <device-id>`. A request
 expires after an hour. Status records distinguish a claimed update from a new
 build that actually restarted. No command is replayed after an ambiguous crash.
 
-The update uses the owner's configured release channel, verifies the existing
+Registration itself never starts an update or agent turn. Updates remain
+explicit admin requests. The update uses the owner's configured release channel, verifies the existing
 release signature/checksum and refuses an active export, Drive upload or agent
 turn. If work starts during the download, the restart waits for it to finish.
 The operator endpoint accepts direct loopback CLI connections only; Tailscale,
@@ -35,8 +39,10 @@ sign-in or a new account permission.
 
 ## Existing access and current blocker
 
-The deployed services, nightly-24, live transport test and JJ project evidence
+The deployed services, original nightly-24 rollout, live transport test and JJ project evidence
 are recorded in [the 27 October rollout](remote-support-rollout-2026-10-27.md).
+The subsequent [automatic registration change](remote-support-automatic-registration.md)
+removes terminal activation for devices that have not explicitly disabled support.
 
 Edit already listens on loopback and its Tailscale address when available, and
 its UI, diagnostics and project agent APIs can be used over that connection.
@@ -45,7 +51,7 @@ devices can reach them. There is no separate per-operator pairing/authentication
 layer in the existing server. Do not expose this local app on the public internet.
 
 The inspected tailnet inventory did not identify JJ's Mac, and the live support
-inventory contained no JJ receiver. Three shared projects have now been
+inventory contained no JJ receiver at that rollout. Three shared projects have now been
 identified and backed up for repair through the operator's normal local Edit.
 Their cloud snapshots do not include JJ's local errors. No connection to JJ's
 Mac, remote update or remote agent turn has been performed. Installing a local

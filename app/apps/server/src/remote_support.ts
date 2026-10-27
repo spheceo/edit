@@ -1,5 +1,5 @@
-// Owner-enabled remote update receiver. Commands arrive over Convex's live
-// query, authenticated as this Edit's signed-in person, never the relay key.
+// Signed-in devices register automatically for remote updates. Commands arrive
+// over Convex's live query as this Edit's signed-in person, never the relay key.
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { ConvexClient } from "convex/browser";
@@ -17,7 +17,7 @@ import { BUILD } from "./version.ts";
 
 const query = (name: string) => makeFunctionReference<"query">(`editSupport:${name}`);
 const mutation = (name: string) => makeFunctionReference<"mutation">(`editSupport:${name}`);
-type Settings = { device: string; enabled: boolean; owner?: string; pendingDisable?: boolean };
+type Settings = { device: string; enabled: boolean; owner?: string; pendingDisable?: boolean; enrolling?: boolean };
 type Pending = { commandId: string; deviceId: string; expiresAt: number; kind: "update" };
 type Outcome = { state: "complete" | "failed"; detail: string };
 type Intent = { commandId: string; device: string; expected: string; outcome?: Outcome };
@@ -73,13 +73,37 @@ function settings(app: App): Settings {
     const value = JSON.parse(fs.readFileSync(settingsPath(app), "utf8")) as Settings;
     if (/^[a-zA-Z0-9_-]{1,120}$/u.test(value.device) && typeof value.enabled === "boolean" &&
       (value.owner === undefined || typeof value.owner === "string") &&
-      (value.pendingDisable === undefined || typeof value.pendingDisable === "boolean")) return value;
+      (value.pendingDisable === undefined || typeof value.pendingDisable === "boolean") &&
+      (value.enrolling === undefined || typeof value.enrolling === "boolean")) return value;
   } catch { /* Not enabled yet. */ }
   return { device: crypto.randomUUID(), enabled: false };
 }
 function save(app: App, value: Settings) {
   fs.mkdirSync(app.store.home, { recursive: true });
   writeAtomic(settingsPath(app), JSON.stringify(value), 0o600);
+}
+
+/** Persist a stable identity before the first network call. An existing file,
+ * including an explicit disable or an unreadable setting, is never replaced. */
+export function prepareEnrollment(app: App, owner: string | null): Settings {
+  if (owner === null || fs.existsSync(settingsPath(app))) return settings(app);
+  const value = { device: crypto.randomUUID(), enabled: true, owner, enrolling: true };
+  save(app, value);
+  return value;
+}
+
+/** Retry first-start registration without re-enabling a device revoked in the
+ * cloud, even if the previous registration's acknowledgement was lost. */
+export async function registerAutomatically(app: App, c: ConvexClient, isCurrent: () => boolean): Promise<void> {
+  const value = settings(app);
+  if (!value.enabled || !value.enrolling) return;
+  const checked = await rpc(c.mutation(mutation("register"), {
+    deviceId: value.device, label: app.machine, build: BUILD, enabled: true, onlyIfNew: true,
+  })) as { enabled: boolean };
+  if (!isCurrent()) return;
+  const current = settings(app);
+  if (!current.enabled || !current.enrolling || current.device !== value.device || current.owner !== value.owner) return;
+  save(app, { ...current, enabled: checked.enabled, enrolling: false });
 }
 
 function journal(app: App, intent: Intent) {
@@ -98,7 +122,7 @@ async function rpc<T>(work: Promise<T>): Promise<T> {
 
 /** Local revocation works even when signed out or offline. Cloud sync follows. */
 export function disable(app: App): Settings {
-  const value = { ...settings(app), enabled: false, pendingDisable: true };
+  const value = { ...settings(app), enabled: false, pendingDisable: true, enrolling: false };
   save(app, value);
   close(app);
   return value;
@@ -217,7 +241,7 @@ export async function execute(app: App, c: ConvexClient, item: Pending, ownsSess
 }
 
 async function connectOnce(app: App) {
-  const setting = settings(app);
+  let setting = settings(app);
   if (subscriptions.has(app)) {
     const c = clients.get(app);
     if (c) drain(app, c);
@@ -228,6 +252,12 @@ async function connectOnce(app: App) {
   const c = await client(app);
   if (setting.owner && accounts.creator()?.sub !== setting.owner) throw new Error("Sign in as the account that enabled this device, or disable remote support.");
   if (generation(app) !== version) return;
+  if (setting.enrolling) {
+    await registerAutomatically(app, c, () => generation(app) === version && authorized(app));
+    if (generation(app) !== version || !authorized(app)) return;
+    setting = settings(app);
+    if (!setting.enabled) { close(app); return; }
+  }
   if (setting.pendingDisable) {
     await rpc(c.mutation(mutation("register"), { deviceId: setting.device, label: app.machine, build: BUILD, enabled: false }));
     if (generation(app) !== version) return;
@@ -293,6 +323,9 @@ function retry(app: App) {
 /** Called after startup; an offline account retries without starting any work. */
 export function start(app: App) {
   observe(app);
+  const account = accounts.status();
+  const allowed = account.admin === true || (Array.isArray(account.perms) && account.perms.includes("use"));
+  prepareEnrollment(app, allowed ? accounts.creator()?.sub ?? null : null);
   if (!settings(app).enabled && !settings(app).pendingDisable && !fs.existsSync(intentPath(app))) return;
   void connect(app).catch(error => { diag.warn("remote", diag.messageOf(error)); retry(app); });
 }
@@ -328,7 +361,7 @@ export function routes(router: Router<App>) {
         const version = generation(app) + 1;
         generations.set(app, version);
         const previous = settings(app);
-        const value = { ...previous, enabled: true, owner: accounts.creator()?.sub, pendingDisable: false };
+        const value = { ...previous, enabled: true, owner: accounts.creator()?.sub, pendingDisable: false, enrolling: false };
         if (previous.pendingDisable) await rpc(c.mutation(mutation("register"), { deviceId: value.device, label: app.machine, build: BUILD, enabled: false }));
         await rpc(c.mutation(mutation("register"), { deviceId: value.device, label: app.machine, build: BUILD, enabled: value.enabled }));
         if (generation(app) !== version || !authorized(app)) {

@@ -34,11 +34,11 @@ again, send one explicit continuation to each project's normal agent:
 
 ## JJ's Mac
 
-Install [nightly-24](https://github.com/spheceo/edit/releases/tag/nightly-24)
-through Edit's normal updater/installer, keep it running and signed in, then
-run `edit remote enable` once on that Mac. With the application bundle installed
-at the usual location, its CLI is
-`/Applications/Edit.app/Contents/Resources/edit remote enable`.
+Install [nightly-25](https://github.com/spheceo/edit/releases/tag/nightly-25)
+through Edit's normal updater/installer, then open Edit and sign in. First-start
+registration is automatic; no terminal command is required. Keep Edit running.
+An existing explicit disable remains off and needs an explicit re-enable.
+See [automatic registration](remote-support-automatic-registration.md).
 
 An admin's local Edit can then run `edit remote devices`, request
 `edit remote update <exact-device-id>` and inspect `edit remote history

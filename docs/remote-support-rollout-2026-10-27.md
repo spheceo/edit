@@ -3,6 +3,12 @@
 ## Released and deployed
 
 The current release is
+[nightly-25](https://github.com/spheceo/edit/releases/tag/nightly-25), which
+[automatically registers signed-in devices](remote-support-automatic-registration.md)
+without a terminal activation step. Existing disables and cloud revocations
+are preserved. Its source, deployment and verification are recorded in that note.
+
+The initial recovery release was
 [nightly-24](https://github.com/spheceo/edit/releases/tag/nightly-24), source
 `0e4b21638c7f20a75bf2f691ad91681ed17aeb64`. It adds the narration source-boundary
 fix found during recovery to the rollout below. Its

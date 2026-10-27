@@ -37,3 +37,18 @@ deployment. A live test rebuilt and opened the signed-in local editor with no
 existing preference file: its device registered as enabled, its enrollment
 marker cleared, and the actual admin CLI listed it in the live inventory.
 No enable command, update request or agent turn was sent for that test.
+
+A separate live command-delivery test then targeted that automatically registered
+development editor. It claimed the command, reported the expected "This build
+cannot update itself" failure (development builds cannot install releases), and
+cleared its recovery journal. This verifies the actual receiver and terminal
+receipt after automatic registration; no app update was executed. Its failed
+command remains in kenobi's audit history as a deliberate transport check.
+
+[Nightly-25 is published](https://github.com/spheceo/edit/releases/tag/nightly-25),
+source `08a674c3d95301b60470fcec8eb5d4b3b4a169a6`.
+The [release workflow](https://github.com/spheceo/edit/actions/runs/40484975059)
+passed for both Mac targets and published all ten assets. The downloaded Apple
+Silicon archive passed its published SHA-256 check, printed `edit nightly-25`,
+and served health/diagnostics from an isolated home. Diagnostics identified
+`nightly-25`; the signed-out home did not enroll a device.

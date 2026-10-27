@@ -424,7 +424,7 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
     };
     const RED_FRAME = [0.93, 0.1, 0.13, 1];
 
-    put({ type: "video", name: "Janitor · web ground", media: ground, source_in: 0, start, duration: end - start, fade_out: 8, transform: { x: 0, y: 0, scale: 1 } });
+    put({ type: "video", name: "Janitor · web ground", media: ground, source_in: 0, start, duration: end - start, transform: { x: 0, y: 0, scale: 1 } });
 
     // When each string grows: out of the middle at WAVE_ONE (or the word naming the person), on out WAVE_GAP after the picture it leaves.
     const ats: number[] = nodes.map((n, i) => {
@@ -461,7 +461,7 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
       const cut = (v: number) => Math.max(0, Math.min(0.9999, forward ? 1 - v : v));
       const past = (across ? 30 / W : 30 / H) * k * (forward ? 1 : -1);
       const [c0, c1] = [cut(along(s.a)), cut(along(s.b) + past)];
-      put({ type: "video", name: "Janitor · web string", media: lines[s.i]!, source_in: 0, start: s.begin, duration: end - s.begin, fade_out: 8, crop: { left: 0, right: 0, top: 0, bottom: 0 },
+      put({ type: "video", name: "Janitor · web string", media: lines[s.i]!, source_in: 0, start: s.begin, duration: end - s.begin, crop: { left: 0, right: 0, top: 0, bottom: 0 },
         transform: { x: 0, y: 0, scale: 1 },
         keyframes: { scale: bake(s.begin, end, cam), x: bake(s.begin, end, (fr) => sx(fr, 0)), y: bake(s.begin, end, (fr) => sy(fr, 0)), [side]: Array.from({ length: Math.ceil(s.frames / 2) + 1 }, (_, j) => key(Math.min(j * 2, s.frames), c0 + (c1 - c0) * grown(Math.min(j * 2, s.frames) / s.frames))) } });
     }
@@ -473,7 +473,7 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
       if (glowFrom >= end - 8) continue;
       const media = halos.get(`${Math.round(box.w)}x${Math.round(box.h)}`)!;
       const m = mediaOf(project, media)!; const f = fitOf(m);
-      put({ type: "video", name: "Janitor · web glow", media, source_in: 0, start: glowFrom, duration: end - glowFrom, fade_in: 8, fade_out: 8, transform: { x: box.x, y: box.y, scale: 1 / f },
+      put({ type: "video", name: "Janitor · web glow", media, source_in: 0, start: glowFrom, duration: end - glowFrom, fade_in: 8, transform: { x: box.x, y: box.y, scale: 1 / f },
         keyframes: { x: bake(glowFrom, end, (fr) => sx(fr, box.x)), y: bake(glowFrom, end, (fr) => sy(fr, box.y)), scale: bake(glowFrom, end, (fr) => cam(fr) / f) } });
     }
 
@@ -492,13 +492,19 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
       const scaleAt = (fr: number) => { const a = shape(fr); const c = cropFor(a); const B = cam(fr); return c.top > 0 ? (box.h * a * B) / (m.width * f) : (box.h * B) / (m.height * f * (1 - c.top - c.bottom)); };
       const from = i < 0 ? start : onFrom(box);
       if (from >= end - 8) continue;
+      // A video that would run out before the web ends starts earlier, or plays slower (never under a quarter).
+      const needed = (end - from) / fps; let sourceIn = node.source_in ?? 0; let speed = 1;
+      if (m.kind === "video" && m.duration > 0 && m.duration - sourceIn < needed) {
+        if (m.duration >= needed + 0.05) sourceIn = m.duration - needed - 0.05;
+        else { sourceIn = 0; speed = Math.max(0.25, (m.duration - 0.05) / needed); }
+      }
       const lane = track();
       for (const [s, e] of stretches(from)) {
         const mid = Math.round((s + e) / 2); const shown = scaleAt(Math.min(mid, s + Math.round(1.5 * fps)));
         const crop = cropFor(want);
         const keyframes: Record<string, Keyframe[]> = { x: bake(s, e, (fr) => sx(fr, box.x)), y: bake(s, e, (fr) => sy(fr, box.y)), scale: bake(s, e, scaleAt) };
         if (i < 0 && fromFull && s - start < Math.round(1.2 * fps)) for (const side of ["left", "right", "top", "bottom"] as const) keyframes[`crop.${side}`] = bake(s, e, (fr) => cropFor(shape(fr))[side]);
-        put({ type: "video", name: i < 0 ? "Janitor · web centre" : "Janitor · web picture", media: m.id, source_in: (node.source_in ?? 0) + (s - from) / fps, start: s, duration: e - s, fade_out: e === end ? 8 : 0,
+        put({ type: "video", name: i < 0 ? "Janitor · web centre" : "Janitor · web picture", media: m.id, source_in: sourceIn + ((s - from) / fps) * speed, speed, start: s, duration: e - s,
           crop, frame: { color: RED_FRAME, width: (2.5 * k) / Math.max(shown, 1e-4), shadow: 0, glow: 0 }, transform: { x: sx(s, box.x), y: sy(s, box.y), scale: scaleAt(s) }, keyframes }, lane);
       }
     }
@@ -514,10 +520,10 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
       const mystery = i >= 0 && mysteryTags.get(i);
       if (mystery) {
         const m = mediaOf(project, mystery)!; const f = fitOf(m);
-        put({ type: "video", name: "Janitor · web mystery name", media: mystery, source_in: 0, start: at, duration: end - at, fade_in: 4, fade_out: 8, transform: { x: box.x, y: tagY(box), scale: 1 / f },
+        put({ type: "video", name: "Janitor · web mystery name", media: mystery, source_in: 0, start: at, duration: end - at, fade_in: 4, transform: { x: box.x, y: tagY(box), scale: 1 / f },
           keyframes: { ...motion, scale: bake(at, end, (fr) => (cam(fr) * pop(fr)) / f) } });
       } else {
-        put({ type: "text", name: "Janitor · web name", text: name.toUpperCase(), start: at, duration: end - at, fade_in: 4, fade_out: 8,
+        put({ type: "text", name: "Janitor · web name", text: name.toUpperCase(), start: at, duration: end - at, fade_in: 4,
           style: { font: "Geist", weight: 700, size: (i < 0 ? 1.15 : 1) * tagSize, color: [1, 1, 1, 1], tracking: 0, line_height: 1.1, glow: { enabled: false }, background: { color: [0, 0, 0, 1], opacity: 0.92, pad_x: 10 * k, pad_y: 5 * k } },
           transform: { x: box.x, y: tagY(box) }, keyframes: { ...motion, scale: bake(at, end, (fr) => cam(fr) * pop(fr)) } });
       }
@@ -529,7 +535,7 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
       const from = onFrom(box); if (from >= end - 8) continue;
       // Only the picture: its frame and glow stay sharp round the mystery.
       const pad = -2 * k;
-      put({ type: "adjustment", name: "Janitor · web mystery", start: from, duration: end - from, fade_out: 8,
+      put({ type: "adjustment", name: "Janitor · web mystery", start: from, duration: end - from,
         blur: { radius: 22 * k, x: box.x, y: box.y, width: box.w + 2 * pad, height: box.h + 2 * pad, feather: 6 * k, shape: "rect" }, grade: { exposure: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 },
         keyframes: { "blur.x": bake(from, end, (fr) => sx(fr, box.x)), "blur.y": bake(from, end, (fr) => sy(fr, box.y)), "blur.width": bake(from, end, (fr) => (box.w + 2 * pad) * cam(fr)), "blur.height": bake(from, end, (fr) => (box.h + 2 * pad) * cam(fr)) } });
     }
@@ -546,10 +552,12 @@ registerTool("commentary_web", async ({ app, args, projectId }) => {
     dust.forEach((media, j) => {
       const m = mediaOf(project, media)!; const f = fitOf(m);
       const drift = (j === 0 ? 0.05 : 0.09) * H;
-      put({ type: "video", name: "Janitor · web dust", media, source_in: 0, start, duration: end - start, fade_in: 6, fade_out: 8, opacity: j === 0 ? 0.55 : 0.35,
+      put({ type: "video", name: "Janitor · web dust", media, source_in: 0, start, duration: end - start, fade_in: 6, opacity: j === 0 ? 0.55 : 0.35,
         transform: { x: 0, y: drift / 2, scale: (W / (m.width * f)) * 1 },
         keyframes: { y: [key(0, drift / 2), key(end - start, -drift / 2)], x: [key(0, j === 0 ? -6 * k : 8 * k), key(end - start, j === 0 ? 10 * k : -10 * k)] } });
     });
+    // It goes out to black over its last 8 frames under one black, not each layer fading: a fading picture shows the red its frame is drawn on, a fading blur the face under it.
+    put({ type: "solid", name: "Janitor · web out", fill: [0, 0, 0, 1], start: end - 8, duration: 8, fade_in: 8 });
     return out;
   });
   return text(stableStringify({ clips: made, slots: L.nodes.map((n, i) => ({ name: nodes[i]!.name ?? null, slot: n.slot })),

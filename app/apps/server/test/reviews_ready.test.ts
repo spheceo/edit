@@ -98,6 +98,12 @@ test("on the fixing computer it takes the request, follows the agent's turn and,
     expect(said.at(-1)).toMatchObject({ state: "done", stage: "Answered: nothing in the edit changed" });
     // Nothing shared.
     expect(calls.some((call) => call.path === "reviews:publish")).toBe(false);
+    const reported = calls.filter((call) => call.path === "reviews:status");
+    expect(reported).toHaveLength(1);
+    expect(reported[0]!.args).toMatchObject({ noteId: "n1", state: "left", reason: "it's a question: answered", details: "it's a question: answered" });
+    expect(calls.some((call) => call.path === "reviews:reply")).toBe(false);
+    const saved = JSON.parse(fs.readFileSync(`${home}/reviews.json`, "utf8")) as { notes: Record<string, { unfixed?: string }> };
+    expect(saved.notes.n1?.unfixed).toBe("it's a question: answered");
   } finally {
     cleanup();
   }

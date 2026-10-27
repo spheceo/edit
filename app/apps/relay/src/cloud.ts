@@ -76,7 +76,7 @@ const WRITER_READS = new Set(["writer:listScripts", "writer:getScript"]);
 const REVIEW_CALLS = new Map<string, string>([
   ["reviews:changes", "query"], ["reviews:get", "query"], ["reviews:open", "query"],
   ["reviews:publish", "mutation"], ["reviews:claim", "mutation"], ["reviews:release", "mutation"], ["reviews:resolve", "mutation"],
-  ["reviews:reply", "mutation"], ["reviews:approve", "mutation"], ["reviews:note", "mutation"], ["reviews:deleteNote", "mutation"], ["reviews:setMeta", "mutation"],
+  ["reviews:reply", "mutation"], ["reviews:status", "mutation"], ["reviews:approve", "mutation"], ["reviews:note", "mutation"], ["reviews:deleteNote", "mutation"], ["reviews:setMeta", "mutation"],
   // The person sharing makes the newest export the only version, v1 (Edit's review/compress).
   ["reviews:compress", "mutation"],
   // Fixing on the one computer chosen on accounts' Fixing page (accounts/docs/fixing.md).

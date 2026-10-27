@@ -705,18 +705,46 @@ export async function unpin(noteId: string): Promise<void> {
   await cloud.mutation("reviews:deleteNote", { noteId });
 }
 
-/** Records a note the agent left, with why (a reply on the review; the note stays open for the team). */
+/** A short reviewer-facing line. The full reason stays in the status details. */
+function reviewerReason(details: string): string {
+  const sentence = details.match(/^.*?[.!?](?:\s|$)/u)?.[0]?.trim() ?? details.trim();
+  return sentence.length > 180 ? sentence.slice(0, 180).trimEnd() : sentence;
+}
+
+/** The relay or Repack does not have `reviews:status` yet, so the older reply still applies. */
+function statusCallMissing(error: unknown): boolean {
+  return /Could not find public function|isn't a function|Only the edit:|can be called/iu.test(diag.messageOf(error));
+}
+
+/**
+ * Records a note the agent left, with why. The note stays open.
+ * One result per unchanged reason: `reviews:status` replaces another
+ * "Not changed" reply. The local copy is written only after Repack accepts it.
+ */
 export async function unfixed(app: App, projectId: string, noteId: string, reason: string): Promise<void> {
   const home = app.store.home;
   const note = read(home).notes[noteId];
   if (note === undefined || note.project !== projectId) throw new Error(`no note ${noteId} on this project's review`);
+  const details = reason.trim();
+  if (details === "") throw new Error("a reason is required");
+  try {
+    await cloud.mutation("reviews:status", {
+      noteId,
+      state: "left",
+      reason: reviewerReason(details),
+      details,
+      ...(typeof note.claimed === "number" ? { attemptAt: note.claimed } : {}),
+    });
+  } catch (error) {
+    if (!statusCallMissing(error)) throw error;
+    await cloud.mutation("reviews:reply", { noteId, text: `Not changed: ${reason}`, author: "Edit's agent" });
+  }
   update(home, (saved) => {
     const own = saved.notes[noteId];
     if (own !== undefined) own.unfixed = reason;
   });
   const live = app.store.get(projectId);
   if (live !== null) checkpoints.set(projectId, structuredClone(live.project));
-  await cloud.mutation("reviews:reply", { noteId, text: `Not changed: ${reason}`, author: "Edit's agent" });
 }
 
 // ---------------------------------------------------------------------------

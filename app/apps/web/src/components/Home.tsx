@@ -817,7 +817,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
           autoFocus
           rows={3}
           value={text}
-          placeholder="Name a project, find a Writer script, or paste case links (Docs, Drive, YouTube, Trello)"
+          placeholder="Name a project, find a Writer script, or paste case links (Docs, Drive, YouTube, Trello, a finished video’s review link)"
           onChange={(event) => setText(event.target.value)}
           onPaste={(event) => {
             const plain = event.clipboardData.getData("text/plain");

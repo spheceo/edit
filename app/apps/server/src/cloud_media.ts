@@ -66,6 +66,7 @@ import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts"
 import { isBug } from "./guard.ts";
 import * as jobs from "./jobs.ts";
 import { mediaHooks, mediaKey, Semaphore } from "./media.ts";
+import * as finished from "./finished.ts";
 import * as youtube from "./youtube.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
 import { native } from "./native/index.ts";
@@ -300,6 +301,10 @@ export function proxyKey(source: string): string | null {
     key = hash >= 0 ? `${dir}/${id}/${rest.slice(hash + 1)}.mp4` : `${dir}/${id}.mp4`;
   } else if (source.startsWith("sha256:")) {
     key = `edit/proxies/sha256/${source.slice("sha256:".length)}.mp4`;
+  } else if (finished.reviewOf(source.split("#")[0]!) !== null) {
+    // A finished video of ours: played whole, so one proxy per version.
+    const at = finished.reviewOf(source.split("#")[0]!)!;
+    key = `edit/proxies/review/${at.project}/${at.version}.mp4`;
   } else {
     return null;
   }
@@ -837,6 +842,50 @@ export async function youtubeOriginal(
   return [{ file, source, key, name, size: got.size }, got.path];
 }
 
+/**
+ * Puts finished video `file` (`review:<project>/<version>`, finished.ts) among
+ * the originals unless the registry has it: its review's full-quality file
+ * fetched once and kept as an original (a review's files are only lent for an
+ * hour at a time; an export reads an original for hours), the local copy
+ * returned for its proxy, the caller removing it.
+ */
+export async function reviewOriginal(
+  file: string,
+  scratch: string,
+  progress: (bytes: number, total: number | null, name: string) => void,
+): Promise<[Original, string | null]> {
+  const at = finished.reviewOf(file);
+  if (at === null) throw new Error(`${debugStr(file)} isn't a finished video`);
+  const source = file;
+  const record = await getRecord(source);
+  const ready = readyOriginal(record);
+  if (record !== null && ready !== null) {
+    const size = Math.max(Math.trunc(record.size), 0);
+    progress(size, size, record.name);
+    return [{ file, source, key: ready, name: record.name, size }, null];
+  }
+  const full = await finished.fullFile(file);
+  const ext = /\.(mov|m4v)$/i.exec(full.key)?.[1]?.toLowerCase() ?? "mp4";
+  const name = scriptParts.safeName(`${full.title} v${at.version}.${ext}`);
+  const dir = join(scratch, `review-${at.project}-${at.version}`);
+  const local = join(dir, name);
+  await diag.timeOnAsync("cloud", "cloud: fetch finished video", source, () => cloud.download(full.key, local, (done, total) => progress(done, total ?? null, name)));
+  const size = sizeOf(local);
+  const key = record !== null && cloud.validKey(record.originalKey) ? record.originalKey : `edit/originals/review/${at.project}/${at.version}/${segment(name)}`;
+  if (record === null) await putRecord({ source, name, originalKey: key, size });
+  await diag.timeOnAsync("cloud", "cloud: keep finished video", source, () => cloud.uploadFile(local, key));
+  let duration: number | null = null;
+  try {
+    duration = await scriptParts.durationOf(local);
+  } catch {
+    duration = null;
+  }
+  const done: Record<string, unknown> = { source, originalReady: true, size };
+  if (duration !== null) done.duration = duration;
+  await putRecord(done);
+  return [{ file, source, key, name, size }, local];
+}
+
 /** Commentary needs scenes, not whole streams. Existing cloud originals and
  * exact excerpts are reused; otherwise yt-dlp fetches bounded padded ranges. */
 const youtubeRanges = new Map<string, Promise<Excerpt>>();
@@ -1223,7 +1272,12 @@ export async function restoreHere(app: App, id: string, progress: (bytes: number
   const originalOf = (file: string) => {
     let found = originals.get(file);
     if (found === undefined) {
-      found = youtube.idOf(file) !== null ? youtubeOriginal(home, file, scratch, progress) : driveOriginal(file, scratch, progress).then((one): [Original, null] => [one, null]);
+      found =
+        youtube.idOf(file) !== null
+          ? youtubeOriginal(home, file, scratch, progress)
+          : finished.reviewOf(file) !== null
+            ? reviewOriginal(file, scratch, progress)
+            : driveOriginal(file, scratch, progress).then((one): [Original, null] => [one, null]);
       originals.set(file, found);
     }
     return found;

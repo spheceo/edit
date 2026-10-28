@@ -3031,12 +3031,16 @@
   },
   {
     "name": "insert_compilation_case",
-    "description": "Add one missing case to an already laid-out compilation without resetting the edit. Downloads new Drive folder/file, YouTube or a finished script Doc, inserts it at a clean timeline boundary, and shifts later work intact. at is FRAMES from get_edit_context, usually after the existing compilation opening for case 1. request_id is a stable unique identifier: retry the same id, never duplicate the case. intro is the new case's researched opening/transition narration; it is voiced only for this case. Docs retain their original ranges and finished cut-in words. before_block is the optional zero-based script insertion index when removed clips make the order ambiguous. This may take minutes; failures leave a retryable pending case and keep the existing edit. Then research/watch this case, update the compilation opening and finish the new case's joins with the appropriate skills.",
+    "description": "Add one missing case to an already laid-out compilation without resetting the edit. Downloads new Drive folder/file, YouTube, a finished script Doc, or a finished video of ours by its review link (feedback.spheceo.com/r/…, played untouched), inserts it at a clean timeline boundary, and shifts later work intact. at is FRAMES from get_edit_context, usually after the existing compilation opening for case 1. request_id is a stable unique identifier: retry the same id, never duplicate the case. intro is the new case's researched opening/transition narration; it is voiced only for this case. Docs retain their original ranges and finished cut-in words. finished: true plays a Drive/YouTube video untouched as a finished section (no editing over it). before_block is the optional zero-based script insertion index when removed clips make the order ambiguous. This may take minutes; failures leave a retryable pending case and keep the existing edit. Then research/watch this case, update the compilation opening and finish the new case's joins with the appropriate skills.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "source": {
           "type": "string"
+        },
+        "finished": {
+          "type": "boolean",
+          "description": "A finished video (Drive/YouTube) played as it is, not footage to edit."
         },
         "request_id": {
           "type": "string"

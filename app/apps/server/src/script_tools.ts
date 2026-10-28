@@ -27,6 +27,7 @@ import * as review from "./review.ts";
 import { display, fixed, round, toI64, trim } from "./rust.ts";
 import * as script from "./script.ts";
 import { readCompilation, sourceKind } from "./compilation_input.ts";
+import { reviewCode } from "./finished.ts";
 import { hasCase, pendingCase, queueCase } from "./case_insertion.ts";
 import { field, read, readStruct, required, SerdeError, type Struct } from "./serde.ts";
 import { stableStringify } from "./stable.ts";
@@ -298,7 +299,7 @@ registerTool("insert_compilation_case", async ({ app, args, projectId }) => {
   const number = num(args.case_number);
   const source = typeof args.source === "string" ? args.source.trim() : "";
   if (!request || at === null || number === null || !source) throw new Error("source, request_id, case_number and at (timeline frames) are required.");
-  if (sourceKind(source) === null || /\s/u.test(source)) throw new Error("source must be one complete Drive, YouTube, Google Doc or Trello URL.");
+  if (sourceKind(source) === null || /\s/u.test(source)) throw new Error("source must be one complete Drive, YouTube, Google Doc, Trello or review (feedback.spheceo.com/r/…) URL.");
   const live = app.store.get(projectId);
   if (!live) throw new Error("no such project");
   if (!kinds.mayEdit(live.project.style)) throw new Error(kinds.cantMake(`edit.${live.project.style}`));
@@ -308,7 +309,8 @@ registerTool("insert_compilation_case", async ({ app, args, projectId }) => {
   if (!hasCase(live.project, request)) {
     // A supplied finished Doc is reused exactly, also when it is the only
     // source being added to an already edited compilation.
-    const input = script.docId(source) ? `REUSE ${source}` : source;
+    // A Doc, a finished video (finished: true) or one by its review link: played as it is.
+    const input = script.docId(source) || args.finished === true || reviewCode(source) !== null ? `REUSE ${source}` : source;
     const parsed = await readCompilation(input, app);
     await app.store.update(projectId, ORIGIN, (project) => queueCase(project, parsed, {
       id: request, at, number,

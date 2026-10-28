@@ -2,6 +2,7 @@
 // only an explicitly marked video is a finished, untouched reused section.
 import type { App } from "./app.ts";
 import * as script from "./script.ts";
+import { LINK_PREFIX, lookUp, reviewCode } from "./finished.ts";
 import { folderId, videosIn } from "./drive_import.ts";
 import * as relay from "./relay.ts";
 import type { Parsed } from "./seams.ts";
@@ -21,6 +22,8 @@ export function sourceKind(value: string): CompilationSource["kind"] | null {
   if (host === "docs.google.com" && script.docId(value)) return "script";
   if (host === "drive.google.com" && folderId(value)) return "folder";
   if ((host === "drive.google.com" || host === "drive.usercontent.google.com" || host === "youtube.com" || host === "youtu.be") && script.footageFile(value)) return "video";
+  // A finished video of ours by its review link: always played as it is.
+  if (reviewCode(value) !== null) return "video";
   if (host === "trello.com" && /^\/c\/[a-zA-Z0-9]+(?:\/|$)/u.test(url.pathname)) return "trello";
   return null;
 }
@@ -63,7 +66,7 @@ export function sourceLines(text: string): CompilationSource[] {
       // recording again keeps its own place.
       const name = currentCase || `line-${index}`;
       if (out.some((one) => one.url === url && one.case === name)) continue;
-      out.push({ url, kind, reuse: kind === "script" || reuse || marked || section, case: name });
+      out.push({ url, kind, reuse: kind === "script" || reuse || marked || section || reviewCode(url) !== null, case: name });
     }
     marked = false;
   }
@@ -138,6 +141,29 @@ export function markReusedScript(parsed: Parsed, url: string): Parsed {
   return parsed;
 }
 
+/**
+ * Finished videos named by their review link (pasted, or a Doc's "Reuse:"
+ * comment) looked up now, before anything is saved: each becomes its
+ * project's approved (else newest) version, played untouched. A link that
+ * isn't one of Edit's videos stops the import, saying so.
+ */
+export async function lookUpFinished(blocks: ScriptBlock[], find: (url: string) => Promise<{ file: string; title: string; version: number }> = lookUp): Promise<void> {
+  const found = new Map<string, { file: string; title: string; version: number }>();
+  for (const block of blocks) {
+    if (block.kind !== "footage" || !block.file.startsWith(LINK_PREFIX)) continue;
+    let video = found.get(block.url);
+    if (video === undefined) {
+      video = await find(block.url);
+      found.set(block.url, video);
+    }
+    block.file = video.file;
+    block.label = script.REUSE;
+    block.start = 0;
+    block.end = 1;
+    block.notes = [...(block.notes ?? []), `Finished video: ${video.title} (v${video.version}), played as it is`];
+  }
+}
+
 export interface CompilationReaders {
   doc(id: string): Promise<[string, string]>;
   folder(id: string): Promise<{ id: string; name: string }[]>;
@@ -190,6 +216,7 @@ export async function readCompilation(input: string, app: App, overrides: Partia
     for (const file of files) blocks.push({ kind: "footage", url: file.url, file: script.footageFile(file.url)!, start: 0, end: 1,
       label: source.reuse ? script.REUSE : WHOLE_SOURCE, notes: [`Case ${source.case}: ${source.url}`, ...(source.earlier ? [`Earlier script: ${source.earlier}`] : []), ...(file.name ? [`Source: ${file.name}`] : [])] });
   }
+  await lookUpFinished(blocks);
   return {
     title: title || (sources.length > 1 ? "Compilation" : "Imported footage"),
     blocks,

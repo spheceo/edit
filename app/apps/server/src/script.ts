@@ -31,6 +31,7 @@ import type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 import * as tools from "./tools.ts";
 import type { Word } from "./transcribe.ts";
 import * as youtube from "./youtube.ts";
+import { LINK_PREFIX as FINISHED_LINK, reviewCode, reviewOf } from "./finished.ts";
 import { finishCase, pendingCase } from "./case_insertion.ts";
 import * as durableJobs from "./jobs.ts";
 
@@ -712,6 +713,9 @@ export async function joinCases(
 
 /** The script file a footage link names: a Drive file id, or `youtube:<id>`. */
 export function footageFile(url: string): string | null {
+  const review = reviewCode(url);
+  // A finished video of ours by its review link: looked up before the import (compilation_input).
+  if (review !== null) return `${FINISHED_LINK}${review}`;
   return driveFileId(url) ?? youtube.fileOf(url);
 }
 
@@ -1838,6 +1842,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       const fileBegan = timing.now();
       try {
         if (file.startsWith("sha256:") && !cloudEnabled()) throw new Error("A shared folder master needs Edit's cloud connection. Sign in and retry.");
+        if (reviewOf(file) !== null && !cloudEnabled()) throw new Error("A finished video from its review link needs Edit's cloud connection: sign in to Edit.");
         const [bytes, name, cut] = cloudEnabled()
           ? await footageToCloud(app, id, index, file)
           : await footageToDisk(app, id, index, file);
@@ -2059,7 +2064,11 @@ async function footageToCloud(app: App, id: string, index: number, file: string)
   const shared = file.startsWith("sha256:");
   const expectedKey = live?.project.script?.blocks.find((block) => block.kind === "footage" && block.file === file)?.notes?.find((note) => note.startsWith("Shared original: "))?.slice("Shared original: ".length);
   const [original, local] =
-    shared ? [await seams.cloudMedia.registeredOriginal(file, expectedKey), null] : youtube.idOf(file) !== null
+    shared
+      ? [await seams.cloudMedia.registeredOriginal(file, expectedKey), null]
+      : reviewOf(file) !== null
+        ? await diag.timeOnAsync("script", "script: finished video to cloud", file, () => seams.cloudMedia.reviewOriginal(file, scratch, progress))
+        : youtube.idOf(file) !== null
       ? await diag.timeOnAsync("script", "script: youtube to cloud", file, () =>
           seams.cloudMedia.youtubeOriginal(app.store.home, file, scratch, progress),
         )

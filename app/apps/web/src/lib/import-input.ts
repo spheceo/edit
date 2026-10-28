@@ -1,5 +1,5 @@
 /** A project name stays a name; known source URLs open the import preview. */
-export const hasImportLinks = (text: string) => /https?:\/\/(?:www\.)?(?:docs\.google\.com\/document\/d\/|drive\.google\.com\/(?:file\/d\/|drive\/|open\?|uc\?)|(?:youtube\.com|youtu\.be)\/|trello\.com\/c\/)/iu.test(text);
+export const hasImportLinks = (text: string) => /https?:\/\/(?:www\.)?(?:docs\.google\.com\/document\/d\/|drive\.google\.com\/(?:file\/d\/|drive\/|open\?|uc\?)|(?:youtube\.com|youtu\.be)\/|trello\.com\/c\/|feedback\.spheceo\.com\/r\/)/iu.test(text);
 
 /** Rich clipboard links must retain their targets, not only Trello's labels. */
 export function importPaste(html: string, plain: string): string {

@@ -39,9 +39,25 @@ export function checkHost(request: Request, allowed: string[]): Response | null 
   // one-use code that's useless without the PKCE verifier kept here.
   if (request.method === "GET" && new URL(request.url).pathname === "/callback") return null;
   const origin = request.headers.get("origin");
+  if (request.method === "GET" && origin !== null && new URL(request.url).pathname.startsWith("/v1/3dtiles/") && mapSibling(origin, host)) return null;
   if (origin !== null && !sameOrigin(origin, host)) return text("cross-origin requests are not allowed", 403);
   if (request.headers.get("sec-fetch-site") === "cross-site") return text("cross-site requests are not allowed", 403);
   return null;
+}
+
+/**
+ * Whether a map tile's request comes from Edit's own map page: the page is on
+ * this server's loopback address and fetches its tiles from `t0…t7.localhost`
+ * on the same port, which Chrome reaches over more connections at once (six a
+ * host over HTTP/1.1: a map's hundreds of tiles took minutes and every map
+ * timed out, Oct 28).
+ */
+export function mapSibling(origin: string, host: string): boolean {
+  const match = /^http:\/\/([^/?#]+)$/.exec(origin);
+  const from = match === null ? null : authority(match[1]!);
+  const to = authority(host);
+  const loopback = (name: string) => name === "127.0.0.1" || name === "localhost" || name.endsWith(".localhost");
+  return from !== null && to !== null && loopback(from.host.toLowerCase()) && loopback(to.host.toLowerCase()) && from.port !== null && from.port === to.port;
 }
 
 /** The headers every answer that passed the check carries. */

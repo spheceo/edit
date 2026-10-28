@@ -1272,26 +1272,39 @@ pub fn export_file(
     #[cfg(not(target_os = "macos"))]
     let made: Option<(Vec<crate::chunks::Chunk>, Option<String>)> = None;
     if let Some(settings) = settings {
+        // Tried twice before exporting it whole: the chunks made are kept, so
+        // a second try only makes the rest. A sound encoder that stalled once
+        // under load (card 1, Oct 29) sent a 93-minute edit to the whole
+        // export, hours where the chunks take minutes.
         #[cfg(target_os = "macos")]
-        match export_chunked(
-            project,
-            options,
-            plan,
-            settings,
-            &temporary.0,
-            cache,
-            sounds,
-            cancel,
-            &mut progress,
-        ) {
-            Ok(chunks) => made = Some(chunks),
-            Err(error) if error == "cancelled" || cancel.load(Ordering::Acquire) => {
-                return Err("cancelled".to_owned())
+        for attempt in 1..=2 {
+            match export_chunked(
+                project,
+                options,
+                plan,
+                settings,
+                &temporary.0,
+                cache,
+                sounds,
+                cancel,
+                &mut progress,
+            ) {
+                Ok(chunks) => {
+                    made = Some(chunks);
+                    break;
+                }
+                Err(error) if error == "cancelled" || cancel.load(Ordering::Acquire) => {
+                    return Err("cancelled".to_owned())
+                }
+                Err(error) if attempt == 1 => crate::log::warn(
+                    "export",
+                    format!("a chunked export failed ({error}); trying the chunks again"),
+                ),
+                Err(error) => crate::log::warn(
+                    "export",
+                    format!("a chunked export failed again ({error}); exporting it whole"),
+                ),
             }
-            Err(error) => crate::log::warn(
-                "export",
-                format!("a chunked export failed ({error}); exporting it whole"),
-            ),
         }
         #[cfg(not(target_os = "macos"))]
         let _ = settings;

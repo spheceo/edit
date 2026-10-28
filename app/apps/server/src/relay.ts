@@ -111,6 +111,9 @@ export async function forwardTiles(request: Request, from: URL): Promise<Respons
     const value = answer.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
+  // The map page asks from its own address (checked by `mapSibling`).
+  const origin = request.headers.get("origin");
+  if (origin !== null) headers.set("access-control-allow-origin", origin);
   return new Response(answer.body, { status: answer.status, headers });
 }
 

@@ -5,7 +5,7 @@ import type { App } from "../src/app.ts";
 import { timings } from "../src/diag.ts";
 import { mapAssets, staticAsset, useAssets } from "../src/http/assets.ts";
 import { ApiError, bad, json } from "../src/http/errors.ts";
-import { sameOrigin } from "../src/http/host.ts";
+import { checkHost, mapSibling, sameOrigin } from "../src/http/host.ts";
 import { badShape, readJson, Router, valueEnd } from "../src/http/router.ts";
 import { baseRouter, listen, respond } from "../src/http/server.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -23,6 +23,20 @@ test("origin_must_match_host_and_port", () => {
   ]) {
     expect(sameOrigin(origin, "localhost:7700")).toBe(false);
   }
+});
+
+test("the_map_page_fetches_its_tiles_from_its_localhost_siblings", () => {
+  expect(mapSibling("http://127.0.0.1:7700", "t3.localhost:7700")).toBe(true);
+  expect(mapSibling("http://127.0.0.1:7700", "t3.localhost:7701")).toBe(false);
+  expect(mapSibling("https://evil.example", "t3.localhost:7700")).toBe(false);
+  expect(mapSibling("http://evil.localhost.example:7700", "t3.localhost:7700")).toBe(false);
+  const tile = (path: string, origin: string, method = "GET") =>
+    checkHost(new Request(`http://t3.localhost:7700${path}`, { method, headers: { host: "t3.localhost:7700", origin, "sec-fetch-site": "cross-site" } }), ["localhost", "127.0.0.1"]);
+  expect(tile("/v1/3dtiles/datasets/x.glb", "http://127.0.0.1:7700")).toBeNull();
+  // Only tiles, only GET, only from Edit's own page.
+  expect(tile("/api/projects", "http://127.0.0.1:7700")?.status).toBe(403);
+  expect(tile("/v1/3dtiles/datasets/x.glb", "http://127.0.0.1:7700", "POST")?.status).toBe(403);
+  expect(tile("/v1/3dtiles/datasets/x.glb", "https://evil.example")?.status).toBe(403);
 });
 
 function request(path: string, init: RequestInit & { host?: string } = {}): Request {

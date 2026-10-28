@@ -127,6 +127,23 @@ async function mark(ctx, ground, opacity) {
   ctx.restore();
 }
 
+// Tiles come from Edit's own server over HTTP/1.1, six at a time a host: a
+// map's hundreds of tiles took minutes. Spread over t0…t7.localhost (this Mac
+// too), the same tile always from the same one so it stays cached.
+const TILES = location.origin + "/v1/3dtiles/datasets/";
+const open = XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+  const href = String(url);
+  if (href.startsWith(TILES)) {
+    let hash = 0;
+    for (let i = 0; i < href.length; i++) hash = (hash * 31 + href.charCodeAt(i)) | 0;
+    url = `http://t${Math.abs(hash) % 8}.localhost:${location.port}${href.slice(location.origin.length)}`;
+  }
+  return open.call(this, method, url, ...rest);
+};
+Cesium.RequestScheduler.maximumRequests = 64;
+Cesium.RequestScheduler.maximumRequestsPerServer = 48;
+
 (async () => {
   Cesium.GoogleMaps.mapTilesApiEndpoint = new Cesium.Resource({ url: C.relay + "/" });
   Cesium.GoogleMaps.defaultApiKey = "relay";

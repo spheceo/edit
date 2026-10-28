@@ -12,6 +12,7 @@ import * as diag from "./diag.ts";
 import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
 import { importDrive, importing } from "./drive_import.ts";
 import * as youtubeSignIn from "./youtube_signin.ts";
+import * as problemReports from "./problem_reports.ts";
 import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
@@ -120,6 +121,24 @@ export function buildRouter(): Router<App> {
     .get("/api/projects/{id}/exports", projectExports)
     .get("/api/storage", async ({ app }) => json({ ...storageReport(app.store.home), exports: await verifyExports(app.store.home) }))
     .post("/api/storage/migrate-media", migrateMedia)
+    // Problem reports (problem_reports.ts): sent from Report a problem; pulled by an admin.
+    .post("/api/reports", async (context) => {
+      const given = await body(context);
+      const report = field<string>(given, "report", "string", true);
+      try {
+        return json(await problemReports.send(context.app.store.home, context.app.machine, report));
+      } catch (error) {
+        throw bad(diag.messageOf(error));
+      }
+    })
+    .get("/api/reports", async ({ app, query }) => {
+      const days = Number(query.get("days") ?? "7");
+      try {
+        return json({ reports: await problemReports.pull(app.store.home, Number.isFinite(days) ? days : 7) });
+      } catch (error) {
+        throw bad(diag.messageOf(error));
+      }
+    })
     // The YouTube sign-in from Chrome (youtube_signin.ts): how it stands, and a check that brings up the Mac's Keychain dialog.
     .get("/api/youtube/sign-in", () => json(youtubeSignIn.status()))
     .post("/api/youtube/sign-in/check", async ({ app }) => json(await youtubeSignIn.check(app.store.home)))

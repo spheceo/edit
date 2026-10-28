@@ -26,7 +26,7 @@
  *                                   AI_GATEWAY_API_KEY (the footage watcher); the gateway's answer as it is
  */
 import { allow, budgetKey, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
-import { EDIT_CALLS, grantedTo, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
+import { EDIT_CALLS, grantedTo, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
 import { cancelJob, driveJob, googleSignIn, jobStatus, proxyJob, type JobsEnv } from "./jobs";
 import { exportRoute, type ModalEnv } from "./exports";
 
@@ -297,6 +297,8 @@ interface Access {
  */
 async function mayTouch(access: Access, op: "read" | "write", key: string): Promise<void> {
   if (op === "write" && !isAdmin(access.found) && !WRITABLE.some((prefix) => key.startsWith(prefix))) throw new Forbidden("Edit doesn't write there.");
+  const refused = op === "read" ? reportRefused(access.found, key) : null;
+  if (refused !== null) throw new Forbidden(refused);
   const project = projectOfKey(key);
   if (project !== null) await mayOpen(access, project);
 }

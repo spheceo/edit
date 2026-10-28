@@ -198,9 +198,14 @@ function ReportDialog() {
   const [comment, setComment] = useState("");
   const [report, setReport] = useState("");
   const [copied, setCopied] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [failed, setFailed] = useState<unknown>(null);
   useEffect(() => {
     if (!open) return;
     setCopied(false);
+    setSent(false);
+    setFailed(null);
     setReport("");
     let current = true;
     void buildReport(trigger, comment).then((text) => current && setReport(text));
@@ -214,13 +219,30 @@ function ReportDialog() {
     setReport(text);
     setCopied(await copyText(text));
   };
+  // To the team's cloud, where whoever looks after Edit reads it: nothing to copy or paste.
+  const send = async () => {
+    setSending(true);
+    setFailed(null);
+    try {
+      const text = comment.trim() ? await buildReport(trigger, comment) : report;
+      setReport(text);
+      await api.sendReport(text);
+      setSent(true);
+    } catch (error) {
+      setFailed(error);
+    } finally {
+      setSending(false);
+    }
+  };
   return (
     <Modal open={open} onClose={closeReport} width={640}>
       <DialogHeader title="Report a problem" />
       <div className="flex flex-col gap-3 px-6 pb-6">
         <p className="text-[13px] leading-relaxed text-muted">
           {trigger ? <span className="text-fg">{trigger}. </span> : null}
-          Copy this report and paste it to whoever is fixing Edit: it has what went wrong, Edit’s recent log and how long things took. Nothing is sent anywhere.
+          {sent
+            ? "Sent. Whoever looks after Edit can read it now: there’s nothing to copy or paste."
+            : "Send this report to the team: it has what went wrong, Edit’s recent log and how long things took. Add what you were doing if you can."}
         </p>
         <input
           value={comment}
@@ -234,16 +256,20 @@ function ReportDialog() {
           onFocus={(event) => event.currentTarget.select()}
           className="h-[300px] resize-none rounded-lg border border-line bg-black/40 p-2.5 font-mono text-[11px] leading-relaxed text-muted outline-none"
         />
+        {failed !== null && <ProblemView error={failed} doing="send the report" />}
         <div className="flex justify-end gap-2">
           <button className="h-8 rounded-lg px-3 text-[13px] text-muted hover:text-fg" onClick={closeReport}>
             Close
           </button>
-          <button
-            disabled={!report}
-            className="h-8 rounded-lg bg-white px-3 text-[13px] font-medium text-black transition-opacity disabled:opacity-40"
-            onClick={() => void copy()}
-          >
+          <button className="h-8 rounded-lg px-3 text-[13px] text-muted hover:text-fg disabled:opacity-40" disabled={!report} onClick={() => void copy()}>
             {copied ? "Copied" : "Copy report"}
+          </button>
+          <button
+            disabled={!report || sending || sent}
+            className="h-8 rounded-lg bg-white px-3 text-[13px] font-medium text-black transition-opacity disabled:opacity-40"
+            onClick={() => void send()}
+          >
+            {sent ? "Sent" : sending ? "Sending…" : "Send to the team"}
           </button>
         </div>
       </div>

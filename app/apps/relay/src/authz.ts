@@ -64,10 +64,23 @@ export const EDIT_CALLS = new Map<string, string>([
 /** Calls that change a project (refused outside the caller's kinds). */
 export const PROJECT_WRITES = new Set(["edit:commitProject", "edit:deleteProject", "edit:acquireLock", "edit:clearRestore"]);
 
-/** Where Edit writes in R2 (cloud_media.ts, covers.ts, reviews.ts, cloud_exports.ts). */
+/**
+ * Problem reports sent from Edit's Report a problem (the error, the log, how
+ * long things took): anyone signed in writes one, only an admin reads or
+ * lists them (they hold another person's log).
+ */
+export const REPORTS = "edit/reports/";
+
+/** Why `found` may not read `key` when it's a problem report (null: they may). */
+export function reportRefused(found: Caller, key: string): string | null {
+  return key.startsWith(REPORTS) && !isAdmin(found) ? "Only an admin reads problem reports." : null;
+}
+
+/** Where Edit writes in R2 (cloud_media.ts, covers.ts, reviews.ts, cloud_exports.ts, reports). */
 export const WRITABLE = [
   "edit/originals/", "edit/proxies/", "edit/excerpts/", "edit/analysis/", "edit/sound/",
   "edit/covers/", "edit/reviews/", "edit/exports/assets/", "edit/exports/manifests/",
+  REPORTS,
 ];
 
 /** What a non-admin may list: the analysis beside a source (cloud_media's fetchAnalysisOf). */

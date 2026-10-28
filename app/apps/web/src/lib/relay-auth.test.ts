@@ -5,6 +5,7 @@ import { exportJWK, generateKeyPair, SignJWT, createLocalJWKSet, type JWK } from
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { allow, budgetKey, caller, useKeys } from "../../../relay/src/auth";
 import { cloud } from "../../../relay/src/cloud";
+import { reportRefused, WRITABLE } from "../../../relay/src/authz";
 import relay, { type Env } from "../../../relay/src/index";
 
 const ISSUER = "https://accounts.example.test";
@@ -121,6 +122,16 @@ describe("relay sign-in gate", () => {
     }
     // Modal's worker routes take only the worker token, never a person's.
     expect(await call("exports/worker/claim", ["use"])).toBe(401);
+  });
+
+  it("lets anyone signed in send a problem report (Edit writes there), and only an admin read one", () => {
+    const person = { kind: "person" as const, sub: "a", perms: ["use", "edit.bodycam"], admin: false };
+    const admin = { ...person, admin: true };
+    const key = "edit/reports/2026-10-28/kenobi-1.txt";
+    expect(WRITABLE.some((prefix) => key.startsWith(prefix))).toBe(true);
+    expect(reportRefused(person, key)).toBe("Only an admin reads problem reports.");
+    expect(reportRefused(admin, key)).toBeNull();
+    expect(reportRefused(person, "edit/covers/p1.jpg")).toBeNull();
   });
 
   it("gives voice generation (paid) to editing: any edit style, an admin, or a token from before v2; not subtitles alone", async () => {

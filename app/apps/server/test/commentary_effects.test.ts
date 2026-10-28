@@ -42,9 +42,17 @@ test("the full-screen video pulls back into the YouTube page as one camera, stil
   const made = player(p, { clip: "full", at: 30, title: "N3ON X YE - DONDA 2 RELEASE", channel: "N3ON", subscribers: "1.2M" });
   const v = p.clips.find((c) => c.id === "full")!;
   const scale = v.keyframes!.scale!;
-  // Full frame until the pull-back, then down to the player's size.
+  // Full frame until the pull-back, down to the player's size, and smoothly back to full frame by its end.
   expect(scale[0]!.value).toBeCloseTo(1);
-  expect(scale.at(-1)!.value).toBeLessThan(0.7);
+  expect(Math.min(...scale.map((k) => k.value))).toBeLessThan(0.7);
+  expect(scale.at(-1)!.value).toBeCloseTo(1);
+  expect(scale.at(-1)!.frame).toBe(199);
+  // back: false holds the page to the cut.
+  const held = project("held");
+  held.media.push(media({ id: "v", name: "V", kind: "video", path: "/v.mp4", duration: 60, width: 1920, height: 1080, has_audio: false }));
+  held.clips.push(clip({ id: "full", type: "video", media: "v", track: "v1", start: 0, duration: 200 }));
+  player(held, { clip: "full", at: 30, title: "t", channel: "c", back: false });
+  expect(held.clips.find((c) => c.id === "full")!.keyframes!.scale!.at(-1)!.value).toBeLessThan(0.7);
   expect((made.clips as string[]).length).toBeGreaterThan(3);
   expect(() => player(p, { clip: "full", at: 195, title: "t", channel: "c" })).toThrow("inside the clip");
 });

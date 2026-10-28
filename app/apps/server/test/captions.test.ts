@@ -29,6 +29,7 @@ import {
   spelledAsTheCase,
 } from "../src/captions.ts";
 import { routes } from "../src/captions_tools.ts";
+import { clipFrom } from "../src/clips.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import type { Clip, Media, Project, Rgba, TextClip, TextStyle, Transform } from "../src/model.ts";
@@ -432,6 +433,17 @@ test("track_region, transcribe, find_in_footage and the routes answer", async ()
     expect((await call(app, "track_region", { project_id: id, time: 1, follow: "a", box: [1, 2, 3, 4], boxes: [{ time: 99, box: [1, 2, 3, 4] }] })).text).toBe(
       "the box at 99.00s isn't on the footage tracked (f plays 0.00–30.00s); give boxes on that clip",
     );
+    // A callout's words track the footage under them, never the arrow picture drawn above them (N3on v2's Sky Bri arrow "stays still").
+    {
+      const project = structuredClone(app.store.get(id)!.project) as Project;
+      for (const track of ["v8", "v9"]) if (!project.tracks.some((one) => one.id === track)) project.tracks.push({ id: track, kind: "video" } as Project["tracks"][number]);
+      project.clips.push(clipFrom({ id: "t", track: "v8", start: 0, duration: 900, type: "text", text: "SKY BRI" }));
+      project.clips.push(clipFrom({ id: "w", track: "v9", start: 0, duration: 900, type: "video", media: "m", name: "Janitor · arrow" }));
+      await app.store.replace(id, null, project, "test");
+      expect((await call(app, "track_region", { project_id: id, time: 1, follow: "t", box: [1, 2, 3, 4], boxes: [{ time: 99, box: [1, 2, 3, 4] }] })).text).toBe(
+        "the box at 99.00s isn't on the footage tracked (f plays 0.00–30.00s); give boxes on that clip",
+      );
+    }
     expect((await call(app, "transcribe", { project_id: id, media_id: "m" })).text).toBe('transcript for bodycam: "ready"');
     expect((await call(app, "transcribe", { project_id: id, media_id: "x" })).text).toBe("no media x");
     const found = await call(app, "find_in_footage", { project_id: id, phrases: ["stop moving"] });

@@ -1589,12 +1589,17 @@ export async function followRegion(
   const fps = fpsOf(project);
   const [width, height] = [project.settings.width, project.settings.height];
   const frame = toI64(Math.floor(time * fps));
-  // The topmost visible footage under that moment.
+  // The topmost visible footage under that moment, beneath the clip that
+  // follows it: never a layer above it, nor another callout's arrow (N3on v2:
+  // the Sky Bri arrow tracked its own arrow picture and "stays still").
   const order = project.tracks.filter((track) => track.kind === "video" && !track.hidden).map((track) => track.id);
+  const followed = project.clips.find((clip) => clip.id === follow);
+  const ceiling = followed === undefined ? Infinity : order.indexOf(followed.track);
   let footage: VideoClip | null = null;
   let best = -2;
   for (const clip of project.clips) {
     if (clip.type !== "video" || !clipContains(clip, frame) || clip.id === follow) continue;
+    if ((ceiling >= 0 && order.indexOf(clip.track) > ceiling) || clip.name === "Janitor · arrow") continue;
     // None (-1) under any Some; the last of equals (Rust's max_by_key).
     const rank = order.indexOf(clip.track);
     if (rank >= best) {

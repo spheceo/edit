@@ -651,17 +651,32 @@ export function player(p: Project, a: Args): Args {
   if (at < c.start || at >= end - 12 || end > clipEnd(c)) throw new Error("at…end must sit inside the clip, at least 12 frames");
   if (typeof a.title !== "string" || typeof a.channel !== "string") throw new Error("commentary_player needs title and channel (youtube_reference gives them)");
   const w = p.settings.width; const h = p.settings.height; const k = h / 1080;
-  const frames = Math.min(Math.max(number(a, "frames", 24), 10), Math.floor((end - at) / 2));
+  const d = end - at;
+  // Out, a slow drift while it holds, and back to full screen by `end` (the
+  // team, N3on v2: "make the zoom out a bit more smooth… when you then have to
+  // zoom in again, you just cut it right back… When doing a transition one
+  // way, a lot of the times you need to do the same thing back"); back: false holds to the cut.
+  const frames = Math.min(Math.max(number(a, "frames", 36), 10), Math.floor(d / 2));
+  const back = a.back === false ? 0 : Math.min(Math.max(number(a, "back", 22), 8), Math.floor((d - frames) / 2));
   // The page as YouTube lays it out at 1080p (theatre-like: the player wide, the details under it).
   const pw = 0.66 * w; const ph = pw * 9 / 16; const left = -pw / 2 - 0.12 * w; const top = -h / 2 + 0.05 * h;
   const pc: [number, number] = [left + pw / 2, top + ph / 2];
   // Camera: S from "the player fills the frame" to 1, the player's centre from the frame's to its own.
   const S0 = Math.max(w / pw, h / ph);
-  const ease = (t: number) => { const u = Math.min(Math.max(t, 0), 1); return 1 - Math.pow(1 - u, 3.2); };
-  const camera = (f: number) => { const e = ease(f / frames); const S = S0 + (1 - S0) * e; return { S, cx: pc[0] * e, cy: pc[1] * e }; };
+  // Smootherstep: eased in and out, no snap at either end.
+  const ease = (t: number) => { const u = Math.min(Math.max(t, 0), 1); return u * u * u * (u * (6 * u - 15) + 10); };
+  const last = d - 1; const turn = last - back; const drift = 0.035;
+  const camera = (f: number) => {
+    if (f <= frames) { const e = ease(f / frames); return { S: S0 + (1 - S0) * e, cx: pc[0] * e, cy: pc[1] * e }; }
+    const held = 1 - drift * ease((f - frames) / Math.max(turn - frames, 1));
+    if (back === 0 || f <= turn) return { S: held, cx: pc[0], cy: pc[1] };
+    const e = ease((f - turn) / back); const Sh = 1 - drift;
+    return { S: Sh + (S0 - Sh) * e, cx: pc[0] * (1 - e), cy: pc[1] * (1 - e) };
+  };
+  const steps = [...new Set([...Array.from({ length: Math.ceil(d / 2) }, (_, i) => i * 2), frames, turn, last].filter((f) => f >= 0 && f <= last))].sort((p, q) => p - q);
   const bake = (from: number, base: (S: number, cx: number, cy: number) => { x: number; y: number; scale: number }) => {
     const keys: Record<string, ReturnType<typeof key>[]> = { x: [], y: [], scale: [] };
-    for (let f = 0; f <= frames; f += 2) { const { S, cx, cy } = camera(f); const v = base(S, cx, cy); keys.x!.push(key(from + f, v.x)); keys.y!.push(key(from + f, v.y)); keys.scale!.push(key(from + f, v.scale)); }
+    for (const f of steps) { const { S, cx, cy } = camera(f); const v = base(S, cx, cy); keys.x!.push(key(from + f, v.x)); keys.y!.push(key(from + f, v.y)); keys.scale!.push(key(from + f, v.scale)); }
     return keys;
   };
   const made: string[] = [];
@@ -670,9 +685,15 @@ export function player(p: Project, a: Args): Args {
   // The video: its own framing scaled by the camera, its centre carried to the player's.
   const m = mediaOf(p, c.media)!; const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
   const coverNow = c.transform.scale; const inPlayer = Math.min(pw / (m.width * fit), ph / (m.height * fit));
-  const vkeys = bake(at - c.start, (S, cx, cy) => ({ x: cx, y: cy, scale: inPlayer * S }));
-  // Full-screen until `at`, on its own framing.
-  for (const name of ["x", "y", "scale"] as const) vkeys[name]!.unshift(key(0, name === "scale" ? coverNow : c.transform[name]), key(Math.max(0, at - c.start - 1), name === "scale" ? coverNow : c.transform[name]));
+  // Sized so the camera's full-screen ends match the clip's own framing exactly (no jump on or off it).
+  const fitted = coverNow / (inPlayer * S0);
+  const vkeys = bake(at - c.start, (S, cx, cy) => ({ x: cx, y: cy, scale: inPlayer * S * fitted }));
+  // Full-screen until `at`, on its own framing, and back on it at the end.
+  for (const name of ["x", "y", "scale"] as const) {
+    const own = name === "scale" ? coverNow : c.transform[name];
+    vkeys[name]!.unshift(key(0, own), key(Math.max(0, at - c.start - 1), own));
+    if (back > 0) vkeys[name]!.at(-1)!.value = own;
+  }
   // Rounded like YouTube's player once it's small.
   (c as { keyframes?: unknown }).keyframes = { ...(c.keyframes ?? {}), ...vkeys };
   (c as { frame?: unknown }).frame = { color: [1, 1, 1, 1], width: 0, shadow: 0, radius: 14 * k / inPlayer };

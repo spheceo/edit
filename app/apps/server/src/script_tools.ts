@@ -17,6 +17,7 @@ import { ApiError, bad, notFound } from "./http/errors.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
 import { image, registerTool, text, type Content } from "./mcp/registry.ts";
 import * as kinds from "./kinds.ts";
+import { voiceFor } from "./styles.ts";
 import type { Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { duration as projectDuration, fps as fpsOf } from "./project.ts";
@@ -421,14 +422,16 @@ async function voiceCreate(context: RouteContext<App>): Promise<Response> {
   const fromProject = given.from_project as string | null;
   let name = given.name as string;
   let lines: [string, string | null][] = [];
+  let voiceId: string | null = null;
   if (fromProject !== null) {
     const live = projectOr404(app, fromProject);
+    voiceId = voiceFor(live.project.style);
     lines = narrationLines(live.project);
     if (lines.length === 0) throw bad("That project's script has no cut-ins to voice.");
     if (trim(name) === "") name = `${live.project.name} (voice-over)`;
   }
   try {
-    return sortedJson({ project: app.voices.create(name, fromProject, lines) });
+    return sortedJson({ project: app.voices.create(name, fromProject, lines, voiceId) });
   } catch (error) {
     throw badOf(error);
   }

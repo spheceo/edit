@@ -7,7 +7,8 @@ import * as fs from "node:fs";
 import { layOut } from "../src/script.ts";
 import * as tools from "../src/tools.ts";
 import { timing as transcribeTiming } from "../src/transcribe.ts";
-import { Voices } from "../src/voice.ts";
+import { defaultSettings, HOUSE_VOICE, Voices } from "../src/voice.ts";
+import { voiceFor } from "../src/styles.ts";
 import { generate, timing as voiceoverTiming } from "../src/voiceover.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import { MockServer, scribeAnswer } from "./mocks/server.ts";
@@ -197,4 +198,20 @@ test.skipIf(ffmpeg === null || Bun.which("ffprobe") === null)("recovery preserve
     expect(after.clips.filter((clip) => clip.name === "Voice-over")).toHaveLength(0);
     expect(app.voices.chosenTakes((app.voices.list()[0] as { id: string }).id)).toHaveLength(1);
   } finally { cleanup(); }
+});
+
+test("a kind of video's own narrator voices its cut-ins; without one, the house voice", () => {
+  const { dir, cleanup } = scratch("voice-style");
+  try {
+    const voices = new Voices(dir);
+    // No style names a narrator yet: the house voice, as before.
+    expect(voiceFor("bodycam")).toBeNull();
+    expect(voices.create("Bodycam (voice-over)", "p1", [["One.", "Cut-in 1"]], voiceFor("bodycam")).voice.voice_id).toBe(HOUSE_VOICE);
+    // A courtroom's notes saying `voice: <id>`: its voice-overs start with that voice.
+    const court = voices.forProject("Court (voice-over)", "p2", [["Two.", "Cut-in 1"]], "ZmqEPiBIr4itJeB29TyD");
+    expect(court.voice.voice_id).toBe("ZmqEPiBIr4itJeB29TyD");
+    expect(court.voice.speed).toBe(defaultSettings().speed);
+  } finally {
+    cleanup();
+  }
 });

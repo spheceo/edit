@@ -317,14 +317,14 @@ export class Voices {
   }
 
   /** A new voice-over; with `lines`, one line each (e.g. a video project's cut-ins). */
-  create(name: string, source: string | null, lines: [string, string | null][]): VoiceProject {
+  create(name: string, source: string | null, lines: [string, string | null][], voiceId: string | null = null): VoiceProject {
     const now = nowMs();
     const project: VoiceProject = {
       id: `v${now}`,
       name: trim(name) === "" ? "Untitled voice-over" : trim(name),
       created_ms: now,
       modified_ms: now,
-      voice: defaultSettings(),
+      voice: voiceId === null ? defaultSettings() : { ...defaultSettings(), voice_id: voiceId },
       lines: [],
       next_id: 0,
     };
@@ -345,7 +345,7 @@ export class Voices {
   }
 
   /** Video project `source`'s voice-over of these lines: the latest one made from the same words, or a new one. */
-  forProject(name: string, source: string, lines: [string, string | null][]): VoiceProject {
+  forProject(name: string, source: string, lines: [string, string | null][], voiceId: string | null = null): VoiceProject {
     for (const summary of this.list()) {
       let project: VoiceProject;
       try {
@@ -361,7 +361,7 @@ export class Voices {
         return project;
       }
     }
-    return this.create(name, source, lines);
+    return this.create(name, source, lines, voiceId);
   }
 
   update(id: string, given: unknown): VoiceProject {

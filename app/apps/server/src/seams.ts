@@ -329,8 +329,9 @@ export interface ScriptSeam {
 export interface Voices {
   list(): Json[];
   get(id: string): VoiceProject;
-  create(name: string, source: string | null, lines: [string, string | null][]): VoiceProject;
-  forProject(name: string, source: string, lines: [string, string | null][]): VoiceProject;
+  /** `voiceId`: the narrator (the video's style's, `styles.voiceFor`); null for the house voice. */
+  create(name: string, source: string | null, lines: [string, string | null][], voiceId?: string | null): VoiceProject;
+  forProject(name: string, source: string, lines: [string, string | null][], voiceId?: string | null): VoiceProject;
   save(project: VoiceProject): void;
   /** The UI's changes (`Changes`, as JSON; refused in serde's words). */
   update(id: string, changes: Json): VoiceProject;

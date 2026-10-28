@@ -81,12 +81,15 @@ export const INSTRUCTIONS = parse(FILES["instructions.md"] ?? "").body.replace(
 );
 
 /** Each style's own rules and skills, by the style's folder name. */
-export const STYLES: Record<string, { notes: string; skills: Skill[] }> = {};
+export const STYLES: Record<string, { notes: string; skills: Skill[]; voice?: string }> = {};
 for (const path of Object.keys(FILES)) {
   const style = /^styles\/([a-z0-9-]+)\//.exec(path)?.[1];
   if (style === undefined || style in STYLES) continue;
   const notes = FILES[`styles/${style}/notes.md`];
-  STYLES[style] = { notes: notes === undefined ? "" : parse(notes).body, skills: skillsIn(`styles/${style}/skills/`) };
+  const parsed = notes === undefined ? null : parse(notes);
+  // `voice: <ElevenLabs voice id>` in the notes' frontmatter: its narrator, where it isn't the house voice.
+  const voice = parsed?.fields.voice;
+  STYLES[style] = { notes: parsed?.body ?? "", skills: skillsIn(`styles/${style}/skills/`), ...(voice ? { voice } : {}) };
 }
 
 /** Every file's path under agent/ (the test checks each one is used). */

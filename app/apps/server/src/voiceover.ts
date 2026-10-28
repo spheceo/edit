@@ -3,6 +3,7 @@
 // that stretch of audio is laid where the cut-in is. The cut-in is lengthened
 // to it and everything after moves with it, so the timeline stays butted.
 
+import { voiceFor } from "./styles.ts";
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
@@ -269,7 +270,7 @@ export async function generate(app: App, id: string, missingOnly = false): Promi
   const lines = seams.voice.narrationLines(live.project);
   if (lines.length === 0) return { media: [] };
   const name = `${live.project.name} (voice-over)`;
-  const project = app.voices.forProject(name, id, lines);
+  const project = app.voices.forProject(name, id, lines, voiceFor(live.project.style));
   // One at a time, in order: each line carries on from the one before.
   for (const line of project.lines) {
     if (line.chosen === null) await app.voices.generate(project.id, line.id);
@@ -396,7 +397,7 @@ export async function revoice(app: App, id: string, cutIn: number, text: string 
     .map((summary) => app.voices.get((summary as { id: string }).id))
     .filter((own) => own.source === id && own.lines.some((line) => line.label === label))
     .sort((a, b) => b.modified_ms - a.modified_ms)[0];
-  voice ??= app.voices.create(`${live.project.name} (voice-over)`, id, lines);
+  voice ??= app.voices.create(`${live.project.name} (voice-over)`, id, lines, voiceFor(live.project.style));
   const line = voice.lines.find((own) => own.label === label);
   if (line === undefined) throw new Error(`the voice-over has no line for ${label}`);
   line.text = words;

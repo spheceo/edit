@@ -303,7 +303,8 @@ async function downloadNow(
   const routes = routesFor(proxy, 2);
   let failure = "";
   let updated = false;
-  for (const [attempt, route] of routes.entries()) {
+  for (let attempt = 0; attempt < routes.length; ) {
+    const route = routes[attempt]!;
     const result = await diag.timeOnAsync("youtube", "youtube: download", `${id}${said(route)}`, () =>
       runYtdlp(binary, url, dir, route, progress),
     );
@@ -322,15 +323,17 @@ async function downloadNow(
         binary = await freshen(binary, true);
         diag.warn("youtube", `${id}: ${failure}; trying again with the newest yt-dlp`);
         routes.splice(attempt + 1, 0, route);
+        attempt += 1;
         continue;
       } catch (error) {
         diag.warn("youtube", `updating yt-dlp: ${diag.messageOf(error)}`);
       }
     }
-    const last = attempt === routes.length - 1;
-    if (last || !worthAnother(result.stderr, routes[attempt + 1]!)) break;
-    diag.warn("youtube", `${id}: ${failure}; trying again${said(routes[attempt + 1]!)}`);
+    const next = nextRoute(routes, attempt, result.stderr);
+    if (next === null) break;
+    diag.warn("youtube", `${id}: ${failure}; trying again${said(routes[next]!)}`);
     await timing.pause(attempt === 0 ? 3000 : 1000);
+    attempt = next;
   }
   throw new Error(`YouTube video ${id} couldn't be downloaded: ${failure}`);
 }
@@ -342,17 +345,17 @@ interface Route {
 }
 
 /**
- * The ways to ask, in order: straight (it costs nothing), with the editor's
- * YouTube sign-in from Chrome when there is one (else straight again: YouTube's
- * refusals come and go), then through the proxy when there is one. `straight`
- * is how many tries go before the proxy.
+ * The ways to ask, in order: straight (it costs nothing; `straight` times,
+ * YouTube's refusals come and go), through the proxy when there is one, and
+ * last the editor's YouTube sign-in from Chrome when there is one (the user,
+ * Oct 28: "a sort of last resort … other than that, we should just have
+ * things work").
  */
 function routesFor(proxy: string, straight: number): Route[] {
-  const signIn = cookieArgs();
-  const routes: Route[] = [{ proxy: null, signIn: [] }];
-  if (straight > 1) routes.push({ proxy: null, signIn });
-  else if (signIn.length > 0) routes.push({ proxy: null, signIn });
+  const routes: Route[] = Array.from({ length: straight }, () => ({ proxy: null, signIn: [] }));
   if (proxy !== "") routes.push({ proxy, signIn: [] });
+  const signIn = cookieArgs();
+  if (signIn.length > 0) routes.push({ proxy: null, signIn });
   return routes;
 }
 
@@ -365,10 +368,17 @@ function needsSignIn(stderr: string): boolean {
   return /confirm your age|age.restricted|members.only|Join this channel|Private video|This video is private/i.test(errorLine(stderr));
 }
 
-/** Whether the next route may get what this one didn't. */
-function worthAnother(stderr: string, next: Route): boolean {
-  if (needsSignIn(stderr)) return next.signIn.length > 0;
-  return refused(stderr) || noVideo(stderr);
+/**
+ * The route to try after `attempt` failed, or null when none can help: a
+ * video that needs a signed-in YouTube goes straight to the sign-in (no other
+ * route can get it), a refusal or no video to the next route.
+ */
+function nextRoute(routes: Route[], attempt: number, stderr: string): number | null {
+  if (needsSignIn(stderr)) {
+    const at = routes.findIndex((route, index) => index > attempt && route.signIn.length > 0);
+    return at < 0 ? null : at;
+  }
+  return attempt + 1 < routes.length && (refused(stderr) || noVideo(stderr)) ? attempt + 1 : null;
 }
 
 async function runYtdlp(
@@ -485,12 +495,11 @@ export async function downloadRange(home: string, id: string, range: [number, nu
   const binary = await ytdlp(home); const proxy = process.env.PROXY_URL?.trim() ?? "";
   const routes = routesFor(proxy, 1);
   let failure = "";
-  for (const [attempt, route] of routes.entries()) {
-    const result = await runYtdlp(binary, `https://www.youtube.com/watch?v=${id}`, dir, route, progress, range);
+  for (let attempt: number | null = 0; attempt !== null; ) {
+    const result = await runYtdlp(binary, `https://www.youtube.com/watch?v=${id}`, dir, routes[attempt]!, progress, range);
     if (result.path !== null) return { path: result.path, name: result.path.slice(dir.length + 1), size: fs.statSync(result.path).size };
     failure = errorLine(result.stderr);
-    const next = routes[attempt + 1];
-    if (next === undefined || !worthAnother(result.stderr, next)) break;
+    attempt = nextRoute(routes, attempt, result.stderr);
   }
   throw new Error(`YouTube excerpt ${id} ${range[0]}–${range[1]} couldn't be downloaded: ${failure}`);
 }

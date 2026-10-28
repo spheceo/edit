@@ -28,6 +28,16 @@ export function guide(style: Style): Guide {
   return TEXT[style] ?? NONE;
 }
 
+/**
+ * The narrator a kind of video's generated voice-overs use: its notes'
+ * `voice:` (a courtroom isn't a bodycam: JJ, Oct 28, "I selected the
+ * courtroom edit option, but the voice was the one from bodycam"), else null
+ * for the house voice.
+ */
+export function voiceFor(style: Style): string | null {
+  return TEXT[style]?.voice ?? null;
+}
+
 /** The skill called `name` for this style: its own version, else the house one. */
 export function skill(style: Style, name: string): Skill | undefined {
   return guide(style).skills.find((own) => own.name === name) ?? skills.get(name);

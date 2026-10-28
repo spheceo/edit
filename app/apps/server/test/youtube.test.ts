@@ -300,7 +300,7 @@ echo "EDIT-FILE $out/Some title [abcdefghijk].mp4"
   }
 });
 
-test("an age-restricted video is asked again with the YouTube sign-in from Chrome, never through the proxy", async () => {
+test("the YouTube sign-in from Chrome is the last resort: an age-restricted video goes straight to it, a bot check only after the proxy", async () => {
   const { dir, cleanup } = scratch("youtube-signin");
   const before = { chrome: signInWhere.chrome, setting: process.env.EDIT_YOUTUBE_SIGNIN, proxy: process.env.PROXY_URL };
   try {
@@ -325,6 +325,17 @@ test("an age-restricted video is asked again with the YouTube sign-in from Chrom
     expect(args).toContain("--cookies-from-browser");
     expect(args).toContain(`chrome:${dir}/Chrome/Profile 2`);
     expect(args).not.toContain("--proxy");
+
+    // A bot check: straight twice, the proxy, and only then the sign-in (never sent through the proxy).
+    const bot = `${dir}/bot`;
+    fs.mkdirSync(bot);
+    const botCalls = fakeScripted(bot, ["ERROR: [youtube] abc: Sign in to confirm you are not a bot", "ERROR: [youtube] abc: Sign in to confirm you are not a bot", "ERROR: [youtube] abc: Sign in to confirm you are not a bot"]);
+    process.env.EDIT_YTDLP = `${bot}/yt-dlp`;
+    await download(bot, "abcdefghijk", `${bot}/out`, () => {});
+    expect(fs.readFileSync(botCalls, "utf8").trim()).toBe("4");
+    const last = fs.readFileSync(`${bot}/args`, "utf8").split("\n");
+    expect(last).toContain("--cookies-from-browser");
+    expect(last).not.toContain("--proxy");
   } finally {
     signInWhere.chrome = before.chrome;
     for (const [key, value] of [["EDIT_YOUTUBE_SIGNIN", before.setting], ["PROXY_URL", before.proxy]] as const) {

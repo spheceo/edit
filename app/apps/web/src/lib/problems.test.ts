@@ -64,6 +64,12 @@ describe("explain", () => {
     expect(explain("write failed: ENOSPC: no space left on device").title).toBe("Your Mac's disk is full");
   });
 
+  it("names the reused script that can't be read, whole", () => {
+    const said = explain("Couldn't read the reused script https://docs.google.com/document/d/1Abc/edit: Couldn't read that Google Doc. Share it so anyone with the link can view, then try again.");
+    expect(said.title).toBe("A script linked in this one can't be read");
+    expect(said.fix).toContain("Share https://docs.google.com/document/d/1Abc/edit so anyone");
+  });
+
   it("doesn't take another service's limit for Claude's", () => {
     expect(explain("Google Drive answered 429: Rate Limit Exceeded").title).toBe("Google Drive is having trouble");
   });

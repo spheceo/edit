@@ -274,6 +274,8 @@ export interface Parsed {
   skipped?: { doc: string; title?: string; why: string }[];
   /** The kind of video its heading names ("COURT …"), when it says. */
   style?: Style;
+  /** Its first line, as written (its name when the Doc's own title is missing). */
+  heading?: string;
 }
 
 /** What Drive serves for a file: the last response's headers after redirects. */

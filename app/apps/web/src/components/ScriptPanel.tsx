@@ -85,9 +85,10 @@ function StandInVoice({ project }: { project: Project }) {
   };
   return (
     <div className="border-b border-line px-3.5 py-2.5 text-[12px]">
-      <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 leading-relaxed text-muted">
-          <span className="text-fg">Stand-in voice.</span> {STYLES.find((one) => one.value === project.style)?.label} videos are narrated by your recording.
+      <div className="flex flex-col items-start gap-2">
+        <span className="leading-relaxed text-muted">
+          <span className="text-fg">Stand-in voice.</span> {STYLES.find((one) => one.value === project.style)?.label} videos are narrated by your
+          recording: add it and it goes on the cut-ins it reads.
         </span>
         <Button size="sm" disabled={busy} onClick={() => picker.current?.click()}>
           {busy ? "Placing it…" : "Add the recording"}

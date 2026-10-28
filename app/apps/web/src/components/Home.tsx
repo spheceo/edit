@@ -12,6 +12,7 @@ import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
 import { NARRATION, STYLES, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
+import { ProblemView } from "./ProblemView";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
@@ -832,10 +833,15 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
         {script && (
           <div className="truncate px-3 pb-2 text-[12px] text-muted">
             {preview?.error ? (
-              <span className="text-danger">{preview.error}</span>
+              <ProblemView error={preview.error} doing="read the script" className="whitespace-normal py-1" />
             ) : preview?.result ? (
               <span className="tabular">
                 <span className="text-fg">{preview.result.title || "Untitled script"}</span> · {preview.result.files} {preview.result.files === 1 ? "source" : "sources"} · {preview.result.narration} cut-ins · {preview.result.whole ? "duration after import" : shortDuration(preview.result.seconds)}
+                {preview.result.finished?.map((one) => (
+                  <span key={one} className="block truncate whitespace-normal text-faint">
+                    Puts in the finished video “{one}”, played as it is
+                  </span>
+                ))}
                 {preview.result.reused?.map((one) => (
                   <span key={one.doc} className="block truncate whitespace-normal text-faint">
                     Reuses “{one.title || "a linked script"}” as written ({one.footage} {one.footage === 1 ? "range" : "ranges"})

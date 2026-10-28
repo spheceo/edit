@@ -123,7 +123,7 @@ const RULES: Rule[] = [
   })],
 
   // Google Drive and Docs.
-  [/Couldn't read the reused script (\S+?):/i, (match) => ({
+  [/Couldn't read the reused script (\S+?):\s/i, (match) => ({
     title: "A script linked in this one can't be read",
     fix: `Share ${match[1]} so anyone with the link can view (any Google Doc linked in a script is read as a script to reuse), or take its link out of the script.`,
     action: "retry",

@@ -227,6 +227,8 @@ export const api = {
       skipped?: { doc: string; title?: string; why: string }[];
       /** The kind of video its heading names ("COURT …"). */
       style?: Style;
+      /** Finished videos of ours put in by their review link, by name. */
+      finished?: string[];
     }>("POST", "/api/scripts/preview", { url }),
   /** Uploads one file into a project's media (not placed); the media ids it added. */
   uploadFile: async (id: string, file: File, origin: string) => {

@@ -690,7 +690,8 @@ export async function joinCases(
       throw new Error(`Couldn't read the reused script https://docs.google.com/document/d/${doc}/edit: ${diag.messageOf(error)}`);
     }
     const inner = await joinCases(parse(html), read, new Set([...seen, doc]), depth + 1);
-    const title = inner.title;
+    // Its name: the Doc's title, else its first line ("INTERRO Elias Campos - The Interview").
+    const title = inner.title || inner.heading;
     if (!inner.blocks.some((block) => block.kind === "footage")) {
       skipped.unshift({ doc, ...(title ? { title } : {}), why: "it has no footage ranges, so it isn't a script to reuse" });
       continue;
@@ -935,7 +936,8 @@ export function parse(html: string): Parsed {
     }
     docsBefore(Number.MAX_SAFE_INTEGER);
   }
-  return { title, blocks, ...(cases.length > 0 ? { cases } : {}), ...(style !== null ? { style } : {}) };
+  const first = heading === undefined ? "" : collapse(heading.text);
+  return { title, blocks, ...(cases.length > 0 ? { cases } : {}), ...(style !== null ? { style } : {}), ...(first !== "" ? { heading: first } : {}) };
 }
 
 /** `str::parse::<f64>`: the whole text a decimal number (or inf/NaN), else null. */
@@ -2523,12 +2525,17 @@ export function summary(parsed: Parsed): {
   reused?: Parsed["reused"];
   skipped?: Parsed["skipped"];
   style?: Style;
+  finished?: string[];
 } {
   const files: string[] = [];
   let footage = 0;
   let narration = 0;
   let seconds = 0;
   let whole = 0;
+  // Finished videos by their review link, by name (compilation_input's note).
+  const finished = [
+    ...new Set(parsed.blocks.flatMap((block) => (block.notes ?? []).filter((note) => note.startsWith("Finished video: ")).map((note) => note.slice("Finished video: ".length).replace(/, played as it is$/, "")))),
+  ];
   for (const block of parsed.blocks) {
     if (block.kind === "footage") {
       footage += 1;
@@ -2550,5 +2557,6 @@ export function summary(parsed: Parsed): {
     ...(parsed.reused?.length ? { reused: parsed.reused } : {}),
     ...(parsed.skipped?.length ? { skipped: parsed.skipped } : {}),
     ...(parsed.style ? { style: parsed.style } : {}),
+    ...(finished.length > 0 ? { finished } : {}),
   };
 }

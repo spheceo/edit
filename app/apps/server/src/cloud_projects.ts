@@ -1264,8 +1264,41 @@ function keepCopy(app: App, cloudProjects: Cloud, id: string, tookOver: string |
 
 /** The cloud has moved on past this machine's base: keep ours as a copy, take theirs. */
 async function conflict(app: App, cloudProjects: Cloud, id: string): Promise<void> {
+  if (await ownSave(cloudProjects, id)) return;
   if (cloudProjects.dirty(id)) keepCopy(app, cloudProjects, id, null);
   return pull(app, cloudProjects, id);
+}
+
+/** The last save each project sent: its base rev, the edits it carried, and its body's hash. */
+const attempts = new Map<string, { base: number; edits: number; hash: string }>();
+
+function bodyHash(body: string): string {
+  return new Bun.CryptoHasher("sha256").update(body).digest("hex");
+}
+
+/**
+ * Whether the "conflict" is this machine's own save: one whose answer was
+ * lost (a timeout under load) but which landed, so the cloud's next rev is
+ * exactly what was sent. Then it's taken as saved, and nothing is copied
+ * (card 2 of Oct 28: a lost answer, then "saved elsewhere since rev 23",
+ * and a "(conflicted copy)" of a project nobody else was editing).
+ */
+async function ownSave(cloudProjects: Cloud, id: string): Promise<boolean> {
+  const attempt = attempts.get(id);
+  if (attempt === undefined) return false;
+  attempts.delete(id);
+  try {
+    const meta = await remote.get(id);
+    if (meta === null || meta.rev !== attempt.base + 1 || meta.bodyUrl === "") return false;
+    const body = new TextDecoder().decode(await http("GET", meta.bodyUrl, null, SLOW));
+    if (bodyHash(body) !== attempt.hash) return false;
+    cloudProjects.with(id, (entry) => entry.pushed(meta.rev, attempt.edits));
+    diag.info("cloud", `${id}: the cloud's rev ${meta.rev} is this machine's own save (its answer was lost): taken as saved, no copy`);
+    return true;
+  } catch (error) {
+    diag.warn("cloud", `${id}: checking whether a conflict is its own lost save: ${diag.messageOf(error)}`);
+    return false;
+  }
 }
 
 /** Someone else has the lock: changes made here become a copy, the editor goes read-only and shows their version. */
@@ -1294,11 +1327,14 @@ async function push(app: App, cloudProjects: Cloud, id: string): Promise<void> {
   const [base, token, edits] = state;
   const started = performance.now();
   let rev: number;
+  // What's being sent, in case its answer is lost but the save lands (see `ownSave`).
+  attempts.set(id, { base, edits, hash: bodyHash(JSON.stringify(live.project)) });
   try {
     rev = await remote.push(live.project, base, token, cloudProjects.holder());
   } catch (error) {
     return failure(app, cloudProjects, id, error);
   }
+  attempts.delete(id);
   diag.record("cloud", "cloud: push", performance.now() - started, null);
   cloudProjects.with(id, (entry) => entry.pushed(rev, edits));
   // Whatever the edit uses that isn't in the cloud yet goes up.

@@ -345,6 +345,24 @@ test("offline, writes go ahead and are queued", async () => {
   }
 });
 
+test("its own save that landed while its answer was lost is no conflict: no copy, the rev taken (card 2, Oct 28)", async () => {
+  const { app, store, projects, cleanup } = setup("cloud-own-save");
+  try {
+    const id = store.create("Case", SETTINGS_1080).project.id;
+    await runStep(app, projects, id, "Acquire");
+    await runStep(app, projects, id, "Push");
+    await store.update(id, "test", (project) => void (project.name = "Case (my edit)"));
+    // This very edit reached the cloud as rev 2, but the answer never came back (a timeout under load).
+    mock.cloud.convex.saveElsewhere(structuredClone(store.get(id)!.project) as unknown as Record<string, unknown>, "kenobi");
+    await runStep(app, projects, id, "Push");
+    expect(store.list().some((summary) => summary.name.endsWith("(conflicted copy)"))).toBe(false);
+    expect(store.get(id)!.project.name).toBe("Case (my edit)");
+    expect(projects.status(id)).toMatchObject({ rev: 2, dirty: false });
+  } finally {
+    cleanup();
+  }
+});
+
 test("a conflict keeps this machine's changes as a conflicted copy and takes the cloud's version", async () => {
   const { app, store, projects, events, cleanup } = setup("cloud-conflict");
   try {

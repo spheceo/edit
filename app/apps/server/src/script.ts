@@ -42,6 +42,8 @@ export const CUT_IN_SECONDS = 3.0;
 export const timing = {
   sleep: (ms: number) => Bun.sleep(ms),
   now: () => performance.now(),
+  /** A download sending nothing for this long is dropped and resumed (a dead connection never ends by itself). */
+  stall: 60_000,
 };
 
 // ---------------------------------------------------------------------------
@@ -107,12 +109,17 @@ export function query(url: string, key: string): string | null {
 async function googleFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const allowHttp = endpoints.googleProto() === "=http,https";
   let current = url;
+  // The sign-in goes only to Google's API, never on to wherever a redirect points.
+  const bearer = await bearerFor(url);
   for (let hops = 0; hops <= 50; hops++) {
     const scheme = current.slice(0, current.indexOf(":")).toLowerCase();
     if (!(scheme === "https" || (allowHttp && scheme === "http"))) {
       throw new Error(`Protocol "${scheme}" not supported or disabled in libcurl`);
     }
-    const response = await fetch(current, { ...init, redirect: "manual" });
+    const headers = new Headers(init.headers);
+    if (bearer !== null && current.startsWith(endpoints.google(GOOGLE_API))) headers.set("authorization", `Bearer ${bearer}`);
+    else headers.delete("authorization");
+    const response = await fetch(current, { ...init, headers, redirect: "manual" });
     const location = response.headers.get("location");
     if (response.status >= 300 && response.status < 400 && location !== null) {
       void response.body?.cancel();
@@ -144,11 +151,74 @@ async function boundedBody(response: Response, max: number): Promise<Uint8Array>
   return Buffer.concat(chunks);
 }
 
+/** Google's APIs: the only place the team's sign-in is sent. */
+const GOOGLE_API = "https://www.googleapis.com/";
+/** A Drive file's bytes, read with the sign-in. */
+function apiMedia(file: string): string {
+  return endpoints.google(`${GOOGLE_API}drive/v3/files/${encodeURIComponent(file)}?alt=media&supportsAllDrives=true`);
+}
+
+/** The sign-in's token for a request to Google's API (null: none, or not an API request). */
+export async function bearerFor(url: string): Promise<string | null> {
+  return url.startsWith(endpoints.google(GOOGLE_API)) ? signedIn() : null;
+}
+
 /**
- * Fetches a Doc that's shared with anyone who has the link, as HTML (which
- * keeps each link's target), and its title (the export's file name).
+ * The team's Google sign-in (the sound library's, `Library.accessToken`):
+ * Docs and Drive files are read with it first, so a file only the team can
+ * see imports like a public one. Set by `createApp`; null in a build without
+ * the sign-in, which reads public links only.
+ */
+let googleToken: (() => Promise<string>) | null = null;
+export function useGoogleSignIn(token: (() => Promise<string>) | null): void {
+  googleToken = token;
+}
+
+/** The sign-in's token, or null when there's none to use (never an error: the public link is tried). */
+async function signedIn(): Promise<string | null> {
+  if (googleToken === null) return null;
+  try {
+    return await googleToken();
+  } catch {
+    return null;
+  }
+}
+
+/** A Doc as the team's sign-in reads it (Drive's HTML export, the same as the public one), or null when it can't. */
+async function docSignedIn(id: string): Promise<[html: string, title: string] | null> {
+  if ((await signedIn()) === null) return null;
+  try {
+    const meta = await googleFetch(endpoints.google(`${GOOGLE_API}drive/v3/files/${encodeURIComponent(id)}?fields=name&supportsAllDrives=true`), {
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (meta.status !== 200) {
+      void meta.body?.cancel();
+      return null;
+    }
+    const name = ((await meta.json()) as { name?: unknown }).name;
+    const response = await googleFetch(endpoints.google(`${GOOGLE_API}drive/v3/files/${encodeURIComponent(id)}/export?mimeType=text/html`), {
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status !== 200) {
+      void response.body?.cancel();
+      return null;
+    }
+    const body = new TextDecoder().decode(await boundedBody(response, 20_000_000));
+    return body.includes("<body") ? [body, typeof name === "string" ? name : ""] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches a Doc as HTML (which keeps each link's target) and its title (the
+ * export's file name): with the team's sign-in when it can see it, else as
+ * its public link. What went wrong says what to do: sharing only when Google
+ * asked for a sign-in, never for a timeout or a busy Google.
  */
 export async function fetchDoc(id: string): Promise<[html: string, title: string]> {
+  const signed = await docSignedIn(id);
+  if (signed !== null) return signed;
   const url = endpoints.google(`https://docs.google.com/document/d/${id}/export?format=html`);
   const problem = "Couldn't read that Google Doc. Share it so anyone with the link can view, then try again.";
   let body: string;
@@ -162,8 +232,10 @@ export async function fetchDoc(id: string): Promise<[html: string, title: string
     disposition = response.headers.get("content-disposition") ?? "";
     body = new TextDecoder().decode(await boundedBody(response, 20_000_000));
   } catch {
-    throw new Error(problem);
+    throw new Error("Couldn't reach Google Docs to read the script. Check the internet connection and try again.");
   }
+  if (code === 404) throw new Error("That Google Doc doesn't exist: it was deleted, or the link is wrong.");
+  if (code === 429 || code >= 500) throw new Error("Google Docs is busy right now. Try again in a minute.");
   if (code !== 200 || effective.includes("accounts.google.com") || !body.includes("<body")) throw new Error(problem);
   let title = dispositionName(disposition) ?? "";
   while (title.endsWith(".html")) title = title.slice(0, -".html".length);
@@ -933,6 +1005,11 @@ export class Jobs {
     return job === undefined ? null : shownJob(job);
   }
 
+  /** Whether any project's import is still working. */
+  running(): boolean {
+    return [...this.jobs.values()].some((job) => RUNNING.includes(job.state));
+  }
+
   /** Starts a job for `project` unless one is running; whether it did. */
   claim(app: App, project: string, job: ScriptJob): boolean {
     const current = this.jobs.get(project);
@@ -1133,32 +1210,50 @@ export function download(
  */
 async function fetchResuming(url: string, part: string, tick: () => void): Promise<string | null> {
   let failure: string | null = null;
+  const sizeNow = () => {
+    try {
+      return fs.statSync(part).size;
+    } catch {
+      return 0;
+    }
+  };
+  let lastHave = sizeNow();
   for (let attempt = 0; attempt <= 5; attempt++) {
     if (attempt > 0) await timing.sleep(3000);
-    let have = 0;
-    try {
-      have = fs.statSync(part).size;
-    } catch {
-      have = 0;
-    }
+    const have = sizeNow();
+    // A try that got further doesn't count against the five: a long download
+    // over a shaky connection keeps resuming as long as it moves.
+    if (attempt > 0 && have > lastHave) attempt = 1;
+    lastHave = have;
+    // Nothing for a minute: dropped and resumed (a dead connection otherwise waits for ever, the bar frozen).
+    const stalled = new AbortController();
+    let idle = setTimeout(() => stalled.abort(), timing.stall);
+    const moved = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => stalled.abort(), timing.stall);
+    };
     let response: Response;
     try {
-      response = await googleFetch(url, have > 0 ? { headers: { range: `bytes=${have}-` } } : {});
+      response = await googleFetch(url, have > 0 ? { headers: { range: `bytes=${have}-` }, signal: stalled.signal } : { signal: stalled.signal });
     } catch (error) {
-      failure = `(7) ${diag.messageOf(error)}`;
+      clearTimeout(idle);
+      failure = stalled.signal.aborted ? `(28) Google Drive sent nothing for ${timing.stall / 1000} s` : `(7) ${diag.messageOf(error)}`;
       continue;
     }
     if (have > 0 && response.status === 416) {
+      clearTimeout(idle);
       void response.body?.cancel();
       return null;
     }
     if (response.status >= 400) {
+      clearTimeout(idle);
       void response.body?.cancel();
       failure = `(22) The requested URL returned error: ${response.status}`;
       if (TRANSIENT.includes(response.status)) continue;
       return failure;
     }
     if (have > 0 && response.status !== 206) {
+      clearTimeout(idle);
       void response.body?.cancel();
       return "(33) HTTP server doesn't seem to support byte ranges. Cannot resume.";
     }
@@ -1172,12 +1267,16 @@ async function fetchResuming(url: string, part: string, tick: () => void): Promi
     }, 400);
     try {
       if (response.body !== null) {
-        for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) fs.writeSync(out, chunk);
+        for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+          fs.writeSync(out, chunk);
+          moved();
+        }
       }
       return null;
     } catch (error) {
-      failure = `(56) ${diag.messageOf(error)}`;
+      failure = stalled.signal.aborted ? `(28) Google Drive sent nothing for ${timing.stall / 1000} s` : `(56) ${diag.messageOf(error)}`;
     } finally {
+      clearTimeout(idle);
       clearInterval(timer);
       fs.closeSync(out);
     }
@@ -1191,6 +1290,8 @@ async function fetchResuming(url: string, part: string, tick: () => void): Promi
  * the first-byte probe may write (removed again).
  */
 export async function resolve(file: string, scratch: string): Promise<[url: string, head: DriveHead]> {
+  const signed = await resolveSignedIn(file);
+  if (signed !== null) return signed;
   let url = endpoints.google(`https://drive.usercontent.google.com/download?id=${file}&export=download&confirm=t`);
   let head = await probe(url, scratch);
   if (head.html) {
@@ -1213,6 +1314,32 @@ export async function resolve(file: string, scratch: string): Promise<[url: stri
   if (head.status === 404) throw new Error("Google Drive can't find this file (deleted, or in the trash).");
   if (head.status >= 400 || head.status === 0) throw new Error(`Google Drive answered ${head.status}.`);
   return [url, head];
+}
+
+/**
+ * A Drive file as the team's sign-in sees it: its name and size from the API
+ * and its bytes from `alt=media` (no virus-scan page, no public-link quota,
+ * and a file shared only with the team works). Null when the sign-in can't
+ * see it (or there's none): the public link is tried as before.
+ */
+async function resolveSignedIn(file: string): Promise<[url: string, head: DriveHead] | null> {
+  if ((await signedIn()) === null) return null;
+  try {
+    const response = await googleFetch(endpoints.google(`${GOOGLE_API}drive/v3/files/${encodeURIComponent(file)}?fields=name,size,mimeType&supportsAllDrives=true`), {
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status !== 200) {
+      void response.body?.cancel();
+      return null;
+    }
+    const meta = (await response.json()) as { name?: unknown; size?: unknown; mimeType?: unknown };
+    // A Google Doc or a folder has no bytes to download.
+    if (typeof meta.mimeType === "string" && meta.mimeType.startsWith("application/vnd.google-apps.")) return null;
+    const size = typeof meta.size === "string" && /^\d+$/.test(meta.size) ? Number(meta.size) : null;
+    return [apiMedia(file), { status: 200, html: false, name: typeof meta.name === "string" ? meta.name : null, total: size }];
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1485,7 +1612,7 @@ export const RESEARCH =
   "The script is imported and laid out. Research the case now (RESEARCH in your house style): start from the script and the transcripts, find the news articles about this case, check each matches and save it, then collect images of the scene, the people involved and the vehicles, and weed out anything off-target so only real candidates wait for review. Don't change the timeline. Finish with a short summary: the key facts the articles add, how many articles you saved and how many images are waiting.";
 
 // Transfer slots are independent from local media work and cloud exports.
-// Across projects, at most three Drive→R2 jobs are followed at once. Local
+// Across projects, at most three downloads (Drive→R2 jobs, or to this Mac) at once. Local
 // excerpt encodes keep a lane of their own rather than fighting for the Mac.
 const cloudDownloads = new mediaModule.Semaphore(3);
 const cloudExcerptLane = new mediaModule.Semaphore(1);
@@ -1549,7 +1676,9 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
         });
       }
     };
-    if (cloudEnabled() && process.env.EDIT_PARALLEL_DOWNLOADS === "1") {
+    // A few at once (ten files took the sum of their times, the bar sitting
+    // on the first): EDIT_PARALLEL_DOWNLOADS=0 goes back to one at a time.
+    if (process.env.EDIT_PARALLEL_DOWNLOADS !== "0") {
       await Promise.all(files.map((file, index) => cloudDownloads.with(() => fetchOne(index, file))));
     } else {
       for (const [index, file] of files.entries()) await fetchOne(index, file);

@@ -6,6 +6,7 @@ import * as os from "node:os";
 
 import { Agents as CodexAgents } from "./agent.ts";
 import { Library as DriveLibrary } from "./library.ts";
+import { useGoogleSignIn } from "./script.ts";
 import { Processor } from "./media.ts";
 import { native, type Native } from "./native/index.ts";
 import {
@@ -55,6 +56,9 @@ export function createApp(options: AppOptions): App {
     library: options.services?.library ?? new DriveLibrary(),
     ...options.services,
   };
+  // Docs and Drive files are read with the team's sign-in first (script.ts).
+  const library = services.library;
+  useGoogleSignIn(() => library.accessToken());
   return {
     store: options.store,
     media: new Processor(options.store),

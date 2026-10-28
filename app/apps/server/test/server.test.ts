@@ -269,7 +269,7 @@ test("an export runs one at a time, tells clients how it goes, and only its file
       error: "this project already has an export running",
     });
     const busy = await send("/api/update", { method: "POST" });
-    expect([busy.status, await busy.json()]).toEqual([409, { error: "an export or Drive upload is running; update when it's done" }]);
+    expect([busy.status, await busy.json()]).toEqual([409, { error: "an export, upload or footage import is running; update when it's done" }]);
     expect((await send(`/api/exports/file?path=${encodeURIComponent(path)}`)).status).toBe(404);
     while (app.exports.running()) await Bun.sleep(10);
     expect(events.map((event) => event.state)).toEqual(["running", "running", "done"]);

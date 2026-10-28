@@ -7,6 +7,8 @@ import type { Server } from "bun";
 import * as fs from "node:fs";
 
 import * as accounts from "./accounts.ts";
+import { keepAwakeWhile } from "./awake.ts";
+import { importing } from "./drive_import.ts";
 import { createApp, hostname, type App } from "./app.ts";
 import { pauseForExports, setListening } from "./broll.ts";
 import { startCleaning } from "./cache_cleanup.ts";
@@ -228,6 +230,17 @@ export function start(home: string, host: string | null, port: number): { app: A
   // updater installed this build). Ordinary launches do no maintenance.
   if (RELEASE && NIGHTLY !== null && !process.env.CI && process.env.EDIT_CLAUDE_MAINTENANCE !== "0") seams.agentPanel(app).claudeSupport?.afterNightly(BUILD);
   resumeJobs(app);
+  keepAwakeWhile(() => {
+    if (app.exports.running()) return "an export";
+    if (app.scripts.running() || importing()) return "a footage import";
+    try {
+      if (seams.drive.uploading()) return "a Drive upload";
+    } catch (error) {
+      if (!seams.isUnavailable(error)) throw error;
+    }
+    if ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.()) return "the agent";
+    return null;
+  });
   // Once listening: the agents reach Edit's MCP on this port.
   try {
     app.agents.resumeInterrupted?.();

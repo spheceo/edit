@@ -287,6 +287,8 @@ export interface ScriptJobs {
   claim(app: App, project: string, job: ScriptJob): boolean;
   /** Changes `project`'s job and says so (a `script` event). */
   set(app: App, project: string, edit: (job: ScriptJob) => void): void;
+  /** Whether any project's import is downloading or laying out (an update waits for it). */
+  running(): boolean;
 }
 
 export interface ScriptSeam {
@@ -309,6 +311,8 @@ export interface ScriptSeam {
   align(words: Word[], peaks: Uint8Array | null, cue: [string, string], start: number, end: number): [number | null, number | null];
   /** The URL that downloads Drive file `file` (past the virus-scan page) and its headers; `scratch` may be written and is removed. */
   resolve(file: string, scratch: string): Promise<[url: string, head: DriveHead]>;
+  /** The team's Google sign-in for a request to Google's API (null for any other address, or no sign-in). */
+  bearerFor(url: string): Promise<string | null>;
   /** A file name safe on every disk: no separators or leading dots ("footage.mp4" when nothing's left). */
   safeName(name: string): string;
   /** The spans of a file that `ranges` need (10 s handles, joined under 120 s apart, inside the file). */

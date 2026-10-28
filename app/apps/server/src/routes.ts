@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
-import { importDrive } from "./drive_import.ts";
+import { importDrive, importing } from "./drive_import.ts";
 import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
@@ -397,11 +397,13 @@ export async function installUpdate(app: App, remote = false) {
     } catch (error) {
       if (!seams.isUnavailable(error)) throw error;
     }
-    return app.exports.running() || uploading;
+    // An import too: a restart mid-download used to leave it waiting for someone to open the project.
+    const scripts = (app.scripts as { running?: () => boolean } | undefined)?.running?.() ?? false;
+    return app.exports.running() || uploading || scripts || importing();
   };
   const agentRunning = () => remote && ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() ?? false);
   if (workRunning()) {
-    throw new ApiError(409, "an export or Drive upload is running; update when it's done");
+    throw new ApiError(409, "an export, upload or footage import is running; update when it's done");
   }
   if (agentRunning()) throw new ApiError(409, "an agent turn is running; update when it's done");
   try {

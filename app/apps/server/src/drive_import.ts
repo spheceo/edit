@@ -57,6 +57,19 @@ export async function videosIn(app: App, folder: string): Promise<{ id: string; 
  * is neither, or the folder has no video.
  */
 export async function importDrive(app: App, id: string, url: string, place: boolean, origin: string): Promise<Imported> {
+  running += 1;
+  try {
+    return await importDriveNow(app, id, url, place, origin);
+  } finally {
+    running -= 1;
+  }
+}
+
+/** Drive links importing now (an update waits for them). */
+let running = 0;
+export const importing = (): boolean => running > 0;
+
+async function importDriveNow(app: App, id: string, url: string, place: boolean, origin: string): Promise<Imported> {
   const folder = folderId(url);
   const file = folder === null ? script.driveFileId(url) : null;
   if (folder === null && file === null) throw new Error("that isn't a Google Drive folder or file link");

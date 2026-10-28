@@ -139,6 +139,7 @@ export const scriptParts = {
   clock: (seconds: number): string => seams.script.clock(seconds),
   excerptExtension: (ext: string): string => seams.script.excerptExtension(ext),
   resolve: (file: string, scratch: string) => seams.script.resolve(file, scratch),
+  bearerFor: (url: string): Promise<string | null> => seams.script.bearerFor(url),
   durationOf: (path: string): Promise<number> => seams.script.durationOf(path),
   keyframeBefore: (path: string, time: number): Promise<number> => seams.script.keyframeBefore(path, time),
   spans: (ranges: [number, number][], duration: number): [number, number][] => seams.script.spans(ranges, duration),
@@ -957,7 +958,9 @@ async function driveSource(url: string, stall: cloud.Stall): Promise<cloud.Sourc
   for (let hop = 0; hop <= 50; hop++) {
     if (!allowed.includes(new URL(target).protocol)) throw stopped(`Protocol "${new URL(target).protocol.slice(0, -1)}" not supported or disabled in libcurl`);
     try {
-      response = await fetch(target, { redirect: "manual", signal: stall.signal });
+      // The team's sign-in for Drive's API only (a file read with it), never sent on past a redirect.
+      const bearer = await scriptParts.bearerFor(target);
+      response = await fetch(target, { redirect: "manual", signal: stall.signal, ...(bearer === null ? {} : { headers: { authorization: `Bearer ${bearer}` } }) });
     } catch (error) {
       throw stopped(stall.why(error));
     }

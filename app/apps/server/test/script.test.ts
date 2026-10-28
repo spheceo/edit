@@ -32,6 +32,8 @@ import {
   spans,
   CUT_IN_SECONDS,
   WORD_PAD,
+  timing as scriptTiming,
+  useGoogleSignIn,
 } from "../src/script.ts";
 import { MockServer } from "./mocks/server.ts";
 import { scratch } from "./helpers/home.ts";
@@ -386,6 +388,80 @@ test("Drive's refusals are said in words", async () => {
       "This Drive file isn't shared. Set it so anyone with the link can view.",
     );
   } finally {
+    cleanup();
+  }
+});
+
+test("a Doc only the team can see is read with the team's sign-in; Google's own troubles aren't called sharing", async () => {
+  mock.on("GET", "/www.googleapis.com/drive/v3/files/TEAMDOC12345", (request) =>
+    request.headers.get("authorization") === "Bearer team-token" ? Response.json({ name: "Team case" }) : Response.json({}, { status: 404 }),
+  );
+  mock.on("GET", "/www.googleapis.com/drive/v3/files/TEAMDOC12345/export", (request) => {
+    expect(request.query.get("mimeType")).toBe("text/html");
+    return request.headers.get("authorization") === "Bearer team-token" ? new Response(DOC, { headers: { "content-type": "text/html" } }) : new Response("", { status: 401 });
+  });
+  useGoogleSignIn(async () => "team-token");
+  try {
+    expect(await fetchDoc("TEAMDOC12345")).toEqual([DOC, "Team case"]);
+    // The sign-in can't see it: the public link, and what went wrong said for what it is.
+    mock.on("GET", "/docs.google.com/document/d/GONEDOC12345/export", () => new Response("", { status: 404 }));
+    await expect(fetchDoc("GONEDOC12345")).rejects.toThrow("That Google Doc doesn't exist: it was deleted, or the link is wrong.");
+    mock.on("GET", "/docs.google.com/document/d/BUSYDOC12345/export", () => new Response("", { status: 503 }));
+    await expect(fetchDoc("BUSYDOC12345")).rejects.toThrow("Google Docs is busy right now. Try again in a minute.");
+  } finally {
+    useGoogleSignIn(null);
+  }
+});
+
+test("a Drive file is read with the sign-in, which never goes on past a redirect", async () => {
+  const bytes = new Uint8Array(5000).map((_, index) => index % 7);
+  mock.on("GET", "/www.googleapis.com/drive/v3/files/TEAMFILE1234", (request, server) => {
+    if (request.query.get("alt") !== "media") return Response.json({ name: "Interview.mp4", size: "5000", mimeType: "video/mp4" });
+    return Response.redirect(`${server.url}/content.example/bytes`, 302);
+  });
+  mock.on("GET", "/content.example/bytes", () => new Response(bytes, { headers: { "content-type": "video/mp4" } }));
+  useGoogleSignIn(async () => "team-token");
+  const { dir, cleanup } = scratch("drive-signed");
+  try {
+    const [url, head] = await resolve("TEAMFILE1234", `${dir}/.probe`);
+    expect(url).toBe(`${mock.url}/www.googleapis.com/drive/v3/files/TEAMFILE1234?alt=media&supportsAllDrives=true`);
+    expect(head).toEqual({ status: 200, html: false, name: "Interview.mp4", total: 5000 });
+    const path = await download(`${dir}/TEAMFILE1234`, "TEAMFILE1234", () => {});
+    expect(new Uint8Array(fs.readFileSync(path))).toEqual(bytes);
+    expect(mock.calls("/www.googleapis.com/drive/v3/files/TEAMFILE1234").every((call) => call.headers.get("authorization") === "Bearer team-token")).toBe(true);
+    expect(mock.calls("/content.example/bytes").map((call) => call.headers.get("authorization"))).toEqual([null]);
+  } finally {
+    useGoogleSignIn(null);
+    cleanup();
+  }
+});
+
+test("a Drive download that stops sending is dropped and resumed, not left frozen", async () => {
+  const bytes = new Uint8Array(6000).map((_, index) => index % 13);
+  let first = true;
+  mock.on("GET", "/drive.usercontent.google.com/download", (request) => {
+    const headers = { "content-type": "video/mp4", "content-disposition": 'attachment; filename="Stall.mp4"' };
+    const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get("range") ?? "");
+    if (range !== null && range[2] !== "") return new Response(bytes.slice(0, 1), { status: 206, headers: { ...headers, "content-range": `bytes 0-0/${bytes.length}` } });
+    const start = range === null ? 0 : Number(range[1]);
+    if (first) {
+      // Half the file, then silence: the connection stays open and sends nothing more.
+      first = false;
+      const stream = new ReadableStream<Uint8Array>({ start: (controller) => controller.enqueue(bytes.slice(0, 3000)) });
+      return new Response(stream, { status: 200, headers });
+    }
+    return new Response(bytes.slice(start), { status: 206, headers: { ...headers, "content-range": `bytes ${start}-${bytes.length - 1}/${bytes.length}` } });
+  });
+  const before = { stall: scriptTiming.stall, sleep: scriptTiming.sleep };
+  scriptTiming.stall = 200;
+  scriptTiming.sleep = async () => {};
+  const { dir, cleanup } = scratch("drive-stall");
+  try {
+    const path = await download(`${dir}/STALL123456`, "STALL123456", () => {});
+    expect(new Uint8Array(fs.readFileSync(path))).toEqual(bytes);
+    expect(mock.calls("/drive.usercontent.google.com/download").map((call) => call.headers.get("range")).at(-1)).toBe("bytes=3000-");
+  } finally {
+    Object.assign(scriptTiming, before);
     cleanup();
   }
 });

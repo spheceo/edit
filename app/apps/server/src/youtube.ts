@@ -70,42 +70,93 @@ export function startOf(t: string): number | null {
 // yt-dlp.
 
 const RELEASE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
+const ASSET = "yt-dlp_macos";
+/** How often Edit's yt-dlp is checked against the newest release. */
+const FRESH_MS = 24 * 3600_000;
 let fetching: Promise<string> | null = null;
 
-/** The yt-dlp to run: `EDIT_YTDLP`, PATH, or Edit's own copy (fetched once). */
+/**
+ * The yt-dlp to run: `EDIT_YTDLP`, else Edit's own copy, kept current. Never
+ * one found on PATH first: a Homebrew yt-dlp two months old (this Mac, Oct
+ * 28) broke YouTube imports the way YouTube breaks every old yt-dlp, and
+ * nobody knew it was the one running. PATH is only the last resort, when
+ * GitHub can't be reached and Edit has no copy yet.
+ */
 export async function ytdlp(home: string): Promise<string> {
   const set = process.env.EDIT_YTDLP;
   if (set !== undefined && set !== "") return set;
-  const found = Bun.which("yt-dlp");
-  if (found !== null) return found;
   const own = join(home, "bin", "yt-dlp");
-  if (fs.existsSync(own)) return own;
-  fetching ??= fetchYtdlp(own).finally(() => {
+  if (fs.existsSync(own)) {
+    // Checked once a day, in the background: this run uses the copy there is.
+    if (stale(own)) void freshen(own, false).catch((error) => diag.warn("youtube", `checking for a newer yt-dlp: ${diag.messageOf(error)}`));
+    return own;
+  }
+  try {
+    return await freshen(own, true);
+  } catch (error) {
+    const found = Bun.which("yt-dlp");
+    if (found !== null) {
+      diag.warn("youtube", `couldn't fetch yt-dlp (${diag.messageOf(error)}); using ${found} for now`);
+      return found;
+    }
+    throw error;
+  }
+}
+
+function stale(path: string): boolean {
+  try {
+    return Date.now() - fs.statSync(path).mtimeMs > FRESH_MS;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Brings Edit's yt-dlp up to the newest release (checksum-verified): only the
+ * small checksum list is fetched when it's current already. `force` checks
+ * even when it was checked today. Returns its path.
+ */
+export function freshen(to: string, force: boolean): Promise<string> {
+  if (!force && !stale(to)) return Promise.resolve(to);
+  fetching ??= fetchYtdlp(to).finally(() => {
     fetching = null;
   });
   return fetching;
 }
 
+/** Whether yt-dlp's words say it's out of date for what YouTube does now (a newer yt-dlp is the fix). */
+export function outdated(stderr: string): boolean {
+  return /Unable to extract|nsig extraction failed|[Ss]ignature extraction failed|n challenge|Precondition check failed|Confirm you are on the latest version|please report this issue/i.test(stderr);
+}
+
 async function fetchYtdlp(to: string): Promise<string> {
   return diag.timeOnAsync("youtube", "youtube: fetch yt-dlp", to, async () => {
-    const asset = "yt-dlp_macos";
     const get = async (name: string): Promise<Uint8Array> => {
-      const response = await fetch(`${RELEASE}/${name}`, { redirect: "follow" });
+      const response = await fetch(`${RELEASE}/${name}`, { redirect: "follow", signal: AbortSignal.timeout(120_000) });
       if (!response.ok) throw new Error(`fetching yt-dlp: ${response.status} for ${name}`);
       return new Uint8Array(await response.arrayBuffer());
     };
-    const [binary, sums] = await Promise.all([get(asset), get("SHA2-256SUMS")]);
+    const sums = await get("SHA2-256SUMS");
     const line = new TextDecoder()
       .decode(sums)
       .split("\n")
-      .find((row) => row.trim().endsWith(` ${asset}`));
+      .find((row) => row.trim().endsWith(` ${ASSET}`));
     const expected = line?.trim().split(/\s+/)[0];
+    if (expected === undefined) throw new Error("yt-dlp's release has no checksum for its macOS build");
+    // Current already: only noted as checked.
+    if (fs.existsSync(to) && new Bun.CryptoHasher("sha256").update(fs.readFileSync(to)).digest("hex") === expected) {
+      const now = new Date();
+      fs.utimesSync(to, now, now);
+      return to;
+    }
+    const binary = await get(ASSET);
     const actual = new Bun.CryptoHasher("sha256").update(binary).digest("hex");
-    if (expected === undefined || expected !== actual) throw new Error("the yt-dlp download didn't match its checksum");
+    if (expected !== actual) throw new Error("the yt-dlp download didn't match its checksum");
     fs.mkdirSync(parent(to)!, { recursive: true });
     const part = `${to}.part-${process.pid}`;
     fs.writeFileSync(part, binary, { mode: 0o755 });
     fs.renameSync(part, to);
+    diag.info("youtube", `yt-dlp updated to the newest release`);
     return to;
   });
 }
@@ -182,7 +233,7 @@ function refused(stderr: string): boolean {
  * real error (a private video) must not make that error retryable.
  */
 function noVideo(stderr: string): boolean {
-  return /requested format is not available|only images are available|did not produce a video|javascript runtime/i.test(errorLine(stderr));
+  return /requested format is not available|only images are available|did not produce a video|javascript runtime|stood still/i.test(errorLine(stderr));
 }
 
 /** yt-dlp's error line, without anything credential-like. */
@@ -201,8 +252,11 @@ export interface Downloaded {
 
 const running = new Map<string, Promise<Downloaded>>();
 
-/** The wait before asking YouTube again (tests make it instant). */
-export const timing = { pause: (ms: number): Promise<void> => Bun.sleep(ms) };
+/** The wait before asking YouTube again, and how long yt-dlp may say nothing before it's stopped (tests make them short). */
+export const timing = { pause: (ms: number): Promise<void> => Bun.sleep(ms), quiet: 10 * 60_000 };
+
+/** What a run stopped for saying nothing reads as (retried like a refusal). */
+const STOOD_STILL = "ERROR: The download stood still";
 
 /**
  * Downloads YouTube video `id` whole into `dir` (one download per video at a
@@ -242,13 +296,14 @@ async function downloadNow(
   } catch {
     // Not downloaded yet.
   }
-  const binary = await ytdlp(home);
+  let binary = await ytdlp(home);
   const url = `https://www.youtube.com/watch?v=${id}`;
   const proxy = process.env.PROXY_URL?.trim() ?? "";
   // Straight first (it costs nothing), a second time straight (YouTube's
   // refusals come and go), then through the proxy when there is one.
   const routes: (string | null)[] = [null, null, ...(proxy !== "" ? [proxy] : [])];
   let failure = "";
+  let updated = false;
   for (const [attempt, route] of routes.entries()) {
     const result = await diag.timeOnAsync("youtube", "youtube: download", `${id}${route === null ? "" : " (proxy)"}`, () =>
       runYtdlp(binary, url, dir, route, progress),
@@ -261,6 +316,18 @@ async function downloadNow(
       return { path: result.path, name, size };
     }
     failure = errorLine(result.stderr);
+    // YouTube changed and this yt-dlp doesn't know yet: the newest one, and this route again.
+    if (!updated && outdated(result.stderr) && binary === join(home, "bin", "yt-dlp")) {
+      updated = true;
+      try {
+        binary = await freshen(binary, true);
+        diag.warn("youtube", `${id}: ${failure}; trying again with the newest yt-dlp`);
+        routes.splice(attempt + 1, 0, route);
+        continue;
+      } catch (error) {
+        diag.warn("youtube", `updating yt-dlp: ${diag.messageOf(error)}`);
+      }
+    }
     const last = attempt === routes.length - 1;
     if (last || !(refused(result.stderr) || noVideo(result.stderr))) break;
     diag.warn("youtube", `${id}: ${failure}; trying again${routes[attempt + 1] === null ? "" : " through the proxy"}`);
@@ -323,10 +390,20 @@ async function runYtdlp(
   let earlier = 0;
   let current = 0;
   let path: string | null = null;
+  // Nothing said for this long (no progress, no merge finishing): stopped, and
+  // the try counts as a failed one, never a download frozen for good.
+  let heard = Date.now();
+  let quiet = false;
+  const watch = setInterval(() => {
+    if (Date.now() - heard < timing.quiet) return;
+    quiet = true;
+    child.kill();
+  }, Math.min(timing.quiet, 5000));
   const lines = async () => {
     const decoder = new TextDecoder();
     let pending = "";
     for await (const chunk of child.stdout) {
+      heard = Date.now();
       pending += decoder.decode(chunk, { stream: true });
       let newline = pending.indexOf("\n");
       while (newline >= 0) {
@@ -353,7 +430,8 @@ async function runYtdlp(
   let stderr: string;
   let code: number;
   try { [, stderr, code] = await Promise.all([lines(), new Response(child.stderr).text(), child.exited]); }
-  finally { if (timer !== null) clearTimeout(timer); }
+  finally { if (timer !== null) clearTimeout(timer); clearInterval(watch); }
+  if (quiet) return { path: null, stderr: `${stderr}\n${STOOD_STILL} (nothing for ${Math.round(timing.quiet / 60_000)} minutes).` };
   if (code !== 0) return { path: null, stderr };
   // yt-dlp said yes and made nothing (a route withholding formats can hand
   // back only storyboards): say so in words the retry above reads.

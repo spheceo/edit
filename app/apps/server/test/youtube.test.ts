@@ -267,3 +267,33 @@ test("a visual excerpt requests an exact bounded section and rejects an entire-s
     await expect(downloadRange(dir, "abcdefghijk", [0, 3600], `${dir}/long`)).rejects.toThrow("at most 10 minutes");
   } finally { cleanup(); }
 });
+
+test("a yt-dlp that says nothing for too long is stopped and tried again, never left frozen", async () => {
+  const { dir, cleanup } = scratch("youtube-quiet");
+  const quiet = timing.quiet;
+  timing.quiet = 2000;
+  try {
+    const script = `${dir}/yt-dlp`;
+    const count = `${dir}/calls`;
+    fs.writeFileSync(
+      script,
+      `#!/bin/sh
+n=$(cat "${count}" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${count}"
+for arg in "$@"; do case "$prev" in -P) out="$arg";; esac; prev="$arg"; done
+# The first run: some progress, then a dead connection (nothing more, ever).
+if [ $n -eq 1 ]; then echo "EDIT 100 1024 NA Some title"; exec sleep 30; fi
+echo "EDIT 1024 1024 NA Some title"
+printf 'video' > "$out/Some title [abcdefghijk].mp4"
+echo "EDIT-FILE $out/Some title [abcdefghijk].mp4"
+`,
+      { mode: 0o755 },
+    );
+    process.env.EDIT_YTDLP = script;
+    const got = await download(dir, "abcdefghijk", `${dir}/out`, () => {});
+    expect(fs.readFileSync(got.path, "utf8")).toBe("video");
+    expect(fs.readFileSync(count, "utf8").trim()).toBe("2");
+  } finally {
+    timing.quiet = quiet;
+    cleanup();
+  }
+});

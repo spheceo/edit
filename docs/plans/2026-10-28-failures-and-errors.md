@@ -194,6 +194,24 @@ What the user asked, what's built, and what can still go wrong.
 
 Not yet run end to end in the app: the voice-over box, the stand-in notice, and a whole import with a review link or a nested reuse. The unit tests cover their logic.
 
+## Trello cards, problem reports, and what the live runs found (Oct 28, evening)
+
+- **Trello cards didn't import at all.**
+  - Writer's relay refused Edit's sign-in ("Sign in to Writer again"): its code allowed it since Oct 26, but it was never deployed. Deployed (the user's OK).
+  - That message now reads as ours to fix, with the script Doc as the way round.
+- **A card came in twice.**
+  - Every case's whole video, then the card's script as a reused one: 46 and 106 minutes.
+  - Now the card's own script (an attached Doc headed like the card) is the edit, and the case list is checked against it.
+  - A "(reuse)" case it lacks goes in finished, at its place.
+  - A case it leaves out is named in the preview and stays out (the user: the script is the final authority).
+- **Problem reports are sent to the team.**
+  - Report a problem → Send to the team: the report goes to `edit/reports/<day>/` on R2. The relay (deployed) lets anyone signed in write there, and only an admin read or list.
+  - `GET /api/reports?days=7` pulls them to an admin's Mac (`~/.edit/reports-inbox/`).
+- **The narrator fix had gone to the wrong pipeline.**
+  - It went only to subtitle videos (`repack_subtitles`), not an edit's `add_subtitles` (`captions.ts`). Moved, and tested through `add_subtitles` itself.
+  - Then the live teaser showed chained cuts refused: a middle line losing words at both ends failed every per-pair check, Repack's too. Cuts are now matched where their two lines meet.
+- **A turn started just after a restart had no Edit tools** (the agent asked the user to restart Edit). The turn now starts again by itself when Edit's tools didn't connect.
+
 ## The model to move to
 
 Most of the above comes from three decisions: an import is **one job**, it ends **done or failed**, and laying out is **a one-way door**. Replace them with:

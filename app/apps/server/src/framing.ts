@@ -284,7 +284,15 @@ export function fillFrame(project: Project, args: Record<string, unknown>): Reco
     if (only !== null && !only.has(clip.id)) continue;
     if ((from !== null && clipEnd(clip) <= from) || (to !== null && clip.start >= to)) continue;
     const media = mediaOf(project, clip.media)!;
-    const want = fill(project, media);
+    const borders = cachedBorders(media) ?? NONE;
+    const crop = clip.crop;
+    const b = {
+      left: Math.max(borders.left, crop?.left ?? 0),
+      right: Math.max(borders.right, crop?.right ?? 0),
+      top: Math.max(borders.top, crop?.top ?? 0),
+      bottom: Math.max(borders.bottom, crop?.bottom ?? 0),
+    };
+    const want = fill(project, media, b);
     const keys = clip.keyframes?.scale;
     const smallest = keys !== undefined && keys.length > 0 ? Math.min(...keys.map((key) => key.value)) : (clip.transform.scale ?? 1);
     const factor = Math.max(want.scale / Math.max(smallest, 0.01), 1);
@@ -293,7 +301,6 @@ export function fillFrame(project: Project, args: Record<string, unknown>): Reco
     // x/y inside the picture at each scale: its kept part's edges past the frame's.
     const [w, h] = [Math.max(media.width ?? W, 1), Math.max(media.height ?? H, 1)];
     const fit = Math.min(W / w, H / h);
-    const b = cachedBorders(media) ?? NONE;
     const clamp = (value: number, scale: number, axis: "x" | "y") => {
       const [size, frame, lo, hi] = axis === "x" ? [w, W, b.left, b.right] : [h, H, b.top, b.bottom];
       const centre = ((lo - hi) / 2) * size * fit * scale;

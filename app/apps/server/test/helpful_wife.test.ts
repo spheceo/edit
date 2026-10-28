@@ -76,6 +76,25 @@ test("footage_at_fit_is_letterboxed_and_fill_frame_fills_it_keeping_its_push_and
   expect(Math.abs(pushed.transform.x)).toBeLessThan(400);
 });
 
+test("fill_frame_covers_an_asymmetric_photo_crop_and_preserves_the_push", () => {
+  const p = project("cropped-photo");
+  p.media.push(media({ id: "photo", name: "Portrait", path: "/found/portrait.png", kind: "image", duration: 30, width: 640, height: 360 }));
+  p.clips.push(clip({
+    id: "crop", track: "v1", start: 0, duration: 120, type: "video", media: "photo", source_in: 0, speed: 1,
+    transform: { x: 110, y: 0, scale: 3.1, rotation: 0 },
+    crop: { left: 0.32, right: 0.36, top: 0, bottom: 0 },
+    keyframes: { scale: [{ frame: 0, value: 3.1 }, { frame: 119, value: 3.286 }] },
+  }));
+  expect(letterboxed(p).map((one) => one.clip)).toEqual(["crop"]);
+  apply(p, [{ op: "fill_frame" }]);
+  expect(letterboxed(p)).toEqual([]);
+  const cropped = p.clips[0] as VideoClip;
+  expect(cropped.crop).toEqual({ left: 0.32, right: 0.36, top: 0, bottom: 0 });
+  expect(cropped.keyframes!.scale![1]!.value / cropped.keyframes!.scale![0]!.value).toBeCloseTo(1.06, 3);
+  expect(cropped.transform.x).toBeGreaterThan(110);
+  expect(framing.fillFrame(p, {})).toMatchObject({ filled: 0 });
+});
+
 test("a_photo_over_a_picture_that_fills_the_frame_isnt_letterboxed_but_one_on_a_black_backing_is", () => {
   const p = tape();
   p.media.push(media({ id: "photo", name: "Photo", path: "/found/photo.jpg", kind: "image", duration: 5, width: 600, height: 900 }));

@@ -154,10 +154,11 @@ describe("one colour per person (edit-core's validate_people)", () => {
     nobody.people = [];
     expect(validateProject(nobody)).toContain("isn't in the cast");
   });
-  it("lets a bystander or a witness be white, as edit-core does (Mom Leaves 5 Kids' bystander)", () => {
+  it("lets a bystander, a witness or a source's narrator be white, as edit-core does (Mom Leaves 5 Kids' bystander, the Cop video's news reporter)", () => {
     expect(validateProject(cast("#f3ecdf", [0.953, 0.925, 0.875, 1], "bystander"))).toBeNull();
     expect(validateProject(cast("#ffffff", [1, 1, 1, 1], "witness"))).toBeNull();
-    expect(validateProject(cast("#f3ecdf", [0.953, 0.925, 0.875, 1], "suspect"))).toContain("only a bystander's or a witness's");
+    expect(validateProject(cast("#ffffff", [1, 1, 1, 1], "narrator"))).toBeNull();
+    expect(validateProject(cast("#f3ecdf", [0.953, 0.925, 0.875, 1], "suspect"))).toContain("only a bystander's, a witness's or a narrator's");
   });
 });
 

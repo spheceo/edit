@@ -62,10 +62,10 @@ export function peopleProblem(project: Project): string | null {
     const bytes = parseHex(person.color);
     if (bytes === null) return `${person.name} needs a colour as #rrggbb`;
     // As edit-core's validate_people: the team's code gives white only to a
-    // bystander or a witness. When the two disagreed, this one refused Mom
-    // Leaves 5 Kids' white bystander and the preview stayed black.
-    if (whitish(bytes) && person.role !== "bystander" && person.role !== "witness") {
-      return `${person.name} (${person.id}) can't be white or a near-white grey: their words are white (only a bystander's or a witness's may be)`;
+    // bystander, a witness or a source's narrator. When the two disagreed, this
+    // one refused Mom Leaves 5 Kids' white bystander and the preview stayed black.
+    if (whitish(bytes) && person.role !== "bystander" && person.role !== "witness" && person.role !== "narrator") {
+      return `${person.name} (${person.id}) can't be white or a near-white grey: their words are white (only a bystander's, a witness's or a narrator's may be)`;
     }
     people.set(person.id, { name: person.name, color: person.color, bytes });
   }

@@ -94,7 +94,7 @@ pub struct Person {
     /// officer, leader, suspect, victim, witness…; "other" when unknown.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub role: String,
-    /// Their one colour, "#rrggbb": by their role (the team's code); white or a near-white grey only for a bystander or a witness.
+    /// Their one colour, "#rrggbb": by their role (the team's code); white or a near-white grey only for a bystander, a witness or a narrator.
     pub color: String,
     /// The transcripts' names their words came from ("Agent", "Travis Lawson (Agent)").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2205,10 +2205,12 @@ impl Project {
                 )
             })?;
             // The team's code gives white only to a bystander, or a witness
-            // when a victim is in it too; anyone else in white reads as nobody's.
-            if whitish(color) && !matches!(person.role.as_str(), "bystander" | "witness") {
+            // when a victim is in it too, and to a source's narrator (a news
+            // reporter subtitled in an edit's teasers: "the narrator and
+            // background talk stay white"); anyone else in white reads as nobody's.
+            if whitish(color) && !matches!(person.role.as_str(), "bystander" | "witness" | "narrator") {
                 return Err(format!(
-                    "{} ({}) can't be white or a near-white grey: their words are white (only a bystander's or a witness's may be)",
+                    "{} ({}) can't be white or a near-white grey: their words are white (only a bystander's, a witness's or a narrator's may be)",
                     person.name, person.id
                 ));
             }
@@ -2429,6 +2431,22 @@ mod validation_tests {
         });
         project
     }
+    #[test]
+    fn white_is_for_a_bystander_a_witness_or_a_sources_narrator() {
+        let with = |role: &str| {
+            let mut project = project();
+            project.people = vec![serde_json::from_value(serde_json::json!({
+                "id": "p1", "name": "Narrator", "label": "Narrator:", "role": role, "color": "#ffffff", "names": []
+            }))
+            .unwrap()];
+            project.validate()
+        };
+        // The Cop video's news reporter, subtitled in its teasers (Oct 28).
+        assert!(with("narrator").is_ok());
+        assert!(with("witness").is_ok());
+        assert!(with("suspect").unwrap_err().contains("only a bystander's, a witness's or a narrator's"));
+    }
+
     #[test]
     fn script_files_are_drive_ids_or_youtube_videos() {
         let with = |file: &str| {

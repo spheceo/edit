@@ -19,6 +19,15 @@ describe("explain", () => {
     );
   });
 
+  it("works out when an allowance resets in the person's own time", () => {
+    // 22:30 UTC: the next midnight UTC is an hour and a half on.
+    const now = new Date(Date.UTC(2026, 9, 28, 22, 30));
+    const at = (hours: number) => new Date(now.getTime() + hours * 3600_000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    expect(resetTime("UTC", now)).toBe(at(1.5));
+    // California is UTC-7 in late October: its midnight is 07:00 UTC.
+    expect(resetTime("America/Los_Angeles", now)).toBe(at(8.5));
+  });
+
   it("keeps the original words for Report, never as the title", () => {
     const raw = "the cloud export stopped (exit 1): Traceback (most recent call last): File \"/app/export_v3.py\", line 88, in <module> RuntimeError: CUDA out of memory";
     const said = explain(raw, "export the video");

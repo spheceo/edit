@@ -24,19 +24,29 @@ export interface Problem {
   known: boolean;
 }
 
-/** The local time of the next midnight UTC, when the team's daily allowances reset ("2:00"). */
-export function resetTime(now: Date = new Date()): string {
-  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-  return next.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+/**
+ * The local time of the next midnight in `zone`, when a daily allowance
+ * resets ("2:00"): UTC for the team's own (the relay's), California for
+ * Gemini's free quota.
+ */
+export function resetTime(zone = "UTC", now: Date = new Date()): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", hour: "numeric", minute: "numeric", second: "numeric" })
+      .formatToParts(now)
+      .map((part) => [part.type, Number(part.value)]),
+  ) as Record<string, number>;
+  const into = ((parts.hour ?? 0) * 3600 + (parts.minute ?? 0) * 60 + (parts.second ?? 0)) * 1000 + now.getMilliseconds();
+  return new Date(now.getTime() + 86_400_000 - into).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 type Said = Omit<Problem, "details" | "known">;
 type Rule = [RegExp, (match: RegExpExecArray, doing: string) => Said];
 
-const tryAgainLater = "Edit tries again by itself in a minute.";
-const daily = (what: string): Said => ({
+const tryAgainLater = "It's usually free again within a minute: try again then.";
+const daily = (what: string, zone = "UTC"): Said => ({
   title: `Today's ${what} allowance is used up`,
-  fix: `It resets at ${resetTime()} your time. What's waiting carries on by itself then; the rest of the edit works as normal.`,
+  fix: `It resets at ${resetTime(zone)} your time; try again after that. Everything else in the edit works as normal meanwhile.`,
+  action: "retry",
 });
 
 /** Most specific first: the first match wins. */
@@ -53,7 +63,7 @@ const RULES: Rule[] = [
   })],
   [/Claude (Code )?(needs to sign in|isn't signed in|sign-in)|Sign in to Claude|claude auth login|\/login/i, () => ({
     title: "Claude needs you to sign in again",
-    fix: "Press Sign in to Claude below. Your message is saved and carries on afterwards.",
+    fix: "Press Sign in to Claude and follow the steps in your browser. Then send your message again if the agent doesn't carry on by itself.",
     action: "claude-sign-in",
   })],
   [/(Claude|Codex|Anthropic|OpenAI)[^.]*(usage limit|rate.?limit|overloaded)|overloaded_error|usage limit reached|5-hour limit|weekly limit/i, () => ({
@@ -65,19 +75,20 @@ const RULES: Rule[] = [
   // The team's daily allowances (the relay's limits).
   [/hearing footage again with the case's names is used up/i, () => ({
     title: "Today's allowance for re-hearing footage is used up",
-    fix: `New footage is still transcribed. Names are checked again after ${resetTime()} your time; nothing else waits.`,
+    fix: `New footage is still transcribed. Names can be checked again after ${resetTime()} your time; nothing else waits.`,
   })],
   [/transcription (allowance|budget)[^.]*used up/i, () => daily("transcription")],
   [/voice (allowance|budget)[^.]*used up/i, () => daily("voice-over")],
   [/map (allowance|budget|lookups)[^.]*used up/i, () => daily("map")],
-  [/AI (allowance|budget)[^.]*used up|no Gemini model left today/i, () => daily("AI")],
+  [/no Gemini model left today/i, () => daily("AI", "America/Los_Angeles")],
+  [/AI (allowance|budget)[^.]*used up/i, () => daily("AI")],
   [/positive credit balance is required/i, () => ({
     title: "The team's AI credit has run out",
     fix: "An admin needs to top up the AI Gateway credit. The edit carries on without the AI checks until then.",
   })],
   [/Cloud export daily compute reservation limit/i, () => ({
     title: "Today's cloud exports are used up",
-    fix: "Export on this Mac instead (choose This Mac in the export settings), or try again tomorrow.",
+    fix: "Try again tomorrow, or ask whoever looks after Edit to export it on their Mac.",
   })],
   [/Too many (transcriptions|lines|lookups|maps|model calls|requests) at once|transcription busy/i, () => ({
     title: "Lots of people are using this at once",
@@ -107,7 +118,7 @@ const RULES: Rule[] = [
   })],
   [/could not reach Edit's relay|could not reach the transcription relay|could not reach R2|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|socket hang up|The connection was closed|getaddrinfo|network (is )?(down|unreachable)/i, () => ({
     title: "Edit couldn't reach the internet",
-    fix: "Check your Wi-Fi or connection. Edit tries again by itself once it's back.",
+    fix: "Check your Wi-Fi or connection, then try again.",
     action: "retry",
   })],
 
@@ -180,14 +191,14 @@ const RULES: Rule[] = [
   })],
   [/The download ended early|Download stopped|stood still|stalled/i, () => ({
     title: "The download was cut off",
-    fix: "Try again: it carries on from where it stopped.",
+    fix: "Try again: Edit picks up where it can.",
     action: "retry",
   })],
 
   // Exports and editing.
   [/export is already running|already has an export running/i, () => ({
     title: "Another export is running",
-    fix: "It's queued: wait for that one to finish, or cancel it under Exports.",
+    fix: "Wait for it to finish, or cancel it in Exports (top bar), then export again.",
   })],
   [/would overwrite source footage/i, () => ({
     title: "That would replace your footage",
@@ -200,12 +211,12 @@ const RULES: Rule[] = [
   })],
   [/cloud export (stopped|failed)|Cloud export \S+ is still queued|Invalid cloud export|export can't render in the cloud/i, () => ({
     title: "The cloud export didn't finish",
-    fix: "Try again, or export on this Mac (choose This Mac in the export settings).",
+    fix: "Try again. If it fails again, press Report.",
     action: "retry",
   })],
   [/revision conflict/i, () => ({
-    title: "This edit changed at the same time",
-    fix: "Edit loaded the newest version. Make your change again.",
+    title: "This edit changed at the same moment",
+    fix: "Someone (or the agent) changed it just then. Make your change again.",
   })],
   [/being edited on another|another (Mac|computer) is (editing|working on)/i, () => ({
     title: "Someone else is working on this edit",

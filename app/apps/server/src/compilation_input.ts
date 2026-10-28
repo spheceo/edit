@@ -242,6 +242,22 @@ export async function readCompilation(input: string, app: App, overrides: Partia
   };
 }
 
+/**
+ * A YouTube video's title from its public oEmbed (a card's smart link holds
+ * only the URL; Trello draws the title itself), so a case left out is named
+ * as the person knows it. Null when YouTube doesn't say in a few seconds.
+ */
+async function youtubeTitle(url: string): Promise<string | null> {
+  if (script.footageFile(url)?.startsWith("youtube:") !== true) return null;
+  try {
+    const answer = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(5000) });
+    const title = answer.ok ? ((await answer.json()) as { title?: unknown }).title : null;
+    return typeof title === "string" && title.trim() !== "" ? title.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Letters and digits only, to compare a card's name with a script's heading or title. */
 function plainName(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
@@ -288,7 +304,8 @@ export async function withCardScript(
     for (const source of cases) {
       const file = script.footageFile(source.url);
       if (file === null || files.has(file)) continue;
-      const named = source.label ? `Case ${source.case}: ${source.label}` : `Case ${source.case}`;
+      const label = source.label && !/^https?:\/\//u.test(source.label) ? source.label : await youtubeTitle(source.url);
+      const named = label ? `Case ${source.case}: ${label}` : `Case ${source.case}`;
       if (!source.reuse) {
         skipped.push({ doc: source.url, title: named, why: "the card's script doesn't use it" });
         continue;

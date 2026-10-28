@@ -150,6 +150,50 @@ What it hit, and what changed:
 - Edit had one house voice for every style. A courtroom's narration was meant to be the team's own recording, and JJ's project had none, so the house voice stayed.
 - A style can now name its narrator: `voice: <ElevenLabs voice id>` in `agent/styles/<style>/notes.md`'s frontmatter. Only the id is missing.
 
+## Scripts in scripts, the narrator, and finished videos (Oct 28, after the run-through)
+
+What the user asked, what's built, and what can still go wrong.
+
+- **Any Google Doc link in a script is a reused script** ("we basically 99% of the time do not have Google Doc links on scripts. We only include them if it's a reuse case").
+  - Built:
+    - In the text or in a comment, it goes in where it's linked, as written, at any depth (Writer's reused cases too).
+    - A Doc that links back up the chain, or has no footage ranges (notes), is left out. The new-project preview says so, beside each script it reuses.
+    - A link's own paragraph ("Case 2: <link>") is never voiced.
+  - Can go wrong:
+    - A Doc linked only as a reference is read as a reuse script. The preview shows it, so the person can take the link out.
+    - One that can't be read stops the import, naming it and saying to share it.
+- **The style comes from the heading** ("the script says COURT at the start").
+  - Built: COURT, INTERRO and FOIA (Writer's series) pick courtroom, interrogation and bodycam until the person picks another.
+  - Can go wrong: a heading without a series picks nothing (the last style stays).
+- **The narrator's voice-over** ("an input box … for a bunch of stuff that isn't bodycam … mark it as such within the code").
+  - Built:
+    - `NARRATION` marks bodycam as the house voice and the rest as the team's recording.
+    - The new project's box takes the recording (a file or a Drive link). It's added before the import starts, so the import places it instead of voicing.
+    - Without one, the house voice stands in. The Script tab says "Stand-in voice" with Add the recording.
+  - Can go wrong:
+    - A recording of another script places nothing (it reads none of the cut-ins), so the stand-in stays and is said.
+    - What it placed isn't reported in the panel yet, only to the agent.
+- **The narrator in subtitles** ("include the narrator's subs, but we still do proper attribution", and the agent "move[s] over" false attribution).
+  - Built:
+    - Repack's turn correction ported (`turns.ts`): words that spilled across a change of speaker go back to who said them, asked once, every word checked.
+    - A full edit subtitles a source's narrator under their own label.
+    - The agent never brings a narrator in with clips it chooses itself.
+  - Can go wrong:
+    - No AI answer (a used-up day) leaves the words as heard.
+    - In the courtroom style, labels are hidden, so attribution shows only in the colours.
+- **A finished video by its review link** ("insert a sort of final video … a feedback link if it's something that we've already done").
+  - Built:
+    - Pasted, in a Doc's "Reuse:" comment, or given to the agent's insert tool (plus `finished: true` for a Drive or YouTube one).
+    - It takes the approved version, else the newest, kept once among the originals and played untouched.
+  - Checked against the real reviews:
+    - Today's link resolves to its project, version and file.
+    - An unknown link says it isn't one of Edit's videos.
+  - Can go wrong:
+    - A version deleted by a later approval asks for the link again.
+    - Copying a large video takes a while, with no percentage while it uploads (14).
+
+Not yet run end to end in the app: the voice-over box, the stand-in notice, and a whole import with a review link or a nested reuse. The unit tests cover their logic.
+
 ## The model to move to
 
 Most of the above comes from three decisions: an import is **one job**, it ends **done or failed**, and laying out is **a one-way door**. Replace them with:

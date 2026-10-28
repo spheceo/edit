@@ -976,9 +976,22 @@ export class Agents implements seams.AgentPanel {
    * a session Claude Code no longer has is started again once as a new
    * conversation (`fresh`), rather than failing the turn.
    */
-  private async runClaude(project: string, generation: number, text: string, options: claude.Options): Promise<void> {
+  private async runClaude(project: string, generation: number, text: string, options: claude.Options, attempt = 0): Promise<void> {
     const running = await this.claudeQuery({ prompt: text, options });
     this.claudeQueries.set(project, running);
+    // Edit's own tools didn't connect (a turn started as Edit came back from
+    // a restart, card 1 of Oct 28: the agent said it had "lost the connection
+    // to Edit" and asked for a restart): started again in a few seconds, up to twice.
+    const again =
+      attempt < EDIT_TOOLS_RETRIES
+        ? async () => {
+            diag.warn("agent", `${project}: Edit's tools didn't connect for this turn; starting it again (${attempt + 1} of ${EDIT_TOOLS_RETRIES})`);
+            await timing.sleep(EDIT_TOOLS_WAIT_MS);
+            const chat = this.withChat(project);
+            if (chat.generation !== generation || chat.halted || !chat.running) return;
+            await this.runClaude(project, generation, text, options, attempt + 1);
+          }
+        : null;
     const fresh =
       options.resume === undefined
         ? null
@@ -986,7 +999,7 @@ export class Agents implements seams.AgentPanel {
             const { resume: _gone, ...rest } = options;
             return this.runClaude(project, generation, `${SESSION_GONE}\n\n${text}`, rest);
           };
-    void this.followClaude(project, generation, new ClaudeTurn(nowMs()), running, fresh, text);
+    void this.followClaude(project, generation, new ClaudeTurn(nowMs()), running, fresh, text, again);
     const after = this.withChat(project);
     // Stop can arrive while the query starts.
     if (after.generation !== generation || after.halted || !after.running) await running.interrupt().catch(() => undefined);
@@ -1000,12 +1013,19 @@ export class Agents implements seams.AgentPanel {
     running: claude.Query,
     fresh: (() => Promise<void>) | null,
     text: string,
+    again: (() => Promise<void>) | null = null,
   ): Promise<void> {
     let error: string | null = null;
     let result: Record<string, unknown> | null = null;
+    let toolsMissing = false;
     try {
       for await (const message of running) {
         if (message.type === "result") result = message as unknown as Record<string, unknown>;
+        if (again !== null && editToolsFailed(message as unknown as Record<string, unknown>)) {
+          toolsMissing = true;
+          await running.interrupt().catch(() => undefined);
+          break;
+        }
         try {
           this.onClaudeMessage(project, generation, turn, message as unknown as Record<string, unknown>);
         } catch (thrown) {
@@ -1017,6 +1037,14 @@ export class Agents implements seams.AgentPanel {
     } finally {
       if (this.claudeQueries.get(project) === running) this.claudeQueries.delete(project);
       running.close();
+    }
+    if (toolsMissing && again !== null) {
+      try {
+        await again();
+        return;
+      } catch (thrown) {
+        error = isBug(thrown) ? crashed("starting the turn again", thrown) : diag.messageOf(thrown);
+      }
     }
     if (result !== null) {
       error = claude.resultError(result);
@@ -1800,6 +1828,17 @@ function codexHome(): string | null {
   if (given !== undefined) return given;
   const home = process.env.HOME;
   return home !== undefined ? join(home, ".codex") : null;
+}
+
+/** Times a turn is started again when Edit's own tools didn't connect, and the wait before each. */
+const EDIT_TOOLS_RETRIES = 2;
+const EDIT_TOOLS_WAIT_MS = 5000;
+
+/** Whether Claude Code's first message says Edit's own tools (`edit`) failed to connect. */
+export function editToolsFailed(message: Record<string, unknown>): boolean {
+  if (message.type !== "system" || message.subtype !== "init" || !Array.isArray(message.mcp_servers)) return false;
+  const edit = (message.mcp_servers as { name?: unknown; status?: unknown }[]).find((server) => server.name === "edit");
+  return edit !== undefined && edit.status !== "connected" && edit.status !== "pending";
 }
 
 /** MCP server names in the user's `~/.codex/config.toml` (`[mcp_servers.NAME]` tables). */

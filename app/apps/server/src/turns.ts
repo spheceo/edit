@@ -98,13 +98,38 @@ function marked(words: TurnWord[], turn: Turn): string {
   return out.join(" ");
 }
 
-/** The letters and digits of some words, to check a cut kept every word. */
-function letters(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+/** Words as compared: lowercase letters and digits only ("That's," is "thats"). */
+function normal(text: string): string[] {
+  return text
+    .split(/\s+/)
+    .map((word) => word.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ""))
+    .filter((word) => word !== "");
 }
 
-function count(text: string): number {
-  return text.split(/\s+/).filter((part) => /[\p{L}\p{N}]/u.test(part)).length;
+/** How many words each side of a meeting must match (fewer when a line is that short). */
+const ANCHOR = 3;
+/** How far from the old boundary a cut may move it, in words. */
+const REACH = 12;
+
+/**
+ * Where a cut's two lines meet among words [from, to): the index where the
+ * second begins, its first words there and the first line's last words just
+ * before; the one nearest the old boundary `near`. An empty first line meets
+ * at `from`, an empty second at `to`. Null when the speech doesn't read so.
+ */
+function meeting(words: TurnWord[], from: number, to: number, near: number, first: string[], second: string[]): number | null {
+  if (first.length === 0) return from;
+  if (second.length === 0) return to;
+  const said = words.map((word) => normal(word.text).join(""));
+  const head = second.slice(0, ANCHOR);
+  const tail = first.slice(-ANCHOR);
+  let best: number | null = null;
+  for (let at = Math.max(from + 1, near - REACH); at <= Math.min(to - 1, near + REACH); at++) {
+    const after = head.every((word, i) => said[at + i] === word && at + i < to);
+    const before = tail.every((word, i) => said[at - tail.length + i] === word && at - tail.length + i >= from);
+    if (after && before && (best === null || Math.abs(at - near) < Math.abs(best - near))) best = at;
+  }
+  return best;
 }
 
 function schema(): Record<string, unknown> {
@@ -169,11 +194,14 @@ export async function fixTurns(
     const a = turns[line]!;
     const b = turns[line + 1]!;
     if (a.speaker === b.speaker || a.to !== b.from) continue;
-    const original = words.slice(a.from, b.to).map((word) => word.text).join(" ");
-    // Every word kept, in order, only the split moved; else it's ignored.
-    if (letters(`${cut.first} ${cut.second}`) !== letters(original)) continue;
-    const split = a.from + count(cut.first);
-    if (count(cut.first) + count(cut.second) !== b.to - a.from || split === a.to) continue;
+    // Where the two lines meet in the speech: the first's last words just
+    // before, the second's first words just after. A middle line can lose
+    // words at both ends (the run-through's sergeant: "arrives" to the
+    // reporter before him, "that's the" to her after), so each cut is matched
+    // where it meets, not as the two lines' whole original words (Repack's
+    // check, which refused all three).
+    const split = meeting(words, a.from, b.to, a.to, normal(cut.first), normal(cut.second));
+    if (split === null || split === a.to) continue;
     for (let at = a.from; at < b.to; at++) {
       const speaker = at < split ? a.speaker : b.speaker;
       if (words[at]!.speaker !== speaker) {

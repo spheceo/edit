@@ -66,3 +66,38 @@ test("a cut that changes or drops a word is ignored, and no answer leaves the wo
     cleanup();
   }
 });
+
+test("chained cuts all apply: a middle line losing words at both ends (the run-through's teaser, the model's real answer)", async () => {
+  const { dir, cleanup } = scratch("turns-chained");
+  try {
+    let at = 0;
+    const run = (text: string, speaker: string) => said(text, speaker, (at += 10_000));
+    const heard = [
+      ...run("one of the suspects appears to be thrown around by James just as the other officer", "reporter"),
+      ...run("arrives he's fully on top of them and all I can see is his arm coming up and down that's the", "sergeant"),
+      ...run("voice of the sergeant when investigators questioned", "reporter"),
+      ...run("him after this incident I'm yelling the whole time James stop Tim stop", "sergeant"),
+    ];
+    const { post } = gateway([
+      { line: 0, first: "one of the suspects appears to be thrown around by James just as the other officer arrives.", second: "He's fully on top of them and all I can see is his arm coming up and down." },
+      { line: 1, first: "He's fully on top of them and all I can see is his arm coming up and down.", second: "That's the voice of the sergeant when investigators questioned" },
+      { line: 2, first: "That's the voice of the sergeant when investigators questioned him after this incident.", second: "I'm yelling the whole time James stop Tim stop" },
+    ]);
+    expect(await fixTurns(heard, names, "Cop Beats a Teen", dir, post)).toBe(7);
+    const lines: string[] = [];
+    for (const word of heard) {
+      const last = lines.at(-1);
+      const who = names(word.speaker!);
+      if (last?.startsWith(`${who}:`)) lines[lines.length - 1] = `${last} ${word.text}`;
+      else lines.push(`${who}: ${word.text}`);
+    }
+    expect(lines).toEqual([
+      "Narrator: one of the suspects appears to be thrown around by James just as the other officer arrives",
+      "Sergeant: he's fully on top of them and all I can see is his arm coming up and down",
+      "Narrator: that's the voice of the sergeant when investigators questioned him after this incident",
+      "Sergeant: I'm yelling the whole time James stop Tim stop",
+    ]);
+  } finally {
+    cleanup();
+  }
+});

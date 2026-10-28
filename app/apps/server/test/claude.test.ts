@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { Agents, EXITED, STALL_MS, timing } from "../src/agent.ts";
+import { Agents, editToolsFailed, EXITED, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -569,4 +569,28 @@ test("verification must follow the failure, and unrelated errors are never adopt
     expect(await agents.retryClaude(other, "old-user")).toBe(false);
     expect(asked).toHaveLength(0);
   } finally { agents.shutdown(); home.cleanup(); }
+});
+
+test("a turn whose Edit tools didn't connect starts again by itself, never asking for a restart (card 1, Oct 28)", async () => {
+  const { home, project, agents, queries } = claudeProject("claude-tools-missing");
+  const sleep = timing.sleep;
+  timing.sleep = async () => {};
+  try {
+    await agents.send(project, "start the editing workflow", null, null);
+    queries[0]!.push({ type: "system", subtype: "init", session_id: "session-1", mcp_servers: [{ name: "edit", status: "failed" }] });
+    await settle();
+    // Stopped and started again, the same message, before the agent says a word.
+    expect(queries[0]!.closed()).toBe(true);
+    expect(queries.length).toBe(2);
+    queries[1]!.push({ type: "system", subtype: "init", session_id: "session-1", mcp_servers: [{ name: "edit", status: "connected" }] });
+    await settle();
+    expect(queries.length).toBe(2);
+    expect(agents.withChat(project).running).toBe(true);
+    expect(agents.withChat(project).entries.some((entry) => entry.kind === "error")).toBe(false);
+    expect(editToolsFailed({ type: "system", subtype: "init", mcp_servers: [{ name: "edit", status: "pending" }] })).toBe(false);
+  } finally {
+    timing.sleep = sleep;
+    agents.shutdown();
+    home.cleanup();
+  }
 });

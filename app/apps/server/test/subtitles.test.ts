@@ -333,6 +333,8 @@ test("listed_words_count_in_their_other_forms", () => {
     ["beating", "beat"],
     ["choked", "choke"],
     ["choking", "choke"],
+    ["chokeslamming", "choke"],
+    ["chokehold", "choke"],
     ["abused", "abuse"],
     ["abusive", "abuse"],
     ["abuser", "abuse"],

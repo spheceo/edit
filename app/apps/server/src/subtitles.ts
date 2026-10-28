@@ -160,8 +160,15 @@ export function isFormOf(token: string, term: string): boolean {
   if (token === term) return true;
   if (!token.startsWith(term)) return isVerbForm(token, term);
   const rest = token.slice(term.length);
-  return rest === "s" || rest === "es" || isVerbForm(token, term);
+  return rest === "s" || rest === "es" || isVerbForm(token, term) || (COMPOUNDS[term] ?? []).some((part) => rest.startsWith(part));
 }
+
+/**
+ * Words a listed one is the start of, as one word: the Cop teaser's victim
+ * said "chokeslamming", which kept its sound and letters. Only these: "ass"
+ * starts "assume", "cock" "cockpit".
+ */
+const COMPOUNDS: Record<string, string[]> = { choke: ["slam", "hold"] };
 
 function isVerbForm(token: string, term: string): boolean {
   if (!VERBS.includes(term)) return false;

@@ -4,7 +4,6 @@ import {
   AudioLines,
   Check,
   ChevronRight,
-  CircleAlert,
   Copy,
   Eye,
   FileInput,
@@ -278,8 +277,9 @@ const toolIcon = (tool?: string) => TOOL_ICONS[tool ?? ""] ?? Wrench;
 function ToolGroup({ calls, live }: { calls: AgentEntry[]; live: boolean }) {
   const [open, setOpen] = useState(false);
   const current = live ? ([...calls].reverse().find((call) => call.status === "running") ?? calls.at(-1)) : undefined;
-  const failed = calls.some((call) => call.status === "failed");
-  const Icon = current ? toolIcon(current.tool) : failed ? CircleAlert : calls.length === 1 ? toolIcon(calls[0].tool) : ListChecks;
+  // A step that didn't work is the agent's to work around (a site's bot check, a plan it fixes and sends
+  // again): never red here. Only what stops the turn is a problem for the person (the error entries).
+  const Icon = current ? toolIcon(current.tool) : calls.length === 1 ? toolIcon(calls[0].tool) : ListChecks;
   const title = current ? callTitle(current) : calls.length === 1 ? callTitle(calls[0]) : groupSummary(calls);
   return (
     <div>
@@ -287,7 +287,7 @@ function ToolGroup({ calls, live }: { calls: AgentEntry[]; live: boolean }) {
         onClick={() => setOpen((value) => !value)}
         className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg/85"
       >
-        <Icon size={13} className={cx("shrink-0", failed ? "text-danger" : "text-faint")} />
+        <Icon size={13} className="shrink-0 text-faint" />
         <span className={cx("min-w-0 flex-1 truncate", current && "shimmer")}>{title}</span>
         {calls.length > 1 && !current && <span className="text-[11px] text-faint tabular">{calls.length}</span>}
       </button>
@@ -314,7 +314,7 @@ function ToolCall({ call }: { call: AgentEntry }) {
       >
         <Icon size={13} className="shrink-0 text-faint" />
         <span className={cx("min-w-0 flex-1 truncate", call.status === "running" && "shimmer")}>{callTitle(call)}</span>
-        {failed && <span className="text-[11px] text-danger">failed</span>}
+        {failed && <span className="text-[11px] text-faint">didn’t work</span>}
         {call.status === "stopped" && <span className="text-[11px] text-faint">stopped</span>}
       </button>
       {open && (

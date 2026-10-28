@@ -2133,6 +2133,8 @@ export async function wholeTranscript(source: string, target: string, scratch: s
   const copy = join(scratch, `whole-${kind}-${id}-${process.pid}.json`);
   let whole: Transcript;
   try {
+    // Footage nobody has heard yet has none: looked up first, so that's no failure in the log.
+    if (!(await cloud.has(`${prefix}transcript.json`))) return false;
     await cloud.download(`${prefix}transcript.json`, copy);
     whole = JSON.parse(fs.readFileSync(copy, "utf8")) as Transcript;
   } catch {

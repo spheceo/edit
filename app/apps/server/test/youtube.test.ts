@@ -108,9 +108,9 @@ for arg in "$@"; do case "$prev" in -P) out="$arg";; --ffmpeg-location) ff="$arg
 # As yt-dlp: FFmpeg by a bare name isn't found, and the streams stay unmerged.
 case "$ff" in /*) ;; *) echo "EDIT-FILE $out/never-merged.mp4"; exit 0;; esac
 if [ $n -le ${refusals} ]; then echo "ERROR: [youtube] abc: Sign in to confirm you're not a bot" >&2; exit 1; fi
-echo "EDIT 512 1024 NA Some title"
-echo "EDIT 1024 1024 NA Some title"
-echo "EDIT 100 100 NA Some title"
+echo "EDIT 512 1024 NA 1124 Some title"
+echo "EDIT 1024 1024 NA 1124 Some title"
+echo "EDIT 100 100 NA 1124 Some title"
 printf 'video' > "$out/Some title [abcdefghijk].mp4"
 echo "EDIT-FILE $out/Some title [abcdefghijk].mp4"
 `,
@@ -132,6 +132,9 @@ test("downloads_once_retries_a_refusal_and_reuses_the_file", async () => {
     // Refused once, then downloaded; the sound's bytes carry on from the picture's.
     expect(fs.readFileSync(calls, "utf8").trim()).toBe("2");
     expect(seen).toContainEqual([1124, 1124]);
+    // The whole video's size from the first line, never shrinking as the sound starts.
+    expect(seen.slice(0, 3).map(([, total]) => total)).toEqual([1124, 1124, 1124]);
+    expect(seen.map(([bytes, total]) => (total === null ? 0 : bytes / total)).every((share, index, all) => index === 0 || share >= all[index - 1]!)).toBe(true);
     // Done once: asked again, it's the same file without running yt-dlp.
     const again = await download(dir, "abcdefghijk", into, () => {});
     expect(again.path).toBe(got.path);

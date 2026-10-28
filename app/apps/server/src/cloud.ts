@@ -633,6 +633,12 @@ export function r2Message(body: string): string {
  * from it while the object is unchanged: `dest.partial.etag` says which
  * version it holds). `progress(received, total)`.
  */
+/** Whether `key` is in the cloud: a lookup that may well find nothing (a shared transcript nobody made yet), never a failure. */
+export async function has(key: string): Promise<boolean> {
+  checkKey(key);
+  return (await head(key)) !== null;
+}
+
 export function download(key: string, dest: string, progress: Report = () => {}): Promise<void> {
   checkKey(key);
   return diag.timeOnAsync("cloud", "cloud: download", key, async () => {

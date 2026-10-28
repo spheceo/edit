@@ -419,7 +419,7 @@ async function runYtdlp(
     "-o",
     "%(title).120B [%(id)s].%(ext)s",
     "--progress-template",
-    "download:EDIT %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s %(info.title).120B",
+    "download:EDIT %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s %(info.filesize_approx)s %(info.title).120B",
     "--print",
     "after_move:EDIT-FILE %(filepath)s",
     ...(proxy === null ? [] : ["--proxy", proxy]),
@@ -433,9 +433,12 @@ async function runYtdlp(
     return { path: null, stderr: `ERROR: yt-dlp couldn't start: ${diag.messageOf(error)}` };
   }
   // Two streams (video, then sound) are downloaded one after the other: the
-  // bytes before the current one are carried.
+  // bytes before the current one are carried. The total is the whole video's
+  // (both streams, yt-dlp's estimate) from the start and never shrinks: it
+  // was the picture's alone, and the bar went back (89% to 85%) as the sound began.
   let earlier = 0;
   let current = 0;
+  let largest = 0;
   let path: string | null = null;
   // Nothing said for this long (no progress, no merge finishing): stopped, and
   // the try counts as a failed one, never a download frozen for good.
@@ -460,7 +463,7 @@ async function runYtdlp(
         if (line.startsWith("EDIT-FILE ")) {
           path = line.slice("EDIT-FILE ".length);
         } else if (line.startsWith("EDIT ")) {
-          const [bytes, total, estimate, ...title] = line.slice("EDIT ".length).split(" ");
+          const [bytes, total, estimate, approx, ...title] = line.slice("EDIT ".length).split(" ");
           const done = Number(bytes);
           if (!Number.isFinite(done)) continue;
           if (done < current) earlier += current;
@@ -468,7 +471,9 @@ async function runYtdlp(
           const size = Number(total);
           const guess = Number(estimate);
           const whole = Number.isFinite(size) ? size : Number.isFinite(guess) ? guess : null;
-          progress(earlier + done, whole === null ? null : earlier + whole, title.join(" "));
+          const both = Number(approx);
+          largest = Math.max(largest, whole === null ? 0 : earlier + whole, Number.isFinite(both) ? both : 0, earlier + done);
+          progress(earlier + done, largest > 0 ? largest : null, title.join(" "));
         }
       }
     }

@@ -74,6 +74,14 @@ export async function request<T>(method: string, url: string, body?: unknown): P
   return data as T;
 }
 
+/** How the YouTube sign-in from Chrome stands (server youtube_signin.ts). */
+export interface YoutubeSignIn {
+  chrome: boolean;
+  profile: { dir: string; name: string; signedIn: boolean } | null;
+  allowed: boolean | null;
+  problem: string | null;
+}
+
 export interface Live {
   rev: number;
   project: Project;
@@ -194,6 +202,8 @@ export const api = {
   /** The project's exports on the machine running Edit, newest first. */
   exports: (id: string) => request<ExportRecord[]>("GET", `/api/projects/${id}/exports`),
   exportActivity: () => request<ExportActivity[]>("GET", "/api/exports/activity"),
+  youtubeSignIn: () => request<YoutubeSignIn>("GET", "/api/youtube/sign-in"),
+  checkYoutubeSignIn: () => request<YoutubeSignIn>("POST", "/api/youtube/sign-in/check"),
   /** Deletes one of them (its file too); the list after. */
   deleteExport: (id: string, path: string) => request<ExportRecord[]>("POST", `/api/projects/${id}/exports/delete`, { path }),
   transcribe: (id: string, media: string) => request<{ status: MediaStatus }>("POST", `/api/projects/${id}/media/${media}/transcribe`),

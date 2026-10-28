@@ -1,0 +1,3 @@
+[test]
+# Every test file: nothing of this Mac's own (its Chrome's YouTube sign-in) leaks into a run.
+preload = ["./test/setup.ts"]

@@ -142,12 +142,12 @@ const RULES: Rule[] = [
   })],
   [/confirm your age|age.restricted|inappropriate for some users/i, () => ({
     title: "That YouTube video is age-restricted",
-    fix: "Edit uses your YouTube sign-in from Chrome for these: sign in to YouTube in Chrome, then try again.",
+    fix: "Edit uses your YouTube sign-in from Chrome for these. Set it up in Settings → YouTube (it says how), then try again.",
     action: "retry",
   })],
   [/members.only|Join this channel/i, () => ({
     title: "That YouTube video is for channel members only",
-    fix: "Sign in to YouTube in Chrome with an account that's a member, then try again; or use another copy.",
+    fix: "Sign in to YouTube in Chrome with an account that's a member and check Settings → YouTube, then try again; or use another copy.",
     action: "retry",
   })],
   [/not available in your country|blocked it in your country|geo.?restrict/i, () => ({
@@ -164,7 +164,7 @@ const RULES: Rule[] = [
   })],
   [/not a bot|Sign in to confirm you|page needs to be reloaded|HTTP Error 403|HTTP Error 429/i, () => ({
     title: "YouTube is blocking downloads for now",
-    fix: "Sign in to YouTube in Chrome (Edit uses that sign-in), then try again. It usually passes within the hour.",
+    fix: "Set up the YouTube sign-in in Settings → YouTube (Edit uses Chrome's), then try again. It usually passes within the hour anyway.",
     action: "retry",
   })],
   [/requested format is not available|only images are available|did not produce a video|YouTube video \S+ couldn't be downloaded/i, () => ({

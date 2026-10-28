@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as diag from "./diag.ts";
 import * as tools from "./tools.ts";
 import { compiled } from "./update.ts";
+import { cookieArgs } from "./youtube_signin.ts";
 import { join, parent } from "./paths.ts";
 
 /** The prefix of a script file that's a YouTube video. */
@@ -299,13 +300,11 @@ async function downloadNow(
   let binary = await ytdlp(home);
   const url = `https://www.youtube.com/watch?v=${id}`;
   const proxy = process.env.PROXY_URL?.trim() ?? "";
-  // Straight first (it costs nothing), a second time straight (YouTube's
-  // refusals come and go), then through the proxy when there is one.
-  const routes: (string | null)[] = [null, null, ...(proxy !== "" ? [proxy] : [])];
+  const routes = routesFor(proxy, 2);
   let failure = "";
   let updated = false;
   for (const [attempt, route] of routes.entries()) {
-    const result = await diag.timeOnAsync("youtube", "youtube: download", `${id}${route === null ? "" : " (proxy)"}`, () =>
+    const result = await diag.timeOnAsync("youtube", "youtube: download", `${id}${said(route)}`, () =>
       runYtdlp(binary, url, dir, route, progress),
     );
     if (result.path !== null) {
@@ -329,21 +328,58 @@ async function downloadNow(
       }
     }
     const last = attempt === routes.length - 1;
-    if (last || !(refused(result.stderr) || noVideo(result.stderr))) break;
-    diag.warn("youtube", `${id}: ${failure}; trying again${routes[attempt + 1] === null ? "" : " through the proxy"}`);
+    if (last || !worthAnother(result.stderr, routes[attempt + 1]!)) break;
+    diag.warn("youtube", `${id}: ${failure}; trying again${said(routes[attempt + 1]!)}`);
     await timing.pause(attempt === 0 ? 3000 : 1000);
   }
   throw new Error(`YouTube video ${id} couldn't be downloaded: ${failure}`);
+}
+
+/** One way of asking YouTube: straight from this Mac, with the editor's sign-in from Chrome, or through the paid proxy (never with the sign-in). */
+interface Route {
+  proxy: string | null;
+  signIn: string[];
+}
+
+/**
+ * The ways to ask, in order: straight (it costs nothing), with the editor's
+ * YouTube sign-in from Chrome when there is one (else straight again: YouTube's
+ * refusals come and go), then through the proxy when there is one. `straight`
+ * is how many tries go before the proxy.
+ */
+function routesFor(proxy: string, straight: number): Route[] {
+  const signIn = cookieArgs();
+  const routes: Route[] = [{ proxy: null, signIn: [] }];
+  if (straight > 1) routes.push({ proxy: null, signIn });
+  else if (signIn.length > 0) routes.push({ proxy: null, signIn });
+  if (proxy !== "") routes.push({ proxy, signIn: [] });
+  return routes;
+}
+
+function said(route: Route): string {
+  return route.proxy !== null ? " (proxy)" : route.signIn.length > 0 ? " (with the YouTube sign-in from Chrome)" : "";
+}
+
+/** Whether a video needs a signed-in YouTube (age, members, private): only the sign-in can help. */
+function needsSignIn(stderr: string): boolean {
+  return /confirm your age|age.restricted|members.only|Join this channel|Private video|This video is private/i.test(errorLine(stderr));
+}
+
+/** Whether the next route may get what this one didn't. */
+function worthAnother(stderr: string, next: Route): boolean {
+  if (needsSignIn(stderr)) return next.signIn.length > 0;
+  return refused(stderr) || noVideo(stderr);
 }
 
 async function runYtdlp(
   binary: string,
   url: string,
   dir: string,
-  proxy: string | null,
+  route: Route,
   progress: (bytes: number, total: number | null, name: string) => void,
   range: [number, number] | null = null,
 ): Promise<{ path: string | null; stderr: string }> {
+  const proxy = route.proxy;
   const runtime = runtimeArgs();
   const command = [
     binary,
@@ -377,6 +413,7 @@ async function runYtdlp(
     "--print",
     "after_move:EDIT-FILE %(filepath)s",
     ...(proxy === null ? [] : ["--proxy", proxy]),
+    ...(proxy === null ? route.signIn : []),
     url,
   ];
   let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
@@ -446,13 +483,14 @@ export async function downloadRange(home: string, id: string, range: [number, nu
   if (!/^[A-Za-z0-9_-]{11}$/.test(id) || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0] || range[1] - range[0] > 600) throw new Error("YouTube excerpt needs a valid video and a source range of at most 10 minutes");
   fs.mkdirSync(dir, { recursive: true });
   const binary = await ytdlp(home); const proxy = process.env.PROXY_URL?.trim() ?? "";
-  const routes = [null, ...(proxy ? [proxy] : [])];
+  const routes = routesFor(proxy, 1);
   let failure = "";
-  for (const route of routes) {
+  for (const [attempt, route] of routes.entries()) {
     const result = await runYtdlp(binary, `https://www.youtube.com/watch?v=${id}`, dir, route, progress, range);
     if (result.path !== null) return { path: result.path, name: result.path.slice(dir.length + 1), size: fs.statSync(result.path).size };
     failure = errorLine(result.stderr);
-    if (!refused(result.stderr) && !noVideo(result.stderr)) break;
+    const next = routes[attempt + 1];
+    if (next === undefined || !worthAnother(result.stderr, next)) break;
   }
   throw new Error(`YouTube excerpt ${id} ${range[0]}–${range[1]} couldn't be downloaded: ${failure}`);
 }

@@ -11,6 +11,7 @@ import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
 import { importDrive, importing } from "./drive_import.ts";
+import * as youtubeSignIn from "./youtube_signin.ts";
 import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
@@ -119,6 +120,9 @@ export function buildRouter(): Router<App> {
     .get("/api/projects/{id}/exports", projectExports)
     .get("/api/storage", async ({ app }) => json({ ...storageReport(app.store.home), exports: await verifyExports(app.store.home) }))
     .post("/api/storage/migrate-media", migrateMedia)
+    // The YouTube sign-in from Chrome (youtube_signin.ts): how it stands, and a check that brings up the Mac's Keychain dialog.
+    .get("/api/youtube/sign-in", () => json(youtubeSignIn.status()))
+    .post("/api/youtube/sign-in/check", async ({ app }) => json(await youtubeSignIn.check(app.store.home)))
     .post("/api/cache/clean", cleanTheCache)
     .post("/api/projects/{id}/exports/delete", deleteProjectExport);
   router

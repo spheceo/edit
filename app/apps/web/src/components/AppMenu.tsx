@@ -8,6 +8,8 @@ import { closeDialog, openDialog, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
+import { api, type YoutubeSignIn } from "../lib/api";
+import { ProblemView } from "./ProblemView";
 import { StartedBy } from "./StartedBy";
 import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
 
@@ -249,6 +251,70 @@ function ReportDialog() {
   );
 }
 
+/**
+ * The YouTube sign-in from Chrome: what it's for, how it stands, and what to
+ * do next, step by step (the team: "give clear instructions on how to do it
+ * and how to give Edit the permissions"). Check brings up the Mac's Keychain
+ * dialog now, while these words are on screen, not in the middle of an import.
+ */
+function YoutubeGroup() {
+  const [state, setState] = useState<YoutubeSignIn | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [failed, setFailed] = useState<unknown>(null);
+  useEffect(() => {
+    void api.youtubeSignIn().then(setState).catch(setFailed);
+  }, []);
+  const check = () => {
+    setChecking(true);
+    setFailed(null);
+    void api
+      .checkYoutubeSignIn()
+      .then(setState)
+      .catch(setFailed)
+      .finally(() => setChecking(false));
+  };
+  const steps: ReactNode = !state ? null : !state.chrome ? (
+    <>Install Google Chrome, open youtube.com in it and sign in (top right), then press Check.</>
+  ) : !state.profile ? (
+    <>Open Chrome, go to youtube.com and sign in (top right) with the team’s YouTube account. Then press Check.</>
+  ) : state.allowed === true ? (
+    <>Ready: Edit uses the YouTube sign-in of Chrome’s “{state.profile.name}” profile when a video needs one.</>
+  ) : (
+    <>
+      {state.problem && <span className="text-danger">{state.problem} </span>}
+      Chrome’s “{state.profile.name}” profile is signed in to YouTube. Press Check: your Mac asks whether “security” may use “Chrome Safe
+      Storage”. Type your Mac’s password and choose <b>Always Allow</b> (not Allow or Deny). That’s all: it won’t ask again.
+    </>
+  );
+  return (
+    <Group title="YouTube">
+      <Row
+        name="Sign-in from Chrome"
+        detail={
+          <>
+            Some videos (age-restricted, members-only, or when YouTube asks for a sign-in) only download for a signed-in account.
+            {steps && (
+              <>
+                <br />
+                {steps}
+              </>
+            )}
+          </>
+        }
+      >
+        <Button onClick={check} disabled={checking || !state?.chrome}>
+          {checking ? "Waiting for your Mac…" : "Check"}
+        </Button>
+      </Row>
+      {failed !== null && (
+        <div className="border-t border-line px-3 py-2.5">
+          <ProblemView error={failed} doing="check the YouTube sign-in" onRetry={check} />
+        </div>
+      )}
+    </Group>
+  );
+}
+
 /** Edit's settings, laid out as Writer's: who's signed in, then updates; the build and Done at the foot. */
 function SettingsDialog() {
   const person = useAccount((state) => (state.account?.signed_in ? state.account.person : null));
@@ -272,6 +338,7 @@ function SettingsDialog() {
       <DialogHeader title="Settings" />
       <div className="flex max-h-[72vh] flex-col gap-[18px] overflow-y-auto px-6">
         {person && <p className="text-[13px] text-muted">Signed in as {person.email}</p>}
+        <YoutubeGroup />
         <Group title="Updates">
           <Row name="Channel" detail={said} bad={error ?? undefined}>
             <Select

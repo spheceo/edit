@@ -7,6 +7,8 @@ import type { ScriptBlock } from "../src/model.ts";
 import { parse, REUSE } from "../src/script.ts";
 import { download, downloadRange, fileOf, idOf, startOf, timing, videoId } from "../src/youtube.ts";
 import { scratch } from "./helpers/home.ts";
+import { Database } from "bun:sqlite";
+import { status as signInStatus, where as signInWhere } from "../src/youtube_signin.ts";
 
 type Footage = Extract<ScriptBlock, { kind: "footage" }>;
 type Narration = Extract<ScriptBlock, { kind: "narration" }>;
@@ -294,6 +296,54 @@ echo "EDIT-FILE $out/Some title [abcdefghijk].mp4"
     expect(fs.readFileSync(count, "utf8").trim()).toBe("2");
   } finally {
     timing.quiet = quiet;
+    cleanup();
+  }
+});
+
+test("an age-restricted video is asked again with the YouTube sign-in from Chrome, never through the proxy", async () => {
+  const { dir, cleanup } = scratch("youtube-signin");
+  const before = { chrome: signInWhere.chrome, setting: process.env.EDIT_YOUTUBE_SIGNIN, proxy: process.env.PROXY_URL };
+  try {
+    // A stand-in Chrome: one profile signed in to YouTube (cookie names only).
+    const profile = `${dir}/Chrome/Profile 2`;
+    fs.mkdirSync(profile, { recursive: true });
+    fs.writeFileSync(`${dir}/Chrome/Local State`, JSON.stringify({ profile: { last_used: "Profile 2", info_cache: { "Profile 2": { name: "Team" } } } }));
+    const db = new Database(`${profile}/Cookies`);
+    db.run("CREATE TABLE cookies (host_key TEXT, name TEXT, encrypted_value BLOB)");
+    db.run("INSERT INTO cookies VALUES ('.youtube.com', 'LOGIN_INFO', x'00')");
+    db.close();
+    signInWhere.chrome = `${dir}/Chrome`;
+    process.env.EDIT_YOUTUBE_SIGNIN = "1";
+    process.env.PROXY_URL = "http://user:secret@proxy.example:8080";
+    expect(signInStatus().profile).toEqual({ dir: "Profile 2", name: "Team", signedIn: true });
+    const calls = fakeScripted(dir, ["ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate for some users."]);
+    process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+    const got = await download(dir, "abcdefghijk", `${dir}/out`, () => {});
+    expect(fs.readFileSync(got.path, "utf8")).toBe("video");
+    expect(fs.readFileSync(calls, "utf8").trim()).toBe("2");
+    const args = fs.readFileSync(`${dir}/args`, "utf8").split("\n");
+    expect(args).toContain("--cookies-from-browser");
+    expect(args).toContain(`chrome:${dir}/Chrome/Profile 2`);
+    expect(args).not.toContain("--proxy");
+  } finally {
+    signInWhere.chrome = before.chrome;
+    for (const [key, value] of [["EDIT_YOUTUBE_SIGNIN", before.setting], ["PROXY_URL", before.proxy]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    cleanup();
+  }
+});
+
+test("without a sign-in, an age-restricted video fails at once, saying why", async () => {
+  const { dir, cleanup } = scratch("youtube-age");
+  try {
+    const calls = fakeScripted(dir, ["ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate for some users."]);
+    process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+    const failed = await download(dir, "abcdefghijk", `${dir}/out`, () => {}).catch((error: Error) => error.message);
+    expect(failed).toContain("Sign in to confirm your age");
+    expect(fs.readFileSync(calls, "utf8").trim()).toBe("1");
+  } finally {
     cleanup();
   }
 });

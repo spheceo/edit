@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import type { Project } from "../src/model.ts";
 import * as fs from "node:fs";
 
-import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, posterSecond, read, shareable, waiting, type Note, type Version } from "../src/reviews.ts";
+import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, posterSecond, read, restoreArchived, shareable, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import * as tools from "../src/tools.ts";
@@ -166,6 +166,27 @@ test("a note the auto-fix tried twice without a result isn't tried again: it's l
   expect(givenUp(state, "p1", later).map((note) => note.id)).toEqual(["b"]);
   // Not while its last try may still be running.
   expect(givenUp(state, "p1", 60_000)).toEqual([]);
+});
+
+test("an export archived to the cloud after it finished is fetched back before it's shared, and refused if it comes back short", async () => {
+  const { dir, cleanup } = scratch("restore");
+  const path = `${dir}/edit.mp4`;
+  const fetched: string[] = [];
+  const fetch = async (key: string, dest: string) => {
+    fetched.push(key);
+    fs.writeFileSync(dest, "12345");
+  };
+  await restoreArchived({ path, bytes: 5, cloudKey: "edit/exports/p/edit.mp4" }, fetch);
+  expect(fetched).toEqual(["edit/exports/p/edit.mp4"]);
+  expect(fs.readFileSync(path, "utf8")).toBe("12345");
+  // Already on disk, or never archived: nothing is fetched.
+  await restoreArchived({ path, bytes: 5, cloudKey: "edit/exports/p/edit.mp4" }, fetch);
+  await restoreArchived({ path: `${dir}/local.mp4`, bytes: 5 }, fetch);
+  expect(fetched.length).toBe(1);
+  const short = `${dir}/short.mp4`;
+  await expect(restoreArchived({ path: short, bytes: 9, cloudKey: "edit/exports/p/short.mp4" }, fetch)).rejects.toThrow("not 9");
+  expect(fs.existsSync(short)).toBe(false);
+  cleanup();
 });
 
 test("a review shares the newest whole export, or a named export of the edit's opening, never a middle stretch", () => {

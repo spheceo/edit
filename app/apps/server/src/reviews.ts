@@ -158,6 +158,25 @@ export function shareable<T extends { path: string; whole: boolean; start?: numb
   return path === null ? usable.find((one) => one.whole) : usable.find((one) => one.path === path && (one.whole || one.start === 0));
 }
 
+/**
+ * An export Edit archived to the cloud once it finished (`archiveExportFile`)
+ * is fetched back to its path, so a share made later can read it (N3on's v3
+ * and Sergeant's v8 failed on the deleted file, Oct 28). Kept only when its
+ * size matches the record's.
+ */
+export async function restoreArchived(
+  record: { path: string; bytes: number | null; cloudKey?: string },
+  fetch: (key: string, dest: string) => Promise<void> = cloud.download,
+): Promise<void> {
+  if (fs.existsSync(record.path) || record.cloudKey === undefined) return;
+  await fetch(record.cloudKey, record.path);
+  const size = fs.existsSync(record.path) ? fs.statSync(record.path).size : -1;
+  if (record.bytes !== null && size !== record.bytes) {
+    fs.rmSync(record.path, { force: true });
+    throw new Error(`the archived export came back ${size} bytes, not ${record.bytes}`);
+  }
+}
+
 export async function share(app: App, projectId: string, path: string | null, replace = false, compress = false): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (the relay token)");
   const live = app.store.get(projectId);
@@ -188,6 +207,11 @@ export async function share(app: App, projectId: string, path: string | null, re
   const poster = join(work, `${timeline}.jpg`);
   sharing.set(projectId, "making the review copy");
   try {
+    if (!fs.existsSync(chosen.path)) {
+      sharing.set(projectId, "fetching the export back from the cloud");
+      await restoreArchived(chosen);
+      sharing.set(projectId, "making the review copy");
+    }
     if (!fs.existsSync(copy)) await reviewCopy(chosen.path, copy);
     const seconds = chosen.frames / fps;
     await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(live.project, seconds), 2), "-i", chosen.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);

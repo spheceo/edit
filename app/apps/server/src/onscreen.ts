@@ -9,6 +9,7 @@
 // pending, as the censor check's are.
 
 import * as diag from "./diag.ts";
+import { Semaphore } from "./media.ts";
 import type { Clip, Media, Project } from "./model.ts";
 import { native, isReal } from "./native/index.ts";
 import { clipEnd, fps as fpsOf, mediaOf, reusedMedia, trackOf } from "./project.ts";
@@ -68,18 +69,26 @@ function footageClips(project: Project): [VideoClip, Media][] {
 
 /** Files being read now, so each is read once at a time. */
 const reading = new Set<string>();
+/**
+ * Files read at once: each is an FFmpeg over the whole file. Unbounded, two
+ * edits' audits (a hundred excerpts each) ran 139 at once, the load passed
+ * 300 and the server stopped answering (the run-through, Oct 28).
+ */
+const READS_AT_ONCE = new Semaphore(2);
 
 /** Reads in the background what isn't cached yet: the seconds of each file the timeline plays, then its cuts. */
 function warm(media: Media, seconds: number[], cuts: boolean): void {
   if (!isReal() || reading.has(media.path)) return;
   reading.add(media.path);
   void (async () => {
+    const release = await READS_AT_ONCE.acquire();
     try {
       if (seconds.length > 0) await native().screenTextDetect(media.path, [media.width ?? 1920, media.height ?? 1080], seconds);
       if (cuts) await seats.cutsOf(media.path);
     } catch (error) {
       diag.warn("audit", `reading ${media.name}'s picture: ${diag.messageOf(error)}`);
     } finally {
+      release();
       reading.delete(media.path);
     }
   })();

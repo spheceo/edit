@@ -386,9 +386,9 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
         const now = app.store.get(projectId);
         if (now === null) throw new Error("project vanished");
         const current = clipOf(now.project, clipId);
-        if (current === undefined) throw new Error("clip was removed before smoothing");
+        if (current === undefined) throw new Superseded("clip was removed before smoothing");
         if (sourceOf(current) !== sourceOf(clip) || current.duration > clip.duration) {
-          throw new Error(`${clipId} changed before smoothing started; skipped`);
+          throw new Superseded(`${clipId} changed before smoothing started; skipped`);
         }
         const { width, height } = project.settings;
         // A cloud media's path is the loopback stream: VideoToolbox opens only
@@ -489,22 +489,25 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
   return swapInSmooth(app, projectId, clip, out, fps);
 }
 
+/** A clip that changed or went away before its smoothing landed: skipped, never a failure (it filled the log, Oct 28). */
+class Superseded extends Error {}
+
 /**
  * Puts a smoothed render in place of the slowed stretch it was made from,
  * unless the clip has changed since (re-trimmed, re-timed, other media): the
  * render no longer matches it then, and it must be smoothed again.
  */
 async function swapInSmooth(app: App, projectId: string, rendered: Clip, out: string, fps: number): Promise<Json> {
-  const changed = () => new Error(`${rendered.id} changed while smoothing; kept the current clip`);
+  const changed = () => new Superseded(`${rendered.id} changed while smoothing; kept the current clip`);
   const before = app.store.get(projectId);
   if (before === null) throw new Error("project vanished");
   const now = clipOf(before.project, rendered.id);
-  if (now === undefined) throw new Error("the clip went away");
+  if (now === undefined) throw new Superseded("the clip went away");
   if (sourceOf(now) !== sourceOf(rendered) || now.duration > rendered.duration) throw changed();
   const probe = await probeFile(out);
   const [, done] = await app.store.update(projectId, "agent", (project) => {
     const clip = clipOf(project, rendered.id);
-    if (clip === undefined) throw new Error("the clip went away");
+    if (clip === undefined) throw new Superseded("the clip went away");
     if (sourceOf(clip) !== sourceOf(rendered) || clip.duration > rendered.duration) throw changed();
     let smooth = project.media.find((media) => media.path === out)?.id;
     if (smooth === undefined) {
@@ -569,7 +572,15 @@ export function smoothInBackground(app: App, projectId: string, clipIds: string[
     const job = jobs.begin(app.store.home, "smooth", projectId, { clip: clipId }, clipId);
     void (async () => {
       try {
-        await diag.timeAsync("agent", "smooth slow motion (background)", () => smoothSlowMotion(app, projectId, clipId));
+        await diag.timeAsync("agent", "smooth slow motion (background)", async () => {
+          try {
+            await smoothSlowMotion(app, projectId, clipId);
+          } catch (error) {
+            // The edit moved on (the clip cut or changed): nothing to smooth, not a failure.
+            if (!(error instanceof Superseded)) throw error;
+            diag.info("agent", `not smoothing ${clipId} in ${projectId}: ${error.message}`);
+          }
+        });
       } catch (error) {
         diag.warn("agent", `smoothing ${clipId} in ${projectId}: ${diag.messageOf(error)}`);
       }

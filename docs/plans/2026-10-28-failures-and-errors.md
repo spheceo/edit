@@ -124,6 +124,32 @@ From the code and this Mac's logs (`~/.edit/logs`, Oct 16–28; the team's runs 
     - **Recover:** a Send button that puts the report (log, timings, the error) on the relay for the team's support page, so the person sees "Sent: we'll look" and nothing to copy.
     - This sends logs off the Mac: it's the user's call.
 
+## A full run-through (Oct 28, nightly-29)
+
+The new Doc ("Cop Beats a HANDCUFFED Teen in His Patrol Car", courtroom, 5 YouTube videos, the user's recording) taken from paste to a review link the way a teammate would: <https://feedback.spheceo.com/r/E4l2mySUxtylewfsxVZFWA>.
+
+- **Import:** 7 minutes, no errors: five videos at once, cut, transcribed, laid out and voiced.
+- **Research:** 4 minutes, 6 articles. **The edit:** about 30 minutes, 24½ minutes long.
+- **Export and share:** 13 minutes.
+
+What it hit, and what changed:
+
+- **The export failed** reading past the end of a 2.8 s smoothed render. In the final pass the agent had set a clip's `source_in` to 60 s, in the original's clock, after background smoothing had swapped the clip onto its render.
+  - Plans and `update_clip(s)` now refuse a clip that plays past its media.
+  - The agent fixed it (and another like it) when told.
+  - The same "failed to fill whole buffer" is 20+ times in older logs.
+- **After a restart**, resumed smoothing read its footage before the sign-in was back (401) and kept two shots unsmoothed. Resuming now waits for the sign-in.
+- **The watcher's windows** failed within a second on the AI gateway's "too many at once". The next try now waits.
+- **A YouTube download's bar** went back (89% → 85%) as its sound began. Now the whole size from the start.
+- **The agent's chat** showed a red alert when the agent worked around a step itself (a site's bot check), and the restart note stayed red after the agent carried on. Both are fixed.
+- **Still open:**
+  - "Making the review copy" sat 3+ minutes with no percentage (14).
+  - JJ's courtroom voice waits for the voice to use (below).
+
+**JJ (Oct 28):** "I selected the courtroom edit option, but the voice was the one from bodycam."
+- Edit had one house voice for every style. A courtroom's narration was meant to be the team's own recording, and JJ's project had none, so the house voice stayed.
+- A style can now name its narrator: `voice: <ElevenLabs voice id>` in `agent/styles/<style>/notes.md`'s frontmatter. Only the id is missing.
+
 ## The model to move to
 
 Most of the above comes from three decisions: an import is **one job**, it ends **done or failed**, and laying out is **a one-way door**. Replace them with:

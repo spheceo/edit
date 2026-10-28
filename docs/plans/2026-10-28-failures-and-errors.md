@@ -1,6 +1,31 @@
-# Footage intake that doesn't get stuck
+# Edit that doesn't get stuck: failures, prevention and plain errors
 
-Oct 28. The import is where most of our recent patches went (the bundled qjs for yt-dlp, resuming partial edits, missing compilation cases, archived exports fetched back). Each one fixed a failure after someone hit it. This plan walks the whole intake, from pasting a link to an edit the agent can work on, lists every way it can fail that the code shows today, and proposes to prevent it, recover from it, or say it plainly.
+Oct 28. Most of our recent patches fixed a failure after someone hit it: the bundled qjs for yt-dlp, resuming partial edits, missing compilation cases, archived exports fetched back. This plan walks the whole flow, from pasting a link through the agent's edit to the export and review, and lists every way it can fail that the code and the logs show. For each one it proposes to **prevent** it, **recover** from it, or, when it genuinely can't be helped, **say** it in plain words with what to do.
+
+The user's brief: "look at EVERY way an error can come up … rewrite all errors to be way more beginner friendly … only when we've tried to handle/fix all ways in which the app can fail; if some specific scenarios genuinely fail, then we show a friendly error."
+
+## Done (Oct 28)
+
+- **Plain errors everywhere a person looks** (`packages/edit-types/src/problems.ts`, `ProblemView`).
+  - One `explain(error, doing)` gives a short title, what to do, and one button (Sign in, Sign in to Claude, Try again).
+  - The original words sit behind Details and Report.
+  - Every toast, the import panel, export activity, the preview, transcripts, the agent's chat and the editor's crash screen use it.
+  - Its rules come from the messages in the logs; a message already written for people is shown as it is, anything else gets "Couldn't <what you were doing>".
+  - The agent still gets the precise words, since it needs them to fix its own work.
+- **The import's Retry says why it can't** instead of quietly doing nothing (12, the message; the hole itself is still open, below).
+- **Imports don't freeze or fail for nothing:**
+  - Docs and Drive files are read with the team's Google sign-in first (1). The sign-in is never sent past a redirect.
+  - Doc errors are honest (2).
+  - A minute of silence drops and resumes a Drive download (5).
+  - A yt-dlp that says nothing for 10 minutes is stopped and tried again (5).
+  - Edit's own yt-dlp is used and kept current, and refreshed and retried when YouTube outdates it (4).
+  - Downloads run three at a time (7).
+  - Updates wait for imports (10).
+  - The Mac is kept awake while an import, export, upload or agent turn runs (9).
+- **YouTube with the editor's sign-in from Chrome** (6):
+  - A refused video is asked again with Chrome's signed-in profile (never through the proxy).
+  - Settings → YouTube explains the set-up step by step, with a Check that brings up the Mac's Keychain dialog while the instructions are on screen.
+- **The log keeps real failures**: background smoothing of a clip that changed or went away is a skip, not an error (it was 600+ of the log's errors).
 
 ## What the code does today
 
@@ -63,6 +88,33 @@ Each item: what goes wrong, the evidence, and the fix (**prevent** it, **recover
 
 16. **Daily allowances are found mid-import.** On Oct 21 the import was laid out again ~25 times in 20 minutes, each time failing its voice-over on the transcription allowance (429). On Oct 22 thirty watch windows failed in seconds on "no Gemini model left today". **Prevent:** preflight estimates the hours an import will need against what's left today, and says so before starting. A job that fails on an allowance waits for the reset instead of retrying.
 
+### Beyond the import: every other stage
+
+From the code and this Mac's logs (`~/.edit/logs`, Oct 16–28; the team's runs are on their Macs).
+
+17. **Daily allowances fail one request at a time.**
+    - The logs: 764 transcriptions failed on a used-up allowance, plus 2,929 "busy, asking again"; 475 watch windows failed on "no Gemini model left today", plus 1,422 retries; 75 failed on the AI gateway's credit.
+    - Each piece of work asks, fails, and logs, and nothing resumes after the reset.
+    - **Prevent:**
+      - Once a service says its day is used up, Edit remembers that until the reset and asks no more.
+      - It shows one notice ("Transcription resumes at 2:00").
+      - It resumes the waiting work by itself after the reset.
+      - The import's preflight estimates the hours it needs against what's left.
+      - The relay warns an admin before the AI gateway's credit runs out.
+18. **Signed out, the background keeps polling.** Reviews (136) and archives (103) failed on "Sign in to Edit" over and over. **Prevent:** while signed out, the background loops pause and one Sign in prompt shows; they resume on sign-in.
+19. **An export that can't start is refused, not queued.**
+    - "An export is already running" was refused 115 times, and "a map view is still rendering" 62.
+    - **Prevent:** the export joins the queue and starts when the map is drawn or the other export finishes, saying so.
+    - **Prevent:** preflight checks the export's estimated size against the disk's free space.
+20. **The agent's turn ends on a Claude limit or sign-in.** Sign-in is handled (Settings → Claude). A usage limit ends a full edit midway. **Recover:** the turn is saved with "resumes at <time>" and carried on by itself after the reset, as a restart's turn already is.
+21. **The preview.**
+    - "Decoding failed: HTTP …" 452 times (the R2 CORS cause was fixed Oct 24), the graphics adapter missing 27, wgpu validation errors 17, React's "maximum update depth" 27.
+    - **Say:** now plain. **Prevent:** each is a bug to fix by its own report; the update-depth loop and the validation error need their causes found.
+22. **Errors travel by copy and paste.**
+    - The Report dialog copies text ("Nothing is sent anywhere"), and a teammate pastes it to whoever fixes Edit.
+    - **Recover:** a Send button that puts the report (log, timings, the error) on the relay for the team's support page, so the person sees "Sent: we'll look" and nothing to copy.
+    - This sends logs off the Mac: it's the user's call.
+
 ## The model to move to
 
 Most of the above comes from three decisions: an import is **one job**, it ends **done or failed**, and laying out is **a one-way door**. Replace them with:
@@ -75,26 +127,30 @@ Most of the above comes from three decisions: an import is **one job**, it ends 
   - **Skip.** The source's blocks are dropped, and the edit closes the gap.
 - **The agent gets the same verbs.** `import_media` accepts links and starts a background source; a `replace_source` tool takes "this is case 1's footage"; and `get_edit_context` lists sources that need you, so the agent edits around them, or asks.
 
-## Order
+## Order (what's left)
 
-1. **Bugs, hours each:**
-   - Retry that silently fails (12): show the error.
-   - Updates wait for imports (10).
-   - Stall timeouts (5).
-   - Edit's own yt-dlp, kept current (4).
-   - Hold off idle sleep (9).
-   - Parallel downloads on (7).
-   - Honest Doc errors (2).
-2. **Authenticated Drive reads, public link as fallback (1).** Removes a whole class of "isn't shared" and quota failures.
-3. **Progress you can trust (14).** Small, and it tells us where the time actually goes.
-4. **Preflight checklist (3, 8, 16).**
-5. **Sources and "needs footage" (11, 12, 13, 15).** The big one: durable per-source jobs, late placement, the remedies, the Drive-link import moved onto it, the agent's tools.
-6. **A fault-injection test**, so we stop learning failures from the team. Fake Drive, YouTube and relay endpoints that stall mid-body, answer 403/429/5xx, cut short, or send the virus-scan page, plus a server killed mid-import. An end-to-end import must end with every healthy source ready and each broken one in "needs you" with the right reason.
+1. **Progress you can trust (14).** Small, and it tells us where the time actually goes.
+2. **Allowances as one notice, resumed after the reset (17), and signed-out pauses (18).** These were most of the log's failures.
+3. **Exports queue instead of refusing (19), and the disk check.**
+4. **Preflight checklist (3, 8, 16, 17).**
+5. **Sources and "needs footage" (11, 12, 13, 15).** The big one:
+   - durable per-source jobs;
+   - late placement;
+   - the remedies;
+   - the Drive-link import moved onto it;
+   - the agent's tools.
+6. **The agent's turn carried on after a Claude limit (20).**
+7. **A fault-injection test**, so we stop learning failures from the team:
+   - fake Drive, YouTube and relay endpoints that stall mid-body, answer 403/429/5xx, cut short, or send the virus-scan page;
+   - a server killed mid-import.
+
+   An end-to-end import must end with every healthy source ready and each broken one in "needs you" with the right reason.
 
 Each step teaches the agent its part (the `edit-workflow` skill: what "needs footage" means and when to ask), as AGENTS.md asks.
 
 ## Open questions
 
-- **YouTube behind a sign-in:** may Edit use the editor's Chrome cookies (`--cookies-from-browser`) when they choose to, or do we only ask for another link?
-- **With footage missing:** should the agent start the edit around the gap, or wait until the user decides?
-- **Skip:** does it drop the source's blocks outright, or leave a marked gap for later?
+- **YouTube behind a sign-in:** answered (Oct 28): Chrome's sign-in by default, with instructions. Done.
+- **With footage missing** (a link that still fails after every retry, e.g. a private video): should the agent start editing the parts it has, or wait until that footage is replaced or skipped? Suggested: research and watching start at once; the editing waits.
+- **Skip:** when the user decides to go without that footage, are its lines removed from the script, or is a marked placeholder left? Suggested: removed, with the narration around it rejoined.
+- **Send a report:** may a report go from the Mac to the relay for the team (22)?

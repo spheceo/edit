@@ -28,6 +28,20 @@ import { ROLES, roleTitle } from "./speakers.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
 import type { Word } from "./transcribe.ts";
 
+/** The pause before asking a busy gateway again (tests make it instant). */
+export const busyTiming = { waitMs: 15_000 };
+
+/**
+ * Whether the gateway said it's busy (too many calls at once, or its own
+ * trouble), which passes in a minute: the next try waits for it. Asked again
+ * at once, the windows of a full run-through all failed in the same second
+ * (Oct 28). A used-up day or credit isn't busy: waiting won't help today.
+ */
+export function busy(message: string): boolean {
+  return /answered (429|5\d\d)|too many .* at once/i.test(message) && !/used up|budget|credit/i.test(message);
+}
+
+
 /** One person as one window saw them. */
 export interface Seen {
   media: string;
@@ -162,6 +176,7 @@ export async function reconcile(
     } catch (error) {
       last = diag.messageOf(error);
       diag.warn("watch", `who is who across the windows, try ${attempt}: ${last}`);
+      if (attempt < TRIES && busy(last)) await Bun.sleep(busyTiming.waitMs * attempt);
       continue;
     } finally {
       fs.rmSync(scratch, { force: true });

@@ -730,3 +730,15 @@ test("a dissolve fades the incoming shot's lead-in over the outgoing one, and th
   expect((lead as VideoClip).source_in).toBeCloseTo(10 - (12 / 30) * 0.8);
   expect(() => apply(p, [{ op: "transition", kind: "dissolve", at: 0 }])).toThrow();
 });
+
+test("a plan never plays a clip past the end of its media (the export failed reading past a 2.8 s smoothed render)", () => {
+  const p = project();
+  p.media.push(media({ id: "short", name: "short.mp4", path: "/short.mp4", kind: "video", duration: 2.766667 }));
+  p.clips.push(clip({ id: "late", track: "v1", start: 0, duration: 75, type: "video", media: "short", source_in: 0 }));
+  // source_in in the original's clock, on a clip since swapped onto its short render.
+  expect(() => apply(p, [{ op: "update", select: { ids: ["late"] }, patch: { source_in: 60 } }])).toThrow(
+    "final plan is invalid: late: short runs out at 2.77 s; from 60.00 s it needs 2.50 s of it (source_in is in seconds of this media, from its start); nothing saved",
+  );
+  // Inside the file: fine.
+  apply(p, [{ op: "update", select: { ids: ["late"] }, patch: { source_in: 0.2 } }]);
+});

@@ -163,6 +163,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   const results: Json[] = [];
   const smooth: string[] = [];
   const placed = new Map(project.clips.map((clip) => [clip.id, `${clip.track}/${clip.start}/${clip.duration}`]));
+  const played = new Map(project.clips.map((clip) => [clip.id, playKey(clip)]));
   operations.forEach((original, index) => {
     let result: Json;
     try {
@@ -208,7 +209,37 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   tidyTracks(project);
   const invalid = native().projectValidate(jsonForSerde(project));
   if (invalid !== null) throw new Error(`final plan is invalid: ${invalid}; nothing saved`);
+  const short = runsOut(project, played);
+  if (short !== null) throw new Error(`final plan is invalid: ${short}; nothing saved`);
   return { results, smooth, separated };
+}
+
+/** What a clip plays of its media (which, from where, how fast, how long). */
+export function playKey(clip: Project["clips"][number]): string | null {
+  return clip.type === "video" || clip.type === "audio" ? `${clip.media}/${clip.source_in}/${clip.speed ?? 1}/${clip.duration}` : null;
+}
+
+/**
+ * A clip the plan added or changed that plays past the end of its media, said
+ * as the shots' check says it; else null. A source_in in the original's clock
+ * on a clip since swapped onto its 2.8 s smoothed render (the full
+ * run-through, Oct 28) was saved, and the export failed reading past the file.
+ */
+export function runsOut(project: Project, before: Map<string, string | null>): string | null {
+  const fps = project.settings.fps * (project.settings.ntsc ? 1000 / 1001 : 1);
+  for (const clip of project.clips) {
+    if (clip.type !== "video" && clip.type !== "audio") continue;
+    if (before.get(clip.id) === playKey(clip)) continue;
+    const media = project.media.find((one) => one.id === clip.media);
+    if (media === undefined || media.kind === "image" || !(media.duration > 0)) continue;
+    const speed = clip.speed ?? 1;
+    const needs = (clip.duration / fps) * speed;
+    if (clip.source_in + needs > media.duration + 0.1) {
+      const from = clip.source_in.toFixed(2);
+      return `${clip.id}: ${clip.media} runs out at ${media.duration.toFixed(2)} s; from ${from} s it needs ${needs.toFixed(2)} s of it${clip.source_in >= media.duration ? " (source_in is in seconds of this media, from its start)" : ""}`;
+    }
+  }
+  return null;
 }
 
 function messageOf(error: unknown): string {

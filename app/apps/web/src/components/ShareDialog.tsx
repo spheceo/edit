@@ -1,4 +1,4 @@
-import { Check, CircleAlert, Copy, ExternalLink, Link2 } from "lucide-react";
+import { Check, Copy, ExternalLink, Link2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { api, type Review } from "../lib/api";
@@ -7,6 +7,7 @@ import { chaptersInSpan, DEFAULTS, scriptChapters, type ExportOptions } from "..
 import { preview } from "../lib/playback";
 import { flushSave, useEditor } from "../lib/store";
 import { rate } from "../lib/types";
+import { ProblemView } from "./ProblemView";
 import { Button, Modal } from "./ui";
 
 /**
@@ -160,9 +161,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
           <div className="min-w-0 flex-1 text-[12px]">
             {progress && <span className="text-muted tabular">{progress}</span>}
             {!progress && problem && (
-              <span className="flex items-center gap-1.5 text-danger">
-                <CircleAlert size={13} className="shrink-0" /> <span className="truncate" title={problem}>{problem}</span>
-              </span>
+              <ProblemView error={problem} doing="share it" />
             )}
             {!progress && !problem && exportState?.state === "done" && link && (
               <span className="flex items-center gap-1.5 text-success">

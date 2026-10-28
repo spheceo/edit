@@ -500,9 +500,12 @@ async function updateClip({ app, args, projectId }: ToolCall): Promise<Content[]
   await app.store.update(projectId, ORIGIN, (project) => {
     const index = project.clips.findIndex((clip) => clip.id === clipId);
     if (index < 0) throw new Error(`no clip ${clipId}`);
+    const before = new Map([[clipId, editPlan.playKey(project.clips[index]!)]]);
     const value = mergeClip(structuredClone(project.clips[index]!) as unknown as Args, structuredClone(patch));
     if (typeof value === "object" && value !== null && !Array.isArray(value)) value.id = clipId;
     project.clips[index] = serde("patched clip is invalid: ", () => clipFrom(value));
+    const short = editPlan.runsOut({ ...project, clips: [project.clips[index]!] }, before);
+    if (short !== null) throw new Error(short);
     if (touchesPeople(objectOf(patch))) editPlan.hooks.oneColourPerPerson(project);
   });
   const clip = app.store.get(projectId)?.project.clips.find((own) => own.id === clipId) ?? null;
@@ -526,6 +529,7 @@ async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[
   const who = str(args.person);
   if (ids === null && label === null && track === null && who === null) throw new Error("pick the clips: clip_ids, label, person or track");
   const [, [changed, people]] = await app.store.update(projectId, ORIGIN, (project) => {
+    const before = new Map(project.clips.map((clip) => [clip.id, editPlan.playKey(clip)]));
     // A person of the cast, by id, name or label ("Officer:" or "Officer").
     let personId: string | null = null;
     if (who !== null) {
@@ -566,6 +570,8 @@ async function updateClips({ app, args, projectId }: ToolCall): Promise<Content[
       return next;
     });
     // A relabel or recolour: one colour per person, everywhere.
+    const short = editPlan.runsOut(project, before);
+    if (short !== null) throw new Error(short);
     const people = (touchesPeople(patch as Args) || role !== null) && changed.length > 0 ? editPlan.hooks.oneColourPerPerson(project) : null;
     return [changed, people] as const;
   });

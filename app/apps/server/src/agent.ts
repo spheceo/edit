@@ -236,7 +236,7 @@ export const MAX_FOLLOW_UPS = 3;
 
 /** The turn that carries on one a restart cut short. */
 const RESUMED =
-  "(Edit, automatically) Edit restarted while you were working (a new build), which cut your last turn off; your last tool call may not have finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.";
+  "(Edit, automatically) Edit restarted while you were working, which cut your last turn off; your last tool call may not have finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.";
 
 /** A mutex for async work (one turn of a chat at a time). */
 class Lock {
@@ -1457,6 +1457,13 @@ export class Agents implements seams.AgentPanel {
     for (const project of noted.projects) {
       if (typeof project !== "string" || this.store.get(project) === null) continue;
       diag.info("agent", `${project}: carrying on the turn the restart cut short`);
+      // The "Edit was closed" note is answered now: no longer a problem to show.
+      const chat = this.withChat(project);
+      for (const item of chat.entries) {
+        if (item.kind === "error" && item.status !== "done" && item.text.startsWith("Edit was closed during this turn")) {
+          this.upsert(project, { ...item, status: "done", detail: item.detail ?? item.text, text: "Edit restarted; the agent carried on where it stopped." });
+        }
+      }
       void this.send(project, RESUMED, null, null).catch((error: unknown) => {
         diag.warn("agent", `carrying on the turn in ${project}: ${diag.messageOf(error)}`);
       });

@@ -180,7 +180,13 @@ export function start(home: string, host: string | null, port: number): { app: A
   seams.speakers.watch(app);
   // Cloud projects (on with the built-in token): sync, locks, and letting them go on the way out.
   // Signed in before: the access token renewed quietly, before the cloud's first call.
-  optional("accounts", () => accounts.start(app));
+  // The sign-in restored before anything resumes (below): a smoothing resumed
+  // at once read its footage before it, got "Sign in to Edit", and kept its
+  // shot unsmoothed (the full run-through, Oct 28).
+  let signedIn: Promise<unknown> = Promise.resolve();
+  optional("accounts", () => {
+    signedIn = accounts.start(app);
+  });
   optional("cloud", () => seams.cloudProjects.start(app));
   // Repack reviews of exports: their notes followed, and fixed by the agent once they settle.
   optional("review", () => reviews.start(app));
@@ -229,7 +235,6 @@ export function start(home: string, host: string | null, port: number): { app: A
   // First start of each installed nightly only (also works when an older
   // updater installed this build). Ordinary launches do no maintenance.
   if (RELEASE && NIGHTLY !== null && !process.env.CI && process.env.EDIT_CLAUDE_MAINTENANCE !== "0") seams.agentPanel(app).claudeSupport?.afterNightly(BUILD);
-  resumeJobs(app);
   keepAwakeWhile(() => {
     if (app.exports.running()) return "an export";
     if (app.scripts.running() || importing()) return "a footage import";
@@ -241,12 +246,16 @@ export function start(home: string, host: string | null, port: number): { app: A
     if ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.()) return "the agent";
     return null;
   });
-  // Once listening: the agents reach Edit's MCP on this port.
-  try {
-    app.agents.resumeInterrupted?.();
-  } catch (error) {
-    diag.warn("agent", `carrying on cut turns: ${diag.messageOf(error)}`);
-  }
+  // Once listening (the agents reach Edit's MCP on this port) and signed in
+  // again (or 20 s on, signed out): the jobs and agent turns a restart cut short.
+  void Promise.race([signedIn.catch(() => undefined), Bun.sleep(20_000)]).then(() => {
+    resumeJobs(app);
+    try {
+      app.agents.resumeInterrupted?.();
+    } catch (error) {
+      diag.warn("agent", `carrying on cut turns: ${diag.messageOf(error)}`);
+    }
+  });
   if (update.enabled()) {
     void update
       .check(update.readChannel(home))

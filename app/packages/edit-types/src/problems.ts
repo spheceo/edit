@@ -54,6 +54,11 @@ const daily = (what: string, zone = "UTC"): Said => ({
 
 /** Most specific first: the first match wins. */
 const RULES: Rule[] = [
+  // Trello cards are read through Writer's relay; when it refuses Edit, it says "Sign in to Writer".
+  [/Sign in to Writer|Trello import refused/i, () => ({
+    title: "Edit can't read Trello cards right now",
+    fix: "That's on our side, not your sign-in. For now, paste the card's script Doc link (or its case links) instead of the card.",
+  })],
   // Signed out.
   [/Sign in to Edit|signed-in people only|Your sign-in ended|invalid_grant/i, () => ({
     title: "You're signed out of Edit",

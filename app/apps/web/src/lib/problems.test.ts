@@ -70,6 +70,10 @@ describe("explain", () => {
     expect(said.fix).toContain("Share https://docs.google.com/document/d/1Abc/edit so anyone");
   });
 
+  it("never tells an Edit user to sign in to Writer", () => {
+    expect(explain("Your sign-in isn't valid. Sign in to Writer again.").title).toBe("Edit can't read Trello cards right now");
+  });
+
   it("doesn't take another service's limit for Claude's", () => {
     expect(explain("Google Drive answered 429: Rate Limit Exceeded").title).toBe("Google Drive is having trouble");
   });

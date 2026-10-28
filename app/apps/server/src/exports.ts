@@ -113,6 +113,27 @@ export const exportCloud = {
  * verified to hold an object of exactly the local size. Any failure keeps
  * the local file (it may be the only copy) and returns false.
  */
+/** Exports being read (a share making its copies): how many readers each. */
+const reading = new Map<string, number>();
+
+/**
+ * Marks an export as being read until `release` is called: its archive keeps
+ * the local copy meanwhile. A share started the moment the Cop video's export
+ * said done lost its file to the archive mid-way ("No such file or
+ * directory", Oct 29).
+ */
+export function holdExport(path: string): () => void {
+  reading.set(path, (reading.get(path) ?? 0) + 1);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    const left = (reading.get(path) ?? 1) - 1;
+    if (left > 0) reading.set(path, left);
+    else reading.delete(path);
+  };
+}
+
 export async function archiveExportFile(
   output: string,
   key: string,
@@ -125,6 +146,8 @@ export async function archiveExportFile(
     const found = await io.head(key);
     if (found === null || found.size !== size) return false;
   } catch { return false; }
+  // Archived; a copy being read stays here too.
+  if (reading.has(output)) return true;
   try { fs.rmSync(output, { force: true }); } catch { return false; }
   return !fs.existsSync(output);
 }
@@ -532,7 +555,7 @@ export class ExportRegistry implements seams.Exports {
               frames, whole: plan.start === 0 && plan.end >= duration(project), start: plan.start, format: options.format, timeline: running.timeline, cloudKey: key,
             });
           } catch { /* the list keeps the local-only record */ }
-          diag.info("export", `${id}: archived ${output} to ${key} and deleted the local copy`);
+          diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy is being read, so kept)" : " and deleted the local copy"}`);
         } else {
           diag.warn("export", `${id}: cloud archive of ${output} unverified; local copy kept`);
         }

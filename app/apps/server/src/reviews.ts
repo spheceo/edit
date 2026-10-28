@@ -26,7 +26,7 @@ import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
-import { clipMap, deleteExport, listExports, mapFile, timelineHash } from "./exports.ts";
+import { clipMap, deleteExport, holdExport, listExports, mapFile, timelineHash } from "./exports.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Project } from "./model.ts";
@@ -206,6 +206,7 @@ export async function share(app: App, projectId: string, path: string | null, re
   const copy = join(work, `${timeline}.mp4`);
   const poster = join(work, `${timeline}.jpg`);
   sharing.set(projectId, "making the review copy");
+  const release = holdExport(chosen.path);
   try {
     if (!fs.existsSync(chosen.path)) {
       sharing.set(projectId, "fetching the export back from the cloud");
@@ -274,6 +275,7 @@ export async function share(app: App, projectId: string, path: string | null, re
     diag.info("review", `${live.project.name}: shared v${answer.version} at ${answer.url}`);
     return { url: answer.url, version: answer.version };
   } finally {
+    release();
     sharing.delete(projectId);
   }
 }

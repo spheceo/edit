@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, listExports, resumeSnapshot } from "../src/exports.ts";
+import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, resumeSnapshot } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -212,6 +212,11 @@ test("archiveExportFile deletes locally only after a size-verified upload", asyn
     expect(fs.existsSync(file)).toBe(true);
     expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(null))).toBe(false);
     expect(fs.existsSync(file)).toBe(true);
+    // A share reading it: archived, and the copy stays until it's done.
+    const release = holdExport(file);
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50))).toBe(true);
+    expect(fs.existsSync(file)).toBe(true);
+    release();
     expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50))).toBe(true);
     expect(fs.existsSync(file)).toBe(false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

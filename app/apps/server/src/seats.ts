@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 
 import * as diag from "./diag.ts";
+import { Semaphore } from "./media.ts";
 import * as media from "./media.ts";
 import { native } from "./native/index.ts";
 import { join } from "./paths.ts";
@@ -235,6 +236,20 @@ const CUTS_FILE = "cuts-v1.json";
 export async function cutsOf(source: string): Promise<number[]> {
   const known = cachedCuts(source);
   if (known !== null) return known;
+  // One scan per file, whoever asks (each slowed shot being smoothed asked
+  // for its file's cuts at once: 89 scans of a few files, Oct 28).
+  let running = scanning.get(source);
+  if (running === undefined) {
+    running = scanCuts(source).finally(() => scanning.delete(source));
+    scanning.set(source, running);
+  }
+  return running;
+}
+
+/** Cut scans under way, by file. */
+const scanning = new Map<string, Promise<number[]>>();
+
+async function scanCuts(source: string): Promise<number[]> {
   const cache = tools.mediaCache(source);
   if (cache === null) throw new Error("no media cache");
   const frames = await framesOf(source, cache);
@@ -329,7 +344,14 @@ export function faces(angles: number, looks: [number, Sighting[]][]): Map<string
  * from the light preview when there is one, else the original (only its
  * keyframes when they're close together).
  */
+/** Frame scans at once (each an FFmpeg over a whole file): unbounded, they took the Mac's load past 300. */
+const SCANS_AT_ONCE = new Semaphore(2);
+
 async function framesOf(source: string, cache: string): Promise<Buffer> {
+  return SCANS_AT_ONCE.with(() => framesOfNow(source, cache));
+}
+
+async function framesOfNow(source: string, cache: string): Promise<Buffer> {
   const light = join(cache, "preview-light.mp4");
   let input = source;
   try {

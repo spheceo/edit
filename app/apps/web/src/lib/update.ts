@@ -58,13 +58,13 @@ async function poll() {
     useUpdate.setState({ status });
     if (from && status.phase === "idle") {
       useUpdate.setState({ from: null });
-      if (status.error) useEditor.getState().toast(`Update failed: ${status.error}`, "error");
+      if (status.error) useEditor.getState().toastError(status.error, "update Edit");
     }
   } catch {
     // Down while it restarts.
     if (from && Date.now() - startedAt > RESTART_PATIENCE_MS) {
       useUpdate.setState({ from: null });
-      useEditor.getState().toast("Edit didn't come back after updating; run `edit serve` again.", "error");
+      useEditor.getState().toast("Edit didn't come back after updating. Quit Edit and open it again.", "error");
     }
   }
   schedule(useUpdate.getState().from ? BUSY_POLL_MS : IDLE_POLL_MS);
@@ -93,7 +93,7 @@ export async function installUpdate() {
     useUpdate.setState({ status: body as UpdateStatus });
   } catch (error) {
     useUpdate.setState({ from: null, status: { ...status, phase: "idle" } });
-    useEditor.getState().toast(`Couldn't update: ${error instanceof Error ? error.message : error}`, "error");
+    useEditor.getState().toastError(error, "update Edit");
     return;
   }
   schedule(BUSY_POLL_MS);

@@ -19,6 +19,7 @@ import { MediaPanel } from "./MediaPanel";
 import { SidePanel } from "./SidePanel";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
+import { ProblemView } from "./ProblemView";
 import { cx, spring, Spinner } from "./ui";
 import { toggleFullscreen, Viewer } from "./Viewer";
 import { rate } from "../lib/types";
@@ -135,7 +136,11 @@ export function Editor({ id }: { id: string }) {
   const machine = useMachine();
 
   if (error) {
-    return <div className="flex h-full items-center justify-center text-muted">{error}</div>;
+    return (
+      <div className="flex h-full items-center justify-center p-8">
+        <ProblemView error={error} doing="open this project" className="max-w-[420px]" />
+      </div>
+    );
   }
   if (!project || project.id !== id) {
     return (

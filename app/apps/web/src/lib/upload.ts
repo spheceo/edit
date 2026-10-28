@@ -88,7 +88,7 @@ async function pump() {
     } catch (error) {
       if ((error as Error).name === "AbortError") continue;
       patch(job.upload.id, { state: "failed", error: (error as Error).message });
-      useEditor.getState().toast(`${job.upload.name}: ${(error as Error).message}`, "error");
+      useEditor.getState().toastError(error, `upload ${job.upload.name}`);
       forget(job.upload.id, 8000);
     }
   }

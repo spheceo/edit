@@ -25,7 +25,7 @@ export function CloudBanner() {
       setAsking(false);
       toast("You’re editing it now.");
     } catch (error) {
-      toast(`Couldn’t take over: ${(error as Error).message}`, "error");
+      useEditor.getState().toastError(error, "take over");
     } finally {
       setBusy(false);
     }

@@ -1,4 +1,4 @@
-import { AudioLines, ChevronRight, CircleAlert, RotateCcw, Search } from "lucide-react";
+import { AudioLines, ChevronRight, RotateCcw, Search } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
@@ -8,6 +8,7 @@ import { useEditor } from "../lib/store";
 import type { Project, Transcript } from "../lib/types";
 import { toggleMenu } from "./ContextMenu";
 import { displayNames } from "./MediaPanel";
+import { ProblemView } from "./ProblemView";
 import { Button, cx, Spinner } from "./ui";
 import { rate } from "../lib/types";
 
@@ -142,7 +143,6 @@ const clock = (frame: number, fps: number) => {
 export function TranscriptPanel() {
   const project = useEditor((state) => state.project)!;
   const statuses = useEditor((state) => state.media);
-  const toast = useEditor((state) => state.toast);
   const [version, setVersion] = useState(0);
   const [query, setQuery] = useState("");
   // The clips still to transcribe, folded away until asked for.
@@ -244,7 +244,7 @@ export function TranscriptPanel() {
     api
       .transcribe(project.id, mediaId)
       .then(({ status }) => useEditor.setState({ media: { ...useEditor.getState().media, [mediaId]: status } }))
-      .catch((error) => toast((error as Error).message, "error"));
+      .catch((error) => useEditor.getState().toastError(error, "start the transcript"));
 
   // Audio files in the bin (voice-overs) can be transcribed before they’re on the timeline.
   const unplaced = project.media.filter((media) => media.kind === "audio" && !isSoundEffect(media) && !heard.includes(media));
@@ -327,10 +327,7 @@ export function TranscriptPanel() {
               );
             })}
           {error && (
-            <p className="flex items-start gap-1.5 px-2 pt-1 pb-1.5 text-[11px] leading-relaxed text-danger/90">
-              <CircleAlert size={11} className="mt-0.5 shrink-0" />
-              {error}
-            </p>
+            <ProblemView error={error} doing="transcribe it" className="px-2 pt-1 pb-1.5" />
           )}
         </div>
       )}
@@ -369,7 +366,7 @@ export function TranscriptPanel() {
                                   loaded.set(`${project.id}/${media}`, transcript);
                                   setNamed((count) => count + 1);
                                 })
-                                .catch((error) => toast((error as Error).message, "error")),
+                                .catch((error) => useEditor.getState().toastError(error, "name the speaker")),
                           })),
                         ],
                         { width: 200 },

@@ -103,7 +103,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       toast(`Approved v${done.version}`, "info");
       setReview(await api.review(project.id));
     } catch (error) {
-      toast((error as Error).message, "error");
+      useEditor.getState().toastError(error, "approve it");
     } finally {
       setApproving(false);
     }

@@ -322,7 +322,7 @@ export function mediaMenu(mediaId: string): MenuItem[] {
               media: { ...useEditor.getState().media, [mediaId]: status },
             }),
           )
-          .catch((error) => editor.toast((error as Error).message, "error")),
+          .catch((error) => editor.toastError(error, "start the transcript")),
     },
     { separator: true },
     {

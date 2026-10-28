@@ -2,7 +2,8 @@
 // between them, in order. The block under the playhead lights up; click one to
 // jump there. Also attaches a Google Doc; its downloads have their own tab.
 
-import { ArrowUpRight, CircleAlert, FileText, RotateCw, Scissors } from "lucide-react";
+import { explain } from "@edit/types/problems";
+import { ArrowUpRight, FileText, RotateCw, Scissors } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "../lib/api";
@@ -12,6 +13,7 @@ import { clipEnd, withLinked } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import type { Project, ScriptBlock, ScriptJob } from "../lib/types";
+import { ProblemView } from "./ProblemView";
 import { Button, cx } from "./ui";
 
 export function ScriptPanel() {
@@ -201,6 +203,7 @@ const size = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB`
 function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
   const labels = fileLabels(project);
   const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<unknown>(null);
   return (
     <div className="px-3.5 py-3">
       <div className="mb-2 flex items-center justify-between text-[12px]">
@@ -214,7 +217,7 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
                 : job.state === "failed"
                   ? job.files.some((file) => file.state === "failed")
                     ? "Some footage didn’t download"
-                    : (job.error ?? "The import stopped")
+                    : explain(job.error ?? "The import stopped", "finish the import").title
                   : "Downloading footage"}
         </span>
         {job.state === "failed" && (
@@ -222,9 +225,12 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
             disabled={retrying}
             onClick={() => {
               setRetrying(true);
+              setRetryError(null);
               void api
                 .resumeScript(project.id)
                 .then(({ job }) => useEditor.setState({ scriptJob: job }))
+                // Never a Retry that quietly does nothing: say why it can't.
+                .catch(setRetryError)
                 .finally(() => setRetrying(false));
             }}
             className="flex h-6 items-center gap-1 rounded-md px-2 text-muted transition-colors hover:bg-hover hover:text-fg"
@@ -233,6 +239,10 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
           </button>
         )}
       </div>
+      {job.state === "failed" && !job.files.some((file) => file.state === "failed") && job.error && (
+        <ProblemView error={job.error} doing="finish the import" className="mb-2" />
+      )}
+      {retryError !== null && <ProblemView error={retryError} doing="retry the import" className="mb-2" />}
       <div className="flex flex-col gap-2">
         {job.files.map((file) => {
           const info = labels.get(file.file);
@@ -267,12 +277,7 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
                   style={{ width: `${Math.round((file.state === "failed" ? 1 : progress) * 100)}%` }}
                 />
               </div>
-              {file.error && (
-                <div className="mt-1 flex items-start gap-1.5 text-[11px] text-danger">
-                  <CircleAlert size={11} className="mt-px shrink-0" />
-                  {file.error}
-                </div>
-              )}
+              {file.error && <ProblemView error={file.error} doing="download this file" className="mt-1.5" />}
             </div>
           );
         })}
@@ -329,7 +334,7 @@ function AttachScript({ project }: { project: Project }) {
         }}
         className="mt-4 w-full resize-y rounded-lg border border-line bg-black px-3 py-2 text-[13px] outline-none placeholder:text-faint focus:border-muted"
       />
-      {error && <p className="mt-2 text-[12px] text-danger">{error}</p>}
+      {error && <ProblemView error={error} doing="read the case links" className="mt-2" />}
       <Button type="submit" variant="primary" className="mt-3 self-center" disabled={busy || !url.trim()}>
         {busy ? "Reading the case links…" : "Import"}
       </Button>

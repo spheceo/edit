@@ -1,3 +1,4 @@
+import { explain, type Problem } from "@edit/types/problems";
 import { produce, type Draft } from "immer";
 import { create } from "zustand";
 
@@ -45,6 +46,8 @@ export interface Toast {
   id: number;
   text: string;
   tone: "info" | "error" | "agent";
+  /** An error's plain words (problems.ts): what went wrong and what to do. */
+  problem?: Problem;
 }
 
 export type Tool = "select" | "razor";
@@ -103,10 +106,17 @@ interface EditorState {
   /** Back to the default height (the divider's double-click). */
   resetTimelineHeight(): void;
   toast(text: string, tone?: Toast["tone"]): void;
+  /** Says what went wrong in plain words; `doing` finishes "Couldn't …" when nothing better is known. */
+  toastError(error: unknown, doing?: string): void;
   dismiss(id: number): void;
 }
 
 let toastId = 0;
+/** The toast under the pointer, kept until it leaves. */
+let heldToast: number | null = null;
+export const holdToast = (id: number | null) => {
+  heldToast = id;
+};
 let editorSession = 0;
 
 /**
@@ -239,7 +249,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (next === project) return;
     const problem = validateProject(next);
     if (problem) {
-      get().toast(`Can't do that: ${problem}.`, "error");
+      get().toastError(problem, "do that");
       return;
     }
     set({ project: next, past: [...past.slice(-HISTORY_LIMIT), project], future: [], dirty: true });
@@ -266,7 +276,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const problem = validateProject(project);
     if (problem) {
       set({ project: gestureBase });
-      get().toast(`Can't do that: ${problem}.`, "error");
+      get().toastError(problem, "do that");
       return;
     }
     set({ past: [...past.slice(-HISTORY_LIMIT), gestureBase], future: [], dirty: true });
@@ -332,10 +342,19 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ timelineHeight: defaultTimelineHeight() });
   },
   toast: (text, tone = "info") => {
-    if (tone === "error") note("error", "ui", text);
+    if (tone === "error") return get().toastError(text);
     const id = ++toastId;
     set({ toasts: [...get().toasts.slice(-3), { id, text, tone }] });
-    setTimeout(() => get().dismiss(id), tone === "error" ? 6000 : 3200);
+    setTimeout(() => get().dismiss(id), 3200);
+  },
+  toastError: (error, doing) => {
+    const problem = explain(error, doing);
+    note("error", "ui", problem.details || problem.title);
+    const id = ++toastId;
+    set({ toasts: [...get().toasts.slice(-3), { id, text: problem.title, tone: "error", problem }] });
+    // Long enough to read the fix; it stays while the pointer is on it (Toasts).
+    const later = () => (heldToast === id ? setTimeout(later, 2000) : get().dismiss(id));
+    setTimeout(later, 12_000);
   },
   dismiss: (id) => set({ toasts: get().toasts.filter((toast) => toast.id !== id) }),
 }));
@@ -407,7 +426,7 @@ async function saveProject(state: EditorState) {
     } else if (error instanceof ApiError && error.status === 400) {
       // The server refused the change: show what it has, never a version that
       // can't be saved; what was on screen stays one undo away.
-      useEditor.getState().toast(`That change couldn't be saved (${error.message}); restored the last saved version (undo brings yours back).`, "error");
+      useEditor.getState().toastError(error, "save that change (the last saved version is back; Undo brings yours back)");
       try {
         const live = await api.project(project.id);
         if (session === editorSession) {
@@ -421,7 +440,7 @@ async function saveProject(state: EditorState) {
         // Offline: keep what's on screen; the next save retries.
       }
     } else {
-      useEditor.getState().toast(`Couldn't save: ${(error as Error).message}`, "error");
+      useEditor.getState().toastError(error, "save");
     }
   } finally {
     if (session === editorSession) useEditor.setState({ saving: false });

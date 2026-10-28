@@ -1,3 +1,4 @@
+import { explain } from "@edit/types/problems";
 import {
   ArrowUp,
   AudioLines,
@@ -44,6 +45,7 @@ import {
 import { buildTurns, callTitle, formatWorked, groupSummary, type Turn } from "../lib/agentTurns";
 import { api, useMachine } from "../lib/api";
 import { useEditor } from "../lib/store";
+import { ProblemView } from "./ProblemView";
 import { Button, cx, IconButton } from "./ui";
 import { ClaudeSetupCard } from "./ClaudeSetupCard";
 
@@ -409,8 +411,14 @@ function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean
     const resolved = entry.status === "done";
     return (
       <div className={cx("flex items-start gap-2 rounded-lg px-2.5 py-2 text-[12px]", resolved ? "bg-raised text-muted" : "bg-danger-soft text-danger")}>
-        {resolved ? <Check size={13} className="mt-px shrink-0" /> : <CircleAlert size={13} className="mt-px shrink-0" />}
-        <span>{entry.text}</span>
+        {resolved ? (
+          <>
+            <Check size={13} className="mt-px shrink-0" />
+            <span>{explain(entry.text, "carry on").title}</span>
+          </>
+        ) : (
+          <ProblemView error={entry.text} doing="carry on" className="min-w-0 flex-1" />
+        )}
       </div>
     );
   }
@@ -480,7 +488,6 @@ const MARKDOWN: Components = {
  */
 function ResetCard({ projectId }: { projectId: string }) {
   const asked = useEditor((state) => state.resetAsked);
-  const toast = useEditor((state) => state.toast);
   const [answering, setAnswering] = useState(false);
   if (!asked) return null;
   const answer = (accept: boolean) => {
@@ -488,7 +495,7 @@ function ResetCard({ projectId }: { projectId: string }) {
     void api
       .answerReset(projectId, accept)
       .then(() => useEditor.setState({ resetAsked: false }))
-      .catch((error) => toast((error as Error).message, "error"))
+      .catch((error) => useEditor.getState().toastError(error, "answer the agent"))
       .finally(() => setAnswering(false));
   };
   return (

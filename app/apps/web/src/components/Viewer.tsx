@@ -12,6 +12,7 @@ import { openMenu } from "./ContextMenu";
 import { importProgress } from "../lib/import_progress";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
+import { ProblemView } from "./ProblemView";
 import { cx, IconButton } from "./ui";
 import { rate } from "../lib/types";
 
@@ -118,11 +119,8 @@ export function Viewer() {
           onContextMenu={(event) => { if (!fullscreen) openMenu(event, viewerMenu()); }}
         />
         {error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-8 text-center text-muted">
-            <p className="max-w-[380px]">{error}</p>
-            <button className="text-[12px] text-faint underline underline-offset-2 hover:text-fg" onClick={() => openReport(`The preview failed: ${error}`)}>
-              Report this problem
-            </button>
+          <div className="absolute inset-0 flex items-center justify-center p-8">
+            <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />
           </div>
         )}
         {!error && buffering && (

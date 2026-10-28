@@ -22,7 +22,6 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
   const [busy, setBusy] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [driveLink, setDriveLink] = useState("");
-  const toast = useEditor((state) => state.toast);
   const machine = useMachine();
 
   const go = (path?: string) =>
@@ -35,7 +34,7 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
       })
       .catch((error) => {
         if (!path) return api.browse().then(setListing);
-        toast(error.message, "error");
+        useEditor.getState().toastError(error, "open that folder");
       });
 
   useEffect(() => {
@@ -53,10 +52,10 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
     try {
       const result = await api.importMedia(project.id, picked, place, clientId);
       useEditor.getState().adopt(result.rev, result.project);
-      for (const error of result.errors) toast(error, "error");
+      for (const error of result.errors) useEditor.getState().toastError(error, "import a file");
       onClose();
     } catch (error) {
-      toast((error as Error).message, "error");
+      useEditor.getState().toastError(error, "import it");
     } finally {
       setBusy(false);
     }
@@ -70,11 +69,11 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
     try {
       const result = await api.importDrive(project.id, driveLink.trim(), place, clientId);
       useEditor.getState().adopt(result.rev, result.project);
-      for (const error of result.errors) toast(error, "error");
+      for (const error of result.errors) useEditor.getState().toastError(error, "import a file");
       setDriveLink("");
       onClose();
     } catch (error) {
-      toast((error as Error).message, "error");
+      useEditor.getState().toastError(error, "import it");
     } finally {
       setBusy(false);
     }

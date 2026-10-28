@@ -26,8 +26,9 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
         <div className="text-[15px] font-medium">Something went wrong in the editor</div>
-        <p className="max-w-[460px] font-mono text-[12px] text-muted">{this.state.error.message}</p>
-        <p className="text-[12px] text-faint">Your project is saved on the server.</p>
+        <p className="max-w-[460px] text-[13px] leading-relaxed text-muted">
+          Your project is saved. Reload to carry on. If it happens again, copy the problem report and send it to whoever looks after Edit (it has the details).
+        </p>
         <div className="flex gap-2">
           <Button variant="ghost" onClick={() => void this.copyReport()}>
             {this.state.copied ? "Report copied" : "Copy problem report"}

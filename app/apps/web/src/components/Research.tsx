@@ -104,7 +104,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
         useEditor.getState().adopt(result.rev, result.project);
         setItems((all) => all.map((other) => (other.id === item.id ? result.item : other)));
       } catch (error) {
-        toast((error as Error).message, "error");
+        useEditor.getState().toastError(error, "save that choice");
         refresh();
       }
     },
@@ -123,7 +123,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
       setQuery("");
       toast(`Searching images for ${queries.map((part) => `“${part}”`).join(", ")}…`);
     } catch (error) {
-      toast((error as Error).message, "error");
+      useEditor.getState().toastError(error, "search for images");
     }
   };
 
@@ -148,7 +148,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
       toast(`Deleted ${removed} ${status === "new" ? "unreviewed" : "rejected"} images`);
       refresh();
     } catch (error) {
-      toast((error as Error).message, "error");
+      useEditor.getState().toastError(error, "delete the images");
     }
   };
 

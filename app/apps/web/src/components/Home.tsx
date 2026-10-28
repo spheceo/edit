@@ -30,7 +30,6 @@ export function Home() {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>(() => (localStorage.getItem(KIND) === "subtitled" ? "subtitled" : "edits"));
   const [style, setStyle] = useState<Style | null>(null);
-  const toast = useEditor((state) => state.toast);
 
   const refresh = () => {
     // The cloud’s list is fetched beside this machine’s, never in its way.
@@ -46,7 +45,7 @@ export function Home() {
     return api
       .projects()
       .then(({ projects }) => setProjects(projects))
-      .catch((error) => toast(`Couldn’t reach Edit: ${error.message}`, "error"));
+      .catch((error) => useEditor.getState().toastError(error, "reach Edit"));
   };
 
   useEffect(() => {
@@ -271,7 +270,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
       await api.saveProject(project.id, live.rev, { ...live.project, name }, clientId);
       onChanged();
     } catch (error) {
-      toast(`Couldn’t rename: ${(error as Error).message}`, "error");
+      useEditor.getState().toastError(error, "rename it");
     }
   };
   const remove = async () => {
@@ -279,13 +278,13 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     try {
       await api.deleteProject(project.id);
     } catch (error) {
-      toast(`Couldn’t delete “${project.name}”: ${(error as Error).message}`, "error");
+      useEditor.getState().toastError(error, `delete “${project.name}”`);
     }
     onChanged();
   };
   const open = () => {
     if (renaming) return;
-    if (project.problem) toast(`“${project.name}” can’t be opened: ${project.problem}`, "error");
+    if (project.problem) useEditor.getState().toastError(project.problem, `open “${project.name}”`);
     else navigate(`/p/${project.id}`);
   };
   const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -399,7 +398,7 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
           toast("Restoring: its footage is downloading again", "info");
           onChanged?.();
         })
-        .catch((error) => toast((error as Error).message, "error"));
+        .catch((error) => useEditor.getState().toastError(error, "restore it"));
     };
     return (
       <span
@@ -545,7 +544,6 @@ function TableRow({ subtitled, ...props }: CardProps & { subtitled: boolean }) {
 /** A project only in the cloud: opening it downloads it to this Mac. */
 function CloudTableRow({ project, onChanged }: { project: CloudProject; onChanged: () => void }) {
   const [deleting, setDeleting] = useState(false);
-  const toast = useEditor((state) => state.toast);
   const summary = project.summary ?? {};
   const style = (summary.style as Style | undefined) ?? "bodycam";
   const seconds = summary.durationFrames && summary.fps ? summary.durationFrames / summary.fps : null;
@@ -554,7 +552,7 @@ function CloudTableRow({ project, onChanged }: { project: CloudProject; onChange
     try {
       await api.deleteProject(project.id);
     } catch (error) {
-      toast(`Couldn’t delete “${project.name}”: ${(error as Error).message}`, "error");
+      useEditor.getState().toastError(error, `delete “${project.name}”`);
     }
     onChanged();
   };
@@ -647,7 +645,7 @@ function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSumm
       onClose();
       onMoved();
     } catch (error) {
-      toast(`Couldn’t move it to the cloud: ${(error as Error).message}`, "error");
+      useEditor.getState().toastError(error, "move it to the cloud");
     } finally {
       setBusy(false);
     }
@@ -730,7 +728,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
       onClose();
       navigate(`/p/${project}`);
     } catch (error) {
-      toast((error as Error).message, "error");
+      useEditor.getState().toastError(error, "start the edit from Writer");
     } finally {
       setStarting(null);
     }
@@ -775,7 +773,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
       onClose();
       navigate(`/p/${project.id}`);
     } catch (error) {
-      toast((error as Error).message, "error");
+      useEditor.getState().toastError(error, "start the project");
     } finally {
       setBusy(false);
     }

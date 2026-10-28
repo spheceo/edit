@@ -498,7 +498,8 @@ export async function syncScriptJob(id: string) {
     const { job, unfinished } = await api.scriptJob(id);
     if (useEditor.getState().project?.id !== id) return;
     const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing" || job.state === "voicing");
-    useEditor.setState(running ? { scriptJob: job, mediaTab: "downloads", showMedia: true } : { scriptJob: job });
+    // Running, or waiting for the person's answer about footage it couldn't fetch: the Downloads tab, open.
+    useEditor.setState(running || job?.state === "waiting" ? { scriptJob: job, mediaTab: "downloads", showMedia: true } : { scriptJob: job });
     // A failed run waits for Retry; an import that stopped part-way (blocks never
     // placed) carries on by itself. A placed block whose clip is gone was removed
     // on purpose (a cut-in card replaced by B-roll): never put it back.
@@ -508,7 +509,7 @@ export async function syncScriptJob(id: string) {
     // Only an import that stopped part-way, never one that finished: a finished edit
     // whose blocks lost their clip links was laid out again on top of itself when it
     // was opened (Mom Leaves 5 Kids, Oct 23: a second copy after 30:50).
-    if (unfinished && neverPlaced && !running && job?.state !== "failed" && job?.state !== "done") {
+    if (unfinished && neverPlaced && !running && job?.state !== "failed" && job?.state !== "waiting" && job?.state !== "done") {
       const resumed = await api.resumeScript(id);
       if (useEditor.getState().project?.id === id) useEditor.setState({ scriptJob: resumed.job });
     }

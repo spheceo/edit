@@ -158,9 +158,11 @@ export const STYLES: { value: Style; label: string }[] = [
 
 /** A script import's footage downloads (apps/server/src/script.ts `Job`). */
 export interface ScriptJob {
-  state: "downloading" | "transcribing" | "placing" | "voicing" | "done" | "failed";
+  /** `waiting`: some footage couldn't be downloaded, even tried again; the person gives another link or goes on without it. */
+  state: "downloading" | "transcribing" | "placing" | "voicing" | "waiting" | "done" | "failed";
   error?: string;
-  files: { file: string; name?: string; bytes: number; total?: number; state: "queued" | "downloading" | "cutting" | "done" | "failed"; error?: string; cut?: { done: number; total: number } }[];
+  /** `retry_at`: when Edit tries a failed file again by itself (ms). */
+  files: { file: string; name?: string; bytes: number; total?: number; state: "queued" | "downloading" | "cutting" | "done" | "failed"; error?: string; retry_at?: number; cut?: { done: number; total: number } }[];
 }
 
 export interface ProjectSummary {

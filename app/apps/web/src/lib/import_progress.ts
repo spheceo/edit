@@ -1,3 +1,4 @@
+import { explain } from "@edit/types/problems";
 import type { ScriptJob } from "./types";
 
 /** A script import as one line and one fraction (0–1), for the viewer, the tab and the panel. */
@@ -17,7 +18,11 @@ export function importProgress(job: ScriptJob): { fraction: number; line: string
   if (job.state === "transcribing") return { fraction: 0.88, line: "Transcribing to find exact cuts…" };
   if (job.state === "placing") return { fraction: 0.94, line: "Laying out the edit…" };
   if (job.state === "voicing") return { fraction: 0.97, line: "Making the voice-over…" };
-  if (job.state === "failed") return { fraction: footage * 0.85, line: job.error ?? "The import stopped" };
+  if (job.state === "failed") return { fraction: footage * 0.85, line: explain(job.error ?? "The import stopped", "finish the import").title };
+  if (job.state === "waiting") {
+    const missing = job.files.filter((file) => file.state === "failed").length;
+    return { fraction: footage * 0.85, line: `Waiting for you: ${missing === 1 ? "one file" : `${missing} files`} couldn’t be downloaded` };
+  }
   if (job.state === "done") return { fraction: 1, line: "Ready" };
   const cutting = files.find((file) => file.state === "cutting" && file.cut);
   const line = cutting?.cut

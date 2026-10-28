@@ -2985,6 +2985,51 @@
     }
   },
   {
+    "name": "replace_footage",
+    "description": "Give footage the import couldn't fetch another link: a Drive file or YouTube video of the same recording (the script's times stay). Use when get_edit_context's import is waiting and the user gives a replacement; the import carries on by itself. file is from import.missing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "The missing footage's file, as import.missing lists it."
+        },
+        "url": {
+          "type": "string",
+          "description": "The replacement's Drive file or YouTube link."
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "skip_footage",
+    "description": "Go on without footage the import couldn't fetch: its ranges leave the script and the rest is laid out. Use only when the user says to proceed without it. file is from import.missing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "The missing footage's file, as import.missing lists it."
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file"
+      ]
+    }
+  },
+  {
     "name": "insert_compilation_case",
     "description": "Add one missing case to an already laid-out compilation without resetting the edit. Downloads new Drive folder/file, YouTube or a finished script Doc, inserts it at a clean timeline boundary, and shifts later work intact. at is FRAMES from get_edit_context, usually after the existing compilation opening for case 1. request_id is a stable unique identifier: retry the same id, never duplicate the case. intro is the new case's researched opening/transition narration; it is voiced only for this case. Docs retain their original ranges and finished cut-in words. before_block is the optional zero-based script insertion index when removed clips make the order ambiguous. This may take minutes; failures leave a retryable pending case and keep the existing edit. Then research/watch this case, update the compilation opening and finish the new case's joins with the appropriate skills.",
     "inputSchema": {

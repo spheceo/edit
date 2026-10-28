@@ -56,7 +56,7 @@ export function MediaPanel({ onImport, onResearch }: { onImport: () => void; onR
           tabs={[
             { value: "media", label: "Media" },
             { value: "script", label: "Script" },
-            ...(downloading && job ? [{ value: "downloads" as const, label: job.state === "failed" ? "Downloads ⚠" : `${Math.round(importProgress(job).fraction * 100)}%` }] : []),
+            ...(downloading && job ? [{ value: "downloads" as const, label: job.state === "failed" || job.state === "waiting" ? "Downloads ⚠" : `${Math.round(importProgress(job).fraction * 100)}%` }] : []),
           ]}
         />
         {shown === "media" && (

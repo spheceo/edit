@@ -3,7 +3,7 @@
 // jump there. Also attaches a Google Doc; its downloads have their own tab.
 
 import { explain } from "@edit/types/problems";
-import { ArrowUpRight, FileText, RotateCw, Scissors } from "lucide-react";
+import { ArrowUpRight, FileText, Scissors } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "../lib/api";
@@ -71,7 +71,11 @@ function fileLabels(project: Project) {
   for (const block of project.script?.blocks ?? []) {
     if (block.kind !== "footage" || labels.has(block.file)) continue;
     const media = block.media ? project.media.find((candidate) => candidate.id === block.media) : undefined;
-    labels.set(block.file, { label: `Footage ${labels.size + 1}`, color: colors[labels.size % colors.length], name: media?.name });
+    const notes = block.notes ?? [];
+    const kase = notes.find((note) => /^Case [^:]+:/.test(note))?.split(":")[0];
+    const source = notes.find((note) => note.startsWith("Source: "))?.slice("Source: ".length);
+    const label = [kase, source].filter(Boolean).join(" · ") || `Footage ${labels.size + 1}`;
+    labels.set(block.file, { label, color: colors[labels.size % colors.length], name: media?.name });
   }
   return labels;
 }
@@ -202,51 +206,35 @@ const size = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB`
 
 function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
   const labels = fileLabels(project);
-  const [retrying, setRetrying] = useState(false);
-  const [retryError, setRetryError] = useState<unknown>(null);
+  const waiting = job.state === "waiting";
+  const missing = job.files.filter((file) => file.state === "failed").length;
   return (
     <div className="px-3.5 py-3">
-      <div className="mb-2 flex items-center justify-between text-[12px]">
-        <span className="font-medium">
-          {job.state === "voicing"
-            ? "Making the voice-over and splitting it across the cut-ins…"
-            : job.state === "placing"
-              ? "Laying out the edit…"
-              : job.state === "transcribing"
-                ? "Transcribing to find exact cuts…"
+      <div className="mb-2 text-[12px] font-medium">
+        {job.state === "voicing"
+          ? "Making the voice-over and splitting it across the cut-ins…"
+          : job.state === "placing"
+            ? "Laying out the edit…"
+            : job.state === "transcribing"
+              ? "Transcribing to find exact cuts…"
+              : waiting
+                ? `${missing === 1 ? "One file" : `${missing} files`} couldn’t be downloaded`
                 : job.state === "failed"
-                  ? job.files.some((file) => file.state === "failed")
-                    ? "Some footage didn’t download"
-                    : explain(job.error ?? "The import stopped", "finish the import").title
+                  ? explain(job.error ?? "The import stopped", "finish the import").title
                   : "Downloading footage"}
-        </span>
-        {job.state === "failed" && (
-          <button
-            disabled={retrying}
-            onClick={() => {
-              setRetrying(true);
-              setRetryError(null);
-              void api
-                .resumeScript(project.id)
-                .then(({ job }) => useEditor.setState({ scriptJob: job }))
-                // Never a Retry that quietly does nothing: say why it can't.
-                .catch(setRetryError)
-                .finally(() => setRetrying(false));
-            }}
-            className="flex h-6 items-center gap-1 rounded-md px-2 text-muted transition-colors hover:bg-hover hover:text-fg"
-          >
-            <RotateCw size={11} className={retrying ? "animate-spin" : undefined} /> Retry
-          </button>
-        )}
       </div>
-      {job.state === "failed" && !job.files.some((file) => file.state === "failed") && job.error && (
-        <ProblemView error={job.error} doing="finish the import" className="mb-2" />
+      {waiting && (
+        <p className="mb-2.5 text-[12px] leading-relaxed text-muted">
+          Edit tried again and couldn’t get {missing === 1 ? "it" : "them"}. The edit waits for you: give another link, or go on without {missing === 1 ? "it" : "them"}.
+        </p>
       )}
-      {retryError !== null && <ProblemView error={retryError} doing="retry the import" className="mb-2" />}
+      {/* Something after the footage (the voice-over, the layout): said once, plainly; never a Retry Edit has already done. */}
+      {job.state === "failed" && job.error && <ProblemView error={job.error} doing="finish the import" className="mb-2" />}
       <div className="flex flex-col gap-2">
         {job.files.map((file) => {
           const info = labels.get(file.file);
           const progress = file.state === "done" ? 1 : file.state === "cutting" ? (file.cut && file.cut.total > 0 ? file.cut.done / file.cut.total : 0) : file.total ? file.bytes / file.total : 0;
+          const later = file.state === "failed" && file.retry_at !== undefined && file.retry_at > Date.now() && !waiting;
           return (
             <div key={file.file}>
               <div className="flex items-center gap-2 text-[11px]">
@@ -264,24 +252,91 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
                         : "Cutting excerpts…"
                       : file.state === "done"
                         ? "Done"
-                        : file.state === "failed"
-                          ? "Failed"
-                          : file.total
-                            ? `${size(file.bytes)} / ${size(file.total)}`
-                            : "Starting…"}
+                        : later
+                          ? `Trying again at ${new Date(file.retry_at!).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                          : file.state === "failed"
+                            ? "Couldn’t download"
+                            : file.total
+                              ? `${size(file.bytes)} / ${size(file.total)}`
+                              : "Starting…"}
                 </span>
               </div>
               <div className="mt-1 h-1 overflow-hidden rounded-full bg-hover">
                 <div
-                  className={cx("h-full rounded-full transition-[width] duration-300", file.state === "failed" ? "bg-danger" : "bg-white/70")}
-                  style={{ width: `${Math.round((file.state === "failed" ? 1 : progress) * 100)}%` }}
+                  className={cx("h-full rounded-full transition-[width] duration-300", file.state === "failed" && !later ? "bg-danger" : "bg-white/70")}
+                  style={{ width: `${Math.round((file.state === "failed" ? (later ? 0 : 1) : progress) * 100)}%` }}
                 />
               </div>
-              {file.error && <ProblemView error={file.error} doing="download this file" className="mt-1.5" />}
+              {file.state === "failed" && !later && waiting && <MissingFile project={project} file={file.file} error={file.error ?? ""} />}
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Footage Edit couldn't fetch, even tried again: why, in plain words, and the
+ * person's two answers (the team: "Do we just proceed without it? Do you have
+ * a replacement?"). Try again only where something they did (shared it,
+ * signed in to YouTube) can change the answer.
+ */
+function MissingFile({ project, file, error }: { project: Project; file: string; error: string }) {
+  const [replacing, setReplacing] = useState(false);
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<unknown>(null);
+  const answer = (given: { url: string } | { skip: true }) => {
+    setBusy(true);
+    setFailed(null);
+    void api
+      .answerFootage(project.id, file, given)
+      .then(({ job }) => useEditor.setState({ scriptJob: job }))
+      .catch(setFailed)
+      .finally(() => setBusy(false));
+  };
+  const again = () => {
+    setBusy(true);
+    void api
+      .resumeScript(project.id)
+      .then(({ job }) => useEditor.setState({ scriptJob: job }))
+      .catch(setFailed)
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="mt-1.5 flex flex-col gap-2 rounded-lg border border-line bg-panel p-2.5">
+      <ProblemView error={error} doing="download this file" onRetry={again} />
+      {replacing ? (
+        <form
+          className="flex gap-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (url.trim()) answer({ url: url.trim() });
+          }}
+        >
+          <input
+            autoFocus
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="A Google Drive or YouTube link to the same video"
+            className="h-7 min-w-0 flex-1 rounded-md border border-line bg-black px-2 text-[12px] outline-none placeholder:text-faint focus:border-muted"
+          />
+          <Button size="sm" variant="primary" type="submit" disabled={busy || !url.trim()}>
+            Use it
+          </Button>
+        </form>
+      ) : (
+        <div className="flex gap-1.5">
+          <Button size="sm" onClick={() => setReplacing(true)} disabled={busy}>
+            I have a replacement
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => answer({ skip: true })} disabled={busy}>
+            Go on without it
+          </Button>
+        </div>
+      )}
+      {failed !== null && <ProblemView error={failed} doing="use that" />}
     </div>
   );
 }

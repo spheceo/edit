@@ -219,6 +219,9 @@ export const api = {
   attachScript: (id: string, url: string) => request<{ rev: number; project: Project; job: ScriptJob | null }>("POST", `/api/projects/${id}/script`, { url }),
   scriptJob: (id: string) => request<{ job: ScriptJob | null; unfinished: boolean }>("GET", `/api/projects/${id}/script/job`),
   /** Picks up a stopped import; `recut` lays the script out again from fresh transcript cuts. */
+  /** Footage the import couldn't fetch: another link for it, or go on without it. */
+  answerFootage: (id: string, file: string, answer: { url: string } | { skip: true }) =>
+    request<{ job: ScriptJob | null }>("POST", `/api/projects/${id}/script/footage`, { file, ...answer }),
   resumeScript: (id: string, recut = false) => request<{ job: ScriptJob | null }>("POST", `/api/projects/${id}/script/job${recut ? "?recut=true" : ""}`),
   /** Where Edit keeps big media files (the media drive, set in code or with `edit media use`). */
   mediaDrive: () => request<MediaDrive>("GET", "/api/media-drive"),

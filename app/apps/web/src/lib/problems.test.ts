@@ -57,7 +57,10 @@ describe("explain", () => {
       "That YouTube video is age-restricted",
     );
     expect(explain("YouTube video abc couldn't be downloaded: Sign in to confirm you're not a bot").title).toBe("YouTube is blocking downloads for now");
-    expect(explain("Download stopped ((56) The socket connection was closed). It resumes where it left off when you retry.").action).toBe("retry");
+    // Edit retried that itself: no Try again for the person.
+    expect(explain("Download stopped ((56) The socket connection was closed). It resumes where it left off when you retry.").action).toBeUndefined();
+    // Only after something they do: share it, then try again.
+    expect(explain("This Drive file isn't shared. Set it so anyone with the link can view.").action).toBe("retry");
     expect(explain("write failed: ENOSPC: no space left on device").title).toBe("Your Mac's disk is full");
   });
 

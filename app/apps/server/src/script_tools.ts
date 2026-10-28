@@ -263,6 +263,24 @@ registerTool("speed_voiceover", async ({ app, args, projectId }) => {
   return text(`sped ${fixed(start / fps, 2)}–${fixed(end / fps, 2)}s up ${display(speed)}x: saved ${fixed(saved / fps, 2)}s`);
 });
 
+// The import waiting on footage it couldn't fetch: the person's two answers.
+registerTool("replace_footage", async ({ app, args, projectId }) => {
+  const file = typeof args.file === "string" ? args.file : "";
+  const url = typeof args.url === "string" ? args.url : "";
+  if (!file || !url) throw new Error("file (from get_edit_context's import.missing) and url (the replacement's link) are required.");
+  await app.store.mayWrite(projectId);
+  await script.replaceFootage(app, projectId, file, url);
+  return text(stableStringify({ job: app.scripts.get(projectId), then: "The import carries on with the new link. Check get_edit_context's import again in a minute; edit once it's laid out." }));
+});
+
+registerTool("skip_footage", async ({ app, args, projectId }) => {
+  const file = typeof args.file === "string" ? args.file : "";
+  if (!file) throw new Error("file (from get_edit_context's import.missing) is required.");
+  await app.store.mayWrite(projectId);
+  await script.skipFootage(app, projectId, file);
+  return text(stableStringify({ job: app.scripts.get(projectId), then: "Its ranges left the script; the rest is laid out now. Check get_edit_context's import again in a minute; edit once it's laid out." }));
+});
+
 registerTool("generate_voiceover", async ({ app, projectId }) => {
   const done = await diag.timeAsync("voiceover", "generate missing voice-overs", () => voiceover.generate(app, projectId, true));
   return text(stableStringify(done));
@@ -662,4 +680,21 @@ export function routes(router: Router<App>): void {
     return sortedJson({ job: app.scripts.get(id), unfinished: script.unfinished(live.project) });
   });
   router.post("/api/projects/{id}/script/job", scriptResume);
+  // Footage the import couldn't fetch: another link for it (`url`), or go on without it (`skip`).
+  router.post("/api/projects/{id}/script/footage", async (context) => {
+    const { app } = context;
+    const id = context.params.id ?? "";
+    projectOr404(app, id);
+    const given = await readJson<{ file?: unknown; url?: unknown; skip?: unknown }>(context);
+    const file = typeof given?.file === "string" ? given.file : "";
+    try {
+      await app.store.mayWrite(id);
+      if (given?.skip === true) await script.skipFootage(app, id, file);
+      else if (typeof given?.url === "string") await script.replaceFootage(app, id, file, given.url);
+      else throw new Error("give url (another link) or skip: true");
+    } catch (error) {
+      throw badOf(error);
+    }
+    return sortedJson({ job: app.scripts.get(id) });
+  });
 }

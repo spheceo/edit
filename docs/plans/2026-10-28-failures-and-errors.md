@@ -25,6 +25,15 @@ The user's brief: "look at EVERY way an error can come up … rewrite all errors
 - **YouTube with the editor's sign-in from Chrome** (6):
   - A refused video is asked again with Chrome's signed-in profile (never through the proxy).
   - Settings → YouTube explains the set-up step by step, with a Check that brings up the Mac's Keychain dialog while the instructions are on screen.
+- **Footage that can't be fetched waits for the person** (12, 15):
+  - Edit tries a failed file again by itself, after a minute and after five more, when the failure might pass.
+  - Still missing: nothing is laid out with a hole. The import waits ("Waiting for you") with the two answers the team asked for, "Do we just proceed without it? Do you have a replacement?": **I have a replacement** (a Drive or YouTube link of the same recording) or **Go on without it** (its ranges leave the script).
+  - The agent hears it in `get_edit_context`'s `import`, asks the person the same, and answers with `replace_footage` / `skip_footage` (the `edit-workflow` skill).
+  - The voice-over step tries again by itself too.
+- **Retry only where the person's action changes the answer** (the team: "not give users a lot of retry options … if we have retried and saying retry won't help, don't give that option"):
+  - Try again is offered only after sharing a file, setting up the YouTube sign-in, or freeing space.
+  - The import's job-level Retry is gone.
+  - Error wording no longer says "try again" where Edit retries itself.
 - **The log keeps real failures**: background smoothing of a clip that changed or went away is a skip, not an error (it was 600+ of the log's errors).
 
 ## What the code does today
@@ -133,12 +142,10 @@ Most of the above comes from three decisions: an import is **one job**, it ends 
 2. **Allowances as one notice, resumed after the reset (17), and signed-out pauses (18).** These were most of the log's failures.
 3. **Exports queue instead of refusing (19), and the disk check.**
 4. **Preflight checklist (3, 8, 16, 17).**
-5. **Sources and "needs footage" (11, 12, 13, 15).** The big one:
-   - durable per-source jobs;
-   - late placement;
-   - the remedies;
-   - the Drive-link import moved onto it;
-   - the agent's tools.
+5. **The rest of "needs footage" (11, 13):**
+   - imports resumed by the server after a restart, not only when the project is opened;
+   - a replacement from a file on this Mac (today: a Drive or YouTube link);
+   - the media browser's Drive-link import as a job, with the same waiting and answers.
 6. **The agent's turn carried on after a Claude limit (20).**
 7. **A fault-injection test**, so we stop learning failures from the team:
    - fake Drive, YouTube and relay endpoints that stall mid-body, answer 403/429/5xx, cut short, or send the virus-scan page;
@@ -151,6 +158,7 @@ Each step teaches the agent its part (the `edit-workflow` skill: what "needs foo
 ## Open questions
 
 - **YouTube behind a sign-in:** answered (Oct 28): Chrome's sign-in by default, with instructions. Done.
-- **With footage missing** (a link that still fails after every retry, e.g. a private video): should the agent start editing the parts it has, or wait until that footage is replaced or skipped? Suggested: research and watching start at once; the editing waits.
-- **Skip:** when the user decides to go without that footage, are its lines removed from the script, or is a marked placeholder left? Suggested: removed, with the narration around it rejoined.
+- **With footage missing:** answered (Oct 28): wait, and ask "Do we just proceed without it? Do you have a replacement?". Done.
+- **Retry options:** answered (Oct 28): none where Edit retries itself or retrying can't help. Done.
+- **Skip:** removes the footage's ranges from the script; the narration around it stays (done). Say if a marked placeholder is wanted instead.
 - **Send a report:** may a report go from the Mac to the relay for the team (22)?

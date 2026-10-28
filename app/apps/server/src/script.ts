@@ -44,7 +44,70 @@ export const timing = {
   now: () => performance.now(),
   /** A download sending nothing for this long is dropped and resumed (a dead connection never ends by itself). */
   stall: 60_000,
+  /** The pauses before Edit tries a failed download (or the voice-over) again by itself. */
+  retryWaits: [60_000, 5 * 60_000],
 };
+
+/**
+ * Whether a download's failure may pass if tried again later (Edit does that
+ * by itself), or needs the person (a file that's private, gone or blocked:
+ * they give another link, or go on without it).
+ */
+export function passing(error: string): boolean {
+  return !/isn't shared|can't find this file|deleted, or in the trash|Private video|This video is private|confirm your age|age.restricted|members.only|Join this channel|not available in your country|blocked it in your country|Video unavailable|has been removed|has been terminated|no longer available|download limit for this file|isn't a Drive file|isn't a YouTube video|has no bytes|A shared folder master|is not uploaded yet/i.test(error);
+}
+
+/** The footage files a script names, with what the person knows each by (its case, its file name). */
+export function footageLabel(project: Project, file: string): string {
+  const blocks = (project.script?.blocks ?? []).filter((block): block is Extract<ScriptBlock, { kind: "footage" }> => block.kind === "footage" && block.file === file);
+  const notes = blocks.flatMap((block) => block.notes ?? []);
+  const named = notes.find((note) => note.startsWith("Source: "))?.slice("Source: ".length);
+  const kase = notes.find((note) => /^Case [^:]+:/.test(note))?.split(":")[0];
+  const label = [kase, named].filter(Boolean).join(" · ");
+  return label !== "" ? label : (blocks[0]?.url ?? file);
+}
+
+function waitingFor(app: App, id: string, file: string): Project {
+  const live = app.store.get(id);
+  if (live === null) throw new Error("no such project");
+  const job = app.scripts.get(id);
+  if (job !== null && RUNNING.includes(job.state)) throw new Error("The import is still working: wait for it to finish first.");
+  if (laidOut(live.project)) throw new Error("This edit is already laid out: add footage to it with insert_compilation_case, or import it as media.");
+  if (!(live.project.script?.blocks ?? []).some((block) => block.kind === "footage" && block.file === file)) throw new Error(`The script has no footage file ${file}.`);
+  return live.project;
+}
+
+/**
+ * Gives footage file `file` another link (a Drive file or a YouTube video of
+ * the same recording: the script's times stay as they are), then carries on
+ * the import. The person's "do you have a replacement?".
+ */
+export async function replaceFootage(app: App, id: string, file: string, url: string): Promise<void> {
+  waitingFor(app, id, file);
+  const replacement = footageFile(url.trim());
+  if (replacement === null) throw new Error("Give a link to one video: a Google Drive file or a YouTube video (not a folder or a Doc).");
+  await app.store.update(id, "script", (project) => {
+    for (const block of project.script?.blocks ?? []) {
+      if (block.kind !== "footage" || block.file !== file) continue;
+      block.file = replacement;
+      block.url = url.trim();
+      block.notes = [...(block.notes ?? []), `Replaced: ${file}`];
+    }
+  });
+  start(app, id, false);
+}
+
+/** Goes on without footage file `file`: its ranges leave the script, the rest is laid out. The person's "proceed without it". */
+export async function skipFootage(app: App, id: string, file: string): Promise<void> {
+  const project = waitingFor(app, id, file);
+  if (!(project.script?.blocks ?? []).some((block) => block.kind === "footage" && block.file !== file)) {
+    throw new Error("That's the only footage in the script: give another link for it instead.");
+  }
+  await app.store.update(id, "script", (edited) => {
+    if (edited.script) edited.script.blocks = edited.script.blocks.filter((block) => block.kind !== "footage" || block.file !== file);
+  });
+  start(app, id, false);
+}
 
 // ---------------------------------------------------------------------------
 // Reading the Doc.
@@ -991,6 +1054,7 @@ function shownJob(job: ScriptJob): ScriptJob {
     if (file.total !== undefined) shown.total = file.total;
     shown.state = file.state;
     if (file.error !== undefined) shown.error = file.error;
+    if (file.retry_at !== undefined) shown.retry_at = file.retry_at;
     return shown as unknown as FileJob;
   });
   return job.error === undefined ? { state: job.state, files } : { state: job.state, error: job.error, files };
@@ -1646,8 +1710,16 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     const title = app.store.get(id)?.project.name ?? id;
     diag.info("script", `${title}: getting ${files.length} footage ${files.length === 1 ? "file" : "files"} ready (${cloudEnabled() ? "from the cloud" : "to this Mac"})`);
     const fetched: ([string, Excerpt[]] | undefined)[] = new Array(files.length);
+    const errors: (string | undefined)[] = new Array(files.length);
     const fetchOne = async (index: number, file: string) => {
-      setFileState(app, id, index, "downloading");
+      app.scripts.set(app, id, (job) => {
+        const entry = job.files[index];
+        if (entry === undefined) return;
+        entry.state = "downloading";
+        delete entry.error;
+        delete entry.retry_at;
+      });
+      errors[index] = undefined;
       const fileBegan = timing.now();
       try {
         if (file.startsWith("sha256:") && !cloudEnabled()) throw new Error("A shared folder master needs Edit's cloud connection. Sign in and retry.");
@@ -1668,6 +1740,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       } catch (error) {
         if (isBug(error)) throw error;
         diag.warn("script", `${title}: file ${index + 1} of ${files.length} (${file}) failed after ${diag.human(timing.now() - fileBegan)}: ${diag.messageOf(error)}`);
+        errors[index] = diag.messageOf(error);
         app.scripts.set(app, id, (job) => {
           const entry = job.files[index];
           if (entry === undefined) return;
@@ -1682,6 +1755,35 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       await Promise.all(files.map((file, index) => cloudDownloads.with(() => fetchOne(index, file))));
     } else {
       for (const [index, file] of files.entries()) await fetchOne(index, file);
+    }
+    // Edit tries again by itself, a little later, whatever might pass (a
+    // dropped connection, a busy Google, YouTube's bot check): the person is
+    // asked only about what retrying can't fix, never to press Retry.
+    for (const wait of timing.retryWaits) {
+      const again = files.flatMap((_, index) => (fetched[index] === undefined && passing(errors[index] ?? "") ? [index] : []));
+      if (again.length === 0) break;
+      const at = nowMs() + wait;
+      app.scripts.set(app, id, (job) => {
+        for (const index of again) {
+          const entry = job.files[index];
+          if (entry !== undefined) entry.retry_at = at;
+        }
+      });
+      diag.info("script", `${title}: trying ${again.length} file${again.length === 1 ? "" : "s"} again in ${diag.human(wait)}`);
+      await timing.sleep(wait);
+      if ((app.store.get(id)?.project.script?.source ?? null) !== source) break;
+      await Promise.all(again.map((index) => cloudDownloads.with(() => fetchOne(index, files[index]!))));
+    }
+    // Still missing after that: the edit isn't laid out with a hole in it. It
+    // waits for the person to give another link or go on without it.
+    const missing = files.filter((_, index) => fetched[index] === undefined).length;
+    if (missing > 0 && !inserting) {
+      app.scripts.set(app, id, (job) => {
+        job.state = "waiting";
+        job.error = `${missing} of ${files.length} footage files couldn't be downloaded`;
+      });
+      diag.warn("script", `${title}: waiting for the person: ${missing} of ${files.length} files couldn't be downloaded (${diag.human(timing.now() - began)})`);
+      return;
     }
     const done = fetched.filter((file): file is [string, Excerpt[]] => file !== undefined);
     app.scripts.set(app, id, (job) => {
@@ -1705,11 +1807,21 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       app.scripts.set(app, id, (job) => {
         job.state = "voicing";
       });
-      try {
-        await diag.timeAsync("script", "script: voice-over", () => inserting ? seams.voiceover.generateCase(app, id, inserting.id) : seams.voiceover.generate(app, id, true));
-      } catch (error) {
-        if (isBug(error)) throw error;
-        result = `The voice-over couldn't be made: ${diag.messageOf(error)}`;
+      // Tried again by itself after a pause (a dropped connection to the
+      // voice service); a used-up allowance isn't asked again today.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await diag.timeAsync("script", "script: voice-over", () => inserting ? seams.voiceover.generateCase(app, id, inserting.id) : seams.voiceover.generate(app, id, true));
+          result = null;
+          break;
+        } catch (error) {
+          if (isBug(error)) throw error;
+          result = `The voice-over couldn't be made: ${diag.messageOf(error)}`;
+          const wait = timing.retryWaits[attempt];
+          if (wait === undefined || /used up|allowance|budget/i.test(diag.messageOf(error))) break;
+          diag.warn("script", `${title}: ${result}; trying again in ${diag.human(wait)}`);
+          await timing.sleep(wait);
+        }
       }
     }
     app.scripts.set(app, id, (job) => {

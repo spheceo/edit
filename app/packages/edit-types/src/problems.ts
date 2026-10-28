@@ -1,5 +1,9 @@
 // What a person sees when something goes wrong: a short title, what they can
-// do about it, and a button when there's one thing to press. The original
+// do about it, and a button when there's one thing to press. Never "try
+// again" for what Edit already tries again by itself, or what trying again
+// can't fix (the team: "not give users a lot of retry options"): Try again
+// is offered only after something the person does (shares the file, signs in
+// to YouTube, frees space). The original
 // words are kept for Report and the log, never shown first. The agent still
 // gets the original words (it needs the detail to fix its own work); this is
 // for people (the team: "an error so long it goes out of the dialog box, and
@@ -42,11 +46,10 @@ export function resetTime(zone = "UTC", now: Date = new Date()): string {
 type Said = Omit<Problem, "details" | "known">;
 type Rule = [RegExp, (match: RegExpExecArray, doing: string) => Said];
 
-const tryAgainLater = "It's usually free again within a minute: try again then.";
+const tryAgainLater = "It's usually free again within a minute.";
 const daily = (what: string, zone = "UTC"): Said => ({
   title: `Today's ${what} allowance is used up`,
-  fix: `It resets at ${resetTime(zone)} your time; try again after that. Everything else in the edit works as normal meanwhile.`,
-  action: "retry",
+  fix: `It resets at ${resetTime(zone)} your time. Everything else in the edit works as normal meanwhile.`,
 });
 
 /** Most specific first: the first match wins. */
@@ -68,8 +71,7 @@ const RULES: Rule[] = [
   })],
   [/(Claude|Codex|Anthropic|OpenAI)[^.]*(usage limit|rate.?limit|overloaded)|overloaded_error|usage limit reached|5-hour limit|weekly limit/i, () => ({
     title: "Claude is busy or at its usage limit",
-    fix: "Wait a little and send your message again. If it keeps happening, the account's limit is used up until it resets (Claude says when).",
-    action: "retry",
+    fix: "Wait a little, then send your message again. If it keeps happening, the account's limit is used up until it resets (Claude says when).",
   })],
 
   // The team's daily allowances (the relay's limits).
@@ -114,12 +116,10 @@ const RULES: Rule[] = [
   [/Can't reach Edit's server|Couldn.t reach Edit|Failed to fetch|NetworkError when attempting/i, () => ({
     title: "Edit isn't responding",
     fix: "It may be restarting after an update (a few seconds). If it doesn't come back, quit Edit and open it again.",
-    action: "retry",
   })],
   [/could not reach Edit's relay|could not reach the transcription relay|could not reach R2|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|socket hang up|The connection was closed|getaddrinfo|network (is )?(down|unreachable)/i, () => ({
     title: "Edit couldn't reach the internet",
-    fix: "Check your Wi-Fi or connection, then try again.",
-    action: "retry",
+    fix: "Check your Wi-Fi or connection.",
   })],
 
   // Google Drive and Docs.
@@ -142,8 +142,7 @@ const RULES: Rule[] = [
   })],
   [/Google Drive (answered|sent a page)|Google Drive \d{3}/i, () => ({
     title: "Google Drive is having trouble",
-    fix: "Try again in a few minutes.",
-    action: "retry",
+    fix: "Edit tried again and Google still had trouble. It usually passes within the hour.",
   })],
 
   // YouTube.
@@ -180,8 +179,7 @@ const RULES: Rule[] = [
   })],
   [/requested format is not available|only images are available|did not produce a video|YouTube video \S+ couldn't be downloaded/i, () => ({
     title: "YouTube didn't send the video",
-    fix: "Try again in a few minutes. If it keeps happening, use another copy of it (a Drive link works).",
-    action: "retry",
+    fix: "Edit tried every way it has. Use another copy of it (a Drive link works).",
   })],
 
   // Footage files.
@@ -203,8 +201,7 @@ const RULES: Rule[] = [
   })],
   [/The download ended early|Download stopped|stood still|stalled/i, () => ({
     title: "The download was cut off",
-    fix: "Try again: Edit picks up where it can.",
-    action: "retry",
+    fix: "Edit tried again several times. Check your connection.",
   })],
 
   // Exports and editing.
@@ -218,18 +215,15 @@ const RULES: Rule[] = [
   })],
   [/map view is still rendering|still only its first frame/i, () => ({
     title: "A map is still being made",
-    fix: "Export again in a minute.",
-    action: "retry",
+    fix: "Export again once it's done (a minute or so).",
   })],
   [/cloud export (stopped|failed)|Cloud export \S+ is still queued|Invalid cloud export|export can't render in the cloud/i, () => ({
     title: "The cloud export didn't finish",
-    fix: "Try again. If it fails again, press Report.",
-    action: "retry",
+    fix: "Press Report so we can see what went wrong.",
   })],
   [/isn't in the cloud/i, () => ({
     title: "That file isn't in the cloud yet",
-    fix: "It's still uploading from the Mac that added it. Try again in a few minutes.",
-    action: "retry",
+    fix: "It's still uploading from the Mac that added it: give it a few minutes.",
   })],
   [/revision conflict|saved elsewhere since rev/i, () => ({
     title: "This edit changed at the same moment",
@@ -286,8 +280,7 @@ export function explain(error: unknown, doing = ""): Problem {
   }
   return {
     title,
-    fix: "Try again. If it happens again, press Report: it sends us what went wrong, so you don't need to copy anything.",
-    action: "retry",
+    fix: "Press Report so we can see what happened.",
     details,
     known: false,
   };

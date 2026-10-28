@@ -15,6 +15,7 @@ import * as cutin from "./cutin.ts";
 import * as commentaryAudit from "./commentary_audit.ts";
 import { FRAME_SCALE, frameKey as screenFrameKey } from "./desktop_screen.ts";
 import * as diag from "./diag.ts";
+import { footageLabel } from "./script.ts";
 import * as editPlan from "./edit_plan.ts";
 import * as footageLevels from "./footage_levels.ts";
 import * as framing from "./framing.ts";
@@ -1485,6 +1486,26 @@ export function cachedTranscripts(app: App, project: Project, footageOnly: boole
 /** Sized for a model's context: Codex cuts a tool's output at ~10k tokens, and every token here is read again on each later request of the turn. */
 const BUDGET = 36_000;
 
+/**
+ * An import still running, or waiting on footage it couldn't fetch, as the
+ * agent hears it in get_edit_context: it asks the person instead of editing a
+ * hole. Null when there's no import (or it's done).
+ */
+export function importStatus(app: App, p: Project): Args | null {
+  const job = app.scripts.get(p.id);
+  return job === null || job.state === "done"
+    ? null
+    : job.state === "waiting"
+      ? {
+          state: "waiting",
+          missing: job.files
+            .filter((file) => file.state === "failed")
+            .map((file) => ({ file: file.file, label: footageLabel(p, file.file), why: file.error ?? "" })),
+          ask: "This footage couldn't be downloaded, even tried again. Don't edit yet. Ask the user, for each: do they have a replacement (a Drive file or YouTube link of the same recording: replace_footage), or should the edit go on without it (skip_footage)?",
+        }
+      : { state: job.state, note: job.state === "failed" ? (job.error ?? "the import stopped") : "Still importing: wait for it before editing." };
+}
+
 export function editContext(app: App, found: Live, args: Args): Args {
   const p = found.project;
   const fps = fpsOf(p);
@@ -1607,10 +1628,12 @@ export function editContext(app: App, found: Live, args: Args): Args {
         span_only: "issues in this span (and those with no time); get_edit_context with no span for all",
       }
     : fullAudit;
+  const importing = importStatus(app, p);
   const context: Args = {
     rev: found.rev,
     id: p.id,
     style: p.style,
+    ...(importing === null ? {} : { import: importing }),
     settings: p.settings,
     duration_frames: total,
     times: "clip rows are `id track type [start,end) frames …`; cut-in words are word@timeline-seconds",

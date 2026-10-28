@@ -45,6 +45,9 @@ import * as seams from "./seams.ts";
 import * as speakers from "./speakers.ts";
 import { compareKeys } from "./stable.ts";
 import { isSubtitled, SUBTITLE_NAME } from "./store.ts";
+import { join } from "./paths.ts";
+import { fixTurns } from "./turns.ts";
+import { post } from "./watch.ts";
 import type { Transcript, Word } from "./transcribe.ts";
 
 export type { ClipMutes, Cue, Found, HouseWords, Line, SubtitleOptions, Suggestion, TimedWord } from "./seams.ts";
@@ -639,6 +642,11 @@ export function readable(cues: Line[], together: boolean, fromMs: number, hidden
  * Whether a role's lines are hidden: the narrator, radio traffic and
  * background talk (a second conversation behind the one followed).
  */
+/** A full edit, with narration of its own (cut-ins, a voice-over), not a subtitle video. */
+export function fullEdit(project: Project): boolean {
+  return (project.script?.blocks ?? []).some((block) => block.kind === "narration") || project.clips.some((clip) => clip.name === "Voice-over");
+}
+
 export function hiddenRole(role: string): boolean {
   return role === "narrator" || role === "dispatch" || role === speakers.BACKGROUND;
 }
@@ -994,6 +1002,8 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
     const transcript = transcripts.get(media.id)!;
     const [visibleFrom, visibleTo] = visible(clip, from, to, fps);
     const words = timedWords(transcript.words, visibleFrom, visibleTo);
+    // Words that spilled across a change of speaker go back to who said them (Repack's turns).
+    await fixTurns(words, (voice) => get(transcript.speakers, voice) ?? voice, project.name, join(app.store.cacheDir(), "turns"), post);
     const onTimeline = onTimelineOf(clip, fps);
     const found = suggestions(words, neglect, visibleFrom * 1000.0, visibleTo * 1000.0);
     for (const cue of segment(words)) {
@@ -1035,6 +1045,11 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
   samePersonSameColour(voices, lines);
   uncram(lines);
   const role = (key: string) => voices.get(key)?.role ?? "other";
+  // A full edit (its own narration) shows a source's narrator heard in its
+  // footage, under their own label; a subtitle video leaves the narrator out,
+  // as Repack does. (The user, Oct 28: "include the narrator's subs, but we
+  // still do proper attribution".)
+  const edited = fullEdit(project);
   const shownLines = shown(
     lines,
     holdMs,
@@ -1042,7 +1057,7 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
     (to / fps) * 1000.0,
     overlap,
     (key) => silentRole(role(key)),
-    (key) => hiddenRole(role(key)),
+    (key) => hiddenRole(role(key)) && !(edited && role(key) === "narrator"),
   );
   const { width, height } = project.settings;
   const frame = (ms: number) => toI64(round((ms / 1000.0) * fps));

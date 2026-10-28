@@ -185,7 +185,19 @@ const RULES: Rule[] = [
   })],
 
   // Footage files.
-  [/Invalid data found|moov atom not found|could not find codec parameters|couldn't read the footage|Couldn't cut an excerpt|EncodingError|Decoder error/i, () => ({
+  [/No suitable graphics adapter|wgpu error|rendering a frame crashed/i, () => ({
+    title: "Edit couldn't draw this frame",
+    fix: "Quit Edit and open it again. If it keeps happening, press Report.",
+  })],
+  [/Preview (decoding )?failed|Preview failed to start|Still waiting for frame/i, () => ({
+    title: "The preview couldn't show this frame",
+    fix: "Move the playhead or press play to try again. If it stays, quit Edit and open it again.",
+  })],
+  [/\bNo (native )?video track/i, () => ({
+    title: "That file has no picture",
+    fix: "It's sound only. Use it as audio, or choose the video file instead.",
+  })],
+  [/Invalid data found|moov atom not found|could not find codec parameters|couldn't read the footage|Couldn't cut an excerpt|EncodingError|Decoder error|failed to fill whole buffer|could not decode/i, () => ({
     title: "Edit can't read that video",
     fix: "The file may be damaged or only partly downloaded. Download it again from where it came from, then import it again.",
   })],
@@ -214,7 +226,12 @@ const RULES: Rule[] = [
     fix: "Try again. If it fails again, press Report.",
     action: "retry",
   })],
-  [/revision conflict/i, () => ({
+  [/isn't in the cloud/i, () => ({
+    title: "That file isn't in the cloud yet",
+    fix: "It's still uploading from the Mac that added it. Try again in a few minutes.",
+    action: "retry",
+  })],
+  [/revision conflict|saved elsewhere since rev/i, () => ({
     title: "This edit changed at the same moment",
     fix: "Someone (or the agent) changed it just then. Make your change again.",
   })],

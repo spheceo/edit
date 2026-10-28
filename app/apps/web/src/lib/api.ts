@@ -229,6 +229,8 @@ export const api = {
       style?: Style;
       /** Finished videos of ours put in by their review link, by name. */
       finished?: string[];
+      /** A Trello card's own script, followed: its name and how many of the card's cases it covers. */
+      cardScript?: { title: string; covered: number; cases: number };
     }>("POST", "/api/scripts/preview", { url }),
   /** Uploads one file into a project's media (not placed); the media ids it added. */
   uploadFile: async (id: string, file: File, origin: string) => {

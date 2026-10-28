@@ -666,7 +666,7 @@ const REUSE_DEPTH = 6;
  */
 export async function joinCases(
   parsed: Parsed,
-  read: (id: string) => Promise<string> = async (id) => (await fetchDoc(id))[0],
+  read: (id: string) => Promise<string | [html: string, title: string]> = fetchDoc,
   seen: ReadonlySet<string> = new Set(),
   depth = 0,
 ): Promise<Parsed> {
@@ -684,14 +684,16 @@ export async function joinCases(
       continue;
     }
     let html: string;
+    let docTitle = "";
     try {
-      html = await read(doc);
+      const got = await read(doc);
+      [html, docTitle] = typeof got === "string" ? [got, ""] : got;
     } catch (error) {
       throw new Error(`Couldn't read the reused script https://docs.google.com/document/d/${doc}/edit: ${diag.messageOf(error)}`);
     }
     const inner = await joinCases(parse(html), read, new Set([...seen, doc]), depth + 1);
     // Its name: the Doc's title, else its first line ("INTERRO Elias Campos - The Interview").
-    const title = inner.title || inner.heading;
+    const title = docTitle || inner.title || inner.heading;
     if (!inner.blocks.some((block) => block.kind === "footage")) {
       skipped.unshift({ doc, ...(title ? { title } : {}), why: "it has no footage ranges, so it isn't a script to reuse" });
       continue;
@@ -779,7 +781,8 @@ function withoutDocLinks(para: { text: string; links: [number, number, string][]
 export function parse(html: string): Parsed {
   const [title, paras, comments] = readHtml(html);
   // The Doc's first line says which kind of video it is.
-  const heading = paras.find((para) => collapse(para.text) !== "");
+  // Its first line of words (a Doc opening on ranges has none to name it by).
+  const heading = paras.find((para) => collapse(para.text) !== "" && findRanges(para.text).length === 0 && /[\p{L}]{3}/u.test(para.text));
   const style = heading === undefined ? null : headerStyle(collapse(heading.text));
   // A range without its own link belongs to the last linked file (or the only one).
   const files: [string, string][] = [];
@@ -2526,6 +2529,7 @@ export function summary(parsed: Parsed): {
   skipped?: Parsed["skipped"];
   style?: Style;
   finished?: string[];
+  cardScript?: Parsed["cardScript"];
 } {
   const files: string[] = [];
   let footage = 0;
@@ -2558,5 +2562,6 @@ export function summary(parsed: Parsed): {
     ...(parsed.skipped?.length ? { skipped: parsed.skipped } : {}),
     ...(parsed.style ? { style: parsed.style } : {}),
     ...(finished.length > 0 ? { finished } : {}),
+    ...(parsed.cardScript ? { cardScript: parsed.cardScript } : {}),
   };
 }

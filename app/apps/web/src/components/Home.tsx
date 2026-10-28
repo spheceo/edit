@@ -837,6 +837,12 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
             ) : preview?.result ? (
               <span className="tabular">
                 <span className="text-fg">{preview.result.title || "Untitled script"}</span> · {preview.result.files} {preview.result.files === 1 ? "source" : "sources"} · {preview.result.narration} cut-ins · {preview.result.whole ? "duration after import" : shortDuration(preview.result.seconds)}
+                {preview.result.cardScript && (
+                  <span className="block truncate whitespace-normal text-faint">
+                    Follows the card’s script “{preview.result.cardScript.title}”: it covers {preview.result.cardScript.covered} of the card’s{" "}
+                    {preview.result.cardScript.cases} cases
+                  </span>
+                )}
                 {preview.result.finished?.map((one) => (
                   <span key={one} className="block truncate whitespace-normal text-faint">
                     Puts in the finished video “{one}”, played as it is

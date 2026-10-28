@@ -11,7 +11,7 @@ import { REUSED_SCRIPT_NOTE, WHOLE_SOURCE_LABEL } from "./project.ts";
 
 export const WHOLE_SOURCE = WHOLE_SOURCE_LABEL;
 export const REUSED_SCRIPT = REUSED_SCRIPT_NOTE;
-export interface CompilationSource { url: string; kind: "script" | "video" | "folder" | "trello"; reuse: boolean; case: string; earlier?: string }
+export interface CompilationSource { url: string; kind: "script" | "video" | "folder" | "trello"; reuse: boolean; case: string; earlier?: string; label?: string }
 
 function cleaned(url: string): string { return url.replace(/[)\]},.;]+$/u, ""); }
 export function sourceKind(value: string): CompilationSource["kind"] | null {
@@ -42,7 +42,7 @@ export function sourceLines(text: string): CompilationSource[] {
     if (heading) { currentCase = heading[1]!; section = false; marked = false; active = true; }
     const words = line.replace(/https?:\/\/[^\s<>"\]]+/gu, " ");
     const reuse = /\bre-?use(?:d)?\b/iu.test(words);
-    if (!heading && currentCase && /^\s*[-*#\s]*(?:thumb(?:nail)?|reference|footage|article|source|video|script)\s*:/iu.test(words)
+    if (!heading && currentCase && /^\s*[-*#\s]*(?:thumb(?:nail)?|titles?|reference|footage|article|source|video|script)\s*:/iu.test(words)
       && out.some((one) => one.case === currentCase)) active = false;
     if (!active) continue;
     if (heading && reuse) section = true;
@@ -66,7 +66,9 @@ export function sourceLines(text: string): CompilationSource[] {
       // recording again keeps its own place.
       const name = currentCase || `line-${index}`;
       if (out.some((one) => one.url === url && one.case === name)) continue;
-      out.push({ url, kind, reuse: kind === "script" || reuse || marked || section || reviewCode(url) !== null, case: name });
+      // A markdown link's text names the case ("[Daniel Holtzclaw Interrogation](…)").
+      const label = /\[([^\]]+)\]\(\s*$/u.exec(line.slice(0, line.indexOf(url)))?.[1]?.trim();
+      out.push({ url, kind, reuse: kind === "script" || reuse || marked || section || reviewCode(url) !== null, case: name, ...(label ? { label } : {}) });
     }
     marked = false;
   }
@@ -182,6 +184,7 @@ export async function readCompilation(input: string, app: App, overrides: Partia
   const skipped: NonNullable<Parsed["skipped"]> = [];
   let title = "";
   let style: Parsed["style"];
+  let cardScript: Parsed["cardScript"];
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i]!;
     if (source.kind === "trello") {
@@ -189,6 +192,18 @@ export async function readCompilation(input: string, app: App, overrides: Partia
       if (!title) title = card.name?.trim() ?? "";
       const found = cardSources(card).filter((one) => one.kind !== "trello");
       if (!found.length) throw new Error("That Trello card has no supported case links.");
+      // The card's own script (an attached Doc titled like the card): it's
+      // the edit, and the case list is what it should cover.
+      const followed = await withCardScript(card, found, readers);
+      if (followed !== null) {
+        title = followed.parsed.title || title;
+        style ??= followed.parsed.style;
+        blocks.push(...followed.parsed.blocks);
+        reused.push(...(followed.parsed.reused ?? []));
+        skipped.push(...(followed.parsed.skipped ?? []));
+        cardScript = followed.summary;
+        continue;
+      }
       if (sources.length - 1 + found.length > 40) throw new Error("Import at most 40 cases at a time.");
       sources.splice(i, 1, ...found); i--; continue;
     }
@@ -223,5 +238,80 @@ export async function readCompilation(input: string, app: App, overrides: Partia
     ...(reused.length > 0 ? { reused } : {}),
     ...(skipped.length > 0 ? { skipped } : {}),
     ...(style ? { style } : {}),
+    ...(cardScript ? { cardScript } : {}),
   };
+}
+
+/** Letters and digits only, to compare a card's name with a script's heading or title. */
+function plainName(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * A Trello card whose own script is attached (a Doc headed like the card,
+ * "INTERRO <the card's name>", or one using most of the case videos): that
+ * Doc is the edit, read as an ordinary script, its reused cases with it. The
+ * card's case list is what it should cover: a case it uses isn't added again
+ * (both cards of Oct 28 came in twice, every case's whole video and then the
+ * script, 46 and 106 minutes); a "(reuse)" case it doesn't have goes in as a
+ * finished video at its case's place; one it leaves out is said, never put in
+ * raw. Null when the card has no script of its own (its sources go in as
+ * they are listed).
+ */
+export async function withCardScript(
+  card: TrelloCard,
+  found: CompilationSource[],
+  readers: CompilationReaders,
+): Promise<{ parsed: Parsed; summary: NonNullable<Parsed["cardScript"]> } | null> {
+  const numbered = (source: CompilationSource) => /^\d+$/u.test(source.case);
+  const cases = found.filter((source) => numbered(source) && source.kind === "video");
+  const name = plainName(card.name ?? "");
+  const seen = new Set<string>();
+  for (const candidate of found) {
+    if (candidate.kind !== "script" || numbered(candidate)) continue;
+    const id = script.docId(candidate.url);
+    if (id === null || seen.has(id)) continue;
+    seen.add(id);
+    const [html, docTitle] = await readers.doc(id);
+    const parsed = script.parse(html);
+    if (!parsed.title) parsed.title = docTitle;
+    await script.joinCases(parsed, readers.doc, new Set([id]));
+    const files = new Set(parsed.blocks.flatMap((block) => (block.kind === "footage" ? [block.file] : [])));
+    if (files.size === 0) continue;
+    const used = cases.filter((source) => files.has(script.footageFile(source.url) ?? ""));
+    const titled = name.length >= 12 && [parsed.heading ?? "", parsed.title, docTitle].some((one) => plainName(one).includes(name));
+    if (!titled && !(cases.length > 0 && used.length * 2 >= cases.length)) continue;
+    // Its blocks, then each case it doesn't have.
+    const blocks = parsed.blocks;
+    const skipped = parsed.skipped ?? [];
+    const firstOf = (file: string) => blocks.findIndex((block) => block.kind === "footage" && block.file === file);
+    for (const source of cases) {
+      const file = script.footageFile(source.url);
+      if (file === null || files.has(file)) continue;
+      const named = source.label ? `Case ${source.case}: ${source.label}` : `Case ${source.case}`;
+      if (!source.reuse) {
+        skipped.push({ doc: source.url, title: named, why: "the card's script doesn't use it" });
+        continue;
+      }
+      // A finished video before the first case after it that the script has, else at the end.
+      const later = cases
+        .filter((other) => Number(other.case) > Number(source.case))
+        .map((other) => firstOf(script.footageFile(other.url) ?? ""))
+        .filter((at) => at >= 0);
+      const at = later.length > 0 ? Math.min(...later) : blocks.length;
+      blocks.splice(at, 0, { kind: "footage", url: source.url, file, start: 0, end: 1, label: script.REUSE, notes: [`Case ${source.case}: ${source.url}`, ...(source.label ? [`Source: ${source.label}`] : [])] });
+      files.add(file);
+    }
+    for (const other of found) {
+      const doc = other.kind === "script" ? script.docId(other.url) : null;
+      if (doc !== null && doc !== id && !numbered(other) && !seen.has(doc)) {
+        seen.add(doc);
+        skipped.push({ doc: other.url, why: "an attached Doc besides the card's script" });
+      }
+    }
+    if (skipped.length > 0) parsed.skipped = skipped;
+    const covered = cases.filter((source) => files.has(script.footageFile(source.url) ?? "")).length;
+    return { parsed, summary: { title: parsed.title || docTitle, covered, cases: cases.length } };
+  }
+  return null;
 }

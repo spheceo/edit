@@ -12,6 +12,7 @@ import {
   captionStyle,
   cap,
   carried,
+  joinStrays,
   layOut,
   linesOf,
   lineText,
@@ -67,6 +68,17 @@ test("splits_lines_at_pauses_voices_and_sentences", () => {
     word("None.", 4.15, 4.5, "s1"),
   ];
   expect(linesOf("c1", words).map(lineText)).toEqual(["A little accident, perhaps?", "I have no idea.", "None."]);
+});
+
+test("a_lone_word_said_straight_after_its_speakers_line_joins_it", () => {
+  // The Cop teaser: nine words then "down", then the reporter. On its own,
+  // squeezed by her line, "down" was left out.
+  const said = ["I", "can", "see", "is", "his", "arm", "coming", "up", "and", "down"].map((text, i) => word(text, 8.0 + i * 0.2, 8.15 + i * 0.2, "s1"));
+  const words = [...said, word("that's", 10.1, 10.3, "s0"), word("the", 10.3, 10.4, "s0"), word("voice", 10.4, 10.7, "s0")];
+  expect(joinStrays(linesOf("c1", words)).map(lineText)).toEqual(["I can see is his arm coming up and down", "that's the voice"]);
+  // Not after a pause.
+  const later = [...said.slice(0, 9), word("down", 10.6, 10.8, "s1")];
+  expect(joinStrays(linesOf("c1", later)).length).toBe(2);
 });
 
 test("drops_lines_that_are_only_fillers", () => {

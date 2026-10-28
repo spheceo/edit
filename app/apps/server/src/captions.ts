@@ -597,7 +597,7 @@ async function spokenLines(app: App, project: Project, clips: Clip[], from: numb
       if (moved > 0) turns.forEach((turn, index) => (words[index]!.speaker = turn.speaker ?? undefined));
     }
     const own = transcript;
-    const made = linesOf(clip.id, words).map((line) => named(line, own));
+    const made = joinStrays(linesOf(clip.id, words)).map((line) => named(line, own));
     if (capped) {
       // Stretched words (cut back by `cap`) before a line: its times are doubtful.
       let at = 0;
@@ -610,6 +610,27 @@ async function spokenLines(app: App, project: Project, clips: Clip[], from: numb
     lines.push(...made);
   }
   return lines;
+}
+
+/**
+ * A one-word line said straight after its speaker's line before it joins it:
+ * on its own, squeezed by the next speaker's line, it's left out (the Cop
+ * teaser's sergeant: "his arm coming up and" without its "down", once the
+ * reporter's "that's the" after it went back to her). At most ten words.
+ */
+export function joinStrays(lines: Line[]): Line[] {
+  const out: Line[] = [];
+  for (const line of lines) {
+    const before = out.at(-1);
+    const first = line.words[0];
+    const last = before?.words.at(-1);
+    if (before !== undefined && line.words.length === 1 && before.words.length < 10 && first !== undefined && last !== undefined && before.voice === line.voice && first.start - last.end < 0.75) {
+      out[out.length - 1] = { ...before, words: [...before.words, ...line.words] };
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
 }
 
 /** A word ending when it could have been said, not stretched over the silence after it. */

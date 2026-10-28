@@ -81,6 +81,21 @@ export const STYLES: { value: Style; label: string }[] = [
   { value: "commentary", label: "Commentary" },
 ];
 
+/**
+ * Who narrates each kind of video. Bodycam (FOIA, and its compilations) has
+ * Edit's house voice set up; the rest are narrated by the team's own
+ * recording, given with the script (the new project's voice-over box) or
+ * added later. Until one is there, the house voice stands in so the edit can
+ * be built, and says it's a stand-in. (JJ, Oct 28: "I selected the courtroom
+ * edit option, but the voice was the one from bodycam".)
+ */
+export const NARRATION: Record<Style, "house" | "recording"> = {
+  bodycam: "house",
+  interrogation: "recording",
+  courtroom: "recording",
+  commentary: "recording",
+};
+
 /** A script import's footage downloads (apps/server/src/script.ts `Job`). */
 export interface ScriptJob {
   /** `waiting`: some footage couldn't be downloaded, even tried again; the person gives another link or goes on without it. */

@@ -194,7 +194,9 @@ export async function resolveWriterCases(given: WriterScript, read = script.fetc
     const id = script.docId(reuse.script ?? reuse.url);
     if (id === null) throw new Error("The reused case is missing its earlier script link.");
     const [html, title] = await read(id);
-    reuse.scriptBlocks = script.parse(html).blocks;
+    // Its own reused scripts in too, at any depth (they were left out).
+    const joined = await script.joinCases(script.parse(html), async (doc) => (await read(doc))[0], new Set([id]));
+    reuse.scriptBlocks = joined.blocks;
     reuse.scriptTitle ??= title;
   }
   return resolved;

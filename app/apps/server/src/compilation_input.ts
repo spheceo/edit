@@ -152,7 +152,10 @@ export async function readCompilation(input: string, app: App, overrides: Partia
   if (sources.length > 40) throw new Error("Import at most 40 cases at a time.");
   const ordinaryDoc = sources.length === 1 && sources[0]!.kind === "script" && !/\bre-?use\b/iu.test(input);
   const blocks: ScriptBlock[] = [];
+  const reused: NonNullable<Parsed["reused"]> = [];
+  const skipped: NonNullable<Parsed["skipped"]> = [];
   let title = "";
+  let style: Parsed["style"];
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i]!;
     if (source.kind === "trello") {
@@ -167,13 +170,16 @@ export async function readCompilation(input: string, app: App, overrides: Partia
       const [html, name] = await readers.doc(script.docId(source.url)!);
       const parsed = script.parse(html);
       if (!parsed.title) parsed.title = name;
-      await script.joinCases(parsed, async (id) => (await readers.doc(id))[0]);
+      await script.joinCases(parsed, async (id) => (await readers.doc(id))[0], new Set([script.docId(source.url)!]));
       if (!parsed.blocks.some((block) => block.kind === "footage")) throw new Error(`The script ${parsed.title || source.url} has no linked footage ranges.`);
       // The normal single-Doc entry point remains an ordinary edit. In a
       // multi-source compilation a Doc is an already-written reused case.
       if (!ordinaryDoc) markReusedScript(parsed, source.url);
       if (!title) title = parsed.title;
+      style ??= parsed.style;
       blocks.push(...parsed.blocks);
+      reused.push(...(parsed.reused ?? []));
+      skipped.push(...(parsed.skipped ?? []));
       continue;
     }
     const files = source.kind === "folder"
@@ -184,5 +190,11 @@ export async function readCompilation(input: string, app: App, overrides: Partia
     for (const file of files) blocks.push({ kind: "footage", url: file.url, file: script.footageFile(file.url)!, start: 0, end: 1,
       label: source.reuse ? script.REUSE : WHOLE_SOURCE, notes: [`Case ${source.case}: ${source.url}`, ...(source.earlier ? [`Earlier script: ${source.earlier}`] : []), ...(file.name ? [`Source: ${file.name}`] : [])] });
   }
-  return { title: title || (sources.length > 1 ? "Compilation" : "Imported footage"), blocks };
+  return {
+    title: title || (sources.length > 1 ? "Compilation" : "Imported footage"),
+    blocks,
+    ...(reused.length > 0 ? { reused } : {}),
+    ...(skipped.length > 0 ? { skipped } : {}),
+    ...(style ? { style } : {}),
+  };
 }

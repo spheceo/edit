@@ -11,8 +11,8 @@ import { importPaste } from "../lib/import-input";
 import { CLIP_HEX } from "../lib/colors";
 import { clipEnd, withLinked } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
-import { useEditor } from "../lib/store";
-import type { Project, ScriptBlock, ScriptJob } from "../lib/types";
+import { clientId, useEditor } from "../lib/store";
+import { NARRATION, STYLES, type Project, type ScriptBlock, type ScriptJob } from "../lib/types";
 import { ProblemView } from "./ProblemView";
 import { Button, cx } from "./ui";
 
@@ -47,7 +47,64 @@ export function ScriptPanel() {
           )}
         </div>
       )}
+      {script && <StandInVoice project={project} />}
       {script ? <Blocks project={project} /> : <AttachScript project={project} />}
+    </div>
+  );
+}
+
+/** Edit's own voice-overs are named "<project> (voice-over) - Cut-in N". */
+const GENERATED = /\(voice-over\) - Cut-in \d+/;
+
+/**
+ * A kind of video narrated by the team's recording, still on Edit's stand-in
+ * voice: said here, with the one button that fixes it (the recording, placed
+ * on the cut-ins it reads). JJ, Oct 28: the courtroom edit had the bodycam voice.
+ */
+function StandInVoice({ project }: { project: Project }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<unknown>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  if (NARRATION[project.style] !== "recording") return null;
+  const media = new Map(project.media.map((one) => [one.id, one]));
+  const standIn = project.clips.some((clip) => clip.type === "audio" && GENERATED.test(media.get(clip.media)?.name ?? ""));
+  if (!standIn) return null;
+  const add = async (file: File) => {
+    setBusy(true);
+    setFailed(null);
+    try {
+      const { added } = await api.uploadFile(project.id, file, `voiceover-${clientId}`);
+      const placed = await api.placeVoiceover(project.id, added);
+      useEditor.getState().adopt(placed.rev, placed.project);
+      useEditor.getState().toast("The recording is on the cut-ins it reads");
+    } catch (error) {
+      setFailed(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="border-b border-line px-3.5 py-2.5 text-[12px]">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 leading-relaxed text-muted">
+          <span className="text-fg">Stand-in voice.</span> {STYLES.find((one) => one.value === project.style)?.label} videos are narrated by your recording.
+        </span>
+        <Button size="sm" disabled={busy} onClick={() => picker.current?.click()}>
+          {busy ? "Placing it…" : "Add the recording"}
+        </Button>
+        <input
+          ref={picker}
+          type="file"
+          accept="audio/*,.mp3,.wav,.m4a,.aac"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) void add(file);
+          }}
+        />
+      </div>
+      {failed !== null && <ProblemView error={failed} doing="place the recording" className="mt-2" />}
     </div>
   );
 }

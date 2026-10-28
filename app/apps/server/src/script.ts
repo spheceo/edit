@@ -21,7 +21,8 @@ import { catchBugsAsync, crashed, isBug } from "./guard.ts";
 import { importMade, importPaths } from "./import.ts";
 import * as mediaModule from "./media.ts";
 import { cloudEnabled } from "./relay.ts";
-import type { ClipColor, Project, Script, ScriptBlock, ScriptJob, TextStyle, TrackKind } from "./model.ts";
+import type { ClipColor, Project, Script, ScriptBlock, ScriptJob, Style, TextStyle, TrackKind } from "./model.ts";
+import { NARRATION } from "./model.ts";
 import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freshId, marksCut, mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL, REUSED_SCRIPT_NOTE, reusedScriptBlock } from "./project.ts";
 import { fileName, fileStem, extension as pathExtension, join, parent } from "./paths.ts";
 import { byteLength, charCount, display, f32, isAlphanumeric, isWhitespace, parseHex, round, splitWhitespace, takeChars, trim } from "./rust.ts";
@@ -637,34 +638,75 @@ function notes(refs: [number, string][], comments: Map<string, string>): string[
 export const REUSE = REUSE_LABEL;
 
 /**
- * A narration's note naming another case's script ("Edit case 2 based on
- * this script here: <Doc link>"): the Doc's id, else null.
+ * A note naming another script: any Google Doc link ("Edit case 2 based on
+ * this script here: <Doc>", "Reuse: <Doc>", or the link alone). Scripts carry
+ * Doc links only to reuse one (the user, Oct 28: "99% of the time we do not
+ * have Google Doc links on scripts. We only include them if it's a reuse
+ * case"). The Doc's id, else null.
  */
 export function caseScript(note: string): string | null {
   const reuse = /^reuse:\s*(\S+)/i.exec(note)?.[1];
   if (reuse && footageFile(reuse)) return null; // Explicit finished video, not both it and its earlier script.
-  if (!/\bscript\b/i.test(note) && !reuse) return null;
   const link = /https:\/\/docs\.google\.com\/document\/d\/[\w-]+\S*/.exec(note)?.[0];
   return link === undefined ? null : docId(link);
 }
 
+/** How deep reused scripts may nest (a script reusing one that reuses another…). */
+const REUSE_DEPTH = 6;
+
 /**
- * Reads a compilation's case scripts in, each after the narration whose note
- * named it (that Doc's title and heading dropped, its notes on further cases
- * not followed), and clears `cases`.
+ * Reads the reused scripts a script links in, each where it was linked, at
+ * any depth: a reused script's own reused scripts come in too (they were left
+ * out without a word, Oct 28). Each block notes the Doc it came from, so it's
+ * thrown in as written. A Doc linking back to one already in the chain, or one
+ * with no footage ranges (notes, research), is left out and said in
+ * `skipped`; one that can't be read stops the import, naming it. `seen`: the
+ * Docs above this one (the top script's own id among them).
  */
-export async function joinCases(parsed: Parsed, read: (id: string) => Promise<string> = async (id) => (await fetchDoc(id))[0]): Promise<Parsed> {
+export async function joinCases(
+  parsed: Parsed,
+  read: (id: string) => Promise<string> = async (id) => (await fetchDoc(id))[0],
+  seen: ReadonlySet<string> = new Set(),
+  depth = 0,
+): Promise<Parsed> {
   const cases = parsed.cases ?? [];
   delete parsed.cases;
+  const reused = parsed.reused ?? [];
+  const skipped = parsed.skipped ?? [];
   for (const { after, doc } of [...cases].reverse()) {
-    const blocks = parse(await read(doc)).blocks;
-    if (!blocks.some((block) => block.kind === "footage")) throw new Error(`The case script ${doc} has no footage timestamps linked to Google Drive or YouTube.`);
-    for (const block of blocks) {
-      block.notes = [...(block.notes ?? []), `${REUSED_SCRIPT_NOTE}https://docs.google.com/document/d/${doc}/edit`];
+    if (seen.has(doc)) {
+      skipped.unshift({ doc, why: "it links back to a script already in this one" });
+      continue;
+    }
+    if (depth >= REUSE_DEPTH) {
+      skipped.unshift({ doc, why: `reused scripts nest more than ${REUSE_DEPTH} deep` });
+      continue;
+    }
+    let html: string;
+    try {
+      html = await read(doc);
+    } catch (error) {
+      throw new Error(`Couldn't read the reused script https://docs.google.com/document/d/${doc}/edit: ${diag.messageOf(error)}`);
+    }
+    const inner = await joinCases(parse(html), read, new Set([...seen, doc]), depth + 1);
+    const title = inner.title;
+    if (!inner.blocks.some((block) => block.kind === "footage")) {
+      skipped.unshift({ doc, ...(title ? { title } : {}), why: "it has no footage ranges, so it isn't a script to reuse" });
+      continue;
+    }
+    for (const block of inner.blocks) {
+      // The innermost Doc a block came from is the one it's preserved as.
+      if (!(block.notes ?? []).some((note) => note.startsWith(REUSED_SCRIPT_NOTE))) {
+        block.notes = [...(block.notes ?? []), `${REUSED_SCRIPT_NOTE}https://docs.google.com/document/d/${doc}/edit`];
+      }
       if (block.kind === "footage") { delete block.words; delete block.cut; }
     }
-    parsed.blocks.splice(after, 0, ...blocks);
+    parsed.blocks.splice(after, 0, ...inner.blocks);
+    reused.unshift({ doc, ...(title ? { title } : {}), footage: inner.blocks.filter((block) => block.kind === "footage").length }, ...(inner.reused ?? []));
+    skipped.unshift(...(inner.skipped ?? []));
   }
+  if (reused.length > 0) parsed.reused = reused;
+  if (skipped.length > 0) parsed.skipped = skipped;
   return parsed;
 }
 
@@ -694,9 +736,46 @@ function besideRanges(text: string): string | null {
   return cleaned === "" ? null : cleaned;
 }
 
+/**
+ * The kind of video a script's heading names: Writer heads every Doc with its
+ * series ("COURT Tim James - …", "INTERRO …", "FOIA …"); null when it doesn't
+ * say. (The team, Oct 28: "the script says COURT at the start".)
+ */
+export function headerStyle(heading: string): Style | null {
+  const word = /^\s*([A-Za-z]+)/.exec(heading)?.[1]?.toUpperCase();
+  if (word === undefined) return null;
+  if (word === "COURT" || word === "COURTROOM") return "courtroom";
+  if (word === "INTERRO" || word === "INTERROGATION") return "interrogation";
+  if (word === "FOIA" || word === "BODYCAM" || word === "BWC") return "bodycam";
+  if (word === "COMMENTARY") return "commentary";
+  return null;
+}
+
+/**
+ * A paragraph's words with its Google Doc links' text taken out: null when
+ * what's left is only a label ("The earlier case:", "Reuse", a few words), so
+ * a reused script's link is never voiced as narration.
+ */
+function withoutDocLinks(para: { text: string; links: [number, number, string][] }): string | null {
+  const docs = para.links.filter(([, , url]) => docId(url) !== null && footageFile(url) === null);
+  if (docs.length === 0) return collapse(para.text);
+  let text = "";
+  let at = 0;
+  for (const [start, end] of [...docs].sort((a, b) => a[0] - b[0])) {
+    text += para.text.slice(at, start);
+    at = Math.max(at, end);
+  }
+  text = collapse(text + para.text.slice(at)).replace(/\bhttps?:\/\/docs\.google\.com\/\S+/g, "").trim();
+  const words = text.split(/\s+/).filter((word) => /[\p{L}\p{N}]/u.test(word));
+  return words.length < 5 || /[:\-–—]$/.test(text) ? null : text;
+}
+
 /** Reads a script Doc's HTML export into footage ranges and narration. */
 export function parse(html: string): Parsed {
   const [title, paras, comments] = readHtml(html);
+  // The Doc's first line says which kind of video it is.
+  const heading = paras.find((para) => collapse(para.text) !== "");
+  const style = heading === undefined ? null : headerStyle(collapse(heading.text));
   // A range without its own link belongs to the last linked file (or the only one).
   const files: [string, string][] = [];
   for (const para of paras) {
@@ -731,6 +810,18 @@ export function parse(html: string): Parsed {
       caseBreak = true;
     }
   };
+  // A Google Doc linked in the text itself: a reused script, where the link is
+  // (the same Doc twice in a row is one).
+  const docLinks = (links: [number, number, string][]) => {
+    for (const [, , url] of links) {
+      const doc = docId(url);
+      if (doc === null || footageFile(url) !== null) continue;
+      const previous = cases.at(-1);
+      if (previous !== undefined && previous.doc === doc && previous.after === blocks.length) continue;
+      cases.push({ after: blocks.length, doc });
+      caseBreak = true;
+    }
+  };
   // Paragraphs of narration one after another are one cut-in; narration
   // written on from ranges starts its own (`own`): a hook paragraph followed
   // by a paragraph that runs the setup on into the hearing is two cut-ins.
@@ -752,11 +843,19 @@ export function parse(html: string): Parsed {
       // The video opens on the first timestamp: anything before it is the
       // Doc's heading (title, "Assets:", durations), never a cut-in.
       // A line of no words ("—", "__") only separates parts of the Doc.
-      if (text === "" || !seenFootage || !/[\p{L}\p{N}]/u.test(text)) continue;
+      if (text === "" || !seenFootage || !/[\p{L}\p{N}]/u.test(text)) {
+        // A reused script linked before the first range opens the video.
+        if (seenFootage || blocks.length === 0) docLinks(para.links);
+        continue;
+      }
       const found = notes(para.refs, comments);
-      narrate(text, found);
+      // A reused script's link, alone or under a short label ("Case 2:
+      // <link>"), is where that script goes, never words to voice.
+      const spoken = withoutDocLinks(para);
+      if (spoken !== null) narrate(spoken, found);
       reuse(found);
       caseNotes(found);
+      docLinks(para.links);
       continue;
     }
     // Narration written on from the ranges in the same paragraph: before,
@@ -765,7 +864,16 @@ export function parse(html: string): Parsed {
     const gaps = ranges.map((range, index) => said(index === 0 ? 0 : ranges[index - 1]!.end, range.start));
     const tail = ranges.length > 0 ? said(ranges[ranges.length - 1]!.end, para.text.length) : null;
     seenFootage = true;
+    // Doc links in a paragraph of ranges: each after the ranges before it.
+    const docsHere = para.links.filter(([, , url]) => docId(url) !== null && footageFile(url) === null);
+    let docAt = 0;
+    const docsBefore = (offset: number) => {
+      const due: [number, number, string][] = [];
+      while (docAt < docsHere.length && docsHere[docAt]![0] < offset) due.push(docsHere[docAt++]!);
+      docLinks(due);
+    };
     ranges.forEach((range, index) => {
+      docsBefore(range.start);
       const gap = gaps[index];
       const gapFrom = index === 0 ? 0 : ranges[index - 1]!.end;
       if (gap !== null && gap !== undefined) {
@@ -821,8 +929,9 @@ export function parse(html: string): Parsed {
       reuse(found);
       caseNotes(found);
     }
+    docsBefore(Number.MAX_SAFE_INTEGER);
   }
-  return cases.length > 0 ? { title, blocks, cases } : { title, blocks };
+  return { title, blocks, ...(cases.length > 0 ? { cases } : {}), ...(style !== null ? { style } : {}) };
 }
 
 /** `str::parse::<f64>`: the whole text a decimal number (or inf/NaN), else null. */
@@ -1671,6 +1780,12 @@ function isSome<T>(value: T | null | undefined): value is T {
   return value !== undefined && value !== null;
 }
 
+/** Audio in the project that isn't on the timeline: a voice-over recording given with the script. */
+function unplacedAudio(project: Project): boolean {
+  const used = new Set(project.clips.flatMap((clip) => ("media" in clip && typeof clip.media === "string" ? [clip.media] : [])));
+  return project.media.some((media) => media.kind === "audio" && !used.has(media.id));
+}
+
 /** What the agent is asked once a script is first laid out. */
 export const RESEARCH =
   "The script is imported and laid out. Research the case now (RESEARCH in your house style): start from the script and the transcripts, find the news articles about this case, check each matches and save it, then collect images of the scene, the people involved and the vehicles, and weed out anything off-target so only real candidates wait for review. Don't change the timeline. Finish with a short summary: the key facts the articles add, how many articles you saved and how many images are waiting.";
@@ -1807,6 +1922,18 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       app.scripts.set(app, id, (job) => {
         job.state = "voicing";
       });
+      // A kind of video narrated by the team's recording: the one given with
+      // the script (audio in the project, not on the timeline) is placed on
+      // the cut-ins it reads; only what it doesn't read is voiced, as a stand-in.
+      const project = app.store.get(id)?.project;
+      if (!inserting && project !== undefined && NARRATION[project.style] === "recording" && unplacedAudio(project)) {
+        try {
+          await diag.timeAsync("script", "script: place the recording", () => seams.voiceover.place(app, id, null));
+        } catch (error) {
+          if (isBug(error)) throw error;
+          diag.warn("script", `${title}: placing the voice-over recording: ${diag.messageOf(error)}`);
+        }
+      }
       // Tried again by itself after a pause (a dropped connection to the
       // voice service); a used-up allowance isn't asked again today.
       for (let attempt = 0; ; attempt++) {
@@ -2377,7 +2504,17 @@ export function attach(project: Project, source: string, parsed: Parsed): void {
 }
 
 /** How much a script holds, for the import dialog's preview. */
-export function summary(parsed: Parsed): { files: number; footage: number; narration: number; seconds: number; title: string; whole?: number } {
+export function summary(parsed: Parsed): {
+  files: number;
+  footage: number;
+  narration: number;
+  seconds: number;
+  title: string;
+  whole?: number;
+  reused?: Parsed["reused"];
+  skipped?: Parsed["skipped"];
+  style?: Style;
+} {
   const files: string[] = [];
   let footage = 0;
   let narration = 0;
@@ -2394,5 +2531,15 @@ export function summary(parsed: Parsed): { files: number; footage: number; narra
       seconds += CUT_IN_SECONDS;
     }
   }
-  return { files: files.length, footage, narration, seconds, title: parsed.title, ...(whole ? { whole } : {}) };
+  return {
+    files: files.length,
+    footage,
+    narration,
+    seconds,
+    title: parsed.title,
+    ...(whole ? { whole } : {}),
+    ...(parsed.reused?.length ? { reused: parsed.reused } : {}),
+    ...(parsed.skipped?.length ? { skipped: parsed.skipped } : {}),
+    ...(parsed.style ? { style: parsed.style } : {}),
+  };
 }

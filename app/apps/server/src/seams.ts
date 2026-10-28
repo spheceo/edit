@@ -266,6 +266,12 @@ export interface Parsed {
   blocks: ScriptBlock[];
   /** A compilation's other case scripts (`script.joinCases` reads them in): each Doc goes after block `after`. */
   cases?: { after: number; doc: string }[];
+  /** The reused scripts read in, at any depth (said before the import, so the person sees what's in it). */
+  reused?: { doc: string; title?: string; footage: number }[];
+  /** Linked Docs left out, and why (no footage ranges, or one linking back). */
+  skipped?: { doc: string; title?: string; why: string }[];
+  /** The kind of video its heading names ("COURT …"), when it says. */
+  style?: Style;
 }
 
 /** What Drive serves for a file: the last response's headers after redirects. */

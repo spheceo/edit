@@ -1,6 +1,6 @@
 import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 
 import { editStyles, useAccount } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
@@ -10,7 +10,7 @@ import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
-import { STYLES, type ProjectSummary, type Style } from "../lib/types";
+import { NARRATION, STYLES, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Tile } from "./Logo";
@@ -686,6 +686,12 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ url: string; result?: Preview; error?: string } | null>(null);
   const toast = useEditor((state) => state.toast);
+  // The team's voice-over recording, for a kind of video narrated by one: a file, or a Drive link to it.
+  const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [voiceLink, setVoiceLink] = useState("");
+  const voicePicker = useRef<HTMLInputElement>(null);
+  // The style the script's heading named ("COURT …"), until the person picks another.
+  const [picked, setPicked] = useState(false);
   const [scripts, setScripts] = useState<WriterScriptRow[] | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const url = text.trim();
@@ -696,6 +702,9 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
     if (!open) return;
     setText("");
     setPreview(null);
+    setVoiceFile(null);
+    setVoiceLink("");
+    setPicked(false);
     if (only !== null && (allowed === null || allowed.has(only))) setStyle(only);
     else if (styles.length > 0 && !styles.some((option) => option.value === style)) setStyle(styles[0]!.value);
     let alive = true;
@@ -754,6 +763,12 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
     };
   }, [url, script]);
 
+  // The script says which kind of video it is: that's the style, unless the person chose one.
+  const named = preview?.result?.style;
+  useEffect(() => {
+    if (named && !picked && (allowed === null || allowed.has(named))) setStyle(named);
+  }, [named, picked]);
+  const recording = script && NARRATION[style] === "recording";
   const ready = !script || Boolean(preview?.result);
   const create = async () => {
     if (!ready) return;
@@ -767,6 +782,16 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
       const name = script ? preview?.result?.title || "Untitled" : url || "Untitled";
       const { project } = await api.createProject({ name, style, ...FORMAT });
       if (script) {
+        // The recording first, so the import places it instead of voicing the cut-ins.
+        if (recording && (voiceFile !== null || voiceLink.trim() !== "")) {
+          try {
+            if (voiceFile !== null) await api.uploadFile(project.id, voiceFile, `voiceover-${clientId}`);
+            else await api.importDrive(project.id, voiceLink.trim(), false, clientId);
+          } catch (error) {
+            // The edit still starts, on a stand-in voice; the Script tab offers the recording again.
+            useEditor.getState().toastError(error, "add the voice-over");
+          }
+        }
         await api.attachScript(project.id, url);
         useEditor.getState().setMediaTab("downloads");
       }
@@ -811,10 +836,49 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
             ) : preview?.result ? (
               <span className="tabular">
                 <span className="text-fg">{preview.result.title || "Untitled script"}</span> · {preview.result.files} {preview.result.files === 1 ? "source" : "sources"} · {preview.result.narration} cut-ins · {preview.result.whole ? "duration after import" : shortDuration(preview.result.seconds)}
+                {preview.result.reused?.map((one) => (
+                  <span key={one.doc} className="block truncate whitespace-normal text-faint">
+                    Reuses “{one.title || "a linked script"}” as written ({one.footage} {one.footage === 1 ? "range" : "ranges"})
+                  </span>
+                ))}
+                {preview.result.skipped?.map((one) => (
+                  <span key={one.doc} className="block whitespace-normal text-faint">
+                    Left out “{one.title || `docs.google.com/…/${one.doc.slice(0, 8)}`}”: {one.why}
+                  </span>
+                ))}
               </span>
             ) : (
               <span className="shimmer">Reading the case links…</span>
             )}
+          </div>
+        )}
+        {recording && (
+          <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2 text-[12px]">
+            <span className="font-medium">Voice-over</span>
+            <Button type="button" size="sm" onClick={() => voicePicker.current?.click()}>
+              {voiceFile ? voiceFile.name : "Choose the recording"}
+            </Button>
+            <input
+              ref={voicePicker}
+              type="file"
+              accept="audio/*,.mp3,.wav,.m4a,.aac"
+              className="hidden"
+              onChange={(event) => {
+                setVoiceFile(event.currentTarget.files?.[0] ?? null);
+                event.currentTarget.value = "";
+              }}
+            />
+            {voiceFile === null && (
+              <input
+                value={voiceLink}
+                onChange={(event) => setVoiceLink(event.target.value)}
+                placeholder="or a Google Drive link to it"
+                className="h-7 min-w-[180px] flex-1 rounded-md border border-line bg-black px-2 outline-none placeholder:text-faint focus:border-muted"
+              />
+            )}
+            <span className="basis-full text-faint">
+              {STYLES.find((one) => one.value === style)?.label} videos are narrated by your recording. Optional now: until it’s added, a stand-in voice is used.
+            </span>
           </div>
         )}
         {!script && fromWriter.length > 0 && (
@@ -850,7 +914,10 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
               <button
                 type="button"
                 key={option.value}
-                onClick={() => setStyle(option.value)}
+                onClick={() => {
+                  setStyle(option.value);
+                  setPicked(true);
+                }}
                 className={cx(
                   "h-7 rounded-md px-3 text-[12px] font-medium transition-colors",
                   style === option.value ? "bg-active text-fg" : "text-muted hover:text-fg",

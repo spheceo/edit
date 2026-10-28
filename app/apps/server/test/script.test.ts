@@ -19,6 +19,7 @@ import {
   excerptExtension,
   excerpts,
   fetchDoc,
+  headerStyle,
   joinCases,
   findRanges,
   layOut,
@@ -517,6 +518,58 @@ test("follows_a_compilations_case_scripts_after_the_narration_naming_them", asyn
     "Lola reported his own parents missing",
   ]);
   expect((parsed.blocks[1] as Narration).text).toBe("Eventually, she was sentenced to 15 years.\n\nIn a similar case, another young man reported the crime himself…");
+});
+
+test("any Google Doc link is a reused script, where it's linked, at any depth; a loop or a Doc of notes is left out and said", async () => {
+  const doc = (id: string) => `https://www.google.com/url?q=https://docs.google.com/document/d/${id}/edit&amp;sa=D`;
+  const range = (file: string, t: number) =>
+    `<a href="https://www.google.com/url?q=https://drive.google.com/file/d/${file}/view?t%3D${t}&amp;sa=D">00:0${t} - 00:0${t + 2}</a>`;
+  // The top script: COURT in its heading, a Doc linked in its text after its first range, and one in a comment with no "script" word.
+  const main = `<html><body><p><span>COURT Tim James - The Case</span></p>
+<p><span>(</span>${range("1TopFileAbcdefg", 1)}<span>)</span></p>
+<p><span>He was arrested that night.</span></p>
+<p><span>The earlier case: </span><a href="${doc("1ReuseOneDocAbc")}">case one</a></p>
+<p><span>Then the hearing began&hellip;</span><sup><a href="#cmnt1" id="cmnt_ref1">[a]</a></sup></p>
+<div><p><a href="#cmnt_ref1" id="cmnt1">[a]</a><span>https://docs.google.com/document/d/1NotesDocAbcde/edit</span></p></div>
+</body></html>`;
+  const docs: Record<string, string> = {
+    // A reused script that reuses another, which links back to the top one.
+    "1ReuseOneDocAbc": `<html><body><p><span>INTERRO One</span></p><p><span>(</span>${range("1OneFileAbcdefg", 3)}<span>)</span></p>
+<p><span>One said it.</span></p><p><a href="${doc("1ReuseTwoDocAbc")}">the case before</a></p></body></html>`,
+    "1ReuseTwoDocAbc": `<html><body><p><span>INTERRO Two</span></p><p><span>(</span>${range("1TwoFileAbcdefg", 5)}<span>)</span></p>
+<p><span>Two said it.</span></p><p><a href="${doc("1TopDocAbcdefg")}">back to the top</a></p></body></html>`,
+    // Notes, not a script.
+    "1NotesDocAbcde": `<html><head><title>Research notes</title></head><body><p><span>Names and dates.</span></p></body></html>`,
+  };
+  const parsed = parse(main);
+  expect(parsed.style).toBe("courtroom");
+  expect(parsed.cases).toEqual([
+    { after: 2, doc: "1ReuseOneDocAbc" },
+    { after: 3, doc: "1NotesDocAbcde" },
+  ]);
+  await joinCases(parsed, async (id) => docs[id] ?? Promise.reject(new Error("not shared")), new Set(["1TopDocAbcdefg"]));
+  const shape = parsed.blocks.map((block) => (block.kind === "footage" ? `footage ${block.file}` : block.text));
+  expect(shape).toEqual(["footage 1TopFileAbcdefg", "He was arrested that night.", "footage 1OneFileAbcdefg", "One said it.", "footage 1TwoFileAbcdefg", "Two said it.", "Then the hearing began…"]);
+  // Each block is preserved as the script it came from.
+  expect(parsed.blocks[4]!.notes).toContain("Reused script (preserve ranges and cut-in words): https://docs.google.com/document/d/1ReuseTwoDocAbc/edit");
+  expect(parsed.reused?.map((one) => [one.doc, one.footage])).toEqual([["1ReuseOneDocAbc", 2], ["1ReuseTwoDocAbc", 1]]);
+  expect(parsed.skipped?.map((one) => [one.doc, one.why])).toEqual([
+    ["1TopDocAbcdefg", "it links back to a script already in this one"],
+    ["1NotesDocAbcde", "it has no footage ranges, so it isn't a script to reuse"],
+  ]);
+  // One that can't be read stops the import, naming it.
+  const unreadable = parse(main);
+  await expect(joinCases(unreadable, async () => Promise.reject(new Error("not shared")))).rejects.toThrow(
+    /^Couldn't read the reused script https:\/\/docs\.google\.com\/document\/d\/1\w+\/edit: not shared$/,
+  );
+});
+
+test("a script's heading names its kind of video, as Writer heads them", () => {
+  expect(headerStyle("COURT Tim James - Cop Beats a HANDCUFFED Teen")).toBe("courtroom");
+  expect(headerStyle("INTERRO John Doe - The Case")).toBe("interrogation");
+  expect(headerStyle("FOIA Mom & Teen")).toBe("bodycam");
+  expect(headerStyle("(DRAFT) Cop Beats a Teen")).toBeNull();
+  expect(headerStyle("Courtney's story")).toBeNull();
 });
 
 test("excerpts_of_dvd_and_webm_files_are_mp4", () => {

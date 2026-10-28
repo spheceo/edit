@@ -214,7 +214,31 @@ export const api = {
     request<Transcript>("POST", `/api/projects/${id}/media/${media}/speakers`, { voice, role }),
   /** Reads a Google Doc script (on the server, as its public link) without importing it. */
   scriptPreview: (url: string) =>
-    request<{ title: string; footage: number; narration: number; files: number; seconds: number; whole?: number }>("POST", "/api/scripts/preview", { url }),
+    request<{
+      title: string;
+      footage: number;
+      narration: number;
+      files: number;
+      seconds: number;
+      whole?: number;
+      /** The reused scripts it pulls in (any Doc linked in it), at any depth. */
+      reused?: { doc: string; title?: string; footage: number }[];
+      /** Linked Docs left out, and why. */
+      skipped?: { doc: string; title?: string; why: string }[];
+      /** The kind of video its heading names ("COURT …"). */
+      style?: Style;
+    }>("POST", "/api/scripts/preview", { url }),
+  /** Uploads one file into a project's media (not placed); the media ids it added. */
+  uploadFile: async (id: string, file: File, origin: string) => {
+    const query = new URLSearchParams({ name: file.name, size: String(file.size), origin });
+    const response = await fetch(`/api/projects/${id}/upload?${query}`, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: file });
+    const data = (await response.json().catch(() => ({}))) as { added?: string[]; error?: string; rev?: number; project?: Project };
+    if (!response.ok) throw new ApiError(data.error ?? `the upload failed (${response.status})`, response.status, data);
+    return data as { added: string[]; rev: number; project: Project };
+  },
+  /** Places the team's voice-over recording (default: audio not on the timeline) on the cut-ins it reads. */
+  placeVoiceover: (id: string, mediaIds: string[] | null) =>
+    request<{ report: unknown; project: Project; rev: number }>("POST", `/api/projects/${id}/voiceover/place`, mediaIds === null ? {} : { media_ids: mediaIds }),
   /** Attaches a Doc's script to a project and starts downloading its footage. */
   attachScript: (id: string, url: string) => request<{ rev: number; project: Project; job: ScriptJob | null }>("POST", `/api/projects/${id}/script`, { url }),
   scriptJob: (id: string) => request<{ job: ScriptJob | null; unfinished: boolean }>("GET", `/api/projects/${id}/script/job`),

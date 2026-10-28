@@ -683,6 +683,22 @@ export function routes(router: Router<App>): void {
     return sortedJson({ job: app.scripts.get(id), unfinished: script.unfinished(live.project) });
   });
   router.post("/api/projects/{id}/script/job", scriptResume);
+  // The team's voice-over recording, added after the import: placed on the cut-ins it reads (over the stand-in voice).
+  router.post("/api/projects/{id}/voiceover/place", async (context) => {
+    const { app } = context;
+    const id = context.params.id ?? "";
+    projectOr404(app, id);
+    const given = await readJson<{ media_ids?: unknown }>(context);
+    const media = Array.isArray(given?.media_ids) ? given.media_ids.filter((one): one is string => typeof one === "string") : null;
+    try {
+      await app.store.mayWrite(id);
+      const report = await voiceover.place(app, id, media);
+      const live = projectOr404(app, id);
+      return sortedJson({ report, project: live.project, rev: live.rev });
+    } catch (error) {
+      throw badOf(error);
+    }
+  });
   // Footage the import couldn't fetch: another link for it (`url`), or go on without it (`skip`).
   router.post("/api/projects/{id}/script/footage", async (context) => {
     const { app } = context;

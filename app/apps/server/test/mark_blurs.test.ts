@@ -73,6 +73,10 @@ test("a still rectangle over a run of shots, or over a push-in, is blur_off_shot
   } as AdjustmentClip;
   p.clips.push(still as Clip);
   expect((offShot(p) as Record<string, unknown>[]).map((issue) => [issue.kind, issue.shots])).toEqual([["blur_off_shot", ["c1", "c2"]]]);
+  // Over cuts within one tape framed the same (a logo burned in stays put): nothing to say.
+  (p.clips[1] as VideoClip).media = "m1";
+  expect(offShot(p)).toEqual([]);
+  (p.clips[1] as VideoClip).media = "m2";
   // Only over its own shot, which doesn't move: nothing to say.
   still.duration = 100;
   expect(offShot(p)).toEqual([]);

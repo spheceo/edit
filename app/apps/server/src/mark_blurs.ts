@@ -320,14 +320,24 @@ export function offShot(project: Project): unknown[] {
       if (top !== undefined) tops.set(top.id, (tops.get(top.id) ?? 0) + 1);
     }
     const shots = [...tops.entries()].filter(([, frames]) => frames > 14).map(([id]) => id);
+    // Cuts within one tape framed the same are one picture to a mark burned
+    // into it: card 1's still blur over the uploader's logo, across the
+    // interrogation's thirteen cuts, was flagged all three passes.
+    const framing = (id: string) => {
+      const clip = under.find((one) => one.id === id);
+      if (clip?.type !== "video") return id;
+      const { x, y, scale } = framingAt(clip, 0);
+      return JSON.stringify([clip.media, x, y, scale, clip.crop ?? null]);
+    };
+    const pictures = new Set(shots.map(framing));
     const moving = under.find((clip) => clip.type === "video" && ["x", "y", "scale"].some((param) => (clip.keyframes?.[param]?.length ?? 0) > 1));
-    if (shots.length > 1 || moving !== undefined) {
+    if (pictures.size > 1 || moving !== undefined) {
       issues.push({
         kind: "blur_off_shot",
         clip: blur.id,
         start: blur.start,
         end: clipEnd(blur),
-        ...(shots.length > 1 ? { shots } : { moving: moving!.id }),
+        ...(pictures.size > 1 ? { shots } : { moving: moving!.id }),
         fix: "op blur_marks (no arguments): every logo or mark gets a blur stuck to its own shot (it follows the push-in and fades with the dissolve) and these still rectangles go; one left over a shot where no mark was found hides nothing that blur_marks knows of: look once and delete it if nothing there needs hiding; a face's blur is track_region's",
       });
     }

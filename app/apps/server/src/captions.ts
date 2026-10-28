@@ -21,6 +21,8 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import { captionSize, hex, parseTranscript, subtitleName, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
+import { fixTurns } from "./turns.ts";
+import { post } from "./watch.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import type {
@@ -586,6 +588,14 @@ async function spokenLines(app: App, project: Project, clips: Clip[], from: numb
     const visibleTo = clip.source_in + ((Math.min(to, clipEnd(clip)) - clip.start) / fps) * clip.speed;
     const seen = transcript.words.filter((word) => word.start >= visibleFrom && word.end <= visibleTo + 0.05);
     const words = seen.map((word) => (capped ? cap(word) : { ...word }));
+    if (capped) {
+      // Words that spilled across a change of speaker go back to who said
+      // them (Repack's turns): the run-through's "him after this incident",
+      // the reporter's, was on the sergeant's subtitle.
+      const turns = words.map((word) => ({ text: word.text, speaker: word.speaker ?? null, start_ms: word.start * 1000, end_ms: word.end * 1000 }));
+      const moved = await fixTurns(turns, (voice) => transcript!.speakers?.[voice] ?? voice, project.name, join(app.store.cacheDir(), "turns"), post);
+      if (moved > 0) turns.forEach((turn, index) => (words[index]!.speaker = turn.speaker ?? undefined));
+    }
     const own = transcript;
     const made = linesOf(clip.id, words).map((line) => named(line, own));
     if (capped) {
@@ -828,7 +838,12 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
   const said = lines.length;
   lines = lines.filter((line) => !throwaway(line));
   const before = lines.length;
-  lines = lines.filter((line) => !seams.subtitles.hiddenRole(line.role));
+  // A source's narrator heard in a full edit's footage (a news reporter over
+  // their report) is subtitled under their own label; radio, dispatch and
+  // background talk never are. (The user, Oct 28: "include the narrator's
+  // subs, but we still do proper attribution".)
+  const edited = seams.subtitles.fullEdit(project);
+  lines = lines.filter((line) => !seams.subtitles.hiddenRole(line.role) || (edited && line.role === "narrator"));
   const hidden = before - lines.length;
   // A line the intro's speaker captions already show (caption_speakers'
   // "Caption · <who>") gets no subtitle under it as well: the comp's and

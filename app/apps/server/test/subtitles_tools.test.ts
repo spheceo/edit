@@ -1,7 +1,8 @@
 // The subtitles package end to end on the stub: its MCP tools, its routes,
 // and the pieces it shares with captions.
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import * as watchModule from "../src/watch.ts";
 
 import type { App } from "../src/app.ts";
 import { hex, subtitleName, timing, transcriptOf } from "../src/captions_core.ts";
@@ -449,4 +450,46 @@ test("subtitle recovery respects captioned and narration segments", async () => 
     expect(reply.isError).toBe(false);
     expect(store.get(id)!.project.clips.filter((clip) => clip.type === "text").map((clip) => clip.type === "text" && clip.text)).toEqual(["Okay."]);
   } finally { cleanup(); }
+});
+
+test("an edit's subtitles: a source's narrator under their own label, and a word that spilled across speakers put back (the run-through, Oct 28)", async () => {
+  const { app, dir, store, cleanup } = fixtureHome("narrator-edit");
+  // The reporter's "…when investigators questioned / him after this incident" came out on the sergeant's line.
+  const answer = { cuts: [{ line: 0, first: "That's the voice of the sergeant when investigators questioned him.", second: "I'm yelling the whole time." }] };
+  const gateway = spyOn(watchModule, "post").mockImplementation(async () => ({ choices: [{ message: { content: JSON.stringify(answer) } }] }));
+  try {
+    const id = await footage(app, dir);
+    const report: Transcript = {
+      ...TRANSCRIPT,
+      words: [
+        ...["That's", "the", "voice", "of", "the", "sergeant", "when", "investigators", "questioned"].map((text, i) => ({ text, start: 0.1 + i * 0.2, end: 0.28 + i * 0.2, speaker: "reporter" })),
+        { text: "him.", start: 1.95, end: 2.1, speaker: "sergeant" },
+        ...["I'm", "yelling", "the", "whole", "time."].map((text, i) => ({ text, start: 2.6 + i * 0.2, end: 2.78 + i * 0.2, speaker: "sergeant" })),
+      ],
+      speakers: { reporter: "Narrator", sergeant: "Sergeant" },
+      roles: { reporter: "narrator", sergeant: "leader" },
+      colors: { reporter: "#ffffff", sergeant: "#3b82f6" },
+    };
+    write(app.media.paths(bodycam(dir).path).transcript, serialize(report));
+    const texts = () =>
+      store.get(id)!.project.clips.filter((clip): clip is TextClip => clip.type === "text").sort((a, b) => a.start - b.start).map((clip) => `${clip.name}: ${clip.text}`);
+    // A subtitle video leaves the narrator out.
+    expect((await call(app, "add_subtitles", { project_id: id })).isError).toBe(false);
+    expect(texts().some((one) => one.includes("voice of the sergeant"))).toBe(false);
+    // A full edit (a voice-over of its own) shows them, and "him." is theirs, not the sergeant's.
+    await store.update(id, "test", (project) => {
+      const sound = project.clips.find((clip) => clip.type === "audio");
+      if (sound) sound.name = "Voice-over";
+    });
+    const again = await call(app, "add_subtitles", { project_id: id });
+    expect(again.isError).toBe(false);
+    const shown = texts();
+    expect(shown.some((one) => one.startsWith("Subtitle · Narrator: That's the voice of the sergeant"))).toBe(true);
+    expect(shown).toContain("Subtitle · Narrator: him.");
+    expect(shown.some((one) => /Sergeant/.test(one) && one.startsWith("Subtitle · Sergeant: I'm yelling"))).toBe(true);
+    expect(gateway).toHaveBeenCalled();
+  } finally {
+    gateway.mockRestore();
+    cleanup();
+  }
 });

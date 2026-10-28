@@ -546,6 +546,8 @@ export interface SubtitlesSeam {
   latestRun(id: string, run: number): boolean;
   SUPERSEDED: Json;
   hiddenRole(role: string): boolean;
+  /** A full edit, with narration of its own, not a subtitle video (a source's narrator is subtitled in one). */
+  fullEdit(project: Project): boolean;
   houseStyle(width: number, height: number, color: Rgba): TextStyle;
   houseWords(app: App, project: Project, from: number, to: number, neglect: boolean, extra?: readonly string[]): Promise<HouseWords>;
   longestMs(word: string): number;

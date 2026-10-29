@@ -123,8 +123,11 @@ A script the cloud refuses (its commit or a file turned away, not just offline) 
 
 The bodies are on R2, not in Convex's file storage: Edit's nightly sweep deletes Convex-stored JSON that no Edit project uses. Keep Script mode's keys under `writer/`: Repack's own cleanup deletes unrecorded files under `repack/`.
 
+## Script mode and Edit mode in step
+
+An edit made from a script follows it, and the script follows the edit (`app/apps/server/src/script_sync.ts`): each block of the edit knows its script clip (`origin`), and the script keeps each clip as the two last agreed (`edit` in its body). A script trimmed, cut down, added to or reworded changes the edit (a reworded cut-in is spoken again, that line alone); a script-made range trimmed, a cut-in reworded or a range deleted in Edit mode changes the script, as a version by "The edit". Undo is a save, so it reaches the other side. A rebuilt script leaves its edit alone and says so; commentaries aren't synced. A script's footage is left to the cloud once it's idle and shared with Edit's originals (`writer/storage.ts`), and comes back when work needs it; Start the edit carries the script's research and case names to the edit.
+
 ## What isn't here
 
-- **Live sync of a script and its edit.** Start the edit and the Script button link the two; a change saved in one doesn't yet change the other (re-voicing just the sentence edited, a clip added in the script showing in the edit, one undo for both). That's the next step of the merge (the plan's last line).
-- **Clearing a script's local footage** (Writer's `storage.rs`, Settings → Storage) and its **backfill** of old scripts into Edit's registry (every script made since does it on import) didn't come over; `distill.rs`, a developer's test tool, was dropped.
-- **Writer's own relay** still serves old Writer and Trello; Edit's relay serves Script mode's cloud once it's deployed with `writer_cloud.ts`.
+- **Writer's own relay** still serves old Writer and Trello; Script mode's cloud is on Edit's relay (`/v1/cloud/writer/*`).
+- **An Edit-only project's research images** stay on the Mac that found them.

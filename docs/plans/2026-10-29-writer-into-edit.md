@@ -100,14 +100,14 @@ From Writer's `docs/how-it-works.md`, each a line to tick once it works in Edit.
 - [x] Find clips (scout) (ported, tested)
 - [x] Reused cases: import the video, highlights for intro clips (ported)
 - [x] Comments, Feedback tab, teaching rounds, lessons synced (ported, tested; lessons merge in kept order)
-- [ ] Review: share, share again, notes, Ready for changes fixing on the chosen Mac, Approve, Make this v1, green bands (ported and tested; notes and counts seen; **sharing waits on the relay deploy**)
+- [x] Review: share, share again, notes, Ready for changes fixing on the chosen Mac, Approve, Make this v1, green bands (ported and tested; notes, counts and the fixing check-in seen with the relay deployed)
 - [x] edit: notes for the editor (ported)
 - [x] Google Doc export, Doc comments (seen: the Docs list and their comments through Edit's Google sign-in; making a Doc wasn't tried, it publishes one)
 - [x] Archive and restore footage (ported)
-- [ ] Cloud: every script synced, conflicts kept as copies (pulls seen; **pushes wait on the relay deploy**: until then a save says "Edit's relay doesn't serve Script mode's cloud yet")
+- [x] Cloud: every script synced, conflicts kept as copies (relay deployed Oct 29 with its own 1200/min limit; a test script committed as rev 1 in 1 s and deleted everywhere)
 - [x] Logs, Settings, update, remote support (one app: Edit's; remote diagnostics and resume take scripts)
-- [ ] Script mode ↔ Edit mode: one project, move to Edit, synced both ways, one undo (done: Start the edit makes the project on this Mac, Open the edit, the Script button back, footage and words shared so Edit mode never fetches or hears them again; **not yet: a save in one changing the other, and one undo**)
-- [ ] Storage: clearing a script's local footage (Writer's `storage.rs`) and the backfill of old scripts into Edit's registry (not ported)
+- [x] Script mode ↔ Edit mode: one project, synced both ways, one undo (script_sync.ts: trims, takeouts, added cut-ins and ranges, rewordings re-voiced alone, Edit-mode trims, rewordings and deletes back to the script; undo is a save on either side; seen on a copy of Trooper FAKES Testimony; research, case names, footage and words carried at Start the edit)
+- [x] Storage: a script's footage left to the cloud once shared and idle (writer/storage.ts, which shares older scripts' recordings first: 1.9 GB here), brought back when work needs it
 
 ## Bugs found
 

@@ -299,8 +299,10 @@ export function narrationRecovery(project: Project): NarrationRecovery[] {
         (trackOf(project, clip.track)?.kind === "video" || (clip.type === "audio" &&
           (isVoiceover(project, clip) || (mediaOf(project, clip.media)?.kind === "audio" && !isSoundEffect(mediaOf(project, clip.media)!))))) &&
         clip.start < clipEnd(card) && clipEnd(clip) > card.start);
-    return [{ cut_in, ...(card ? { clip: card.id } : {}), state: untouched ? "missing" as const : "review" as const,
-      ...(!untouched ? { why: "Removed or edited cut-in/voice-over: preserve it and inspect before changing." } : {}) }];
+    // One add_cut_in placed is meant to be voiced, whatever plays across it (a music bed lengthened over the new time).
+    const added = !block.voiceover && card?.type === "solid" && (block.notes ?? []).includes("Added cut-in");
+    return [{ cut_in, ...(card ? { clip: card.id } : {}), state: untouched || added ? "missing" as const : "review" as const,
+      ...(!untouched && !added ? { why: "Removed or edited cut-in/voice-over: preserve it and inspect before changing." } : {}) }];
   });
 }
 

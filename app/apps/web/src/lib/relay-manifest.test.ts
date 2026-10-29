@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import relay, { type Env } from "../../../relay/src/index";
-import { CAPABILITIES, ICON_SVG, manifest } from "../../../relay/src/manifest";
+import { CAPABILITIES, ICON_SVG, manifest, SCRIPT_CAPABILITIES } from "../../../relay/src/manifest";
 
 const ID = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/;
 
@@ -31,7 +31,8 @@ describe("Edit's manifest", () => {
 
   it("keeps its ids (they're forever) and the brand's icon", () => {
     expect(Object.values(CAPABILITIES).sort()).toEqual(["edit.bodycam", "edit.commentary", "edit.courtroom", "edit.interrogation", "edit.shorts", "video.subtitles"]);
-    expect(manifest().presets.map((one) => [one.id, one.capabilities.length])).toEqual([["subtitles", 1], ["editor", 6], ["full", 6]]);
+    expect(SCRIPT_CAPABILITIES.map((one) => one.id).sort()).toEqual(["review.lessons", "review.share", "scripts.commentary", "scripts.courtroom", "scripts.courtroom-compilation", "scripts.foia", "scripts.foia-compilation", "scripts.interrogation", "scripts.interrogation-compilation"]);
+    expect(manifest().presets.map((one) => [one.id, one.capabilities.length])).toEqual([["subtitles", 1], ["editor", 6], ["writer", 3], ["full", 15]]);
     expect(ICON_SVG).toBe(fs.readFileSync(new URL("../../../../assets/brand/edit-icon.svg", import.meta.url), "utf8"));
   });
 

@@ -295,7 +295,7 @@ test("a resume is carried out once, reports what happened and never installs an 
     const finished = f.calls.filter(call => call.state !== undefined);
     expect(finished).toHaveLength(1);
     expect(finished[0]).toMatchObject({ commandId: "cmd-resume", state: "failed" });
-    expect(String(finished[0]!.detail)).toContain("no project p1 on this Mac");
+    expect(String(finished[0]!.detail)).toContain("no project or script p1 on this Mac");
     expect(new RemoteCommandReceipts(f.home, "device1").read("cmd-resume")?.state).toBe("failed");
   } finally { await f.clean(); }
 });

@@ -2,7 +2,7 @@ import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudU
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
-import { editStyles, useAccount } from "../lib/account";
+import { editStyles, makesVideos, useAccount, writesScripts } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { hasImportLinks, importPaste } from "../lib/import-input";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
@@ -31,6 +31,11 @@ export function Home() {
   const [statuses, setStatuses] = useState<Record<string, ProjectStatus>>({});
   const [creating, setCreating] = useState(false);
   const [scriptCount, setScriptCount] = useState<number | null>(null);
+  const account = useAccount((state) => state.account);
+  // Someone who writes scripts and makes no videos: Script mode is their home.
+  useEffect(() => {
+    if (!makesVideos(account) && writesScripts(account)) navigate("/scripts", true);
+  }, [account]);
   useEffect(() => {
     void fetch("/api/writer/scripts").then((answer) => (answer.ok ? answer.json() : null)).then((rows: unknown) => setScriptCount(Array.isArray(rows) ? rows.length : null), () => {});
   }, []);
@@ -141,9 +146,12 @@ export function Home() {
                 ? "Projects are kept in the team’s cloud, so anyone can pick one up where you left off. Import footage, cut it, and let an agent build the polish."
                 : "Projects live on this machine. Import footage, cut it, and let an agent build the polish."}
             </p>
-            <Button variant="primary" className="mt-6" onClick={() => setCreating(true)}>
-              <Plus size={15} strokeWidth={2.2} /> New project
-            </Button>
+            <div className="mt-6 flex gap-2">
+              <Button variant="primary" onClick={() => setCreating(true)}>
+                <Plus size={15} strokeWidth={2.2} /> New project
+              </Button>
+              {writesScripts(account) && <Button onClick={() => navigate("/scripts")}>Scripts {scriptCount !== null && <span className="font-normal text-faint tabular">{scriptCount}</span>}</Button>}
+            </div>
           </motion.div>
         )}
 

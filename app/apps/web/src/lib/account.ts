@@ -21,14 +21,21 @@ export interface Account {
 
 /**
  * The edit styles the person may make full edits in (accounts' `edit.<style>`),
- * as the server's kinds.ts reads the token; null for all of them (an admin, a
- * token from before the kinds, or nobody signed in).
+ * as the server's kinds.ts reads the token; null for all of them (an admin, or
+ * nobody signed in).
  */
 export function editStyles(account: Account | null): Set<string> | null {
   if (account === null || account.person === null || account.admin) return null;
-  if (!account.perms.some((perm) => perm.includes("."))) return null;
   return new Set(account.perms.filter((perm) => perm.startsWith("edit.")).map((perm) => perm.slice("edit.".length)));
 }
+
+const everything = (account: Account | null) => account === null || account.person === null || account.admin;
+
+/** Whether the person makes videos at all: a style's edits or subtitled videos. */
+export const makesVideos = (account: Account | null): boolean => everything(account) || account!.perms.some((perm) => perm.startsWith("edit.") || perm === "video.subtitles");
+
+/** Whether they write scripts (Script mode's `scripts.*`). */
+export const writesScripts = (account: Account | null): boolean => everything(account) || account!.perms.some((perm) => perm.startsWith("scripts."));
 
 export const useAccount = create<{ account: Account | null; waiting: boolean }>(() => ({ account: null, waiting: false }));
 

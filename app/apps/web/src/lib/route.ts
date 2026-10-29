@@ -3,9 +3,11 @@ import { useSyncExternalStore } from "react";
 const listeners = new Set<() => void>();
 window.addEventListener("popstate", () => listeners.forEach((listener) => listener()));
 
-export function navigate(path: string) {
+/** Goes to `path`; `replace` takes the current entry's place, so Back doesn't return to it. */
+export function navigate(path: string, replace = false) {
   if (path === location.pathname) return;
-  history.pushState(null, "", path);
+  if (replace) history.replaceState(null, "", path);
+  else history.pushState(null, "", path);
   listeners.forEach((listener) => listener());
 }
 

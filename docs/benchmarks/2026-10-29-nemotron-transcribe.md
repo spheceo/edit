@@ -1,6 +1,6 @@
 # Nemotron 3.5 Transcribe vs our transcripts, Oct 29
 
-Plan: `docs/plans/2026-10-29-nemotron-transcribe.md`. Scripts: `app/scripts/nemotron-bench.py` (Modal, one H100, BF16, vLLM 0.32.0, NeMo Speech `743beaf427`, the model card's serve command) and `app/scripts/nemotron-score.py`.
+Plan: `docs/plans/2026-10-29-nemotron-transcribe.md`. Run on Modal (one H100, BF16, vLLM 0.32.0, NeMo Speech `743beaf427`, the model card's serve command). The bench and scoring scripts were removed after the run; they're in commit `909ed81e` (`app/scripts/nemotron-bench.py`, `app/scripts/nemotron-score.py`).
 
 **Verdict: Scribe stays.** Nemotron is worse at who speaks on both videos. It gets the team's Killer Couple feedback stretch wrong, and it can't hear more than 8 people. Its word times are as good as Scribe's pieces, and its words are no clear gain.
 
@@ -36,8 +36,8 @@ Two prompts per video: the card's (speaker tags `<spk:0>`…`<spk:3>`) and ours 
 
 - Each hour-long file took 74–88 s on one H100 (four heard at once in 93 s).
 - Starting the server took 11 min (85 s of weights, the rest compiling and warming up). One cold start plus four files: 786 s of H100, about $0.85 on Modal. Run warm, about $0.10 per hour of audio; with a cold start per video it's more than Scribe's ~$0.22.
-- The 67.5 GB weights sit in the Modal volume `nemotron-bench`.
+- The 67.5 GB weights' Modal volume was deleted after the run.
 
 ## When to look again
 
-If a release raises the speaker limit past 8 or is shown to beat Scribe on distant, overlapping speech. The scripts re-run as they are: `nemotron-bench.py` with the WAVs, then `nemotron-score.py` with `--window` for feedback stretches.
+If a release raises the speaker limit past 8 or is shown to beat Scribe on distant, overlapping speech. Restore the scripts from `909ed81e` to run it again.

@@ -28,7 +28,7 @@ volume = modal.Volume.from_name(VOLUME, create_if_missing=True)
 PROGRESS = APP + "-progress"
 root = Path("/sections")
 app = modal.App(APP)
-for module in ["sections_runtime.py", "sections_v3_runtime.py"]:
+for module in ["sections_runtime.py", "sections_v3_runtime.py", "review_runtime.py"]:
     image = image.add_local_file(Path(__file__).with_name(module), "/opt/edit/" + module, copy=True)
 
 
@@ -94,3 +94,27 @@ def cleanup(name: str):
     except KeyError:
         pass
     return result
+
+
+@app.function(image=image, gpu=GPU, cpu=(4, 4), memory=(8192, 8192), max_containers=POOL, timeout=900,
+              startup_timeout=300, scaledown_window=2, retries=0, serialized=True)
+def review_piece(source: str, start: float, frames: int, upload: str):
+    """One piece of a review copy at 720p on its own GPU (review_runtime.py)."""
+    from review_runtime import piece
+    from runtime import plain
+    try:
+        return piece(source, start, frames, upload)
+    except Exception as error:
+        raise RuntimeError(plain(error)) from None
+
+
+@app.function(image=image, cpu=(4, 4), memory=(8192, 8192), max_containers=COORDINATORS,
+              timeout=1800, startup_timeout=300, scaledown_window=2, retries=0, serialized=True)
+def review(job: dict):
+    """A review copy made in the cloud: its pieces at once, joined with the sound; its poster and waveform."""
+    from review_runtime import join
+    from runtime import plain
+    try:
+        return join(job, review_piece)
+    except Exception as error:
+        raise RuntimeError(plain(error)) from None

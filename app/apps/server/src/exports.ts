@@ -55,6 +55,8 @@ interface Running {
   timeline: string;
   keepLocal: boolean;
   queued: boolean;
+  /** Rendered on Modal and kept in the cloud there (never copied here): its key and size. */
+  inCloud?: { key: string; bytes: number | null };
   cancelQueued?: () => void;
 }
 
@@ -565,7 +567,10 @@ export class ExportRegistry implements seams.Exports {
       await catchBugsAsync("the export", async () => {
         if (running.backend === "modal") {
           try {
-            await seams.modalExports.run(this.home ?? store.home, project, options, output, () => running.cancelled, progress => emit("running", progress));
+            // Kept in the cloud where it's archived, unless Drive or the caller wants it here.
+            const keep = !upload && !running.keepLocal && exportCloud.enabled() ? exportCloudKey(id, fileName(output) ?? "export.mp4") : null;
+            const made = await seams.modalExports.run(this.home ?? store.home, project, options, output, () => running.cancelled, progress => emit("running", progress), keep);
+            if (made.key !== null) running.inCloud = { key: made.key, bytes: made.bytes };
             return;
           } catch (error) {
             if (running.cancelled) throw error;
@@ -673,11 +678,11 @@ export class ExportRegistry implements seams.Exports {
         `${project.name} exported ${frames} frames in ${diag.human(took)} (${fixed(frames / Math.max(took / 1000, 1e-3), 1)} frames/s) to ${output}`,
       );
       diag.record("export", "export", took, null);
-      let bytes: number | null = null;
+      let bytes: number | null = running.inCloud?.bytes ?? null;
       try {
         bytes = fs.statSync(output).size;
       } catch {
-        bytes = null;
+        // In the cloud only.
       }
       emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload, backend: running.backend });
       try {
@@ -692,6 +697,7 @@ export class ExportRegistry implements seams.Exports {
           start: plan.start,
           format: options.format,
           timeline: running.timeline,
+          ...(running.inCloud === undefined ? {} : { cloudKey: running.inCloud.key }),
         });
         fs.mkdirSync(join(this.home ?? store.home, "export-maps"), { recursive: true });
         writeAtomic(mapFile(this.home ?? store.home, running.timeline), JSON.stringify(clipMap(project)));
@@ -700,7 +706,9 @@ export class ExportRegistry implements seams.Exports {
       }
       // Cloud is canonical: upload, verify by size, then delete the local
       // file. Skipped when Drive will read the file next, or on request.
-      if (!upload && !running.keepLocal && exportCloud.enabled()) {
+      if (running.inCloud !== undefined) {
+        diag.info("export", `${id}: rendered and kept in the cloud at ${running.inCloud.key}, never copied to this Mac`);
+      } else if (!upload && !running.keepLocal && exportCloud.enabled()) {
         const key = exportCloudKey(id, fileName(output) ?? "export.mp4");
         if (await archiveExportFile(output, key)) {
           try {

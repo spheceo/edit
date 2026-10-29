@@ -114,16 +114,44 @@ function command(): { cwd: string; cmd: string[] } {
  * `cancelled()` and the cloud work is stopped.
  */
 export async function run(home: string, project: Project, options: ExportOptions, output: string,
-  cancelled: () => boolean, onProgress: (progress: number) => void): Promise<void> {
-  const { cwd, cmd } = command();
+  cancelled: () => boolean, onProgress: (progress: number) => void, keep: string | null = null): Promise<{ bytes: number | null; key: string | null }> {
   const id = `${project.id.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 60)}-${crypto.randomUUID().slice(0, 8)}`;
+  const sent = { ...project, media: used(project) };
+  // `keep`: the export stays in the cloud at that key, never copied to this Mac.
+  const done = await drive(home, id, { project: JSON.parse(jsonForSerde(sent)), options: { ...options, range: null }, output, ...(keep === null ? {} : { key: keep, deliver: false }) }, cancelled, onProgress);
+  diag.info("export", `${project.id}: cloud export ${id}: ${done.rendered}/${done.sections} sections rendered (the rest reused), sound ${done.sound_cached ? "reused" : "mixed"}${keep === null ? "" : `, kept in the cloud at ${keep}`}`);
+  return { bytes: typeof done.bytes === "number" ? done.bytes : null, key: typeof done.key === "string" ? done.key : null };
+}
+
+/** What a cloud review copy gives back: the files' details and the review copy's waveform. */
+export interface Reviewed {
+  review: Record<string, unknown>;
+  export: Record<string, unknown>;
+  peaks: number[];
+}
+
+/**
+ * A review copy made in the cloud from an export kept there (`source`): its
+ * 720p copy at `video`, its poster at `poster` (from `posterSecond`), the
+ * export copied to `full`; all within R2, nothing through this Mac.
+ */
+export async function review(home: string, project: string, keys: { source: string; video: string; poster: string; full: string }, posterSecond: number, fps: number, frames: number,
+  onProgress: (progress: number) => void = () => {}): Promise<Reviewed> {
+  const id = `review-${project.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 50)}-${crypto.randomUUID().slice(0, 8)}`;
+  const done = await drive(home, id, { review: true, source_key: keys.source, review_key: keys.video, poster_key: keys.poster, full_key: keys.full, poster_second: posterSecond, fps, frames }, () => false, onProgress);
+  diag.info("review", `${project}: review copy made in the cloud from ${done.pieces} pieces in ${Math.round(Number(done.seconds ?? 0))} s`);
+  return { review: (done.review ?? {}) as Record<string, unknown>, export: (done.export ?? {}) as Record<string, unknown>, peaks: Array.isArray(done.peaks) ? (done.peaks as number[]) : [] };
+}
+
+/** Runs the cloud driver on `job` until it says it's done (its last line), reporting progress. */
+async function drive(home: string, id: string, job: Record<string, unknown>, cancelled: () => boolean, onProgress: (progress: number) => void): Promise<Record<string, unknown>> {
+  const { cwd, cmd } = command();
   const dir = join(home, "jobs");
   fs.mkdirSync(dir, { recursive: true });
   const file = join(dir, `modal-${id}.json`);
-  const sent = { ...project, media: used(project) };
   // A SIGTERM may not get through Infisical and uv: the driver also looks for this file.
   const stop = `${file}.cancel`;
-  writeAtomic(file, JSON.stringify({ id, project: JSON.parse(jsonForSerde(sent)), options: { ...options, range: null }, output, host: process.pid, cancel: stop }));
+  writeAtomic(file, JSON.stringify({ id, ...job, host: process.pid, cancel: stop }));
   const child = Bun.spawn([...cmd, file], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const stderr = new Response(child.stderr).text();
   let stopped = false;
@@ -155,7 +183,7 @@ export async function run(home: string, project: Project, options: ExportOptions
         if (typeof said.error === "string") error = said.error;
         else if (said.done === true) done = said;
         else if (typeof said.progress === "number") {
-          if (said.phase === "deploying") diag.info("export", `${project.id}: deploying the cloud exporter (a new build)`);
+          if (said.phase === "deploying") diag.info("export", `${id}: deploying the cloud exporter (a new build)`);
           onProgress(Math.min(0.99, said.progress));
         }
       }
@@ -163,7 +191,7 @@ export async function run(home: string, project: Project, options: ExportOptions
     const code = await child.exited;
     if (cancelled()) throw new Error("cancelled");
     if (done === null) throw new Error(error ?? `the cloud export stopped (exit ${code}): ${(await stderr).trim().split("\n").slice(-3).join(" ")}`);
-    diag.info("export", `${project.id}: cloud export ${id}: ${done.rendered}/${done.sections} sections rendered (the rest reused), sound ${done.sound_cached ? "reused" : "mixed"}`);
+    return done;
   } finally {
     clearInterval(watch);
     if (child.exitCode === null) child.kill("SIGTERM");

@@ -35,6 +35,7 @@ import { defaultExportPath } from "./server_seam.ts";
 import { clipEnd, fps as fpsOf, trackOf } from "./project.ts";
 import { cachedTranscripts } from "./edit_tools.ts";
 import { Semaphore } from "./media.ts";
+import type { Reviewed } from "./modal_exports.ts";
 import { native } from "./native/index.ts";
 import { onScreen } from "./review.ts";
 import { fixed, jsonForSerde } from "./rust.ts";
@@ -209,35 +210,52 @@ export async function share(app: App, projectId: string, path: string | null, re
   sharing.set(projectId, "making the review copy");
   const release = holdExport(chosen.path);
   try {
-    if (!fs.existsSync(chosen.path)) {
-      sharing.set(projectId, "fetching the export back from the cloud");
-      await restoreArchived(chosen);
-      sharing.set(projectId, "making the review copy");
-    }
-    if (!fs.existsSync(copy)) {
-      let pieced = false;
-      try {
-        pieced = await reviewCopyFromChunks(app.store.cacheDir(), projectId, chosen.path, copy);
-      } catch (error) {
-        diag.warn("review", `${projectId}: the review copy from the export's chunks: ${diag.messageOf(error)}; making it whole`);
-      }
-      if (!pieced) await reviewCopy(chosen.path, copy);
-    }
-    const seconds = chosen.frames / fps;
-    await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(live.project, seconds), 2), "-i", chosen.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
     const prefix = `edit/reviews/${projectId}/${timeline}`;
-    sharing.set(projectId, "uploading");
-    await cloud.uploadFile(copy, `${prefix}/video.mp4`, (done, total) => sharing.set(projectId, `uploading ${total ? Math.round((done / total) * 100) : 0}%`));
-    await cloud.uploadFile(poster, `${prefix}/poster.jpg`);
-    // The export itself, untouched, for the page's Download button (`fullKey`).
     const fullKey = fullKeyOf(prefix, chosen.path);
-    sharing.set(projectId, "uploading the full-quality file");
-    await cloud.uploadFile(chosen.path, fullKey, (done, total) => sharing.set(projectId, `uploading the full-quality file ${total ? Math.round((done / total) * 100) : 0}%`));
+    const seconds = chosen.frames / fps;
+    // In the cloud when the export is there and Modal is here: its review
+    // copy, poster and full-quality file made and copied within R2, nothing
+    // through this Mac (the team, Oct 29: "everything should be done on the
+    // cloud"); else here, as before.
+    let made: Reviewed | null = null;
+    if (chosen.cloudKey !== undefined && seams.modalExports.enabled()) {
+      sharing.set(projectId, "making the review copy in the cloud");
+      try {
+        made = await seams.modalExports.review(home, projectId, { source: chosen.cloudKey, video: `${prefix}/video.mp4`, poster: `${prefix}/poster.jpg`, full: fullKey }, posterSecond(live.project, seconds), fps, chosen.frames);
+      } catch (error) {
+        diag.warn("review", `${projectId}: the review copy in the cloud: ${diag.messageOf(error)}; making it on this Mac`);
+      }
+    }
+    if (made === null) await shareFromHere();
     // What the page shows beside the video: its transcript, chapters, the
     // censoring, a waveform and the files' details (Fields), and the clips
     // under each moment (a note is pinned to its footage as it's written).
     sharing.set(projectId, "describing it");
-    const extra = await describe(app, live.project, chosen.path, copy, prefix, clips);
+    const extra = await describe(app, live.project, chosen.path, copy, prefix, clips, made);
+    async function shareFromHere(): Promise<void> {
+      const [pick, now] = [chosen!, live!];
+      if (!fs.existsSync(pick.path)) {
+        sharing.set(projectId, "fetching the export back from the cloud");
+        await restoreArchived(pick);
+        sharing.set(projectId, "making the review copy");
+      }
+      if (!fs.existsSync(copy)) {
+        let pieced = false;
+        try {
+          pieced = await reviewCopyFromChunks(app.store.cacheDir(), projectId, pick.path, copy);
+        } catch (error) {
+          diag.warn("review", `${projectId}: the review copy from the export's chunks: ${diag.messageOf(error)}; making it whole`);
+        }
+        if (!pieced) await reviewCopy(pick.path, copy);
+      }
+      await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(now.project, seconds), 2), "-i", pick.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
+      sharing.set(projectId, "uploading");
+      await cloud.uploadFile(copy, `${prefix}/video.mp4`, (done, total) => sharing.set(projectId, `uploading ${total ? Math.round((done / total) * 100) : 0}%`));
+      await cloud.uploadFile(poster, `${prefix}/poster.jpg`);
+      // The export itself, untouched, for the page's Download button (`fullKey`).
+      sharing.set(projectId, "uploading the full-quality file");
+      await cloud.uploadFile(pick.path, fullKey, (done, total) => sharing.set(projectId, `uploading the full-quality file ${total ? Math.round((done / total) * 100) : 0}%`));
+    }
     if (latest !== null && latest !== undefined) {
       const shared = read(home).shared[projectId]!;
       update(home, (state) => {
@@ -395,10 +413,15 @@ async function probe(path: string): Promise<Record<string, unknown>> {
  * beside the video its words (export time, with who says them) and a
  * waveform; plus the picture clips, so a note can be pinned to its footage.
  */
-async function describe(app: App, project: Project, exported: string, copy: string, prefix: string, clips: [string, number, number][]): Promise<Record<string, unknown>> {
+async function describe(app: App, project: Project, exported: string, copy: string, prefix: string, clips: [string, number, number][], made: Reviewed | null = null): Promise<Record<string, unknown>> {
   const fps = fpsOf(project);
   const ms = (frame: number) => Math.round((frame / fps) * 1000);
-  const out: Record<string, unknown> = { export: { renderedAt: Date.now(), ...(await probe(exported)) }, review: await probe(copy), clipMap: clips };
+  // Made in the cloud: the files' details and the waveform came back with it.
+  const out: Record<string, unknown> = {
+    export: { renderedAt: Date.now(), ...(made?.export ?? (await probe(exported))) },
+    review: made?.review ?? (await probe(copy)),
+    clipMap: clips,
+  };
   // Chapters: the intro, each cut-in, the story, the outro.
   try {
     const parts = native().sections({ json: jsonForSerde(project) }).parts;
@@ -447,13 +470,16 @@ async function describe(app: App, project: Project, exported: string, copy: stri
   }
   // A waveform of the review copy's sound: its loudest sample every 100 ms, 0–100.
   try {
-    const pcm = await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-i", copy, "-ac", "1", "-ar", "8000", "-f", "s16le", "-"]);
-    const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));
-    const peaks: number[] = [];
-    for (let at = 0; at < samples.length; at += 800) {
-      let most = 0;
-      for (let one = at; one < Math.min(at + 800, samples.length); one++) most = Math.max(most, Math.abs(samples[one]!));
-      peaks.push(Math.round((most / 32768) * 100));
+    let peaks: number[] = made?.peaks ?? [];
+    if (made === null) {
+      const pcm = await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-i", copy, "-ac", "1", "-ar", "8000", "-f", "s16le", "-"]);
+      const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));
+      peaks = [];
+      for (let at = 0; at < samples.length; at += 800) {
+        let most = 0;
+        for (let one = at; one < Math.min(at + 800, samples.length); one++) most = Math.max(most, Math.abs(samples[one]!));
+        peaks.push(Math.round((most / 32768) * 100));
+      }
     }
     const file = `${copy}.peaks.json`;
     fs.writeFileSync(file, JSON.stringify({ everyMs: 100, peaks }));

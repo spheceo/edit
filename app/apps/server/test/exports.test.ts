@@ -140,6 +140,7 @@ test("house exports of cloud footage render on Modal at once, and drive false ke
   const render = spyOn(seams.modalExports, "run").mockImplementation(async (_home, _project, _options, output) => {
     await wait;
     fs.writeFileSync(output, "modal export");
+    return { bytes: 12, key: null };
   });
   const wanted = spyOn(seams.drive, "wanted").mockReturnValue(true);
   const uploaded: string[] = [];

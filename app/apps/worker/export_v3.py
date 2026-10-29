@@ -62,7 +62,11 @@ def say(**fields):
 
 def main():
     job = json.loads(Path(sys.argv[1]).read_text())
+    if job.get("review"):
+        return review(job)
     name, project, output, host = job["id"], job["project"], Path(job["output"]), int(job["host"])
+    # Kept in the cloud at `key` (the export's own place there), not copied to this Mac.
+    stays = job.get("deliver") is False and isinstance(job.get("key"), str)
     asked_to_stop = Path(job["cancel"]) if job.get("cancel") else None
     if not re.fullmatch(r"[a-z0-9-]{1,100}", name):
         raise ValueError("Invalid export id")
@@ -110,7 +114,7 @@ def main():
         assets.append({"media": media["id"], "etag": head["ETag"], "size": head["ContentLength"], "key": key,
                        "url": s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=6 * 3600)})
         media["path"] = "asset:" + media["id"]
-    key = f"edit/exports/v3/{name}.mp4"
+    key = job["key"] if stays else f"edit/exports/v3/{name}.mp4"
     upload = {"Bucket": bucket, "Key": key, "UploadId": s3.create_multipart_upload(Bucket=bucket, Key=key, ContentType="video/mp4")["UploadId"]}
     published = False
     call = None
@@ -156,6 +160,12 @@ def main():
         head = s3.head_object(Bucket=bucket, Key=key)
         if head["ContentLength"] != receipt["upload"]["size"]:
             raise RuntimeError("The published file's length doesn't match the checked one")
+        if stays:
+            rendered = [s for s in receipt["sections"] if not s.get("cached")]
+            say(done=True, progress=1, bytes=head["ContentLength"], sha256=receipt["sha256"], key=key, seconds=time.monotonic() - started,
+                sections=len(receipt["sections"]), rendered=len(rendered), sound_cached=receipt.get("sound_cached"),
+                sources_cached=receipt.get("input_cache", {}).get("hits"))
+            return
         progress("delivering", .92)
         check()
         shutil.rmtree(folder, ignore_errors=True)
@@ -187,7 +197,7 @@ def main():
                 s3.abort_multipart_upload(**upload)
             except Exception:
                 pass
-        else:
+        elif not stays:
             try:
                 s3.delete_object(Bucket=bucket, Key=key)
             except Exception:
@@ -198,6 +208,56 @@ def main():
                 modal.Function.from_name(APP, "cleanup", environment_name=ENVIRONMENT).spawn(name)
             except Exception:
                 pass
+
+
+def review(job):
+    """A review copy made in the cloud from an export kept there: its pieces on
+    GPUs at once (review_runtime.py), the copy, poster and waveform put
+    straight into R2, and the export itself copied to the review's own key
+    there. Prints the files' details and the waveform."""
+    for key in ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"]:
+        if not os.environ.get(key):
+            raise RuntimeError("R2 settings are missing (run through Repack's environment injection)")
+    name = job["id"]
+    if not re.fullmatch(r"[a-z0-9-]{1,100}", name):
+        raise ValueError("Invalid review id")
+    bucket = os.environ["R2_BUCKET"]
+    s3 = boto3.client("s3", endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+                      aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"], aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+                      region_name="auto", config=Config(signature_version="s3v4", retries={"max_attempts": 2}))
+    started = time.monotonic()
+    halt = Stop()
+
+    def check():
+        if halt.is_set():
+            raise Stopped("cancelled")
+
+    def progress(phase, value):
+        say(phase=phase, progress=round(value, 4))
+
+    deploy(build_id(), check, progress)
+    sign = lambda method, key, hours=6: s3.generate_presigned_url(method, Params={"Bucket": bucket, "Key": key}, ExpiresIn=hours * 3600)
+    fps, frames = float(job["fps"]), int(job["frames"])
+    # Pieces of about three minutes, at most 24 (one GPU each).
+    count = max(1, min(24, round(frames / fps / 180)))
+    step = -(-frames // count)
+    temp = f"edit/reviews/tmp/{name}"
+    pieces = [{"start": at / fps, "frames": min(step, frames - at), "put": sign("put_object", f"{temp}/{i:03d}.mp4"),
+               "get": sign("get_object", f"{temp}/{i:03d}.mp4")} for i, at in enumerate(range(0, frames, step))]
+    progress("reviewing", .1)
+    make = modal.Function.from_name(APP, "review", environment_name=ENVIRONMENT)
+    result = make.remote({"source": sign("get_object", job["source_key"]), "pieces": pieces, "video_put": sign("put_object", job["review_key"]),
+                          "poster_put": sign("put_object", job["poster_key"]), "poster_second": float(job["poster_second"])})
+    progress("copying", .9)
+    # The export, untouched, for the review's Download button: copied within R2.
+    s3.copy({"Bucket": bucket, "Key": job["source_key"]}, bucket, job["full_key"])
+    try:
+        listed = s3.list_objects_v2(Bucket=bucket, Prefix=temp + "/")
+        if listed.get("Contents"):
+            s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": one["Key"]} for one in listed["Contents"]]})
+    except Exception:
+        pass
+    say(done=True, progress=1, seconds=time.monotonic() - started, pieces=len(pieces), **result)
 
 
 def deploy(build, check, progress):

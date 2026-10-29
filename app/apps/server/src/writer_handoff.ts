@@ -13,6 +13,7 @@
 // recordings plays as one range of each. A clip's notes are the producer's
 // for the editor, an "edit:" one an instruction the agent follows there.
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
@@ -20,6 +21,9 @@ import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import { ApiError } from "./http/errors.ts";
 import * as kinds from "./kinds.ts";
+import * as caseNames from "./names.ts";
+import { withDocuments } from "./writer/casefiles.ts";
+import * as writerResearch from "./writer/research.ts";
 import * as writerStore from "./writer/store.ts";
 import type { Router } from "./http/router.ts";
 import type { ScriptBlock, Style } from "./model.ts";
@@ -276,6 +280,35 @@ export async function fetchScript(id: string, home: string | null = null): Promi
   return (await answer.json()) as WriterScript;
 }
 
+/**
+ * The script's research (its reports and case files) and case names go to
+ * the edit before its import starts, so the edit neither searches nor asks
+ * for them again (Oct 29, the user: "everything if started on script side is
+ * passed onto edit to save time and money"). Its footage and words are in
+ * Edit's registry already (writer/handoff.ts).
+ */
+export function carryResearch(app: App, scriptId: string, projectId: string): void {
+  const dir = writerStore.scriptDir(writerStore.dataDir(app.store.home), scriptId);
+  const found = writerResearch.load(dir);
+  const reports = found === null ? [] : withDocuments(dir, found).articles;
+  const ours = join(app.store.home, "research", projectId, "articles.json");
+  if (reports.length > 0 && !fs.existsSync(ours)) {
+    fs.mkdirSync(join(app.store.home, "research", projectId), { recursive: true });
+    const articles = reports.map((report) => ({ id: createHash("sha256").update(report.url).digest("hex").slice(0, 16), url: report.url, title: report.title, outlet: report.outlet, ...(report.published ? { published: report.published } : {}), summary: report.summary, text: [report.summary, ...report.facts].join("\n") }));
+    writeAtomic(ours, JSON.stringify(articles, null, 2));
+  }
+  let names: string[] = [];
+  try {
+    const kept = JSON.parse(fs.readFileSync(join(dir, "names.json"), "utf8")) as { names?: unknown };
+    names = Array.isArray(kept.names) ? kept.names.filter((name): name is string => typeof name === "string") : [];
+  } catch {
+    // None listed for the script.
+  }
+  const live = app.store.get(projectId);
+  if (names.length > 0 && live !== null) caseNames.keep(app, live.project, names);
+  if (reports.length > 0 || names.length > 0) diag.info("script", `${projectId}: the script's research came along (${reports.length} reports, ${names.length} case names)`);
+}
+
 /** Makes an Edit project from a Writer script and starts its import (footage, transcripts, voice-over, layout). */
 export async function importScript(app: App, id: string): Promise<{ project: string }> {
   const given = await fetchScript(id, app.store.home);
@@ -289,6 +322,7 @@ export async function importScript(app: App, id: string): Promise<{ project: str
     fs.mkdirSync(dir, { recursive: true });
     writeAtomic(join(dir, "broll.json"), JSON.stringify({ writer: { id: given.id, title: given.title, sources: (given.commentary?.sources ?? []).filter((source) => source.role === "evidence") } }, null, 2));
   }
+  carryResearch(app, id, live.project.id);
   script.start(app, live.project.id, false);
   writeAtomic(join(app.store.home, "writer-imports.json"), JSON.stringify({ ...imports(app.store.home), [id]: live.project.id }));
   diag.info("script", `${given.title}: imported from Writer (${parsed.blocks.length} blocks)`);

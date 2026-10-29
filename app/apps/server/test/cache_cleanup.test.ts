@@ -291,3 +291,35 @@ test("explicit legacy migration removes completed orphan previews, never paid da
     expect(fs.existsSync(`${working}/preview.mp4`)).toBe(true);
   } finally { cleanup(); }
 });
+
+test("smoothed shots, YouTube downloads and library sounds nobody uses go after two days; used ones, a script's original and new ones stay", async () => {
+  const { app, store, cleanup } = fixtureHome("cache-generated");
+  try {
+    const live = store.create("p", { width: 1920, height: 1080, fps: 30 });
+    const media = `${app.store.home}/media`;
+    const make = (path: string) => {
+      fs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+      fs.writeFileSync(path, "video");
+      return path;
+    };
+    const oldSmooth = make(`${media}/${live.project.id}/smooth/Shot 0h0m1s-0h0m3s-0.5x-ab12.mp4`);
+    const usedSmooth = make(`${media}/${live.project.id}/smooth/Shot 0h0m4s-0h0m6s-0.5x-cd34.mp4`);
+    const youtube = make(`${media}/drive/youtube/jNQXAC9IVRw/Me at the zoo [jNQXAC9IVRw].mp4`);
+    const scriptOriginal = make(`${media}/drive/youtube/dQw4w9WgXcQ/Song [dQw4w9WgXcQ].mp4`);
+    const sound = make(`${app.store.home}/library/music/0123456789ab/Bed.mp3`);
+    const theirs = make(`${media}/${live.project.id}/My cut.mp4`);
+    const project = structuredClone(live.project);
+    project.media = [{ id: "m1", name: "Shot", path: usedSmooth, kind: "video", duration: 1, width: 2, height: 2, fps: 30, has_audio: false }];
+    await store.replace(project.id, null, project, "test");
+    // A script whose original is the shared YouTube download itself.
+    const scriptDir = `${app.store.home}/writer/scripts/4f6c2a1e-0b7d-4c3e-9a5f-2d8e1b6c7a90`;
+    make(`${scriptDir}/x`);
+    fs.writeFileSync(`${scriptDir}/script.json`, JSON.stringify({ id: "4f6c2a1e-0b7d-4c3e-9a5f-2d8e1b6c7a90", title: "S", originalPath: scriptOriginal, words: [], clips: [] }));
+    cleanCache(app, false, Date.now() + 3600 * 1000);
+    expect([oldSmooth, youtube, sound].map((path) => fs.existsSync(path))).toEqual([true, true, true]);
+    cleanCache(app, false, Date.now() + 3 * 24 * 3600 * 1000);
+    expect([oldSmooth, usedSmooth, youtube, scriptOriginal, sound, theirs].map((path) => fs.existsSync(path))).toEqual([false, true, false, true, false, true]);
+  } finally {
+    cleanup();
+  }
+});

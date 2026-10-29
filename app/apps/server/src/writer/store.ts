@@ -135,6 +135,20 @@ export function list(data: string, archived: (id: string) => Summary["archive"] 
   return rows.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+/** The files scripts here play from (their originals), wherever they are. */
+export function originals(data: string): Set<string> {
+  const out = new Set<string>();
+  for (const id of ids(data)) {
+    try {
+      const script = read(scriptDir(data, id));
+      if (script.originalPath) out.add(script.originalPath);
+    } catch {
+      // Not a script any more.
+    }
+  }
+  return out;
+}
+
 /** Every script's id here. */
 export function ids(data: string): string[] {
   try {

@@ -14,6 +14,7 @@ import * as reviews from "./reviews.ts";
 import * as drive from "./drive.ts";
 import { isFile, join, userHome } from "../paths.ts";
 import * as jobs from "./jobs.ts";
+import * as storage from "./storage.ts";
 import * as store from "./store.ts";
 
 /** Where Writer kept its scripts on this Mac. */
@@ -49,6 +50,8 @@ export function start(app: App): void {
   for (const id of store.ids(data)) jobs.markInterrupted(data, id);
   cloud.start(data);
   reviews.start(app, data);
+  // Idle scripts' footage left to the cloud.
+  storage.start(data);
   // Archives and restores heard from the cloud, acted on every 20 s.
   setInterval(() => archive.react(app, data), 20_000);
   for (const begin of starters) {

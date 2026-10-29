@@ -8,7 +8,6 @@ import type { Clip, Focus, Kind, Research, Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
-import * as archive from "./archive.ts";
 import { isFile } from "../paths.ts";
 import * as build from "./build.ts";
 import * as casefiles from "./casefiles.ts";
@@ -25,6 +24,7 @@ import { compile, type Plan } from "./plan.ts";
 import * as research from "./research.ts";
 import * as reuse from "./reuse.ts";
 import { revise } from "./revise.ts";
+import * as storage from "./storage.ts";
 import * as store from "./store.ts";
 import { keepPeaks, readPeaks } from "./tidy.ts";
 import * as versions from "./versions.ts";
@@ -208,7 +208,7 @@ async function cutExactly(app: App, data: string, dir: string, script: Script, p
   if (!isFile(footagePath(dir, script))) {
     job.stage("Bringing the footage back to hear it");
     try {
-      await archive.restoreFootage(app, data, script.id, job);
+      await storage.bringBack(app, data, script.id, job);
     } catch (error) {
       checkStopped(job);
       return [clips, `The footage isn't on this Mac and couldn't be brought back (${diag.messageOf(error)}), so its cuts follow YouTube's captions. Build again to try once more.`];

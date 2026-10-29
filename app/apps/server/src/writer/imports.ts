@@ -27,6 +27,7 @@ import { nameVoices } from "./naming.ts";
 import * as parts from "./parts.ts";
 import * as research from "./research.ts";
 import * as reuse from "./reuse.ts";
+import * as storage from "./storage.ts";
 import * as store from "./store.ts";
 import * as transcription from "./transcription.ts";
 import * as trello from "./trello.ts";
@@ -1004,6 +1005,8 @@ export async function complete(app: App, data: string, id: string, job: jobs.Job
   if (script.noSpeech) throw new Error("This project was opened without speech. It has no transcription to complete.");
   const revision = script.revision;
   const before = script.words.length;
+  // Hearing needs the footage: back from the cloud if it was left there.
+  await storage.bringBack(app, data, id, job);
   await transcription.transcribe(app, script, dir, (done, total) => job.stage(`Completing transcription: ${Math.floor((done * 100) / Math.max(total, 1))}%`), job.signal);
   jobs.checkStopped(job);
   if (script.captions) {
@@ -1028,7 +1031,7 @@ export async function complete(app: App, data: string, id: string, job: jobs.Job
 }
 
 /** Retry unfinished speaker checks, as a job: completed answers are reused; only unfinished checks ask again. */
-export async function retrySpeakers(data: string, id: string, job: jobs.Job): Promise<jobs.Outcome> {
+export async function retrySpeakers(app: App, data: string, id: string, job: jobs.Job): Promise<jobs.Outcome> {
   const dir = store.scriptDir(data, id);
   const script = store.read(dir);
   const revision = script.revision;
@@ -1044,6 +1047,8 @@ export async function retrySpeakers(data: string, id: string, job: jobs.Job): Pr
   } else {
     const status = watch.status(dir);
     if (!(status !== null && (status.failed.length > 0 || status.needsApply))) throw new Error("There are no unfinished speaker checks.");
+    // Watching needs the footage: back from the cloud if it was left there.
+    await storage.bringBack(app, data, id, job);
     const report = await watch.run(script, dir, (done, total, cached) => job.stage(`Checking speakers: ${done} of ${total}; ${cached} saved checks reused`), job.signal);
     if (report === null) throw new Error("There is no video speech to check.");
     watch.clearNotes(script);

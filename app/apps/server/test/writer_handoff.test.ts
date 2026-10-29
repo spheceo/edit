@@ -1,9 +1,14 @@
 // writer_handoff.ts: a Writer script as Edit's script blocks.
 
 import { expect, test } from "bun:test";
+import * as fs from "node:fs";
+import { join } from "node:path";
 
-import { resolveWriterCases, styleOf, toParsed, type WriterScript } from "../src/writer_handoff.ts";
+import { caseNames } from "../src/names.ts";
+import * as writerStore from "../src/writer/store.ts";
+import { carryResearch, resolveWriterCases, styleOf, toParsed, type WriterScript } from "../src/writer_handoff.ts";
 import { reusedScriptBlock } from "../src/project.ts";
+import { fixtureHome } from "./helpers/home.ts";
 
 test("a Writer script's clips become footage ranges of each recording and cut-ins, notes and edit: notes kept", () => {
   const joined: WriterScript = {
@@ -103,4 +108,23 @@ test("a reused earlier Trello case rebuilds the saved selected Doc section while
   expect(input.reuses?.[0]?.url).toBe(url);
   delete input.reuses![0]!.scriptText;
   await expect(resolveWriterCases(input, async () => { throw new Error("must not fetch the whole compilation"); })).rejects.toThrow("selected script text is missing");
+});
+
+test("a script's research and case names go to the edit made from it, so neither is asked for again", async () => {
+  const { app, store, cleanup } = fixtureHome("handoff-research");
+  try {
+    const id = "6b1f0c2e-3a4d-4e5f-9a8b-7c6d5e4f3a2b";
+    const dir = writerStore.scriptDir(writerStore.dataDir(app.store.home), id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(join(dir, "research.json"), JSON.stringify({ queries: ["q"], at: 1, articles: [{ title: "Sentenced", outlet: "Town News", published: "2025-04-30", url: "https://news.test/a", summary: "Ryan Reese was sentenced.", facts: ["390 years"], video: null }] }));
+    fs.writeFileSync(join(dir, "names.json"), JSON.stringify({ hash: "the script's", names: ["Ryan Reese", "Reese"] }));
+    const live = store.create("Case", { width: 1920, height: 1080, fps: 30 });
+    carryResearch(app, id, live.project.id);
+    const articles = JSON.parse(fs.readFileSync(join(app.store.home, "research", live.project.id, "articles.json"), "utf8"));
+    expect(articles).toEqual([{ id: expect.any(String), url: "https://news.test/a", title: "Sentenced", outlet: "Town News", published: "2025-04-30", summary: "Ryan Reese was sentenced.", text: "Ryan Reese was sentenced.\n390 years" }]);
+    // Kept as listed from the edit's own sources: asked for, they come back without a model call.
+    expect(await caseNames(app, store.get(live.project.id)!.project)).toEqual(["Ryan Reese", "Reese"]);
+  } finally {
+    cleanup();
+  }
 });

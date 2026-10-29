@@ -22,6 +22,7 @@ import { checkStopped, type Job, type Outcome } from "./jobs.ts";
 import * as media from "./media.ts";
 import { caseNames } from "./names.ts";
 import { clock } from "./paragraphs.ts";
+import * as storage from "./storage.ts";
 import * as store from "./store.ts";
 import { keepPeaks, readPeaks } from "./tidy.ts";
 import { transcribeSpan } from "./transcription.ts";
@@ -310,9 +311,10 @@ export async function importReused(app: App, data: string, id: string, given: st
 async function bringIn(app: App, dir: string, given: string[], job: Job): Promise<Outcome> {
   const script = store.read(dir);
   const chosen = wanted(script, given);
-  // Joining onto the preview needs the file itself.
+  // Joining onto the preview needs the file itself: back from the cloud if it was left there.
   const base = store.proxyPath(dir);
-  if (!isFile(base)) throw new Error("The preview isn't on this Mac. Restore the footage first.");
+  if (!isFile(base)) await storage.bringBack(app, store.dataDir(app.store.home), script.id, job, true);
+  if (!isFile(base)) throw new Error("The preview isn't on this Mac or in the cloud. Restore the footage first.");
   // Kept out of the cloud (a dot folder) until the footage is joined.
   const folder = join(dir, ".reuse");
   fs.mkdirSync(folder, { recursive: true });

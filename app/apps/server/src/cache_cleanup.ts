@@ -28,6 +28,7 @@ import * as diag from "./diag.ts";
 import { carryAnalysis, localPath, readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { join } from "./paths.ts";
 import * as research from "./research.ts";
+import * as writerStore from "./writer/store.ts";
 import { localBudgetBytes } from "./storage.ts";
 
 /** Made again cheaply from the source. */
@@ -37,6 +38,8 @@ const PARTIAL = /\.partial([.-]|$)|\.sb-[0-9a-f]+-/;
 const DAY = 24 * 3600 * 1000;
 /** Recently touched: maybe in use right now. */
 const RECENT = 2 * DAY;
+/** A cloud copy this new may be uploading or playing. */
+const COPY_RECENT = 6 * 3600 * 1000;
 /** A Drive download (its original in the cloud) not read by an export for this long goes. */
 const DOWNLOADED = 3 * DAY;
 /** The cache's size past which old projects' previews go: the one local-data budget (sub-1 GB). */
@@ -334,6 +337,35 @@ export function cleanCache(
     }
   }
   if (dropped) writeLocalOriginals(cache, known);
+  // What Edit made or fetched that no project uses any more (Oct 29, the user:
+  // "things shouldn't take up storage on the local devices… everything on the
+  // cloud!"): smoothed shots a project moved to the cloud or made again
+  // (404 of them, 2.85 GB on this Mac), YouTube videos downloaded for a script
+  // (the registry has the original), and the team library's sounds (Drive has
+  // them; a cloud project's sound is its cloud copy). Each comes back when
+  // it's asked for again.
+  if (inUse !== null) {
+    // A script's original can be one of these when it couldn't be hard-linked (a media drive on another disk).
+    const scripts = writerStore.originals(writerStore.dataDir(app.store.home));
+    const generated = (relative: string) => /(?:^|\/)smooth\/[^/]+$/.test(relative) || /^(?:[A-Za-z0-9_-]+\/)?drive\/youtube\/[A-Za-z0-9_-]{6,}\/[^/]+$/.test(relative);
+    const places: [string, (relative: string) => boolean][] = [...[...roots].map((root): [string, (relative: string) => boolean] => [root, generated]), [join(app.store.home, "library"), () => true]];
+    for (const [root, wanted] of places) {
+      const stack = [root];
+      for (let at = stack.pop(); at !== undefined; at = stack.pop()) {
+        for (const name of safeList(at)) {
+          const path = join(at, name);
+          let stat: fs.Stats;
+          try {
+            stat = fs.statSync(path);
+          } catch {
+            continue;
+          }
+          if (stat.isDirectory()) stack.push(path);
+          else if (wanted(path.slice(root.length + 1)) && !inUse.paths.has(path) && !scripts.has(path) && !uploadingNow(path) && now - stat.mtimeMs >= (PARTIAL.test(name) ? DAY : RECENT)) remove(path);
+        }
+      }
+    }
+  }
   // Chunks an export left when it stopped part-way (the engine's chunks.rs):
   // a run again soon carries on from them; after a few days they go.
   const chunksDir = join(cache, "export-chunks");
@@ -404,10 +436,18 @@ export function cleanCache(
     }
   }
   // Cloud cache past the one budget: copies of R2 objects (proxies, sound,
-  // originals, excerpts) go least-recently-touched first. Recent files stay
-  // (one may be uploading or playing); the canonical copy is on R2, and a
-  // later need fetches or streams it again.
+  // originals, excerpts) go least-recently-touched first. Files from the last
+  // few hours stay (one may be uploading or playing), and while an export
+  // runs (it mixes from the sound copies) the last two days'; the canonical
+  // copy is on R2, and a later need fetches or streams it again.
   {
+    let exporting = true;
+    try {
+      exporting = app.exports.running();
+    } catch {
+      // No exports here to ask (tests): kept as if one ran.
+    }
+    const fresh = exporting ? RECENT : COPY_RECENT;
     let over = size(cache) - (dryRun ? report.bytes : 0) - limits.cacheBytes;
     if (over > 0) {
       const candidates: { path: string; at: number; bytes: number }[] = [];
@@ -417,7 +457,7 @@ export function cleanCache(
           try {
             const stat = fs.statSync(path);
             if (stat.isDirectory()) collect(path);
-            else if (now - stat.mtimeMs >= RECENT) candidates.push({ path, at: stat.mtimeMs, bytes: stat.size });
+            else if (now - stat.mtimeMs >= fresh) candidates.push({ path, at: stat.mtimeMs, bytes: stat.size });
           } catch { /* gone */ }
         }
       };

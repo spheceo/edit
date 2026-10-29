@@ -7,7 +7,7 @@
 // script's folder is the producer's own: never touched.
 //
 // Restore (the banner's button, or `restore` set on Repack's page) brings the
-// footage back from its links (YouTube and Drive) and rebuilds the preview;
+// footage back from its links (YouTube and Drive; storage.ts) and rebuilds the preview;
 // the transcripts were kept, so nothing is heard again. What can't come back
 // (a file from disk) is listed as missing.
 
@@ -18,15 +18,12 @@ import type { Archive } from "@edit/types/writer";
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
-import { isFile, join } from "../paths.ts";
+import { join } from "../paths.ts";
 import * as cloud from "./cloud.ts";
-import { fetchVideo } from "./imports.ts";
 import { importing } from "./imports.ts";
 import * as jobs from "./jobs.ts";
-import * as media from "./media.ts";
-import { partSources, partTargets } from "./parts.ts";
+import * as storage from "./storage.ts";
 import * as store from "./store.ts";
-import { recordings } from "./transcription.ts";
 
 type State = { archived?: { at?: number; by?: string; freedBytes?: number } | null; restore?: unknown };
 type Local = { purgedFor?: number | null; restoredFor?: number | null; restoring?: boolean; missing?: string[] };
@@ -76,26 +73,6 @@ export function state(data: string, id: string): Archive | null {
   return { at, by: found?.archived?.by ?? "", freedBytes: found?.archived?.freedBytes ?? 0, restoring: local.restoring === true || (jobs.running(id) && typeof found?.restore === "object" && found.restore !== null), missing: local.missing ?? [] };
 }
 
-/** What counts as footage in a script's folder: video and sound, the big files an archive frees. */
-export const isFootage = (name: string): boolean => ["mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "m4a", "mp3", "aac", "wav", "flac", "ogg", "opus", "part"].includes((name.split(".").pop() ?? "").toLowerCase());
-
-/** Deletes the footage in a script's folder, keeping everything else: the bytes freed. */
-export function purge(dir: string): number {
-  let freed = 0;
-  const stack = [dir];
-  for (let at = stack.pop(); at !== undefined; at = stack.pop()) {
-    for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
-      const path = join(at, entry.name);
-      if (entry.isDirectory()) stack.push(path);
-      else if (isFootage(entry.name)) {
-        freed += fs.statSync(path).size;
-        fs.rmSync(path, { force: true });
-      }
-    }
-  }
-  return freed;
-}
-
 /** Acts on archives and restores heard from the cloud: frees an archived script's footage here, restores one asked back. */
 export function react(app: App, data: string): void {
   for (const [id, found] of Object.entries(read<State>(statesPath(data)))) {
@@ -112,7 +89,7 @@ export function react(app: App, data: string): void {
       continue;
     }
     if (at !== null && local.purgedFor !== at) {
-      const freed = purge(store.scriptDir(data, id));
+      const freed = storage.purge(store.scriptDir(data, id));
       diag.info("writer", `${jobs.named(id, "")}: archived by ${found.archived?.by ?? "Repack"}; its footage deleted here (${Math.round(freed / 1e6)} MB)`);
       changeLocal(data, id, (one) => void (one.purgedFor = at));
     }
@@ -131,7 +108,7 @@ export function startRestore(app: App, data: string, id: string): import("@edit/
 async function restore(app: App, data: string, id: string, job: jobs.Job): Promise<jobs.Outcome> {
   let missing: string[];
   try {
-    missing = await restoreFootage(app, data, id, job);
+    missing = await storage.bringBack(app, data, id, job);
   } finally {
     changeLocal(data, id, (local) => void (local.restoring = false));
   }
@@ -141,57 +118,4 @@ async function restore(app: App, data: string, id: string, job: jobs.Job): Promi
   await cloud.convex("mutation", "writer:clearRestore", { scriptId: id }).catch(() => undefined);
   cloud.syncSoon();
   return [missing.length === 0 ? "The footage is back, and the transcripts as they were: nothing was heard again." : `The footage is back, but not ${missing.join(", ")}: it came from this Mac's disk, and the archive deleted it.`, 0];
-}
-
-/** Each recording again (from its YouTube or Drive link), then the preview; answers what couldn't come back. */
-export async function restoreFootage(app: App, data: string, id: string, job?: jobs.Job): Promise<string[]> {
-  const dir = store.scriptDir(data, id);
-  const script = store.read(dir);
-  const all = recordings(dir, script);
-  const sources = partSources(dir, script);
-  const targets = partTargets(dir, script);
-  const joined = (script.parts ?? []).length > 1;
-  const missing: string[] = [];
-  const files: (string | null)[] = [];
-  for (const [index] of all.entries()) {
-    const title = joined ? script.parts![index]!.title : script.title;
-    const target = joined ? (targets[index] ?? join(dir, ".reuse", `restored-${String(index).padStart(2, "0")}.mp4`)) : script.originalPath;
-    if (await media.readable(target)) {
-      files.push(target);
-      continue;
-    }
-    job?.stage(`Bringing back ${title}`);
-    const source = sources[index]?.[0] ?? null;
-    const reused = script.parts?.[index]?.reuse ? (script.reuses ?? []).find((one) => one.url === script.parts![index]!.reuse) : undefined;
-    const link = source?.startsWith("youtube:") ? `https://www.youtube.com/watch?v=${source.slice(8)}` : source?.startsWith("drive:") ? `https://drive.google.com/file/d/${source.slice(6)}/view` : (reused?.footage ?? reused?.url ?? null);
-    if (!target.startsWith(`${dir}/`) || link === null) {
-      missing.push(title);
-      files.push(null);
-      continue;
-    }
-    try {
-      fs.mkdirSync(target.slice(0, target.lastIndexOf("/")), { recursive: true });
-      await fetchVideo(app, link, target, (percent) => job?.stage(`Bringing back ${title} · ${percent}%`), job?.signal);
-      files.push(target);
-    } catch (error) {
-      diag.warn("writer", `${jobs.named(id, script.title)}: ${title} can't come back: ${diag.messageOf(error)}`);
-      missing.push(title);
-      files.push(null);
-    }
-  }
-  // The preview, as the import made it.
-  const proxy = store.proxyPath(dir);
-  if (!isFile(proxy) && files.every((file) => file !== null)) {
-    job?.stage("Rebuilding the preview");
-    if (joined) {
-      const parts = await Promise.all(files.map(async (file, index) => ({ path: file!, streams: { ...(await media.streams(file!)), durationMs: script.parts![index]!.durationMs } })));
-      await media.join(parts, proxy, (percent) => job?.stage(`Rebuilding the preview · ${percent}%`), job?.signal);
-    } else if (files[0]) {
-      const found = await media.streams(files[0]);
-      if (found.video) await media.encodeProxy(files[0], proxy, script.durationMs, (percent) => job?.stage(`Rebuilding the preview · ${percent}%`), job?.signal);
-      else await media.join([{ path: files[0], streams: { ...found, durationMs: script.durationMs } }], proxy, (percent) => job?.stage(`Rebuilding the preview · ${percent}%`), job?.signal);
-    }
-  }
-  for (const name of ["proxy.mp4"]) cloud.forgetPurged(data, id, name);
-  return missing;
 }

@@ -78,6 +78,13 @@ function kept(path: string): string[] {
   }
 }
 
+/** Names listed already for this case (its script's), kept for `project` as listed from its sources as they are now, so they aren't asked for again. */
+export function keep(app: App, project: Project, names: string[]): void {
+  const path = file(app, project);
+  fs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+  writeAtomic(path, JSON.stringify({ hash: digest(project.name, sources(app, project)), names }, null, 1));
+}
+
 const asking = new Map<string, Promise<string[]>>();
 
 /**

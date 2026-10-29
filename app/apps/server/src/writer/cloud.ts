@@ -19,6 +19,7 @@ import type { Script } from "@edit/types/writer";
 
 import * as diag from "../diag.ts";
 import * as archive from "./archive.ts";
+import * as storage from "./storage.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join, parent } from "../paths.ts";
 import * as machine from "../machine.ts";
@@ -327,25 +328,29 @@ export async function head(key: string): Promise<number | null> {
 export const getBytes = (key: string): Promise<Uint8Array | null> => fetchBytes(key);
 
 /**
- * The script's preview on this Mac, brought down from the cloud first when
- * it was cleared from here or made on another Mac.
+ * A script's file (by its path in the folder) on this Mac, brought down from
+ * the cloud first when it was cleared from here or made on another Mac.
  */
-export async function fetchPreview(data: string, id: string): Promise<string> {
-  const path = store.proxyPath(store.scriptDir(data, id));
+export async function fetchFile(data: string, id: string, name: string): Promise<string> {
+  const path = inside(store.scriptDir(data, id), name);
+  if (path === null) throw new Error(`${name} isn't a script's file.`);
   if (isFile(path)) return path;
-  const kept = fileKey(data, id, "proxy.mp4");
-  if (kept === null) throw new Error("This script's preview isn't on this Mac or in the cloud.");
-  await download(id, "proxy.mp4", kept.key, kept.size, path);
+  const kept = fileKey(data, id, name);
+  if (kept === null || kept.key === "") throw new Error(`This script's ${name} isn't on this Mac or in the cloud.`);
+  await download(id, name, kept.key, kept.size, path);
   // Its time as kept here now, so the next push sees it unchanged.
   const ledger = loadLedger(data);
-  const known = ledger.scripts[id]?.files["proxy.mp4"];
+  const known = ledger.scripts[id]?.files[name];
   if (known !== undefined) {
     known.mtime = mtime(path);
     writeJson(ledgerPath(data), ledger);
   }
-  forgetPurged(data, id, "proxy.mp4");
+  forgetPurged(data, id, name);
   return path;
 }
+
+/** The script's preview on this Mac, brought down from the cloud first when it was cleared from here or made on another Mac. */
+export const fetchPreview = (data: string, id: string): Promise<string> => fetchFile(data, id, "proxy.mp4");
 
 /**
  * A script's preview that's only in the cloud (another Mac made it), played
@@ -618,8 +623,6 @@ export function withCreator(body: Uint8Array, createdBy: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(value, null, 2));
 }
 
-const isFootage = (name: string): boolean => ["mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "m4a", "mp3", "aac", "wav", "flac", "ogg", "opus", "part"].includes((name.split(".").pop() ?? "").toLowerCase());
-
 /** Brings one script from the cloud when it's newer than this Mac's. */
 async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown>): Promise<void> {
   const id = String(row.scriptId ?? "");
@@ -658,13 +661,13 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
     const smallJson = name.endsWith(".json") && size < 2_000_000;
     const present = !smallJson && isFile(path) && fs.statSync(path).size === size;
     // Footage isn't downloaded: the page plays it from the cloud (`stream`), so a first sync brings the scripts at once.
-    if (isFootage(name) && !present) {
+    if (storage.isFootage(name) && !present) {
       if (isFile(path)) fs.rmSync(path);
       files[name] = { key, size, mtime: known?.files[name]?.mtime ?? 0 };
       left.push(name);
       continue;
     }
-    if (row.archived != null && isFootage(name)) continue;
+    if (row.archived != null && storage.isFootage(name)) continue;
     if (!present) await download(id, name, key, size, path);
     files[name] = { key, size, mtime: mtime(path) };
   }

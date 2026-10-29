@@ -265,7 +265,7 @@ export function routes(router: Router<App>): void {
       answer(() => startJob(context.app, id(context), { kind: "transcribe" }, (job) => imports.complete(context.app, dataOf(context.app), id(context), job))),
     )
     .post("/api/writer/scripts/{id}/speakers/retry", (context) =>
-      answer(() => startJob(context.app, id(context), { kind: "speakers" }, (job) => imports.retrySpeakers(dataOf(context.app), id(context), job))),
+      answer(() => startJob(context.app, id(context), { kind: "speakers" }, (job) => imports.retrySpeakers(context.app, dataOf(context.app), id(context), job))),
     )
     // A compilation's reused cases' videos, brought in for its opening's intro clips.
     .post("/api/writer/scripts/{id}/reuses", async (context) => {

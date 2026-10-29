@@ -37,7 +37,7 @@ OPEN_MAPS = "0"                    # "1" would let the maps answer with no token
 STAMP_CREATOR = "1"                # a project's first commit records who started it (`actor`, from the token); Repack's edit:commitProject takes it since 906b67a (Oct 23)
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
-DAILY_BYTES_PER_IP = "96000000"    # ~6.7 hours, a third of the day (the audit, Oct 23: one account could spend the team's whole day)
+DAILY_BYTES_PER_IP = "288000000"   # ~20 hours, the whole shared day (Oct 29: a person's ~6.7 h cap left an import's narration untranscribed; was a third of the day after the Oct 23 audit)
 DAILY_BYTES_TOTAL = "288000000"    # ~20 hours (~16.6k credits a day at most; lowered Oct 22 from ~90: Oct 19–21 used ~195k credits, 13.5 hours of footage costing 62 hours of Scribe)
 DAILY_REHEAR_BYTES = "72000000"   # ~5 hours of the day for hearing finished footage again with the case's names (Oct 22: re-hears spent the whole day by 00:20 UTC and a new import went unheard)
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request

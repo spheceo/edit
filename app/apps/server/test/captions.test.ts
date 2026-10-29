@@ -114,9 +114,13 @@ function glimpse(frame: number, faces: Face[], speaker: Face | null): Glimpse {
 test("a_caption_sits_under_a_clear_speaker_and_never_on_a_face", () => {
   const frame: [number, number] = [1920.0, 1080.0];
   const style = captionStyle(1920, 1080);
-  // The speaker mid-frame, steady: under their chin, still, off their face.
+  // The speaker mid-frame, steady, someone else in shot: under their chin, still, off their face.
   const face: Face = [-100.0, -300.0, 100.0, -60.0];
-  const seen = Array.from({ length: 6 }, (_, i) => glimpse(i * 15.0, [face], face));
+  const beside: Face = [600.0, -300.0, 760.0, -80.0];
+  // Alone on screen: bottom middle, never moving (the user, Oct 29).
+  const alone = Array.from({ length: 6 }, (_, i) => glimpse(i * 15.0, [face], face));
+  expect(layOut("told me that,", style, frame, alone, true)).toMatchObject({ under_face: false, keys: null, x: 0.0, y: f32(CAPTION_BOTTOM * 1080.0) });
+  const seen = Array.from({ length: 6 }, (_, i) => glimpse(i * 15.0, [face, beside], face));
   let laid = layOut("told me that,", style, frame, seen, true);
   expect(laid.under_face).toBe(true);
   // A face that hardly moves: no jitter.
@@ -148,7 +152,7 @@ test("a_moving_speaker_is_followed_smoothly", () => {
   const seen = Array.from({ length: 8 }, (_, i) => {
     const x = f32(-400.0 + 60.0 * i + (i % 2 === 0 ? 8.0 : -8.0));
     const face: Face = [x, -300.0, f32(x + 180.0), -80.0];
-    return glimpse(i * 15.0, [face], face);
+    return glimpse(i * 15.0, [face, [-900.0, -300.0, -760.0, -80.0]], face);
   });
   const laid = layOut("saying", style, frame, seen, true);
   expect(laid.keys).not.toBeNull();

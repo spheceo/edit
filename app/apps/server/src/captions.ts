@@ -434,7 +434,12 @@ export function layOut(
   const k = frame[1] / 1080.0;
   const band = -frame[1] / 2.0 + frame[1] * 0.11;
   const followed = glimpses.filter((g) => g.speaker !== null);
-  if (speakerClear && followed.length > 0) {
+  // Under the speaker only to say who's talking among several people: with
+  // one person on screen it stays bottom middle and never moves (the user,
+  // Oct 29, on card 2's teasers: "when we can only see one subject … we just
+  // have them in the bottom middle. We don't change their position").
+  const others = followed.some((g) => g.faces.some((face) => faces.overlap(face, g.speaker!) <= 0.0));
+  if (speakerClear && followed.length > 0 && others) {
     widths: for (const share of WIDTHS) {
       const width = round(f32(f32(frame[0]) * share));
       const size = captionSize(text, { ...style, max_width: width });

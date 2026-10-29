@@ -19,6 +19,7 @@ import * as can from "./can.ts";
 import * as casefiles from "./casefiles.ts";
 import { fix as fixSpills } from "./spills.ts";
 import * as drive from "./drive.ts";
+import * as handoff from "./handoff.ts";
 import * as jobs from "./jobs.ts";
 import * as media from "./media.ts";
 import { caseNames } from "./names.ts";
@@ -350,6 +351,8 @@ async function run(app: App, dir: string, script: Script): Promise<Script> {
   try {
     const step = await pipeline(app, dir, script);
     const seconds = `${Math.round((Date.now() - began) / 1000)} s`;
+    // Its recordings and words, shared with Edit mode in the background.
+    if (step === "done") handoff.shareSoon(store.dataDir(app.store.home), script.id);
     if (step === "done") diag.info("writer", `${jobs.named(script.id, script.title)}: imported in ${seconds}: ${clock(script.durationMs)} of footage, ${script.words.length} words, ${new Set(script.words.map((word) => word.speaker).filter(Boolean)).size} voices`);
     else diag.warn("writer", `${jobs.named(script.id, script.title)}: paused after ${seconds} for a choice: ${script.decision?.summary ?? ""}`);
     return script;

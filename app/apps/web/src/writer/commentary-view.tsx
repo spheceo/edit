@@ -87,8 +87,8 @@ function previewCut(draft: Draft | null, sources: Source[], srcOf: Map<string, s
     const youtube = youtubeId(cite.link) ?? youtubeId(source?.origin);
     items.push({ id, kind: "cut-in", startMs: 0, endMs: Math.min(CARD_MS, Math.max(1000, cite.endMs - cite.startMs)) });
     cards.set(id, {
-      title: `${cite.source} · ${cite.video || source?.title} · ${youtube && coming ? "downloading" : youtube ? "couldn't be downloaded" : "not in Writer"}`,
-      text: cite.quote.trim() ? `“${cite.quote.trim()}”` : "No speech. Import the recording into Writer to see it here.",
+      title: `${cite.source} · ${cite.video || source?.title} · ${youtube && coming ? "downloading" : youtube ? "couldn't be downloaded" : "not in Edit"}`,
+      text: cite.quote.trim() ? `“${cite.quote.trim()}”` : "No speech. Import the recording as a script to see it here.",
     });
   };
   draft.open.forEach((cite, index) => clip(cite, `o${index}`));
@@ -240,7 +240,7 @@ export function CommentaryEditor({
     const title = cite.video || source?.title || cite.source;
     if (item?.src) return { id, title, quote: cite.quote.trim(), src: item.src, startMs: item.startMs, endMs: item.endMs, atMs: cite.startMs, toMs: cite.endMs };
     const youtube = youtubeId(cite.link) ?? youtubeId(source?.origin);
-    const waiting = youtube ? ((footage?.pending ?? 0) > 0 ? "Downloading this stretch…" : "This stretch couldn't be downloaded.") : "This recording isn't in Writer.";
+    const waiting = youtube ? ((footage?.pending ?? 0) > 0 ? "Downloading this stretch…" : "This stretch couldn't be downloaded.") : "This recording isn't in Edit.";
     return { id, title, quote: cite.quote.trim(), startMs: 0, endMs: 0, atMs: cite.startMs, toMs: cite.endMs, waiting };
   };
   const [{ player, playhead }] = useState(() => {
@@ -436,7 +436,7 @@ export function CommentaryEditor({
       const done = window.document.execCommand("copy");
       area.remove();
       if (!done) {
-        setError("This browser would not copy the script. Open Writer on the Mac, or select the text by hand.");
+        setError("This browser would not copy the script. Open Edit on the Mac, or select the text by hand.");
         return;
       }
     }
@@ -867,7 +867,7 @@ const commentaryTotal = (draft: Draft) => {
 
 function origin(source: Source) {
   if (source.origin === "pasted") return "pasted";
-  if (source.origin.startsWith("writer:")) return "from Writer";
+  if (source.origin.startsWith("writer:")) return "from a script";
   if (source.origin.startsWith("http")) {
     try {
       return new URL(source.origin).host.replace(/^www\./, "");
@@ -1321,7 +1321,7 @@ function AddSourceDialog({
                 ))}
               </div>
             ) : (
-              <p className="hint">No transcribed footage in Writer yet. Import a video as a new script first, then add its transcript here.</p>
+              <p className="hint">No transcribed footage in Script mode yet. Import a video as a new script first, then add its transcript here.</p>
             ))}
           <div className="row role-pick">
             <span className="faint">Use it as</span>

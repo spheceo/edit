@@ -84,7 +84,7 @@ export function SyncDock({ onOpen }: { onOpen: (script: string) => void }) {
     state === "offline"
       ? "Offline: everything is saved on this Mac and syncs when the connection is back."
       : state === "error"
-        ? (cloud?.error ?? "The cloud refused something; Writer keeps trying.")
+        ? (cloud?.error ?? "The cloud refused something; Edit keeps trying.")
         : syncing && !work.some((item) => item.key === "cloud")
           ? `Syncing with the cloud${left}.`
           : null;

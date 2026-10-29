@@ -23,7 +23,8 @@ import { importError } from "./import-error";
 import { pastedTrelloCard } from "./import-input";
 import { AccountMenu } from "./account";
 import { Avatar } from "./avatar";
-import mark from "./assets/writer-mark.svg";
+import { Logo, Tile } from "../components/Logo";
+import { navigate } from "../lib/route";
 import { CAN, useGrants } from "./can";
 import { useReviewCounts } from "./review";
 import type { Brief, BriefLink, BriefRole, Choice, ClaudeStatus, ImportProgress, Kind, Script, Summary, TrelloCard, TrelloCards, TrelloList, VideoCheck } from "./types";
@@ -84,7 +85,7 @@ function scriptStatus(script: Summary, progress: ImportProgress[]): { tone: Tone
   if (script.status === "needs_choice") return { tone: "stale", label: "Needs your choice", title: script.decision?.summary };
   if (script.status === "error") return { tone: "error", label: "Import failed", title: script.error ?? undefined };
   // The cloud refused it: the team can't open it until it's up (Edit's Home, Oct 29).
-  if (script.cloudRefused) return { tone: "error", label: "Not in the cloud", title: `Writer keeps trying to save it to the cloud: ${script.cloudRefused}` };
+  if (script.cloudRefused) return { tone: "error", label: "Not in the cloud", title: `Edit keeps trying to save it to the cloud: ${script.cloudRefused}` };
   const made =
     script.sourceKind === "commentary"
       ? script.draftWords
@@ -225,10 +226,14 @@ export function Library({
   return (
     <div className="library">
       <header className="app-header" data-tauri-drag-region>
-        <span className="brand" data-tauri-drag-region>
-          <img src={mark} alt="" width={22} height={22} />
-          Writer
-        </span>
+        {/* Edit's: Script mode is one of its two modes, the edits the other. */}
+        <button type="button" className="brand" title="Edits" onClick={() => navigate("/")}>
+          <Logo size={22} />
+        </button>
+        <div className="seg" role="tablist" aria-label="Mode">
+          <button type="button" role="tab" aria-selected={false} onClick={() => navigate("/")}>Edits</button>
+          <button type="button" role="tab" aria-selected className="on">Scripts</button>
+        </div>
         {!empty && (
           <label className="list-search">
             <Icon name="search" size={14} />
@@ -296,9 +301,9 @@ export function Library({
       {loadError && <div className="notice">{loadError}</div>}
       {empty ? (
         <div className="welcome">
-          <img src={mark} alt="" width={64} height={64} />
+          <Tile size={64} />
           <h2>Write your first script</h2>
-          <p>Bring in footage or sources. Writer transcribes them, then Claude can write alongside you.</p>
+          <p>Bring in footage or sources. Edit transcribes them, then Claude can write alongside you.</p>
           <button type="button" className="primary" onClick={() => setCreating(true)}>
             <Icon name="plus" size={15} />
             New script
@@ -701,7 +706,7 @@ function RecoverDialog({
 const SOURCES: Record<Source, { placeholder: string; hint: string }> = {
   video: {
     placeholder: "Paste a YouTube, Google Drive or Trello card link",
-    hint: "Writer downloads it, makes a preview and transcribes it.",
+    hint: "Edit downloads it, makes a preview and transcribes it.",
   },
   commentary: {
     placeholder: "Sources (optional): the brief first, then evidence. One Google Doc, Drive or web link per line.",
@@ -734,11 +739,11 @@ const isDrive = (url: string) => /drive\.google\.com/.test(url);
 /** What the Video tab will do with what's in it, said in a few words. */
 const videoHint = (value: string, file: string) =>
   file
-    ? "The video stays where it is on this Mac. Writer makes a preview and transcribes it."
+    ? "The video stays where it is on this Mac. Edit makes a preview and transcribes it."
     : isDrive(value)
       ? "A Drive video, or a folder of recordings joined in name order."
       : value.trim()
-        ? "Downloaded on this Mac through Writer's proxy, then transcribed."
+        ? "Downloaded on this Mac through Edit's proxy, then transcribed."
         : SOURCES.video.hint;
 
 /** A Google Doc link: the script of a case the channel already made, always a reused case. */
@@ -1124,7 +1129,7 @@ function ImportDialog({
             { value: "commentary" as Source, label: <><Icon name="doc" size={14} />Commentary</> },
           ].filter((option) => sources.includes(option.value))}
         />
-        {!sources.length && <p className="bad">Your account can't start scripts in Writer yet. Ask an admin at accounts.spheceo.com.</p>}
+        {!sources.length && <p className="bad">Your account can't start scripts yet. Ask an admin at accounts.spheceo.com.</p>}
         <div className="trello-bar">
           {trello ? (
             <>

@@ -268,7 +268,7 @@ export function ReviewDialog({
   // The script as it is now as the link's only version, v1: the earlier versions go, their notes move onto v1.
   const makeFirst = async () => {
     if (!link) return;
-    if (!window.confirm(`Make the script as it is now v1 on this link? v1 to v${link.version} are removed from the link and every note is kept on v1. Writer's own version history is untouched.`)) return;
+    if (!window.confirm(`Make the script as it is now v1 on this link? v1 to v${link.version} are removed from the link and every note is kept on v1. the script's own version history is untouched.`)) return;
     setSharing(true);
     setProblem(null);
     try {
@@ -289,7 +289,7 @@ export function ReviewDialog({
   const approve = async (yes: boolean) => {
     if (!link) return;
     const ask = yes
-      ? `Approve v${link.version}? The review link stops taking notes and the other versions' files are deleted. Every note from every round is kept, and Writer's own version history is untouched.`
+      ? `Approve v${link.version}? The review link stops taking notes and the other versions' files are deleted. Every note from every round is kept, and the script's own version history is untouched.`
       : `Take back the approval of v${approved?.version}? The link takes notes again; files already deleted stay deleted.`;
     if (!window.confirm(ask)) return;
     setApproving(true);

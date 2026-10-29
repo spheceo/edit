@@ -12,12 +12,12 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     body = text ? JSON.parse(text) : undefined;
   } catch {
     throw new Error(
-      `Writer didn't answer (${response.status}). It may be restarting; try again in a moment.`,
+      `Edit didn't answer (${response.status}). It may be restarting; try again in a moment.`,
     );
   }
   if (!response.ok) {
     const said = (body as { error?: string } | undefined)?.error;
-    throw new Error(said || `Writer didn't answer (${response.status}). Try again in a moment.`);
+    throw new Error(said || `Edit didn't answer (${response.status}). Try again in a moment.`);
   }
   return body as T;
 }
@@ -27,6 +27,10 @@ const json = (body: unknown): RequestInit => ({
   headers: { "content-type": "application/json" },
   body: JSON.stringify(body),
 });
+
+/** The Edit project this script became, if it has one; making one starts the edit from the script (footage, voice-over, layout). */
+export const editProject = (id: string) => http<{ project: string | null }>(`/api/writer/scripts/${id}/edit`);
+export const startEdit = (id: string) => http<{ project: string }>(`/api/writer/handoff/${id}/import`, { method: "POST" });
 
 export const listScripts = () =>
   http<Summary[]>("/api/writer/scripts");

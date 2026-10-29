@@ -259,7 +259,7 @@ export function FeedbackPanel({
       {status && <div className="fb-status">{status}</div>}
       {!feedback ? (
         <div className="empty">
-          <h3 className="fb-teach-title">Teach Writer from these comments</h3>
+          <h3 className="fb-teach-title">Teach the scripts from these comments</h3>
           <p>
             Opus makes an answer key by applying the comments above, then writes a lesson from them in general terms. In each round a fresh
             Opus gets only the script and the lesson, finds the problems itself and fixes them, and is graded against the comments.

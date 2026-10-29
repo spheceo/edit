@@ -1,4 +1,4 @@
-import { ChevronLeft, Cloud, CloudAlert, CloudCheck, CloudOff, CloudSync, CloudUpload, Copy, ExternalLink, Lock, Redo2, Share, Undo2 } from "lucide-react";
+import { ChevronLeft, Cloud, CloudAlert, CloudCheck, CloudOff, CloudSync, CloudUpload, Copy, ExternalLink, FileText, Lock, Redo2, Share, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -24,6 +24,8 @@ export function TopBar({ onShare }: { onShare: () => void }) {
   const showAgent = useEditor((state) => state.showAgent);
   const exportState = useEditor((state) => state.exportState);
   const toggle = useEditor((state) => state.toggle);
+  // Made from a script in Script mode: the same project's other mode.
+  const scriptId = useEditor((state) => state.project?.script?.source)?.match(/^writer:([\w-]+)$/)?.[1];
 
   return (
     <header className="relative flex h-12 shrink-0 items-center gap-2 px-3">
@@ -52,6 +54,11 @@ export function TopBar({ onShare }: { onShare: () => void }) {
 
       <div className="ml-auto flex items-center gap-1.5">
         <UpdateButton />
+        {scriptId && (
+          <Button variant="subtle" onClick={() => navigate(`/scripts/${scriptId}`)} title="This video's script, in Script mode">
+            <FileText size={14} /> Script
+          </Button>
+        )}
         <IconButton label="Toggle agent" active={showAgent} onClick={() => toggle("showAgent")} className="relative">
           <AgentMark size={14} />
           {agentActive && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-agent" />}

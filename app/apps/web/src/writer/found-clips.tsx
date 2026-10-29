@@ -118,7 +118,7 @@ function Clip({ id, clip, video }: { id: string; clip: Found; video?: FoundVideo
       </div>
       {video && (
         <p className="faint found-channel">
-          {[video.channel, video.heard ? "transcribed by Writer" : "", video.source ? `source ${video.source}` : ""].filter(Boolean).join(" · ")}
+          {[video.channel, video.heard ? "transcribed by Edit" : "", video.source ? `source ${video.source}` : ""].filter(Boolean).join(" · ")}
         </p>
       )}
       {clip.quote && <blockquote>"{clip.quote}"</blockquote>}

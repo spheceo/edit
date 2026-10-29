@@ -1,6 +1,7 @@
 import { type CSSProperties, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Asked, ChatLog, Composer, ResetAsk, Said, Working, useChatDraft } from "./agent";
-import { buildStatus, clearChat, completeTranscription, correctWord, getChat, getResearch, getScript, importReuses, message, previewSrc, resetScript, resolveProposals, restoreVersion, retrySpeakers, saveClips, setHeading, startBuild, startRevision, stopJob } from "./api";
+import { buildStatus, clearChat, completeTranscription, correctWord, editProject, getChat, getResearch, getScript, importReuses, message, previewSrc, resetScript, resolveProposals, restoreVersion, retrySpeakers, saveClips, setHeading, startBuild, startEdit, startRevision, stopJob } from "./api";
+import { navigate } from "../lib/route";
 import { breathe, clock, insertAt, isCutIn, keptMs, purposes, splitClip } from "./clips";
 import { Avatar } from "./avatar";
 import { UpdateButton } from "./update";
@@ -557,7 +558,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
       const done = window.document.execCommand("copy");
       area.remove();
       if (!done) {
-        setError("This browser would not copy the script. Open Writer on the Mac, or select the text by hand.");
+        setError("This browser would not copy the script. Open Edit on the Mac, or select the text by hand.");
         return;
       }
     }
@@ -605,6 +606,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
           >
             <Icon name="panel" />
           </button>
+          <EditButton script={script} disabled={busy || !cueCount} onProblem={setError} />
           <ReviewButton script={script} open={openNotes} approved={review.approved} onClick={() => setReviewOpen(true)} />
           <Menu
             label="More"
@@ -966,5 +968,36 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
         onUseComments={cueCount ? (text) => setNote(`Work through these comments from the Google Doc:\n${text}`) : undefined}
       />
     </div>
+  );
+}
+
+/**
+ * The script's Edit project, the same project's other mode: opened when there
+ * is one, else made from the script (its footage, narration as voice-over,
+ * the cut laid out) and opened.
+ */
+function EditButton({ script, disabled, onProblem }: { script: Script; disabled: boolean; onProblem: (problem: string) => void }) {
+  const [project, setProject] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void editProject(script.id).then((found) => live && setProject(found.project), () => {});
+    return () => void (live = false);
+  }, [script.id]);
+  const go = async () => {
+    if (project !== null) return navigate(`/p/${project}`);
+    setStarting(true);
+    try {
+      navigate(`/p/${(await startEdit(script.id)).project}`);
+    } catch (cause) {
+      onProblem(message(cause));
+    } finally {
+      setStarting(false);
+    }
+  };
+  return (
+    <button type="button" className={project === null ? "ghost" : "primary"} disabled={(disabled && project === null) || starting} title={project === null ? "Start the edit from this script: its footage, voice-over and cut" : "This script's edit"} onClick={() => void go()}>
+      {starting ? "Starting the edit…" : project === null ? "Start the edit" : "Open the edit"}
+    </button>
   );
 }

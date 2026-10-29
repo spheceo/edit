@@ -20,6 +20,7 @@ import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import { ApiError } from "./http/errors.ts";
 import * as kinds from "./kinds.ts";
+import * as writerStore from "./writer/store.ts";
 import type { Router } from "./http/router.ts";
 import type { ScriptBlock, Style } from "./model.ts";
 import * as script from "./script.ts";
@@ -211,6 +212,12 @@ function imports(home: string): Record<string, string> {
   }
 }
 
+/** The Edit project made from a script here, while it's still a project: the same project's other mode. */
+export function projectFor(app: App, id: string): string | null {
+  const project = imports(app.store.home)[id];
+  return project !== undefined && app.store.get(project) !== null ? project : null;
+}
+
 /** Writer's scripts in the cloud, newest first (deleted ones left out), each with the Edit project made from it here. */
 export async function list(
   app: App,
@@ -252,8 +259,15 @@ export async function list(
     .sort((a, b) => Number(b.handoff !== null) - Number(a.handoff !== null) || (b.handoff?.at ?? b.updatedAt) - (a.handoff?.at ?? a.updatedAt));
 }
 
-/** A Writer script's body, read from R2 (the relay presigns it). */
-export async function fetchScript(id: string): Promise<WriterScript> {
+/** A script's body: Script mode's own on this Mac (the same project in its other mode), else read from R2 (the relay presigns it). */
+export async function fetchScript(id: string, home: string | null = null): Promise<WriterScript> {
+  if (home !== null && writerStore.idOk(id)) {
+    try {
+      return writerStore.read(writerStore.scriptDir(writerStore.dataDir(home), id)) as unknown as WriterScript;
+    } catch {
+      // Not on this Mac: the cloud's.
+    }
+  }
   const row = (await cloud.query("writer:getScript", { scriptId: id })) as Record<string, unknown> | null;
   if (row === null || typeof row.bodyKey !== "string") throw new Error("no such script in Writer's cloud");
   const url = await cloud.presign(row.bodyKey, "GET");
@@ -264,7 +278,7 @@ export async function fetchScript(id: string): Promise<WriterScript> {
 
 /** Makes an Edit project from a Writer script and starts its import (footage, transcripts, voice-over, layout). */
 export async function importScript(app: App, id: string): Promise<{ project: string }> {
-  const given = await fetchScript(id);
+  const given = await fetchScript(id, app.store.home);
   const style = scriptStyle(given);
   if (!kinds.mayEdit(style)) throw new Error(kinds.cantMake(`edit.${style}`));
   const parsed = toParsed(await resolveWriterCases(given));
@@ -293,9 +307,9 @@ export function routes(router: Router<App>): void {
       throw new ApiError(400, diag.messageOf(error));
     }
   });
-  router.get("/api/writer/handoff/{id}", async ({ params }) => {
+  router.get("/api/writer/handoff/{id}", async ({ app, params }) => {
     try {
-      const given = await fetchScript(params.id ?? "");
+      const given = await fetchScript(params.id ?? "", app.store.home);
       return sorted({ ...script.summary(toParsed(await resolveWriterCases(given))), title: given.title, style: scriptStyle(given) });
     } catch (error) {
       throw new ApiError(400, diag.messageOf(error));

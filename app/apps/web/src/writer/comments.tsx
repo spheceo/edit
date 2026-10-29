@@ -130,9 +130,9 @@ export function stateOf(note: ReviewNote, replies: ReviewNote[], now = Date.now(
   const working = note.attempted && (note.attemptAt ?? 0) > now - CLAIM_MS && !(note.notFixedAt && note.notFixedAt > (note.attemptAt ?? 0));
   const last = replies[replies.length - 1];
   if (!working && last?.fromApp && note.intent !== "question" && note.intent !== "fyi") return { kind: "left", label: `Left: ${last.text}` };
-  if (working) return { kind: "working", label: "Writer is working on it" };
-  if (note.notFixedAt) return { kind: "notFixed", label: note.notFixedVersion ? `Not fixed in v${note.notFixedVersion}: back with Writer` : "Not fixed: back with Writer" };
-  if (note.intent === "question") return { kind: "answer", label: "Writer will answer" };
+  if (working) return { kind: "working", label: "Edit is working on it" };
+  if (note.notFixedAt) return { kind: "notFixed", label: note.notFixedVersion ? `Not fixed in v${note.notFixedVersion}: back with Edit` : "Not fixed: back with Edit" };
+  if (note.intent === "question") return { kind: "answer", label: "Edit will answer" };
   if (note.intent === "fyi") return { kind: "answer", label: "No fix asked" };
   return null;
 }
@@ -207,7 +207,7 @@ export function CommentsPanel({
   }, [roots]);
   const unread = (note: ReviewNote) => !note.fromApp && !read.has(note.id);
   const threadUnread = (note: ReviewNote) => unread(note) || (repliesOf.get(note.id) ?? []).some(unread);
-  const people = [...new Set(roots.map((note) => (note.fromApp ? "Writer" : note.author)))].sort();
+  const people = [...new Set(roots.map((note) => (note.fromApp ? "Edit" : note.author)))].sort();
   const counts = {
     all: roots.length,
     open: roots.filter((note) => note.status !== "done").length,
@@ -227,7 +227,7 @@ export function CommentsPanel({
               ? threadUnread(note)
               : filter === "mine"
                 ? note.fromApp
-                : (note.fromApp ? "Writer" : note.author) === filter.slice("person:".length),
+                : (note.fromApp ? "Edit" : note.author) === filter.slice("person:".length),
     )
     .sort((a, b) =>
       sort === "newest"
@@ -240,8 +240,8 @@ export function CommentsPanel({
     { value: "open", label: "Open", hint: String(counts.open) },
     { value: "done", label: "Done", hint: String(counts.done) },
     { value: "unread", label: "Unread", hint: String(counts.unread) },
-    { value: "mine", label: "Writer's", hint: String(counts.mine) },
-    ...people.map((person) => ({ value: `person:${person}`, label: person, hint: String(roots.filter((note) => (note.fromApp ? "Writer" : note.author) === person).length) })),
+    { value: "mine", label: "Edit's", hint: String(counts.mine) },
+    ...people.map((person) => ({ value: `person:${person}`, label: person, hint: String(roots.filter((note) => (note.fromApp ? "Edit" : note.author) === person).length) })),
     ...(counts.unread > 0 ? [{ value: "read", label: "Mark all as read" }] : []),
   ];
 
@@ -361,7 +361,7 @@ function Card({
   const [replying, setReplying] = useState<"reply" | "notFixed" | false>(false);
   const checkable = canWrite && note.status === "done" && !note.confirmed && note.outcome !== "rejected";
   const state = stateOf(note, replies);
-  const author = note.fromApp ? "Writer" : note.author;
+  const author = note.fromApp ? "Edit" : note.author;
   const menu: MenuItem[] = [
     ...(note.anchor?.blockId ? [{ label: note.status === "done" && note.doneInVersion ? `Show the words (fixed in v${note.doneInVersion})` : "Show the words", icon: "search", onSelect: onOpen }] : []),
     ...(checkable
@@ -439,7 +439,7 @@ function Card({
           {replies.map((reply) => (
             <li key={reply.id}>
               <span className="cm-reply-head">
-                <b>{reply.fromApp && reply.author === "Writer" ? "Writer" : reply.author}</b>
+                <b>{reply.fromApp && (reply.author === "Writer" || reply.author === "Edit") ? "Edit" : reply.author}</b>
                 <span className="cm-ago">{ago(reply.createdAt)}</span>
                 {unread(reply) && <i className="cm-unread" aria-label="Unread" />}
               </span>
@@ -502,7 +502,7 @@ function ReplyForm({ back, onCancel, onSend }: { back?: boolean; onCancel: () =>
       <div className="cm-actions">
         <button type="button" className="ghost sm" onClick={onCancel}>Cancel</button>
         <button type="button" className={back ? "danger-soft sm" : "primary sm"} disabled={(!text.trim() && !back) || sending} onClick={() => void send()}>
-          {sending ? "Sending…" : back ? "Send back to Writer" : "Reply"}
+          {sending ? "Sending…" : back ? "Send back to Edit" : "Reply"}
         </button>
       </div>
     </div>
@@ -630,17 +630,17 @@ function ReadyLine({ scriptId }: { scriptId: string }) {
       ? state?.computer === "on"
         ? `${fix.by} asked for changes. Found a computer; starting…`
         : state?.computer === "none"
-          ? "No fixing computer is chosen for Writer yet: choose one on the accounts dashboard. This waits until then."
+          ? "No fixing computer is chosen for Edit yet: choose one on the accounts dashboard. This waits until then."
           : "No computer is on to make these changes: this waits, and starts when it comes on."
       : running
         ? fix.stale
           ? "The fixing computer stopped answering. Ask again with Ready for changes."
           : (fix.stage ?? (fix.state === "sharing" ? `Sharing v${fix.version + 1}…` : fix.total ? `Fixing comment ${(fix.done ?? 0) + 1} of ${fix.total}…` : "Fixing the comments…"))
         : fix.state === "failed"
-          ? `${fix.error ?? "Writer couldn't make the changes."} Ask again with Ready for changes.`
+          ? `${fix.error ?? "Edit couldn't make the changes."} Ask again with Ready for changes.`
           : fix.newVersion
             ? `v${fix.newVersion} has the changes.`
-            : (fix.stage ?? "Writer went through the comments; nothing needed a new version.");
+            : (fix.stage ?? "Edit went through the comments; nothing needed a new version.");
   const tone = fix.state === "failed" || (running && fix.stale) ? "failed" : fix.state === "done" ? "done" : "working";
   return (
     <div className={`cm-ready ${tone}`}>

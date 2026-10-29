@@ -30,6 +30,10 @@ export function Home() {
   const [cloud, setCloud] = useState<CloudList | null>(null);
   const [statuses, setStatuses] = useState<Record<string, ProjectStatus>>({});
   const [creating, setCreating] = useState(false);
+  const [scriptCount, setScriptCount] = useState<number | null>(null);
+  useEffect(() => {
+    void fetch("/api/writer/scripts").then((answer) => (answer.ok ? answer.json() : null)).then((rows: unknown) => setScriptCount(Array.isArray(rows) ? rows.length : null), () => {});
+  }, []);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>(() => (localStorage.getItem(KIND) === "subtitled" ? "subtitled" : "edits"));
   const [style, setStyle] = useState<Style | null>(null);
@@ -165,6 +169,10 @@ export function Home() {
                     {label} <span className="font-normal text-faint tabular">{total}</span>
                   </button>
                 ))}
+                {/* Script mode: the same projects before they're edits. */}
+                <button onClick={() => navigate("/scripts")} className="flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted transition-colors hover:text-fg">
+                  Scripts {scriptCount !== null && <span className="font-normal text-faint tabular">{scriptCount}</span>}
+                </button>
               </div>
               {cloud?.on && cloud.error && (
                 <span className="text-[12px] text-warning/80" title={cloud.error}>

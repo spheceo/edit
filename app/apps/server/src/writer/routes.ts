@@ -17,6 +17,7 @@ import * as chat from "./chat.ts";
 import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
 import { blocksOf } from "./blocks.ts";
+import * as activity from "./activity.ts";
 import * as brief from "./brief.ts";
 import * as docs from "./docs.ts";
 import * as drive from "./drive.ts";
@@ -24,6 +25,8 @@ import * as edits from "./edits.ts";
 import * as feedback from "./feedback.ts";
 import { lessons } from "./lessons.ts";
 import * as fixing from "./fixing.ts";
+import * as handoff from "./handoff.ts";
+import { projectFor } from "../writer_handoff.ts";
 import * as footage from "./footage.ts";
 import * as imports from "./imports.ts";
 import * as jobs from "./jobs.ts";
@@ -510,6 +513,22 @@ export function routes(router: Router<App>): void {
     })
     .get("/api/writer/progress", () => json(imports.progress()))
     .get("/api/writer/cloud", () => json(cloud.statusNow()))
+    .get("/api/writer/activity", () => json(activity.list()))
+    // The Edit project this script became, if it has one: Edit mode's side of the same project.
+    .get("/api/writer/scripts/{id}/edit", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return { project: projectFor(context.app, id(context)) };
+      }),
+    )
+    // The script's footage and words put where Edit mode finds them.
+    .post("/api/writer/scripts/{id}/edit-share", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return handoff.share(dataOf(context.app), id(context));
+      }),
+    )
+    .get("/api/writer/claude", () => answer(() => activity.claudeStatus()))
     .post("/api/writer/videos/check", async (context) => {
       const given = await body<{ lines?: string[] }>(context);
       return answer(() => imports.checkVideos(context.app, Array.isArray(given.lines) ? given.lines.map(String) : []));

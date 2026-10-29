@@ -32,7 +32,7 @@ function describe(status: CloudStatus | null): { tone: string; label: string; ti
   const when = status.lastSync ? new Date(status.lastSync).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
   switch (status.state) {
     case "off":
-      return { tone: "idle", label: "Cloud off", title: "This copy of Writer has no relay token, so scripts stay on this Mac only." };
+      return { tone: "idle", label: "Cloud off", title: "Sign in to Edit to keep scripts in the team’s cloud; until then they stay on this Mac." };
     case "offline":
       return { tone: "warn", label: "Offline", title: `Saved on this Mac; it syncs when the connection is back.${status.error ? `\n${status.error}` : ""}` };
     case "error":

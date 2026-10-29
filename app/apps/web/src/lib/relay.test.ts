@@ -492,7 +492,7 @@ describe("relay cloud: Google sign-in and the AI Gateway", () => {
 
 describe("relay transcription", () => {
   const env = {
-    ELEVENLABS_API_KEY: "xi-key", MAX_UPLOAD_BYTES: "1000", DAILY_BYTES_PER_IP: "1000", DAILY_BYTES_TOTAL: "1000",
+    ELEVENLABS_MAIN_KEY: "xi-key", MAX_UPLOAD_BYTES: "1000", DAILY_BYTES_PER_IP: "1000", DAILY_BYTES_TOTAL: "1000",
     BURST: { limit: async () => ({ success: true }) },
     TRANSCRIBE_BURST: { limit: async () => ({ success: true }) },
     BUDGET: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response("{}") }) },
@@ -510,6 +510,18 @@ describe("relay transcription", () => {
     expect((await transcribe("", env)).status).toBe(200);
   });
 
+  it("uses main for transcription ahead of the legacy key", async () => {
+    vi.stubGlobal("FixedLengthStream", class extends TransformStream<Uint8Array, Uint8Array> { constructor(_length: number) { super(); } });
+    let key: string | null = null;
+    vi.stubGlobal("fetch", async (_url: unknown, init: RequestInit) => {
+      key = new Headers(init.headers).get("xi-api-key");
+      await new Response(init.body).text();
+      return Response.json({ words: [] });
+    });
+    expect((await transcribe("", { ...env, ELEVENLABS_MAIN_KEY: "main-key" })).status).toBe(200);
+    expect(key).toBe("main-key");
+  });
+
   // The interrogation's "John Ruetten" was heard as "John Rutten" and "John Bruton" without them.
   it("tells Scribe the case's names to listen for, each its own keyterms field", async () => {
     vi.stubGlobal("FixedLengthStream", class extends TransformStream<Uint8Array, Uint8Array> { constructor(_length: number) { super(); } });
@@ -525,5 +537,53 @@ describe("relay transcription", () => {
     expect(sent).toContain("OggS");
     expect((await transcribe("?keyterm=%7Bbad%7D")).status).toBe(400);
     expect((await transcribe(`?keyterm=${"a".repeat(50)}`)).status).toBe(400);
+  });
+});
+
+
+describe("relay ElevenLabs accounts", () => {
+  const house = "gUABw7pXQjhjt0kNFBTF";
+  const extra = "NewVoice1234";
+  const env = {
+    ELEVENLABS_MAIN_KEY: "main-key", ELEVENLABS_VOICES_KEY: "voices-key",
+    ELEVENLABS_VOICES_IDS: ` ${extra}, `,
+    MAX_SPEECH_CHARS: "5000", DAILY_SPEECH_CHARS_PER_IP: "50000", DAILY_SPEECH_CHARS_TOTAL: "150000",
+    SPEECH_BURST: { limit: async () => ({ success: true }) },
+    BUDGET: { idFromName: (name: string) => name, get: () => ({ fetch: async () => Response.json({}) }) },
+  } as unknown as Env;
+  const speak = (voice: string, given = env) => relay.fetch(new Request("https://relay.test/v1/speech", {
+    method: "POST", headers: { authorization: `Bearer ${EDITOR}`, "content-type": "application/json" },
+    body: JSON.stringify({ voice_id: voice, text: "Hello." }),
+  }), given);
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("routes the house voice to main and configured voice IDs to voices", async () => {
+    const keys: string[] = [];
+    vi.stubGlobal("fetch", async (_url: unknown, init: RequestInit) => {
+      keys.push(new Headers(init.headers).get("xi-api-key")!);
+      return new Response("audio");
+    });
+    expect((await speak(house)).status).toBe(200);
+    expect((await speak(extra)).status).toBe(200);
+    expect(keys).toEqual(["main-key", "voices-key"]);
+    expect((await speak(house, { ...env, ELEVENLABS_MAIN_KEY: undefined })).status).toBe(503);
+    expect((await speak(extra, { ...env, ELEVENLABS_VOICES_KEY: undefined })).status).toBe(503);
+    expect(keys).toHaveLength(2);
+  });
+
+  it("lists both accounts with the same routing, pagination and no duplicate IDs", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (url: URL, init: RequestInit) => {
+      const key = new Headers(init.headers).get("xi-api-key")!;
+      calls.push(key);
+      if (key === "main-key") return Response.json({ voices: [{ voice_id: house, name: "House" }, { voice_id: extra, name: "Wrong account" }] });
+      if (!url.searchParams.has("next_page_token")) return Response.json({ voices: [{ voice_id: house, name: "Duplicate house" }], has_more: true, next_page_token: "next" });
+      return Response.json({ voices: [{ voice_id: extra, name: "New" }, { voice_id: extra, name: "Duplicate new" }, { voice_id: "Unconfigured", name: "Other" }] });
+    });
+    const answer = await relay.fetch(new Request("https://relay.test/v1/voices", { headers: { authorization: `Bearer ${EDITOR}` } }), env);
+    expect(answer.status).toBe(200);
+    const body = await answer.json() as { voices: { voice_id: string; name: string }[] };
+    expect(body.voices.map(voice => [voice.voice_id, voice.name])).toEqual([[house, "House"], [extra, "New"]]);
+    expect(calls).toEqual(["main-key", "voices-key", "voices-key"]);
   });
 });

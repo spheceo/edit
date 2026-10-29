@@ -213,6 +213,8 @@ dev: wasm web-install (native "debug")
             fi
         done
     fi
+    # Whole cloud edits export on Modal when this Mac is busy or it's long (modal_exports.ts).
+    export EDIT_MODAL_EXPORTS="${EDIT_MODAL_EXPORTS:-1}" EDIT_WORKER_ROOT="${EDIT_WORKER_ROOT:-$PWD}"
     # bun --watch restarts the server on its own files and on the addon it loads.
     bun --watch apps/server/src/main.ts serve &
     SERVER=$!

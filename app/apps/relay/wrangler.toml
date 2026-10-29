@@ -6,10 +6,10 @@ compatibility_date = "2026-09-07"
 workers_dev = true
 preview_urls = false
 
-# Secrets: in Infisical (Repack's project, folder /edit-relay, references to the root's values),
+# Secrets: in Infisical (Repack's project, folder /edit-relay; ElevenLabs and Maps values live there directly),
 # pushed with `bun scripts/push-secrets.ts --yes` (dry run without --yes; values on wrangler's
 # stdin, never printed). For `wrangler dev`, apps/relay/.dev.vars, gitignored. Never in this file:
-#   ELEVENLABS_API_KEY, ELEVENLABS_SPEECH_KEY, GOOGLE_MAPS_KEY
+#   ELEVENLABS_MAIN_KEY, ELEVENLABS_VOICES_KEY, GOOGLE_MAPS_KEY
 # Edit's cloud (/v1/cloud/*, src/cloud.ts; signed-in people only, src/auth.ts):
 #   R2_ACCOUNT_ID          Cloudflare account id (<id>.r2.cloudflarestorage.com)
 #   R2_ACCESS_KEY_ID       an R2 API token's S3 access key id
@@ -26,6 +26,9 @@ preview_urls = false
 #   AI_GATEWAY_API_KEY
 
 [vars]
+# Comma-separated voice IDs belonging to ELEVENLABS_VOICES_KEY; all others
+# (including the existing house voice) use ELEVENLABS_MAIN_KEY.
+ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
 # Sign-in (accounts.spheceo.com, Oct 23): every route but /health takes a signed-in person's token,
 # checked against this issuer's JWKS. The old shared token (CLOUD_TOKEN) was retired the same day.
 ACCOUNTS_ISSUER = "https://accounts.spheceo.com"

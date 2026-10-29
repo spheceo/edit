@@ -30,9 +30,11 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  */
 
 export interface Env extends CloudEnv, AuthEnv {
-  ELEVENLABS_API_KEY?: string;
-  /** A key for voice generation (text to speech, voices); else ELEVENLABS_API_KEY. */
-  ELEVENLABS_SPEECH_KEY?: string;
+  /** Transcription and the existing house voice. */
+  ELEVENLABS_MAIN_KEY?: string;
+  /** Only the voices named in ELEVENLABS_VOICES_IDS use this account. */
+  ELEVENLABS_VOICES_KEY?: string;
+  ELEVENLABS_VOICES_IDS?: string;
   DAILY_SPEECH_CHARS_PER_IP: string;
   DAILY_SPEECH_CHARS_TOTAL: string;
   MAX_SPEECH_CHARS: string;
@@ -65,7 +67,7 @@ export default {
     if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
       return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
     }
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(env.ELEVENLABS_API_KEY), speech: Boolean(speechKey(env)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);
@@ -87,7 +89,8 @@ export default {
 
     const found = await allow(request, env, "use", "transcribe");
     if (found instanceof Response) return found;
-    if (!env.ELEVENLABS_API_KEY) return json(503, { error: "Transcription is not configured on the relay yet." });
+    const key = mainKey(env);
+    if (!key) return json(503, { error: "Transcription is not configured on the relay yet." });
 
     const type = request.headers.get("content-type") ?? "";
     if (!type.startsWith("audio/")) return json(415, { error: "Send audio (e.g. audio/ogg)." });
@@ -125,7 +128,7 @@ export default {
     ]);
     const upstream = await fetch(SCRIBE, {
       method: "POST",
-      headers: { "xi-api-key": env.ELEVENLABS_API_KEY, "content-type": form.contentType },
+      headers: { "xi-api-key": key, "content-type": form.contentType },
       body: form.body,
     });
 
@@ -219,7 +222,11 @@ async function outline(request: Request, url: URL, env: Env): Promise<Response> 
   return new Response(answer.body, { status: answer.status, headers: { "content-type": "application/json" } });
 }
 
-const speechKey = (env: Env) => env.ELEVENLABS_SPEECH_KEY || env.ELEVENLABS_API_KEY;
+const mainKey = (env: Env) => env.ELEVENLABS_MAIN_KEY;
+const extraVoiceIds = (env: Env) => new Set((env.ELEVENLABS_VOICES_IDS ?? "").split(",").map(id => id.trim()).filter(Boolean));
+const speechKey = (env: Env, voice?: string) => voice && extraVoiceIds(env).has(voice)
+  ? env.ELEVENLABS_VOICES_KEY
+  : env.ELEVENLABS_MAIN_KEY;
 
 /** ElevenLabs' error, as `{ error }` Edit can show (e.g. which permission the key lacks). */
 async function elevenError(answer: Response): Promise<Response> {
@@ -246,27 +253,33 @@ async function voices(request: Request, env: Env): Promise<Response> {
   if (request.method !== "GET") return json(405, { error: "GET /v1/voices" });
   const found = await allow(request, env, "use", "voices");
   if (found instanceof Response) return found;
-  const key = speechKey(env);
-  if (!key) return json(503, { error: "Voice generation is not configured on the relay yet." });
+  const ids = extraVoiceIds(env);
+  const accounts = [speechKey(env), ...(ids.size ? [env.ELEVENLABS_VOICES_KEY] : [])];
+  if (accounts.some(key => !key)) return json(503, { error: "Voice generation is not configured on the relay yet." });
   if (!(await env.SPEECH_BURST.limit({ key: `voices:${burstKey(request, found)}` })).success) return json(429, { error: "Too many requests at once; try again in a minute." });
   const out: unknown[] = [];
-  let token = "";
-  for (let page = 0; page < 5; page++) {
-    const upstream = new URL("https://api.elevenlabs.io/v2/voices");
-    upstream.searchParams.set("page_size", "100");
-    if (token) upstream.searchParams.set("next_page_token", token);
-    const answer = await fetch(upstream, { headers: { "xi-api-key": key } });
-    if (!answer.ok) return elevenError(answer);
-    const body = (await answer.json()) as {
-      voices: { voice_id: string; name: string; category?: string; labels?: Record<string, string>; description?: string; preview_url?: string }[];
-      has_more?: boolean;
-      next_page_token?: string;
-    };
-    for (const voice of body.voices) {
-      out.push({ voice_id: voice.voice_id, name: voice.name, category: voice.category, labels: voice.labels ?? {}, description: voice.description ?? "", preview_url: voice.preview_url ?? null });
+  const seen = new Set<string>();
+  for (const [account, key] of accounts.entries()) {
+    let token = "";
+    for (let page = 0; page < 5; page++) {
+      const upstream = new URL("https://api.elevenlabs.io/v2/voices");
+      upstream.searchParams.set("page_size", "100");
+      if (token) upstream.searchParams.set("next_page_token", token);
+      const answer = await fetch(upstream, { headers: { "xi-api-key": key! } });
+      if (!answer.ok) return elevenError(answer);
+      const body = (await answer.json()) as {
+        voices: { voice_id: string; name: string; category?: string; labels?: Record<string, string>; description?: string; preview_url?: string }[];
+        has_more?: boolean;
+        next_page_token?: string;
+      };
+      for (const voice of body.voices) {
+        if ((account === 1) !== ids.has(voice.voice_id) || seen.has(voice.voice_id)) continue;
+        seen.add(voice.voice_id);
+        out.push({ voice_id: voice.voice_id, name: voice.name, category: voice.category, labels: voice.labels ?? {}, description: voice.description ?? "", preview_url: voice.preview_url ?? null });
+      }
+      if (!body.has_more || !body.next_page_token) break;
+      token = body.next_page_token;
     }
-    if (!body.has_more || !body.next_page_token) break;
-    token = body.next_page_token;
   }
   return json(200, { voices: out });
 }
@@ -281,8 +294,6 @@ async function speech(request: Request, env: Env): Promise<Response> {
   if (found instanceof Response) return found;
   // Voice generation is paid: the one thing the relay checks beyond `use`. It comes with editing.
   if (!mayVoice(found)) return json(403, { error: "Voice-overs come with editing: ask an admin for an Edit style at accounts.spheceo.com." });
-  const key = speechKey(env);
-  if (!key) return json(503, { error: "Voice generation is not configured on the relay yet." });
   const limits = [env.MAX_SPEECH_CHARS, env.DAILY_SPEECH_CHARS_PER_IP, env.DAILY_SPEECH_CHARS_TOTAL].map(Number);
   if (!limits.every((value) => Number.isSafeInteger(value) && value > 0)) return json(503, { error: "Voice budget is misconfigured." });
   let body: {
@@ -302,6 +313,8 @@ async function speech(request: Request, env: Env): Promise<Response> {
   if (text.length > limits[0]) return json(413, { error: `That's ${text.length} characters; split it into lines of at most ${limits[0]}.` });
   if (!/^[A-Za-z0-9]{8,64}$/.test(voice)) return json(400, { error: "Choose a voice." });
   if (!/^[a-z0-9_]{3,64}$/.test(model)) return json(400, { error: "Unknown model." });
+  const key = speechKey(env, voice);
+  if (!key) return json(503, { error: "Voice generation is not configured for this voice on the relay yet." });
   if (!OUTPUT_FORMATS.has(format)) return json(400, { error: "Unknown output format." });
 
   if (!(await env.SPEECH_BURST.limit({ key: `speech:${burstKey(request, found)}` })).success) return json(429, { error: "Too many lines at once; try again in a minute." });

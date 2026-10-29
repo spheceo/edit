@@ -220,9 +220,10 @@ const FRESH_MS = 600_000;
  * An article page: kept for a few minutes, fetched plainly first (most news
  * pages are rendered on the server, and a plain fetch takes a second where a
  * fresh headless Chrome takes ten or twenty), the browser only when the plain
- * page is a shell, a block or too thin to be the story.
+ * page is a shell, a block or too thin to be the story. Script mode's case
+ * research reads its pages with it too.
  */
-async function articlePage(url: string): Promise<string> {
+export async function articlePage(url: string): Promise<string> {
   const now = performance.now();
   // Public web pages only, for read_page and add_article alike (net_guard.ts).
   await publicUrl(url);

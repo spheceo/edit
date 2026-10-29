@@ -114,6 +114,12 @@ export type Script = {
   proposals?: Proposal[];
   /** The last full export to Google Docs. */
   docExport?: { id: string; url: string; revision: number; exportedAt: number };
+  /** What the producer's brief called each of the case's videos, in the order they join (brief.ts). */
+  labels?: Label[];
+  /** Some recording's words came from YouTube's captions: who speaks is read from the conversation, not watched. */
+  captions?: boolean;
+  /** The stretches (ms) of captioned footage heard exactly since: their words have Scribe's times and spelling. */
+  exact?: [number, number][];
   revision: number;
   createdAt: number;
   updatedAt: number;
@@ -207,6 +213,8 @@ export type Article = {
   url: string;
   summary: string;
   facts: string[];
+  /** In a compilation, the video whose case it reports (1 for Video 1). */
+  video?: number;
 };
 
 export type Research = { articles: Article[]; queries: string[]; at: number; problem?: string };
@@ -458,6 +466,8 @@ export type TrelloCards = { list: string; cards: TrelloCard[] };
 export type BriefRole = "hearing" | "supporting" | "background" | "article";
 export type BriefLink = { url: string; label: string; role: BriefRole; part?: number };
 export type Brief = { title: string; notes: string; links: BriefLink[] };
+/** A recording's label as the script keeps it: what the brief called it, and its role. */
+export type Label = { label: string; role: BriefRole; part?: number };
 export type VideoCheck = { url: string; reuse: boolean; earlier?: string; earlierFound?: string; title: string; channel: string; durationMs: number | null; problem: string | null; warning: string | null };
 
 /** A script's review link on Repack (reviews.rs), once shared. */

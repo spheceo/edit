@@ -520,6 +520,20 @@ test("follows_a_compilations_case_scripts_after_the_narration_naming_them", asyn
   expect((parsed.blocks[1] as Narration).text).toBe("Eventually, she was sentenced to 15 years.\n\nIn a similar case, another young man reported the crime himself…");
 });
 
+test("a reused script linked in a comment before the first range is the first case", () => {
+  // Card 1's Doc (Oct 29): "REUSE" highlighted under the heading, the reused script's link in the comment on it.
+  const range = `<a href="https://www.google.com/url?q=https://drive.google.com/file/d/1TopFileAbcdefg/view?t%3D448&amp;sa=D">7:28-7:32</a>`;
+  const main = `<html><body><p><span>INTERRO Off-Duty Officer</span></p>
+<p><span>Total Duration: 46m10s</span></p>
+<p><span>REUSE</span><sup><a href="#cmnt1" id="cmnt_ref1">[a]</a></sup></p>
+<p><span>Moving on to the case where an officer on patrol&hellip;</span></p>
+<p><span>(</span>${range}<span>)</span></p>
+<p><span>On a Tuesday night in 2011&hellip;</span></p>
+<div><p><a href="#cmnt_ref1" id="cmnt1">[a]</a><span>Reuse: </span><a href="https://www.google.com/url?q=https://docs.google.com/document/d/1EYg7IWwPaicBNhWKN7bFmBFxG/edit?usp%3Dsharing&amp;sa=D">https://docs.google.com/document/d/1EYg7IWwPaicBNhWKN7bFmBFxG/edit?usp=sharing</a></p></div>
+</body></html>`;
+  expect(parse(main).cases).toEqual([{ after: 0, doc: "1EYg7IWwPaicBNhWKN7bFmBFxG" }]);
+});
+
 test("any Google Doc link is a reused script, where it's linked, at any depth; a loop or a Doc of notes is left out and said", async () => {
   const doc = (id: string) => `https://www.google.com/url?q=https://docs.google.com/document/d/${id}/edit&amp;sa=D`;
   const range = (file: string, t: number) =>

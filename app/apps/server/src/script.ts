@@ -854,8 +854,14 @@ export function parse(html: string): Parsed {
       // Doc's heading (title, "Assets:", durations), never a cut-in.
       // A line of no words ("—", "__") only separates parts of the Doc.
       if (text === "" || !seenFootage || !/[\p{L}\p{N}]/u.test(text)) {
-        // A reused script linked before the first range opens the video.
-        if (seenFootage || blocks.length === 0) docLinks(para.links);
+        // A reused script linked before the first range opens the video:
+        // in the text, or in a comment on it (card 1's Doc: "REUSE"
+        // highlighted, the reused script's link in the comment on it; the
+        // user, Oct 29: "it seems we missed the reuse comment").
+        if (seenFootage || blocks.length === 0) {
+          docLinks(para.links);
+          caseNotes(notes(para.refs, comments));
+        }
         continue;
       }
       const found = notes(para.refs, comments);
@@ -919,6 +925,8 @@ export function parse(html: string): Parsed {
       const from = index === 0 && (gap === null || gap === undefined) ? 0 : range.start;
       const refs = para.refs.filter(([at]) => at >= from && at < next);
       const rangeNotes = notes(refs, comments);
+      // A reused script's link in a range's comment comes after that range.
+      const reusedHere = rangeNotes.filter((note) => caseScript(note) !== null);
       const block: ScriptBlock = {
         kind: "footage",
         url,
@@ -931,6 +939,7 @@ export function parse(html: string): Parsed {
       const words = cueWords(rangeNotes);
       if (words !== null) block.words = words;
       blocks.push(block);
+      caseNotes(reusedHere);
     });
     if (tail !== null) {
       const after = ranges[ranges.length - 1]!.end;

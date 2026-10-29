@@ -1,5 +1,6 @@
-// Cards waiting for a script on Repack's Trello lists, read through Edit's
-// relay (its key and token stay there) and parsed as Repack's
+// Cards waiting for a script on Repack's Trello lists, read through Writer's
+// relay with the person's Edit sign-in (its key and token stay there; it
+// takes Edit's tokens for these fixed reads) and parsed as Repack's
 // script-trello.ts and script.ts parse them. Nothing is written to Trello.
 //
 // The Raw Channels list holds one case a card: its footage is the first
@@ -48,10 +49,19 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filt
 const text = (value: unknown, fallback = ""): string => (typeof value === "string" ? value : fallback);
 const clip = (given: string, count: number): string => [...given].slice(0, count).join("");
 
+/** One of Writer's relay's read-only Trello routes, as the signed-in person (compilation_input.ts reads cards this way too). */
+export async function trelloGet(route: string): Promise<Raw> {
+  const service = process.env.EDIT_WRITER_RELAY_URL ?? "https://writer-relay.sphe-g-personal.workers.dev";
+  const response = await fetch(`${service.replace(/\/$/u, "")}${route}`, { headers: relay.authHeaders(), redirect: "error", signal: AbortSignal.timeout(30_000) });
+  const value = (await response.json().catch(() => ({}))) as Raw & { error?: string };
+  if (!response.ok) throw new Error(value.error ?? `Trello refused (${response.status})`);
+  return value;
+}
+
 /** One list's cards, `raw` or `comp`, each parsed for what a script needs; `titles` are the scripts already made, lowercased. */
 export async function cards(list: string, titles: string[]): Promise<Cards> {
   if (list !== "raw" && list !== "comp") throw new Error("Choose the Raw Channels list or the compilation list.");
-  const value = await relay.json<Raw>("GET", `/v1/writer/trello/cards?list=${list}`, null, "Trello", 60);
+  const value = await trelloGet(`/v1/trello/cards?list=${list}`);
   const compilation = list === "comp";
   return { list: text(value.list, list), cards: (Array.isArray(value.cards) ? (value.cards as Raw[]) : []).flatMap((card) => parse(card, compilation, titles) ?? []) };
 }
@@ -60,7 +70,7 @@ export async function cards(list: string, titles: string[]): Promise<Cards> {
 export async function card(link: string, titles: string[]): Promise<Card> {
   const id = cardId(link);
   if (id === null) throw new Error("That isn't a Trello card link (trello.com/c/…).");
-  const value = await relay.json<Raw>("GET", `/v1/writer/trello/card?card=${id}`, null, "Trello", 60);
+  const value = await trelloGet(`/v1/trello/card?card=${encodeURIComponent(id)}`);
   return pastedCard(value, id, link, titles);
 }
 

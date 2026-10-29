@@ -31,6 +31,19 @@ export const CAPABILITIES = {
   shorts: "edit.shorts",
 } as const;
 
+/** Script mode's kinds of work (Writer's capabilities, merged into Edit on Oct 29 2026: the ids stay Writer's, so grants keep their meaning). */
+export const SCRIPT_CAPABILITIES = [
+  { id: "scripts.interrogation", label: "Interrogation", description: "One case's footage (YouTube, Google Drive or this Mac) into an interrogation script.", group: "Scripts from footage" },
+  { id: "scripts.interrogation-compilation", label: "Interrogation compilations", description: "2 to 20 cases in one interrogation script, standard (\"When…\") or hidden.", group: "Scripts from footage" },
+  { id: "scripts.foia", label: "FOIA", description: "One case's FOIA footage (bodycam and records) into a FOIA script.", group: "Scripts from footage" },
+  { id: "scripts.foia-compilation", label: "Bodycam compilations", description: "2 to 20 bodycam (FOIA) cases in one compilation script, standard (\"When…\") or hidden.", group: "Scripts from footage" },
+  { id: "scripts.courtroom", label: "Courtroom", description: "One case's hearing into a courtroom script, including one hearing split across several videos.", group: "Scripts from footage" },
+  { id: "scripts.courtroom-compilation", label: "Courtroom compilations", description: "Several cases' hearings in one courtroom script.", group: "Scripts from footage" },
+  { id: "scripts.commentary", label: "Commentary", description: "A voiceover essay from articles, videos and Docs, with clips found and placed.", group: "Other scripts" },
+  { id: "review.share", label: "Share for review", description: "Make review links, see and fix reviewers' notes, approve, and export to Google Docs.", group: "Sharing and teaching" },
+  { id: "review.lessons", label: "Teach the scripts from feedback", description: "Turn reviewers' feedback into lessons and keep them. Lessons are shared by every Mac and change everyone's builds.", group: "Sharing and teaching" },
+];
+
 /** Whether a capability id is one of the edit styles (voice-overs come with any of them). */
 export function isEditing(id: string): boolean {
   return id.startsWith("edit.");
@@ -49,11 +62,13 @@ export function manifest() {
       { id: CAPABILITIES.courtroom, label: "Courtroom edits", description: "Full edits in the courtroom style, voice-overs included.", group: "Kinds of video" },
       { id: CAPABILITIES.commentary, label: "Commentary edits", description: "Narrated video essays, source clips, researched B-roll and motion graphics, voice-overs included.", group: "Kinds of video" },
       { id: CAPABILITIES.shorts, label: "Shorts", description: "9:16 YouTube Shorts: a video's highlights cut to 45–60 seconds, reframed, subtitled and scored.", group: "Kinds of video" },
+      ...SCRIPT_CAPABILITIES,
     ],
     presets: [
       { id: "subtitles", label: "Subtitles only", capabilities: [CAPABILITIES.subtitles] },
       { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.commentary, CAPABILITIES.shorts, CAPABILITIES.subtitles] },
-      { id: "full", label: "Everything", capabilities: Object.values(CAPABILITIES) },
+      { id: "writer", label: "Script writer", capabilities: ["scripts.interrogation", "scripts.interrogation-compilation", "review.share"] },
+      { id: "full", label: "Everything", capabilities: [...Object.values(CAPABILITIES), ...SCRIPT_CAPABILITIES.map((one) => one.id)] },
     ],
   };
 }

@@ -22,6 +22,7 @@
  *   /v1/cloud/jobs/cancel           {id}         → {ok}
  *   /v1/cloud/google/token          {}           → {access_token, expires_in}: the team's Google sign-in
  *                                   (Drive and Docs: the sound library, script imports, Drive links and uploads)
+ *   /v1/cloud/writer/…              Script mode's scripts, their reviews and lessons, under Writer's rules (writer_cloud.ts)
  *   /v1/cloud/ai/chat               an AI Gateway chat completion, passed through with the relay's
  *                                   AI_GATEWAY_API_KEY (the footage watcher); the gateway's answer as it is
  */
@@ -29,6 +30,7 @@ import { allow, budgetKey, burstKey, type AuthEnv, type Caller, type Permission 
 import { EDIT_CALLS, grantedTo, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
 import { cancelJob, driveJob, googleSignIn, jobStatus, proxyJob, type JobsEnv } from "./jobs";
 import { exportRoute, v3Route, type ModalEnv } from "./exports";
+import { writerCloud } from "./writer_cloud";
 
 export interface CloudEnv extends JobsEnv, ModalEnv {
   /** Edit's bearer token for /v1/cloud/* (EDIT_RELAY_TOKEN on the app side). */
@@ -94,6 +96,13 @@ function permissionOf(route: string): Permission | null {
 export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv): Promise<Response> {
   if (url.pathname.startsWith("/v1/cloud/exports/")) return exportRoute(request, url, env);
   if (url.pathname.startsWith("/v1/cloud/v3/")) return v3Route(request, url, env);
+  // Script mode's scripts, reviews and lessons, under Writer's rules (writer_cloud.ts).
+  if (url.pathname.startsWith("/v1/cloud/writer/")) {
+    const found = await allow(request, env, "use", url.pathname.slice("/v1/".length));
+    if (found instanceof Response) return found;
+    if (env.BURST !== undefined && !(await env.BURST.limit({ key: `writer:${burstKey(request, found)}` })).success) return json(429, { error: "Too many cloud requests at once; try again in a minute." });
+    return writerCloud(request, url, env, found);
+  }
   const permission = permissionOf(url.pathname.slice("/v1/cloud/".length));
   if (permission === null) return json(404, { error: "not found" });
   const found = await allow(request, env, permission, url.pathname.slice("/v1/".length));

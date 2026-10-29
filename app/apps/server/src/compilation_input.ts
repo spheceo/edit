@@ -4,7 +4,7 @@ import type { App } from "./app.ts";
 import * as script from "./script.ts";
 import { LINK_PREFIX, lookUp, reviewCode } from "./finished.ts";
 import { folderId, videosIn } from "./drive_import.ts";
-import * as relay from "./relay.ts";
+import { trelloGet } from "./writer/trello.ts";
 import type { Parsed } from "./seams.ts";
 import type { ScriptBlock } from "./model.ts";
 import { REUSED_SCRIPT_NOTE, WHOLE_SOURCE_LABEL } from "./project.ts";
@@ -109,13 +109,7 @@ export function cardSources(card: TrelloCard): CompilationSource[] {
 
 export async function readCard(url: string): Promise<TrelloCard> {
   const id = new URL(url).pathname.split("/")[2]!;
-  const service = process.env.EDIT_WRITER_RELAY_URL ?? "https://writer-relay.sphe-g-personal.workers.dev";
-  const response = await fetch(`${service.replace(/\/$/u, "")}/v1/trello/card?card=${encodeURIComponent(id)}`, {
-    headers: relay.authHeaders(), redirect: "error", signal: AbortSignal.timeout(30_000),
-  });
-  const value = await response.json() as TrelloCard & { error?: string };
-  if (!response.ok) throw new Error(value.error ?? `Trello import refused (${response.status})`);
-  return value;
+  return (await trelloGet(`/v1/trello/card?card=${encodeURIComponent(id)}`)) as unknown as TrelloCard;
 }
 
 const escape = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");

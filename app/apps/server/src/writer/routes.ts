@@ -14,6 +14,7 @@ import { creator } from "../accounts.ts";
 import * as build from "./build.ts";
 import * as can from "./can.ts";
 import * as chat from "./chat.ts";
+import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
 import * as brief from "./brief.ts";
 import * as drive from "./drive.ts";
@@ -28,18 +29,9 @@ import { readText } from "./sources.ts";
 import * as store from "./store.ts";
 import * as trello from "./trello.ts";
 import * as versions from "./versions.ts";
+import * as watch from "./watch.ts";
 
 type Context = RouteContext<App>;
-
-/** What other parts of Script mode add to its routes and to a script as the page reads it. */
-export const extensions: {
-  /** Fields of a script that are this Mac's (archived, the speaker check), filled in on reading. */
-  detail: ((data: string, dir: string, script: Script) => Partial<Script>)[];
-  /** A summary's fields from elsewhere (the cloud's refusal), filled in on listing. */
-  listed: ((id: string) => Partial<import("@edit/types/writer").Summary>)[];
-  /** After a script is deleted here (the cloud records it). */
-  deleted: ((data: string, id: string) => void)[];
-} = { detail: [], listed: [], deleted: [] };
 
 export const dataOf = (app: App): string => store.dataDir(app.store.home);
 
@@ -47,7 +39,9 @@ export const dataOf = (app: App): string => store.dataDir(app.store.home);
 export function detail(data: string, script: Script): Script {
   const dir = store.scriptDir(data, script.id);
   const out: Script = { ...script, proxyPath: isFile(store.proxyPath(dir)) ? store.proxyPath(dir) : null };
-  for (const add of extensions.detail) Object.assign(out, add(data, dir, script));
+  // What the watcher left unfinished, for Retry unfinished speaker checks.
+  const check = watch.status(dir);
+  if (check !== null) out.speakerCheck = check;
   return out;
 }
 
@@ -99,7 +93,10 @@ export function routes(router: Router<App>): void {
         return store
           .list(data)
           .filter((row) => can.sees(row))
-          .map((row) => Object.assign(row, { building: jobs.running(row.id) }, ...extensions.listed.map((add) => add(row.id))));
+          .map((row) => {
+            const refusal = cloud.refused(row.id);
+            return Object.assign(row, { building: jobs.running(row.id) }, refusal === null ? {} : { cloudRefused: refusal });
+          });
       }),
     )
     .get("/api/writer/library", () => json({ version: store.libraryVersion() }))
@@ -111,7 +108,7 @@ export function routes(router: Router<App>): void {
         idle(id(context));
         if (jobs.running(id(context))) throw new Error("Claude is still writing this script.");
         // The cloud's delete is recorded first: a crash between the two can't bring the script back.
-        for (const done of extensions.deleted) done(data, id(context));
+        cloud.deleted(data, id(context));
         store.remove(data, id(context));
         store.libraryChanged();
         return { ok: true };
@@ -280,6 +277,7 @@ export function routes(router: Router<App>): void {
       });
     })
     .get("/api/writer/progress", () => json(imports.progress()))
+    .get("/api/writer/cloud", () => json(cloud.statusNow()))
     .post("/api/writer/videos/check", async (context) => {
       const given = await body<{ lines?: string[] }>(context);
       return answer(() => imports.checkVideos(context.app, Array.isArray(given.lines) ? given.lines.map(String) : []));
@@ -409,12 +407,15 @@ export function routes(router: Router<App>): void {
       });
     })
     // The preview: the file on this Mac, a range at a time (cloud.ts streams one that's only in the cloud).
-    .get("/api/writer/scripts/{id}/proxy", (context) => {
+    .get("/api/writer/scripts/{id}/proxy", async (context) => {
       const data = dataOf(context.app);
       readFor(data, id(context));
       const path = store.proxyPath(store.scriptDir(data, id(context)));
-      if (!isFile(path)) throw notFound("No preview here.");
-      return serveFile(context.request, path);
+      if (isFile(path)) return serveFile(context.request, path);
+      // Made on another Mac: played from the cloud.
+      const streamed = await cloud.stream(context.request, data, id(context));
+      if (streamed === null) throw notFound("No preview here.");
+      return streamed;
     })
     .get("/api/writer/scripts/{id}/files/{name}", (context) => {
       // A file the page shows beside the script (a found clip's frames, a commentary's footage): only plain names in its folder.

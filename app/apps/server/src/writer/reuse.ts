@@ -12,7 +12,6 @@ import type { Highlight, Part, Reuse, Script, Word } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import { isFile, join } from "../paths.ts";
-import * as relay from "../relay.ts";
 import { videoId } from "../youtube.ts";
 import * as chat from "./chat.ts";
 import * as claude from "./claude.ts";
@@ -26,7 +25,7 @@ import { clock } from "./paragraphs.ts";
 import * as store from "./store.ts";
 import { keepPeaks, readPeaks } from "./tidy.ts";
 import { transcribeSpan } from "./transcription.ts";
-import { cardId, isDoc, unwrapRedirect, urls } from "./trello.ts";
+import { cardId, isDoc, trelloGet, unwrapRedirect, urls } from "./trello.ts";
 import { isYoutube } from "./youtube.ts";
 
 /** What the reuse job asks for, and what it says when the producer starts it. */
@@ -199,7 +198,7 @@ export async function readEarlier(earlier: string, video: string): Promise<Earli
 async function scriptOnCard(link: string): Promise<string> {
   const id = cardId(link);
   if (id === null) throw new Error("That isn't a Trello card link.");
-  const card = await relay.json<Record<string, unknown>>("GET", `/v1/writer/trello/card?card=${id}`, null, "Trello", 60);
+  const card = await trelloGet(`/v1/trello/card?card=${encodeURIComponent(id)}`);
   const listed = (field: string) => (Array.isArray(card[field]) ? (card[field] as unknown[]).filter((item): item is string => typeof item === "string") : []);
   const all = [...listed("attachments"), typeof card.desc === "string" ? card.desc : "", ...listed("comments"), ...listed("checklists")];
   const name = typeof card.name === "string" ? card.name.trim() : "The earlier card";

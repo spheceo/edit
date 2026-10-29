@@ -12,6 +12,8 @@ let NAMED = "";
 let SUBS = "";
 let EDITOR = "";
 let ADMIN = "";
+/** Script mode (Writer's capabilities in Edit): an interrogation writer who shares reviews, and an Edit-only editor. */
+let WRITER = "";
 beforeAll(async () => {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
   useKeys(createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), kid: "t1", alg: "RS256" }] }));
@@ -21,6 +23,7 @@ beforeAll(async () => {
   SUBS = await sign({ perms: ["use", "video.subtitles"], admin: false }, "person-s");
   EDITOR = await sign({ perms: ["use", "edit.bodycam", "video.subtitles"], admin: false });
   ADMIN = await sign({ perms: ["use"], admin: true }, "person-a");
+  WRITER = await sign({ perms: ["use", "scripts.interrogation", "review.share"], admin: false }, "person-w");
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
 afterAll(() => useKeys(null));
@@ -146,6 +149,53 @@ describe("relay cloud endpoints", () => {
     expect((await call("convex", { kind: "query", path: "reviews:get", args: {} })).status).toBe(200);
     const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).args.app).toBe("edit");
+  });
+
+  it("Script mode's cloud keeps Writer's rules: reads for anyone, writes for script work of the script's kind, reviews as Writer", async () => {
+    const upstream = vi.fn(async (url: string, init?: RequestInit) => {
+      const sent = init?.body ? JSON.parse(String(init.body)) : {};
+      // The relay looking a script up before a delete: an interrogation script.
+      if (String(url).includes("/api/query") && sent.path === "writer:getScript") return new Response(JSON.stringify({ status: "success", value: { summary: { kind: "interrogation" } } }));
+      return new Response(JSON.stringify({ status: "success", value: 1 }));
+    });
+    vi.stubGlobal("fetch", upstream);
+    const writer = (route: string, body: unknown, token: string) => call(`writer/${route}`, body, { token });
+    // Reading is open to anyone who may use Edit.
+    expect((await writer("r2/url", { key: "writer/scripts/a/body/1-ff.json" }, EDITOR)).status).toBe(200);
+    expect((await writer("convex", { kind: "query", path: "writer:listScripts" }, EDITOR)).status).toBe(200);
+    // Writing needs script work: an Edit-only editor can't, a writer can.
+    expect((await writer("r2/url", { key: "writer/scripts/a/body/2-ff.json", method: "PUT" }, EDITOR)).status).toBe(403);
+    expect((await writer("r2/url", { key: "writer/scripts/a/body/2-ff.json", method: "PUT" }, WRITER)).status).toBe(200);
+    // The shared lessons need review.lessons.
+    expect((await writer("r2/url", { key: "writer/lessons.json", method: "PUT" }, WRITER)).status).toBe(403);
+    expect((await writer("r2/url", { key: "writer/lessons.json", method: "PUT" }, ADMIN)).status).toBe(200);
+    // A commit of the writer's own kind goes through; another kind's doesn't.
+    expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "interrogation" } } }, WRITER)).status).toBe(200);
+    expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "courtroom" } } }, WRITER)).status).toBe(403);
+    expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "interrogation" } } }, EDITOR)).status).toBe(403);
+    // A delete is judged by what the script is in the cloud.
+    expect((await writer("convex", { kind: "mutation", path: "writer:deleteScript", args: { scriptId: "a" } }, WRITER)).status).toBe(200);
+    // Reviews: shared by who may share, always as Writer.
+    expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit" } }, EDITOR)).status).toBe(403);
+    expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit" } }, WRITER)).status).toBe(200);
+    const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).args.app).toBe("writer");
+    // Nothing else is reachable, and keys stay under writer/ (or Edit's shared footage, never deleted from here).
+    expect((await writer("convex", { kind: "mutation", path: "edit:deleteProject", args: {} }, ADMIN)).status).toBe(403);
+    expect((await writer("r2/url", { key: "edit/projects/p/project.json" }, WRITER)).status).toBe(400);
+    expect((await writer("r2/url", { key: "edit/originals/youtube/x/a.mp4", method: "PUT" }, WRITER)).status).toBe(200);
+    expect((await writer("r2/delete", { keys: ["edit/originals/youtube/x/a.mp4"] }, WRITER)).status).toBe(400);
+    expect((await writer("r2/list", { prefix: "edit/" }, ADMIN)).status).toBe(400);
+    // Problem reports: anyone puts one, only an admin reads them.
+    expect((await writer("r2/url", { key: "writer/reports/r1.json", method: "PUT" }, EDITOR)).status).toBe(200);
+    expect((await writer("r2/url", { key: "writer/reports/r1.json" }, WRITER)).status).toBe(403);
+    expect((await writer("r2/url", { key: "writer/reports/r1.json" }, ADMIN)).status).toBe(200);
+  });
+
+  it("publishes Script mode's capabilities with Edit's, their ids unchanged", async () => {
+    const answer = await relay.fetch(new Request("https://relay.test/.well-known/spheceo-app.json"), env);
+    const ids = ((await answer.json()) as { capabilities: { id: string }[] }).capabilities.map((one) => one.id);
+    for (const id of ["edit.bodycam", "scripts.interrogation", "scripts.commentary", "review.share", "review.lessons"]) expect(ids).toContain(id);
   });
 
   it("only touches keys under edit/", async () => {

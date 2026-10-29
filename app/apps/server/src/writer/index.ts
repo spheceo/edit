@@ -6,6 +6,7 @@
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import * as build from "./build.ts";
+import * as cloud from "./cloud.ts";
 import * as drive from "./drive.ts";
 import { join, userHome } from "../paths.ts";
 import * as jobs from "./jobs.ts";
@@ -27,8 +28,14 @@ export function start(app: App): void {
   } catch (error) {
     diag.warn("writer", `Writer's scripts weren't brought in: ${diag.messageOf(error)}`);
   }
+  try {
+    cloud.adoptLedger(data, WRITER_FOLDER());
+  } catch (error) {
+    diag.warn("writer", `Writer's cloud record wasn't taken: ${diag.messageOf(error)}`);
+  }
   store.markInterrupted(data);
   for (const id of store.ids(data)) jobs.markInterrupted(data, id);
+  cloud.start(data);
   for (const begin of starters) {
     try {
       begin(app);

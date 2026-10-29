@@ -23,7 +23,7 @@ import * as mediaModule from "./media.ts";
 import { cloudEnabled } from "./relay.ts";
 import type { ClipColor, Media, Project, Script, ScriptBlock, ScriptJob, Style, TextStyle, TrackKind } from "./model.ts";
 import { NARRATION } from "./model.ts";
-import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freshId, marksCut, mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL, REUSED_SCRIPT_NOTE, reusedScriptBlock } from "./project.ts";
+import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freeTrack, freshId, insertTime, marksCut, mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL, REUSED_SCRIPT_NOTE, reusedScriptBlock } from "./project.ts";
 import { fileName, fileStem, extension as pathExtension, join, parent } from "./paths.ts";
 import { byteLength, charCount, display, f32, isAlphanumeric, isWhitespace, parseHex, round, splitWhitespace, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
@@ -2555,6 +2555,47 @@ export function layOut(project: Project): void {
       cursor += length;
     }
   }
+}
+
+/**
+ * A cut-in the script didn't have, added at the cut at frame `at`: the time
+ * opened there (everything after moves on), the black card with its words
+ * placed in it, and a narration block for it in the script before the first
+ * range after the cut, so generate_voiceover voices it like the others. Card
+ * 1's bridge from its reused case into the next had no way in (Oct 29: the
+ * agent "can't voice a new narration"). The card's id.
+ */
+export function addCutIn(project: Project, text: string, at: number): string {
+  const script = project.script;
+  if (!isSome(script)) throw new Error("this project has no script to add a cut-in to");
+  const words = text.trim();
+  if (words === "") throw new Error("text is the cut-in's narration, word for word");
+  const footage = project.clips.filter((clip) => clip.type === "video" && tracksOf(project, "video")[0] === clip.track);
+  if (at !== 0 && !footage.some((clip) => clip.start + clip.duration === at) && !footage.some((clip) => clip.start === at)) {
+    throw new Error("at must be a cut on the footage track (a frame where one clip ends or starts)");
+  }
+  const fps = fpsOf(project);
+  const length = Math.max(Math.trunc(round(CUT_IN_SECONDS * fps)), 1);
+  insertTime(project, at, length, new Set(), new Set());
+  const { width, height } = project.settings;
+  const link = freshId(project, "l");
+  const card = freshId(project, "c");
+  project.clips.push(clipFrom({ id: card, track: freeTrack(project, "video", at, at + length), start: at, duration: length, color: "purple", name: "Cut-in (added)", link, type: "solid", fill: [0, 0, 0, 1], opacity: 1 }));
+  project.clips.push(clipFrom({ id: freshId(project, "c"), track: freeTrack(project, "video", at, at + length), start: at, duration: length, color: "purple", link, type: "text", text: words, style: cutInStyle(width, height, words) }));
+  // In the script before the first block placed after the cut.
+  const startOf = (block: ScriptBlock) => {
+    const id = block.kind === "narration" ? (block.voiceover ?? block.clip) : block.clip;
+    const clip = isSome(id) ? clipOf(project, id) : undefined;
+    return clip === undefined ? null : clip.start;
+  };
+  const index = script.blocks.findIndex((block) => {
+    const start = startOf(block);
+    return start !== null && start >= at + length;
+  });
+  const block: ScriptBlock = { kind: "narration", text: words, notes: ["Added cut-in"], clip: card };
+  if (index < 0) script.blocks.push(block);
+  else script.blocks.splice(index, 0, block);
+  return card;
 }
 
 /** Attaches a Doc's script to a project (replacing any before). */

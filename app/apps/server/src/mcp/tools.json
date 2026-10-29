@@ -3235,7 +3235,7 @@
     }
   },
   {
-    "description": "Fill a 9:16 Short's frame with its 16:9 footage and keyframe each clip's x so the subject stays in the middle: the biggest face first, then the same person; the camera holds while they're in the middle and moves, eased, only when they'd leave it. It sets each clip's scale (fill) and x and replaces its x/y/scale keyframes, so punch-ins go on after it (scale keyframes at or above the fill scale it answers). Where it says no face was seen (a redaction blur, a back turned, a car), look at the frames and run it again for that clip with centres: where the subject is across the source picture (0 left, 1 right) from each time on.",
+    "description": "Fill a 9:16 Short's frame with its 16:9 footage and keyframe each clip's x so the subject stays in the middle. It sets each clip's scale (fill) and x and replaces its x/y/scale keyframes, so punch-ins go on after it (scale keyframes at or above the fill scale it answers). Where it says no face was seen (a redaction blur, a back turned, a car), look at the frames and run it again for that clip with centres: where the subject is across the source picture (0 left, 1 right) from each time on.",
     "inputSchema": {
       "properties": {
         "clip_ids": {
@@ -3270,7 +3270,7 @@
     "name": "reframe"
   },
   {
-    "description": "Import a song from its YouTube link (its sound only) and lay it under the whole Short, levelled under the footage's speech and fading over the last second: the team's Shorts songs aren't in the sound library. Cut the Short first: the song runs to the end of the timeline. place false only imports it.",
+    "description": "Import a song from its YouTube link and lay it under the whole Short, levelled under the speech. Cut the Short first: the song runs to the end of the timeline. place false only imports it.",
     "inputSchema": {
       "properties": {
         "url": {
@@ -3302,7 +3302,7 @@
     "name": "import_music"
   },
   {
-    "description": "A Short's callout introducing someone, as the Shorts the team follows do it (\"WANTED SUSPECT\"): the footage at `at` freezes for `hold` frames, cut in tighter on them (zoom) and brightened, the words above them in heavy white capitals with a deep shadow (the last word bigger) and a white hand-drawn arrow curving down to them, all landing on the cut. Once or twice a Short, on the person the story is about as they first appear: who they are in two or three words (\"WANTED SUSPECT\", \"DRUNK DRIVER\", \"THE MAYOR'S DAUGHTER\"). Their words keep playing under it.",
+    "description": "A Short's callout introducing someone (\"WANTED SUSPECT\"): a freeze cut in on them, the words above, an arrow to them. Once or twice a Short, on the person the story is about as they first appear: who they are in two or three words (\"WANTED SUSPECT\", \"DRUNK DRIVER\", \"THE MAYOR'S DAUGHTER\"). Their words keep playing under it.",
     "inputSchema": {
       "properties": {
         "text": {
@@ -3341,5 +3341,30 @@
       "type": "object"
     },
     "name": "shorts_callout"
+  },
+  {
+    "description": "Add a cut-in the script doesn't have at a cut, ready for generate_voiceover. Then cover it and give it its transitions as any cut-in.",
+    "inputSchema": {
+      "properties": {
+        "text": {
+          "description": "The narration, word for word.",
+          "type": "string"
+        },
+        "at": {
+          "description": "The frame of the cut it goes in at (where one footage clip ends and the next starts).",
+          "type": "integer"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "at"
+      ],
+      "type": "object"
+    },
+    "name": "add_cut_in"
   }
 ]

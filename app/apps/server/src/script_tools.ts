@@ -218,6 +218,14 @@ registerTool("use_found", async ({ app, args, projectId }) => {
 // ---------------------------------------------------------------------------
 // Script and voice-over tools.
 
+registerTool("add_cut_in", async ({ app, args, projectId }) => {
+  const words = typeof args.text === "string" ? args.text : "";
+  const at = typeof args.at === "number" ? Math.round(args.at) : null;
+  if (at === null) throw new Error("at is the frame of the cut it goes in at");
+  const [saved, card] = await app.store.update(projectId, "agent", (project) => script.addCutIn(project, words, at));
+  return text(`added cut-in ${card} at ${at} (rev ${saved.rev}): run generate_voiceover to voice it, then cover it and add its transitions as for the other cut-ins`);
+});
+
 registerTool("realign_script", async ({ app, args, projectId }) => {
   const live = app.store.get(projectId);
   const fps = live === null ? 30 : live.project.settings.fps;

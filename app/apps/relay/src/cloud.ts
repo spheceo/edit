@@ -55,6 +55,8 @@ export interface CloudEnv extends JobsEnv, ModalEnv {
   /** The day's budgets (index.ts's TranscriptionBudget) and the burst limiter. */
   BUDGET?: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
   BURST?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  /** Script mode's cloud calls (1200 a minute per person, wrangler.toml). */
+  CLOUD_BURST?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   /** "1": a project's first commit carries who started it (`actor`, from the token); Repack's `edit:commitProject` keeps it as `createdBy`. */
   STAMP_CREATOR?: string;
 }
@@ -100,7 +102,7 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
   if (url.pathname.startsWith("/v1/cloud/writer/")) {
     const found = await allow(request, env, "use", url.pathname.slice("/v1/".length));
     if (found instanceof Response) return found;
-    if (env.BURST !== undefined && !(await env.BURST.limit({ key: `writer:${burstKey(request, found)}` })).success) return json(429, { error: "Too many cloud requests at once; try again in a minute." });
+    if (env.CLOUD_BURST !== undefined && !(await env.CLOUD_BURST.limit({ key: `writer:${burstKey(request, found)}` })).success) return json(429, { error: "Too many cloud requests at once; try again in a minute." });
     return writerCloud(request, url, env, found);
   }
   const permission = permissionOf(url.pathname.slice("/v1/cloud/".length));

@@ -192,6 +192,15 @@ describe("relay cloud endpoints", () => {
     expect((await writer("r2/url", { key: "writer/reports/r1.json" }, ADMIN)).status).toBe(200);
   });
 
+  it("Script mode's cloud has its own limit, not the 4 a minute of maps and lookups", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: "success", value: [] }))));
+    const read = (limits: Partial<Env>) => call("writer/convex", { kind: "query", path: "writer:listScripts" }, { env: { ...env, ...limits } as Env });
+    const no = { limit: async () => ({ success: false }) };
+    const yes = { limit: async () => ({ success: true }) };
+    expect((await read({ BURST: no, CLOUD_BURST: yes } as Partial<Env>)).status).toBe(200);
+    expect((await read({ BURST: yes, CLOUD_BURST: no } as Partial<Env>)).status).toBe(429);
+  });
+
   it("publishes Script mode's capabilities with Edit's, their ids unchanged", async () => {
     const answer = await relay.fetch(new Request("https://relay.test/.well-known/spheceo-app.json"), env);
     const ids = ((await answer.json()) as { capabilities: { id: string }[] }).capabilities.map((one) => one.id);

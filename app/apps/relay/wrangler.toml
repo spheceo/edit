@@ -74,6 +74,18 @@ namespace_id = "7701"
 limit = 4
 period = 60
 
+# Script mode's cloud calls a minute per person (/v1/cloud/writer/*: the sync's
+# pulls and pushes, review polling, fixing check-ins, the footage handoff), as
+# Writer's relay allowed them: 4 a minute (BURST) stalled the sync. 7710: not a
+# namespace Writer's relay uses either.
+[[ratelimits]]
+name = "CLOUD_BURST"
+namespace_id = "7710"
+
+[ratelimits.simple]
+limit = 1200
+period = 60
+
 # A long file is heard in ~40-second pieces, four at a time (the server's
 # transcribe.ts): 60 a minute keeps them moving; the daily byte quotas below
 # still bound the spend.

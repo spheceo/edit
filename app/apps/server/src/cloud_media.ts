@@ -57,6 +57,7 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import * as cloudBlocks from "./cloud_blocks.ts";
 import * as cloud from "./cloud.ts";
 import { playbackKey, playbackPath } from "./cloud_playback.ts";
 import { proxyJob, requestProxy } from "./cloud_proxy.ts";
@@ -107,8 +108,12 @@ const playbackPorts = new Map<string, number>();
 const previewPath = (cache: string, key: string) => playbackPath(key, playbackPorts.get(cache) ?? 7700);
 
 /** Install before the store loads projects: native tools read the same cloud ranges as the browser. */
+/** Where cloud previews' blocks are kept (cloud_blocks.ts), once playback is configured. */
+let playbackBlocks: string | null = null;
+
 export function configurePlayback(app: App): void {
   playbackPorts.set(app.store.cacheDir(), app.port);
+  playbackBlocks = join(app.store.cacheDir(), "cloud", "blocks");
   app.store.setMediaResolver((project) => {
     for (const media of project.media) {
       if (media.kind === "image" || media.cloud == null) continue;
@@ -1347,6 +1352,15 @@ export async function streamFromCloud(request: Request, cloudMedia: { proxy?: st
   const key = streamKey(cloudMedia, kind);
   if (key === null || !cloud.enabled()) return null;
   const range = request.headers.get("range");
+  // The page's bounded reads come from big blocks read once and kept a while (cloud_blocks.ts); anything else straight from R2.
+  if (playbackBlocks !== null) {
+    const served = await cloudBlocks.serve(playbackBlocks, key, range, () => streamingUrl(key)).catch((error: unknown) => {
+      diag.warn("cloud", `reading ${key} in blocks: ${diag.messageOf(error)}`);
+      signedStreams.delete(key);
+      return null;
+    });
+    if (served !== null) return served;
+  }
   for (let attempt = 0; ; attempt++) {
     const answer = await fetch(await streamingUrl(key), { headers: range === null ? {} : { range }, signal: request.signal });
     // A signature that lapsed early (a clock off): signed again, once.

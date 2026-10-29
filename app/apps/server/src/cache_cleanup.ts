@@ -46,8 +46,8 @@ const DOWNLOADED = 3 * DAY;
 const CACHE_LIMIT = localBudgetBytes();
 /** The disk's free space below which old projects' previews go (safety valve only). */
 const FREE_FLOOR = 1e9;
-/** Cloud-cache subtrees holding rebuildable copies of R2 objects (LRU-evicted past the budget). */
-const CLOUD_EVICTABLE = ["proxies", "sound", "originals", "excerpts"];
+/** Cloud-cache subtrees holding rebuildable copies of R2 objects (LRU-evicted past the budget); `blocks` are previews read for playback (cloud_blocks.ts). */
+const CLOUD_EVICTABLE = ["proxies", "sound", "originals", "excerpts", "blocks"];
 /** A preview file of a media folder (the picture, its light copy, the sound, the done mark). */
 const PREVIEW = /^preview/;
 

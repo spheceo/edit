@@ -23,6 +23,19 @@ requests `bytes=N-` and aborts on every seek; over Wi-Fi most of each scrub went
 bytes that were thrown away.) Each worker runs at most two jobs concurrently and
 retains at most four idle/active input files after jobs settle.
 
+Cloud previews come through the server (`/api/cloud/preview`, `cloud_media.streamFromCloud`),
+which serves the page's bounded reads from 2 MiB blocks of the R2 object (`cloud_blocks.ts`):
+each block read from R2 once, both workers' reads of the same file sharing it, kept on disk under
+`<cache>/cloud/blocks/` and dropped by the cleaner after a few hours, the next two read ahead.
+Measured Oct 29 on Mom & Teen from South Africa, where every R2 read waits ~0.25 s for its first
+byte whatever its size: before, 256 KiB reads straight to R2 (picture and sound each reading the
+same file) played at 21 fps with a 4.8 s freeze, 565 late frames and 568 audio underruns, and 3 of
+8 cold seeks hadn't landed after 4 s; with the blocks, cold, it plays at 30 fps (worst hold
+0.25 s, 14 late frames, no underruns) and every seek lands in 0.3–1.9 s; warm, seeks take
+34–150 ms and the first frame 1.7 s. A scrub (a position every 33 ms) shows about half the
+positions asked: each decodes from the keyframe before it. The measuring script drove headless
+Chrome over its debugging protocol (`window.__edit.preview`: seek, play, `diagnostics`).
+
 Video lanes (one per visible clip) keep a decoder open during playback and read
 forward from it across batches; a jump of more than a second, or backwards,
 reopens it at the preceding keyframe. A scrub decodes from the keyframe to exactly

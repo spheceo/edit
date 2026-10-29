@@ -396,10 +396,11 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_pla
   // No window overlaps another.
   const windows = result.windows as { centre: [number, number]; width: number }[];
   expect(windows.length).toBe(3);
-  // Every clip moves against the camera: the wallpaper's scale changes.
+  // The windows move with the camera; the wallpaper fills the frame and stays still (Oct 29).
   const wall = p.clips.find((own) => own.name === "Desktop · wallpaper")!;
-  const scales = (wall.keyframes?.scale ?? []).map((key) => key.value);
-  expect(Math.max(...scales) / Math.min(...scales)).toBeGreaterThan(1.3);
+  expect(wall.keyframes?.x ?? []).toEqual([]);
+  expect(wall.keyframes?.scale ?? []).toEqual([]);
+  expect(wall.type === "video" && [wall.transform.x, wall.transform.y]).toEqual([0, 0]);
   // Only the keys the camera's curve needs.
   const keys = p.clips.filter((own) => own.name?.startsWith("Desktop ·") === true).reduce((sum, own) => sum + Object.values(own.keyframes ?? {}).reduce((n, list) => n + list.length, 0), 0);
   expect(keys).toBeLessThan(900);

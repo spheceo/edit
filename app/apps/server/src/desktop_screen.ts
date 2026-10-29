@@ -594,10 +594,14 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   // A picture's scale so it's `width` desktop pixels wide (the renderer fits media to the frame at scale 1).
   const scaleFor = (media: Media, width: number) => width / (Math.max(media.width, 1) * Math.min(W / Math.max(media.width, 1), H / Math.max(media.height, 1)));
 
-  // The wallpaper, covering the desktop.
+  // The wallpaper, filling the frame and still: only the windows move with
+  // the camera. It moved with them over a desktop the camera could pull back
+  // past, and its edge came into view with black beyond (the user, Oct 29:
+  // "Why is the background moving along with the elements? This is not
+  // supposed to be happening at all").
   const wallpaper = mediaOf(project, art.wallpaper);
   if (wallpaper === undefined) throw new Error("desktop: the wallpaper wasn't prepared (run it through apply_edit_plan)");
-  const cover = Math.max(DW / Math.max(wallpaper.width, 1), DH / Math.max(wallpaper.height, 1)) * wallpaper.width;
+  const cover = Math.max(W / Math.max(wallpaper.width, 1), H / Math.max(wallpaper.height, 1)) * wallpaper.width;
   add({
     type: "video",
     name: `${spec.prefix}wallpaper`,
@@ -607,7 +611,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     frame: { width: 0, shadow: 0 },
     start: spec.start,
     duration: total,
-    ...keysFor(DW / 2, DH / 2, scaleFor(wallpaper, cover), null, 0),
+    transform: { x: 0, y: 0, scale: scaleFor(wallpaper, cover) * 1.01, rotation: 0 },
   });
 
   const zOrder = laid.map((_, index) => index).sort((a, b) => laid[a]!.spec.z - laid[b]!.spec.z || a - b);

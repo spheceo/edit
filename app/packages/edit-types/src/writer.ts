@@ -74,6 +74,12 @@ export type Check = { name: string; ok: boolean; detail: string };
 /** Who started a script (none on scripts from before sign-in). */
 export type Creator = { sub: string; name: string; email?: string; picture?: string | null };
 
+/** A script clip as a script and its edit last agreed on: its range (script ms) or words, and the edit's ends of it then (seconds of the recordings) or its words. */
+export type SyncedClip = { id: string; cutIn: boolean; startMs: number; endMs: number; narration: string | null; edit?: { head: number; tail: number; text: string | null } };
+
+/** The edit a script's changes go to, and back: its project, the clips as last in step, and why it stopped following the script, if it has. */
+export type EditLink = { project: string; clips: SyncedClip[]; outOfStep?: string };
+
 export type Script = {
   speakerCheck?: { total: number; checked: number; failed: string[]; at: number; needsApply?: boolean };
   id: string;
@@ -117,6 +123,8 @@ export type Script = {
   proposals?: Proposal[];
   /** The last full export to Google Docs. */
   docExport?: { id: string; url: string; revision: number; exportedAt: number };
+  /** The edit made from this script and each clip as the two last agreed on (script_sync.ts): what a save on either side is compared with. */
+  edit?: EditLink;
   /** What the producer's brief called each of the case's videos, in the order they join (brief.ts). */
   labels?: Label[];
   /** Some recording's words came from YouTube's captions: who speaks is read from the conversation, not watched. */
@@ -441,7 +449,7 @@ export type ChatTurn = {
 export type Focus = { selected: string[]; picked: [number, number] | null; playheadMs: number | null };
 
 /** A saved version of a footage script: who made it and what changed. */
-export type Version = { id: string; at: number; author: "you" | "claude" | "before"; summary: string; base?: string; restored?: number };
+export type Version = { id: string; at: number; author: "you" | "claude" | "edit" | "before"; summary: string; base?: string; restored?: number };
 
 /** What a version holds. */
 export type Snapshot = { clips: Clip[]; corrections: Record<string, string>; heading: string | null };

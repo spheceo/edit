@@ -33,9 +33,19 @@ cut?: [number, number],
 /**
  * The clip that plays it on the timeline.
  */
-clip?: string, } | { "kind": "narration", text: string, notes?: Array<string>, clip?: string, 
+clip?: string, 
+/**
+ * The script clip it came from (Script mode's clip id): the link that
+ * keeps a script and its edit in step both ways (script_sync.ts).
+ */
+origin?: string, } | { "kind": "narration", text: string, notes?: Array<string>, clip?: string, 
 /**
  * The voice-over clip reading it, once placed: it stands in for the
  * card once the card is gone.
  */
-voiceover?: string, };
+voiceover?: string, 
+/**
+ * The script clip it came from (Script mode's clip id): the link that
+ * keeps a script and its edit in step both ways (script_sync.ts).
+ */
+origin?: string, };

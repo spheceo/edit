@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
+import * as scriptSync from "../script_sync.ts";
 import * as archive from "./archive.ts";
 import * as build from "./build.ts";
 import * as cloud from "./cloud.ts";
@@ -52,6 +53,8 @@ export function start(app: App): void {
   reviews.start(app, data);
   // Idle scripts' footage left to the cloud.
   storage.start(data);
+  // Each script and the edit made from it kept in step.
+  scriptSync.start(app);
   // Archives and restores heard from the cloud, acted on every 20 s.
   setInterval(() => archive.react(app, data), 20_000);
   for (const begin of starters) {

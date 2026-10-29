@@ -42,6 +42,7 @@ import {
   addTrack,
   clipEnd,
   clipOf,
+  cutTime,
   duration as durationOf,
   fps as fpsOf,
   freeTrack,
@@ -155,12 +156,6 @@ function onLiveAsync<T>(found: Live, work: (input: ProjectInput) => Promise<T>):
 /** An image as MCP content: the picture, then its caption. */
 function imageContent(picture: EncodedImage, caption: string): Content[] {
   return image(picture.data, caption, picture.mime);
-}
-
-/** Replaces `target`'s fields with `source`'s (a project changed by the addon, in a store update). */
-function replaceContents(target: Project, source: Project): void {
-  for (const key of Object.keys(target)) delete (target as unknown as Args)[key];
-  Object.assign(target, source);
 }
 
 // ---------------------------------------------------------------------------
@@ -751,11 +746,7 @@ async function removeTime({ app, args, projectId }: ToolCall): Promise<Content[]
   };
   const [start, end] = [frame("start"), frame("end")];
   if (end <= start) throw new Error("end must come after start");
-  const [, done] = await app.store.update(projectId, ORIGIN, (project) => {
-    const cut = native().removeTime({ json: jsonForSerde(project) }, start, end);
-    replaceContents(project, JSON.parse(cut.json) as Project);
-    return cut.rippled;
-  });
+  const [, done] = await app.store.update(projectId, ORIGIN, (project) => cutTime(project, start, end));
   return text(
     `removed ${fixed(done.frames / fps, 2)}s at ${fixed(start / fps, 2)}s: ${done.cut} clip(s) cut, ${done.deleted} deleted, ${done.moved} moved`,
   );

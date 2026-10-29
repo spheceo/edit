@@ -40,6 +40,8 @@ export function libraryChanged(): void {
 /** The shared keys a save keeps (the cloud's, set when it starts). */
 export const hooks = {
   withSharedKeys: (_dir: string, script: Script): Script => script,
+  /** A script saved on this Mac (not a cloud pull): its edit follows (script_sync.ts). */
+  written: (_script: Script): void => {},
 };
 
 export function read(dir: string): Script {
@@ -76,6 +78,7 @@ export function body(script: Script): Script {
 export function write(dir: string, script: Script): void {
   fs.mkdirSync(dir, { recursive: true });
   writeAtomic(join(dir, "script.json"), JSON.stringify(body(hooks.withSharedKeys(dir, script)), null, 2));
+  hooks.written(script);
 }
 
 export function summary(script: Script): Summary {

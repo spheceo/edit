@@ -295,6 +295,11 @@ pub enum ScriptBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         clip: Option<String>,
+        /// The script clip it came from (Script mode's clip id): the link that
+        /// keeps a script and its edit in step both ways (script_sync.ts).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        origin: Option<String>,
     },
     /// Words between footage: shown as a cut-in card until there's a voice-over.
     Narration {
@@ -309,6 +314,11 @@ pub enum ScriptBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         voiceover: Option<String>,
+        /// The script clip it came from (Script mode's clip id): the link that
+        /// keeps a script and its edit in step both ways (script_sync.ts).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        origin: Option<String>,
     },
 }
 

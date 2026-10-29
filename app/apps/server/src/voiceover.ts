@@ -16,7 +16,7 @@ import { isBug } from "./guard.ts";
 import { importPaths } from "./import.ts";
 import type { Clip, Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
-import { addTrack, clipEnd, clipMedia, clipOf, fps as fpsOf, freshId, isSoundEffect, marksCut, mediaOf, trackOf } from "./project.ts";
+import { addTrack, clipEnd, clipMedia, clipOf, cutTime, fps as fpsOf, freshId, insertTime, isSoundEffect, marksCut, mediaOf, trackOf } from "./project.ts";
 import { join } from "./paths.ts";
 import { debugStrings, f32Saved, isAlphanumeric, isWhitespace, jsonForSerde, round, splitWhitespace, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
@@ -377,9 +377,12 @@ const REVOICE_SPEEDS: [number, number] = [0.85, 1.2];
  * when given (a word fixed: "himself" → "herself"; a house word reworded so
  * the narration needn't be muted), and puts the new take in place of its
  * voice-over, played at the speed that fits the cut-in as it is, so nothing
- * else on the timeline moves. The script's cut-in text follows.
+ * else on the timeline moves. The script's cut-in text follows. With
+ * `stretch` (a cut-in reworded in its script, which may now say more or less),
+ * a take too far from the cut-in's length to fit by speed plays as it is and
+ * the time at the cut-in's end opens or closes to it.
  */
-export async function revoice(app: App, id: string, cutIn: number, text: string | null): Promise<Json> {
+export async function revoice(app: App, id: string, cutIn: number, text: string | null, stretch = false): Promise<Json> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
   const blocks = (live.project.script?.blocks ?? []).filter((block) => block.kind === "narration");
@@ -423,17 +426,29 @@ export async function revoice(app: App, id: string, cutIn: number, text: string 
     const media = mediaOf(project, mediaId);
     if (clip === undefined || clip.type !== "audio" || media === undefined) throw new Error("the voice-over changed while the take was spoken");
     const seconds = clip.duration / fps;
-    const speed = media.duration / seconds;
+    let speed = media.duration / seconds;
+    let placedClip = clip;
     if (speed < REVOICE_SPEEDS[0] || speed > REVOICE_SPEEDS[1]) {
-      throw new Error(
-        `the new take is ${round(media.duration * 10) / 10} s and the cut-in ${round(seconds * 10) / 10} s: too far apart to fit by speed; reword it nearer the old length (the take is media ${mediaId})`,
-      );
+      if (!stretch) {
+        throw new Error(
+          `the new take is ${round(media.duration * 10) / 10} s and the cut-in ${round(seconds * 10) / 10} s: too far apart to fit by speed; reword it nearer the old length (the take is media ${mediaId})`,
+        );
+      }
+      const frames = Math.max(Math.round(media.duration * fps), 1);
+      const end = clip.start + clip.duration;
+      // What ends with the cut-in (its B-roll, its card) plays on with it; what follows moves.
+      if (frames > clip.duration) insertTime(project, end, frames - clip.duration, new Set(project.clips.filter((other) => clipEnd(other) === end && other.start >= clip.start).map((other) => other.id)), new Set());
+      else cutTime(project, end - (clip.duration - frames), end);
+      const again = clipOf(project, placed.id);
+      if (again === undefined || again.type !== "audio") throw new Error("the voice-over changed while the take was spoken");
+      placedClip = again;
+      speed = 1;
     }
-    clip.media = mediaId;
-    clip.source_in = 0;
-    clip.speed = f32Saved(speed);
+    placedClip.media = mediaId;
+    placedClip.source_in = 0;
+    placedClip.speed = f32Saved(speed);
     // Its house words are muted again by the next mute_house_words.
-    clip.mutes = [];
+    placedClip.mutes = [];
     const own = (project.script?.blocks ?? []).filter((one) => one.kind === "narration")[cutIn - 1];
     if (own !== undefined && own.kind === "narration") own.text = words;
     return { cut_in: cutIn, clip: clip.id, media: mediaId, take_seconds: round(media.duration * 100) / 100, speed: round(speed * 1000) / 1000, text: words };

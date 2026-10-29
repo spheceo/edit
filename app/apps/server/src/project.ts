@@ -13,12 +13,15 @@ import type {
   Media,
   Mute,
   Project,
+  Rippled,
   Settings,
   Style,
   ScriptBlock,
   Track,
   TrackKind,
 } from "./model.ts";
+import { native } from "./native/index.ts";
+import { jsonForSerde } from "./rust.ts";
 
 /** Project file format version (edit_core::PROJECT_VERSION). */
 export const PROJECT_VERSION = 1;
@@ -639,6 +642,19 @@ export function insertTime(project: Project, at: number, frames: number, lengthe
   }
   for (const marker of project.markers ?? []) if (marker.frame >= at) marker.frame += frames;
   return done;
+}
+
+/**
+ * Takes the frames [start, end) out of the timeline on every track (remove_time,
+ * the engine's): what plays across it is cut, what's inside goes, what comes
+ * after moves back. `project` is changed in place (a store update's copy).
+ */
+export function cutTime(project: Project, start: number, end: number): Rippled {
+  const cut = native().removeTime({ json: jsonForSerde(project) }, start, end);
+  const next = JSON.parse(cut.json) as Project;
+  for (const key of Object.keys(project)) delete (project as unknown as Record<string, unknown>)[key];
+  Object.assign(project, next);
+  return cut.rippled;
 }
 
 /**

@@ -29,11 +29,12 @@ test("a Writer script's clips become footage ranges of each recording and cut-in
   };
   const parsed = toParsed(joined);
   expect(parsed.title).toBe("Mom Leaves 5 Kids");
+  // Each block knows the script clip it came from (both of c3's, one a recording): the link script_sync keeps.
   expect(parsed.blocks).toEqual([
-    { kind: "footage", url: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123/view", file: "1AbCdEfGhIjKlMnOpQrStUvWxYz0123", start: 5, end: 9, label: "00:05 - 00:09", notes: ["edit: blur the child's face"] },
-    { kind: "narration", text: "On July 22, 2023, a call came in." },
-    { kind: "footage", url: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123/view", file: "1AbCdEfGhIjKlMnOpQrStUvWxYz0123", start: 58, end: 60, label: "00:58 - 01:00" },
-    { kind: "footage", url: "https://drive.google.com/file/d/1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876/view", file: "1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876", start: 0, end: 2.5, label: "00:00 - 00:03" },
+    { kind: "footage", url: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123/view", file: "1AbCdEfGhIjKlMnOpQrStUvWxYz0123", start: 5, end: 9, label: "00:05 - 00:09", notes: ["edit: blur the child's face"], origin: "c1" },
+    { kind: "narration", text: "On July 22, 2023, a call came in.", origin: "c2" },
+    { kind: "footage", url: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123/view", file: "1AbCdEfGhIjKlMnOpQrStUvWxYz0123", start: 58, end: 60, label: "00:58 - 01:00", origin: "c3" },
+    { kind: "footage", url: "https://drive.google.com/file/d/1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876/view", file: "1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876", start: 0, end: 2.5, label: "00:00 - 00:03", origin: "c3" },
   ]);
   expect(styleOf("foia")).toBe("bodycam");
   expect(styleOf("courtroom")).toBe("courtroom");

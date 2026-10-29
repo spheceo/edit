@@ -400,6 +400,7 @@ mod tests {
                 notes: Vec::new(),
                 clip: Some("inside".into()),
                 voiceover: Some("snd".into()),
+                origin: None,
             }],
         });
         project

@@ -17,7 +17,8 @@ const MERGE_MS = 10 * 60_000;
 /** Versions kept; the oldest go first. */
 const KEPT = 200;
 
-export type Author = "you" | "claude";
+/** Who made a save: the producer, Claude, or the edit made from the script (script_sync.ts). */
+export type Author = "you" | "claude" | "edit";
 
 export const snapshotOf = (script: Script): Snapshot => ({ clips: script.clips, corrections: script.corrections ?? {}, heading: script.heading ?? null });
 

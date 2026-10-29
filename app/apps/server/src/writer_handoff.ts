@@ -28,6 +28,7 @@ import * as writerStore from "./writer/store.ts";
 import type { Router } from "./http/router.ts";
 import type { ScriptBlock, Style } from "./model.ts";
 import * as script from "./script.ts";
+import * as scriptSync from "./script_sync.ts";
 import { markReusedScript, parseScriptText } from "./compilation_input.ts";
 import type { Parsed } from "./seams.ts";
 import { writeAtomic } from "./files.ts";
@@ -112,17 +113,9 @@ const mmss = (seconds: number) => {
   return `${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
 };
 
-/**
- * A Writer script as Edit's script blocks, or why it can't come over: a
- * commentary script has no footage of its own, and footage only on the Mac
- * it was imported on (a disk file) has no link another machine can fetch.
- */
-export function toParsed(given: WriterScript): Parsed {
-  if (given.sourceKind === "commentary" || (given.commentary !== undefined && given.commentary !== null)) {
-    return commentaryParsed(given);
-  }
+/** A script's recordings on its clock (ms), each with its file as Edit names it. */
+export function recordingFiles(given: WriterScript): { start: number; end: number; url: string; file: string; originalKey?: string }[] {
   const parts = (given.parts ?? []).filter((part) => part.durationMs > 0);
-  // The recordings on the script's clock, each with its file.
   const files: { start: number; end: number; url: string; file: string; originalKey?: string }[] = [];
   if (parts.length === 0) {
     const url = given.sourceUrl ?? "";
@@ -138,6 +131,19 @@ export function toParsed(given: WriterScript): Parsed {
       files.push({ start: part.startMs, end: part.startMs + part.durationMs, url: part.url ?? "", file, ...(shared ? { originalKey: part.originalKey } : {}) });
     }
   }
+  return files;
+}
+
+/**
+ * A Writer script as Edit's script blocks, or why it can't come over: a
+ * commentary script has no footage of its own, and footage only on the Mac
+ * it was imported on (a disk file) has no link another machine can fetch.
+ */
+export function toParsed(given: WriterScript): Parsed {
+  if (given.sourceKind === "commentary" || (given.commentary !== undefined && given.commentary !== null)) {
+    return commentaryParsed(given);
+  }
+  const files = recordingFiles(given);
   const blocks: ScriptBlock[] = [];
   const reused = new Set<string>();
   const appendReuse = (url: string) => {
@@ -158,7 +164,7 @@ export function toParsed(given: WriterScript): Parsed {
     const notes = (clip.notes ?? []).map((note) => note.text.trim()).filter((text) => text !== "");
     if (clip.kind === "cut-in") {
       const text = (clip.narration ?? "").trim();
-      if (text !== "" && !(clip.reuse && text === "REUSE")) blocks.push({ kind: "narration", text, ...(notes.length > 0 ? { notes } : {}) });
+      if (text !== "" && !(clip.reuse && text === "REUSE")) blocks.push({ kind: "narration", text, ...(notes.length > 0 ? { notes } : {}), origin: clip.id });
       if (clip.reuse) appendReuse(clip.reuse);
       continue;
     }
@@ -177,6 +183,7 @@ export function toParsed(given: WriterScript): Parsed {
         end,
         label: `${mmss(start)} - ${mmss(end)}`,
         ...((first && notes.length > 0) || one.originalKey ? { notes: [...(first ? notes : []), ...(one.originalKey ? [`Shared original: ${one.originalKey}`] : [])] } : {}),
+        origin: clip.id,
       });
       first = false;
     }
@@ -323,6 +330,9 @@ export async function importScript(app: App, id: string): Promise<{ project: str
     writeAtomic(join(dir, "broll.json"), JSON.stringify({ writer: { id: given.id, title: given.title, sources: (given.commentary?.sources ?? []).filter((source) => source.role === "evidence") } }, null, 2));
   }
   carryResearch(app, id, live.project.id);
+  // The two kept in step from here (script_sync.ts): the script remembers its edit and each clip as both have it.
+  const own = writerStore.scriptDir(writerStore.dataDir(app.store.home), id);
+  if (fs.existsSync(join(own, "script.json")) && scriptSync.follows(given)) writerStore.update(own, (kept) => void (kept.edit = scriptSync.linkOf(live.project.id, kept)), true);
   script.start(app, live.project.id, false);
   writeAtomic(join(app.store.home, "writer-imports.json"), JSON.stringify({ ...imports(app.store.home), [id]: live.project.id }));
   diag.info("script", `${given.title}: imported from Writer (${parsed.blocks.length} blocks)`);

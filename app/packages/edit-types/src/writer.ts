@@ -48,6 +48,9 @@ export type Part = {
 export type Highlight = { firstWordId: string; lastWordId: string; startMs: number; endMs: number; quote: string; why: string };
 
 /** A question a paused import waits on, as Repack asks it. */
+/** A case of a compilation the channel already covered: its transition is written from its earlier script, and its footage joins only for intro clips. */
+export type Reuse = { url: string; title: string; after: number; footage?: string; narration?: string; earlier?: string; script?: string; scriptTitle?: string; scriptText?: string };
+
 export type Decision =
   | { kind: "failed_recordings"; summary: string; failed: { id: string; title: string; error: string }[]; total: number }
   | {
@@ -109,7 +112,7 @@ export type Script = {
   /** A compilation's reused cases: each takes only its transition, carrying its link. */
   /** A reused case given as its earlier script's Doc carries the footage it lists and its narration. */
   /** `earlier`: the earlier compilation's card (or Doc) and case, as the card gave them; `script`: that compilation's Doc, once read. */
-  reuses?: { url: string; title: string; after: number; footage?: string; narration?: string; earlier?: string; script?: string; scriptTitle?: string; scriptText?: string }[];
+  reuses?: Reuse[];
   /** Rewrites of saved narration waiting for the producer to accept or decline. */
   proposals?: Proposal[];
   /** The last full export to Google Docs. */

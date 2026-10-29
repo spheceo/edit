@@ -6,7 +6,7 @@
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import * as build from "./build.ts";
-import * as commentary from "./commentary.ts";
+import * as drive from "./drive.ts";
 import { join, userHome } from "../paths.ts";
 import * as jobs from "./jobs.ts";
 import * as store from "./store.ts";
@@ -19,7 +19,7 @@ export const starters: ((app: App) => void)[] = [];
 
 export function start(app: App): void {
   const data = store.dataDir(app.store.home);
-  commentary.hooks.googleToken = () => app.library.accessToken();
+  drive.hooks.accessToken = () => app.library.accessToken();
   build.usePort(app.port);
   try {
     const adopted = store.adoptWriterFolder(data, WRITER_FOLDER());

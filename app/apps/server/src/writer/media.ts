@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 
 import * as diag from "../diag.ts";
+import { isFile } from "../paths.ts";
 import { ffmpeg, ffprobe } from "../tools.ts";
 import { run } from "./proc.ts";
 
@@ -34,6 +35,12 @@ export async function streams(path: string): Promise<Streams> {
 }
 
 /** Time for ffmpeg to work through footage: an hour, or ten minutes plus half its length, whichever is longer. */
+/** A file that plays: there, and with a length. */
+export async function readable(path: string): Promise<boolean> {
+  if (!isFile(path)) return false;
+  return streams(path).then((found) => found.durationMs > 0, () => false);
+}
+
 export const toolTime = (durationMs: number): number => Math.max(600_000 + durationMs / 2, 3_600_000);
 
 /**

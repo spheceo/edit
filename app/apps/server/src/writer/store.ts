@@ -11,6 +11,7 @@ import { writeAtomic } from "../files.ts";
 import { join } from "../paths.ts";
 import { isCutIn } from "./blocks.ts";
 import { draftWords } from "./paragraphs.ts";
+import { partLinks } from "./parts.ts";
 
 /** Script mode's data folder in Edit's home. */
 export const dataDir = (home: string): string => join(home, "writer");
@@ -36,9 +37,8 @@ export function libraryChanged(): void {
   library++;
 }
 
-/** Hooks other parts of Script mode set: links an older joined script's recordings gained later, and the shared keys a save keeps. */
+/** The shared keys a save keeps (the cloud's, set when it starts). */
 export const hooks = {
-  partLinks: (_dir: string, _script: Script): string[] | null => null,
   withSharedKeys: (_dir: string, script: Script): Script => script,
 };
 
@@ -61,7 +61,7 @@ export function read(dir: string): Script {
   // A script joined before its recordings kept their links gets them from the import's own list.
   const parts = script.parts ?? [];
   if (parts.some((part) => part.url === undefined)) {
-    const links = hooks.partLinks(dir, script);
+    const links = partLinks(dir, script);
     if (links !== null) parts.forEach((part, index) => (part.url ??= links[index]));
   }
   return script;

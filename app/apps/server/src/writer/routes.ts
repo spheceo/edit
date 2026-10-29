@@ -2,7 +2,7 @@
 // answered (its UI came over with them), each checked against what the
 // signed-in person may do (can.ts).
 
-import type { Adding, BuildStatus, Clip, Draft, Focus, Kind, Pacing, Role, Script } from "@edit/types/writer";
+import type { Adding, BuildStatus, Choice, Clip, Draft, Focus, Kind, Pacing, Role, Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
@@ -15,13 +15,18 @@ import * as build from "./build.ts";
 import * as can from "./can.ts";
 import * as chat from "./chat.ts";
 import * as commentary from "./commentary.ts";
+import * as brief from "./brief.ts";
+import * as drive from "./drive.ts";
 import * as edits from "./edits.ts";
+import * as imports from "./imports.ts";
 import * as jobs from "./jobs.ts";
+import * as reuse from "./reuse.ts";
 import { pageCount } from "./pages.ts";
 import { audit } from "./plan.ts";
 import * as scripting from "./scripting.ts";
 import { readText } from "./sources.ts";
 import * as store from "./store.ts";
+import * as trello from "./trello.ts";
 import * as versions from "./versions.ts";
 
 type Context = RouteContext<App>;
@@ -32,11 +37,9 @@ export const extensions: {
   detail: ((data: string, dir: string, script: Script) => Partial<Script>)[];
   /** A summary's fields from elsewhere (the cloud's refusal), filled in on listing. */
   listed: ((id: string) => Partial<import("@edit/types/writer").Summary>)[];
-  /** Whether an import is running on the script (import.ts). */
-  importing: (id: string) => boolean;
   /** After a script is deleted here (the cloud records it). */
   deleted: ((data: string, id: string) => void)[];
-} = { detail: [], listed: [], importing: () => false, deleted: [] };
+} = { detail: [], listed: [], deleted: [] };
 
 export const dataOf = (app: App): string => store.dataDir(app.store.home);
 
@@ -58,7 +61,7 @@ export function readFor(data: string, id: string): Script {
 
 /** Refuses while an import or a job runs on the script. */
 export function idle(id: string, what = "This import is still running."): void {
-  if (extensions.importing(id)) throw bad(what);
+  if (imports.importing(id)) throw bad(what);
 }
 
 /** A route's work, its plain errors answered as 400s. */
@@ -77,6 +80,9 @@ export async function body<T>(context: Context): Promise<T> {
 }
 
 const id = (context: Context): string => context.params.id ?? "";
+
+/** The scripts already made, lowercased, so a Trello card with one is marked. */
+const titles = (app: App): string[] => store.list(dataOf(app)).map((row) => row.title.trim().toLowerCase());
 
 const NO_FOCUS: Focus = { selected: [], picked: null, playheadMs: null };
 
@@ -172,7 +178,7 @@ export function routes(router: Router<App>): void {
       return answer(() => {
         const data = dataOf(context.app);
         readFor(data, id(context));
-        if (jobs.running(id(context)) || extensions.importing(id(context))) throw new Error("Wait for the current work to finish before reviewing changes.");
+        if (jobs.running(id(context)) || imports.importing(id(context))) throw new Error("Wait for the current work to finish before reviewing changes.");
         return detail(data, edits.resolveProposals(data, id(context), Number(given.revision), Array.isArray(given.proposals) ? given.proposals.map(String) : [], given.accept === true));
       });
     })
@@ -222,6 +228,78 @@ export function routes(router: Router<App>): void {
         return { ok: true };
       }),
     )
+    // Imports: each request holds until its import finishes or pauses for a choice; the page follows it in /api/writer/progress meanwhile.
+    .post("/api/writer/scripts/file", async (context) => {
+      const given = await body<{ path?: string; article?: string; title?: string; kind?: Kind }>(context);
+      return answer(async () => detail(dataOf(context.app), await imports.fromFile(context.app, dataOf(context.app), String(given.path ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null)));
+    })
+    .post("/api/writer/scripts/youtube", async (context) => {
+      const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind }>(context);
+      return answer(async () => detail(dataOf(context.app), await imports.fromYoutube(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null)));
+    })
+    .post("/api/writer/scripts/drive", async (context) => {
+      const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind }>(context);
+      return answer(async () => detail(dataOf(context.app), await imports.fromDrive(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null)));
+    })
+    .post("/api/writer/scripts/compilation", async (context) => {
+      const given = await body<{ title?: string; urls?: string[]; case?: boolean; kind?: Kind }>(context);
+      return answer(async () => detail(dataOf(context.app), await imports.fromCompilation(context.app, dataOf(context.app), String(given.title ?? ""), Array.isArray(given.urls) ? given.urls.map(String) : [], given.case === true, given.kind ?? null)));
+    })
+    .post("/api/writer/scripts/brief", async (context) => {
+      const given = await body<{ text?: string; kind?: Kind }>(context);
+      return answer(async () => detail(dataOf(context.app), await imports.fromBrief(context.app, dataOf(context.app), String(given.text ?? ""), given.kind ?? null)));
+    })
+    .post("/api/writer/scripts/{id}/resume", async (context) => {
+      const choice = await body<Choice>(context);
+      return answer(async () => {
+        readFor(dataOf(context.app), id(context));
+        return detail(dataOf(context.app), await imports.resume(context.app, dataOf(context.app), id(context), choice));
+      });
+    })
+    // Transcribing footage that has none: the same as Retry.
+    .post("/api/writer/scripts/{id}/transcribe", (context) =>
+      answer(async () => {
+        readFor(dataOf(context.app), id(context));
+        return detail(dataOf(context.app), await imports.resume(context.app, dataOf(context.app), id(context), { kind: "retry" }));
+      }),
+    )
+    .post("/api/writer/scripts/{id}/complete-transcription", (context) =>
+      answer(() => startJob(context.app, id(context), { kind: "transcribe" }, (job) => imports.complete(context.app, dataOf(context.app), id(context), job))),
+    )
+    .post("/api/writer/scripts/{id}/speakers/retry", (context) =>
+      answer(() => startJob(context.app, id(context), { kind: "speakers" }, (job) => imports.retrySpeakers(dataOf(context.app), id(context), job))),
+    )
+    // A compilation's reused cases' videos, brought in for its opening's intro clips.
+    .post("/api/writer/scripts/{id}/reuses", async (context) => {
+      const given = await body<{ urls?: string[] }>(context);
+      return answer(() => {
+        const script = readFor(dataOf(context.app), id(context));
+        const urls = Array.isArray(given.urls) && given.urls.length > 0 ? given.urls.map(String) : reuse.missing(script);
+        if (urls.length === 0) throw new Error("Every reused case is already imported.");
+        return startJob(context.app, id(context), { kind: "reuse", urls }, (job) => reuse.importReused(context.app, dataOf(context.app), id(context), urls, job));
+      });
+    })
+    .get("/api/writer/progress", () => json(imports.progress()))
+    .post("/api/writer/videos/check", async (context) => {
+      const given = await body<{ lines?: string[] }>(context);
+      return answer(() => imports.checkVideos(context.app, Array.isArray(given.lines) ? given.lines.map(String) : []));
+    })
+    .post("/api/writer/briefs/read", async (context) => {
+      const given = await body<{ text?: string }>(context);
+      return answer(() => brief.parse(String(given.text ?? "")));
+    })
+    // Signs in to the team's Drive account without downloading anything.
+    .post("/api/writer/drive/check", () =>
+      answer(async () => {
+        await drive.hooks.accessToken();
+        return "Google Drive is connected.";
+      }),
+    )
+    .post("/api/writer/trello/card", async (context) => {
+      const given = await body<{ link?: string }>(context);
+      return answer(() => trello.card(String(given.link ?? ""), titles(context.app)));
+    })
+    .get("/api/writer/trello/{list}", (context) => answer(() => trello.cards(context.params.list ?? "", titles(context.app))))
     .post("/api/writer/scripts/{id}/build", async (context) => {
       const given = await body<{ note?: string; kind?: Kind }>(context);
       return answer(() => {

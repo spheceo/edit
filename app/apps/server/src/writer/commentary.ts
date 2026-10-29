@@ -15,6 +15,7 @@ import { decodeEntities } from "../research.ts";
 import { isAlphanumeric, splitWhitespace } from "../rust.ts";
 import * as can from "./can.ts";
 import * as claude from "./claude.ts";
+import * as drive from "./drive.ts";
 import { scriptText } from "./lessons.ts";
 import { cites as citesOf, clock, draftWords, ensureIds, findIn, liveMarks, minutes, noteLines, parseTime, popupLine, said as saidOf, timing, WORDS_PER_MINUTE } from "./paragraphs.ts";
 import { pageTitle, paragraphs as pageText } from "./research.ts";
@@ -26,9 +27,6 @@ import * as store from "./store.ts";
 export { WORDS_PER_MINUTE };
 
 export const GUIDE = writerGuide("commentary");
-
-/** The team's Google sign-in, for a Doc or Drive file shared with its account rather than publicly; Edit's library holds it (set on start). */
-export const hooks = { googleToken: (): Promise<string> => Promise.reject(new Error("no Google sign-in")) };
 
 /** The least share of narration a documentary-paced script carries (Turkey Tom's: 75%), and the most clips per ten minutes of narration (his: 16). */
 const DOCUMENTARY_NARRATION = 0.65;
@@ -319,7 +317,7 @@ async function driveApi(id: string, doc: boolean): Promise<[string, string]> {
   const NOT_SHARED = 'That file isn\'t shared publicly or with Repack\'s Drive account. Set it to "Anyone with the link", then add it again.';
   let token: string;
   try {
-    token = await hooks.googleToken();
+    token = await drive.hooks.accessToken();
   } catch {
     throw new Error(NOT_SHARED);
   }

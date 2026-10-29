@@ -3,6 +3,7 @@
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
+import * as os from "node:os";
 
 import type { App } from "../src/app.ts";
 import { dispatch } from "../src/mcp/index.ts";
@@ -172,6 +173,8 @@ test.skipIf(ffmpeg === null || Bun.which("ffprobe") === null)(
       expect((await call(app, "collect_images", { queries: "x" })).text).toBe("invalid type: string \"x\", expected a sequence");
 
       const [item] = research.items(home, id);
+      // Kept once, in the pool, and linked into the project.
+      expect(fs.statSync(item!.file).nlink).toBe(2);
       // A look at what's waiting: a sheet of thumbnails and the list.
       let sheet: { width: number; height: number }[] = [];
       native.composeSheet = async (images) => {
@@ -225,5 +228,36 @@ test("one collection per project at a time", async () => {
     expect(fs.existsSync(home)).toBe(true);
   } finally {
     cleanup();
+  }
+});
+
+test("research images are pooled once and the pool keeps only what a project links", () => {
+  const home = fs.mkdtempSync(`${os.tmpdir()}/edit-pool-`);
+  try {
+    const name = "0123456789abcdef.jpg";
+    const a = `${home}/research/pa`;
+    const b = `${home}/research/pb`;
+    fs.mkdirSync(a, { recursive: true });
+    fs.mkdirSync(b, { recursive: true });
+    fs.writeFileSync(`${a}/${name}`, "same picture");
+    fs.writeFileSync(`${b}/${name}`, "same picture");
+    fs.writeFileSync(`${a}/index.json`, "[]");
+    // Two copies: one goes (a dry run changes nothing).
+    expect(research.prunePool(home, true)).toBe(0);
+    expect(research.prunePool(home)).toBe(12);
+    const pooled = `${research.poolDir(home)}/${name}`;
+    expect(fs.statSync(pooled).nlink).toBe(3);
+    expect(fs.readFileSync(`${b}/${name}`, "utf8")).toBe("same picture");
+    expect(fs.existsSync(`${a}/index.json`)).toBe(true);
+    // Both projects gone: the pooled copy goes, once it isn't new.
+    fs.rmSync(a, { recursive: true });
+    fs.rmSync(b, { recursive: true });
+    expect(research.prunePool(home)).toBe(0);
+    const old = new Date(Date.now() - 2 * 3600_000);
+    fs.utimesSync(pooled, old, old);
+    expect(research.prunePool(home)).toBe(12);
+    expect(fs.existsSync(pooled)).toBe(false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });

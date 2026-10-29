@@ -52,6 +52,101 @@ export function dir(home: string, project: string): string {
   return join(home, "research", project);
 }
 
+/**
+ * Every found image once, by its hash: `<home>/research/.images/`, hard-linked
+ * into each project's folder. Test edits of the same video found the same
+ * pictures again and again (Oct 29: 4.2 GB of images, 1.1 GB of them
+ * different). A pooled file no project links any more goes with the cache's
+ * cleaning (`prunePool`).
+ */
+export function poolDir(home: string): string {
+  return join(home, "research", ".images");
+}
+
+function linkPooled(folder: string, name: string, bytes: Uint8Array): void {
+  const pool = join(folder.slice(0, folder.lastIndexOf("/")), ".images");
+  const pooled = join(pool, name);
+  const path = join(folder, name);
+  if (!fs.existsSync(pooled)) {
+    fs.mkdirSync(pool, { recursive: true });
+    writeAtomic(pooled, bytes);
+  }
+  try {
+    fs.linkSync(pooled, path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+    // A home the pool can't link into: the project keeps its own copy.
+    fs.writeFileSync(path, bytes);
+  }
+}
+
+/**
+ * Pools the images already in projects' folders (each name is its hash, so
+ * equal names are equal files) and removes pooled ones no project links.
+ * Returns the bytes freed.
+ */
+export function prunePool(home: string, dryRun = false): number {
+  const root = join(home, "research");
+  const pool = poolDir(home);
+  let freed = 0;
+  let projects: string[];
+  try {
+    projects = fs.readdirSync(root).filter((name) => !name.startsWith("."));
+  } catch {
+    return 0;
+  }
+  for (const project of projects) {
+    let names: string[];
+    try {
+      names = fs.readdirSync(join(root, project)).filter((name) => /^[0-9a-f]{16}\.(jpg|png|webp)$/.test(name));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const path = join(root, project, name);
+      const pooled = join(pool, name);
+      try {
+        const stat = fs.lstatSync(path);
+        if (!stat.isFile()) continue;
+        if (!fs.existsSync(pooled)) {
+          if (dryRun) continue;
+          fs.mkdirSync(pool, { recursive: true });
+          fs.linkSync(path, pooled);
+          continue;
+        }
+        const other = fs.statSync(pooled);
+        if (other.ino === stat.ino || other.size !== stat.size) continue;
+        freed += stat.size;
+        if (dryRun) continue;
+        const temp = `${path}.pool-${process.pid}`;
+        fs.linkSync(pooled, temp);
+        fs.renameSync(temp, path);
+      } catch (error) {
+        diag.warn("research", `pooling ${path}: ${diag.messageOf(error)}`);
+      }
+    }
+  }
+  let pooled: string[] = [];
+  try {
+    pooled = fs.readdirSync(pool);
+  } catch {
+    // No pool yet.
+  }
+  for (const name of pooled) {
+    const path = join(pool, name);
+    try {
+      const stat = fs.statSync(path);
+      // One written a moment ago may be about to be linked.
+      if (!stat.isFile() || stat.nlink > 1 || Date.now() - stat.mtimeMs < 3600_000) continue;
+      freed += stat.size;
+      if (!dryRun) fs.rmSync(path);
+    } catch {
+      // Gone already.
+    }
+  }
+  return freed;
+}
+
 export function collecting(project: string): boolean {
   return COLLECTING.has(project);
 }
@@ -688,7 +783,7 @@ async function download(folder: string, [image, page, title]: Hit, query: string
   const path = join(folder, `${id}.${extension}`);
   if (!fs.existsSync(path)) {
     try {
-      fs.writeFileSync(path, bytes);
+      linkPooled(folder, `${id}.${extension}`, bytes);
     } catch {
       return null;
     }

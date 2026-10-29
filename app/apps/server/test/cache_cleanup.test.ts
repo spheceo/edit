@@ -39,14 +39,21 @@ test("the cache loses rebuildable files of media nobody uses and old half-writte
     put(`${cache}/export-chunks/p/0123.mp4`, 11);
     put(`${cache}/export-chunks/p/4567.mp4`, 13, Date.now());
     put(`${cache}/export-chunks/p/manifest-v1.json`, 2);
+    // A failed share's review copy goes after a few days; its poster and a fresh one stay.
+    put(`${cache}/reviews/p/old.mp4`, 7);
+    put(`${cache}/reviews/p/old.jpg`, 3);
+    put(`${cache}/reviews/p/new.mp4`, 9, Date.now());
     const dry = cleanCache(app, true);
-    expect(dry.bytes).toBe(20 + 30 + 40 + 5 + 11);
+    expect(dry.bytes).toBe(20 + 30 + 40 + 5 + 11 + 7);
     expect(fs.existsSync(`${cache}/${gone}/preview.mp4`)).toBe(true);
     const done = cleanCache(app, false);
     expect(fs.existsSync(`${cache}/export-chunks/p/0123.mp4`)).toBe(false);
     expect(fs.existsSync(`${cache}/export-chunks/p/4567.mp4`)).toBe(true);
     expect(fs.existsSync(`${cache}/export-chunks/p/manifest-v1.json`)).toBe(true);
-    expect(done.bytes).toBe(106);
+    expect(fs.existsSync(`${cache}/reviews/p/old.mp4`)).toBe(false);
+    expect(fs.existsSync(`${cache}/reviews/p/old.jpg`)).toBe(true);
+    expect(fs.existsSync(`${cache}/reviews/p/new.mp4`)).toBe(true);
+    expect(done.bytes).toBe(113);
     expect(fs.existsSync(`${cache}/${usedKey}/preview.mp4`)).toBe(true);
     expect(fs.existsSync(`${cache}/${usedKey}/preview.partial.mp4.sb-a0dac0bf-H5wfgu`)).toBe(false);
     expect(fs.existsSync(`${cache}/${gone}/preview.mp4`)).toBe(false);

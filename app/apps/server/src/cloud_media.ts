@@ -352,7 +352,7 @@ export function scratchDir(cache: string): string {
   }
   for (const name of names) {
     try {
-      if (Date.now() - fs.statSync(join(dir, name)).mtimeMs > 12 * HOUR * 1000) fs.rmSync(join(dir, name), { force: true });
+      if (Date.now() - fs.statSync(join(dir, name)).mtimeMs > 12 * HOUR * 1000) fs.rmSync(join(dir, name), { recursive: true, force: true });
     } catch {
       // Gone already.
     }

@@ -27,6 +27,7 @@ import { Semaphore } from "./media.ts";
 import * as diag from "./diag.ts";
 import { carryAnalysis, localPath, readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { join } from "./paths.ts";
+import * as research from "./research.ts";
 import { localBudgetBytes } from "./storage.ts";
 
 /** Made again cheaply from the source. */
@@ -364,6 +365,23 @@ export function cleanCache(
       }
     }
     if (touched) report.folders += 1;
+  }
+  // A review copy is removed once its share is published; one a share that
+  // failed left (Oct 29: a 669 MB one, two days old) goes after a few days.
+  const reviewsDir = join(cache, "reviews");
+  for (const project of safeList(reviewsDir)) {
+    for (const entry of safeList(join(reviewsDir, project))) {
+      if (!entry.endsWith(".mp4")) continue;
+      const path = join(reviewsDir, project, entry);
+      if (age(path, now) >= DOWNLOADED) remove(path);
+    }
+  }
+  // Research images no project links any more (research.ts's pool).
+  const pooled = research.prunePool(app.store.home, dryRun);
+  if (pooled > 0) {
+    report.bytes += pooled;
+    report.files += 1;
+    if (report.removed.length < 50) report.removed.push(research.poolDir(app.store.home));
   }
   // Over the limit (or the disk nearly full): used footage's previews, the
   // projects saved longest ago first.

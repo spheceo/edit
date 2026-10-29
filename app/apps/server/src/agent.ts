@@ -279,6 +279,11 @@ export class Agents implements seams.AgentPanel {
   hasRunningTurns(): boolean {
     return [...this.chats.values()].some((chat) => chat.running);
   }
+
+  /** The projects whose agent turn is running now. */
+  runningProjects(): string[] {
+    return [...this.chats.entries()].flatMap(([project, chat]) => (chat.running ? [project] : []));
+  }
   readonly claudeSupport: ClaudeSupport;
   /** Failed messages survive app restarts, but never Stop, New Chat or a newer message. */
   private authPending = new Map<string, { text: string; user: string; model: string | null; effort: string | null; continued: boolean; retried: boolean }>();

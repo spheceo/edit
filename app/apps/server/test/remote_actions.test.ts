@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Script } from "@edit/types/writer";
 
 import type { App } from "../src/app.ts";
-import { resume } from "../src/remote_actions.ts";
+import { problems, RESTART, resume, UNSTICK } from "../src/remote_actions.ts";
 import * as store from "../src/writer/store.ts";
 
 /** An Edit home with one script in Script mode's folder, and no projects. */
@@ -37,5 +37,33 @@ describe("remote resume of a script", () => {
   test("an id that's neither a project nor a script says so", async () => {
     const [app] = home({});
     await expect(resume(app, "nope")).rejects.toThrow("There's no project or script nope on this Mac.");
+  });
+});
+
+describe("remote support's other actions", () => {
+  /** A Mac with nothing on it and, with `exporting`, an export running. */
+  const quiet = (exporting = false) => {
+    const root = fs.mkdtempSync(join(os.tmpdir(), "edit-remote-"));
+    return { store: { home: root, get: () => null, list: () => [], cloud: () => null }, scripts: { get: () => null, running: () => false }, agents: { runningProjects: () => [] }, exports: { running: () => exporting } } as unknown as App;
+  };
+
+  test("unstick on a Mac with nothing stuck says so; restart refuses while work would be cut off", async () => {
+    expect(await resume(quiet(), UNSTICK)).toBe("nothing was stuck");
+    await expect(resume(quiet(true), RESTART)).rejects.toThrow("Not restarted: an export would be cut off");
+  });
+
+  test("the problems of the last two days come once per kind, most frequent first, numbers and ids aside", () => {
+    const now = Date.parse("2026-10-30T01:00:00");
+    const lines = [
+      "2026-10-29 23:00:01.000 ERROR [export] p1793273198608-28: export failed after 12 s: decoder stalled at 1200",
+      "2026-10-29 23:10:01.000 ERROR [export] p1793132820736-211: export failed after 40 s: decoder stalled at 88",
+      "2026-10-29 23:20:01.000 WARN [cloud] reading edit/proxies/a.mp4 in blocks: R2 answered 503 to a block read",
+      "2026-10-29 23:20:02.000 INFO [cloud] all fine",
+      "2026-10-26 23:20:02.000 ERROR [export] long ago",
+    ];
+    expect(problems(lines, now)).toEqual([
+      "    2× last 2026-10-29 23:10:01 · ERROR [export] p1793132820736-211: export failed after 40 s: decoder stalled at 88",
+      "    1× last 2026-10-29 23:20:01 · WARN [cloud] reading edit/proxies/a.mp4 in blocks: R2 answered 503 to a block read",
+    ]);
   });
 });

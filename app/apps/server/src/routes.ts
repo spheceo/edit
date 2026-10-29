@@ -32,6 +32,8 @@ import * as patches from "./patch.ts";
 import { canonical, expandHome, extension, fileName, fileStem, isFile, join, parent } from "./paths.ts";
 import { DEFAULT_SETTINGS, SHORTS_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
+import * as writerImports from "./writer/imports.ts";
+import * as writerJobs from "./writer/jobs.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { listFiles, migrateMediaFiles, storageReport, verifyExports } from "./storage.ts";
 import { readLocalOriginals } from "./cloud_media.ts";
@@ -424,7 +426,9 @@ export async function installUpdate(app: App, remote = false) {
     }
     // An import too: a restart mid-download used to leave it waiting for someone to open the project.
     const scripts = (app.scripts as { running?: () => boolean } | undefined)?.running?.() ?? false;
-    return app.exports.running() || uploading || scripts || importing();
+    // Script mode's imports and Claude's work on scripts too (they'd be cut off).
+    const writing = writerImports.anyImporting() || writerJobs.runningList().length > 0;
+    return app.exports.running() || uploading || scripts || importing() || writing;
   };
   const agentRunning = () => remote && ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() ?? false);
   if (workRunning()) {

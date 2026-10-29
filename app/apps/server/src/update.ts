@@ -660,6 +660,11 @@ function restart(exe: string): never {
   process.exit(1);
 }
 
+/** Starts this Edit again where it runs (remote support's restart): the same program and arguments, so it binds the same ports. */
+export function restartSelf(): never {
+  restart(process.execPath);
+}
+
 /** `edit update`. */
 export async function runCli(home: string): Promise<void> {
   if (!enabled()) {

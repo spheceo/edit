@@ -469,6 +469,18 @@ export class Cloud implements CloudHook {
     return entry === undefined ? undefined : change(entry);
   }
 
+  /** Every project waiting out a failure is tried again now (remote support's unstick): how many were waiting. */
+  retryNow(): number {
+    let waiting = 0;
+    for (const entry of this.projects.values()) {
+      if (entry.retryAt === null) continue;
+      entry.retryAt = null;
+      waiting++;
+    }
+    this.wake();
+    return waiting;
+  }
+
   /** Wakes the loop (tokio's Notify::notify_one: a wake with nobody waiting is kept for the next wait). */
   wake(): void {
     const waiter = this.waiter;

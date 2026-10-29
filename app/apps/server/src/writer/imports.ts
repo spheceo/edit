@@ -50,6 +50,8 @@ const latest = new Map<string, ImportProgress>();
 
 /** Whether this script is importing right now. */
 export const importing = (id: string): boolean => running.has(id);
+/** Whether any script is importing (a restart would cut it off). */
+export const anyImporting = (): boolean => running.size > 0;
 
 /** Every import running now, so the page can follow them. */
 export const progress = (): ImportProgress[] => [...latest.values()];

@@ -70,6 +70,14 @@ export function syncSoon(): void {
   pullNow = true;
 }
 
+/** Every script waiting after a refusal is tried again on the next tick (remote support's unstick): how many were. */
+export function tryAllAgain(): number {
+  const waiting = backoff.size;
+  backoff.clear();
+  syncSoon();
+  return waiting;
+}
+
 /** Tries this script again on the next tick, however long it was waiting after a refusal. */
 export function tryAgain(id: string): void {
   backoff.delete(id);

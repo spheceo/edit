@@ -20,6 +20,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as archive from "./archive.ts";
 import * as cloud from "./cloud.ts";
+import * as cloudProjects from "./cloud_projects.ts";
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
 import * as machine from "./machine.ts";
@@ -1133,6 +1134,19 @@ export async function checkIn(app: App): Promise<string[]> {
     const project = request.sourceId;
     const live = app.store.get(project);
     const busy = readying.has(project) || sharing.has(project) || (live !== null && (seams.agentPanel(app).chat(project) as { running?: boolean }).running === true);
+    // A project only in the cloud comes down, and the next check-in takes it
+    // (Oct 29: two Ready for changes waited all evening on the fixing
+    // computer because their projects weren't on it). A busy one waits.
+    if (live === null && !busy && cloudProjects.cloudOf(app)?.on()) {
+      try {
+        await cloudProjects.open(app, project, "fixing");
+        waits(request.reviewId, `${request.title || project}: Ready for changes: the project came down from the cloud; its fix starts at the next check-in`);
+        continue;
+      } catch (error) {
+        waits(request.reviewId, `${request.title || project}: Ready for changes waits: the project didn't come down from the cloud (${diag.messageOf(error)})`);
+        continue;
+      }
+    }
     // A project not here, or busy, waits for a later check-in.
     if (live === null || busy) {
       waits(request.reviewId, `${request.title || project}: Ready for changes waits: the project ${live === null ? "isn't on this computer" : "is busy"}`);

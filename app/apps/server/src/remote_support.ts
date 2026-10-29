@@ -376,6 +376,8 @@ function requireLocalCli(context: RouteContext<App>) {
 
 export function routes(router: Router<App>) {
   router.get("/api/remote-support", context => { requireLocalCli(context); return json(settings(context.app)); });
+  // This Mac's own report, as an admin would get it (nothing sent).
+  router.get("/api/remote-support/report", async context => { requireLocalCli(context); return new Response(diag.scrub(await actions.report(context.app)), { headers: { "content-type": "text/plain; charset=utf-8" } }); });
   router.post("/api/remote-support", async context => {
     requireLocalCli(context);
     const given = await readJson<{ action?: string; device?: string; project?: string }>(context);

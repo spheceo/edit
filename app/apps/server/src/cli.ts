@@ -43,8 +43,10 @@ USAGE
       Install the newest release (the editor also offers it, one click).
   edit support <command> --url https://<device>.<tailnet>.ts.net
       Inspect or help an owner's already-shared Edit; \`edit support help\` says more.
-  edit remote enable|disable|devices|update|history [device-id]
-      Enable remote support on this Edit, or manage remote updates as an admin.
+  edit remote enable|disable|devices|update|diagnostics|unstick|restart|history [device-id]
+  edit remote resume <device-id> <project-or-script-id>
+      Enable remote support on this Edit, or, as an admin, help a teammate's: update it,
+      get its diagnostics (what needs attention first), unstick everything stuck, restart it.
   edit --version
 
 ENV
@@ -113,8 +115,12 @@ export async function main(args: string[]): Promise<void> {
       console.log(mcpText(flag("--port") ?? String(DEFAULT_PORT)));
       return;
     case "remote": {
-      const action = args[1];
-      if (!action || !["enable", "disable", "devices", "update", "diagnostics", "resume", "history"].includes(action) || (["update", "diagnostics", "resume", "history"].includes(action) && !args[2]) || (action === "resume" && !args[3])) fail("use edit remote enable|disable|devices|update|diagnostics|history [device-id], or edit remote resume <device-id> <project-id>");
+      const given = args[1];
+      const onDevice = ["update", "diagnostics", "resume", "unstick", "restart", "history"];
+      if (!given || !["enable", "disable", "devices", ...onDevice].includes(given) || (onDevice.includes(given) && !args[2]) || (given === "resume" && !args[3])) fail("use edit remote enable|disable|devices|update|diagnostics|unstick|restart|history [device-id], or edit remote resume <device-id> <project-or-script-id>");
+      // unstick and restart go as a resume of a reserved target (remote_actions.ts).
+      const action = given === "unstick" || given === "restart" ? "resume" : given;
+      if (action !== given) args[3] = given;
       try {
         const response = await fetch(`http://127.0.0.1:${port()}/api/remote-support`, {
           method: "POST", headers: { "content-type": "application/json" },

@@ -28,7 +28,7 @@ volume = modal.Volume.from_name(VOLUME, create_if_missing=True)
 PROGRESS = APP + "-progress"
 root = Path("/sections")
 app = modal.App(APP)
-for module in ["sections_runtime.py", "sections_v3_runtime.py", "review_runtime.py"]:
+for module in ["sections_runtime.py", "sections_v3_runtime.py", "review_runtime.py", "cloud_job.py"]:
     image = image.add_local_file(Path(__file__).with_name(module), "/opt/edit/" + module, copy=True)
 
 
@@ -116,5 +116,37 @@ def review(job: dict):
     from runtime import plain
     try:
         return join(job, review_piece)
+    except Exception as error:
+        raise RuntimeError(plain(error)) from None
+
+
+# For an Edit installed on anyone's Mac: the relay (which signed the person
+# in) starts these through `api` with the shared token; R2's keys and the
+# token are this secret's, never on any Mac.
+cloud = modal.Secret.from_name(APP + "-cloud", required_keys=["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "EDIT_V3_TOKEN"])
+# The drivers talk to R2 themselves.
+cloud_image = image.pip_install("boto3==1.40.31")
+
+
+@app.function(image=cloud_image, secrets=[cloud], cpu=(1, 2), memory=(2048, 4096), max_containers=COORDINATORS * 2, timeout=3600,
+              startup_timeout=300, scaledown_window=2, retries=0, serialized=True)
+def run_export(job: dict):
+    from cloud_job import export
+    from runtime import plain
+    try:
+        progress = modal.Dict.from_name(PROGRESS, create_if_missing=True)
+        return export(job, coordinate, lambda state: progress.put(job["id"], state), BUILD)
+    except Exception as error:
+        raise RuntimeError(plain(error)) from None
+
+
+@app.function(image=cloud_image, secrets=[cloud], cpu=(4, 4), memory=(8192, 8192), max_containers=COORDINATORS * 2, timeout=1800,
+              startup_timeout=300, scaledown_window=2, retries=0, serialized=True)
+def run_review(job: dict):
+    from cloud_job import review as made_in_cloud
+    from review_runtime import join
+    from runtime import plain
+    try:
+        return made_in_cloud(job, lambda one: join(one, review_piece))
     except Exception as error:
         raise RuntimeError(plain(error)) from None

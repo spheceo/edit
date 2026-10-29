@@ -475,7 +475,7 @@ export class ExportRegistry implements seams.Exports {
     let backend: Backend;
     if (extra.backend !== undefined) {
       backend = extra.backend;
-    } else if (seams.modalExports.enabled()) {
+    } else if ((await seams.modalExports.ready(), seams.modalExports.enabled())) {
       // Modal whenever it can take the export, each on its own GPUs so any
       // number run at once; this Mac only for what Modal can't do, or when
       // Modal fails (the team, Oct 29: card 1's export took 43 minutes here).

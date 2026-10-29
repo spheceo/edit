@@ -17,6 +17,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 
+import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import { subtitleVideo } from "./drive.ts";
 import { writeAtomic } from "./files.ts";
@@ -36,15 +37,63 @@ function workerRoot(): string {
  * local Mac if there's something wrong with Modal"); EDIT_MODAL_EXPORTS=0
  * keeps them on this Mac.
  */
-export const enabled = () => {
-  if (process.env.EDIT_MODAL_EXPORTS === "0") return false;
+export const enabled = () => process.env.EDIT_MODAL_EXPORTS !== "0" && (here() || relayOn);
+
+/** Whether this Mac drives Modal itself (a developer's checkout with the worker, Repack, Bun and uv); EDIT_MODAL_VIA_RELAY=1 goes through the relay as an installed Edit does. */
+function here(): boolean {
+  if (process.env.EDIT_MODAL_VIA_RELAY === "1") return false;
   try {
     command();
     return true;
   } catch {
     return false;
   }
-};
+}
+
+/**
+ * Whether the relay starts cloud exports for this Edit (an installed one,
+ * with no worker of its own): asked when an export starts (`ready`), again
+ * after ten minutes, so `enabled` stays a plain answer.
+ */
+let relayOn = false;
+let askedAt = 0;
+export async function ready(): Promise<void> {
+  if (process.env.EDIT_MODAL_EXPORTS === "0" || here() || Date.now() - askedAt < 10 * 60_000 || !cloud.enabled()) return;
+  askedAt = Date.now();
+  try {
+    relayOn = (await cloud.relayJson("v3/config", {})).enabled === true;
+  } catch (error) {
+    relayOn = false;
+    diag.warn("export", `asking the relay about cloud exports: ${diag.messageOf(error)}`);
+  }
+}
+
+/**
+ * A job run on the v3 pool through the relay (`start_export` / `start_review`),
+ * polled until it's done, reporting progress; cancelled when `cancelled()`.
+ */
+async function throughRelay(kind: "export" | "review", job: Record<string, unknown>, cancelled: () => boolean, onProgress: (progress: number) => void): Promise<Record<string, unknown>> {
+  const started = await cloud.relayJson(`v3/start_${kind}`, { job });
+  const call = started.call;
+  if (typeof call !== "string") throw new Error(typeof started.error === "string" ? started.error : "the cloud didn't start it");
+  for (;;) {
+    await Bun.sleep(3000);
+    if (cancelled()) {
+      await cloud.relayJson("v3/cancel", { call }).catch(() => ({}));
+      throw new Error("cancelled");
+    }
+    let said: Record<string, unknown>;
+    try {
+      said = await cloud.relayJson("v3/status", { call, id: job.id });
+    } catch (error) {
+      diag.warn("export", `${job.id}: asking the cloud how it's going: ${diag.messageOf(error)}`);
+      continue;
+    }
+    if (said.state === "done" && typeof said.result === "object" && said.result !== null) return said.result as Record<string, unknown>;
+    if (said.state === "failed" || typeof said.error === "string") throw new Error(String(said.error ?? "the cloud job failed"));
+    if (typeof said.progress === "number") onProgress(Math.min(0.99, said.progress));
+  }
+}
 
 /** Why `project` can't export on Modal as `options` ask (it exports here), or null when it can. */
 export function unsuitable(project: Project, options: ExportOptions, plan: Plan): string | null {
@@ -117,6 +166,17 @@ export async function run(home: string, project: Project, options: ExportOptions
   cancelled: () => boolean, onProgress: (progress: number) => void, keep: string | null = null): Promise<{ bytes: number | null; key: string | null }> {
   const id = `${project.id.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 60)}-${crypto.randomUUID().slice(0, 8)}`;
   const sent = { ...project, media: used(project) };
+  if (!here()) {
+    // Through the relay: kept in the cloud (fetched here only when it's wanted here).
+    const key = keep ?? `edit/exports/${project.id}/${crypto.randomUUID().slice(0, 8)}-${output.split("/").pop() ?? "export.mp4"}`;
+    const made = await throughRelay("export", { id, project: JSON.parse(jsonForSerde(sent)), options: { ...options, range: null }, key }, cancelled, onProgress);
+    diag.info("export", `${project.id}: cloud export ${id}: ${made.rendered}/${made.sections} sections rendered (the rest reused), sound ${made.sound_cached ? "reused" : "mixed"}, kept at ${key}`);
+    if (keep === null) {
+      await cloud.download(key, output);
+      return { bytes: typeof made.bytes === "number" ? made.bytes : null, key: null };
+    }
+    return { bytes: typeof made.bytes === "number" ? made.bytes : null, key };
+  }
   // `keep`: the export stays in the cloud at that key, never copied to this Mac.
   const done = await drive(home, id, { project: JSON.parse(jsonForSerde(sent)), options: { ...options, range: null }, output, ...(keep === null ? {} : { key: keep, deliver: false }) }, cancelled, onProgress);
   diag.info("export", `${project.id}: cloud export ${id}: ${done.rendered}/${done.sections} sections rendered (the rest reused), sound ${done.sound_cached ? "reused" : "mixed"}${keep === null ? "" : `, kept in the cloud at ${keep}`}`);
@@ -138,8 +198,9 @@ export interface Reviewed {
 export async function review(home: string, project: string, keys: { source: string; video: string; poster: string; full: string }, posterSecond: number, fps: number, frames: number,
   onProgress: (progress: number) => void = () => {}): Promise<Reviewed> {
   const id = `review-${project.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 50)}-${crypto.randomUUID().slice(0, 8)}`;
-  const done = await drive(home, id, { review: true, source_key: keys.source, review_key: keys.video, poster_key: keys.poster, full_key: keys.full, poster_second: posterSecond, fps, frames }, () => false, onProgress);
-  diag.info("review", `${project}: review copy made in the cloud from ${done.pieces} pieces in ${Math.round(Number(done.seconds ?? 0))} s`);
+  const job = { id, source_key: keys.source, review_key: keys.video, poster_key: keys.poster, full_key: keys.full, poster_second: posterSecond, fps, frames };
+  const done = !here() ? await throughRelay("review", job, () => false, onProgress) : await drive(home, id, { review: true, source_key: keys.source, review_key: keys.video, poster_key: keys.poster, full_key: keys.full, poster_second: posterSecond, fps, frames }, () => false, onProgress);
+  diag.info("review", `${project}: review copy made in the cloud from ${done.pieces} pieces in ${Math.round(Number(done.seconds ?? 0))} s (${JSON.stringify(done.took ?? {})})`);
   return { review: (done.review ?? {}) as Record<string, unknown>, export: (done.export ?? {}) as Record<string, unknown>, peaks: Array.isArray(done.peaks) ? (done.peaks as number[]) : [] };
 }
 

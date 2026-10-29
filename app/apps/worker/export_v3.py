@@ -283,18 +283,20 @@ def deploy(build, check, progress):
                "EDIT_SECTIONS_POOL": "32", "EDIT_VERIFIERS_POOL": "64", "EDIT_SECTIONS_COORDINATORS": "6"}
         # The image build's log is long: to a file, not a pipe that could fill.
         log = STATE / f"{APP}-deploy.log"
+        # The pool, then the small app the relay calls it through (api_v3.py).
         with log.open("w") as out:
-            process = subprocess.Popen([sys.executable, "-m", "modal", "deploy", "apps/worker/sections_v3.py", "--env", ENVIRONMENT],
-                                       cwd=ROOT, env=env, stdout=out, stderr=subprocess.STDOUT)
-            try:
-                while process.poll() is None:
-                    check()
-                    time.sleep(1)
-            except Stopped:
-                process.terminate()
-                raise
-        if process.returncode:
-            raise RuntimeError(f"Deploying the cloud exporter failed (see {log}): " + log.read_text()[-1500:])
+            for module in ["apps/worker/sections_v3.py", "apps/worker/api_v3.py"]:
+                process = subprocess.Popen([sys.executable, "-m", "modal", "deploy", module, "--env", ENVIRONMENT],
+                                           cwd=ROOT, env=env, stdout=out, stderr=subprocess.STDOUT)
+                try:
+                    while process.poll() is None:
+                        check()
+                        time.sleep(1)
+                except Stopped:
+                    process.terminate()
+                    raise
+                if process.returncode:
+                    raise RuntimeError(f"Deploying the cloud exporter failed (see {log}): " + log.read_text()[-1500:])
         record.write_text(json.dumps({"build": build, "deployed_ms": int(time.time() * 1000)}))
 
 

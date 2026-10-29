@@ -25,6 +25,9 @@ export interface ModalEnv {
   MODAL_JOB_SECONDS?: string;
   MODAL_STARTUP_SECONDS?: string;
   MODAL_SHUTDOWN_SECONDS?: string;
+  /** The v3 exporter's endpoint (edit-exports-v3's `api`) and the token it checks: exports and review copies made in the cloud for any Edit. */
+  MODAL_V3_URL?: string;
+  MODAL_V3_TOKEN?: string;
 }
 type Env = import("./cloud").CloudEnv;
 type State = "queued" | "dispatching" | "running" | "cancelling" | "done" | "failed" | "cancelled";
@@ -346,4 +349,36 @@ export function validateManifest(value: unknown): WorkerManifest {
   }
   if (bytes > WORKER_INPUT_LIMIT) throw new BadRequest("Cloud export input limit exceeded.");
   return value as unknown as WorkerManifest;
+}
+
+
+/**
+ * Exports and review copies made on Modal's v3 pool for an Edit installed on
+ * anyone's Mac (`/v1/cloud/v3/<action>`): the person is signed in here, then
+ * the request goes on to the exporter with the token it checks, which never
+ * leaves the relay. Its files stay in R2: exports under edit/exports/,
+ * review copies under edit/reviews/.
+ */
+export async function v3Route(request: Request, url: URL, env: Env & AuthEnv): Promise<Response> {
+  const found = await allow(request, env, "use", url.pathname.slice("/v1/".length));
+  if (found instanceof Response) return found;
+  const action = url.pathname.slice("/v1/cloud/v3/".length);
+  const on = Boolean(env.MODAL_V3_URL && env.MODAL_V3_TOKEN);
+  if (action === "config") return json(200, { enabled: on });
+  if (!["start_export", "start_review", "status", "cancel"].includes(action)) return json(404, { error: "not found" });
+  if (!on) return json(503, { error: "Cloud exports aren't set up on the relay yet." });
+  if (request.method !== "POST") return json(405, { error: "POST JSON required." });
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return json(400, { error: "Send JSON." });
+  }
+  if (!isObject(body)) return json(400, { error: "Send an object." });
+  const job = isObject(body.job) ? body.job : null;
+  const under = (value: unknown, prefix: string) => typeof value === "string" && value.startsWith(prefix) && !value.includes("..");
+  if (action === "start_export" && !(job !== null && under(job.key, "edit/exports/") && typeof job.id === "string")) return json(400, { error: "An export is kept under edit/exports/." });
+  if (action === "start_review" && !(job !== null && ["source_key", "review_key", "poster_key", "full_key"].every((field) => under(job[field], "edit/")) && typeof job.id === "string")) return json(400, { error: "Review files are kept under edit/." });
+  const answer = await fetch(env.MODAL_V3_URL!, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, action, token: env.MODAL_V3_TOKEN }) });
+  return new Response(answer.body, { status: answer.status, headers: { "content-type": "application/json" } });
 }

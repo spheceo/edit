@@ -28,7 +28,7 @@
 import { allow, budgetKey, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
 import { EDIT_CALLS, grantedTo, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
 import { cancelJob, driveJob, googleSignIn, jobStatus, proxyJob, type JobsEnv } from "./jobs";
-import { exportRoute, type ModalEnv } from "./exports";
+import { exportRoute, v3Route, type ModalEnv } from "./exports";
 
 export interface CloudEnv extends JobsEnv, ModalEnv {
   /** Edit's bearer token for /v1/cloud/* (EDIT_RELAY_TOKEN on the app side). */
@@ -93,6 +93,7 @@ function permissionOf(route: string): Permission | null {
 
 export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv): Promise<Response> {
   if (url.pathname.startsWith("/v1/cloud/exports/")) return exportRoute(request, url, env);
+  if (url.pathname.startsWith("/v1/cloud/v3/")) return v3Route(request, url, env);
   const permission = permissionOf(url.pathname.slice("/v1/cloud/".length));
   if (permission === null) return json(404, { error: "not found" });
   const found = await allow(request, env, permission, url.pathname.slice("/v1/".length));

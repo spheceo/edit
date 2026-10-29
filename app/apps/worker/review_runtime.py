@@ -3,10 +3,12 @@
 once, a poster and a waveform beside it, every file put straight into R2.
 Nothing goes through the Mac (the team, Oct 29: "everything should be done
 on the cloud"; a 93-minute edit's review copy took 10 minutes there)."""
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 
 import httpx
 
@@ -59,34 +61,55 @@ def probe(path):
 
 def join(job, make_piece):
     """The pieces made at once, joined with the sound into the review copy; its poster and waveform."""
+    took = {}
+    mark = time.monotonic()
+
+    def lap(name):
+        nonlocal mark
+        took[name] = round(time.monotonic() - mark, 1)
+        mark = time.monotonic()
+
     calls = [make_piece.spawn(job["source"], one["start"], one["frames"], one["put"]) for one in job["pieces"]]
     for call in calls:
         call.get()
+    lap("pieces")
     with tempfile.TemporaryDirectory() as folder:
         folder = Path(folder)
-        names = []
-        with httpx.Client(timeout=1800) as client:
-            for index, one in enumerate(job["pieces"]):
-                path = folder / f"{index:03d}.mp4"
-                with client.stream("GET", one["get"]) as answer:
-                    if answer.status_code >= 300:
-                        raise RuntimeError(f"a piece couldn't be read back ({answer.status_code})")
-                    with path.open("wb") as out:
-                        for chunk in answer.iter_bytes(1 << 20):
-                            out.write(chunk)
-                names.append(path)
+
+        def fetch(index):
+            path = folder / f"{index:03d}.mp4"
+            with httpx.Client(timeout=1800) as client, client.stream("GET", job["pieces"][index]["get"]) as answer:
+                if answer.status_code >= 300:
+                    raise RuntimeError(f"a piece couldn't be read back ({answer.status_code})")
+                with path.open("wb") as out:
+                    for chunk in answer.iter_bytes(1 << 20):
+                        out.write(chunk)
+            return path
+
+        with ThreadPoolExecutor(8) as pool:
+            names = list(pool.map(fetch, range(len(job["pieces"]))))
+        lap("fetch")
         listing = folder / "pieces.txt"
         listing.write_text("".join(f"file '{path}'\n" for path in names))
         review = folder / "review.mp4"
-        run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-i", job["source"],
-             "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(review)])
+        joined = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-i", job["source"],
+                  "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy"]
+        # The export's own sound (AAC already): copied, not encoded again.
+        try:
+            run(joined + ["-c:a", "copy", "-movflags", "+faststart", str(review)])
+        except RuntimeError:
+            run(joined + ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(review)])
+        lap("join")
         put(job["video_put"], review, "video/mp4")
+        lap("upload")
         poster = folder / "poster.jpg"
         run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", f"{job['poster_second']:.2f}", "-i", job["source"], "-frames:v", "1",
              "-vf", "scale=1280:-2", str(poster)])
         put(job["poster_put"], poster, "image/jpeg")
+        lap("poster")
         # Its loudest sample every 100 ms, 0–100, as the review page draws it.
         pcm = run(["ffmpeg", "-v", "error", "-nostdin", "-i", str(review), "-ac", "1", "-ar", "8000", "-f", "s16le", "-"])
         samples = memoryview(pcm).cast("h")
         peaks = [round(max((abs(x) for x in samples[at:at + 800]), default=0) / 32768 * 100) for at in range(0, len(samples), 800)]
-        return {"review": probe(review), "export": probe(job["source"]), "peaks": peaks}
+        lap("waveform")
+        return {"review": probe(review), "export": probe(job["source"]), "peaks": peaks, "took": took}

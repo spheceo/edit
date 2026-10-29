@@ -218,6 +218,7 @@ export async function share(app: App, projectId: string, path: string | null, re
     // through this Mac (the team, Oct 29: "everything should be done on the
     // cloud"); else here, as before.
     let made: Reviewed | null = null;
+    await seams.modalExports.ready();
     if (chosen.cloudKey !== undefined && seams.modalExports.enabled()) {
       sharing.set(projectId, "making the review copy in the cloud");
       try {
@@ -358,10 +359,10 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
         }
       });
     });
-    await app.exports.start(app.store, app.library, structuredClone(live.project) as Project, { ...native().exportDefaults(), ...options }, defaultExportPath(app.store, live.project), {
-      // The share reads the file next (its review copy and the full-quality upload): not archived away under it.
-      keepLocal: true,
-    });
+    // On Modal the export stays in the cloud and the share is made there; on
+    // this Mac the share holds the file while it reads it (holdExport), so
+    // the archive never takes it away underneath.
+    await app.exports.start(app.store, app.library, structuredClone(live.project) as Project, { ...native().exportDefaults(), ...options }, defaultExportPath(app.store, live.project), {});
     path = await finished;
   } finally {
     sharing.delete(projectId);

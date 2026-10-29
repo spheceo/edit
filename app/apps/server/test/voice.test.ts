@@ -204,13 +204,18 @@ test("a kind of video's own narrator voices its cut-ins; without one, the house 
   const { dir, cleanup } = scratch("voice-style");
   try {
     const voices = new Voices(dir);
-    // No style names a narrator yet: the house voice, as before.
+    // Bodycam and interrogation keep the main account's house voice.
     expect(voiceFor("bodycam")).toBeNull();
+    expect(voiceFor("interrogation")).toBeNull();
+    expect(voiceFor("courtroom")).toBe("vVj9i7yXuhHiV9JHF0kj");
     expect(voices.create("Bodycam (voice-over)", "p1", [["One.", "Cut-in 1"]], voiceFor("bodycam")).voice.voice_id).toBe(HOUSE_VOICE);
-    // A courtroom's notes saying `voice: <id>`: its voice-overs start with that voice.
-    const court = voices.forProject("Court (voice-over)", "p2", [["Two.", "Cut-in 1"]], "ZmqEPiBIr4itJeB29TyD");
-    expect(court.voice.voice_id).toBe("ZmqEPiBIr4itJeB29TyD");
+    // Courtroom's notes select its narrator for real new voice-over projects.
+    const court = voices.forProject("Court (voice-over)", "p2", [["Two.", "Cut-in 1"]], voiceFor("courtroom"));
+    expect(court.voice.voice_id).toBe("vVj9i7yXuhHiV9JHF0kj");
     expect(court.voice.speed).toBe(defaultSettings().speed);
+    expect(voiceFor("commentary")).toBe("QWUeV5PUhJjaGUhu0cKp");
+    const docu = voices.forProject("Commentary (voice-over)", "p3", [["Three.", "Cut-in 1"]], voiceFor("commentary"));
+    expect(docu.voice.voice_id).toBe("QWUeV5PUhJjaGUhu0cKp");
   } finally {
     cleanup();
   }

@@ -1,8 +1,9 @@
 ---
+voice: QWUeV5PUhJjaGUhu0cKp
 learnt_from: Internet Janitor Editing Rules & Processes, and the Oct 19 frame/After Effects study.
 ---
 
-A COMMENTARY VIDEO is a narrated investigative essay. Follow the imported Writer script, its chapter order, source excerpts and anchored production notes. The narrator carries the story; a source clip plays with its own sound where hearing it matters. These rules replace the police/court templates: no arrest teaser requirement, maps, Windows desktop, charges, sentencing, blanket captions or compulsory flash between narration paragraphs.
+A COMMENTARY VIDEO is a narrated investigative essay. Generated narration uses this style's documentary voice (`QWUeV5PUhJjaGUhu0cKp`), through `ELEVENLABS_VOICES_KEY`. Follow the imported Writer script, its chapter order, source excerpts and anchored production notes. The narrator carries the story; a source clip plays with its own sound where hearing it matters. These rules replace the police/court templates: no arrest teaser requirement, maps, Windows desktop, charges, sentencing, blanket captions or compulsory flash between narration paragraphs.
 
 “B-roll must be relevant to what is being said”: show the actual people, event, period and action the line names. Prefer their own uploads, primary interviews and original posts. A title or transcript match is a lead, not proof of the picture. Inspect candidate frames, record what they show, then use distinct scenes. Don't loop one talking head through an essay, invent a missing tweet, fabricate evidence, or call a generic image an actual event. A sourced portrait can identify someone while the narrator explains an unpictured claim; it cannot substantiate the claim. Keep a short list of unresolved source requests.
 

@@ -320,7 +320,7 @@ async function generateMissing(app: App, id: string): Promise<Json> {
   const expected = new Map(targets.map((clip) => [clip, narrationSnapshot(live.project, clip)]));
   // Keep the full list so an interrupted import finds the same saved takes;
   // only unvoiced lines are spoken/imported/placed.
-  const voice = app.voices.forProject(`${live.project.name} (voice-over)`, id, seams.voice.narrationLines(live.project));
+  const voice = app.voices.forProject(`${live.project.name} (voice-over)`, id, seams.voice.narrationLines(live.project), voiceFor(live.project.style));
   const numbers = new Set(state.filter((line) => line.state === "missing").map((line) => line.cut_in));
   const chosen = new Set(app.voices.chosenTakes(voice.id).map(([number]) => number));
   for (const [index, line] of voice.lines.entries()) if (numbers.has(index + 1) && !chosen.has(index + 1)) await app.voices.generate(voice.id, line.id);
@@ -336,7 +336,7 @@ export async function generateCase(app: App, id: string, request: string): Promi
   if (!blocks.length) return { media: [] };
   const targets = blocks.flatMap((block) => block.clip ? [block.clip] : []);
   if (targets.length !== blocks.length) throw new Error("Lay out the new case's cut-ins before voicing them.");
-  const voice = app.voices.forProject(`${live.project.name} (case ${request})`, id, blocks.map((block, index) => [block.text, `Added case line ${index + 1}`]));
+  const voice = app.voices.forProject(`${live.project.name} (case ${request})`, id, blocks.map((block, index) => [block.text, `Added case line ${index + 1}`]), voiceFor(live.project.style));
   for (const line of voice.lines) if (line.chosen === null) await app.voices.generate(voice.id, line.id);
   return send(app, voice.id, id, targets);
 }

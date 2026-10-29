@@ -115,6 +115,8 @@ export const exportCloud = {
  */
 /** Exports being read (a share making its copies): how many readers each. */
 const reading = new Map<string, number>();
+/** Exports archived while being read: their local copy goes when the last reader is done. */
+const archivedMeanwhile = new Set<string>();
 
 /**
  * Marks an export as being read until `release` is called: its archive keeps
@@ -129,8 +131,14 @@ export function holdExport(path: string): () => void {
     if (!held) return;
     held = false;
     const left = (reading.get(path) ?? 1) - 1;
-    if (left > 0) reading.set(path, left);
-    else reading.delete(path);
+    if (left > 0) {
+      reading.set(path, left);
+      return;
+    }
+    reading.delete(path);
+    // Archived while it was read: gone now, as it would have been then (the
+    // kept copies filled the disk and card 1's export failed, Oct 29).
+    if (archivedMeanwhile.delete(path)) fs.rmSync(path, { force: true });
   };
 }
 
@@ -146,8 +154,11 @@ export async function archiveExportFile(
     const found = await io.head(key);
     if (found === null || found.size !== size) return false;
   } catch { return false; }
-  // Archived; a copy being read stays here too.
-  if (reading.has(output)) return true;
+  // Archived; a copy being read stays until the reading's done.
+  if (reading.has(output)) {
+    archivedMeanwhile.add(output);
+    return true;
+  }
   try { fs.rmSync(output, { force: true }); } catch { return false; }
   return !fs.existsSync(output);
 }

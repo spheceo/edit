@@ -216,7 +216,10 @@ test("archiveExportFile deletes locally only after a size-verified upload", asyn
     const release = holdExport(file);
     expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50))).toBe(true);
     expect(fs.existsSync(file)).toBe(true);
+    // Gone once the share is done with it.
     release();
+    expect(fs.existsSync(file)).toBe(false);
+    fs.writeFileSync(file, Buffer.alloc(50));
     expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50))).toBe(true);
     expect(fs.existsSync(file)).toBe(false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

@@ -2,7 +2,7 @@
 // answered (its UI came over with them), each checked against what the
 // signed-in person may do (can.ts).
 
-import type { Adding, BuildStatus, Choice, Clip, Draft, Focus, Kind, Pacing, Role, Script } from "@edit/types/writer";
+import type { Adding, BuildStatus, Choice, Clip, Draft, Focus, Kind, LearnStep, Pacing, Role, Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
@@ -20,6 +20,8 @@ import { blocksOf } from "./blocks.ts";
 import * as brief from "./brief.ts";
 import * as drive from "./drive.ts";
 import * as edits from "./edits.ts";
+import * as feedback from "./feedback.ts";
+import { lessons } from "./lessons.ts";
 import * as fixing from "./fixing.ts";
 import * as footage from "./footage.ts";
 import * as imports from "./imports.ts";
@@ -368,6 +370,74 @@ export function routes(router: Router<App>): void {
         readFor(dataOf(context.app), id(context));
         await reviews.deleteNote(dataOf(context.app), context.params.note ?? "");
         return { ok: true };
+      }),
+    )
+    // Teaching commentary builds from a review's notes: pull them, test a lesson in rounds, keep it.
+    .post("/api/writer/scripts/{id}/feedback", (context) =>
+      answer(async () => {
+        can.require(can.LESSONS);
+        readFor(dataOf(context.app), id(context));
+        notWhileWriting(id(context));
+        return feedback.pull(dataOf(context.app), id(context));
+      }),
+    )
+    .get("/api/writer/scripts/{id}/feedback", (context) =>
+      answer(() => {
+        can.require(can.LESSONS);
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        return feedback.load(store.scriptDir(data, id(context)));
+      }),
+    )
+    .put("/api/writer/scripts/{id}/feedback/items/{item}", async (context) => {
+      const given = await body<{ skip?: boolean; note?: string }>(context);
+      return answer(() => {
+        can.require(can.LESSONS);
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        notWhileWriting(id(context));
+        return feedback.setItem(store.scriptDir(data, id(context)), context.params.item ?? "", given.skip ?? null, given.note ?? null);
+      });
+    })
+    .put("/api/writer/scripts/{id}/feedback/lesson", async (context) => {
+      const given = await body<{ lesson?: string }>(context);
+      return answer(() => {
+        can.require(can.LESSONS);
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        notWhileWriting(id(context));
+        const [saved, leaks] = feedback.setLesson(store.scriptDir(data, id(context)), String(given.lesson ?? ""));
+        return { feedback: saved, leaks };
+      });
+    })
+    .post("/api/writer/scripts/{id}/feedback/steps", async (context) => {
+      const step = await body<LearnStep>(context);
+      return answer(() => {
+        can.require(can.LESSONS);
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        feedback.ready(store.scriptDir(data, id(context)), step);
+        return startJob(context.app, id(context), { kind: "learn", step }, (job) => feedback.run(data, id(context), step, job));
+      });
+    })
+    .post("/api/writer/scripts/{id}/feedback/keep", (context) =>
+      answer(() => {
+        can.require(can.LESSONS);
+        readFor(dataOf(context.app), id(context));
+        notWhileWriting(id(context));
+        return feedback.keep(dataOf(context.app), id(context));
+      }),
+    )
+    .get("/api/writer/lessons", ({ app }) =>
+      answer(() => {
+        can.require(can.LESSONS);
+        return lessons(dataOf(app));
+      }),
+    )
+    .delete("/api/writer/lessons/{lesson}", (context) =>
+      answer(() => {
+        can.require(can.LESSONS);
+        return feedback.forget(dataOf(context.app), context.params.lesson ?? "");
       }),
     )
     // A commentary's clip footage, as Split plays it.

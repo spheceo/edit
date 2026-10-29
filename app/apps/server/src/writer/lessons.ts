@@ -49,6 +49,7 @@ export function merge(a: Shelf, b: Shelf): Shelf {
     if (at < 0) lessons.push(lesson);
     else if (lesson.keptAt > lessons[at]!.keptAt) lessons[at] = lesson;
   }
+  lessons.sort((x, y) => x.keptAt - y.keptAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
   return { lessons, forgotten };
 }
 

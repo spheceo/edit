@@ -218,8 +218,12 @@ registerTool("use_found", async ({ app, args, projectId }) => {
 // ---------------------------------------------------------------------------
 // Script and voice-over tools.
 
-registerTool("realign_script", async ({ app, projectId }) => {
-  const changed = await script.realign(app, projectId);
+registerTool("realign_script", async ({ app, args, projectId }) => {
+  const live = app.store.get(projectId);
+  const fps = live === null ? 30 : live.project.settings.fps;
+  const [from, to] = [typeof args.start === "number" ? args.start : null, typeof args.end === "number" ? args.end : null];
+  const span: [number, number] | null = from === null && to === null ? null : [Math.round((from ?? 0) * fps), to === null ? Number.MAX_SAFE_INTEGER : Math.round(to * fps)];
+  const changed = await script.realign(app, projectId, span);
   return text(changed.length === 0 ? "every range already starts and ends on its words" : stableStringify(changed, 2));
 });
 

@@ -21,7 +21,7 @@ import { catchBugsAsync, crashed, isBug } from "./guard.ts";
 import { importMade, importPaths } from "./import.ts";
 import * as mediaModule from "./media.ts";
 import { cloudEnabled } from "./relay.ts";
-import type { ClipColor, Project, Script, ScriptBlock, ScriptJob, Style, TextStyle, TrackKind } from "./model.ts";
+import type { ClipColor, Media, Project, Script, ScriptBlock, ScriptJob, Style, TextStyle, TrackKind } from "./model.ts";
 import { NARRATION } from "./model.ts";
 import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freshId, marksCut, mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL, REUSED_SCRIPT_NOTE, reusedScriptBlock } from "./project.ts";
 import { fileName, fileStem, extension as pathExtension, join, parent } from "./paths.ts";
@@ -29,7 +29,8 @@ import { byteLength, charCount, display, f32, isAlphanumeric, isWhitespace, pars
 import * as seams from "./seams.ts";
 import type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 import * as tools from "./tools.ts";
-import type { Word } from "./transcribe.ts";
+import type { Transcript, Word } from "./transcribe.ts";
+import { MODEL as CAPTIONS_MODEL } from "./youtube_captions.ts";
 import * as youtube from "./youtube.ts";
 import { LINK_PREFIX as FINISHED_LINK, reviewCode, reviewOf } from "./finished.ts";
 import { finishCase, pendingCase } from "./case_insertion.ts";
@@ -2210,10 +2211,16 @@ export function outOfOrder(project: Project): boolean {
  * stays butted; effects ending on its cut (a shake into a cut-in) keep ending
  * on it. Returns what changed.
  */
-export async function realign(app: App, id: string): Promise<unknown[]> {
+export async function realign(app: App, id: string, span: [number, number] | null = null): Promise<unknown[]> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
-  const heard = await transcripts(app, live.project);
+  // Only the ranges placed in `span` (timeline frames), when given: the rest of the edit stays as it is.
+  const within = (block: ScriptBlock): boolean => {
+    if (span === null) return true;
+    const clip = isSome(block.clip) ? clipOf(live.project, block.clip) : undefined;
+    return clip !== undefined && clip.start >= span[0] && clip.start < span[1];
+  };
+  const heard = await transcripts(app, live.project, within);
   const [, changed] = await app.store.update(id, "agent", (project) => {
     const fps = fpsOf(project);
     const changed: unknown[] = [];
@@ -2221,7 +2228,7 @@ export async function realign(app: App, id: string): Promise<unknown[]> {
     const blocks = structuredClone(project.script.blocks);
     for (const block of blocks) {
       const cue = block.kind === "footage" ? cueOf(block) : null;
-      if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.media) || cue === null || !isSome(block.clip)) continue;
+      if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.media) || cue === null || !isSome(block.clip) || !within(block)) continue;
       const media = heard.get(block.media);
       if (media === undefined) continue;
       const offset = block.media_start ?? 0;
@@ -2294,10 +2301,11 @@ interface Heard {
  * the words. Media without sound, or whose transcription fails, are left out:
  * their ranges keep the times the Doc wrote.
  */
-async function transcripts(app: App, project: Project): Promise<Map<string, Heard>> {
+async function transcripts(app: App, project: Project, within: (block: ScriptBlock) => boolean = () => true): Promise<Map<string, Heard>> {
   const used = new Set<string>();
   for (const block of project.script?.blocks ?? []) {
     if (pendingCase(project) && placed(project, block)) continue;
+    if (!within(block)) continue;
     if (block.kind === "footage" && isSome(block.media) && cueOf(block) !== null) used.add(block.media);
   }
   const media = project.media.filter((item) => used.has(item.id) && item.has_audio);
@@ -2306,31 +2314,57 @@ async function transcripts(app: App, project: Project): Promise<Map<string, Hear
   for (const item of media) app.media.transcribe(item.path, true, names);
   const out = new Map<string, Heard>();
   const started = timing.now();
-  for (const item of media) {
+  /** Waits for a file's transcript and reads its words (null when it failed or took too long). */
+  const heard = async (item: Media): Promise<(Heard & { model: string }) | null> => {
     for (;;) {
       const stage = app.media.status(item.path).transcript;
       if (stage === "ready") {
-        let words: Word[] | null = null;
+        let transcript: Transcript | null = null;
         try {
-          words = parseTranscript(fs.readFileSync(app.media.paths(item.path).transcript, "utf8")).words;
+          transcript = parseTranscript(fs.readFileSync(app.media.paths(item.path).transcript, "utf8"));
         } catch {
-          words = null;
+          return null;
         }
-        if (words !== null) {
-          let peaks: Uint8Array | null = null;
-          try {
-            peaks = new Uint8Array(fs.readFileSync(app.media.paths(item.path).peaks));
-          } catch {
-            peaks = null;
-          }
-          out.set(item.id, { words, peaks });
+        let peaks: Uint8Array | null = null;
+        try {
+          peaks = new Uint8Array(fs.readFileSync(app.media.paths(item.path).peaks));
+        } catch {
+          peaks = null;
         }
-        break;
+        return { words: transcript.words, peaks, model: transcript.model };
       }
-      if (stage === "failed") break;
-      if (timing.now() - started > 30 * 60 * 1000) break;
+      if (stage === "failed") return null;
+      if (timing.now() - started > 30 * 60 * 1000) return null;
       await timing.sleep(2000);
     }
+  };
+  for (const item of media) {
+    const found = await heard(item);
+    if (found === null) continue;
+    // YouTube's own captions drop and mistime words: a range whose first or
+    // last word they don't have is heard properly (Scribe) before it's cut,
+    // else it's cut at the Doc's rounded seconds, mid-sentence (card 1's
+    // teasers, Oct 29: "pregnant" missing, "vitals" nine seconds late).
+    if (found.model === CAPTIONS_MODEL) {
+      const missed = (project.script?.blocks ?? []).some((block) => {
+        if (block.kind !== "footage" || block.media !== item.id || !within(block)) return false;
+        const cue = cueOf(block);
+        if (cue === null) return false;
+        const offset = block.media_start ?? 0;
+        const [cutIn, cutOut] = align(found.words, found.peaks, cue, block.start - offset, block.end - offset);
+        return cutIn === null || cutOut === null;
+      });
+      if (missed) {
+        diag.info("script", `${item.name}: YouTube's captions miss a range's first or last word; hearing it properly`);
+        app.media.transcribe(item.path, true, names, true);
+        const again = await heard(item);
+        if (again !== null) {
+          out.set(item.id, { words: again.words, peaks: again.peaks });
+          continue;
+        }
+      }
+    }
+    out.set(item.id, { words: found.words, peaks: found.peaks });
   }
   return out;
 }

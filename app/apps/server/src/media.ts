@@ -411,7 +411,9 @@ export class Processor {
     const shared = again ? null : sharedSourceOf(this.store.cacheDir(), source);
     const hear = async () => {
       if (shared !== null && mediaHooks.wholeTranscript !== null && (await mediaHooks.wholeTranscript(shared, target).catch(() => false))) return;
-      const captions = this.captionSource(source);
+      // Heard again: properly (Scribe), not from YouTube's captions, which
+      // are what a second hearing is usually for.
+      const captions = again ? null : this.captionSource(source);
       if (captions !== null && await writeCaptionTranscript(this.store.home, captions, target)) return;
       await transcribe.run(source, target, keyterms, again);
     };

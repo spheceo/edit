@@ -163,6 +163,66 @@ export async function archiveExportFile(
   return !fs.existsSync(output);
 }
 
+/** The chunk folder of a project's exports (the engine's chunks::folder). */
+export function chunkFolder(cache: string, project: string): string {
+  return join(cache, "export-chunks", project.replace(/[^A-Za-z0-9_-]/g, "_"));
+}
+
+/**
+ * The last export's file, fetched back from the cloud when it was archived,
+ * so a re-export copies the chunks that didn't change out of it: with the
+ * file gone the engine reuses nothing (its manifest wants the file as it was
+ * written), and every re-export since exports went to the cloud rendered the
+ * whole video again: 30–40 minutes for a fix in the intro (Oct 29). Its
+ * manifest gets the fetched copy's time. The path fetched, else null.
+ */
+export async function restorePrevious(cache: string, home: string, project: string, fetch: (key: string, dest: string) => Promise<void> = (key, dest) => cloud.download(key, dest)): Promise<string | null> {
+  const manifest = join(chunkFolder(cache, project), "manifest-v1.json");
+  let text: string;
+  let output: string;
+  let size: number;
+  try {
+    text = fs.readFileSync(manifest, "utf8");
+    const value = JSON.parse(text) as { output?: unknown; size?: unknown };
+    if (typeof value.output !== "string" || typeof value.size !== "number") return null;
+    [output, size] = [value.output, value.size];
+  } catch {
+    return null;
+  }
+  if (fs.existsSync(output)) return null;
+  const key = cloudKeyFor(home, output);
+  if (key === null) return null;
+  try {
+    fs.mkdirSync(parent(output) ?? ".", { recursive: true });
+    await fetch(key, output);
+  } catch (error) {
+    diag.warn("export", `fetching the last export back to reuse its chunks: ${diag.messageOf(error)}; it renders whole`);
+    fs.rmSync(output, { force: true });
+    return null;
+  }
+  if (!fs.existsSync(output) || fs.statSync(output).size !== size) {
+    fs.rmSync(output, { force: true });
+    return null;
+  }
+  // The time as text: nanoseconds are past what a JS number holds exactly.
+  const ns = fs.statSync(output, { bigint: true }).mtimeNs.toString();
+  writeAtomic(manifest, text.replace(/"modified_ns"\s*:\s*\d+/, `"modified_ns":${ns}`));
+  diag.info("export", `${project}: fetched the last export back so its unchanged chunks are reused`);
+  return output;
+}
+
+/** The chunks the last whole export of `project` was joined from: each one's content key, first frame in the file and length. */
+export function lastChunks(cache: string, project: string): { output: string; size: number; fps: number; chunks: { key: string; at: number; frames: number }[] } | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(join(chunkFolder(cache, project), "manifest-v1.json"), "utf8")) as Record<string, unknown>;
+    if (typeof value.output !== "string" || typeof value.size !== "number" || typeof value.fps !== "number" || !Array.isArray(value.chunks)) return null;
+    const chunks = (value.chunks as Record<string, unknown>[]).filter((one) => typeof one.key === "string" && typeof one.at === "number" && typeof one.frames === "number") as { key: string; at: number; frames: number }[];
+    return chunks.length === value.chunks.length && chunks.length > 0 ? { output: value.output, size: value.size, fps: value.fps, chunks } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The cloud key recorded for `path`, when its local copy was archived. */
 export function cloudKeyFor(home: string, path: string): string | null {
   for (const own of Object.values(readRecords(home))) {
@@ -473,6 +533,7 @@ export class ExportRegistry implements seams.Exports {
           return;
         }
         // Cloud footage: the originals, not the proxies (read from R2 for the export).
+        let restored: string | null = null;
         let exported = project;
         let originals: seams.Originals | null = null;
         try {
@@ -494,6 +555,8 @@ export class ExportRegistry implements seams.Exports {
             );
           }
           if (running.cancelled) throw new Error("cancelled");
+          // Fetched back to reuse its chunks; gone again after if this export writes elsewhere.
+          restored = this.home === null ? null : await restorePrevious(store.cacheDir(), this.home, project.id);
           const job = native().ExportJob.start(
             { project: { json: jsonForSerde(exported) }, options, plan, output, cacheDir: store.cacheDir(), sounds: originals?.sounds ?? {} },
             (progress) => {
@@ -510,6 +573,7 @@ export class ExportRegistry implements seams.Exports {
           if (running.cancelled) throw new Error("cancelled");
         } finally {
           originals?.release();
+          if (restored !== null && restored !== output) fs.rmSync(restored, { force: true });
         }
       });
       this.finished = this.finished.filter((done) => done !== output);

@@ -26,7 +26,7 @@ import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
-import { clipMap, deleteExport, holdExport, listExports, mapFile, timelineHash } from "./exports.ts";
+import { chunkFolder, clipMap, deleteExport, holdExport, lastChunks, listExports, mapFile, timelineHash } from "./exports.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Project } from "./model.ts";
@@ -34,6 +34,7 @@ import { join } from "./paths.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { clipEnd, fps as fpsOf, trackOf } from "./project.ts";
 import { cachedTranscripts } from "./edit_tools.ts";
+import { Semaphore } from "./media.ts";
 import { native } from "./native/index.ts";
 import { onScreen } from "./review.ts";
 import { fixed, jsonForSerde } from "./rust.ts";
@@ -213,7 +214,15 @@ export async function share(app: App, projectId: string, path: string | null, re
       await restoreArchived(chosen);
       sharing.set(projectId, "making the review copy");
     }
-    if (!fs.existsSync(copy)) await reviewCopy(chosen.path, copy);
+    if (!fs.existsSync(copy)) {
+      let pieced = false;
+      try {
+        pieced = await reviewCopyFromChunks(app.store.cacheDir(), projectId, chosen.path, copy);
+      } catch (error) {
+        diag.warn("review", `${projectId}: the review copy from the export's chunks: ${diag.messageOf(error)}; making it whole`);
+      }
+      if (!pieced) await reviewCopy(chosen.path, copy);
+    }
     const seconds = chosen.frames / fps;
     await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(live.project, seconds), 2), "-i", chosen.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
     const prefix = `edit/reviews/${projectId}/${timeline}`;
@@ -458,6 +467,53 @@ async function describe(app: App, project: Project, exported: string, copy: stri
 }
 
 /** A review copy of an export: 720p H.264 at ~3 Mbit/s on Video Toolbox (a 30-minute edit in a minute or two), x264 without it. */
+/** Review copy pieces made at once (VideoToolbox sessions). */
+const PIECES_AT_ONCE = new Semaphore(2);
+
+/**
+ * The review copy made the way the export was: a 720p piece per chunk of the
+ * export, kept by the chunk's content key, joined without re-encoding, the
+ * sound encoded once over the whole. A fix re-encodes only its own chunks: a
+ * 93-minute edit's review copy took 10 minutes whole for a change in its
+ * intro (card 1, Oct 29). False when the export wasn't made of chunks (or
+ * isn't the file they were joined into): then it's made whole.
+ */
+async function reviewCopyFromChunks(cache: string, project: string, source: string, dest: string): Promise<boolean> {
+  const last = lastChunks(cache, project);
+  if (last === null || last.output !== source || !fs.existsSync(source) || fs.statSync(source).size !== last.size) return false;
+  const dir = join(chunkFolder(cache, project), "review");
+  fs.mkdirSync(dir, { recursive: true });
+  const pieceOf = (key: string) => join(dir, `${key}.mp4`);
+  let made = 0;
+  await Promise.all(
+    last.chunks.map((chunk) =>
+      PIECES_AT_ONCE.with(async () => {
+        const piece = pieceOf(chunk.key);
+        if (fs.existsSync(piece)) return;
+        const partial = `${piece}.partial.mp4`;
+        const common = ["-v", "error", "-nostdin", "-y", "-ss", (chunk.at / last.fps).toFixed(6), "-i", source, "-frames:v", String(chunk.frames), "-an", "-vf", "scale=-2:720"];
+        try {
+          await tools.run([tools.ffmpeg(), ...common, "-c:v", "h264_videotoolbox", "-b:v", "3M", partial]);
+        } catch {
+          await tools.run([tools.ffmpeg(), ...common, "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", partial]);
+        }
+        fs.renameSync(partial, piece);
+        made += 1;
+      }),
+    ),
+  );
+  const list = join(dir, "pieces.txt");
+  fs.writeFileSync(list, last.chunks.map((chunk) => `file '${pieceOf(chunk.key).replaceAll("'", "'\\''")}'`).join("\n"));
+  const partial = `${dest}.partial.mp4`;
+  await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list, "-i", source, "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", partial]);
+  fs.renameSync(partial, dest);
+  // Pieces of chunks the edit no longer has go.
+  const kept = new Set(last.chunks.map((chunk) => `${chunk.key}.mp4`));
+  for (const name of fs.readdirSync(dir)) if (name.endsWith(".mp4") && !kept.has(name)) fs.rmSync(join(dir, name), { force: true });
+  diag.info("review", `${project}: review copy from ${last.chunks.length} pieces, ${made} made now`);
+  return true;
+}
+
 async function reviewCopy(source: string, dest: string): Promise<void> {
   const partial = `${dest}.partial.mp4`;
   const common = ["-v", "error", "-nostdin", "-y", "-i", source, "-vf", "scale=-2:720", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"];

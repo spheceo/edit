@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, resumeSnapshot } from "../src/exports.ts";
+import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -223,4 +223,29 @@ test("archiveExportFile deletes locally only after a size-verified upload", asyn
     expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50))).toBe(true);
     expect(fs.existsSync(file)).toBe(false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a re-export fetches the archived last export back, so its unchanged chunks are reused", async () => {
+  const home = fs.mkdtempSync(`${os.tmpdir()}/edit-restore-`);
+  try {
+    const cache = `${home}/cache`;
+    const output = `${home}/Movies/Out.mp4`;
+    fs.mkdirSync(`${cache}/export-chunks/p1-2`, { recursive: true });
+    const manifest = `${cache}/export-chunks/p1-2/manifest-v1.json`;
+    fs.writeFileSync(manifest, JSON.stringify({ version: 1, output, size: 50, fps: 30, chunks: [], sound: null }).replace('"fps"', '"modified_ns":1793238703930730021,"fps"'));
+    fs.writeFileSync(`${home}/exports.json`, JSON.stringify({ "p1-2": [{ path: output, name: "Out.mp4", finished_ms: 1, seconds: 1, bytes: 50, frames: 30, whole: true, start: 0, format: "h264", timeline: "t", cloudKey: "edit/exports/p1-2/Out.mp4" }] }));
+    const fetched: string[] = [];
+    const fetch = async (key: string, dest: string) => { fetched.push(key); fs.writeFileSync(dest, Buffer.alloc(50)); };
+    expect(await restorePrevious(cache, home, "p1-2", fetch)).toBe(output);
+    expect(fetched).toEqual(["edit/exports/p1-2/Out.mp4"]);
+    // The manifest has the fetched copy's own time, to the nanosecond.
+    const ns = fs.statSync(output, { bigint: true }).mtimeNs.toString();
+    expect(fs.readFileSync(manifest, "utf8")).toContain(`"modified_ns":${ns}`);
+    // Already here: nothing to fetch.
+    expect(await restorePrevious(cache, home, "p1-2", fetch)).toBeNull();
+    // A copy of another size isn't the export: not kept.
+    fs.rmSync(output);
+    expect(await restorePrevious(cache, home, "p1-2", async (_key, dest) => fs.writeFileSync(dest, Buffer.alloc(49)))).toBeNull();
+    expect(fs.existsSync(output)).toBe(false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

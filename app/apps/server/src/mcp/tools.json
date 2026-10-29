@@ -1622,12 +1622,20 @@
     "name": "measure_audio"
   },
   {
-    "description": "Re-finds each script range's first and last words in its transcript (forgiving how the Doc spells them: plurals, possessives, a letter off, e.g. \"priuses\" for \"Prius\") and moves that clip's in/out points to them, shifting everything after it so nothing overlaps or gaps (effects ending on its cut move with the cut). Use it when a range starts or ends a word early or late. Re-run caption_speakers over any clip it changes.",
+    "description": "Re-finds each script range's first and last words in its transcript (forgiving how the Doc spells them: plurals, possessives, a letter off, e.g. \"priuses\" for \"Prius\") and moves that clip's in/out points to them, shifting everything after it so nothing overlaps or gaps (effects ending on its cut move with the cut). Use it when a range starts or ends a word early or late. A range whose first or last word YouTube's captions don't have is heard properly first. start/end (timeline seconds) limit it to the ranges placed there (the intro's teasers: the rest stays as it is). Re-run caption_speakers over any clip it changes.",
     "inputSchema": {
       "properties": {
         "project_id": {
           "description": "Defaults to the project open in the UI.",
           "type": "string"
+        },
+        "start": {
+          "description": "Timeline seconds: only ranges placed from here.",
+          "type": "number"
+        },
+        "end": {
+          "description": "Timeline seconds: only ranges placed before here.",
+          "type": "number"
         }
       },
       "required": [],

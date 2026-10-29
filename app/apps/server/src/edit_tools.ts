@@ -1317,6 +1317,26 @@ export function introWithoutArrest(project: Project, heard: Map<string, Transcri
 }
 
 /**
+ * Teasers subtitled plainly: an interrogation's or bodycam's intro has its
+ * lines as the speakers' captions (caption_speakers: word by word in their
+ * colour, glowing). Card 2's agent never ran it and its teasers went out as
+ * plain subtitles while card 1's had them (the user, Oct 29: "the intro of
+ * the off-duty officer uses the correct subtitle style but for the predator
+ * card it does not").
+ */
+function introUncaptioned(project: Project, teasers: [number, number][]): Json[] {
+  if (project.style !== "interrogation" && project.style !== "bodycam") return [];
+  return teasers.flatMap(([start, end]) => {
+    const inside = project.clips.filter((clip) => clip.type === "text" && clip.start >= start && clip.start < end);
+    const plain = inside.filter((clip) => (clip.name ?? "").startsWith("Subtitle ·"));
+    const captioned = inside.some((clip) => (clip.name ?? "").startsWith("Caption ·") || (clip.name ?? "") === "Subtitle (teaser)");
+    return plain.length > 0 && !captioned
+      ? [{ kind: "intro_uncaptioned", start, end, lines: plain.length, fix: "caption_speakers over the intro (start and end in seconds): the teasers' lines as the speakers' captions, as every intro has them" }]
+      : [];
+  });
+}
+
+/**
  * The plan's mechanical audit, plus what it needs the media cache for: B-roll
  * that's mostly pixelated or blurred (files not read yet start reading and
  * are listed as pending) and quote callouts away from the words that point
@@ -1357,6 +1377,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...soundEffectsLateHit(project),
     ...(typing.typingSoundsOff(project) as Json[]),
     ...(pointerIssues(project) as Json[]),
+    ...introUncaptioned(project, teasers),
     // The house rule (one_line.ts): what's left over from before it, or couldn't be split.
     ...twoLineSubtitles(project).map((one) => ({ kind: "subtitle_two_lines", clip: one.id, start: one.start, text: one.text, lines: 1, fix: "split it into one-line cues at a natural break (any edit to its text splits it itself), or shorten it" })),
   ];
@@ -1397,11 +1418,11 @@ const FIXABLE = [
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
   "blur_off_shot", "sfx_long", "sfx_late_hit", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "viewer_over_cut",
-  "short_length", "short_unfilled", "short_subject_off", "short_unsubtitled", "short_no_music", "short_music_stops",
+  "intro_uncaptioned", "short_length", "short_unfilled", "short_subject_off", "short_unsubtitled", "short_no_music", "short_music_stops",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */
-const WHOLE_EDIT = ["short_length", "short_unsubtitled", "short_no_music", "short_music_stops", "blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_text_heavy", "commentary_flash", "commentary_graphics_monotony"];
+const WHOLE_EDIT = ["intro_uncaptioned", "short_length", "short_unsubtitled", "short_no_music", "short_music_stops", "blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_text_heavy", "commentary_flash", "commentary_graphics_monotony"];
 
 /**
  * Edit's follow-up after a whole edit that left three or more fixable flags (or one of WHOLE_EDIT's)

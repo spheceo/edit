@@ -28,6 +28,7 @@ import * as imports from "./imports.ts";
 import * as jobs from "./jobs.ts";
 import * as reuse from "./reuse.ts";
 import * as reviews from "./reviews.ts";
+import * as scout from "./scout.ts";
 import { pageCount } from "./pages.ts";
 import { audit } from "./plan.ts";
 import * as scripting from "./scripting.ts";
@@ -372,6 +373,31 @@ export function routes(router: Router<App>): void {
         return { ok: true };
       }),
     )
+    // Finding a commentary's clips on YouTube from its brief.
+    .post("/api/writer/scripts/{id}/finds", (context) =>
+      answer(() => {
+        const script = readFor(dataOf(context.app), id(context));
+        if (!script.commentary) throw new Error("Clips are found for a commentary script.");
+        if (!script.commentary.sources.some((source) => source.role === "brief")) throw new Error("Add the producer's brief first: the search starts from it.");
+        return startJob(context.app, id(context), { kind: "find" }, (job) => scout.find(context.app, dataOf(context.app), id(context), job));
+      }),
+    )
+    .get("/api/writer/scripts/{id}/finds", (context) =>
+      answer(() => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        return scout.load(store.scriptDir(data, id(context)));
+      }),
+    )
+    .get("/api/writer/scripts/{id}/finds/frames/{name}", (context) => {
+      const data = dataOf(context.app);
+      readFor(data, id(context));
+      const name = context.params.name ?? "";
+      if (!/^frames-\d+\.jpg$/.test(name)) throw notFound("No such frames.");
+      const path = join(store.scriptDir(data, id(context)), "finds", "frames", name);
+      if (!isFile(path)) throw notFound("No such frames.");
+      return serveFile(context.request, path);
+    })
     // Teaching commentary builds from a review's notes: pull them, test a lesson in rounds, keep it.
     .post("/api/writer/scripts/{id}/feedback", (context) =>
       answer(async () => {

@@ -6,7 +6,9 @@
 
 import type { Clip, Focus, Kind, Research, Script } from "@edit/types/writer";
 
+import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
+import * as archive from "./archive.ts";
 import { isFile } from "../paths.ts";
 import * as build from "./build.ts";
 import * as casefiles from "./casefiles.ts";
@@ -26,9 +28,6 @@ import { revise } from "./revise.ts";
 import * as store from "./store.ts";
 import { keepPeaks, readPeaks } from "./tidy.ts";
 import * as versions from "./versions.ts";
-
-/** Brings an archived script's footage back (archive.ts sets it). */
-export const hooks = { restoreFootage: (_data: string, _id: string, _signal?: AbortSignal): Promise<string[]> => Promise.reject(new Error("the footage isn't on this Mac")) };
 
 const CHANGED = "The script changed while Claude was editing it, so nothing was applied. Ask again.";
 
@@ -94,7 +93,7 @@ async function pickReused(dir: string, script: Script, job: Job): Promise<Script
  * script is read again afterwards, so an edit made during the build to
  * anything but the timeline stays.
  */
-export async function buildOnce(data: string, id: string, note: string, kind: Kind | undefined, job: Job): Promise<Outcome> {
+export async function buildOnce(app: App, data: string, id: string, note: string, kind: Kind | undefined, job: Job): Promise<Outcome> {
   const dir = store.scriptDir(data, id);
   let script = store.read(dir);
   if (script.commentary) return buildCommentary(data, dir, script, note, job);
@@ -150,7 +149,7 @@ export async function buildOnce(data: string, id: string, note: string, kind: Ki
   let clips = built.clips;
   if (exact.wanted(now)) {
     let said: string;
-    [clips, said] = await cutExactly(data, dir, now, built.plan, clips, peaks, job);
+    [clips, said] = await cutExactly(app, data, dir, now, built.plan, clips, peaks, job);
     report = `${report}\n\n${said}`;
   }
   try {
@@ -182,14 +181,14 @@ async function buildCommentary(data: string, dir: string, script: Script, note: 
  * cut again: the same words and narration, read back from its clips, with
  * the producer's clip notes kept.
  */
-export async function exactOnce(data: string, id: string, job: Job): Promise<Outcome> {
+export async function exactOnce(app: App, data: string, id: string, job: Job): Promise<Outcome> {
   const dir = store.scriptDir(data, id);
   const script = store.read(dir);
   if (!exact.wanted(script)) throw new Error("Only footage transcribed from YouTube's captions needs hearing exactly.");
   if (!script.clips.some((clip) => clip.kind === "cut-in")) throw new Error("Build the script first.");
   const before = structuredClone(script);
   const peaks = await peaksOf(dir, script, job.signal);
-  const [clips, said] = await cutExactly(data, dir, script, exact.planOf(script), before.clips, peaks, job);
+  const [clips, said] = await cutExactly(app, data, dir, script, exact.planOf(script), before.clips, peaks, job);
   exact.keepNotes(before.words, before.clips, script.words, clips);
   checkStopped(job);
   if (store.read(dir).revision !== before.revision) throw new Error("The script changed while its footage was heard, so nothing was applied. Try again.");
@@ -204,12 +203,12 @@ export async function exactOnce(data: string, id: string, job: Job): Promise<Out
  * again on those times, without any piece that has no sound. Hearing that
  * fails leaves the captions' cut, and says so.
  */
-async function cutExactly(data: string, dir: string, script: Script, plan: Plan, clips: Clip[], peaks: ArrayLike<number>, job: Job): Promise<[Clip[], string]> {
+async function cutExactly(app: App, data: string, dir: string, script: Script, plan: Plan, clips: Clip[], peaks: ArrayLike<number>, job: Job): Promise<[Clip[], string]> {
   // Footage cleared from this Mac once the cloud held it comes back first.
   if (!isFile(footagePath(dir, script))) {
     job.stage("Bringing the footage back to hear it");
     try {
-      await hooks.restoreFootage(data, script.id, job.signal);
+      await archive.restoreFootage(app, data, script.id, job);
     } catch (error) {
       checkStopped(job);
       return [clips, `The footage isn't on this Mac and couldn't be brought back (${diag.messageOf(error)}), so its cuts follow YouTube's captions. Build again to try once more.`];

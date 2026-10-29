@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
+import * as archive from "./archive.ts";
 import * as build from "./build.ts";
 import * as cloud from "./cloud.ts";
 import * as reviews from "./reviews.ts";
@@ -48,6 +49,8 @@ export function start(app: App): void {
   for (const id of store.ids(data)) jobs.markInterrupted(data, id);
   cloud.start(data);
   reviews.start(app, data);
+  // Archives and restores heard from the cloud, acted on every 20 s.
+  setInterval(() => archive.react(app, data), 20_000);
   for (const begin of starters) {
     try {
       begin(app);

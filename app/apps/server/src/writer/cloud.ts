@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import type { Script } from "@edit/types/writer";
 
 import * as diag from "../diag.ts";
+import * as archive from "./archive.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join, parent } from "../paths.ts";
 import * as machine from "../machine.ts";
@@ -160,10 +161,12 @@ export const fileKey = (data: string, id: string, name: string): Kept | null => 
  * now, so a file whose size the record agrees with takes its time from here.
  */
 export function adoptLedger(data: string, writerFolder: string): void {
-  // What Writer cleared from this Mac, or left in the cloud: still those scripts' files there.
-  if (!isFile(storagePath(data)) && isFile(join(writerFolder, "cloud", "storage.json"))) {
-    fs.mkdirSync(join(data, "cloud"), { recursive: true });
-    fs.copyFileSync(join(writerFolder, "cloud", "storage.json"), storagePath(data));
+  // What Writer cleared from this Mac or left in the cloud (still those scripts' files there), and which archives it freed or restored here.
+  for (const name of ["storage.json", "archive-local.json"]) {
+    if (!isFile(join(data, "cloud", name)) && isFile(join(writerFolder, "cloud", name))) {
+      fs.mkdirSync(join(data, "cloud"), { recursive: true });
+      fs.copyFileSync(join(writerFolder, "cloud", name), join(data, "cloud", name));
+    }
   }
   if (isFile(ledgerPath(data))) return;
   const theirs = readJson<Ledger | null>(join(writerFolder, "cloud", "ledger.json"), null);
@@ -503,6 +506,8 @@ async function tick(data: string, pull: boolean): Promise<number> {
     if (!listed.ok) throw new Problem(`The cloud refused to list scripts (${listed.code}).`);
     const rows = (Array.isArray(listed.value) ? listed.value : []) as Record<string, unknown>[];
     status.scripts = rows.filter((row) => row.deletedAt == null).length;
+    // Archived from Repack's page, or asked back: archive.ts acts on it.
+    archive.keepStates(data, rows);
     for (const row of rows) {
       if (gone.includes(String(row.scriptId))) continue;
       try {
@@ -519,7 +524,7 @@ async function tick(data: string, pull: boolean): Promise<number> {
   const changed: [string, string, Script, Uint8Array, Known | undefined, Record<string, Kept>][] = [];
   for (const id of store.ids(data).sort()) {
     const until = backoff.get(id)?.until ?? 0;
-    if (busy(id) || until > Date.now()) continue;
+    if (busy(id) || until > Date.now() || archive.archived(data, id)) continue;
     const dir = store.scriptDir(data, id);
     let body: Uint8Array;
     let script: Script;

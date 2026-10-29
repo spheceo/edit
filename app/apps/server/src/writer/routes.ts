@@ -18,9 +18,9 @@ import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
 import { blocksOf } from "./blocks.ts";
 import * as activity from "./activity.ts";
+import * as archive from "./archive.ts";
 import * as brief from "./brief.ts";
 import * as docs from "./docs.ts";
-import * as drive from "./drive.ts";
 import * as edits from "./edits.ts";
 import * as feedback from "./feedback.ts";
 import { lessons } from "./lessons.ts";
@@ -53,6 +53,9 @@ export function detail(data: string, script: Script): Script {
   // What the watcher left unfinished, for Retry unfinished speaker checks.
   const check = watch.status(dir);
   if (check !== null) out.speakerCheck = check;
+  // Archived on Repack's page: its footage freed, read-only until restored.
+  const archived = archive.state(data, script.id);
+  if (archived !== null) out.archive = archived;
   return out;
 }
 
@@ -106,7 +109,8 @@ export function routes(router: Router<App>): void {
           .filter((row) => can.sees(row))
           .map((row) => {
             const refusal = cloud.refused(row.id);
-            return Object.assign(row, { building: jobs.running(row.id) }, refusal === null ? {} : { cloudRefused: refusal });
+            const archived = archive.state(data, row.id);
+            return Object.assign(row, { building: jobs.running(row.id) }, refusal === null ? {} : { cloudRefused: refusal }, archived === null ? {} : { archive: archived });
           });
       }),
     )
@@ -190,13 +194,6 @@ export function routes(router: Router<App>): void {
         return detail(data, edits.resolveProposals(data, id(context), Number(given.revision), Array.isArray(given.proposals) ? given.proposals.map(String) : [], given.accept === true));
       });
     })
-    .delete("/api/writer/scripts/{id}/proposals/{proposal}", (context) =>
-      answer(() => {
-        const data = dataOf(context.app);
-        readFor(data, id(context));
-        return detail(data, edits.declineProposal(data, id(context), context.params.proposal ?? ""));
-      }),
-    )
     .get("/api/writer/scripts/{id}/chat", (context) =>
       answer(() => {
         const data = dataOf(context.app);
@@ -264,13 +261,6 @@ export function routes(router: Router<App>): void {
         return detail(dataOf(context.app), await imports.resume(context.app, dataOf(context.app), id(context), choice));
       });
     })
-    // Transcribing footage that has none: the same as Retry.
-    .post("/api/writer/scripts/{id}/transcribe", (context) =>
-      answer(async () => {
-        readFor(dataOf(context.app), id(context));
-        return detail(dataOf(context.app), await imports.resume(context.app, dataOf(context.app), id(context), { kind: "retry" }));
-      }),
-    )
     .post("/api/writer/scripts/{id}/complete-transcription", (context) =>
       answer(() => startJob(context.app, id(context), { kind: "transcribe" }, (job) => imports.complete(context.app, dataOf(context.app), id(context), job))),
     )
@@ -514,6 +504,13 @@ export function routes(router: Router<App>): void {
     .get("/api/writer/progress", () => json(imports.progress()))
     .get("/api/writer/cloud", () => json(cloud.statusNow()))
     .get("/api/writer/activity", () => json(activity.list()))
+    // Brings an archived script's footage back; followed as a build.
+    .post("/api/writer/scripts/{id}/restore", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return archive.startRestore(context.app, dataOf(context.app), id(context));
+      }),
+    )
     // The Edit project this script became, if it has one: Edit mode's side of the same project.
     .get("/api/writer/scripts/{id}/edit", (context) =>
       answer(() => {
@@ -537,13 +534,6 @@ export function routes(router: Router<App>): void {
       const given = await body<{ text?: string }>(context);
       return answer(() => brief.parse(String(given.text ?? "")));
     })
-    // Signs in to the team's Drive account without downloading anything.
-    .post("/api/writer/drive/check", () =>
-      answer(async () => {
-        await drive.hooks.accessToken();
-        return "Google Drive is connected.";
-      }),
-    )
     .post("/api/writer/trello/card", async (context) => {
       const given = await body<{ link?: string }>(context);
       return answer(() => trello.card(String(given.link ?? ""), titles(context.app)));
@@ -555,7 +545,7 @@ export function routes(router: Router<App>): void {
         const script = readFor(dataOf(context.app), id(context));
         if (given.kind !== undefined) can.requireKind(script, given.kind);
         const note = String(given.note ?? "");
-        return startJob(context.app, id(context), { kind: "build", note, ...(given.kind ? { format: given.kind } : {}) }, (job) => scripting.buildOnce(dataOf(context.app), id(context), note, given.kind, job));
+        return startJob(context.app, id(context), { kind: "build", note, ...(given.kind ? { format: given.kind } : {}) }, (job) => scripting.buildOnce(context.app, dataOf(context.app), id(context), note, given.kind, job));
       });
     })
     .post("/api/writer/scripts/{id}/revise", async (context) => {
@@ -569,7 +559,7 @@ export function routes(router: Router<App>): void {
       });
     })
     .post("/api/writer/scripts/{id}/exact", (context) =>
-      answer(() => startJob(context.app, id(context), { kind: "exact" }, (job) => scripting.exactOnce(dataOf(context.app), id(context), job))),
+      answer(() => startJob(context.app, id(context), { kind: "exact" }, (job) => scripting.exactOnce(context.app, dataOf(context.app), id(context), job))),
     )
     .get("/api/writer/scripts/{id}/research", (context) =>
       answer(() => {

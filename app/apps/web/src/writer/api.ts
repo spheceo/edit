@@ -1,4 +1,4 @@
-import type { Adding, Brief, BuildStatus, ChatTurn, DocComment, DocFile, Check, Choice, ClaudeStatus, Draft, Feedback, Finds, Focus, LearnStep, Lesson, Pacing, Kind, Research, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, ImportProgress, Role, Script, Settings, Snapshot, StorageCleared, StorageReport, Summary, TrelloCards, TrelloList, Version, VideoCheck, Footage, TrelloCard } from "./types";
+import type { Adding, Brief, BuildStatus, ChatTurn, DocComment, DocFile, Choice, ClaudeStatus, Draft, Feedback, Finds, Focus, LearnStep, Lesson, Pacing, Kind, Research, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, ImportProgress, Role, Script, Snapshot, Summary, TrelloCards, TrelloList, Version, VideoCheck, Footage, TrelloCard } from "./types";
 
 /** Writer's own replies are JSON. Anything else came from in between (Vite
  * while the app restarts, a dropped tailnet hop), and says so plainly. A
@@ -64,14 +64,6 @@ export const renameScript = (id: string, title: string) =>
 export const resumeImport = (id: string, choice: Choice) =>
   http<Script>(`/api/writer/scripts/${id}/resume`, json(choice));
 
-export const doctor = () => (http<Check[]>("/api/doctor"));
-
-export const checkDrive = () =>
-  http<string>("/api/writer/drive/check", { method: "POST" });
-
-export const retryTranscribe = (id: string) =>
-  http<Script>(`/api/writer/scripts/${id}/transcribe`, { method: "POST" });
-
 export const completeTranscription = (id: string) =>
   http<BuildStatus>(`/api/writer/scripts/${id}/complete-transcription`, { method: "POST" });
 
@@ -80,17 +72,6 @@ export const saveClips = (id: string, revision: number, clips: Script["clips"]) 
 
 export const deleteScript = (id: string) =>
   http<void>(`/api/writer/scripts/${id}`, { method: "DELETE" });
-
-export const getSettings = () =>
-  http<Settings>("/api/settings");
-
-export const saveSettings = (settings: Settings) =>
-  http<Settings>("/api/settings", { ...json(settings), method: "PUT" });
-
-export const checkRelay = () =>
-  http<RelayHealth>("/api/relay/check", { method: "POST" });
-
-type RelayHealth = { ok: boolean; transcription: boolean; drive: boolean; proxy: boolean; message: string };
 
 export const claudeStatus = () =>
   http<ClaudeStatus>("/api/writer/claude");
@@ -203,10 +184,6 @@ export const getChat = (id: string) =>
 export const clearChat = (id: string) =>
   http<void>(`/api/writer/scripts/${id}/chat`, { method: "DELETE" });
 
-/** Declines a proposed rewrite; the saved narration stays. */
-export const declineProposal = (id: string, proposal: string) =>
-  http<Script>(`/api/writer/scripts/${id}/proposals/${proposal}`, { method: "DELETE" });
-
 /** Respells a transcript word; an empty text puts it back. */
 export const correctWord = (id: string, revision: number, word: string, text: string) =>
   http<Script>(`/api/writer/scripts/${id}/corrections`, { ...json({ revision, word, text }), method: "PUT" });
@@ -308,14 +285,6 @@ export type CloudStatus = {
 /** Where syncing to the cloud has got to. */
 export const cloudStatus = () => (http<CloudStatus>("/api/writer/cloud"));
 
-/** What Writer holds on this Mac, and how much the cloud holds too. */
-export const storageReport = () =>
-  http<StorageReport>("/api/writer/storage");
-
-/** Clears local footage verified in the cloud; still-uploading footage stays. */
-export const clearStorage = () =>
-  http<StorageCleared>("/api/writer/storage/clear", { method: "POST" });
-
 /**
  * Where a script's preview plays from: the file on this Mac when it's here,
  * otherwise the cloud's copy a range at a time (stream.rs), as Repack plays
@@ -323,10 +292,6 @@ export const clearStorage = () =>
  */
 export const previewSrc = (id: string, v: number | string) =>
   `/api/writer/scripts/${id}/proxy?v=${v}`;
-
-/** A cleared preview back from the cloud, so the script plays here again. */
-export const restorePreview = (id: string) =>
-  http<Script>(`/api/writer/scripts/${id}/preview`, { method: "POST" });
 
 /** Shares the script on a Repack review link, or its next version on the same link. */
 /** The script as it is now made its review's only version, v1, on the same link. */
@@ -353,9 +318,6 @@ export const approveReview = (id: string, approve: boolean) =>
 export const fixNotes = (id: string) =>
   http<BuildStatus>(`/api/writer/scripts/${id}/review/fix`, json({}));
 
-export const setEngine = (engine: "cli" | "sdk") =>
-  http<Settings>("/api/settings/engine", { ...json({ engine }), method: "PUT" });
-
 /** Calls `then` whenever review notes change (in the app; the dev page asks every half minute). */
 /** Scripts came, went or changed behind the page's back (the cloud, the local
  * API): Writer says so; a page in a browser asks every few seconds. */
@@ -378,20 +340,12 @@ export function onReviews(then: () => void): () => void {
   return () => window.clearInterval(timer);
 }
 
-
 /** Brings an archived script's footage back from its links (or Edit's originals); followed as a build. */
 export const restoreScript = (id: string) =>
   http<BuildStatus>(`/api/writer/scripts/${id}/restore`, json({}));
 
 /** A line of Writer's log. */
 export type LogLine = { at: number; time: string; level: "INFO" | "WARN" | "ERROR"; area: string; message: string };
-
-/** The log's lines after `since` (ms), and where its file is. */
-export const getLogs = (since: number) =>
-  http<{ lines: LogLine[]; file: string | null }>(`/api/logs?since=${since}`);
-
-/** Shows the log file in Finder. */
-export const revealLogs = () => (http<void>("/api/logs/reveal", json({})));
 
 /** Something long under way: what, on what, the step and how far. */
 export type Activity = { key: string; script: string | null; what: string; title: string; step: string; done: number; total: number; unit: "count" | "bytes" | "percent"; started: number };
@@ -400,7 +354,6 @@ export const getActivity = () => (http<Activity[]>("/api/writer/activity"));
 
 /** Which Writer this is: "Writer nightly-1", "Writer v0.0.0", or a dev build. */
 export type About = { name: string; version: string; tag: string | null; release: boolean };
-export const getAbout = () => (http<About>("/api/about"));
 
 /** Who's signed in (account.rs), at accounts.spheceo.com. */
 export type Person = { sub: string; email: string; name: string; image: string | null; perms: string[]; admin: boolean };
@@ -416,12 +369,10 @@ export type AccountStatus = {
 };
 /** A script starter's photo, kept on this Mac: a src for <img>, or null (show initials). */
 export const avatarSrc = async (_sub: string, picture: string): Promise<string | null> => `/api/avatar?url=${encodeURIComponent(picture)}`;
-export const accountStatus = () => (http<AccountStatus>("/api/account"));
 export const signIn = () => (http<AccountStatus>("/api/account/sign-in", json({})));
 export const signInWithCode = () => (http<AccountStatus>("/api/account/sign-in-code", json({})));
 /** Opens one of Writer's own pages (accounts.spheceo.com, Writer's issues) in the browser. */
 export const openPage = (url: string) => (http<void>("/api/open", json({ url })));
-export const cancelSignIn = () => (http<AccountStatus>("/api/account/cancel", json({})));
 export const signOut = () => (http<AccountStatus>("/api/account/sign-out", json({})));
 
 /** Self-update (update.rs): this build, the channel, and the build on offer. */
@@ -436,11 +387,7 @@ export type UpdateStatus = {
   /** Why the last look for updates failed, until one works. */
   checkError: string | null;
 };
-export const updateStatus = () => (http<UpdateStatus>("/api/update"));
-export const checkUpdate = () => (http<UpdateStatus>("/api/update/check", json({})));
 export const installUpdate = () => (http<void>("/api/update/install", json({})));
-export const setUpdateChannel = (channel: "nightly" | "stable") =>
-  http<UpdateStatus>("/api/update/channel", { ...json({ channel }), method: "PUT" });
 
 /** A commentary's downloaded footage; asking starts what's missing (footage.rs). */
 export const getFootage = (id: string) => (http<Footage>(`/api/writer/scripts/${id}/footage`));
@@ -448,8 +395,3 @@ export const getFootage = (id: string) => (http<Footage>(`/api/writer/scripts/${
 /** Where a downloaded stretch of a commentary's footage plays from. */
 export const footageUrl = (id: string, file: string) => `/api/writer/scripts/${id}/footage/${encodeURIComponent(file)}`;
 
-/** Whether downloads can fall back on the person's YouTube sign-in (a cookies file, read silently). */
-export const youtubeSignIn = () =>
-  http<{ saved: boolean; savedAt: number | null }>("/api/youtube/sign-in");
-/** Copies the YouTube sign-in from the browser into that file, once (Chrome asks macOS for its key this one time). */
-export const saveYoutubeSignIn = () => (http<{ browser: string }>("/api/youtube/sign-in", json({})).then((answer) => answer.browser));

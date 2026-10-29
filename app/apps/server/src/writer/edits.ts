@@ -132,17 +132,6 @@ export function resolveProposals(data: string, id: string, revision: number, cho
   });
 }
 
-/** Declines one proposed rewrite; the saved narration stays. */
-export function declineProposal(data: string, id: string, proposal: string): Script {
-  return store.update(
-    store.scriptDir(data, id),
-    (script) => {
-      script.proposals = (script.proposals ?? []).filter((item) => item.id !== proposal);
-    },
-    true,
-  );
-}
-
 /**
  * The producer's answer to Claude asking to start over: accepted, the built
  * script goes (every clip and cut-in, or a commentary's draft); the transcript,

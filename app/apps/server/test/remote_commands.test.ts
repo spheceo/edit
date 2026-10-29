@@ -28,7 +28,7 @@ test("expired, wrong-device and agent commands never claim work", () => {
     const command = { id: "one", device: "device-1", kind: "update" as const, expiresAt: 100 };
     expect(receipts.claim(command, 100)).toBe(false);
     expect(receipts.claim({ ...command, device: "another" }, 1)).toBe(false);
-    expect(receipts.claim({ ...command, kind: "agent" }, 1)).toBe(false);
+    expect(receipts.claim({ ...command, kind: "agent" as never }, 1)).toBe(false);
     expect(() => receipts.claim({ ...command, id: "../bad" }, 1)).toThrow();
     expect(receipts.read(command.id)).toBeNull();
   } finally {

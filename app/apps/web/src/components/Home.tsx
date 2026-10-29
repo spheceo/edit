@@ -373,13 +373,16 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
   // What’s worth a word on the card, as a chip beside "On Drive".
   const notice: NoticeProps | null = project.problem
     ? { tone: "bad", text: "Can’t be opened", title: project.problem }
-    : missing > 0
-      ? {
-          tone: "warn",
-          text: mostlyMissing ? "Footage missing" : `${missing} ${missing === 1 ? "file" : "files"} missing`,
-          title: `${missing} of ${used} footage files the edit plays aren’t on this Mac (deleted, or on a drive that isn’t plugged in)`,
-        }
-      : null;
+    : // The cloud refused it: the team can't open or fix it until it's up (Oct 29).
+      status?.sync === "error"
+      ? { tone: "bad", text: "Not in the cloud", title: `Edit keeps trying to save it to the cloud: ${status.message ?? "it was refused"}` }
+      : missing > 0
+        ? {
+            tone: "warn",
+            text: mostlyMissing ? "Footage missing" : `${missing} ${missing === 1 ? "file" : "files"} missing`,
+            title: `${missing} of ${used} footage files the edit plays aren’t on this Mac (deleted, or on a drive that isn’t plugged in)`,
+          }
+        : null;
   return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, notice, open, menu, driveMenu, nameInput, dialogs };
 }
 

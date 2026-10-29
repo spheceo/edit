@@ -11,6 +11,7 @@ import { writeAtomic } from "./files.ts";
 import { ApiError, bad, json } from "./http/errors.ts";
 import { readJson, type RouteContext, type Router } from "./http/router.ts";
 import * as relay from "./relay.ts";
+import * as actions from "./remote_actions.ts";
 import { RemoteCommandReceipts } from "./remote_commands.ts";
 import { installUpdate } from "./routes.ts";
 import { BUILD } from "./version.ts";
@@ -18,7 +19,7 @@ import { BUILD } from "./version.ts";
 const query = (name: string) => makeFunctionReference<"query">(`editSupport:${name}`);
 const mutation = (name: string) => makeFunctionReference<"mutation">(`editSupport:${name}`);
 type Settings = { device: string; enabled: boolean; owner?: string; pendingDisable?: boolean; enrolling?: boolean };
-type Pending = { commandId: string; deviceId: string; expiresAt: number; kind: "update" };
+type Pending = { commandId: string; deviceId: string; expiresAt: number; kind: actions.Kind; projectId?: string };
 type Outcome = { state: "complete" | "failed"; detail: string };
 type Intent = { commandId: string; device: string; expected: string; outcome?: Outcome };
 const clients = new WeakMap<App, ConvexClient>();
@@ -195,7 +196,40 @@ export async function recover(app: App, c: ConvexClient, currentBuild = BUILD) {
   }
 }
 
+/**
+ * A command that isn't an update (diagnostics, resume): claimed, carried out
+ * and reported at once. Nothing restarts, so no journal: the receipt keeps it
+ * from running twice.
+ */
+async function executeAction(app: App, c: ConvexClient, item: Pending, ownsSession: () => boolean) {
+  const setting = settings(app);
+  if (!ownsSession() || !setting.enabled || setting.device !== item.deviceId || item.expiresAt <= Date.now()) return;
+  const receipts = new RemoteCommandReceipts(app.store.home, setting.device);
+  if (!(await rpc(c.mutation(mutation("claim"), { deviceId: setting.device, commandId: item.commandId })))) return;
+  let state: "complete" | "failed" = "complete";
+  let detail: string;
+  try {
+    if (!receipts.claim({ id: item.commandId, device: item.deviceId, kind: item.kind, expiresAt: item.expiresAt })) throw new Error("This command was already received or expired. Nothing was replayed.");
+    if (item.kind === "diagnostics") detail = `Sent: ${await actions.diagnostics(app)}`;
+    else if (item.kind === "resume") {
+      if (!item.projectId) throw new Error("No project was named.");
+      detail = await actions.resume(app, item.projectId);
+    } else throw new Error(`This build doesn't know "${item.kind}".`);
+  } catch (error) {
+    state = "failed";
+    detail = diag.messageOf(error);
+  }
+  await rpc(c.mutation(mutation("finish"), { deviceId: setting.device, commandId: item.commandId, state, detail, build: BUILD }));
+  if (receipts.read(item.commandId)?.state === "claimed") receipts.finish(item.commandId, state, detail);
+}
+
 export async function execute(app: App, c: ConvexClient, item: Pending, ownsSession = () => authorized(app)) {
+  if (item.kind !== "update") {
+    if (handling.has(app)) return;
+    handling.add(app);
+    try { await executeAction(app, c, item, ownsSession); } finally { handling.delete(app); }
+    return;
+  }
   if (handling.has(app) || activeUpdates.has(app) || fs.existsSync(intentPath(app))) return;
   handling.add(app);
   try {
@@ -273,7 +307,7 @@ async function connectOnce(app: App) {
   if (!checked.enabled) { save(app, { ...setting, enabled: false }); close(app); return; }
   if (!activeUpdates.has(app)) await recover(app, c);
   if (generation(app) !== version || !settings(app).enabled || !authorized(app)) return;
-  const sub = c.onUpdate(query("pending"), { deviceId: setting.device }, (items: Pending[]) => {
+  const sub = c.onUpdate(query("pending"), { deviceId: setting.device, kinds: [...actions.KINDS] }, (items: Pending[]) => {
     deliveries.set(app, items);
     drain(app, c);
   }, error => diag.warn("remote", diag.messageOf(error)));
@@ -344,10 +378,11 @@ export function routes(router: Router<App>) {
   router.get("/api/remote-support", context => { requireLocalCli(context); return json(settings(context.app)); });
   router.post("/api/remote-support", async context => {
     requireLocalCli(context);
-    const given = await readJson<{ action?: string; device?: string }>(context);
+    const given = await readJson<{ action?: string; device?: string; project?: string }>(context);
     const app = context.app; const action = given?.action;
-    if (!action || !["enable", "disable", "devices", "history", "update"].includes(action)) throw bad("Choose enable, disable, devices, update or history.");
-    if ((action === "history" || action === "update") && (typeof given.device !== "string" || !/^[a-zA-Z0-9_-]{1,120}$/u.test(given.device))) throw bad("Give a valid device id.");
+    if (!action || !["enable", "disable", "devices", "history", "update", "diagnostics", "resume"].includes(action)) throw bad("Choose enable, disable, devices, update, diagnostics, resume or history.");
+    if (["history", "update", "diagnostics", "resume"].includes(action) && (typeof given.device !== "string" || !/^[a-zA-Z0-9_-]{1,120}$/u.test(given.device))) throw bad("Give a valid device id.");
+    if (action === "resume" && (typeof given.project !== "string" || !/^[a-zA-Z0-9_-]{1,120}$/u.test(given.project))) throw bad("Give a valid project id.");
     try {
       if (action === "disable") {
         const value = disable(app);
@@ -379,7 +414,12 @@ export function routes(router: Router<App>) {
         await rpc(c.mutation(mutation("requestUpdate"), { deviceId: given.device, commandId }));
         return json({ commandId });
       }
-      throw new Error("Choose enable, disable, devices, update or history.");
+      if ((action === "diagnostics" || action === "resume") && typeof given.device === "string") {
+        const commandId = crypto.randomUUID();
+        await rpc(c.mutation(mutation("requestAction"), { deviceId: given.device, commandId, kind: action, ...(action === "resume" ? { projectId: given.project } : {}) }));
+        return json({ commandId });
+      }
+      throw new Error("Choose enable, disable, devices, update, diagnostics, resume or history.");
     } catch (error) { throw bad(diag.messageOf(error)); }
   });
 }

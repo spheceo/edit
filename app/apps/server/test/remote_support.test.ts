@@ -39,7 +39,7 @@ function fixture(running = false) {
     query: async () => cloud.state === "claimed" ? [item()] : [],
   } as unknown as ConvexClient;
   let signedIn = true;
-  const send = (command = item()) => execute(app, c, command, () => signedIn);
+  const send = (command: Parameters<typeof execute>[2] = item()) => execute(app, c, command, () => signedIn);
   return { home, app, c, calls, cloud, send, signOut: () => { signedIn = false; }, installs: () => installs,
     intent: () => JSON.parse(fs.readFileSync(join(home, "remote-update.json"), "utf8")),
     clean: async () => {
@@ -281,4 +281,30 @@ test("a real loopback connection can reach the local CLI endpoint", async () => 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ device: "device1", enabled: true });
   } finally { server.stop(true); await f.clean(); }
+});
+
+test("a resume is carried out once, reports what happened and never installs an update", async () => {
+  const f = fixture();
+  try {
+    (f.app.store as unknown as { get: () => null }).get = () => null;
+    const resume = { commandId: "cmd-resume", deviceId: "device1", kind: "resume" as const, projectId: "p1", expiresAt: Date.now() + 60_000 };
+    await f.send(resume);
+    await f.send(resume);
+    expect(f.installs()).toBe(0);
+    expect(fs.existsSync(join(f.home, "remote-update.json"))).toBe(false);
+    const finished = f.calls.filter(call => call.state !== undefined);
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ commandId: "cmd-resume", state: "failed" });
+    expect(String(finished[0]!.detail)).toContain("no project p1 on this Mac");
+    expect(new RemoteCommandReceipts(f.home, "device1").read("cmd-resume")?.state).toBe("failed");
+  } finally { await f.clean(); }
+});
+
+test("a resume without a project fails without touching anything", async () => {
+  const f = fixture();
+  try {
+    await f.send({ commandId: "cmd-none", deviceId: "device1", kind: "resume", expiresAt: Date.now() + 60_000 });
+    expect(f.installs()).toBe(0);
+    expect(f.calls.some(call => call.state === "failed" && String(call.detail).includes("No project was named"))).toBe(true);
+  } finally { await f.clean(); }
 });

@@ -114,11 +114,11 @@ export async function main(args: string[]): Promise<void> {
       return;
     case "remote": {
       const action = args[1];
-      if (!action || !["enable", "disable", "devices", "update", "history"].includes(action) || (["update", "history"].includes(action) && !args[2])) fail("use edit remote enable|disable|devices|update|history [device-id]");
+      if (!action || !["enable", "disable", "devices", "update", "diagnostics", "resume", "history"].includes(action) || (["update", "diagnostics", "resume", "history"].includes(action) && !args[2]) || (action === "resume" && !args[3])) fail("use edit remote enable|disable|devices|update|diagnostics|history [device-id], or edit remote resume <device-id> <project-id>");
       try {
         const response = await fetch(`http://127.0.0.1:${port()}/api/remote-support`, {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action, ...(["update", "history"].includes(action) ? { device: args[2] } : {}) }),
+          body: JSON.stringify({ action, ...(["update", "diagnostics", "resume", "history"].includes(action) ? { device: args[2] } : {}), ...(action === "resume" ? { project: args[3] } : {}) }),
           signal: AbortSignal.timeout(30000),
         });
         const value = await response.json() as { error?: unknown };

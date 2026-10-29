@@ -1,5 +1,4 @@
-// Durable, at-most-once execution for future remote support commands. Nothing
-// subscribes to or executes commands until the device transport is configured.
+// Durable, at-most-once execution for remote support commands (remote_support.ts).
 import * as fs from "node:fs";
 import { join } from "node:path";
 
@@ -7,7 +6,7 @@ export type RemoteCommand = {
   id: string;
   device: string;
   expiresAt: number;
-  kind: "update" | "agent";
+  kind: "update" | "diagnostics" | "resume";
 };
 
 export type Receipt = {
@@ -43,8 +42,8 @@ export class RemoteCommandReceipts {
   claim(command: RemoteCommand, now = Date.now()): boolean {
     const path = this.path(command.id);
     if (command.device !== this.device || !Number.isFinite(command.expiresAt) || command.expiresAt <= now) return false;
-    // Remote agent work stays disabled until its spending limit is implemented.
-    if (command.kind !== "update") return false;
+    // Only these: remote agent work stays disabled until its spending limit is implemented.
+    if (!["update", "diagnostics", "resume"].includes(command.kind)) return false;
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     try {
       fs.writeFileSync(path, JSON.stringify({ id: command.id, kind: command.kind, state: "claimed" } satisfies Receipt), { flag: "wx", mode: 0o600 });

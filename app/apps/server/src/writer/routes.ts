@@ -2,7 +2,7 @@
 // answered (its UI came over with them), each checked against what the
 // signed-in person may do (can.ts).
 
-import type { Clip, Script } from "@edit/types/writer";
+import type { Adding, BuildStatus, Clip, Draft, Focus, Kind, Pacing, Role, Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
@@ -10,10 +10,17 @@ import { ApiError, bad, json, notFound } from "../http/errors.ts";
 import { serveFile } from "../http/files.ts";
 import { readJson, type RouteContext, type Router } from "../http/router.ts";
 import { isFile, join } from "../paths.ts";
+import { creator } from "../accounts.ts";
+import * as build from "./build.ts";
 import * as can from "./can.ts";
 import * as chat from "./chat.ts";
+import * as commentary from "./commentary.ts";
 import * as edits from "./edits.ts";
 import * as jobs from "./jobs.ts";
+import { pageCount } from "./pages.ts";
+import { audit } from "./plan.ts";
+import * as scripting from "./scripting.ts";
+import { readText } from "./sources.ts";
 import * as store from "./store.ts";
 import * as versions from "./versions.ts";
 
@@ -21,7 +28,6 @@ type Context = RouteContext<App>;
 
 /** What other parts of Script mode add to its routes and to a script as the page reads it. */
 export const extensions: {
-  routes: ((router: Router<App>) => void)[];
   /** Fields of a script that are this Mac's (archived, the speaker check), filled in on reading. */
   detail: ((data: string, dir: string, script: Script) => Partial<Script>)[];
   /** A summary's fields from elsewhere (the cloud's refusal), filled in on listing. */
@@ -30,7 +36,7 @@ export const extensions: {
   importing: (id: string) => boolean;
   /** After a script is deleted here (the cloud records it). */
   deleted: ((data: string, id: string) => void)[];
-} = { routes: [], detail: [], listed: [], importing: () => false, deleted: [] };
+} = { detail: [], listed: [], importing: () => false, deleted: [] };
 
 export const dataOf = (app: App): string => store.dataDir(app.store.home);
 
@@ -71,6 +77,13 @@ export async function body<T>(context: Context): Promise<T> {
 }
 
 const id = (context: Context): string => context.params.id ?? "";
+
+const NO_FOCUS: Focus = { selected: [], picked: null, playheadMs: null };
+
+/** Refused while Claude works on the script: `what` says what waits. */
+function notWhileWriting(scriptId: string, what = "Claude is still working on this script."): void {
+  if (jobs.running(scriptId)) throw bad(what);
+}
 
 export function routes(router: Router<App>): void {
   router
@@ -209,6 +222,114 @@ export function routes(router: Router<App>): void {
         return { ok: true };
       }),
     )
+    .post("/api/writer/scripts/{id}/build", async (context) => {
+      const given = await body<{ note?: string; kind?: Kind }>(context);
+      return answer(() => {
+        const script = readFor(dataOf(context.app), id(context));
+        if (given.kind !== undefined) can.requireKind(script, given.kind);
+        const note = String(given.note ?? "");
+        return startJob(context.app, id(context), { kind: "build", note, ...(given.kind ? { format: given.kind } : {}) }, (job) => scripting.buildOnce(dataOf(context.app), id(context), note, given.kind, job));
+      });
+    })
+    .post("/api/writer/scripts/{id}/revise", async (context) => {
+      const given = await body<{ request?: string; focus?: Focus }>(context);
+      return answer(() => {
+        const request = String(given.request ?? "").trim();
+        if (request === "") throw new Error("Say what to change.");
+        if ([...request].length > 8_000) throw new Error("Keep the request under 8,000 characters.");
+        const focus = given.focus ?? NO_FOCUS;
+        return startJob(context.app, id(context), { kind: "revise", request, focus }, (job) => scripting.reviseWith(dataOf(context.app), id(context), request, request, focus, false, job));
+      });
+    })
+    .post("/api/writer/scripts/{id}/exact", (context) =>
+      answer(() => startJob(context.app, id(context), { kind: "exact" }, (job) => scripting.exactOnce(dataOf(context.app), id(context), job))),
+    )
+    .get("/api/writer/scripts/{id}/research", (context) =>
+      answer(() => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        return scripting.researchShown(store.scriptDir(data, id(context)));
+      }),
+    )
+    .post("/api/writer/scripts/{id}/research", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return scripting.researchAgain(dataOf(context.app), id(context), context.request.signal);
+      }),
+    )
+    // What a reviewer would flag on the script as it is, with the counts behind it: shown before sharing.
+    .get("/api/writer/scripts/{id}/audit", (context) =>
+      answer(() => {
+        const data = dataOf(context.app);
+        const script = readFor(data, id(context));
+        if (script.commentary) {
+          const [measures, flags] = commentary.checks(store.scriptDir(data, id(context)), script);
+          return { measures, flags };
+        }
+        // A footage script's Letter pages, as its Doc lays them out (a compilation runs 6 to 7).
+        return { measures: null, pages: pageCount(script, script.clips), flags: audit(script) };
+      }),
+    )
+    // Commentary projects: the sources a script is written from, its pacing and its written draft.
+    .post("/api/writer/scripts/commentary", async (context) => {
+      const given = await body<{ title?: string; links?: string[] }>(context);
+      return answer(async () => {
+        can.require(can.COMMENTARY);
+        const data = dataOf(context.app);
+        return detail(data, await commentary.create(data, String(given.title ?? ""), Array.isArray(given.links) ? given.links.map(String) : [], creator() ?? undefined));
+      });
+    })
+    .post("/api/writer/scripts/{id}/sources", async (context) => {
+      const given = await body<{ adding: Adding; role: Role }>(context);
+      return answer(async () => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        notWhileWriting(id(context), "Claude is writing this script. Add sources once it's done.");
+        return detail(data, await commentary.add(data, id(context), given.adding, given.role));
+      });
+    })
+    .get("/api/writer/scripts/{id}/sources/{source}", (context) =>
+      answer(() => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        return readText(store.scriptDir(data, id(context)), context.params.source ?? "");
+      }),
+    )
+    .put("/api/writer/scripts/{id}/sources/{source}", async (context) => {
+      const given = await body<{ role?: Role; title?: string }>(context);
+      return answer(() => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        return detail(data, commentary.updateSource(data, id(context), context.params.source ?? "", given.role ?? null, given.title ?? null));
+      });
+    })
+    .delete("/api/writer/scripts/{id}/sources/{source}", (context) =>
+      answer(() => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        notWhileWriting(id(context), "Claude is writing this script. Remove sources once it's done.");
+        return detail(data, commentary.removeSource(data, id(context), context.params.source ?? ""));
+      }),
+    )
+    .put("/api/writer/scripts/{id}/pacing", async (context) => {
+      const given = await body<{ pacing: Pacing }>(context);
+      return answer(() => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        notWhileWriting(id(context));
+        if (given.pacing !== "channel" && given.pacing !== "documentary") throw new Error("Pace it as the channel or as a documentary.");
+        return detail(data, commentary.setPacing(data, id(context), given.pacing));
+      });
+    })
+    .put("/api/writer/scripts/{id}/draft", async (context) => {
+      const given = await body<{ revision: number; draft: Draft }>(context);
+      return answer(() => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        notWhileWriting(id(context), "Claude is writing this script.");
+        return detail(data, commentary.saveDraft(data, id(context), Number(given.revision), given.draft));
+      });
+    })
     // The preview: the file on this Mac, a range at a time (cloud.ts streams one that's only in the cloud).
     .get("/api/writer/scripts/{id}/proxy", (context) => {
       const data = dataOf(context.app);
@@ -227,11 +348,12 @@ export function routes(router: Router<App>): void {
       if (!isFile(path)) throw notFound("No such file.");
       return serveFile(context.request, path);
     });
-  for (const add of extensions.routes) add(router);
+  // Claude's tools while it builds a script in steps (build.ts), on this server.
+  build.routes(router);
 }
 
 /** Starts the work's job on a script the person may see; its first status. */
-export function startJob(app: App, scriptId: string, work: jobs.Work, run: (job: jobs.Job) => Promise<jobs.Outcome>, after?: () => void): import("@edit/types/writer").BuildStatus {
+export function startJob(app: App, scriptId: string, work: jobs.Work, run: (job: jobs.Job) => Promise<jobs.Outcome>, after?: () => void): BuildStatus {
   const data = dataOf(app);
   const script = readFor(data, scriptId);
   idle(scriptId);

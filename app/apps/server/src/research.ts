@@ -833,7 +833,7 @@ function attribute(block: string, name: string): string | null {
   if (at < 0) return null;
   const rest = tag.slice(at + needle.length);
   const end = rest.indexOf('"');
-  return end < 0 ? null : unescape(rest.slice(0, end));
+  return end < 0 ? null : decodeEntities(rest.slice(0, end));
 }
 
 /** Markup to plain text: tags dropped, entities read, spaces collapsed. */
@@ -850,18 +850,17 @@ export function textOf(markup: string): string {
       text += c;
     }
   }
-  return splitWhitespace(unescape(text)).join(" ");
+  return splitWhitespace(decodeEntities(text)).join(" ");
 }
 
-function unescape(text: string): string {
-  return text
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'")
-    .replaceAll("&#x27;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&nbsp;", " ")
-    .replaceAll("&amp;", "&");
+/** HTML's entities read: the named ones pages use, and any numbered one; an unknown one is left as written. */
+export function decodeEntities(text: string): string {
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "'", lsquo: "'", rdquo: '"', ldquo: '"', mdash: "-", ndash: "-", hellip: "…" };
+  return text.replace(/&(#[xX][0-9a-fA-F]+|#\d+|[A-Za-z]+);/g, (whole, entity: string) => {
+    if (!entity.startsWith("#")) return named[entity] ?? whole;
+    const code = /^#[xX]/.test(entity) ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+    return code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : whole;
+  });
 }
 
 /** Percent-decoding (DuckDuckGo's redirect links). */

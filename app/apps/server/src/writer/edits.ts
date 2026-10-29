@@ -2,9 +2,10 @@
 // version: the timeline, a respelled word, the heading, a restored version, a
 // proposed rewrite accepted or declined, and starting over.
 
-import type { Clip, Proposal, Script } from "@edit/types/writer";
+import type { Clip, Script } from "@edit/types/writer";
 
 import * as chat from "./chat.ts";
+import { settle } from "./revise.ts";
 import { isCutIn } from "./blocks.ts";
 import * as store from "./store.ts";
 import * as versions from "./versions.ts";
@@ -36,11 +37,6 @@ export function checkClips(clips: Clip[], durationMs: number): Clip[] {
   return clips;
 }
 
-/** A proposal whose paragraph changed (accepted, or edited by hand) is done. */
-export function settle(clips: Clip[], proposals: Proposal[] = []): Proposal[] {
-  return proposals.filter((proposal) => clips.some((clip) => clip.id === proposal.cutIn && (clip.narration ?? "").trim() === proposal.before.trim()));
-}
-
 const changed = "This script changed. Reload it.";
 
 /** A save of the producer's: refused when the script moved on since `revision`; recorded as a version. */
@@ -60,7 +56,7 @@ function edit(data: string, id: string, revision: number | null, change: (script
 export function saveClips(data: string, id: string, revision: number, clips: Clip[]): Script {
   return edit(data, id, revision, (script) => {
     script.clips = checkClips(clips, script.durationMs);
-    script.proposals = settle(script.clips, script.proposals);
+    script.proposals = settle(script.clips, script.proposals ?? []);
   });
 }
 
@@ -110,7 +106,7 @@ export function restoreVersion(data: string, id: string, revision: number, versi
   script.corrections = Object.fromEntries(Object.entries(snapshot.corrections).filter(([word]) => words.has(word)));
   if (snapshot.heading) script.heading = snapshot.heading;
   else delete script.heading;
-  script.proposals = settle(script.clips, script.proposals);
+  script.proposals = settle(script.clips, script.proposals ?? []);
   script.revision++;
   script.updatedAt = Date.now();
   store.write(dir, script);

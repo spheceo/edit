@@ -5,6 +5,8 @@
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
+import * as build from "./build.ts";
+import * as commentary from "./commentary.ts";
 import { join, userHome } from "../paths.ts";
 import * as jobs from "./jobs.ts";
 import * as store from "./store.ts";
@@ -17,6 +19,8 @@ export const starters: ((app: App) => void)[] = [];
 
 export function start(app: App): void {
   const data = store.dataDir(app.store.home);
+  commentary.hooks.googleToken = () => app.library.accessToken();
+  build.usePort(app.port);
   try {
     const adopted = store.adoptWriterFolder(data, WRITER_FOLDER());
     if (adopted > 0) diag.info("writer", `brought ${adopted} scripts in from Writer's folder on this Mac`);

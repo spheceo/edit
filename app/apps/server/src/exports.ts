@@ -142,6 +142,9 @@ export function holdExport(path: string): () => void {
   };
 }
 
+/** An export with no progress for `ms` has stalled: it's started again, `tries` times at most (looked at every `everyMs`). */
+export const stall = { ms: 8 * 60_000, tries: 3, everyMs: 15_000 };
+
 /** Free space where `path` is (bytes); 0 when it can't be told. */
 function freeBytes(path: string): number {
   try {
@@ -572,47 +575,76 @@ export class ExportRegistry implements seams.Exports {
           });
           return;
         }
-        // Cloud footage: the originals, not the proxies (read from R2 for the export).
+        // Fetched back to reuse its chunks; gone again after if this export writes elsewhere.
         let restored: string | null = null;
-        let exported = project;
-        let originals: seams.Originals | null = null;
         try {
-          [exported, originals] = await seams.cloudMedia.forExport(project, plan.start, plan.end, store.cacheDir());
-        } catch (error) {
-          if (!seams.isUnavailable(error)) throw error;
-        }
-        try {
-          let pending: string[] = [];
-          try {
-            pending = seams.broll.smoothingPending(exported.id);
-          } catch (error) {
-            if (!seams.isUnavailable(error)) throw error;
-          }
-          if (pending.length > 0) {
-            diag.info(
-              "export",
-              `exporting current timeline snapshot; ${pending.length} optional optical-flow renders still pending`,
-            );
-          }
-          if (running.cancelled) throw new Error("cancelled");
-          // Fetched back to reuse its chunks; gone again after if this export writes elsewhere.
-          restored = this.home === null ? null : await restorePrevious(store.cacheDir(), this.home, project.id);
-          const job = native().ExportJob.start(
-            { project: { json: jsonForSerde(exported) }, options, plan, output, cacheDir: store.cacheDir(), sounds: originals?.sounds ?? {} },
-            (progress) => {
+          // A stalled render (a read from the cloud that never answers: card 1's
+          // export sat at 28% for seven minutes, Oct 29) is stopped and started
+          // again by itself; the chunks it made are kept, so it carries on.
+          for (let attempt = 1; ; attempt++) {
+            let stalled = false;
+            // Cloud footage: the originals, not the proxies (read from R2 for the export), signed afresh each try.
+            let exported = project;
+            let originals: seams.Originals | null = null;
+            try {
+              [exported, originals] = await seams.cloudMedia.forExport(project, plan.start, plan.end, store.cacheDir());
+            } catch (error) {
+              if (!seams.isUnavailable(error)) throw error;
+            }
+            try {
+              let pending: string[] = [];
               try {
-                emit("running", progress);
+                pending = seams.broll.smoothingPending(exported.id);
               } catch (error) {
-                diag.warn("export", `progress: ${diag.messageOf(error)}`);
+                if (!seams.isUnavailable(error)) throw error;
               }
-            },
-          );
-          running.job = job;
-          if (running.cancelled) job.cancel();
-          await job.wait();
-          if (running.cancelled) throw new Error("cancelled");
+              if (pending.length > 0) {
+                diag.info(
+                  "export",
+                  `exporting current timeline snapshot; ${pending.length} optional optical-flow renders still pending`,
+                );
+              }
+              if (running.cancelled) throw new Error("cancelled");
+              if (attempt === 1) restored = this.home === null ? null : await restorePrevious(store.cacheDir(), this.home, project.id);
+              let moved = performance.now();
+              let last = -1;
+              const job = native().ExportJob.start(
+                { project: { json: jsonForSerde(exported) }, options, plan, output, cacheDir: store.cacheDir(), sounds: originals?.sounds ?? {} },
+                (progress) => {
+                  if (progress > last) {
+                    last = progress;
+                    moved = performance.now();
+                  }
+                  try {
+                    emit("running", progress);
+                  } catch (error) {
+                    diag.warn("export", `progress: ${diag.messageOf(error)}`);
+                  }
+                },
+              );
+              running.job = job;
+              if (running.cancelled) job.cancel();
+              const watch = setInterval(() => {
+                if (performance.now() - moved < stall.ms) return;
+                stalled = true;
+                job.cancel();
+              }, stall.everyMs);
+              try {
+                await job.wait();
+              } catch (error) {
+                if (!stalled || running.cancelled) throw error;
+              } finally {
+                clearInterval(watch);
+              }
+              if (running.cancelled) throw new Error("cancelled");
+              if (!stalled) break;
+            } finally {
+              originals?.release();
+            }
+            if (attempt >= stall.tries) throw new Error(`the export stopped moving ${stall.tries} times (nothing new for ${Math.round(stall.ms / 60_000)} minutes each)`);
+            diag.warn("export", `${project.name}: nothing new for ${Math.round(stall.ms / 60_000)} minutes; starting it again (the chunks made are kept)`);
+          }
         } finally {
-          originals?.release();
           if (restored !== null && restored !== output) fs.rmSync(restored, { force: true });
         }
       });

@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot } from "../src/exports.ts";
+import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot, stall } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -251,4 +251,37 @@ test("a re-export fetches the archived last export back, so its unchanged chunks
     expect(await restorePrevious(cache, home, "p1-2", async (_key, dest) => fs.writeFileSync(dest, Buffer.alloc(49)))).toBeNull();
     expect(fs.existsSync(output)).toBe(false);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("an export that stops moving is started again by itself", async () => {
+  const { dir, home, store, app, native, cleanup } = fixtureHome("stalled-export");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const was = { ...stall };
+  Object.assign(stall, { ms: 30, everyMs: 10 });
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
+  let starts = 0;
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job, progress) => {
+    starts += 1;
+    // The first hangs (a read that never answers) until it's stopped; the second finishes.
+    if (starts === 1) {
+      progress(0.2);
+      let stop!: () => void;
+      const stopped = new Promise<void>((resolve) => { stop = resolve; });
+      return { cancel: () => stop(), wait: async () => { await stopped; throw new Error("cancelled"); } };
+    }
+    return { cancel: () => {}, wait: async () => { fs.writeFileSync(job.output, "export"); return { seconds: 1, bytes: 6 }; } };
+  });
+  try {
+    const id = store.create("stalls", { width: 64, height: 36, fps: 30 }).project.id;
+    await store.update(id, "test", (p) => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+    await registry.start(store, app.library, structuredClone(store.get(id)!.project), native.exportDefaults(), `${dir}/stalls.mp4`, { backend: "local", drive: false, keepLocal: true });
+    for (let tries = 0; registry.running() && tries < 500; tries++) await Bun.sleep(5);
+    expect(starts).toBe(2);
+    expect(registry.activity().find((one) => one.id === id)?.state).toBe("done");
+  } finally {
+    Object.assign(stall, was);
+    render.mockRestore(); archive.mockRestore(); plan.mockRestore(); cleanup();
+  }
 });

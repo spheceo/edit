@@ -474,13 +474,12 @@ export class ExportRegistry implements seams.Exports {
     if (extra.backend !== undefined) {
       backend = extra.backend;
     } else if (seams.modalExports.enabled()) {
-      // Modal when it can take the export and it's worth it (this Mac is
-      // exporting or loaded, or it's long); else here, for free.
+      // Modal whenever it can take the export, each on its own GPUs so any
+      // number run at once; this Mac only for what Modal can't do, or when
+      // Modal fails (the team, Oct 29: card 1's export took 43 minutes here).
       const why = seams.modalExports.unsuitable(project, options, plan);
-      const reason = why === null ? seams.modalExports.cloudBetter(project, plan, this.localRunning()) : null;
-      if (why !== null || reason === null) diag.info("export", `${project.id}: exporting on this Mac: ${why ?? "it's free and about as quick"}`);
-      else diag.info("export", `${project.id}: exporting on Modal: ${reason}`);
-      backend = reason !== null ? "modal" : seams.cloudExports.enabled() ? "cloud" : "local";
+      diag.info("export", why === null ? `${project.id}: exporting on Modal` : `${project.id}: exporting on this Mac: ${why}`);
+      backend = why === null ? "modal" : seams.cloudExports.enabled() ? "cloud" : "local";
     } else {
       backend = seams.cloudExports.enabled() ? "cloud" : "local";
     }
@@ -565,8 +564,16 @@ export class ExportRegistry implements seams.Exports {
     try {
       await catchBugsAsync("the export", async () => {
         if (running.backend === "modal") {
-          await seams.modalExports.run(this.home ?? store.home, project, options, output, () => running.cancelled, progress => emit("running", progress));
-          return;
+          try {
+            await seams.modalExports.run(this.home ?? store.home, project, options, output, () => running.cancelled, progress => emit("running", progress));
+            return;
+          } catch (error) {
+            if (running.cancelled) throw error;
+            // Something wrong on Modal (out of credit, down): exported here instead.
+            diag.warn("export", `${project.name}: Modal couldn't export it (${diag.messageOf(error)}); exporting on this Mac`);
+            running.backend = "local";
+            emit("running", 0);
+          }
         }
         if (running.backend === "cloud") {
           await seams.cloudExports.run(project, options, plan, output, () => running.cancelled, progress => emit("running", progress), running.cloudRequest, {

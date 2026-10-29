@@ -220,7 +220,7 @@ def deploy(build, check, progress):
             pass
         progress("deploying", .01)
         env = {**os.environ, "EDIT_MODAL_GPU": "L40S", "EDIT_SECTIONS_APP": APP, "EDIT_SECTIONS_VOLUME": VOLUME,
-               "EDIT_SECTIONS_POOL": "8", "EDIT_VERIFIERS_POOL": "16", "EDIT_SECTIONS_COORDINATORS": "6"}
+               "EDIT_SECTIONS_POOL": "32", "EDIT_VERIFIERS_POOL": "64", "EDIT_SECTIONS_COORDINATORS": "6"}
         # The image build's log is long: to a file, not a pipe that could fill.
         log = STATE / f"{APP}-deploy.log"
         with log.open("w") as out:

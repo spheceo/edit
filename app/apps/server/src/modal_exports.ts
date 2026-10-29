@@ -25,7 +25,26 @@ import { join } from "./paths.ts";
 import { duration } from "./project.ts";
 import { jsonForSerde } from "./rust.ts";
 
-export const enabled = () => process.env.EDIT_MODAL_EXPORTS === "1";
+/** The checkout's app/ folder, whose worker runs the cloud exports: EDIT_WORKER_ROOT, else this server's own checkout (none in a release build). */
+function workerRoot(): string {
+  return process.env.EDIT_WORKER_ROOT ?? join(import.meta.dir, "..", "..", "..");
+}
+
+/**
+ * Whether exports go to Modal: by default whenever its worker is here (the
+ * team, Oct 29: "we use Modal as the default … we should only revert to the
+ * local Mac if there's something wrong with Modal"); EDIT_MODAL_EXPORTS=0
+ * keeps them on this Mac.
+ */
+export const enabled = () => {
+  if (process.env.EDIT_MODAL_EXPORTS === "0") return false;
+  try {
+    command();
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** Why `project` can't export on Modal as `options` ask (it exports here), or null when it can. */
 export function unsuitable(project: Project, options: ExportOptions, plan: Plan): string | null {
@@ -73,8 +92,8 @@ function used(project: Project): Project["media"] {
 
 /** The driver's command (Repack's injection, then uv's Python with the worker's requirements), or why there's none. */
 function command(): { cwd: string; cmd: string[] } {
-  const root = process.env.EDIT_WORKER_ROOT;
-  if (root === undefined || !fs.existsSync(join(root, "apps", "worker", "export_v3.py"))) {
+  const root = workerRoot();
+  if (!fs.existsSync(join(root, "apps", "worker", "export_v3.py"))) {
     throw new Error("cloud exports need EDIT_WORKER_ROOT (the checkout's app/ folder)");
   }
   const repack = process.env.EDIT_REPACK_ROOT ?? join(root, "..", "..", "repack");

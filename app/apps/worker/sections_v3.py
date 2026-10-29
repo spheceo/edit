@@ -15,8 +15,8 @@ CPU_POOL = int(os.environ.get("EDIT_VERIFIERS_POOL", "16"))
 # Exports at once (each has its own coordinator; their sections share the pool).
 COORDINATORS = int(os.environ.get("EDIT_SECTIONS_COORDINATORS", "2"))
 ENGINE = engine_id()
-if POOL not in {4, 8} or CPU_POOL not in {8, 16} or GPU != "L40S" or not 1 <= COORDINATORS <= 8:
-    raise ValueError("Use four/eight L40S workers, eight/sixteen CPU verifiers and one to eight coordinators")
+if POOL not in {4, 8, 16, 32} or CPU_POOL not in {8, 16, 32, 64} or GPU != "L40S" or not 1 <= COORDINATORS <= 8:
+    raise ValueError("Use 4, 8, 16 or 32 L40S workers, 8 to 64 CPU verifiers and one to eight coordinators")
 if not re.fullmatch(r"edit-exports-(sections-v3-benchmark|v3)", APP):
     raise ValueError("Use the benchmark's or the app's own v3 Modal app")
 VOLUME = os.environ["EDIT_SECTIONS_VOLUME"]

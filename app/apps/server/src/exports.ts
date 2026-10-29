@@ -142,10 +142,28 @@ export function holdExport(path: string): () => void {
   };
 }
 
+/** Free space where `path` is (bytes); 0 when it can't be told. */
+function freeBytes(path: string): number {
+  try {
+    const found = fs.statfsSync(parent(path) ?? ".");
+    return Number(found.bavail) * Number(found.bsize);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Room enough on the disk to keep an archived export here too: the next
+ * re-export copies its unchanged chunks straight out of it instead of
+ * fetching it back from the cloud first (2–3 minutes for a 90-minute edit).
+ */
+export const KEEP_WHEN_FREE = 60e9;
+
 export async function archiveExportFile(
   output: string,
   key: string,
   io: typeof exportCloud = exportCloud,
+  room: (path: string) => number = freeBytes,
 ): Promise<boolean> {
   let size: number;
   try { size = fs.statSync(output).size; } catch { return false; }
@@ -154,7 +172,9 @@ export async function archiveExportFile(
     const found = await io.head(key);
     if (found === null || found.size !== size) return false;
   } catch { return false; }
-  // Archived; a copy being read stays until the reading's done.
+  // Archived; with room to spare it stays here too.
+  if (room(output) > KEEP_WHEN_FREE) return true;
+  // A copy being read stays until the reading's done.
   if (reading.has(output)) {
     archivedMeanwhile.add(output);
     return true;
@@ -221,6 +241,26 @@ export function lastChunks(cache: string, project: string): { output: string; si
   } catch {
     return null;
   }
+}
+
+/**
+ * Deletes the local copies of exports archived in the cloud (verified by
+ * size), but `except` and any being read: kept while the disk had room,
+ * they go when it hasn't (four of them filled this Mac on Oct 29).
+ */
+export function dropKept(home: string, except: string): number {
+  let freed = 0;
+  for (const own of Object.values(readRecords(home))) {
+    for (const record of own) {
+      if (record.cloudKey === undefined || record.path === except || reading.has(record.path) || !fs.existsSync(record.path)) continue;
+      const size = fs.statSync(record.path).size;
+      if (record.bytes !== null && size !== record.bytes) continue;
+      fs.rmSync(record.path, { force: true });
+      freed += size;
+    }
+  }
+  if (freed > 0) diag.info("export", `freed ${(freed / 1e9).toFixed(1)} GB: exports already in the cloud, kept here while there was room`);
+  return freed;
 }
 
 /** The cloud key recorded for `path`, when its local copy was archived. */
@@ -630,7 +670,9 @@ export class ExportRegistry implements seams.Exports {
               frames, whole: plan.start === 0 && plan.end >= duration(project), start: plan.start, format: options.format, timeline: running.timeline, cloudKey: key,
             });
           } catch { /* the list keeps the local-only record */ }
-          diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy is being read, so kept)" : " and deleted the local copy"}`);
+          diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy kept: being read, or room to spare)" : " and deleted the local copy"}`);
+          // Short of room: the copies kept while there was some go too.
+          if (freeBytes(output) <= KEEP_WHEN_FREE) dropKept(this.home ?? store.home, output);
         } else {
           diag.warn("export", `${id}: cloud archive of ${output} unverified; local copy kept`);
         }

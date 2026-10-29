@@ -85,7 +85,17 @@ fn frame_hash(scene: &Scene, key: &mut dyn FnMut(&str) -> String) -> u64 {
                     source.media = key(&source.media);
                 }
             }
-            Layer::Adjustment { .. } | Layer::Solid { .. } => {}
+            // A glitch's pattern is seeded by the frame's place on the
+            // timeline; with no glitch it draws nothing, so it isn't part of
+            // what's on screen. Kept, it made every frame under a blur or a
+            // vignette new when the timeline shifted: card 1's teasers grew
+            // 2.1 s and 105 of its 127 chunks were rendered again (Oct 29).
+            Layer::Adjustment { glitch, .. } => {
+                if glitch.amount == 0.0 {
+                    glitch.seed = 0.0;
+                }
+            }
+            Layer::Solid { .. } => {}
         }
     }
     let mut hasher = hasher("frame");
@@ -492,6 +502,80 @@ mod tests {
             content_key(one),
             "https://r2.example/edit/originals/sha256/ab/x.mp4"
         );
+    }
+
+    #[test]
+    fn a_frame_under_a_blur_hashes_the_same_wherever_it_is_on_the_timeline() {
+        use edit_core::{
+            evaluate_seen, Blur, Clip, ClipColor, ClipContent, Glitch, Grade, Media, MediaKind,
+            Settings, Shake, Transform,
+        };
+        let project = |at: i64| {
+            let mut project = Project::new("p".into(), "t".into(), Settings::default());
+            project.media.push(Media {
+                id: "m1".into(),
+                name: "a.mp4".into(),
+                path: "https://r2.example/edit/originals/a.mp4".into(),
+                kind: MediaKind::Video,
+                duration: 600.0,
+                width: 1920,
+                height: 1080,
+                fps: 30.0,
+                has_audio: true,
+                markers: Vec::new(),
+                cloud: None,
+                library: None,
+            });
+            let (v1, v2) = (project.tracks[0].id.clone(), project.tracks[1].id.clone());
+            let clip = |id: &str, track: String, content: ClipContent| Clip {
+                id: id.into(),
+                track,
+                start: at,
+                duration: 900,
+                color: ClipColor::Blue,
+                name: None,
+                link: None,
+                fade_in: 0,
+                fade_out: 0,
+                keyframes: Default::default(),
+                person: None,
+                content,
+            };
+            project.clips.push(clip(
+                "c1",
+                v1,
+                ClipContent::Video {
+                    media: "m1".into(),
+                    source_in: 10.0,
+                    speed: 1.0,
+                    transform: Transform::default(),
+                    opacity: 1.0,
+                    crop: Default::default(),
+                    frame: None,
+                    blend: Default::default(),
+                },
+            ));
+            project.clips.push(clip(
+                "c2",
+                v2,
+                ClipContent::Adjustment {
+                    grade: Grade::default(),
+                    shake: Shake::default(),
+                    glitch: Glitch::default(),
+                    blur: Blur { radius: 30.0, width: 200.0, height: 100.0, ..Blur::default() },
+                    opacity: 1.0,
+                },
+            ));
+            project
+        };
+        let key = |media: &str| media.to_owned();
+        let (before, after) = (project(0), project(63));
+        for frame in [0, 100, 500] {
+            assert_eq!(
+                frame_hash(&evaluate_seen(&before, frame), &mut { key }),
+                frame_hash(&evaluate_seen(&after, frame + 63), &mut { key }),
+            );
+        }
     }
 
     #[test]

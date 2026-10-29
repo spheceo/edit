@@ -208,19 +208,22 @@ test("archiveExportFile deletes locally only after a size-verified upload", asyn
     const file = `${dir}/Out.mp4`;
     fs.writeFileSync(file, Buffer.alloc(50));
     const io = (size: number | null) => ({ enabled: () => true, upload: async () => {}, head: async () => (size === null ? null : { size }) });
-    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(51))).toBe(false);
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(51), () => 0)).toBe(false);
     expect(fs.existsSync(file)).toBe(true);
-    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(null))).toBe(false);
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(null), () => 0)).toBe(false);
+    expect(fs.existsSync(file)).toBe(true);
+    // Room to spare: archived and kept, for the next re-export's chunks.
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50), () => 100e9)).toBe(true);
     expect(fs.existsSync(file)).toBe(true);
     // A share reading it: archived, and the copy stays until it's done.
     const release = holdExport(file);
-    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50))).toBe(true);
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50), () => 0)).toBe(true);
     expect(fs.existsSync(file)).toBe(true);
     // Gone once the share is done with it.
     release();
     expect(fs.existsSync(file)).toBe(false);
     fs.writeFileSync(file, Buffer.alloc(50));
-    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50))).toBe(true);
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50), () => 0)).toBe(true);
     expect(fs.existsSync(file)).toBe(false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

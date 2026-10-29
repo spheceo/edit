@@ -27,6 +27,31 @@ def put(url, path, kind):
         raise RuntimeError(f"upload refused ({answer.status_code})")
 
 
+PART = 64 << 20
+
+
+def put_parts(urls, path):
+    """`path` uploaded in 64 MiB parts to presigned part URLs, eight at once; the parts as S3 completes them."""
+    size = path.stat().st_size
+    count = -(-size // PART)
+    if count > len(urls):
+        raise RuntimeError("the review copy is bigger than its upload allows")
+
+    def one(index):
+        with open(path, "rb") as body:
+            body.seek(index * PART)
+            data = body.read(PART)
+        for attempt in range(3):
+            answer = httpx.put(urls[index], content=data, timeout=600)
+            if answer.status_code < 300:
+                return {"PartNumber": index + 1, "ETag": answer.headers["etag"]}
+            time.sleep(2 * (attempt + 1))
+        raise RuntimeError(f"upload refused ({answer.status_code})")
+
+    with ThreadPoolExecutor(8) as pool:
+        return list(pool.map(one, range(count)))
+
+
 def piece(source, start, frames, upload):
     """Frames [start, start + frames) of `source` (seconds, then a count) at 720p, picture only."""
     with tempfile.TemporaryDirectory() as folder:
@@ -100,7 +125,10 @@ def join(job, make_piece):
         except RuntimeError:
             run(joined + ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(review)])
         lap("join")
-        put(job["video_put"], review, "video/mp4")
+        # In parts: one request for a 2 GB copy was refused (502).
+        parts = put_parts(job["video_parts"], review) if job.get("video_parts") else None
+        if parts is None:
+            put(job["video_put"], review, "video/mp4")
         lap("upload")
         poster = folder / "poster.jpg"
         run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", f"{job['poster_second']:.2f}", "-i", job["source"], "-frames:v", "1",
@@ -112,4 +140,4 @@ def join(job, make_piece):
         samples = memoryview(pcm).cast("h")
         peaks = [round(max((abs(x) for x in samples[at:at + 800]), default=0) / 32768 * 100) for at in range(0, len(samples), 800)]
         lap("waveform")
-        return {"review": probe(review), "export": probe(job["source"]), "peaks": peaks, "took": took}
+        return {"review": probe(review), "export": probe(job["source"]), "peaks": peaks, "took": took, **({"parts": parts} if parts else {})}

@@ -80,8 +80,18 @@ def review(job, make):
     pieces = [{"start": at / fps, "frames": min(step, frames - at), "put": sign("put_object", f"{temp}/{i:03d}.mp4"),
                "get": sign("get_object", f"{temp}/{i:03d}.mp4")} for i, at in enumerate(range(0, frames, step))]
     started = time.monotonic()
-    result = make({"source": sign("get_object", job["source_key"]), "pieces": pieces, "video_put": sign("put_object", job["review_key"]),
-                         "poster_put": sign("put_object", job["poster_key"]), "poster_second": float(job["poster_second"])})
+    upload = {"Bucket": bucket, "Key": job["review_key"], "UploadId": s3.create_multipart_upload(Bucket=bucket, Key=job["review_key"], ContentType="video/mp4")["UploadId"]}
+    try:
+        parts = [s3.generate_presigned_url("upload_part", Params={**upload, "PartNumber": i}, ExpiresIn=6 * 3600) for i in range(1, 161)]
+        result = make({"source": sign("get_object", job["source_key"]), "pieces": pieces, "video_put": sign("put_object", job["review_key"]),
+                       "video_parts": parts, "poster_put": sign("put_object", job["poster_key"]), "poster_second": float(job["poster_second"])})
+        s3.complete_multipart_upload(**upload, MultipartUpload={"Parts": result.pop("parts")})
+    except BaseException:
+        try:
+            s3.abort_multipart_upload(**upload)
+        except Exception:
+            pass
+        raise
     s3.copy({"Bucket": bucket, "Key": job["source_key"]}, bucket, job["full_key"])
     try:
         listed = s3.list_objects_v2(Bucket=bucket, Prefix=temp + "/")

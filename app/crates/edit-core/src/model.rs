@@ -1963,7 +1963,23 @@ impl Project {
                     let shared = file.strip_prefix("sha256:").is_some_and(|hash| {
                         hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
                     });
-                    if !drive && !youtube && !shared {
+                    // A finished video of ours by its review link: `feedback:<code>`
+                    // until it's looked up, then `review:<project id>/<version>`
+                    // (apps/server/src/finished.ts; card 1's reused case, Oct 29).
+                    let feedback = file
+                        .strip_prefix("feedback:")
+                        .is_some_and(|code| (16..=64).contains(&code.len()) && id_chars(code));
+                    let review = file.strip_prefix("review:").is_some_and(|rest| {
+                        rest.split_once('/').is_some_and(|(project, version)| {
+                            project.len() <= 64
+                                && project.starts_with('p')
+                                && id_chars(project)
+                                && !version.is_empty()
+                                && version.len() <= 6
+                                && version.bytes().all(|byte| byte.is_ascii_digit())
+                        })
+                    });
+                    if !drive && !youtube && !shared && !feedback && !review {
                         return Err(
                             "script file must be a Google Drive ID, youtube:<video id> or sha256:<hash>, without path separators"
                                 .to_owned(),
@@ -2467,7 +2483,14 @@ mod validation_tests {
         assert!(with("1H9hY3w4LjzWlSAqY8hfp3I5Ft5PP0X9Y").is_ok());
         assert!(with("youtube:MeT7tyZqfiw").is_ok());
         assert!(with(&format!("sha256:{}", "a".repeat(64))).is_ok());
+        // A finished video by its review link, before and after it's looked up.
+        assert!(with("feedback:9YYjQzHWrP9lh4nJWSs8DA").is_ok());
+        assert!(with("review:p1793003918016-1/8").is_ok());
         for bad in [
+            "feedback:short",
+            "review:p1/../../x",
+            "review:p1793003918016-1/",
+            "review:../x/1",
             "youtube:short",
             "youtube:../../etc/x",
             "drive:abc",

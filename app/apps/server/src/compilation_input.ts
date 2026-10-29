@@ -328,7 +328,7 @@ export async function withCardScript(
     }
     if (skipped.length > 0) parsed.skipped = skipped;
     const covered = cases.filter((source) => files.has(script.footageFile(source.url) ?? "")).length;
-    return { parsed, summary: { title: parsed.title || docTitle, covered, cases: cases.length } };
+    return { parsed, summary: { title: parsed.title || docTitle, covered, cases: cases.length, url: candidate.url } };
   }
   return null;
 }

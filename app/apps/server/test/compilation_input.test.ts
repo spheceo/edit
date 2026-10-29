@@ -139,7 +139,7 @@ test("a card's own script is the edit: its case list is checked against it, neve
     expect(files(one)).toEqual(["youtube:u8l7-8bcu-w", "youtube:gaSVPb76D2Q", "youtube:4mqGp1IgqEw (finished)"]);
     // Its own narration, editable: not a reused script's.
     expect(one.blocks.some(reusedScriptBlock)).toBe(false);
-    expect(one.cardScript).toEqual({ title: "Off-Duty Officer Accidentally Says Something Only The Killer Would Know", covered: 3, cases: 4 });
+    expect(one.cardScript).toMatchObject({ title: "Off-Duty Officer Accidentally Says Something Only The Killer Would Know", covered: 3, cases: 4 });
     expect(one.skipped).toEqual([{ doc: "https://youtu.be/AFpBTALCm1k", title: "Case 1: Cop Messes Up Big Time While Questioned About Wife's Suspicious Death", why: "the card's script doesn't use it" }]);
 
     const two = await readCompilation("https://trello.com/c/1cHETQCS/132", home.app, {

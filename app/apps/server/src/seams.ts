@@ -279,7 +279,8 @@ export interface Parsed {
   /** Its first line, as written (its name when the Doc's own title is missing). */
   heading?: string;
   /** A Trello card's own script, followed: its name, and how many of the card's cases it covers. */
-  cardScript?: { title: string; covered: number; cases: number };
+  /** The card's own script: its title, the cases it covers, and its Doc (url). */
+  cardScript?: { title: string; covered: number; cases: number; url?: string };
 }
 
 /** What Drive serves for a file: the last response's headers after redirects. */

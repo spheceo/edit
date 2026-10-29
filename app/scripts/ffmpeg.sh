@@ -4,7 +4,7 @@
 # down (a Cloudflare 521 held up v0.0.0), osxexperts.net's static builds
 # instead, pinned the same way (same encoders; ad hoc signed).
 #
-#   scripts/ffmpeg.sh <aarch64-apple-darwin|x86_64-apple-darwin> <out-dir>
+#   scripts/ffmpeg.sh aarch64-apple-darwin <out-dir>
 #
 # Bumping the version: take the new release's folder and the .sha256 beside
 # each zip from https://ffmpeg.martin-riedl.de (macOS, release), and check
@@ -25,14 +25,6 @@ case "$TARGET" in
     # FFmpeg 9.0
     FALLBACK_FFMPEG="https://www.osxexperts.net/ffmpeg9arm.zip d0c06c5c68ce48af3143b262f7a9118a7c9f67de1e237fcc24ffb14df9c67af9"
     FALLBACK_FFPROBE="https://www.osxexperts.net/ffprobe9arm.zip 0c94fbdd8917022f28115eca512196cf4648732bc9e5db9ec8896c7e519d02aa"
-    ;;
-  x86_64-apple-darwin)
-    BASE="https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_$VERSION"
-    FFMPEG_SHA="7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4"
-    FFPROBE_SHA="2322438ed2f6319a691291b247d09c69dcaa3a982460d1f269a7e1af335cfdfd"
-    # FFmpeg 8.0
-    FALLBACK_FFMPEG="https://www.osxexperts.net/ffmpeg80intel.zip 2d24d22db78c87f394a5822867acd5c5dc5e762cd261a44bd26923f3a5af3e07"
-    FALLBACK_FFPROBE="https://www.osxexperts.net/ffprobe80intel.zip 0b6576104a95c1b39d4939e2df86f8f7cf1d55287ff57da48777d94605d12feb"
     ;;
   *)
     echo "no FFmpeg build for $TARGET" >&2

@@ -88,7 +88,7 @@ The biggest finding: exports aren't slow because of the export pipeline; other w
 | # | Change | Why |
 |---|---|---|
 | 6.1 | *engine* **Compact project JSON** on disk and in history. | 2.1 MB pretty against ~1.2 MB compact; 127 MB of history. |
-| 6.2 | **Drop the Intel build** if no one uses an Intel Mac. | Halves release CI. |
+| 6.2 | **Drop the Intel build** if no one uses an Intel Mac. | Halves release CI. Done Oct 29: the whole team is on Apple Silicon. |
 
 ## 7. Workers Paid rollout: move suitable work off the Mac
 

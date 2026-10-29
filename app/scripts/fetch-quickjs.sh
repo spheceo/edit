@@ -6,7 +6,7 @@
 # are static: the check below refuses any that would need a library a
 # Mac doesn't ship with.
 #
-#   scripts/fetch-quickjs.sh <aarch64-apple-darwin|x86_64-apple-darwin> <out-dir>
+#   scripts/fetch-quickjs.sh aarch64-apple-darwin <out-dir>
 #
 # The fetch lands as <out-dir>/qjs-<target>, the sidecar name beside edit.
 # Bumping the version: take the new release's qjs-darwin-<arch> assets and
@@ -22,10 +22,6 @@ case "$TARGET" in
   aarch64-apple-darwin)
     ARCH="arm64"
     SUM="8be3ddfe3397d2e692e4e1e8972ee9d032a0a580505d2f8b4ea528cf1b651c11"
-    ;;
-  x86_64-apple-darwin)
-    ARCH="x86_64"
-    SUM="9e5e101b4fd13cda3204222ca9f8be35412c41dcdef3745829633b7a67245412"
     ;;
   *)
     echo "no qjs build for $TARGET" >&2

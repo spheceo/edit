@@ -7,7 +7,7 @@
 #
 # <package dir> holds edit, edit-ffmpeg, edit-ffprobe and qjs-<target> (the
 # release workflow's package/). Writes <out>/Edit-<target>.zip (+ .sha256) and
-# <out>/Edit-<Apple-Silicon|Intel>.dmg.
+# <out>/Edit-Apple-Silicon.dmg.
 #
 # Signing: with MACOS_CERTIFICATE (a Developer ID Application .p12, base64) and
 # MACOS_CERTIFICATE_PASSWORD, every program is signed with it under the hardened
@@ -22,7 +22,6 @@ pkg=${2:A}
 out=${3:A}
 case "$target" in
   aarch64-apple-darwin) human=Apple-Silicon ;;
-  x86_64-apple-darwin) human=Intel ;;
   *) echo "no Mac app for $target" >&2; exit 1 ;;
 esac
 mkdir -p "$out"
@@ -69,30 +68,23 @@ echo "==> qjs starts as signed"
 
 # The signed server must start and answer before anything ships: a Bun-compiled
 # binary can hang at start under the hardened runtime (Writer's, Bun 1.4.4, Oct 23),
-# which only this signing shows. Another architecture runs under Rosetta when it's
-# installed (its first start is slow while Rosetta translates it).
+# which only this signing shows.
 echo "==> The signed server starts"
 server="$app/Contents/Resources/edit"
-run=()
 limit=30
-if [[ "$target" == x86_64-apple-darwin && "$(uname -m)" == arm64 ]]; then
-  if arch -x86_64 /usr/bin/true 2>/dev/null; then run=(arch -x86_64); limit=180; else echo "(no Rosetta here: the Intel build isn't started)"; server=""; fi
-fi
-if [[ -n "$server" ]]; then
-  perl -e 'alarm shift; exec @ARGV' "$limit" "${run[@]}" "$server" --version || { echo "the signed edit didn't answer --version within ${limit}s" >&2; exit 1; }
-  home="$work/smoke-home"
-  mkdir -p "$home"
-  EDIT_KEYCHAIN_FILE="$home/keychain.json" EDIT_ADOPT_SHELL_ENV=1 EDIT_NO_BROWSER=1 EDIT_CLAUDE_MAINTENANCE=0 "${run[@]}" "$server" serve --home "$home" --port 7797 >"$work/smoke.log" 2>&1 &
-  smoke=$!
-  answered=0
-  for _ in $(seq 1 $((limit * 2))); do
-    if curl -fsS -m 2 http://127.0.0.1:7797/api/health 2>/dev/null | grep -q '"name":"edit"'; then answered=1; break; fi
-    sleep 0.5
-  done
-  kill "$smoke" 2>/dev/null || true
-  wait "$smoke" 2>/dev/null || true
-  (( answered )) || { echo "the signed edit serve didn't answer within ${limit}s:" >&2; cat "$work/smoke.log" >&2; exit 1; }
-fi
+perl -e 'alarm shift; exec @ARGV' "$limit" "$server" --version || { echo "the signed edit didn't answer --version within ${limit}s" >&2; exit 1; }
+home="$work/smoke-home"
+mkdir -p "$home"
+EDIT_KEYCHAIN_FILE="$home/keychain.json" EDIT_ADOPT_SHELL_ENV=1 EDIT_NO_BROWSER=1 EDIT_CLAUDE_MAINTENANCE=0 "$server" serve --home "$home" --port 7797 >"$work/smoke.log" 2>&1 &
+smoke=$!
+answered=0
+for _ in $(seq 1 $((limit * 2))); do
+  if curl -fsS -m 2 http://127.0.0.1:7797/api/health 2>/dev/null | grep -q '"name":"edit"'; then answered=1; break; fi
+  sleep 0.5
+done
+kill "$smoke" 2>/dev/null || true
+wait "$smoke" 2>/dev/null || true
+(( answered )) || { echo "the signed edit serve didn't answer within ${limit}s:" >&2; cat "$work/smoke.log" >&2; exit 1; }
 
 dmg="$out/Edit-$human.dmg"
 "$here/make-dmg.sh" "$app" "$dmg"

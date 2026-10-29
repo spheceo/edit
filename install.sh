@@ -19,10 +19,13 @@ set -eu
 REPO="spheceo/edit"
 PREFIX="${EDIT_INSTALL_DIR:-$HOME/.local/bin}"
 
-# Releases have Mac builds only (Apple Silicon and Intel).
+# Releases have Apple Silicon Mac builds only (no Intel since Oct 29).
 case "$(uname -s)/$(uname -m)" in
   Darwin/arm64) TARGET="aarch64-apple-darwin" ;;
-  Darwin/x86_64) TARGET="x86_64-apple-darwin" ;;
+  Darwin/x86_64)
+    echo "Edit only has Apple Silicon Mac builds (this Mac is Intel)." >&2
+    exit 1
+    ;;
   *)
     echo "Edit only has Mac builds so far (this is $(uname -s)/$(uname -m))." >&2
     exit 1

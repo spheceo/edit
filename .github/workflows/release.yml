@@ -1,8 +1,9 @@
 name: Release
 
-# `just publish` bumps the patch version, tags it and pushes; this builds
-# Apple Silicon and Intel Mac archives and publishes the GitHub Release once
-# both are up (a draft until then, so updaters never see a half-built one).
+# `just publish` bumps the patch version, tags it and pushes; this builds the
+# Apple Silicon Mac archives and publishes the GitHub Release once they're up
+# (a draft until then, so updaters never see a half-built one). No Intel
+# build since Oct 29: the whole team is on Apple Silicon.
 # `just nightly` tags `nightly-<N>`: the same build, published as a
 # pre-release with its number in it (installs on the Nightly channel take it).
 #
@@ -107,8 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both on the Apple Silicon runner; Intel is cross-compiled.
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        target: [aarch64-apple-darwin]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -142,7 +142,6 @@ jobs:
           if [ "$NIGHTLY" = true ]; then nightly="${TAG#nightly-}"; fi
           case "${{ matrix.target }}" in
             aarch64-apple-darwin) bun_target=bun-darwin-arm64 ;;
-            x86_64-apple-darwin) bun_target=bun-darwin-x64 ;;
           esac
           bun install --frozen-lockfile
           touch "$RUNNER_TEMP/addon-start"
@@ -197,12 +196,7 @@ jobs:
           cp ffmpeg/ffprobe package/edit-ffprobe
           scripts/fetch-quickjs.sh "${{ matrix.target }}" quickjs
           cp "quickjs/qjs-${{ matrix.target }}" package/
-          # Only the build for this runner's own architecture can be run to
-          # check it starts (the Intel one is cross-compiled; Edit.app's
-          # packaging starts it under Rosetta where that's installed).
-          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
-            "package/qjs-${{ matrix.target }}" --version
-          fi
+          "package/qjs-${{ matrix.target }}" --version
           tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe "qjs-${{ matrix.target }}"
           (cd dist && shasum -a 256 "$name" > "$name.sha256")
           echo "NAME=$name" >> "$GITHUB_ENV"

@@ -146,7 +146,7 @@ serve-build-bin:
 
 # Releases go up a patch at a time (v0.0.0, v0.0.1, …); in between, nightlies
 # (nightly-1, nightly-2, …). GitHub Actions (.github/workflows/release.yml)
-# builds the Apple Silicon and Intel Mac archives from the tag and publishes it.
+# builds the Apple Silicon Mac archives from the tag and publishes it.
 # Only when the user says to make a new version; otherwise ship a nightly.
 # Ship the next patch version (the current one if it was never released): check, bump, tag, push (CI builds and publishes)
 publish: check

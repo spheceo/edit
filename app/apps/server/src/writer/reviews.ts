@@ -690,6 +690,9 @@ async function checkIn(app: App, data: string): Promise<void> {
   }
 }
 
+/** Why each request waits, as last said. */
+const waiting = new Map<string, string>();
+
 /** Takes one request and starts its fix, or says why it couldn't. */
 async function take(app: App, data: string, reviewId: string, scriptId: string, title: string): Promise<void> {
   const name = jobs.named(scriptId, title);
@@ -701,9 +704,13 @@ async function take(app: App, data: string, reviewId: string, scriptId: string, 
   }
   // A script this Mac hasn't got yet (the sync brings it) or is busy with waits for a later check-in.
   if (!here || jobs.running(scriptId) || importing(scriptId)) {
-    diag.info("writer", `${name}: Ready for changes waits: the script ${here ? "is busy" : "isn't on this Mac yet"}`);
+    const why = `${name}: Ready for changes waits: the script ${here ? "is busy" : "isn't on this Mac yet"}`;
+    // Said once, not at every check-in.
+    if (waiting.get(reviewId) !== why) diag.info("writer", why);
+    waiting.set(reviewId, why);
     return;
   }
+  waiting.delete(reviewId);
   let taken: Record<string, unknown>;
   try {
     taken = await call("mutation", "reviews:takeFix", { machine: machine.id(), reviewId });

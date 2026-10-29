@@ -1109,6 +1109,14 @@ interface Request {
  * computer, takes each waiting "Ready for changes" for a project here:
  * `reviews:takeFix`, then `fixReady` runs on by itself. The requests it took.
  */
+/** Why each request waits, as last said: said again only when it changes (the check-in runs every few seconds). */
+const waitingFix = new Map<string, string>();
+function waits(review: string, why: string): void {
+  if (waitingFix.get(review) === why) return;
+  waitingFix.set(review, why);
+  diag.info("review", why);
+}
+
 export async function checkIn(app: App): Promise<string[]> {
   const email = accounts.status().person as { email?: string } | null;
   const answer = (await cloud.mutation("reviews:checkIn", { machine: machine.id(), name: machine.name(), email: email?.email ?? null })) as { chosen?: boolean; requests?: Request[] };
@@ -1127,15 +1135,16 @@ export async function checkIn(app: App): Promise<string[]> {
     const busy = readying.has(project) || sharing.has(project) || (live !== null && (seams.agentPanel(app).chat(project) as { running?: boolean }).running === true);
     // A project not here, or busy, waits for a later check-in.
     if (live === null || busy) {
-      diag.info("review", `${request.title || project}: Ready for changes waits: the project ${live === null ? "isn't on this computer" : "is busy"}`);
+      waits(request.reviewId, `${request.title || project}: Ready for changes waits: the project ${live === null ? "isn't on this computer" : "is busy"}`);
       continue;
     }
     try {
       await app.store.mayWrite(project);
     } catch {
-      diag.info("review", `${live.project.name}: Ready for changes waits: another computer holds the project`);
+      waits(request.reviewId, `${live.project.name}: Ready for changes waits: another computer holds the project`);
       continue;
     }
+    waitingFix.delete(request.reviewId);
     const taken = (await cloud.mutation("reviews:takeFix", { machine: machine.id(), reviewId: request.reviewId })) as { ok?: boolean; reason?: string; noteIds?: string[] };
     if (taken.ok !== true) {
       diag.info("review", `${live.project.name}: Ready for changes not taken (${taken.reason ?? "?"})`);

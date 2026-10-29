@@ -1,0 +1,270 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { claudeStatus, getProgress, getScript, listScripts, message, onLibrary } from "./api";
+import { CommentaryEditor } from "./commentary-view";
+import { Editor } from "./editor";
+import { Library } from "./library";
+import { Icon, startToastTimer } from "./ui";
+import { SyncDock } from "./sync-dock";
+import { LitStyle } from "./comments";
+import { ImportScreen } from "./import-screen";
+import { useAccount } from "./account";
+import { openDialog } from "../lib/dialogs";
+import { navigate, usePath } from "../lib/route";
+import { startScrollbars } from "./scrollbars";
+import "./writer.css";
+import type { ClaudeStatus, ImportProgress, Script, Summary } from "./types";
+
+type Route = { name: "library" } | { name: "script"; id: string };
+
+// The route lives in the URL (Edit's paths: /scripts, /scripts/<id>), so a
+// reload (a phone or laptop on the tailnet does that often) comes back to the
+// same script.
+function parse(path: string): Route {
+  const script = /^\/scripts\/([0-9a-f-]+)$/i.exec(path);
+  if (script) return { name: "script", id: script[1] };
+  return { name: "library" };
+}
+
+const pathOf = (route: Route) => (route.name === "script" ? `/scripts/${route.id}` : "/scripts");
+
+// A click never leaves a focus ring (the kit's rule): a pointer marks the page until Tab brings the rings back.
+let marking = false;
+function markPointer() {
+  if (marking) return;
+  marking = true;
+  const html = document.documentElement;
+  document.addEventListener("pointerdown", () => html.setAttribute("data-pointer", ""), { capture: true });
+  document.addEventListener("keydown", (event) => event.key === "Tab" && html.removeAttribute("data-pointer"), { capture: true });
+}
+
+function ImportFinished({
+  notice,
+  onOpen,
+  onDismiss,
+}: {
+  notice: { id: string; title: string };
+  onOpen: () => void;
+  onDismiss: () => void;
+}) {
+  // App re-renders while imports poll, handing a new onDismiss each time. The timer starts once.
+  const dismiss = useRef(onDismiss);
+  dismiss.current = onDismiss;
+  useEffect(() => startToastTimer(() => dismiss.current()), []);
+  return (
+    <div className="toasts">
+      <div className="toast import-complete" role="status">
+        <span><b>Import finished</b> · {notice.title}</span>
+        <button type="button" className="tool" onClick={() => { onOpen(); onDismiss(); }}>Open script</button>
+        <button type="button" className="icon-tool" aria-label="Dismiss import notification" onClick={onDismiss}><Icon name="close" size={14} /></button>
+      </div>
+    </div>
+  );
+}
+
+/** Script mode: Writer's library and its scripts, inside Edit. */
+export function ScriptMode() {
+  const path = usePath();
+  // One object a path, so the effects that follow it run when it changes, not every render.
+  const route = useMemo(() => parse(path), [path]);
+  useEffect(() => {
+    markPointer();
+    startScrollbars();
+  }, []);
+  const [ready, setReady] = useState(false);
+  const [scripts, setScripts] = useState<Summary[]>([]);
+  const [claude, setClaude] = useState<ClaudeStatus | null>(null);
+  const [progress, setProgress] = useState<ImportProgress[]>([]);
+  const [open, setOpen] = useState<Script | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<{ id: string; title: string } | null>(null);
+  const [account] = useAccount();
+  const acceptScript = (fresh: Script) => setOpen((current) => {
+    if (current?.id === fresh.id && (fresh.revision < current.revision || (fresh.revision === current.revision && fresh.updatedAt < current.updatedAt))) return current;
+    return fresh;
+  });
+  const setRoute = (next: Route) => navigate(pathOf(next));
+
+  const refresh = () => {
+    void listScripts().then(setScripts).catch((cause) => setError(message(cause)));
+  };
+
+  useEffect(() => {
+    // `just dev` serves the page before the Rust API is listening. Keep
+    // asking until it answers rather than showing the refused request.
+    let waiting: number | undefined;
+    const connect = () => {
+      void listScripts()
+        .then((rows) => {
+          setScripts(rows);
+          setError(null);
+          setReady(true);
+          void claudeStatus().then(setClaude).catch(() => setClaude(null));
+        })
+        .catch(() => {
+          setError("Starting Script mode…");
+          waiting = window.setTimeout(connect, 1500);
+        });
+    };
+    connect();
+    // Hidden windows stop asking; the next look catches up.
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      void getProgress()
+        .then((list) => setProgress(Array.isArray(list) ? list : []))
+        .catch(() => {});
+    }, 800);
+    return () => {
+      window.clearTimeout(waiting);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (route.name !== "script" || !ready) return;
+    let gone = false;
+    void getScript(route.id).then((fresh) => { if (!gone) acceptScript(fresh); }).catch((cause) => { if (!gone) setError(message(cause)); });
+    return () => { gone = true; };
+  }, [route, ready]);
+
+  // A script open here that another Mac changed comes down through the cloud
+  // into its file; the open copy follows it.
+  const opened_ = route.name === "script" && open && open.id === route.id ? open : null;
+  const shown = useRef(opened_);
+  shown.current = opened_;
+  useEffect(() => {
+    if (route.name !== "script" || !ready) return;
+    let gone = false;
+    const ask = () => {
+      const now = shown.current;
+      if (!now || document.hidden) return;
+      void getScript(now.id)
+        .then((fresh) => {
+          const current = shown.current;
+          // Imports save words, speakers and status without making an edit revision.
+          if (!gone && current && fresh.id === current.id && fresh.updatedAt > current.updatedAt && fresh.revision >= current.revision) {
+            acceptScript(fresh);
+            if (current.status === "processing" && fresh.status === "ready") setImportNotice({ id: fresh.id, title: fresh.title });
+          }
+        })
+        .catch(() => {});
+    };
+    const timer = window.setInterval(ask, 4000);
+    const back = () => { if (!document.hidden) ask(); };
+    document.addEventListener("visibilitychange", back);
+    window.addEventListener("focus", back);
+    return () => {
+      gone = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", back);
+      window.removeEventListener("focus", back);
+    };
+  }, [route, ready]);
+
+  const previousImports = useRef<ImportProgress[]>([]);
+  useEffect(() => {
+    const finished = previousImports.current.filter((item) => !progress.some((now) => now.id === item.id));
+    previousImports.current = progress;
+    for (const item of finished) {
+      void getScript(item.id).then((fresh) => {
+        if (fresh.status !== "ready") return;
+        setImportNotice({ id: fresh.id, title: fresh.title });
+        if (shown.current?.id === fresh.id) acceptScript(fresh);
+        refresh();
+      }).catch(() => {});
+    }
+  }, [progress]);
+
+  // Scripts that come, go or change behind the list's back (the cloud, the
+  // local API) show up straight away, and the list catches up when the window comes back.
+  useEffect(() => {
+    const stop = onLibrary(refresh);
+    const back = () => !document.hidden && refresh();
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", back);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // While something imports or Claude is writing, keep the list current. The
+  // request that started it may have been dropped on the way.
+  const working = progress.length > 0 || scripts.some((row) => row.status === "processing" || row.building);
+  useEffect(() => {
+    if (!working || route.name !== "library") return;
+    const timer = window.setInterval(() => !document.hidden && refresh(), 4000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [working, route.name]);
+
+  const home = () => {
+    setRoute({ name: "library" });
+    refresh();
+  };
+  // Who's signed in decides which scripts they see (can.rs): list them again when that changes.
+  const grantsKey = account ? `${account.signedIn}|${account.person?.sub ?? ""}|${account.person?.admin ?? ""}|${(account.person?.perms ?? []).join(",")}` : "";
+  useEffect(() => {
+    if (grantsKey) refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grantsKey]);
+  const opened = route.name === "script" && open && open.id === route.id ? open : null;
+  // The open script still importing: its progress shows over the project, which loads when it's done.
+  const importing = route.name === "script" ? (progress.find((item) => item.id === route.id) ?? null) : null;
+  const wasImporting = useRef<string | null>(null);
+  useEffect(() => {
+    if (route.name !== "script" || !ready) return;
+    let gone = false;
+    const load = () => void getScript(route.id).then((fresh) => { if (!gone) acceptScript(fresh); }).catch((cause) => { if (!gone) setError(message(cause)); });
+    if (importing) {
+      wasImporting.current = route.id;
+      // Its script.json may not be there for the first moments.
+      if (!opened) load();
+    } else if (wasImporting.current === route.id) {
+      wasImporting.current = null;
+      load();
+    }
+    return () => { gone = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!importing, importing?.stage, route, ready]);
+  return (
+    <div className="writer-root">
+      {opened?.commentary ? (
+        <CommentaryEditor key={opened.id} script={opened} onChange={setOpen} onBack={home} />
+      ) : opened ? (
+        <Editor key={opened.id} script={opened} onChange={setOpen} onBack={home} />
+      ) : route.name === "script" ? (
+        <div className="studio">
+          <header className="topbar" data-tauri-drag-region>
+            <button type="button" className="icon-tool" aria-label="All scripts" title="All scripts" onClick={home}>
+              <Icon name="back" />
+            </button>
+            <div className="title-block" data-tauri-drag-region>Scripts</div>
+          </header>
+          <p className={error ? "notice" : "empty"}>{error ?? "Opening…"}</p>
+        </div>
+      ) : (
+        <Library
+          scripts={scripts}
+          claude={claude}
+          onSettings={() => openDialog("settings")}
+          onLogs={() => openDialog("logs")}
+          progress={progress}
+          loadError={error}
+          onOpen={(id) => setRoute({ name: "script", id })}
+          onChanged={refresh}
+        />
+      )}
+      <ImportScreen item={importing} onLeave={home} />
+      {importNotice && (
+        <ImportFinished
+          key={importNotice.id}
+          notice={importNotice}
+          onOpen={() => setRoute({ name: "script", id: importNotice.id })}
+          onDismiss={() => setImportNotice(null)}
+        />
+      )}
+      <LitStyle />
+      <SyncDock onOpen={(id) => setRoute({ name: "script", id })} />
+    </div>
+  );
+}

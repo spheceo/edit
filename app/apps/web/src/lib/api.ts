@@ -189,7 +189,14 @@ export const api = {
   /** The footage the timeline plays that isn't on this machine and can't be fetched. */
   missingFootage: (id: string) =>
     request<{ used: number; missing: { id: string; name: string; path: string }[] }>("GET", `/api/projects/${id}/missing`),
-  browse: (path?: string) => request<FsListing>("GET", `/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  /** A folder on the machine running Edit: its folders and media, or (`extensions`) its files with those extensions. */
+  browse: (path?: string, extensions: string[] = []) => {
+    const query = new URLSearchParams();
+    if (path) query.set("path", path);
+    if (extensions.length) query.set("ext", extensions.join(","));
+    const asked = query.toString();
+    return request<FsListing>("GET", `/api/fs${asked ? `?${asked}` : ""}`);
+  },
   /** `drive`: upload the finished file to Drive (by default only a whole subtitled video is). */
   exportProject: (id: string, path: string, options: ExportOptions, drive?: boolean) =>
     request<{ path: string }>("POST", `/api/projects/${id}/export`, drive === undefined ? { path, options } : { path, options, drive }),
@@ -272,9 +279,9 @@ export const api = {
   /** Brings an archived project's footage back from Drive and YouTube. */
   restoreProject: (id: string) => request<{ started: boolean }>("POST", `/api/projects/${id}/restore`),
   /** Writer's scripts in the cloud, newest first, each with the project made from it here. */
-  writerScripts: () => request<{ scripts: WriterScriptRow[] }>("GET", "/api/writer/scripts"),
+  writerScripts: () => request<{ scripts: WriterScriptRow[] }>("GET", "/api/writer/handoff"),
   /** Makes an Edit project from a Writer script and starts its import. */
-  importWriter: (id: string) => request<{ project: string }>("POST", `/api/writer/scripts/${id}/import`),
+  importWriter: (id: string) => request<{ project: string }>("POST", `/api/writer/handoff/${id}/import`),
 };
 
 export interface WriterScriptRow {

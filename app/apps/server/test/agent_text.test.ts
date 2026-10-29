@@ -6,7 +6,7 @@ import { TOOLS } from "../src/mcp/registry.ts";
 import * as styles from "../src/styles.ts";
 
 test("every_file_in_agent_is_one_the_server_reads", () => {
-  const known = /^(instructions\.md|shared\/[a-z0-9-]+\.md|skills\/[a-z0-9-]+\.md|styles\/[a-z0-9-]+\/(notes\.md|skills\/[a-z0-9-]+\.md))$/;
+  const known = /^(instructions\.md|shared\/[a-z0-9-]+\.md|skills\/[a-z0-9-]+\.md|writer\/[a-z0-9-]+\.md|styles\/[a-z0-9-]+\/(notes\.md|skills\/[a-z0-9-]+\.md))$/;
   for (const path of PATHS) expect(path).toMatch(known);
   expect(PATHS).toContain("instructions.md");
   const names = STYLES.map((style) => style.value as string);

@@ -7,6 +7,7 @@
 //     agent/styles/<style>/notes.md            a kind of video's own rules
 //     agent/styles/<style>/skills/<name>.md    its own skill, or its version of a house one
 //     agent/shared/<name>.md                   text taken in with {{> name}}
+//     agent/writer/<name>.md                   Script mode's guides (Repack's, word for word)
 //
 // A file may open with frontmatter (`---` lines of `key: value`); a house
 // skill's `description` is its line in the instructions' SKILLS list, which
@@ -90,6 +91,17 @@ for (const path of Object.keys(FILES)) {
   // `voice: <ElevenLabs voice id>` in the notes' frontmatter: its narrator, where it isn't the house voice.
   const voice = parsed?.fields.voice;
   STYLES[style] = { notes: parsed?.body ?? "", skills: skillsIn(`styles/${style}/skills/`), ...(voice ? { voice } : {}) };
+}
+
+/**
+ * One of Script mode's guides (agent/writer/<name>.md), exactly as written:
+ * Repack's guides and Writer's house rules go to the script builds whole,
+ * frontmatter, partials and trailing newline untouched.
+ */
+export function writerGuide(name: string): string {
+  const text = FILES[`writer/${name}.md`];
+  if (text === undefined) throw new Error(`agent text: no agent/writer/${name}.md`);
+  return text;
 }
 
 /** Every file's path under agent/ (the test checks each one is used). */

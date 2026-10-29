@@ -286,14 +286,14 @@ function sorted(value: unknown, status = 200): Response {
 }
 
 export function routes(router: Router<App>): void {
-  router.get("/api/writer/scripts", async ({ app }) => {
+  router.get("/api/writer/handoff", async ({ app }) => {
     try {
       return sorted({ scripts: await list(app) });
     } catch (error) {
       throw new ApiError(400, diag.messageOf(error));
     }
   });
-  router.get("/api/writer/scripts/{id}", async ({ params }) => {
+  router.get("/api/writer/handoff/{id}", async ({ params }) => {
     try {
       const given = await fetchScript(params.id ?? "");
       return sorted({ ...script.summary(toParsed(await resolveWriterCases(given))), title: given.title, style: scriptStyle(given) });
@@ -301,7 +301,7 @@ export function routes(router: Router<App>): void {
       throw new ApiError(400, diag.messageOf(error));
     }
   });
-  router.post("/api/writer/scripts/{id}/import", async ({ app, params }) => {
+  router.post("/api/writer/handoff/{id}/import", async ({ app, params }) => {
     try {
       return sorted(await importScript(app, params.id ?? ""));
     } catch (error) {

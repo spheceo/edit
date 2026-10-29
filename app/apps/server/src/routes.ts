@@ -44,6 +44,7 @@ import * as reset from "./reset.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
+import * as writer from "./writer/routes.ts";
 import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
 import * as remoteSupport from "./remote_support.ts";
@@ -79,6 +80,7 @@ export function buildRouter(): Router<App> {
   remoteSupport.routes(router);
   windowFocus.routes(router);
   writerHandoff.routes(router);
+  writer.routes(router);
   archive.routes(router);
   covers.routes(router);
   avatars.routes(router);
@@ -1143,6 +1145,8 @@ function browse(context: Context): Response {
     throw notFound("folder not found");
   }
   const entries: { name: string; path: string; dir: boolean; size: number }[] = [];
+  // `ext=txt,md`: files with these extensions instead of media (Script mode's text sources).
+  const wanted = context.query.get("ext")?.split(",").map((one) => one.trim().toLowerCase()).filter((one) => one !== "") ?? null;
   let names: string[];
   try {
     names = fs.readdirSync(dir);
@@ -1159,7 +1163,7 @@ function browse(context: Context): Response {
       continue;
     }
     const isDir = meta.isDirectory();
-    if (!isDir && !isMediaPath(path)) continue;
+    if (!isDir && !(wanted === null ? isMediaPath(path) : wanted.includes((extension(path) ?? "").toLowerCase()))) continue;
     entries.push({ name, path, dir: isDir, size: meta.size });
   }
   entries.sort((a, b) => {

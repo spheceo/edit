@@ -31,6 +31,7 @@ import * as seams from "./seams.ts";
 import { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as update from "./update.ts";
+import * as writer from "./writer/index.ts";
 import { BUILD, NIGHTLY, RELEASE } from "./version.ts";
 
 /** A place to listen: an IP and port, as Rust's SocketAddr shows it ("127.0.0.1:7700", "[::1]:7700"). */
@@ -192,6 +193,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   optional("review", () => reviews.start(app));
   // Projects archived on Repack: their big files freed here, and restores asked for done.
   optional("archive", () => archive.start(app));
+  // Script mode: Writer's scripts on this Mac brought in once, and its background work.
+  optional("writer", () => writer.start(app));
   let quitting = false;
   const quit = (code: number) => {
     // A second signal, or a cloud push that never answers, doesn't hold Edit open.

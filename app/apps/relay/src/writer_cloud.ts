@@ -64,13 +64,12 @@ export const LESSONS_KEY = "writer/lessons.json";
 /** Edit's prefixes Script mode may read and write, for the footage and transcripts it shares with Edit mode. */
 const SHARED_PREFIXES = ["edit/originals/", "edit/analysis/"];
 
-/** What the caller was granted: an admin, or their capabilities (none dotted: a token from before the kinds, which has everything). */
+/** What the caller was granted: an admin, or their capabilities. */
 export type Grants = { admin: boolean; perms: Set<string> };
 
 export function grantsOf(found: Caller): Grants {
   if (found.kind !== "person") return { admin: false, perms: new Set() };
-  const legacy = !found.perms.some((perm) => perm.includes("."));
-  return { admin: found.admin || legacy, perms: new Set(found.perms) };
+  return { admin: found.admin, perms: new Set(found.perms) };
 }
 
 const has = (grants: Grants, id: string) => grants.admin || grants.perms.has(id);

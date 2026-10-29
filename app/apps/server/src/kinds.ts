@@ -34,13 +34,13 @@ const LABELS: Record<string, [kind: string, grant: string]> = {
 
 /**
  * The capabilities the signed-in person has; null for everything: an admin,
- * a token from before the kinds (no dotted id in its perms), or nobody signed
- * in (tests and a local relay: the UI asks everyone to sign in first).
+ * or nobody signed in (tests and a local relay: the UI asks everyone to sign
+ * in first). `use` alone opens nothing (Oct 29: the fallback for tokens from
+ * before the kinds went, so `use` can't give Script mode's work too).
  */
 export function granted(): Set<string> | null {
   const now = accountStatus() as { person: unknown; perms: string[]; admin: boolean };
   if (now.person === null || now.admin) return null;
-  if (!now.perms.some((perm) => perm.includes("."))) return null;
   return new Set(now.perms);
 }
 

@@ -36,12 +36,13 @@ test("who may work on what: a style's edits, subtitled videos, and footage-only 
   expect(kinds.mayWork(shape("bodycam", false, true), courtroom)).toBe(false);
   expect([kinds.mayStart("bodycam", subtitler), kinds.mayStart("bodycam", courtroom), kinds.mayStart("courtroom", courtroom)]).toEqual([true, false, true]);
   expect([kinds.mayEdit("bodycam", subtitler), kinds.mayEdit("courtroom", courtroom), kinds.editsAny(subtitler), kinds.editsAny(courtroom)]).toEqual([false, true, false, true]);
-  // Everything: nobody signed in (tests, a local relay), an admin, a token from before the kinds.
+  // Everything: nobody signed in (tests, a local relay), an admin. `use` alone opens nothing.
   expect(kinds.granted()).toBeNull();
   accounts.signedInForTests(["use"], true);
   expect(kinds.granted()).toBeNull();
   accounts.signedInForTests(["use", "cloud", "drive"]);
-  expect(kinds.granted()).toBeNull();
+  expect(kinds.granted()).toEqual(new Set(["use", "cloud", "drive"]));
+  expect(kinds.mayWork(shape("bodycam"))).toBe(false);
   accounts.signedInForTests(["use", "cloud", "video.subtitles"]);
   expect(kinds.granted()).toEqual(new Set(["use", "cloud", "video.subtitles"]));
 });

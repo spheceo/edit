@@ -14,16 +14,18 @@ let EDITOR = "";
 let ADMIN = "";
 /** Script mode (Writer's capabilities in Edit): an interrogation writer who shares reviews, and an Edit-only editor. */
 let WRITER = "";
+let USE_ONLY = "";
 beforeAll(async () => {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
   useKeys(createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), kid: "t1", alg: "RS256" }] }));
-  PERSON = await new SignJWT({ perms: ["use", "cloud", "drive", "ai", "export"], admin: false }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
-  NAMED = await new SignJWT({ perms: ["use"], admin: false, name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
+  PERSON = await new SignJWT({ perms: ["use", "cloud", "drive", "ai", "export", "edit.bodycam"], admin: false }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
+  NAMED = await new SignJWT({ perms: ["use", "edit.bodycam"], admin: false, name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
   const sign = (claims: Record<string, unknown>, sub = "person-t") => new SignJWT(claims).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject(sub).setIssuedAt().setExpirationTime("1h").sign(privateKey);
   SUBS = await sign({ perms: ["use", "video.subtitles"], admin: false }, "person-s");
   EDITOR = await sign({ perms: ["use", "edit.bodycam", "video.subtitles"], admin: false });
   ADMIN = await sign({ perms: ["use"], admin: true }, "person-a");
   WRITER = await sign({ perms: ["use", "scripts.interrogation", "review.share"], admin: false }, "person-w");
+  USE_ONLY = await sign({ perms: ["use", "cloud", "drive"], admin: false }, "person-u");
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
 afterAll(() => useKeys(null));
@@ -169,6 +171,10 @@ describe("relay cloud endpoints", () => {
     // The shared lessons need review.lessons.
     expect((await writer("r2/url", { key: "writer/lessons.json", method: "PUT" }, WRITER)).status).toBe(403);
     expect((await writer("r2/url", { key: "writer/lessons.json", method: "PUT" }, ADMIN)).status).toBe(200);
+    // `use` with no capability is no one's admin: it reads, and writes nothing.
+    expect((await writer("convex", { kind: "query", path: "writer:listScripts" }, USE_ONLY)).status).toBe(200);
+    expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "interrogation" } } }, USE_ONLY)).status).toBe(403);
+    expect((await writer("r2/url", { key: "writer/lessons.json", method: "PUT" }, USE_ONLY)).status).toBe(403);
     // A commit of the writer's own kind goes through; another kind's doesn't.
     expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "interrogation" } } }, WRITER)).status).toBe(200);
     expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "courtroom" } } }, WRITER)).status).toBe(403);

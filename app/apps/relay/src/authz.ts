@@ -25,10 +25,9 @@ export interface Shape {
   footageOnly: boolean;
 }
 
-/** The capabilities a caller has; null for everything (an admin, or a token from before the kinds). */
+/** The capabilities a caller has; null for everything (an admin). A token with none has none: `use` alone opens nothing (Oct 29: the fallback for tokens from before the kinds went, so `use` can't give Script mode's work too). */
 export function grantedTo(found: Caller): Set<string> | null {
   if (found.kind !== "person" || found.admin) return null;
-  if (!found.perms.some((perm) => perm.includes("."))) return null;
   return new Set(found.perms);
 }
 

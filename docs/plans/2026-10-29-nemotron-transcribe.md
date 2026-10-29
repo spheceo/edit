@@ -1,6 +1,6 @@
-# NVIDIA Nemotron 3.5 Transcribe: worth a bench, parked
+# NVIDIA Nemotron 3.5 Transcribe: benched, not switching
 
-Researched Oct 29, the day after its release (Oct 28). Not benched yet; this is where to pick it up.
+Researched Oct 29, the day after its release (Oct 28), and benched the same day on two of our hour-long videos: **worse than Scribe at who speaks**, the deciding test. Results in `docs/benchmarks/2026-10-29-nemotron-transcribe.md`; the plan below is what was run.
 
 ## Where we are
 

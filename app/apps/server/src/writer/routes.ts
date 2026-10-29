@@ -18,6 +18,7 @@ import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
 import { blocksOf } from "./blocks.ts";
 import * as brief from "./brief.ts";
+import * as docs from "./docs.ts";
 import * as drive from "./drive.ts";
 import * as edits from "./edits.ts";
 import * as feedback from "./feedback.ts";
@@ -371,6 +372,33 @@ export function routes(router: Router<App>): void {
         readFor(dataOf(context.app), id(context));
         await reviews.deleteNote(dataOf(context.app), context.params.note ?? "");
         return { ok: true };
+      }),
+    )
+    // Google Docs: the script laid out by the page as a Word file, made into a Doc in the team's "Writer scripts" folder.
+    .post("/api/writer/scripts/{id}/docs", async (context) => {
+      const given = await body<{ draft?: boolean; docx?: string }>(context);
+      return answer(() => {
+        can.require(can.SHARE);
+        readFor(dataOf(context.app), id(context));
+        return docs.exportDoc(dataOf(context.app), id(context), given.draft === true, String(given.docx ?? ""));
+      });
+    })
+    .get("/api/writer/scripts/{id}/docs", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return docs.listDocs(id(context));
+      }),
+    )
+    .get("/api/writer/scripts/{id}/docs/comments", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return docs.docComments(dataOf(context.app), id(context), null);
+      }),
+    )
+    .get("/api/writer/scripts/{id}/docs/{doc}/comments", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return docs.docComments(dataOf(context.app), id(context), context.params.doc ?? "");
       }),
     )
     // Finding a commentary's clips on YouTube from its brief.

@@ -3031,7 +3031,7 @@
   },
   {
     "name": "insert_compilation_case",
-    "description": "Add one missing case to an already laid-out compilation without resetting the edit. Downloads new Drive folder/file, YouTube, a finished script Doc, or a finished video of ours by its review link (feedback.spheceo.com/r/…, played untouched), inserts it at a clean timeline boundary, and shifts later work intact. at is FRAMES from get_edit_context, usually after the existing compilation opening for case 1. request_id is a stable unique identifier: retry the same id, never duplicate the case. intro is the new case's researched opening/transition narration; it is voiced only for this case. Docs retain their original ranges and finished cut-in words. finished: true plays a Drive/YouTube video untouched as a finished section (no editing over it). before_block is the optional zero-based script insertion index when removed clips make the order ambiguous. This may take minutes; failures leave a retryable pending case and keep the existing edit. Then research/watch this case, update the compilation opening and finish the new case's joins with the appropriate skills.",
+    "description": "Add one missing case to an already laid-out compilation without resetting the edit. Downloads new Drive folder/file, YouTube, a finished script Doc, or a finished video of ours by its review link (feedback.spheceo.com/r/\u2026, played untouched), inserts it at a clean timeline boundary, and shifts later work intact. at is FRAMES from get_edit_context, usually after the existing compilation opening for case 1. request_id is a stable unique identifier: retry the same id, never duplicate the case. intro is the new case's researched opening/transition narration; it is voiced only for this case. Docs retain their original ranges and finished cut-in words. finished: true plays a Drive/YouTube video untouched as a finished section (no editing over it). before_block is the optional zero-based script insertion index when removed clips make the order ambiguous. This may take minutes; failures leave a retryable pending case and keep the existing edit. Then research/watch this case, update the compilation opening and finish the new case's joins with the appropriate skills.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3225,5 +3225,113 @@
         }
       }
     }
+  },
+  {
+    "description": "Fill a 9:16 Short's frame with its 16:9 footage and keyframe each clip's x so the subject stays in the middle: the biggest face first, then the same person; the camera holds while they're in the middle and moves, eased, only when they'd leave it. It sets each clip's scale (fill) and x and replaces its x/y/scale keyframes, so punch-ins go on after it (scale keyframes at or above the fill scale it answers). Where it says no face was seen (a redaction blur, a back turned, a car), look at the frames and run it again for that clip with centres: where the subject is across the source picture (0 left, 1 right) from each time on.",
+    "inputSchema": {
+      "properties": {
+        "clip_ids": {
+          "description": "The footage clips; all landscape footage when left out.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "centres": {
+          "description": "Where to look instead of the faces: [{time: timeline seconds, x: 0\u20131 across the source picture}], each held until the next (eased moves between).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "time": {
+                "type": "number"
+              },
+              "x": {
+                "type": "number"
+              }
+            }
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "reframe"
+  },
+  {
+    "description": "Import a song from its YouTube link (its sound only) and lay it under the whole Short, levelled under the footage's speech and fading over the last second: the team's Shorts songs aren't in the sound library. Cut the Short first: the song runs to the end of the timeline. place false only imports it.",
+    "inputSchema": {
+      "properties": {
+        "url": {
+          "description": "The song's YouTube link.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "from": {
+          "description": "Seconds into the song to start (a stretch without singing). Default 0.",
+          "type": "number"
+        },
+        "under_speech": {
+          "description": "LU under the footage's speech (default 20, a bed).",
+          "type": "number"
+        },
+        "place": {
+          "description": "false: import only.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "name": "import_music"
+  },
+  {
+    "description": "A Short's callout introducing someone, as the Shorts the team follows do it (\"WANTED SUSPECT\"): the footage at `at` freezes for `hold` frames, cut in tighter on them (zoom) and brightened, the words above them in heavy white capitals with a deep shadow (the last word bigger) and a white hand-drawn arrow curving down to them, all landing on the cut. Once or twice a Short, on the person the story is about as they first appear: who they are in two or three words (\"WANTED SUSPECT\", \"DRUNK DRIVER\", \"THE MAYOR'S DAUGHTER\"). Their words keep playing under it.",
+    "inputSchema": {
+      "properties": {
+        "text": {
+          "description": "Two or three words; the last is the big line.",
+          "type": "string"
+        },
+        "at": {
+          "description": "The timeline frame to freeze.",
+          "type": "integer"
+        },
+        "point": {
+          "description": "[x, y]: the top of the person's head at that frame, project px from the frame's centre.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "hold": {
+          "description": "Frames it holds (default 1.2 s).",
+          "type": "integer"
+        },
+        "zoom": {
+          "description": "How much tighter the frozen frame is cut in (default 1.25, at most 2).",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "at",
+        "point"
+      ],
+      "type": "object"
+    },
+    "name": "shorts_callout"
   }
 ]

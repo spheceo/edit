@@ -21,6 +21,7 @@ export const BLOCKED = new Set([
   "add_article",
   "collect_images",
   "import_media",
+  "import_music",
   "share_for_review",
   "export",
   "reset_edit",

@@ -755,6 +755,7 @@ export function headerStyle(heading: string): Style | null {
   if (word === "INTERRO" || word === "INTERROGATION") return "interrogation";
   if (word === "FOIA" || word === "BODYCAM" || word === "BWC") return "bodycam";
   if (word === "COMMENTARY") return "commentary";
+  if (word === "SHORT" || word === "SHORTS") return "shorts";
   return null;
 }
 
@@ -1970,10 +1971,11 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       diag.log(job.state === "done" ? "info" : "warn", "script", `${title}: import ${job.state === "done" ? "done" : `stopped: ${error}`} in ${diag.human(timing.now() - began)}`);
     });
     // A new edit starts with the case's research, so the articles and images
-    // are waiting by the time the editing gets to them.
+    // are waiting by the time the editing gets to them. Not a Short: it shows
+    // only its own footage (no maps, photos or articles to wait for).
     const home = app.store.home;
     const researched = seams.research.articles(home, id).length > 0 || seams.research.items(home, id).length > 0;
-    if (laidOut && !recut && !inserting && !researched && now?.project.style !== "commentary") {
+    if (laidOut && !recut && !inserting && !researched && now?.project.style !== "commentary" && now?.project.style !== "shorts") {
       try {
         await seams.agentPanel(app).send(id, RESEARCH, null, null);
       } catch (error) {

@@ -30,6 +30,8 @@ const SAFE = 9_007_199_254_740_991;
 export const CAPTION_PREFIX = "Caption · ";
 
 export const DEFAULT_SETTINGS: Settings = { width: 1920, height: 1080, fps: 30 };
+/** A YouTube Short's frame: 9:16. */
+export const SHORTS_SETTINGS: Settings = { width: 1080, height: 1920, fps: 30 };
 
 /** A new project (Project::new): three video tracks, two audio tracks. */
 export function newProject(id: string, name: string, settings: Settings, style: Style = "bodycam"): Project {

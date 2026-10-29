@@ -1397,10 +1397,11 @@ const FIXABLE = [
   "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
   "blur_off_shot", "sfx_long", "sfx_late_hit", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "viewer_over_cut",
+  "short_length", "short_unfilled", "short_subject_off", "short_unsubtitled", "short_no_music", "short_music_stops",
 ];
 
 /** Fixable flags that come once for the whole edit: one is enough for a follow-up. */
-const WHOLE_EDIT = ["blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_text_heavy", "commentary_flash", "commentary_graphics_monotony"];
+const WHOLE_EDIT = ["short_length", "short_unsubtitled", "short_no_music", "short_music_stops", "blur_off_shot", "teaser_wide", "intro_long", "intro_no_arrest", "windows_underused", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_text_heavy", "commentary_flash", "commentary_graphics_monotony"];
 
 /**
  * Edit's follow-up after a whole edit that left three or more fixable flags (or one of WHOLE_EDIT's)

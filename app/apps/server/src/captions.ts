@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
-import { captionSize, hex, parseTranscript, subtitleName, transcriptOf } from "./captions_core.ts";
+import { captionSize, hex, parseTranscript, subtitleName, subtitleRow, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import { fixTurns } from "./turns.ts";
 import { post } from "./watch.ts";
@@ -154,9 +154,11 @@ export function boxPixels(b: number[], [width, height]: [number, number]): [numb
 
 /**
  * Splits a clip's words into caption lines: at a pause, a change of voice,
- * the end of a sentence (once a line has a few words), or nine words.
+ * the end of a sentence (once a line has a few words), or `most` words (nine;
+ * three in a 9:16 Short, whose lines are a word or three), or past `chars`
+ * letters (a Short's row: "She was continually" wrapped to two, Oct 29).
  */
-export function linesOf(clip: string, words: Word[]): Line[] {
+export function linesOf(clip: string, words: Word[], most = 9, chars = Infinity): Line[] {
   const lines: Line[] = [];
   for (const word of words) {
     const line = lines[lines.length - 1];
@@ -168,7 +170,8 @@ export function linesOf(clip: string, words: Word[]): Line[] {
         last === undefined ||
         word.start - last.end >= 0.45 ||
         speaker !== line.voice ||
-        line.words.length >= 9 ||
+        line.words.length >= most ||
+        [...line.words, word].map((one) => one.text.trim()).join(" ").length > chars ||
         (line.words.length >= 4 && /[.?!]$/u.test(trimEnd(last.text)));
     }
     if (line !== undefined && !split) {
@@ -597,7 +600,8 @@ async function spokenLines(app: App, project: Project, clips: Clip[], from: numb
       if (moved > 0) turns.forEach((turn, index) => (words[index]!.speaker = turn.speaker ?? undefined));
     }
     const own = transcript;
-    const made = joinStrays(linesOf(clip.id, words)).map((line) => named(line, own));
+    const tall = project.settings.height > project.settings.width;
+    const made = joinStrays(linesOf(clip.id, words, tall ? 3 : 9, tall ? 16 : Infinity), tall ? 16 : Infinity).map((line) => named(line, own));
     if (capped) {
       // Stretched words (cut back by `cap`) before a line: its times are doubtful.
       let at = 0;
@@ -618,13 +622,13 @@ async function spokenLines(app: App, project: Project, clips: Clip[], from: numb
  * teaser's sergeant: "his arm coming up and" without its "down", once the
  * reporter's "that's the" after it went back to her). At most ten words.
  */
-export function joinStrays(lines: Line[]): Line[] {
+export function joinStrays(lines: Line[], chars = Infinity): Line[] {
   const out: Line[] = [];
   for (const line of lines) {
     const before = out.at(-1);
     const first = line.words[0];
     const last = before?.words.at(-1);
-    if (before !== undefined && line.words.length === 1 && before.words.length < 10 && first !== undefined && last !== undefined && before.voice === line.voice && first.start - last.end < 0.75) {
+    if (before !== undefined && line.words.length === 1 && before.words.length < 10 && first !== undefined && last !== undefined && before.voice === line.voice && first.start - last.end < 0.75 && [...before.words, first].map((one) => one.text.trim()).join(" ").length <= chars) {
       out[out.length - 1] = { ...before, words: [...before.words, ...line.words] };
       continue;
     }
@@ -895,7 +899,7 @@ export async function subtitles(app: App, projectId: string, from: number, to: n
   const spans = uncrammed(timed, texts, lines.map((line) => line.doubtful === true)).map(([start, end]) => [(start / 1000.0) * fps, (end / 1000.0) * fps] as [number, number]);
   const { width, height } = project.settings;
   const style = subtitleStyle(width, height);
-  const transform: Transform = { x: 0, y: f32(f32(height) * f32(0.4)), scale: 1, rotation: 0 };
+  const transform: Transform = { x: 0, y: subtitleRow([width, height]), scale: 1, rotation: 0 };
   if (!seams.subtitles.latestRun(projectId, run)) return seams.subtitles.SUPERSEDED;
   const [saved, [placed, kept, starred, people]] = await app.store.update(projectId, "agent", (project) => {
     const preserved = missingOnly ? new Map(project.clips.map((clip) => [clip.id, JSON.stringify(clip)])) : null;

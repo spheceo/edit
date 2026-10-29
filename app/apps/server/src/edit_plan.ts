@@ -13,6 +13,7 @@ import * as looks from "./looks.ts";
 import * as graphics from "./graphics.ts";
 import * as commentaryGraphics from "./commentary_graphics.ts";
 import * as commentaryAudit from "./commentary_audit.ts";
+import * as shortsAudit from "./shorts.ts";
 import * as intro from "./intro_graphics.ts";
 import * as markBlurs from "./mark_blurs.ts";
 import * as typing from "./typing_sounds.ts";
@@ -1227,6 +1228,10 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   }
   if (project.style === "commentary") {
     return { issues: sortIssues([...issues, ...commentaryAudit.issues(project)]), frames: total, clips: project.clips.length };
+  }
+  // A Short has its own checks: no teaser, map, intro or outro to flag.
+  if (project.style === "shorts") {
+    return { issues: sortIssues([...issues, ...shortsAudit.issues(project)]), frames: total, clips: project.clips.length };
   }
   // The same picture shown in more than one place in the video (the team:
   // "the same images again and again and again… it's just annoying").

@@ -169,14 +169,17 @@ pub enum Style {
     Interrogation,
     Courtroom,
     Commentary,
+    /// A 9:16 YouTube Short: 45–60 s of one video's highlights, reframed.
+    Shorts,
 }
 
 impl Style {
-    pub const ALL: [Style; 4] = [
+    pub const ALL: [Style; 5] = [
         Style::Bodycam,
         Style::Interrogation,
         Style::Courtroom,
         Style::Commentary,
+        Style::Shorts,
     ];
 
     pub fn name(self) -> &'static str {
@@ -185,6 +188,7 @@ impl Style {
             Style::Interrogation => "interrogation",
             Style::Courtroom => "courtroom",
             Style::Commentary => "commentary",
+            Style::Shorts => "shorts",
         }
     }
 }

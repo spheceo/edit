@@ -154,6 +154,7 @@ export const STYLES: { value: Style; label: string }[] = [
   { value: "interrogation", label: "Interrogation" },
   { value: "courtroom", label: "Courtroom" },
   { value: "commentary", label: "Commentary" },
+  { value: "shorts", label: "Shorts" },
 ];
 
 /**
@@ -164,11 +165,13 @@ export const STYLES: { value: Style; label: string }[] = [
  * be built, and says it's a stand-in. (JJ, Oct 28: "I selected the courtroom
  * edit option, but the voice was the one from bodycam".)
  */
-export const NARRATION: Record<Style, "house" | "recording"> = {
+export const NARRATION: Record<Style, "house" | "recording" | "none"> = {
   bodycam: "house",
   interrogation: "recording",
   courtroom: "recording",
   commentary: "recording",
+  // A Short is the footage's own sound: no narrator.
+  shorts: "none",
 };
 
 /** A script import's footage downloads (apps/server/src/script.ts `Job`). */

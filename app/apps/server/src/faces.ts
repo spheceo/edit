@@ -18,7 +18,7 @@
 // Its arithmetic is f32 (`f32` after every step), as edit-core's would be,
 // since the places it picks are saved in the project.
 
-import { captionSize } from "./captions_core.ts";
+import { captionSize, subtitleRow } from "./captions_core.ts";
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import type { Clip, Project, TextStyle, Transform } from "./model.ts";
@@ -91,7 +91,7 @@ export function subtitleSize(text: string, style: TextStyle, height: number): [n
  * and right (below the band at the top where bodycam stamps sit).
  */
 export function spots(size: [number, number], label: number, frame: [number, number]): Spot[] {
-  return spotsFrom(size, label, frame, f32(f32(0.4) * frame[1]));
+  return spotsFrom(size, label, frame, subtitleRow(frame));
 }
 
 /**
@@ -157,7 +157,7 @@ export function place(
   faces: Face[],
   previous: Spot | null,
 ): Spot {
-  return placeAt(size, frame, label, faces, previous, f32(f32(0.4) * frame[1]));
+  return placeAt(size, frame, label, faces, previous, subtitleRow(frame));
 }
 
 /** `place` with no line before it and the house place's centre at `bottom` below the frame's centre (intro captions). */
@@ -414,7 +414,7 @@ export async function placeSubtitles(app: App, projectId: string, from: number, 
     }
     return count;
   });
-  const house = f32(f32(0.4) * frame[1]);
+  const house = subtitleRow(frame);
   const offHouse = after.project.clips.filter(
     (clip) =>
       (clip.name ?? "").startsWith(SUBTITLE) &&

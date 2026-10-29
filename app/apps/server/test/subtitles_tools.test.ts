@@ -485,7 +485,7 @@ test("an edit's subtitles: a source's narrator under their own label, and a word
     expect(again.isError).toBe(false);
     const shown = texts();
     expect(shown.some((one) => one.startsWith("Subtitle · Narrator: That's the voice of the sergeant"))).toBe(true);
-    expect(shown).toContain("Subtitle · Narrator: him.");
+    expect(shown).toContain("Subtitle · Narrator: questioned him.");
     expect(shown.some((one) => /Sergeant/.test(one) && one.startsWith("Subtitle · Sergeant: I'm yelling"))).toBe(true);
     expect(gateway).toHaveBeenCalled();
   } finally {

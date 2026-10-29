@@ -21,7 +21,7 @@ label?: string,
  */
 role?: string, 
 /**
- * Their one colour, "#rrggbb": by their role (the team's code); white or a near-white grey only for a bystander or a witness.
+ * Their one colour, "#rrggbb": by their role (the team's code); white or a near-white grey only for a bystander, a witness or a narrator.
  */
 color: string, 
 /**

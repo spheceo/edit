@@ -30,8 +30,8 @@ describe("Edit's manifest", () => {
   });
 
   it("keeps its ids (they're forever) and the brand's icon", () => {
-    expect(Object.values(CAPABILITIES).sort()).toEqual(["edit.bodycam", "edit.commentary", "edit.courtroom", "edit.interrogation", "video.subtitles"]);
-    expect(manifest().presets.map((one) => [one.id, one.capabilities.length])).toEqual([["subtitles", 1], ["editor", 5], ["full", 5]]);
+    expect(Object.values(CAPABILITIES).sort()).toEqual(["edit.bodycam", "edit.commentary", "edit.courtroom", "edit.interrogation", "edit.shorts", "video.subtitles"]);
+    expect(manifest().presets.map((one) => [one.id, one.capabilities.length])).toEqual([["subtitles", 1], ["editor", 6], ["full", 6]]);
     expect(ICON_SVG).toBe(fs.readFileSync(new URL("../../../../assets/brand/edit-icon.svg", import.meta.url), "utf8"));
   });
 

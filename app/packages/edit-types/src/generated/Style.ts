@@ -4,4 +4,4 @@
  * The kind of video a project is. Each gets its own teaching for the agent
  * (`apps/server/src/styles.ts`); projects from before styles are bodycam.
  */
-export type Style = "bodycam" | "interrogation" | "courtroom" | "commentary";
+export type Style = "bodycam" | "interrogation" | "courtroom" | "commentary" | "shorts";

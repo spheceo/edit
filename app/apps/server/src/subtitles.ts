@@ -13,7 +13,7 @@
 // Rust (`f32` after every step), so the saved numbers come out the same.
 
 import type { App } from "./app.ts";
-import { hex, transcriptOf } from "./captions_core.ts";
+import { hex, subtitleRow, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import type { Clip, Mute, Project, Rgba, Segment, TextStyle, Transform } from "./model.ts";
 import {
@@ -1121,7 +1121,7 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
     writeMutes(edited, mutes);
     tracks.push(subtitlesTrack(edited));
     tracks.push(...stacked);
-    const baseY = f32(f32(height) * f32(0.4));
+    const baseY = subtitleRow([width, height]);
     const k = f32(height / 1080.0);
     // The footage the seats were found in, to find where a line is in it.
     const footage: Footage[] = [];
@@ -1280,7 +1280,7 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
  * speaking). The intro's captions keep their own places.
  */
 export function bottomMiddle(project: Project): { x: number; y: number } {
-  return { x: 0, y: round(project.settings.height * 0.4) };
+  return { x: 0, y: round(subtitleRow([project.settings.width, project.settings.height])) };
 }
 
 /** Subtitles (not captions) in `from`..`to` off the bottom middle, by id. */

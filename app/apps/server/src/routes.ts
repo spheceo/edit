@@ -30,7 +30,7 @@ import type { ExportOptions, Project, Style } from "./model.ts";
 import { withProjectAsync } from "./native/index.ts";
 import * as patches from "./patch.ts";
 import { canonical, expandHome, extension, fileName, fileStem, isFile, join, parent } from "./paths.ts";
-import { DEFAULT_SETTINGS } from "./project.ts";
+import { DEFAULT_SETTINGS, SHORTS_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { listFiles, migrateMediaFiles, storageReport, verifyExports } from "./storage.ts";
@@ -443,18 +443,19 @@ function listProjects({ app }: Context): Response {
   return json({ projects: app.store.visible() });
 }
 
-const STYLES: Style[] = ["bodycam", "interrogation", "courtroom", "commentary"];
+const STYLES: Style[] = ["bodycam", "interrogation", "courtroom", "commentary", "shorts"];
 
 async function createProject(context: Context): Promise<Response> {
   const given = await body(context);
   const name = field<string>(given, "name", "string", true);
   const style = given.style === undefined ? "bodycam" : given.style;
   if (typeof style !== "string" || !STYLES.includes(style as Style)) {
-    throw badShape(`style: unknown variant \`${String(style)}\`, expected one of \`bodycam\`, \`interrogation\`, \`courtroom\`, \`commentary\``);
+    throw badShape(`style: unknown variant \`${String(style)}\`, expected one of \`bodycam\`, \`interrogation\`, \`courtroom\`, \`commentary\`, \`shorts\``);
   }
   const size = (key: "width" | "height" | "fps") => {
     const value = field<number>(given, key, "u32");
-    if (value === null) return DEFAULT_SETTINGS[key];
+    // A Short is 9:16 unless asked otherwise.
+    if (value === null) return style === "shorts" ? SHORTS_SETTINGS[key] : DEFAULT_SETTINGS[key];
     return value;
   };
   const settings = { width: size("width"), height: size("height"), fps: size("fps") };

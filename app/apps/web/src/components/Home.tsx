@@ -22,6 +22,8 @@ import { Button, cx, Modal, spring } from "./ui";
 
 // Every project is 1080p at 30 fps.
 const FORMAT = { width: 1920, height: 1080, fps: 30 };
+/** A YouTube Short's frame: 9:16. */
+const SHORTS_FORMAT = { width: 1080, height: 1920, fps: 30 };
 
 export function Home() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
@@ -209,7 +211,16 @@ type Listed = { at: number; local: ProjectSummary; cloud: null } | { at: number;
 const KIND = "edit.home.kind";
 
 /** Each kind of video’s colour (its dot on cards and filters). */
-const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#c4a7ff", commentary: "#e5be72" };
+const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#c4a7ff", commentary: "#e5be72", shorts: "#5fd38d" };
+
+/** What each kind of video makes, under the style picker. */
+const STYLE_NOTES: Record<Style, string> = {
+  bodycam: "16:9 · a narrated bodycam case or compilation, in the house voice",
+  interrogation: "16:9 · an interrogation edit, narrated by your recording",
+  courtroom: "16:9 · a courtroom edit, narrated by your recording",
+  commentary: "16:9 · a narrated video essay with researched B-roll",
+  shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
+};
 
 /** A quiet mark among a row’s chips: its footage isn’t on this Mac yet (opening it downloads it). */
 function NotHere({ title }: { title: string }) {
@@ -781,7 +792,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
     setBusy(true);
     try {
       const name = script ? preview?.result?.title || "Untitled" : url || "Untitled";
-      const { project } = await api.createProject({ name, style, ...FORMAT });
+      const { project } = await api.createProject({ name, style, ...(style === "shorts" ? SHORTS_FORMAT : FORMAT) });
       if (script) {
         // The recording first, so the import places it instead of voicing the cut-ins.
         if (recording && (voiceFile !== null || voiceLink.trim() !== "")) {
@@ -918,6 +929,12 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
                 </button>
               ))}
             </div>
+          </div>
+        )}
+        {styles.length > 0 && (
+          <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-[12px] text-faint">
+            <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[style] }} />
+            {STYLE_NOTES[style]}
           </div>
         )}
         <div className="flex items-center gap-2 border-t border-line px-1 pt-2 pb-0.5">

@@ -126,6 +126,16 @@ export function subtitleName(given: string): string {
   return first;
 }
 
+/**
+ * Where subtitles sit (their box's centre, project pixels below the frame's
+ * centre): the bottom of a 16:9 frame; a little below the middle of a 9:16
+ * one, as the Shorts the team follows have them (InOutNetwork), above the
+ * player's own title and buttons.
+ */
+export function subtitleRow(frame: [number, number]): number {
+  return frame[1] > frame[0] ? f32(f32(0.05) * frame[1]) : f32(f32(0.4) * frame[1]);
+}
+
 /** A caption's rough size (project pixels): wrapped at the style's width. */
 export function captionSize(text: string, style: TextStyle): [number, number] {
   const size = f32(style.size);

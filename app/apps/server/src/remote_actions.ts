@@ -1,5 +1,6 @@
 // What an admin can ask a teammate's Edit to do besides updating
-// (remote_support.ts): send its diagnostics, and pick up a stopped import.
+// (remote_support.ts): send its diagnostics, and pick up a stopped import,
+// a project's or a script's (Script mode's, as Writer's remote support did).
 // Both are bounded: no agent turn, so nothing spends beyond what the import
 // itself would (the user, Oct 29: "if anything goes wrong … we're able to do
 // things on our end, and they reflect on someone else's computer").
@@ -13,6 +14,10 @@ import { join } from "./paths.ts";
 import * as problemReports from "./problem_reports.ts";
 import * as script from "./script.ts";
 import { BUILD } from "./version.ts";
+import * as writerCloud from "./writer/cloud.ts";
+import * as writerImports from "./writer/imports.ts";
+import * as writerJobs from "./writer/jobs.ts";
+import * as writerStore from "./writer/store.ts";
 
 /** The kinds this build carries out (Convex sends an older build only updates). */
 export const KINDS = ["update", "diagnostics", "resume"] as const;
@@ -28,6 +33,20 @@ function projectLines(app: App): string[] {
     const where = status.cloud ? `cloud ${status.sync ?? "?"}${status.message ? ` (${status.message})` : ""}` : "only on this Mac";
     const importing = job ? ` · import ${job.state}${job.error ? `: ${job.error}` : ""}` : "";
     return `${id} "${summary.name}" · ${where}${importing}`;
+  });
+}
+
+/** Each script here: its title, cloud state, import and whether Claude is writing it, one line each. */
+function scriptLines(app: App): string[] {
+  const data = writerStore.dataDir(app.store.home);
+  return writerStore.list(data).map((row) => {
+    const refused = writerCloud.refused(row.id);
+    const rev = writerCloud.revOf(data, row.id);
+    const where = refused !== null ? `NOT IN THE CLOUD (${refused})` : rev === null ? "only on this Mac" : `cloud rev ${rev}`;
+    const imported = row.status === "ready" ? "" : ` · import ${row.status}${row.error ? `: ${row.error}` : ""}`;
+    const choice = row.decision ? ` · waits on a choice: ${row.decision.summary}` : "";
+    const writing = writerJobs.running(row.id) ? " · Claude is writing" : "";
+    return `${row.id} "${row.title}" · ${where}${imported}${choice}${writing}`;
   });
 }
 
@@ -52,6 +71,9 @@ export async function diagnostics(app: App): Promise<string> {
     "Projects:",
     ...projectLines(app),
     "",
+    "Scripts:",
+    ...scriptLines(app),
+    "",
     "Timings:",
     ...slow,
     "",
@@ -69,7 +91,8 @@ export async function diagnostics(app: App): Promise<string> {
  */
 export async function resume(app: App, projectId: string): Promise<string> {
   const live = app.store.get(projectId);
-  if (live === null) throw new Error(`There's no project ${projectId} on this Mac.`);
+  if (live === null && writerStore.idOk(projectId) && writerStore.ids(writerStore.dataDir(app.store.home)).includes(projectId)) return resumeScript(app, projectId);
+  if (live === null) throw new Error(`There's no project or script ${projectId} on this Mac.`);
   const done: string[] = [];
   const cloud = cloudProjects.cloudOf(app);
   if (cloud?.on() && (cloud.status(projectId) as { cloud?: boolean }).cloud !== true) {
@@ -87,4 +110,29 @@ export async function resume(app: App, projectId: string): Promise<string> {
   if (status.message) done.push(`cloud: ${status.message}`);
   diag.info("remote", `resume ${projectId}: ${done.join("; ")}`);
   return `"${live.project.name}": ${done.join("; ")}`;
+}
+
+/**
+ * Picks up a script: one the cloud refused or never got is tried again at
+ * once, and an import that stopped (failed, interrupted when Edit closed, or
+ * ready without its words) starts again from what it kept.
+ */
+function resumeScript(app: App, id: string): string {
+  const data = writerStore.dataDir(app.store.home);
+  const found = writerStore.read(writerStore.scriptDir(data, id));
+  const done: string[] = [];
+  const refused = writerCloud.refused(id);
+  if (refused !== null || writerCloud.revOf(data, id) === null) {
+    writerCloud.tryAgain(id);
+    done.push(refused !== null ? `its cloud save tried again (it said: ${refused})` : "sent to the cloud");
+  }
+  const stopped = found.status === "error" || (found.status === "ready" && found.words.length === 0 && !found.noSpeech);
+  if (writerImports.importing(id)) done.push("its import is already running");
+  else if (stopped) {
+    void writerImports.resume(app, data, id, { kind: "retry" }).catch((error: unknown) => diag.warn("remote", `resume ${id}: ${diag.messageOf(error)}`));
+    done.push("import started again");
+  } else if (found.status === "needs_choice") done.push(`its import waits on a choice they make: ${found.decision?.summary ?? ""}`);
+  else done.push("its import had finished");
+  diag.info("remote", `resume ${id}: ${done.join("; ")}`);
+  return `"${found.title}": ${done.join("; ")}`;
 }

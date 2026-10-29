@@ -124,6 +124,9 @@ export function creator(): Creator | null {
   return { sub: person.sub, name: person.name || person.email.split("@")[0] || "", ...(person.image !== null ? { picture: person.image } : {}) };
 }
 
+/** The signed-in person's email (the Fixing page names a computer's person by it); null signed out. */
+export const email = (): string | null => state.person?.email || null;
+
 /** The signed-in person's access token while it's good for another half minute, else null. */
 export function accessToken(): string | null {
   if (state.access === null) return null;

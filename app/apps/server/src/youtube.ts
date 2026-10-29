@@ -388,6 +388,7 @@ async function runYtdlp(
   route: Route,
   progress: (bytes: number, total: number | null, name: string) => void,
   range: [number, number] | null = null,
+  format: string | null = null,
 ): Promise<{ path: string | null; stderr: string }> {
   const proxy = route.proxy;
   const runtime = runtimeArgs();
@@ -408,7 +409,7 @@ async function runYtdlp(
     "30",
     "--continue",
     "-f",
-    proxy === null ? FORMAT : PROXY_FORMAT,
+    format ?? (proxy === null ? FORMAT : PROXY_FORMAT),
     "--merge-output-format",
     "mp4",
     ...(range === null ? [] : ["--download-sections", `*${range[0]}-${range[1]}`, "--force-keyframes-at-cuts"]),
@@ -494,14 +495,17 @@ async function runYtdlp(
 
 /** Download only a selected stretch, with exact cuts. Never fall back to a
  * whole stream: visual sourcing must not materialize hours for a few seconds. */
-export async function downloadRange(home: string, id: string, range: [number, number], dir: string, progress: (bytes: number, total: number | null, name: string) => void = () => {}): Promise<Downloaded> {
+/** A preview's picture: H.264 in an mp4, 480p at most (Script mode's review clips). */
+export const PREVIEW_FORMAT = "b[vcodec^=avc1][height<=480][ext=mp4]/bv*[vcodec^=avc1][height<=480]+ba[ext=m4a]/b[height<=480][ext=mp4]/bv*[height<=480]+ba/b";
+
+export async function downloadRange(home: string, id: string, range: [number, number], dir: string, progress: (bytes: number, total: number | null, name: string) => void = () => {}, format: string | null = null): Promise<Downloaded> {
   if (!/^[A-Za-z0-9_-]{11}$/.test(id) || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0] || range[1] - range[0] > 600) throw new Error("YouTube excerpt needs a valid video and a source range of at most 10 minutes");
   fs.mkdirSync(dir, { recursive: true });
   const binary = await ytdlp(home); const proxy = process.env.PROXY_URL?.trim() ?? "";
   const routes = routesFor(proxy, 1);
   let failure = "";
   for (let attempt: number | null = 0; attempt !== null; ) {
-    const result = await runYtdlp(binary, `https://www.youtube.com/watch?v=${id}`, dir, routes[attempt]!, progress, range);
+    const result = await runYtdlp(binary, `https://www.youtube.com/watch?v=${id}`, dir, routes[attempt]!, progress, range, format);
     if (result.path !== null) return { path: result.path, name: result.path.slice(dir.length + 1), size: fs.statSync(result.path).size };
     failure = errorLine(result.stderr);
     attempt = nextRoute(routes, attempt, result.stderr);

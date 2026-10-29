@@ -292,7 +292,7 @@ export async function reviseWith(data: string, id: string, request: string, said
 }
 
 /** A change to a written commentary: Opus edits the paragraphs the request is about and nothing else, written straight in (undo and the versions bring back what was there). */
-async function reviseCommentary(data: string, dir: string, given: Script, request: string, said: string, job: Job): Promise<Outcome> {
+export async function reviseCommentary(data: string, dir: string, given: Script, request: string, said: string, job: Job): Promise<Outcome> {
   // Edits name paragraphs by id: a script never shared gets them now.
   const script = structuredClone(given);
   if (script.commentary?.draft && ensureIds(script.commentary.draft)) store.write(dir, script);

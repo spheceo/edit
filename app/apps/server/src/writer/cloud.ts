@@ -14,13 +14,13 @@
 
 import * as fs from "node:fs";
 import { createHash } from "node:crypto";
-import * as os from "node:os";
 
 import type { Script } from "@edit/types/writer";
 
 import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join, parent } from "../paths.ts";
+import * as machine from "../machine.ts";
 import * as relay from "../relay.ts";
 import { importing } from "./imports.ts";
 import * as jobs from "./jobs.ts";
@@ -193,7 +193,7 @@ async function call(route: string, body: Record<string, unknown>): Promise<Recor
     if (/needs deploying|\b404\b|not found/i.test(message)) {
       const read = (route === "convex" && READS.has(String(body.path))) || (route === "r2/url" && body.method !== "PUT" && String(body.key).startsWith(`${PREFIX}/`));
       if (read) return relay.json<Record<string, unknown>>("POST", `/v1/cloud/${route}`, body, "Script mode's cloud", 120);
-      throw new Problem("Edit's relay doesn't take Script mode's saves yet (it needs the update with Writer's cloud).");
+      throw new Problem("Edit's relay doesn't serve Script mode's cloud yet (it needs the update with Writer's cloud).");
     }
     throw new Problem(message, message.startsWith(relay.UNREACHABLE));
   }
@@ -303,6 +303,47 @@ async function download(script: string, name: string, key: string, size: number,
   fs.renameSync(partial, path);
 }
 
+/** Puts bytes at a key Script mode may write (its own, or Edit's shared prefixes). */
+export async function putBytes(key: string, bytes: Uint8Array | string, contentType = "application/json"): Promise<void> {
+  const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: bytes, headers: { "content-type": contentType } }).catch((error: unknown) => {
+    throw transferProblem(error, key.split("/").pop() ?? "file");
+  });
+  if (!answer.ok) throw new Problem(`The cloud refused ${key.split("/").pop()} (${answer.status}).`);
+}
+
+/** Uploads a file to a key, its progress shown under `script` as the sync's is. */
+export const putFile = (script: string, key: string, path: string): Promise<number> => upload(script, path.split("/").pop() ?? "file", path, key);
+
+/** The size of what's at a key, or null when nothing is there. */
+export async function head(key: string): Promise<number | null> {
+  const answer = await call("r2/head", { key });
+  return answer.exists === true ? Number(answer.size ?? 0) : null;
+}
+
+/** What's at a key, or null when nothing is. */
+export const getBytes = (key: string): Promise<Uint8Array | null> => fetchBytes(key);
+
+/**
+ * The script's preview on this Mac, brought down from the cloud first when
+ * it was cleared from here or made on another Mac.
+ */
+export async function fetchPreview(data: string, id: string): Promise<string> {
+  const path = store.proxyPath(store.scriptDir(data, id));
+  if (isFile(path)) return path;
+  const kept = fileKey(data, id, "proxy.mp4");
+  if (kept === null) throw new Error("This script's preview isn't on this Mac or in the cloud.");
+  await download(id, "proxy.mp4", kept.key, kept.size, path);
+  // Its time as kept here now, so the next push sees it unchanged.
+  const ledger = loadLedger(data);
+  const known = ledger.scripts[id]?.files["proxy.mp4"];
+  if (known !== undefined) {
+    known.mtime = mtime(path);
+    writeJson(ledgerPath(data), ledger);
+  }
+  forgetPurged(data, id, "proxy.mp4");
+  return path;
+}
+
 /**
  * A script's preview that's only in the cloud (another Mac made it), played
  * from there a range at a time; null when the cloud has none.
@@ -323,16 +364,7 @@ export async function stream(request: Request, data: string, id: string): Promis
 // ---- The loop ----
 
 /** Who this Mac is, as commits name it. */
-const holder = (() => {
-  let name: string | null = null;
-  return () => (name ??= (() => {
-    try {
-      return Bun.spawnSync(["scutil", "--get", "ComputerName"]).stdout.toString().trim() || os.hostname();
-    } catch {
-      return os.hostname();
-    }
-  })().slice(0, 120));
-})();
+const holder = (): string => machine.name().slice(0, 120);
 
 /** Starts syncing in the background, for as long as Edit runs. */
 export function start(data: string): void {

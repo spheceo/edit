@@ -16,12 +16,16 @@ import * as can from "./can.ts";
 import * as chat from "./chat.ts";
 import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
+import { blocksOf } from "./blocks.ts";
 import * as brief from "./brief.ts";
 import * as drive from "./drive.ts";
 import * as edits from "./edits.ts";
+import * as fixing from "./fixing.ts";
+import * as footage from "./footage.ts";
 import * as imports from "./imports.ts";
 import * as jobs from "./jobs.ts";
 import * as reuse from "./reuse.ts";
+import * as reviews from "./reviews.ts";
 import { pageCount } from "./pages.ts";
 import { audit } from "./plan.ts";
 import * as scripting from "./scripting.ts";
@@ -276,6 +280,110 @@ export function routes(router: Router<App>): void {
         return startJob(context.app, id(context), { kind: "reuse", urls }, (job) => reuse.importReused(context.app, dataOf(context.app), id(context), urls, job));
       });
     })
+    // Sharing for review on feedback.spheceo.com, and the notes reviewers leave there.
+    .post("/api/writer/scripts/{id}/share", (context) =>
+      answer(async () => {
+        can.require(can.SHARE);
+        readFor(dataOf(context.app), id(context));
+        return detail(dataOf(context.app), await reviews.share(context.app, dataOf(context.app), id(context)));
+      }),
+    )
+    .post("/api/writer/scripts/{id}/review/compress", (context) =>
+      answer(async () => {
+        can.require(can.SHARE);
+        readFor(dataOf(context.app), id(context));
+        return detail(dataOf(context.app), await reviews.compress(context.app, dataOf(context.app), id(context)));
+      }),
+    )
+    .post("/api/writer/scripts/{id}/review/replace", (context) =>
+      answer(async () => {
+        can.require(can.SHARE);
+        readFor(dataOf(context.app), id(context));
+        notWhileWriting(id(context));
+        return detail(dataOf(context.app), await reviews.replaceLatest(context.app, dataOf(context.app), id(context)));
+      }),
+    )
+    .get("/api/writer/reviews", ({ app }) => json(reviews.counts(dataOf(app))))
+    .get("/api/writer/scripts/{id}/review", (context) => answer(() => reviewState(dataOf(context.app), id(context))))
+    .put("/api/writer/scripts/{id}/review/approval", async (context) => {
+      const given = await body<{ approve?: boolean }>(context);
+      return answer(async () => {
+        can.require(can.SHARE);
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        if (given.approve === false) await reviews.unapprove(data, id(context));
+        else await reviews.approve(data, id(context));
+        return reviewState(data, id(context));
+      });
+    })
+    // Fixes a script's open notes now, by hand: on any computer, not only the fixing one.
+    .post("/api/writer/scripts/{id}/review/fix", (context) =>
+      answer(() => {
+        can.require(can.SHARE);
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        const approved = reviews.approval(data, id(context));
+        if (approved !== null) throw new Error(`v${approved.version} is approved, so its notes aren't fixed. Take the approval back to fix them.`);
+        const notes = reviews.openNotes(data, id(context));
+        if (notes.length === 0) throw new Error("No notes are open.");
+        reviews.markTried(data, notes);
+        return startJob(context.app, id(context), { kind: "review", notes, ready: null }, (job) => fixing.run(context.app, data, id(context), notes, null, job));
+      }),
+    )
+    .get("/api/writer/scripts/{id}/review/fix", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return reviews.fixState(id(context));
+      }),
+    )
+    .post("/api/writer/scripts/{id}/review/notes", async (context) => {
+      const given = await body<{ text?: string; details?: reviews.NoteDetails }>(context);
+      return answer(async () => {
+        can.require(can.SHARE);
+        readFor(dataOf(context.app), id(context));
+        await reviews.addNote(dataOf(context.app), id(context), String(given.text ?? ""), given.details ?? {});
+        return { ok: true };
+      });
+    })
+    .post("/api/writer/scripts/{id}/review/notes/{note}/replies", async (context) => {
+      const given = await body<{ text?: string }>(context);
+      return answer(async () => {
+        readFor(dataOf(context.app), id(context));
+        await reviews.reply(dataOf(context.app), context.params.note ?? "", String(given.text ?? ""));
+        return { ok: true };
+      });
+    })
+    .post("/api/writer/scripts/{id}/review/notes/{note}/check", async (context) => {
+      const given = await body<{ verdict?: string; text?: string }>(context);
+      return answer(async () => {
+        can.require(can.SHARE);
+        readFor(dataOf(context.app), id(context));
+        await reviews.check(dataOf(context.app), context.params.note ?? "", String(given.verdict ?? ""), given.text ?? null);
+        return { ok: true };
+      });
+    })
+    .delete("/api/writer/scripts/{id}/review/notes/{note}", (context) =>
+      answer(async () => {
+        can.require(can.SHARE);
+        readFor(dataOf(context.app), id(context));
+        await reviews.deleteNote(dataOf(context.app), context.params.note ?? "");
+        return { ok: true };
+      }),
+    )
+    // A commentary's clip footage, as Split plays it.
+    .get("/api/writer/scripts/{id}/footage", (context) =>
+      answer(() => {
+        readFor(dataOf(context.app), id(context));
+        return footage.now(context.app, dataOf(context.app), id(context));
+      }),
+    )
+    .get("/api/writer/scripts/{id}/footage/{name}", (context) => {
+      const data = dataOf(context.app);
+      readFor(data, id(context));
+      const path = footage.file(store.scriptDir(data, id(context)), context.params.name ?? "");
+      if (path === null) throw notFound("No such clip.");
+      return serveFile(context.request, path);
+    })
     .get("/api/writer/progress", () => json(imports.progress()))
     .get("/api/writer/cloud", () => json(cloud.statusNow()))
     .post("/api/writer/videos/check", async (context) => {
@@ -431,10 +539,21 @@ export function routes(router: Router<App>): void {
   build.routes(router);
 }
 
+/** A script's review as the page shows it: its notes, its blocks as shared, its approval. */
+function reviewState(data: string, scriptId: string): { notes: reviews.Note[]; blocks: ReturnType<typeof blocksOf>; approved: reviews.Approval | null } {
+  const script = readFor(data, scriptId);
+  return { notes: reviews.notesOf(data, scriptId), blocks: blocksOf(script), approved: reviews.approval(data, scriptId) };
+}
+
 /** Starts the work's job on a script the person may see; its first status. */
 export function startJob(app: App, scriptId: string, work: jobs.Work, run: (job: jobs.Job) => Promise<jobs.Outcome>, after?: () => void): BuildStatus {
   const data = dataOf(app);
   const script = readFor(data, scriptId);
   idle(scriptId);
-  return jobs.start(data, scriptId, script.title, work, run, after);
+  // A commentary's clips may have changed: their footage comes down after.
+  const footageAfter = ["restore", "speakers", "transcribe"].includes(work.kind) ? undefined : () => void footage.now(app, data, scriptId);
+  return jobs.start(data, scriptId, script.title, work, run, () => {
+    footageAfter?.();
+    after?.();
+  });
 }

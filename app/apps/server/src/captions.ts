@@ -1300,7 +1300,7 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
   for (const plan of plans) if (!speakers.includes(plan.who)) speakers.push(plan.who);
   const style = captionStyle(width, height);
   const k = height / 1080.0;
-  const [saved, [placed, underFaces]] = await app.store.update(projectId, "agent", (project) => {
+  const [saved, [placed, underFaces, subtitlesRemoved]] = await app.store.update(projectId, "agent", (project) => {
     // A second run replaces the first.
     const old = new Set(
       project.clips
@@ -1374,16 +1374,31 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
       });
       placed += 1;
     }
+    // A plain subtitle of a line now captioned goes: card 2's teasers showed
+    // every line twice when the captions came after the subtitles (Oct 29).
+    // add_subtitles, run after, leaves out what the captions already show.
+    const captions = project.clips.filter((clip) => clip.type === "text" && (clip.name ?? "").startsWith(`${NAME} ·`) && clip.start < to && clipEnd(clip) > from);
+    const doubled = new Set(
+      project.clips
+        .filter((clip) => clip.type === "text" && (clip.name ?? "").startsWith(`${SUBTITLE} ·`) && clip.start < to && clipEnd(clip) > from)
+        .filter((clip) => {
+          const covered = captions.reduce((sum, caption) => sum + Math.max(0, Math.min(clipEnd(clip), clipEnd(caption)) - Math.max(clip.start, caption.start)), 0);
+          return covered >= 0.5 * Math.max(clip.duration, 1);
+        })
+        .map((clip) => clip.id),
+    );
+    project.clips = project.clips.filter((clip) => !doubled.has(clip.id));
     // One colour per person: the same as their subtitles and quotes.
     seams.people.oneColourPerPerson(project);
     // Never under a blur (a child's face blurred in the teaser).
     liftTextOverBlurs(project);
-    return [placed, underFaces] as const;
+    return [placed, underFaces, doubled.size] as const;
   });
   return {
     rev: saved.rev,
     lines: lines.length,
     placed,
+    ...(subtitlesRemoved > 0 ? { subtitles_removed: subtitlesRemoved } : {}),
     under_the_speakers_face: underFaces,
     bottom_middle: placed - underFaces,
     speakers,

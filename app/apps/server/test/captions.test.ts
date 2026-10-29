@@ -34,7 +34,7 @@ import { clipFrom } from "../src/clips.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import type { Clip, Media, Project, Rgba, TextClip, TextStyle, Transform } from "../src/model.ts";
-import { newProject } from "../src/project.ts";
+import { addTrack, newProject } from "../src/project.ts";
 import { f32 } from "../src/rust.ts";
 import * as seams from "../src/seams.ts";
 import type { Face, Found } from "../src/seams.ts";
@@ -392,6 +392,13 @@ test("caption_speakers asks Luna who speaks and lays the intro's captions out (n
     await store.replace(id, null, { ...silent, clips: structuredClone(store.get(id)!.project.clips).concat([{ id: "a", track: "a4", start: 0, duration: 900, color: "blue", fade_in: 0, fade_out: 0, type: "audio", media: "m", source_in: 0, speed: 1, volume_db: 0, link: "l1" } as never]) }, "test");
     reply = await call(app, "caption_speakers", { project_id: id });
     expect(reply).toEqual({ text: "couldn't take a still", isError: true });
+    // A plain subtitle of a line about to be captioned, and one of a line that isn't.
+    await store.update(id, "test", (p) => {
+      const track = addTrack(p, "video");
+      const plain = (cid: string, start: number) =>
+        clipFrom({ id: cid, track, start, duration: 40, color: "blue", fade_in: 0, fade_out: 0, type: "text", name: "Subtitle · Officer", text: "Stop moving now.", style: subtitleStyle(1920, 1080), transform: { x: 0, y: 432, scale: 1, rotation: 0 }, opacity: 1 });
+      p.clips.push(plain("s1", 30), plain("s2", 300));
+    });
     // With stills (an FFmpeg that "takes" them), the captions go in.
     const bin = `${dir}/bin`;
     write(`${bin}/ffmpeg`, "#!/bin/sh\nexit 0\n");
@@ -409,13 +416,15 @@ test("caption_speakers asks Luna who speaks and lays the intro's captions out (n
     expect(reply.isError).toBe(false);
     expect(reply.text.startsWith("captioned 0–10s: {")).toBe(true);
     const summary = JSON.parse(reply.text.slice(reply.text.indexOf("{"))) as Record<string, unknown>;
-    expect(summary).toMatchObject({ lines: 2, placed: 2, under_the_speakers_face: 0, bottom_middle: 2, speakers: ["Officer", "Jane (Mother)"] });
+    expect(summary).toMatchObject({ lines: 2, placed: 2, under_the_speakers_face: 0, bottom_middle: 2, speakers: ["Officer", "Jane (Mother)"], subtitles_removed: 1 });
+    // The line captioned isn't shown twice; the other subtitle stays.
+    expect(store.get(id)!.project.clips.filter((clip) => clip.id === "s1" || clip.id === "s2").map((clip) => clip.id)).toEqual(["s2"]);
     const [model, effort, input, schema, timeout] = asked[0]!;
     expect([model, effort, schema, timeout]).toEqual(["gpt-6-luna", "medium", true, 600_000]);
     const prompt = (input as { text?: string }[])[0]!.text!;
     expect(prompt).toContain("Who's who: speaker_0 (Officer); speaker_1 (Jane (Mother)).");
     expect(prompt).toContain("0 [1.0s, speaker_0 (Officer)] Stop moving now. (still 0 is at 1.5s)\n1 [3.0s, speaker_1 (Jane (Mother))] Okay. (still 1 is at 3.1s)");
-    const captions = store.get(id)!.project.clips.filter((clip): clip is TextClip => clip.type === "text");
+    const captions = store.get(id)!.project.clips.filter((clip): clip is TextClip => clip.type === "text" && (clip.name ?? "").startsWith("Caption"));
     expect(captions.map((clip) => [clip.name, clip.text, clip.start, clip.duration, clip.transform.y, clip.animation.preset])).toEqual([
       ["Caption · Officer", "Stop moving now.", 30, 41, f32(388.8), "words"],
       ["Caption · Jane (Mother)", "Okay.", 90, 20, f32(388.8), "words"],

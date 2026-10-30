@@ -177,6 +177,8 @@ export type Summary = {
   /** A commentary script's narration words, once written. */
   draftWords: number;
   compilation: boolean;
+  /** Claude's last run on it ended without finishing (an API error, Edit closing, stopped): when, and what the chat said. Home lists it under Needs you. */
+  runFailed?: { at: number; error: string } | null;
   /** When the last full Google Doc export was made, and whether the script changed since. */
   docExportedAt?: number;
   docBehind: boolean;

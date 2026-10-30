@@ -10,6 +10,7 @@ import type { Script, Summary } from "@edit/types/writer";
 import { writeAtomic } from "../files.ts";
 import { join } from "../paths.ts";
 import { isCutIn } from "./blocks.ts";
+import * as chat from "./chat.ts";
 import { draftWords } from "./paragraphs.ts";
 import { partLinks } from "./parts.ts";
 
@@ -81,8 +82,21 @@ export function write(dir: string, script: Script): void {
   hooks.written(script);
 }
 
-export function summary(script: Script): Summary {
+/**
+ * Claude's last run on a script, when it ended without finishing: the chat's
+ * last answer marked failed ("Claude stopped: …"). Read from the chat, which
+ * syncs, so a run that failed on another Mac shows here too (the user, Oct 30:
+ * "projects that have failed like this deserve a needs you").
+ */
+export function runFailed(dir: string): { at: number; error: string } | null {
+  const last = chat.read(dir).findLast((turn) => turn.role === "editor");
+  return last?.failed === true ? { at: last.at, error: last.text } : null;
+}
+
+/** A script's row in the lists; with its folder, also whether Claude's last run on it failed. */
+export function summary(script: Script, dir?: string): Summary {
   const cutIns = script.clips.filter(isCutIn).length;
+  const failed = dir === undefined ? null : runFailed(dir);
   return {
     id: script.id,
     title: script.title,
@@ -102,6 +116,8 @@ export function summary(script: Script): Summary {
     ...(script.firstBuild ? { firstBuild: true } : {}),
     draftWords: script.commentary?.draft ? draftWords(script.commentary.draft) : 0,
     compilation: script.compilation ?? false,
+    // Said either way once the folder's read (null: its last run finished), so the cloud's row shows it was looked at.
+    ...(dir === undefined ? {} : { runFailed: failed }),
     ...(script.docExport ? { docExportedAt: script.docExport.exportedAt } : {}),
     docBehind: script.docExport !== undefined && script.docExport.revision < script.revision,
     createdAt: script.createdAt,
@@ -128,7 +144,7 @@ export function list(data: string, archived: (id: string) => Summary["archive"] 
       const id = source.origin.startsWith("writer:") ? source.origin.slice("writer:".length) : null;
       if (id !== null && !usedBy.has(id)) usedBy.set(id, script.title);
     }
-    const row = summary(script);
+    const row = summary(script, join(root, entry.name));
     const archive = archived(script.id);
     if (archive) row.archive = archive;
     rows.push(row);

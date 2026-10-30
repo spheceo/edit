@@ -40,8 +40,8 @@ const PART_SIZE = 64 * 1024 * 1024;
 const BACKOFF_FIRST = 30_000;
 const BACKOFF_MAX = 3_600_000;
 const LESSONS_KEY = "writer/lessons.json";
-/** The library row's shape: 1 added `kind`. */
-const SUMMARY_VERSION = 1;
+/** The library row's shape: 1 added `kind`, 2 `runFailed` (Oct 30). A script whose cloud row is older is pushed again. */
+const SUMMARY_VERSION = 2;
 
 /** What the page shows: off, syncing, synced, offline or a problem. */
 export interface Status {
@@ -697,8 +697,8 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   const given = withCreator(body, row.createdBy);
   writeAtomic(bodyPath, Buffer.from(given));
   diag.info("writer", `${jobs.named(id, title)}: rev ${rev} came from ${String(row.updatedBy ?? "another Mac")}`);
-  const summary = row.summary as { kind?: unknown } | undefined;
-  ledger.scripts[id] = { rev, body: hash(given), files, summary: typeof summary?.kind === "string" ? SUMMARY_VERSION : 0 };
+  const summary = row.summary as { kind?: unknown; runFailed?: unknown } | undefined;
+  ledger.scripts[id] = { rev, body: hash(given), files, summary: typeof summary?.kind !== "string" ? 0 : summary.runFailed === undefined ? 1 : SUMMARY_VERSION };
   store.libraryChanged();
 }
 
@@ -744,7 +744,7 @@ async function push(id: string, dir: string, script: Script, body: Uint8Array, k
     bodyKey,
     bodySize: body.length,
     files: Object.entries(kept).map(([name, file]) => ({ name, key: file.key, size: file.size })),
-    summary: store.summary(script),
+    summary: store.summary(script, dir),
     holder: holder(),
   });
   if (answer.ok) {

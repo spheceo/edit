@@ -239,7 +239,7 @@ function creatorOf(value: unknown): Creator | null {
 /** Writer's scripts in the cloud, newest first (deleted ones left out), each with the Edit project made from it here. */
 export async function list(
   app: App,
-): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; createdBy: Creator | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null; clips: number; durationMs: number; built: boolean; style: Style | null }[]> {
+): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; createdBy: Creator | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null; clips: number; durationMs: number; built: boolean; style: Style | null; compilation: boolean; runFailed: { at: number; error: string } | null }[]> {
   const made = imports(app.store.home);
   if (!cloud.enabled()) throw new Error("Writer's scripts need Edit's cloud (the relay token)");
   const rows = (await cloud.query("writer:listScripts", {})) as Record<string, unknown>[];
@@ -262,11 +262,14 @@ export async function list(
       createdBy: creatorOf(row.createdBy),
       // From Writer's library row: a built script has its footage cut into clips (a source being researched is one whole clip, or none).
       ...(() => {
-        const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown; kind?: unknown; sourceKind?: unknown };
+        const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown; kind?: unknown; sourceKind?: unknown; compilation?: unknown; runFailed?: unknown };
         const clips = typeof summary.clipCount === "number" ? summary.clipCount : 0;
         // Its kind of video, once Writer's row says it (as its script's `kind`).
         const style = summary.sourceKind === "commentary" ? "commentary" : typeof summary.kind === "string" && summary.kind !== "" ? styleOf(summary.kind) : null;
-        return { clips, durationMs: typeof summary.durationMs === "number" ? summary.durationMs : 0, built: clips > 1 || (style === "commentary" && summary.status === "ready"), style };
+        // Over several videos, and whether Claude's last run on it failed (Home's category and Needs you, whichever Mac made it).
+        const failed = summary.runFailed as { at?: unknown; error?: unknown } | null | undefined;
+        const runFailed = failed && typeof failed.at === "number" && typeof failed.error === "string" ? { at: failed.at, error: failed.error } : null;
+        return { clips, durationMs: typeof summary.durationMs === "number" ? summary.durationMs : 0, built: clips > 1 || (style === "commentary" && summary.status === "ready"), style, compilation: summary.compilation === true, runFailed };
       })(),
       // Sent to Edit from Writer ("Send to Edit"), and whether it changed since.
       handoff: (() => {

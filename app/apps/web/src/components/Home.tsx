@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileText, Files, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Captions, FileText, Film, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
@@ -833,7 +833,7 @@ function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: st
         </button>
         <StartedBy by={issue.createdBy} size={24} className="ml-auto shrink-0" />
       </div>
-      <div className="col-span-3 flex min-w-0 items-center gap-2">
+      <div className="col-span-5 flex min-w-0 items-center gap-2">
         {/* Where it stopped, so it's plain what's being fixed (the list already says it stopped). */}
         <span title={`Stopped ${stageWords(issue.stage)}`} className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
           {stageName(issue.stage)}
@@ -1005,7 +1005,8 @@ function changedLabel(ms: number) {
 }
 
 /** Name, status, length, when it last changed and its ⋯: the columns every row lines up on. */
-const COLUMNS = "grid grid-cols-[minmax(0,2.4fr)_minmax(0,1.5fr)_64px_92px_30px] items-center gap-4";
+/** Name, category, type, status, length, updated, ⋯ (the user, Oct 30: the kind and the type each a column of their own, "Bodycam Compilation" one label). */
+const COLUMNS = "grid grid-cols-[minmax(0,1fr)_158px_64px_minmax(150px,0.45fr)_64px_92px_30px] items-center gap-3";
 
 /** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */
 function ProjectTable({
@@ -1063,6 +1064,8 @@ function ProjectTable({
     <div role="table" aria-label="Projects" className="mt-6 overflow-hidden rounded-xl border border-line">
       <div role="row" className={cx(COLUMNS, "h-10 bg-panel px-4 text-[12px] font-medium text-muted")}>
         <span role="columnheader">Name</span>
+        <span role="columnheader">Category</span>
+        <span role="columnheader">Type</span>
         <span role="columnheader">Status</span>
         <span role="columnheader" className="text-right">
           Length
@@ -1114,6 +1117,8 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
           )}
           <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} size={24} className="ml-auto shrink-0" />
         </div>
+        <Category style={project.style} compilation={script?.compilation} />
+        <Type kind={project.subtitles ? "subtitles" : "edit"} />
         <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
           {script !== null && <ScriptLink id={script.id} />}
           {card.notice && <Notice {...card.notice} />}
@@ -1147,7 +1152,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
   );
 }
 
-/** The project's script, a click away: its other mode. */
+/** The project's script, a click away: its other mode (an icon: the Type column already says it's an edit). */
 function ScriptLink({ id }: { id: string }) {
   return (
     <button
@@ -1157,23 +1162,31 @@ function ScriptLink({ id }: { id: string }) {
         event.stopPropagation();
         navigate(`/scripts/${id}`);
       }}
-      className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary hover:bg-hover hover:text-fg"
+      className="flex size-[22px] shrink-0 items-center justify-center rounded-full bg-raised text-secondary hover:bg-hover hover:text-fg"
     >
       <FileText size={12} />
-      Script
     </button>
   );
 }
 
-/** What a script is, in its row's status: its kind of video, and one script or a compilation of several videos ("Bodycam compilation"). */
-function ScriptKind({ script }: { script: WriterScriptRow }) {
-  const style = STYLES.find((option) => option.value === script.style)?.label;
-  const label = style === undefined ? (script.compilation ? "Compilation" : "Script") : `${style} ${script.compilation ? "compilation" : "script"}`;
-  const Icon = script.compilation ? Files : FileText;
+/** A project's category: its kind of video, one label with "Compilation" when it's over several videos ("Bodycam Compilation"). */
+function Category({ style, compilation = false }: { style?: Style | null; compilation?: boolean }) {
+  const label = STYLES.find((option) => option.value === style)?.label ?? "";
+  const text = compilation ? `${label} Compilation`.trim() : label;
   return (
-    <span title={label} className="flex h-[22px] min-w-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary">
-      <Icon size={12} className="shrink-0" />
-      <span className="truncate">{label}</span>
+    <span role="cell" className="truncate text-[13px] text-secondary" title={text || undefined}>
+      {text}
+    </span>
+  );
+}
+
+/** What a row is: a script, an edit, or a subtitled video. */
+function Type({ kind }: { kind: "script" | "edit" | "subtitles" }) {
+  const [Icon, label] = kind === "script" ? [FileText, "Script"] : kind === "edit" ? [Film, "Edit"] : [Captions, "Subtitles"];
+  return (
+    <span role="cell" className="flex min-w-0 items-center gap-1.5 text-[13px] text-secondary">
+      <Icon size={13} className="shrink-0" />
+      {label}
     </span>
   );
 }
@@ -1217,27 +1230,27 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
         </span>
         <StartedBy by={script.createdBy ?? undefined} size={24} className="ml-auto shrink-0" />
       </div>
+      <Category style={script.style} compilation={script.compilation} />
+      <Type kind="script" />
       <div role="cell" className="flex min-w-0 items-center gap-1">
         {importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (its row opens the import).
           <span className="flex min-w-0 items-center gap-2" title={importing.step}>
-            <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-raised">
+            <span className="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-raised">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
             <span className="shrink-0 text-[12px] text-fg tabular">{Math.round(Math.max(0, Math.min(100, importing.percent)))}%</span>
             {importing.step && <span className="min-w-0 truncate text-[12px] text-muted">{importing.step}</span>}
           </span>
         ) : importing ? (
-          <span className={cx("flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium tabular", importing.stopped ? "text-warning" : "text-info")}>{importing.word}</span>
+          <span className={cx("truncate text-[13px] tabular", importing.stopped ? "text-warning" : "text-info")}>{importing.word}</span>
+        ) : writing ? (
+          <span className="text-[13px] text-info">Writing…</span>
         ) : (
-          <ScriptKind script={script} />
-        )}
-        {writing && !importing && <span className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-info">Writing</span>}
-        {/* Its next step, as a button of its own at the end of the status. */}
-        {!importing && !writing && (
-          <Button size="sm" className="ml-auto shrink-0" disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))}>
-            {starting ? "Starting…" : script.built ? "Start the edit" : "Write the script"}
-          </Button>
+          // Its next step, quiet until the row is under the pointer (its section already says the stage).
+          <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className="truncate text-[13px] text-muted transition-colors group-hover:text-fg hover:underline hover:underline-offset-[3px] disabled:opacity-60">
+            {starting ? "Starting…" : script.built ? "Start the edit →" : "Write the script →"}
+          </button>
         )}
       </div>
       <span role="cell" className="text-right text-[13px] text-secondary tabular">
@@ -1274,6 +1287,8 @@ function CloudTableRow({ project, onChanged }: { project: CloudProject; onChange
           </span>
           <StartedBy by={project.created_by} projectId={project.id} size={24} className="ml-auto shrink-0" />
         </div>
+        <Category style={summary.style} />
+        <Type kind={summary.subtitles ? "subtitles" : "edit"} />
         <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
           {project.holder && <CloudBadge editor={project.holder} />}
           <span className="flex items-center gap-1 text-[12px] text-faint" title="Not on this Mac yet: opening it downloads it">

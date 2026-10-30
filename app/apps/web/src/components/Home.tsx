@@ -153,7 +153,7 @@ export function Home() {
   const projectRows: Listed[] = [
     ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true) })),
+    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true), here: localScripts.some((local) => local.id === one.id) })),
   ].sort((a, b) => b.at - a.at);
   const subtitledRows: Listed[] = [
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
@@ -314,7 +314,7 @@ type View = "needs" | "all" | "subtitled";
 type Listed =
   | { at: number; local: ProjectSummary; cloud: null; script: WriterScriptRow | null }
   | { at: number; local: null; cloud: CloudProject; script: WriterScriptRow | null }
-  | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing; writing?: boolean };
+  | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing; writing?: boolean; here?: boolean };
 
 /** A script's import while it isn't done: its word for it ("Importing 40%", "Stopped"). */
 type Importing = { word: string; stopped: boolean; percent?: number; step?: string };
@@ -1082,7 +1082,7 @@ function ProjectTable({
     ) : row.cloud !== null ? (
       <CloudTableRow project={row.cloud} script={row.script} onChanged={onChanged} />
     ) : (
-      <ScriptTableRow script={row.script} importing={row.importing} writing={row.writing === true} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
+      <ScriptTableRow script={row.script} importing={row.importing} writing={row.writing === true} here={row.here === true} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
     );
   // One stage (or the subtitled videos): newest first, by when they changed.
   const groups = !grouped
@@ -1219,8 +1219,50 @@ function Type({ kind }: { kind: "script" | "edit" | "subtitles" }) {
 }
 
 /** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
-function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; onChanged: () => void; onImport?: () => void }) {
+function ScriptTableRow({ script, importing, writing, here, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; here: boolean; onChanged: () => void; onImport?: () => void }) {
   const [starting, setStarting] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  // Its ⋯, as an edit's: open it, and (when this Mac has it) rename or delete it.
+  const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    toggleMenu(
+      event.currentTarget,
+      [
+        { label: "Open script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) },
+        ...(here
+          ? ([
+              { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(script.title) },
+              { separator: true },
+              { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
+            ] satisfies MenuItem[])
+          : []),
+      ],
+      { width: 180 },
+    );
+  };
+  const rename = async () => {
+    const title = renaming?.trim() ?? "";
+    setRenaming(null);
+    if (title === "" || title === script.title) return;
+    try {
+      const writer = await import("../writer/api");
+      await writer.renameScript(script.id, title);
+      onChanged();
+    } catch (error) {
+      useEditor.getState().toastError(error, `rename “${script.title}”`);
+    }
+  };
+  const remove = async () => {
+    setDeleting(false);
+    try {
+      const writer = await import("../writer/api");
+      await writer.deleteScript(script.id);
+      onChanged();
+    } catch (error) {
+      useEditor.getState().toastError(error, `delete “${script.title}”`);
+    }
+  };
   // Ready to script: Claude writes it (as the script page's Build the script does), followed on its page.
   const write = async (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -1250,6 +1292,7 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
     }
   };
   return (
+    <>
     <div role="row" onMouseEnter={() => !onImport && prefetchScript(script.id)} onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
         <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={script.title}>
@@ -1263,7 +1306,7 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
         {importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (the step in its tooltip; its row opens the import).
           <span className={cx(CHIP, "text-info tabular")} title={importing.step}>
-            <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-line">
+            <span className="h-1 min-w-10 flex-1 overflow-hidden rounded-full bg-line">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
             {Math.floor(Math.max(0, Math.min(100, importing.percent)))}%
@@ -1292,8 +1335,49 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
       <span role="cell" className="text-right text-[13px] text-secondary" title={script.updatedBy ? `by ${script.updatedBy}` : undefined}>
         {ago(script.updatedAt)}
       </span>
-      <span />
+      <button
+        title="More"
+        onClick={menu}
+        className="flex size-7 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
+      >
+        <Ellipsis size={15} />
+      </button>
     </div>
+      <Modal open={renaming !== null} onClose={() => setRenaming(null)} width={420}>
+        <form
+          className="p-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void rename();
+          }}
+        >
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Rename script</h2>
+          <input autoFocus value={renaming ?? ""} maxLength={180} onChange={(event) => setRenaming(event.target.value)} className="mt-4 h-9 w-full rounded-md border border-line bg-panel px-3 text-[14px] text-fg outline-none focus:border-line-strong" />
+          <div className="mt-[22px] flex justify-end gap-2">
+            <Button variant="subtle" type="button" onClick={() => setRenaming(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!renaming?.trim() || renaming.trim() === script.title}>
+              Rename
+            </Button>
+          </div>
+        </form>
+      </Modal>
+      <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
+        <div className="p-6">
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Delete “{script.title}”?</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">The script, its transcript, preview and narration are deleted, for everyone on the team.</p>
+          <div className="mt-[22px] flex justify-end gap-2">
+            <Button variant="subtle" onClick={() => setDeleting(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void remove()}>
+              Delete
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 

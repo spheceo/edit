@@ -92,11 +92,13 @@ def review(job, make):
         except Exception:
             pass
         raise
+    finally:
+        # The pieces go whether it worked or not (a failed review left 1.8 GB of them, Oct 29).
+        try:
+            listed = s3.list_objects_v2(Bucket=bucket, Prefix=temp + "/")
+            if listed.get("Contents"):
+                s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": one["Key"]} for one in listed["Contents"]]})
+        except Exception:
+            pass
     s3.copy({"Bucket": bucket, "Key": job["source_key"]}, bucket, job["full_key"])
-    try:
-        listed = s3.list_objects_v2(Bucket=bucket, Prefix=temp + "/")
-        if listed.get("Contents"):
-            s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": one["Key"]} for one in listed["Contents"]]})
-    except Exception:
-        pass
     return {**result, "pieces": len(pieces), "seconds": time.monotonic() - started}

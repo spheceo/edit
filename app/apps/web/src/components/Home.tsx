@@ -359,8 +359,8 @@ const STYLE_NOTES: Record<Style, string> = {
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
 
-/** Every status in Home's table looks alike: one pill, its icon, a word or two of about the same length (Write script, Not exported, 7 comments, Cloud only), its colour saying how much it matters; each as wide as the column (the widest of them), so they line up without empty tails. */
-const CHIP = "flex h-[22px] min-w-0 flex-1 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium whitespace-nowrap";
+/** Every status in Home's table looks alike: one pill, its icon, a word or two of about the same length (Write script, Not exported, 7 comments, Cloud only), its colour saying how much it matters; each as wide as the column (the widest of them) with its words centred, so they line up as one even column. */
+const CHIP = "flex h-[22px] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full bg-raised px-2.5 text-[12px] leading-none font-medium whitespace-nowrap";
 
 interface NoticeProps {
   tone: "warn" | "bad" | "info";
@@ -1279,7 +1279,7 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
         {importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (the step in its tooltip; its row opens the import).
           <span className={cx(CHIP, "text-info tabular")} title={importing.step}>
-            <span className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-line">
+            <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-line">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
             {Math.floor(Math.max(0, Math.min(100, importing.percent)))}%

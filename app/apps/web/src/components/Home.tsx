@@ -123,6 +123,16 @@ export function Home() {
     return edit !== null ? [[edit, one] as const] : [];
   }));
   const scriptOnly = scripts.filter((one) => editOf(one) === null);
+  // A script still importing (running, stopped or waiting on a choice) isn't
+  // a script yet: it's in Importing, with how far it got (the user, Oct 30:
+  // "until the first prompt is kicked off the project isn't a Script project
+  // it's still in the importing phase").
+  const importingNow = new Map<string, Importing>();
+  for (const one of localScripts) {
+    if (one.status === "processing") importingNow.set(one.id, { word: `Importing ${Math.round(one.progress ?? 0)}%`, stopped: false });
+    else if (one.status === "error" || one.status === "needs_choice") importingNow.set(one.id, { word: one.status === "needs_choice" ? "Waiting on a choice" : "Stopped", stopped: true });
+  }
+  for (const one of writing) importingNow.set(one.id, { word: `Importing ${Math.round(one.percent)}%`, stopped: false });
   const count = (projects?.length ?? 0) + cloudOnly.length + scriptOnly.length;
 
   // What the search and filters keep.
@@ -139,7 +149,7 @@ export function Home() {
   const projectRows: Listed[] = [
     ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined)).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one })),
+    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined)).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one, importing: importingNow.get(one.id) })),
   ].sort((a, b) => b.at - a.at);
   const subtitledRows: Listed[] = [
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
@@ -274,7 +284,7 @@ export function Home() {
             <ImportDialog id={watching} writing={writing} issues={issues} onClose={() => setWatching(null)} />
             {rows.length > 0 ? (
               // Edits grouped by stage, script to finished video.
-              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits} statuses={statuses} importing={new Set(writing.map((one) => one.id))} onImport={setWatching} />
+              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits} statuses={statuses} onImport={setWatching} />
             ) : searching ? (
               <p className="mt-16 text-center text-muted">Nothing matches “{query.trim()}”.</p>
             ) : view === "needs" && stoppedScripts === 0 ? (
@@ -300,7 +310,10 @@ type View = "needs" | "all" | "subtitled";
 type Listed =
   | { at: number; local: ProjectSummary; cloud: null; script: WriterScriptRow | null }
   | { at: number; local: null; cloud: CloudProject; script: WriterScriptRow | null }
-  | { at: number; local: null; cloud: null; script: WriterScriptRow };
+  | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing };
+
+/** A script's import while it isn't done: its word for it ("Importing 40%", "Stopped"). */
+type Importing = { word: string; stopped: boolean };
 
 /**
  * Where a project is on its way, script to finished video: Home lists them by
@@ -320,7 +333,7 @@ const STAGES: { value: Stage; label: string }[] = [
 ];
 
 function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
-  if (row.local === null && row.cloud === null) return row.script.built ? "ready" : "scripting";
+  if (row.local === null && row.cloud === null) return row.importing ? "importing" : row.script.built ? "ready" : "scripting";
   if (state === undefined) return "editing";
   if (state.importing !== null) return "importing";
   if (state.approved !== null) return "done";
@@ -1036,7 +1049,6 @@ function ProjectTable({
   subtitled,
   grouped,
   statuses,
-  importing,
   onImport,
 }: {
   rows: Listed[];
@@ -1046,8 +1058,7 @@ function ProjectTable({
   /** A search across stages: each stage's matches under its name. */
   grouped: boolean;
   statuses: Record<string, ProjectStatus>;
-  /** Scripts still importing: their row opens the import over Home. */
-  importing: Set<string>;
+  /** Opens a script's import over Home (a script still importing). */
   onImport: (id: string) => void;
 }) {
   const idOf = (row: Listed) => row.local?.id ?? row.cloud?.id ?? `script-${row.script!.id}`;
@@ -1076,7 +1087,7 @@ function ProjectTable({
     ) : row.cloud !== null ? (
       <CloudTableRow project={row.cloud} onChanged={onChanged} />
     ) : (
-      <ScriptTableRow script={row.script} onChanged={onChanged} onImport={importing.has(row.script.id) ? () => onImport(row.script.id) : undefined} />
+      <ScriptTableRow script={row.script} importing={row.importing} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
     );
   // One stage (or the subtitled videos): newest first, by when they changed.
   const groups = !grouped
@@ -1189,7 +1200,7 @@ function ScriptLink({ id }: { id: string }) {
 }
 
 /** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
-function ScriptTableRow({ script, onChanged, onImport }: { script: WriterScriptRow; onChanged: () => void; onImport?: () => void }) {
+function ScriptTableRow({ script, importing, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; onChanged: () => void; onImport?: () => void }) {
   const [starting, setStarting] = useState(false);
   const start = async (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -1214,11 +1225,16 @@ function ScriptTableRow({ script, onChanged, onImport }: { script: WriterScriptR
         <StartedBy by={script.createdBy ?? undefined} size={24} className="ml-auto shrink-0" />
       </div>
       <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
-        <span className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary">
-          <FileText size={12} />
-          Script
-        </span>
-        {script.built && (
+        {importing ? (
+          // Still importing: how far, or that it stopped (its row opens the import).
+          <span className={cx("flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium tabular", importing.stopped ? "text-warning" : "text-info")}>{importing.word}</span>
+        ) : (
+          <span className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary">
+            <FileText size={12} />
+            Script
+          </span>
+        )}
+        {script.built && !importing && (
           <button onClick={(event) => void start(event)} disabled={starting} className="flex h-[22px] shrink-0 items-center rounded-full px-2 text-[12px] font-medium text-info hover:bg-hover disabled:opacity-60">
             {starting ? "Starting…" : "Start the edit"}
           </button>

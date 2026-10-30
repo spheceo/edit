@@ -386,7 +386,7 @@ function Notice({ tone, text, title }: NoticeProps) {
 }
 
 /** What a project’s card says about it, and what can be done to it (rename, delete, move to cloud). */
-function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boolean, status?: CloudStatus, remote?: CloudProject) {
+function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boolean, status?: CloudStatus, remote?: CloudProject, script: string | null = null) {
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [moving, setMoving] = useState(false);
@@ -444,6 +444,8 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     toggleMenu(
       event.currentTarget,
       [
+        // Made from a script: that script, its other mode.
+        ...(script !== null ? [{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script}`) }] : []),
         { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(true) },
         // Shared from here, many projects at once (an export that would wait here goes to the cloud).
         ...(project.problem ? [] : [{ label: "Share for review", icon: <Share2 size={14} />, onSelect: () => void share() }]),
@@ -1131,7 +1133,7 @@ function ProjectTable({
 /** A project on this Mac: its name, what's worth a word about it, and its ⋯. */
 function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitled: boolean; script?: WriterScriptRow | null }) {
   const { project, onChanged, remote, state } = props;
-  const card = useProject(project, onChanged, props.cloudOn, props.status, remote);
+  const card = useProject(project, onChanged, props.cloudOn, props.status, remote, script?.id ?? null);
   return (
     <>
       <div role="row" onClick={card.open} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
@@ -1143,7 +1145,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
           )}
         </div>
         <Category style={project.style} compilation={script?.compilation} />
-        <Type kind={project.subtitles ? "subtitles" : "edit"} script={script?.id ?? null} />
+        <Type kind={project.subtitles ? "subtitles" : "edit"} />
         <CreatorCell by={remote?.created_by ?? project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
           {/* Where its files are, in a slot of its own so the statuses line up, then its one status: what's wrong with it, else where it stands. */}
@@ -1180,23 +1182,6 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
   );
 }
 
-/** The project's script, a click away: its other mode (an icon beside its Type). */
-function ScriptLink({ id }: { id: string }) {
-  return (
-    <button
-      title="Open its script"
-      onMouseEnter={() => prefetchScript(id)}
-      onClick={(event) => {
-        event.stopPropagation();
-        navigate(`/scripts/${id}`);
-      }}
-      className="-my-1 flex size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-hover hover:text-fg"
-    >
-      <FileText size={12} />
-    </button>
-  );
-}
-
 /** A project's category: its kind of video, one label with "Compilation" when it's over several videos ("Bodycam Compilation"). */
 function Category({ style, compilation = false }: { style?: Style | null; compilation?: boolean }) {
   const label = STYLES.find((option) => option.value === style)?.label ?? "";
@@ -1222,14 +1207,12 @@ function CreatorCell({ by, projectId }: { by: Creator | null | undefined; projec
 }
 
 /** What a row is: a script, an edit, or a subtitled video. */
-function Type({ kind, script = null }: { kind: "script" | "edit" | "subtitles"; script?: string | null }) {
+function Type({ kind }: { kind: "script" | "edit" | "subtitles" }) {
   const [Icon, label] = kind === "script" ? [FileText, "Script"] : kind === "edit" ? [Film, "Edit"] : [Captions, "Subtitles"];
   return (
     <span role="cell" className="flex min-w-0 items-center gap-1.5 text-[13px] text-secondary">
       <Icon size={13} className="shrink-0" />
       {label}
-      {/* An edit made from a script: that script, a click away. */}
-      {script !== null && <ScriptLink id={script} />}
     </span>
   );
 }
@@ -1336,7 +1319,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
           </span>
         </div>
         <Category style={summary.style} compilation={script?.compilation} />
-        <Type kind={summary.subtitles ? "subtitles" : "edit"} script={script?.id ?? null} />
+        <Type kind={summary.subtitles ? "subtitles" : "edit"} />
         <CreatorCell by={project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
           {project.holder ? (
@@ -1358,7 +1341,14 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
           title="More"
           onClick={(event) => {
             event.stopPropagation();
-            toggleMenu(event.currentTarget, [{ label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) }], { width: 160 });
+            toggleMenu(
+              event.currentTarget,
+              [
+                ...(script !== null ? ([{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) }, { separator: true }] satisfies MenuItem[]) : []),
+                { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
+              ],
+              { width: 180 },
+            );
           }}
           className="flex size-6 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
         >

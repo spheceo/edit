@@ -12,6 +12,8 @@ import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
 import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
+import { IdeasTab, NewIdea, useIdeasHome } from "../ideas/home";
+import { makesIdeas } from "../lib/ideas";
 import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
 import { useKept } from "../lib/kept";
@@ -79,9 +81,31 @@ export function Home() {
   const [query, setQuery] = useState("");
   // One stage at a time (or the subtitled videos), remembered on this browser.
   const [view, setView] = useState<View>(() => {
+    // /ideas is Home on its Ideas tab (the idea page's way back).
+    if (window.location.pathname === "/ideas") return "ideas";
     const saved = localStorage.getItem(VIEW);
-    return saved === "all" || saved === "subtitled" ? saved : "needs";
+    return saved === "all" || saved === "subtitled" || saved === "ideas" ? saved : "needs";
   });
+  // Ideas (Oct 31): the team's repackaging, a tab of Home's for those who work on them.
+  const ideasAllowed = makesIdeas(account);
+  const [ideasHome, refreshIdeas, ideasError] = useIdeasHome(ideasAllowed);
+  const [ideaOpen, setIdeaOpen] = useState(false);
+  const ideasShown = ideasAllowed && view === "ideas";
+  // As the other tabs count their lists: every idea, and the cards waiting on changes.
+  const ideasCount = (ideasHome?.changes.length ?? 0) + (ideasHome?.ideas.length ?? 0);
+  // An approved idea's "Write the script": New project opened with its title and links.
+  const [start, setStart] = useState<NewProjectStart | null>(null);
+  useEffect(() => {
+    const given = sessionStorage.getItem("edit.newProject");
+    if (given === null) return;
+    sessionStorage.removeItem("edit.newProject");
+    try {
+      setStart(JSON.parse(given) as NewProjectStart);
+      setCreating(true);
+    } catch {
+      // Not ours.
+    }
+  }, []);
   const [style, setStyle] = useState<Style | null>(null);
 
   // Imports, agents and shares under way are followed every few seconds (many projects at once).
@@ -202,7 +226,7 @@ export function Home() {
   });
   const stoppedScripts = issues.filter((issue) => !writing.some((one) => one.id === issue.id)).length;
   // A search looks through every project; otherwise the tab's.
-  const searching = words !== "";
+  const searching = words !== "" && !ideasShown;
   const rows = !showEdits ? subtitledRows : searching || view === "all" ? projectRows : needsYou;
   const cardProps = (project: ProjectSummary) => ({
     project,
@@ -215,6 +239,8 @@ export function Home() {
   const choose = (value: View) => {
     localStorage.setItem(VIEW, value);
     setView(value);
+    if (value === "ideas") navigate("/ideas", true);
+    else if (window.location.pathname === "/ideas") navigate("/", true);
   };
 
   return (
@@ -222,12 +248,12 @@ export function Home() {
       <div className="mx-auto max-w-[1120px] px-8 pt-8 pb-16">
         <header className="flex items-center gap-4">
           <Logo size={22} />
-          {projects && count > 0 && (
+          {projects && (count > 0 || ideasShown) && (
             <label className="ml-4 flex h-[34px] max-w-[420px] flex-1 items-center gap-2 rounded-lg border border-line-strong bg-bg px-2.5 text-muted focus-within:border-muted">
               <Search size={14} />
               <input
                 value={query}
-                placeholder="Search projects"
+                placeholder={ideasShown ? "Search ideas" : "Search projects"}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={(event) => event.key === "Escape" && setQuery("")}
                 className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-faint"
@@ -237,16 +263,22 @@ export function Home() {
           <div className="ml-auto flex items-center gap-1.5">
             <UpdateButton />
             {/* One main action a screen, in white (the user, Oct 30): on an empty Home, the empty state's button is it. */}
-            <Button variant={projects && count === 0 ? "subtle" : "light"} onClick={() => setCreating(true)}>
-              <Plus size={15} strokeWidth={2.2} /> New project
-            </Button>
+            {ideasShown ? (
+              <Button variant="light" onClick={() => setIdeaOpen(true)}>
+                <Plus size={15} strokeWidth={2.2} /> New idea
+              </Button>
+            ) : (
+              <Button variant={projects && count === 0 ? "subtle" : "light"} onClick={() => setCreating(true)}>
+                <Plus size={15} strokeWidth={2.2} /> New project
+              </Button>
+            )}
             <AppMenu />
           </div>
         </header>
 
         <SetupCard />
 
-        {projects && count === 0 && (
+        {projects && count === 0 && !ideasShown && (
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -264,11 +296,16 @@ export function Home() {
               <Button variant="light" onClick={() => setCreating(true)}>
                 <Plus size={15} strokeWidth={2.2} /> New project
               </Button>
+              {ideasAllowed && (
+                <Button variant="subtle" onClick={() => choose("ideas")}>
+                  Ideas
+                </Button>
+              )}
             </div>
           </motion.div>
         )}
 
-        {projects && count > 0 && (
+        {projects && (count > 0 || ideasShown) && (
           <>
             <div className="mt-8 flex flex-wrap items-center gap-2">
               {/* The kit's segmented control (.sp-seg). */}
@@ -279,6 +316,7 @@ export function Home() {
                     ["needs", "Needs you", needsYou.length + stoppedScripts] as [View, string, number],
                     ["all", "All projects", projectRows.length] as [View, string, number],
                     ["subtitled", "Subtitled", subtitledRows.length] as [View, string, number],
+                    ...(ideasAllowed ? [["ideas", "Ideas", ideasCount] as [View, string, number]] : []),
                   ] as [View, string, number][]
                 ).map(([value, label, total]) => (
                   <button
@@ -286,7 +324,7 @@ export function Home() {
                     onClick={() => choose(value)}
                     className={cx(
                       "flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors",
-                      view === value && !searching ? "bg-active text-fg" : "text-muted hover:text-fg",
+                      view === value && (!searching || value === "ideas") ? "bg-active text-fg" : "text-muted hover:text-fg",
                     )}
                   >
                     {label} <span className="font-normal text-faint tabular">{total}</span>
@@ -298,7 +336,7 @@ export function Home() {
                   {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
                 </span>
               )}
-              <div className="ml-auto flex gap-1.5">
+              <div className={cx("ml-auto flex gap-1.5", ideasShown && "hidden")}>
                 {STYLES.map((option) => (
                   <button
                     key={option.value}
@@ -315,6 +353,10 @@ export function Home() {
               </div>
             </div>
 
+            {ideasShown ? (
+              <IdeasTab home={ideasHome} error={ideasError} query={query} onNew={() => setIdeaOpen(true)} />
+            ) : (
+            <>
             <Imports writing={writing} issues={issues} onOpen={setWatching} />
             <ImportDialog id={watching} writing={writing} issues={issues} onClose={() => setWatching(null)} />
             {rows.length > 0 ? (
@@ -330,16 +372,22 @@ export function Home() {
             ) : view === "needs" ? null : (
               <p className="mt-16 text-center text-muted">Nothing here.</p>
             )}
+            </>
+            )}
           </>
         )}
       </div>
-      <NewProject open={creating} onClose={() => setCreating(false)} only={style} />
+      <NewProject open={creating} onClose={() => { setCreating(false); setStart(null); }} only={style} start={start} />
+      {ideasAllowed && <NewIdea open={ideaOpen} onClose={() => setIdeaOpen(false)} onMade={refreshIdeas} />}
     </div>
   );
 }
 
-/** What Home lists: what needs someone, every project, or the subtitled videos. */
-type View = "needs" | "all" | "subtitled";
+/** What Home lists: what needs someone, every project, the subtitled videos, or the ideas. */
+type View = "needs" | "all" | "subtitled" | "ideas";
+
+/** New project opened with a title, its links and a kind (an approved idea's Write the script). */
+type NewProjectStart = { title: string; text: string; style: Style };
 
 /** A row of Home's table: a project on this Mac, one only in the cloud, or a script with no edit yet; `script`: the script it's made from. */
 type Listed =
@@ -1612,7 +1660,7 @@ type Source = { url: string; title: string; durationMs: number | null; reuse: bo
  * through a script). The import runs on Home, then the script workflow or the
  * edit workflow starts by itself (the user, Oct 30).
  */
-function NewProject({ open, onClose, only = null }: { open: boolean; onClose: () => void; only?: Style | null }) {
+function NewProject({ open, onClose, only = null, start = null }: { open: boolean; onClose: () => void; only?: Style | null; start?: NewProjectStart | null }) {
   const account = useAccount((state) => state.account);
   const allowed = editStyles(account);
   const writes = writesScripts(account);
@@ -1639,15 +1687,16 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
   // A fresh dialog each time.
   useEffect(() => {
     if (!open) return;
-    setTitle("");
-    setText("");
+    setTitle(start?.title ?? "");
+    setText(start?.text ?? "");
     setPrompt("");
     setSources(null);
     setPreview(null);
     setError(null);
-    setPicked(false);
+    setPicked(start !== null);
     setMode(writes ? "write" : "edit");
-    if (only !== null) setStyle(only);
+    if (start !== null) setStyle(start.style);
+    else if (only !== null) setStyle(only);
   }, [open]);
 
   // Writing: the paste read into its sources (a Trello card into its videos), each checked, reuses ticked.

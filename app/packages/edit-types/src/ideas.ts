@@ -143,6 +143,8 @@ export type IdeaSummary = {
   changes: number;
   skipped: string | null;
   duplicate: string | null;
+  /** What it's made from, by key: a video's id, an article's link (so a second idea of the same case is caught). */
+  keys?: string[];
 };
 
 /** An idea as Home lists it. */

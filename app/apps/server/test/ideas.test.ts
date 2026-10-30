@@ -10,7 +10,7 @@ import type { Idea } from "@edit/types/ideas";
 import * as board from "../src/ideas/board.ts";
 import * as cloud from "../src/ideas/cloud.ts";
 import { cleanGuide, cleanTitle, closest, guideProblem, lengthStyle, summaryProblem, titleProblem } from "../src/ideas/policy.ts";
-import { linksIn, mayIdeas, readiness } from "../src/ideas/routes.ts";
+import { applyPatch, linksIn, mayIdeas, readiness } from "../src/ideas/routes.ts";
 import * as run from "../src/ideas/run.ts";
 import * as sources from "../src/ideas/sources.ts";
 import * as live from "../src/writer/live.ts";
@@ -124,6 +124,23 @@ test("what was pasted gives each link once (a video by its id), and an idea need
   expect(mayIdeas(new Set(["edit.interrogation"]))).toBe(false);
   expect(mayIdeas(new Set(["ideas.interrogation"]))).toBe(true);
   expect(mayIdeas(null)).toBe(true);
+});
+
+test("a person's change: their reworded title stays the main one, theirs by name, and an idea is ready only with titles, a guide and its case", () => {
+  const idea = videoIdea("i10-test");
+  idea.titles = [{ id: "a", text: "First Title", by: "claude", at: 0 }, { id: "b", text: "Main Title", by: "claude", at: 0 }];
+  idea.main = "Main Title";
+  applyPatch(idea, { titles: [{ id: "a", text: "First Title" }, { id: "b", text: "Main Title Reworded" }] }, "Sphe");
+  expect(idea.main).toBe("Main Title Reworded");
+  expect(idea.titles.map((one) => [one.id, one.by])).toEqual([["a", "claude"], ["b", "Sphe"]]);
+  applyPatch(idea, { titles: [{ id: "a", text: "First Title" }] }, "Sphe");
+  expect(idea.main).toBe("First Title");
+  expect(() => applyPatch(idea, { status: "ready" }, "Sphe")).toThrow("Not ready: a thumbnail guide.");
+  applyPatch(idea, { thumbnailGuide: "We use the interrogation room and have the mom in the middle" }, "Sphe");
+  expect([idea.thumbnailGuide, idea.guideBy]).toEqual(["we use the interrogation room and have the mom in the middle", "Sphe"]);
+  applyPatch(idea, { status: "ready" }, "Sphe");
+  expect(idea.status).toBe("ready");
+  expect(() => applyPatch(idea, { footage: "https://evil.example/x" }, "Sphe")).toThrow("Google Drive");
 });
 
 test("a change overtaken by another Mac's is made again on top of it", async () => {

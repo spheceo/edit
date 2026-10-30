@@ -75,6 +75,9 @@ export async function change(id: string, by: string, change: (idea: Idea) => boo
   }
 }
 
+/** A source's key: a video by its id, an article by its link. */
+export const keyOf = (source: Idea["sources"][number]): string => (source.kind === "youtube" ? `youtube:${source.videoId}` : source.url);
+
 /** An idea's row in a list. */
 export function summarize(idea: Idea): IdeaSummary {
   const video = idea.sources.find((one) => one.kind === "youtube");
@@ -93,5 +96,6 @@ export function summarize(idea: Idea): IdeaSummary {
     changes: idea.changes?.comments.length ?? 0,
     skipped: idea.skipped,
     duplicate: idea.duplicate?.name ?? null,
+    keys: idea.sources.map(keyOf),
   };
 }

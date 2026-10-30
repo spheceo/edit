@@ -130,10 +130,12 @@ type Patch = {
 };
 
 /** A person's change to an idea: their titles and guide are theirs (Claude's next fresh run keeps them). */
-function applyPatch(idea: Idea, patch: Patch, who: string): void {
+export function applyPatch(idea: Idea, patch: Patch, who: string): void {
   if (patch.titles !== undefined) {
     if (!Array.isArray(patch.titles) || patch.titles.length > 20) throw bad("titles must be at most 20.");
     const before = new Map(idea.titles.map((one) => [one.id, one]));
+    // The main title followed by its id: rewording it keeps it the main one.
+    const mainId = idea.titles.find((one) => one.text === idea.main)?.id;
     const next: IdeaTitle[] = [];
     for (const given of patch.titles) {
       const text = cleanTitle(typeof given?.text === "string" ? given.text : "");
@@ -143,6 +145,8 @@ function applyPatch(idea: Idea, patch: Patch, who: string): void {
       next.push(was !== undefined && was.text === text ? was : { id: was?.id ?? shortId(), text, by: who, at: Date.now() });
     }
     idea.titles = next;
+    const renamed = next.find((one) => one.id === mainId);
+    if (renamed !== undefined) idea.main = renamed.text;
     if (idea.main !== null && !next.some((one) => one.text === idea.main)) idea.main = next[0]?.text ?? null;
     if (idea.main === null) idea.main = next[0]?.text ?? null;
   }
@@ -282,11 +286,20 @@ export function routes(router: Router<App>): void {
       if (footage !== "" && !/^https:\/\/(drive|docs)\.google\.com\//.test(footage)) throw bad("The footage is a Google Drive link.");
       const who = by();
       const made: { id: string; link: string }[] = [];
-      const refused: { link: string; why: string }[] = [];
+      const refused: { link: string; why: string; id?: string }[] = [];
+      // A case someone already has as an idea is theirs to open, not a second idea.
+      const existing = await cloud.list().catch((error: unknown) => failed(error));
+      const had = new Map(existing.flatMap((row) => (row.summary.keys ?? []).map((key) => [key, row] as const)));
       // One idea a link, each repackaged as it's made (three at a time on this Mac).
       await Promise.all(
         links.map(async (link) => {
           try {
+            const video = sources.videoIdOf(link);
+            const known = had.get(video !== null ? `youtube:${video}` : link);
+            if (known !== undefined) {
+              refused.push({ link, why: `It's already an idea: “${known.summary.title}”${known.createdBy ? `, started by ${known.createdBy.name}` : ""}.`, id: known.id });
+              return;
+            }
             const source = await sourceOf(link);
             const idea = run.fresh(newId(), who, { sources: [source], steer, wantsSummary: body.summary === true, footage: links.length === 1 ? footage : "" });
             await cloud.commit(idea, 0, who);
@@ -393,7 +406,7 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/ideas/{id}/send", async (context: Context) => {
       guard();
-      const body = await readJson<{ lane?: unknown }>(context);
+      const body = await readJson<{ lane?: unknown; anyway?: unknown }>(context);
       if (typeof body.lane !== "string") throw bad("Choose the lane it goes to.");
       const who = by();
       try {
@@ -403,8 +416,9 @@ export function routes(router: Router<App>): void {
         if (missing.length > 0) throw bad(`Not ready: ${missing.join(", ")}.`);
         if (found.idea.card !== null && found.idea.status === "sent") throw bad("This idea is already on the board: update its card instead.");
         if (run.isRunning(found.idea.id)) throw bad("Claude is still working on this idea.");
-        // The board checked again first: someone may have put the video there since (it fails closed).
-        if (found.idea.card === null && found.idea.duplicate === null) {
+        // The board checked again first: someone may have put the video there since (it fails closed). A
+        // second card for a video already there only when the person says so.
+        if (found.idea.card === null && body.anyway !== true) {
           const ids = found.idea.sources.flatMap((one) => (one.kind === "youtube" ? [one.videoId] : []));
           const hit = Object.values(await board.duplicates(ids))[0];
           if (hit !== undefined) {

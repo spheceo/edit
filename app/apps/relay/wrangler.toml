@@ -6,7 +6,7 @@ compatibility_date = "2026-09-07"
 workers_dev = true
 preview_urls = false
 
-# Secrets: in Infisical (Repack's project, folder /edit-relay; ElevenLabs and Maps values live there directly),
+# Secrets: in Infisical (the platform's project "Platform", dev, folder /edit-relay; CONVEX_* reference /mamagi),
 # pushed with `bun scripts/push-secrets.ts --yes` (dry run without --yes; values on wrangler's
 # stdin, never printed). For `wrangler dev`, apps/relay/.dev.vars, gitignored. Never in this file:
 #   ELEVENLABS_MAIN_KEY, ELEVENLABS_VOICES_KEY, GOOGLE_MAPS_KEY, PROXY_URL (the YouTube proxy, /v1/proxy)

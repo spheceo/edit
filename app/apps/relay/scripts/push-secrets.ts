@@ -1,8 +1,10 @@
 // Pushes edit-relay's secrets from Infisical to the Worker (`wrangler secret put`).
 //
-// Infisical is where every app's configuration lives: Repack's project,
-// folder `/edit-relay`: shared configuration references the root; the
-// ElevenLabs and Maps keys live in this folder directly. This reads it
+// Infisical is where every app's configuration lives: the platform's
+// project ("Platform"), folder `/edit-relay` (copied from Repack's project
+// on 2026-10-30): CONVEX_URL and CONVEX_SERVICE_TOKEN reference prod's
+// `/mamagi`; the rest are values of their own, the shared ones copied from
+// Repack's root, so a rotation there is made here too. This reads it
 // into memory (`infisical export`) and hands each value to wrangler on its
 // stdin: never in an argument, a file or a log. It prints names only.
 //
@@ -16,7 +18,8 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 
-const PROJECT = "cdf4a0c5-eca4-4415-af3a-40871af285f3";
+// The platform's own Infisical project ("Platform"), not Repack's: /edit-relay moved there on 2026-10-30.
+const PROJECT = "979fe56c-c4d0-4809-b64f-5ebc75eeaf05";
 const FOLDER = "/edit-relay";
 const RELAY = join(dirname(new URL(import.meta.url).pathname), "..");
 

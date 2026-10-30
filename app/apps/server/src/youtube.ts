@@ -339,6 +339,92 @@ async function downloadNow(
   throw new Error(`YouTube video ${id} couldn't be downloaded: ${failure}`);
 }
 
+/**
+ * YouTube video `id` streamed into `consume` with no file on this Mac: the
+ * video and its sound merged by yt-dlp's FFmpeg into Matroska on its output,
+ * in the same format, by the same routes (straight, the proxy, the editor's
+ * sign-in) and with the same newer yt-dlp a refusal asks for, as `download`.
+ * `consume` reads `stdout` to its end and waits for `exited` (yt-dlp's exit
+ * code: anything but 0 means what it read was cut short, and it must throw).
+ * A route whose run fails is asked again by the next. Answers what `consume`
+ * answered.
+ */
+export async function streamWith(
+  home: string,
+  id: string,
+  consume: (stdout: ReadableStream<Uint8Array>, exited: Promise<number>, route: string) => Promise<number>,
+): Promise<number> {
+  let binary = await ytdlp(home);
+  const url = `https://www.youtube.com/watch?v=${id}`;
+  const routes = routesFor(await proxyUrl(), 2);
+  let failure = "";
+  let updated = false;
+  for (let attempt = 0; attempt < routes.length; ) {
+    const route = routes[attempt]!;
+    const signIn = route.signIn ? cookieArgs() : [];
+    let stderr = "ERROR: no YouTube sign-in in Chrome on this Mac";
+    if (!route.signIn || signIn.length > 0) {
+      const runtime = runtimeArgs();
+      const proxy = route.proxy;
+      const child = Bun.spawn(
+        [
+          binary,
+          "--no-playlist",
+          "--no-warnings",
+          "--no-progress",
+          "--retries",
+          proxy === null ? "5" : "1",
+          "--fragment-retries",
+          proxy === null ? "5" : "1",
+          "--socket-timeout",
+          "30",
+          "-f",
+          proxy === null ? FORMAT : PROXY_FORMAT,
+          "--downloader",
+          "ffmpeg",
+          "--merge-output-format",
+          "mkv",
+          ...ffmpegArgs(),
+          ...runtime,
+          "-o",
+          "-",
+          ...(proxy === null ? signIn : ["--proxy", proxy]),
+          url,
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: runtimeEnv(runtime) },
+      );
+      const heard = new Response(child.stderr).text();
+      try {
+        const answer = await diag.timeOnAsync("youtube", "youtube: stream", `${id}${said(route)}`, () => consume(child.stdout, child.exited, `YouTube ${id}${said(route)}`));
+        await heard;
+        return answer;
+      } catch (error) {
+        child.kill();
+        stderr = `${await heard}\nERROR: ${diag.messageOf(error)}`;
+      }
+    }
+    failure = errorLine(stderr);
+    if (!updated && outdated(stderr) && binary === join(home, "bin", "yt-dlp")) {
+      updated = true;
+      try {
+        binary = await freshen(binary, true);
+        diag.warn("youtube", `${id}: ${failure}; streaming again with the newest yt-dlp`);
+        routes.splice(attempt + 1, 0, route);
+        attempt += 1;
+        continue;
+      } catch (error) {
+        diag.warn("youtube", `updating yt-dlp: ${diag.messageOf(error)}`);
+      }
+    }
+    const next = nextRoute(routes, attempt, stderr);
+    if (next === null) break;
+    diag.warn("youtube", `${id}: ${failure}; streaming again${said(routes[next]!)}`);
+    await timing.pause(attempt === 0 ? 3000 : 1000);
+    attempt = next;
+  }
+  throw new Error(`YouTube video ${id} couldn't be streamed: ${failure}`);
+}
+
 /** The relay's proxy, asked for once in a while (it's the same for everyone). */
 let fromRelay: { url: string; at: number } | null = null;
 

@@ -14,6 +14,7 @@ import type { App } from "../app.ts";
 import { creator } from "../accounts.ts";
 import * as diag from "../diag.ts";
 import { isFile, join } from "../paths.ts";
+import { isUrl } from "../tools.ts";
 import * as brief from "./brief.ts";
 import * as can from "./can.ts";
 import * as casefiles from "./casefiles.ts";
@@ -28,6 +29,7 @@ import * as parts from "./parts.ts";
 import * as research from "./research.ts";
 import * as reuse from "./reuse.ts";
 import * as storage from "./storage.ts";
+import * as streamed from "./streamed.ts";
 import * as store from "./store.ts";
 import * as transcription from "./transcription.ts";
 import * as trello from "./trello.ts";
@@ -417,6 +419,7 @@ async function run(app: App, dir: string, script: Script): Promise<Script> {
   const name = jobs.named(script.id, script.title);
   const from = script.sourceKind === "file" ? `the file ${script.originalPath.split("/").pop()}` : script.sourceKind === "compilation" ? `${script.sourceUrl.split("\n").length} videos` : `${script.sourceKind} ${script.sourceUrl.split("\n")[0]}`;
   diag.info("writer", `${name}: importing from ${from}`);
+  say(script, "Starting.");
   try {
     const step = await pipeline(app, dir, script);
     const seconds = `${Math.round((Date.now() - began) / 1000)} s`;
@@ -462,9 +465,8 @@ async function pipeline(app: App, dir: string, script: Script): Promise<"done" |
   // The footage.
   let build: Build | null = null;
   let joined = false;
-  if (script.sourceKind === "youtube") await fetchYoutube(app, dir, script);
-  else if (script.sourceKind === "drive" || script.sourceKind === "compilation") {
-    const fetched = script.sourceKind === "drive" ? await fetchDrive(dir, script) : await fetchCompilation(app, dir, script);
+  if (script.sourceKind === "youtube" || script.sourceKind === "drive" || script.sourceKind === "compilation") {
+    const fetched = script.sourceKind === "youtube" ? await fetchYoutube(app, dir, script) : script.sourceKind === "drive" ? await fetchDrive(dir, script) : await fetchCompilation(app, dir, script);
     if (fetched === "paused") return "paused";
     if (fetched !== "one") {
       build = fetched.joined;
@@ -696,12 +698,17 @@ async function audioPreview(dir: string, script: Script, found: media.Streams): 
   };
 }
 
-/** YouTube, once, into Edit's media folder (Edit's downloader: its proxy, retries and the editor's sign-in); the script's folder holds it as `original.mp4`. */
-async function fetchYoutube(app: App, dir: string, script: Script): Promise<void> {
+/**
+ * YouTube: streamed to Edit's originals in the cloud and only its 480p
+ * preview made here (streamed.ts), a case of one recording; else (streaming
+ * off, or a download kept from before) once into Edit's media folder, the
+ * script's folder holding it as `original.mp4`.
+ */
+async function fetchYoutube(app: App, dir: string, script: Script): Promise<Fetched> {
   const dest = join(dir, "original.mp4");
   if (await media.readable(dest)) {
     script.originalPath = dest;
-    return;
+    return "one";
   }
   script.stage = "downloading";
   if (script.title === "YouTube video") {
@@ -709,11 +716,26 @@ async function fetchYoutube(app: App, dir: string, script: Script): Promise<void
     script.title = await youtube.title(app, script.sourceUrl);
     store.write(dir, script);
   }
+  if (streamed.on()) {
+    const proxy = store.proxyPath(dir);
+    const one = script.parts?.length === 1 ? script.parts[0]! : null;
+    if (one !== null && (await previewFits(proxy, one.durationMs))) {
+      script.originalPath = proxy;
+      return { joined: null };
+    }
+    const began = Date.now();
+    const inCloud = await streamed.fromYoutube(app, dir, script.sourceUrl, (bytes) => say(script, `Streaming from YouTube to the cloud: ${Math.round(bytes / 1e6)} MB.`, "downloading", 10));
+    diag.info("writer", `${jobs.named(script.id, script.title)}: YouTube video streamed to the cloud in ${Math.round((Date.now() - began) / 1000)} s`);
+    say(script, "Making the preview.", "downloading", 15);
+    await encodePiece(dir, inCloud.url, jobs.named(script.id, script.title));
+    return { joined: await joinPreview(dir, script, [[script.title, inCloud.url, script.sourceUrl]], "video") };
+  }
   const began = Date.now();
   const shared = await youtube.fetch(app, script.sourceUrl, (percent) => say(script, `Downloading from YouTube: ${Math.floor(percent)}%.`, "downloading", 5 + Math.floor((percent * 14) / 100)));
   script.originalPath = youtube.place(shared, dest);
   diag.info("writer", `${jobs.named(script.id, script.title)}: YouTube video downloaded in ${Math.round((Date.now() - began) / 1000)} s`);
   store.write(dir, script);
+  return "one";
 }
 
 /** One video, from YouTube or a Drive file or folder link, to `dest`: a compilation's, or a reused case's brought in later. One already downloaded is kept. */
@@ -836,12 +858,15 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
   }
   const wanted = parts.wanted(manifest);
   if (wanted.length === 0) throw new Error("No recordings are left to import from this folder.");
-  // Room for the downloads and the joined preview.
+  // Streamed, only the previews take room here (about a tenth of the footage); downloaded, the recordings too.
+  const stream = streamed.on();
   const needed = wanted.reduce((sum, [index, recording]) => {
     const path = parts.driveFile(folder, index, recording);
     return sum + Math.max(recording.size - (isFile(path) ? fs.statSync(path).size : 0), 0);
   }, 0);
-  checkSpace(dir, needed + needed / 5 + 1_000_000_000);
+  checkSpace(dir, stream ? needed / 5 + 1_000_000_000 : needed + needed / 5 + 1_000_000_000);
+  // Each recording's original in the cloud, by its place among the wanted (streamed).
+  const inCloud: (string | null)[] = wanted.map(() => null);
   // Three recordings come down at once; the progress shown is their sum.
   const totalBytes = Math.max(wanted.reduce((sum, [, recording]) => sum + recording.size, 0), 1);
   const pulled = wanted.map(() => 0);
@@ -856,7 +881,22 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
     const dest = parts.driveFile(folder, index, recording);
     let problem: string | null = null;
     const began = Date.now();
-    if (!downloaded(dest, recording)) {
+    if (stream && !downloaded(dest, recording)) {
+      try {
+        const put = await streamed.drive(dir, recording, (bytes) => {
+          pulled[step] = Math.min(bytes, recording.size);
+          report();
+        });
+        const found = await media.streams(put.url).catch(() => null);
+        if (found === null || found.durationMs <= 0 || !(found.video || found.audio)) problem = "Couldn't be read as video or audio, so it was dropped.";
+        else {
+          inCloud[step] = put.url;
+          await encodePiece(dir, put.url, `${jobs.named(script.id, script.title)} · ${recording.name}`);
+        }
+      } catch (error) {
+        problem = diag.scrub(diag.messageOf(error));
+      }
+    } else if (!downloaded(dest, recording)) {
       const onBytes = (bytes: number) => {
         pulled[step] = Math.min(bytes, recording.size);
         report();
@@ -877,7 +917,7 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
         }
       }
     }
-    if (problem === null) {
+    if (problem === null && inCloud[step] === null) {
       const found = await media.streams(dest).catch(() => null);
       if (found === null || found.durationMs <= 0 || !(found.video || found.audio)) {
         fs.rmSync(dest, { force: true });
@@ -885,7 +925,7 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
       }
     }
     // Its piece of the preview, while the other recordings still come down; one recording alone is the footage itself.
-    if (problem === null && wanted.length > 1) await encodePiece(dir, dest, `${jobs.named(script.id, script.title)} · ${recording.name}`);
+    if (problem === null && inCloud[step] === null && wanted.length > 1) await encodePiece(dir, dest, `${jobs.named(script.id, script.title)} · ${recording.name}`);
     pulled[step] = recording.size;
     finished++;
     if (problem === null) diag.info("writer", `${jobs.named(script.id, script.title)}: Drive recording ${finished} of ${wanted.length} ready: ${recording.name} in ${Math.round((Date.now() - began) / 1000)} s`);
@@ -897,19 +937,20 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
   });
   if (failed.length > 0) return failedQuestion(dir, script, failed.sort((a, b) => a[0] - b[0]).map(([, item]) => item), wanted.length, "recordings");
   const [[firstIndex, first]] = wanted as [[number, drive.Recording]];
-  if (wanted.length === 1 && !first.audio) {
+  if (wanted.length === 1 && !first.audio && inCloud[0] === null) {
     script.originalPath = parts.driveFile(folder, firstIndex, first);
     script.parts = [];
     store.write(dir, script);
     return "one";
   }
   // Joined, each recording at the length it actually holds. The recordings stay: each is heard from its own file, and they're the full-quality footage Edit cuts from.
-  const items: [string, string, string | null][] = wanted.map(([index, recording]) => [drive.stem(recording.name), parts.driveFile(folder, index, recording), drive.fileLink(recording.id)]);
+  const items: [string, string, string | null][] = wanted.map(([index, recording], step) => [drive.stem(recording.name), inCloud[step] ?? parts.driveFile(folder, index, recording), drive.fileLink(recording.id)]);
   return { joined: await joinPreview(dir, script, items, "recordings") };
 }
 
 /** A recording's own 480p piece of the preview, encoded as soon as it lands, so the preview is copied together at the end. */
-const piecePath = (dir: string, source: string): string => join(dir, "pieces", source.split("/").pop() ?? "piece.mp4");
+const piecePath = (dir: string, source: string): string =>
+  join(dir, "pieces", isUrl(source) ? new URL(source).pathname.split("/").slice(-2).map(decodeURIComponent).join("-").replace(/[^\w. -]+/g, "_") : (source.split("/").pop() ?? "piece.mp4"));
 
 /** Encodes one recording's piece as `joinPreview` would encode it in the whole; a piece that fails is only logged, and the preview is then encoded whole. */
 async function encodePiece(dir: string, source: string, label: string): Promise<void> {
@@ -966,7 +1007,8 @@ async function joinPreview(dir: string, script: Script, items: [string, string, 
     const began = Date.now();
     try {
       const whole = await Promise.all(pieces.map((piece, index) => previewFits(piece, made[index]!.durationMs)));
-      const copied = pieces.length > 1 && whole.every(Boolean) ? await media.append(pieces[0]!, pieces.slice(1), partial) : (await media.join(toJoin, partial), false);
+      const copied =
+        pieces.length > 1 && whole.every(Boolean) ? await media.append(pieces[0]!, pieces.slice(1), partial) : pieces.length === 1 && whole[0] === true ? (fs.renameSync(pieces[0]!, partial), true) : (await media.join(toJoin, partial), false);
       fs.renameSync(partial, proxy);
       diag.info("writer", `${label}: ${items.length} ${what} joined into the preview (${clock(startMs)}) in ${Math.round((Date.now() - began) / 1000)} s${copied ? ", copied from the pieces encoded as they came down" : ""}`);
       fs.rmSync(join(dir, "pieces"), { recursive: true, force: true });
@@ -1037,6 +1079,17 @@ async function fetchCompilation(app: App, dir: string, script: Script): Promise<
   await lanes(wanted, DOWNLOADS, async ([index, video], step) => {
     const dest = join(folder, `${String(index).padStart(2, "0")}.mp4`);
     try {
+      // A YouTube video or one Drive file goes to the cloud without a copy here; a Drive folder (one case, joined into a master) comes down as before.
+      const link = video.url.includes("drive.google.com") ? drive.parse(video.url) : null;
+      if (streamed.on() && !(await media.readable(dest)) && (link === null || link.kind === "file")) {
+        const onBytes = () => say(script, `Streaming videos to the cloud: ${percents.filter((value) => value === 100).length} of ${wanted.length} ready.`, "downloading", 5 + Math.floor((percents.reduce((sum, value) => sum + value, 0) * 33) / (wanted.length * 100)));
+        const put = link !== null ? await streamed.drive(dir, (await drive.recordings(await drive.hooks.accessToken(), link))[1][0]!, onBytes) : await streamed.fromYoutube(app, dir, video.url, onBytes);
+        if (!(await media.readable(put.url))) throw new Error("Couldn't be read as video, so it was dropped.");
+        percents[step] = 100;
+        await encodePiece(dir, put.url, `${jobs.named(script.id, script.title)} · video ${index + 1}`);
+        results[step] = put.url;
+        return;
+      }
       await fetchVideo(app, video.url, dest, (percent, said) => {
         percents[step] = Math.max(percents[step]!, percent);
         const done = percents.filter((value) => value === 100).length;

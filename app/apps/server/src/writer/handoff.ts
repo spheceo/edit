@@ -49,7 +49,8 @@ export async function sha256Of(path: string): Promise<string> {
 
 /** One recording to share: its own file, its source and name, where it sits on the script's clock, its voices' mark ("2:" in a joined case) and its hearing's key. */
 interface Shared {
-  file: string;
+  /** Null: streamed to Edit's originals when imported (writer/streamed.ts), never on this Mac. */
+  file: string | null;
   source: string;
   name: string;
   offsetMs: number;
@@ -62,10 +63,16 @@ interface Shared {
 async function shared(dir: string, script: Script): Promise<Shared[]> {
   const all = recordings(dir, script);
   const sources = partSources(dir, script);
+  const streamed = streamedSources(dir);
   const out: Shared[] = [];
   for (const [index, recording] of all.entries()) {
-    if (recording.span !== null || !isFile(recording.file)) continue;
     let found = sources[index] ?? null;
+    // Streamed to the cloud when imported: heard from the preview, its footage already in Edit's originals.
+    if (found !== null && streamed.has(found[0]) && (recording.file === store.proxyPath(dir) || recording.span !== null || !isFile(recording.file))) {
+      out.push({ file: null, source: found[0], name: found[1], offsetMs: recording.offsetMs, lengthMs: recording.lengthMs, tag: all.length > 1 ? String(index + 1) : null, key: recording.key });
+      continue;
+    }
+    if (recording.span !== null || !isFile(recording.file)) continue;
     const folderCase = script.sourceKind === "compilation" && drive.isDrive(script.parts?.[index]?.url ?? "") && drive.parse(script.parts![index]!.url!).kind === "folder";
     if (found === null && (script.sourceKind === "file" || folderCase)) found = [`sha256:${await sha256Of(recording.file)}`, recording.file.split("/").pop() ?? "footage.mp4"];
     if (found === null) continue;
@@ -91,8 +98,18 @@ function transcriptOf(dir: string, script: Script, recording: Shared): Transcrip
   return { model: heard?.model || "scribe_v2", language: heard?.language ?? null, words, speakers, ...(heard?.keyterms ? { keyterms: heard.keyterms } : {}) };
 }
 
-/** What of the script is in Edit's originals: its file (by its path in the script's folder), source and key. */
-function keepShared(dir: string, file: string, source: string, key: string): void {
+/** The sources streamed to Edit's originals when imported: in `edit-shared.json` with no file here. */
+function streamedSources(dir: string): Set<string> {
+  try {
+    const kept = JSON.parse(fs.readFileSync(join(dir, "edit-shared.json"), "utf8")) as { source: string; file: string | null }[];
+    return new Set(kept.filter((entry) => entry.file === null).map((entry) => entry.source));
+  } catch {
+    return new Set();
+  }
+}
+
+/** What of the script is in Edit's originals: its file (by its path in the script's folder; null for one streamed there, never here), source and key. */
+export function keepShared(dir: string, file: string | null, source: string, key: string): void {
   const path = join(dir, "edit-shared.json");
   let kept: { source: string; key: string; file: string | null }[] = [];
   try {
@@ -100,7 +117,7 @@ function keepShared(dir: string, file: string, source: string, key: string): voi
   } catch {
     kept = [];
   }
-  const relative = file.startsWith(`${dir}/`) ? file.slice(dir.length + 1) : null;
+  const relative = file !== null && file.startsWith(`${dir}/`) ? file.slice(dir.length + 1) : null;
   writeAtomic(path, JSON.stringify([...kept.filter((entry) => entry.source !== source), { source, key, file: relative }], null, 2));
 }
 
@@ -117,6 +134,10 @@ export async function share(data: string, id: string): Promise<string> {
   const done: string[] = [];
   const name = named(id, script.title);
   for (const recording of list) {
+    if (recording.file === null) {
+      await shareWords(dir, script, recording, done);
+      continue;
+    }
     const size = fs.statSync(recording.file).size;
     const duration = await media.streams(recording.file).then((found) => found.durationMs / 1000, () => null);
     let record = (await editCloud.query("edit:getMedia", { source: recording.source })) as Record<string, unknown> | null;
@@ -129,17 +150,21 @@ export async function share(data: string, id: string): Promise<string> {
       done.push(`uploaded ${recording.name}`);
     }
     keepShared(dir, recording.file, recording.source, typeof record?.originalKey === "string" ? record.originalKey : originalKey(recording.source, recording.name));
-    const at = transcriptKey(recording.source);
-    // Words only where the script has them, and never for words only YouTube's captions gave (Edit reads the captions itself).
-    const captioned = isFile(join(dir, "transcript", recording.key, "captions.json")) && hearing.cached(join(dir, "transcript", recording.key)) === null;
-    if (script.words.length > 0 && !captioned && !(await editCloud.has(at))) {
-      const text = serialize(transcriptOf(dir, script, recording));
-      await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);
-      done.push(`shared the words of ${recording.name}`);
-    }
+    await shareWords(dir, script, recording, done);
   }
   if (done.length > 0) diag.info("writer", `${name}: shared with Edit: ${done.join("; ")}`);
   return list.length === 0 ? "no footage on this Mac to share" : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
+}
+
+/** A recording's words to Edit's analysis: only where the script has them, and never words only YouTube's captions gave (Edit reads the captions itself). */
+async function shareWords(dir: string, script: Script, recording: Shared, done: string[]): Promise<void> {
+  const at = transcriptKey(recording.source);
+  const captioned = isFile(join(dir, "transcript", recording.key, "captions.json")) && hearing.cached(join(dir, "transcript", recording.key)) === null;
+  if (script.words.length > 0 && !captioned && !(await editCloud.has(at))) {
+    const text = serialize(transcriptOf(dir, script, recording));
+    await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);
+    done.push(`shared the words of ${recording.name}`);
+  }
 }
 
 const sharing = new Set<string>();

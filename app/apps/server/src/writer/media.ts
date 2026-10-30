@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 
 import * as diag from "../diag.ts";
 import { isFile } from "../paths.ts";
-import { ffmpeg, ffprobe } from "../tools.ts";
+import { ffmpeg, ffprobe, isUrl, protocols, urlArgs } from "../tools.ts";
 import { run } from "./proc.ts";
 
 /** A joined case may run as long as Repack lets one run. */
@@ -21,8 +21,16 @@ export interface Streams {
   audio: boolean;
 }
 
+/** What FFmpeg needs before `-i` to read `path`: for a cloud original's address (streamed imports), HTTPS with the Mac's certificates and reconnects. */
+export function input(path: string): string[] {
+  return isUrl(path) ? [...urlArgs(path), "-protocol_whitelist", protocols(path)] : [];
+}
+
+/** A path fit for a log line: a cloud original's address is a credential. */
+const shown = (path: string): string => (isUrl(path) ? "the footage in the cloud" : path);
+
 export async function streams(path: string): Promise<Streams> {
-  const text = await run(ffprobe(), ["-v", "error", "-show_entries", "stream=codec_type", "-show_entries", "format=duration", "-of", "json", path], { timeoutMs: 60_000 });
+  const text = await run(ffprobe(), ["-v", "error", ...input(path), "-show_entries", "stream=codec_type", "-show_entries", "format=duration", "-of", "json", path], { timeoutMs: 60_000 });
   let value: { format?: { duration?: string | number }; streams?: { codec_type?: string }[] };
   try {
     value = JSON.parse(text) as typeof value;
@@ -37,7 +45,7 @@ export async function streams(path: string): Promise<Streams> {
 /** Time for ffmpeg to work through footage: an hour, or ten minutes plus half its length, whichever is longer. */
 /** A file that plays: there, and with a length. */
 export async function readable(path: string): Promise<boolean> {
-  if (!isFile(path)) return false;
+  if (!isUrl(path) && !isFile(path)) return false;
   return streams(path).then((found) => found.durationMs > 0, () => false);
 }
 
@@ -49,6 +57,8 @@ export const toolTime = (durationMs: number): number => Math.max(600_000 + durat
  * be hours longer than what it holds.
  */
 export async function heldMs(path: string, claimedMs: number): Promise<number | null> {
+  // A cloud original would be read whole, twice, to find it: its claimed length stands.
+  if (isUrl(path)) return null;
   // One stream at a time: ffprobe takes a single specifier.
   const lastOf = async (stream: string): Promise<number> => {
     let last = 0;
@@ -125,7 +135,7 @@ async function joinHardware(part: JoinPart, dest: string, onPercent: (percent: n
     ? `[0:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=duration=${seconds(total)},asetpts=PTS-STARTPTS[a]`
     : `anullsrc=r=48000:cl=stereo,atrim=duration=${seconds(total)}[a]`;
   await encode(
-    ["-hide_banner", "-y", ...HARDWARE_DECODE, "-i", part.path, "-filter_complex", `${picture};${sound}`, "-map", "[v]", "-map", "[a]", ...HARDWARE_ENCODE, "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
+    ["-hide_banner", "-y", ...HARDWARE_DECODE, ...input(part.path), "-i", part.path, "-filter_complex", `${picture};${sound}`, "-map", "[v]", "-map", "[a]", ...HARDWARE_ENCODE, "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
     dest,
     total,
     onPercent,
@@ -140,7 +150,7 @@ async function joinOne(part: JoinPart, dest: string, onPercent: (percent: number
       return await joinHardware(part, dest, onPercent, signal);
     } catch (error) {
       if (signal?.aborted) throw error;
-      diag.warn("writer", `the video hardware couldn't encode ${part.path}, so libx264 does: ${diag.messageOf(error)}`);
+      diag.warn("writer", `the video hardware couldn't encode ${shown(part.path)}, so libx264 does: ${diag.scrub(diag.messageOf(error))}`);
     }
   }
   await joinSized([part], dest, onPercent, 854, 480, "27", signal);
@@ -192,7 +202,7 @@ async function joinSized(parts: JoinPart[], dest: string, onPercent: (percent: n
   const filters: string[] = [];
   let joined = "";
   for (const [index, part] of parts.entries()) {
-    args.push("-i", part.path);
+    args.push(...input(part.path), "-i", part.path);
     const length = seconds(part.streams.durationMs);
     filters.push(
       part.streams.video

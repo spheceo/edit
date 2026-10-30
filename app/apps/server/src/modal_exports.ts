@@ -8,8 +8,8 @@
  *
  * On when the server starts with `EDIT_MODAL_EXPORTS=1` and `EDIT_WORKER_ROOT`
  * (the checkout's `app/`, whose worker it runs); Infisical's CLI gives the
- * driver R2's keys for that process only (`infisical run`, the `/media`
- * folder), so nothing needs Repack's checkout; Modal is signed in on the Mac. The house export of a whole edit whose footage is all in the
+ * driver R2's keys for that process only (`infisical run`, Platform's
+ * `/edit-relay` folder), so nothing needs Repack's checkout or project; Modal is signed in on the Mac. The house export of a whole edit whose footage is all in the
  * cloud goes there when this Mac is busy or it's long (`cloudBetter`); anything else (another format, size or shape, a span,
  * chapters, footage only on this Mac) is exported here as before.
  */
@@ -138,8 +138,8 @@ function used(project: Project): Project["media"] {
   return project.media.filter((media) => ids.has(media.id));
 }
 
-/** The team's Infisical project (where R2's keys live, in `/media`). */
-const INFISICAL_PROJECT = "cdf4a0c5-eca4-4415-af3a-40871af285f3";
+/** The platform's Infisical project, Platform (R2's keys are in `/edit-relay`; Repack's project until Oct 30). */
+const INFISICAL_PROJECT = "979fe56c-c4d0-4809-b64f-5ebc75eeaf05";
 
 /** The driver's command (Infisical's injection, then uv's Python with the worker's requirements), or why there's none. */
 function command(): { cwd: string; cmd: string[] } {
@@ -152,7 +152,7 @@ function command(): { cwd: string; cmd: string[] } {
   if (infisical === null || uv === null) throw new Error("cloud exports need Infisical's CLI (signed in) and uv on this Mac");
   return {
     cwd: root,
-    cmd: [infisical, "run", `--projectId=${INFISICAL_PROJECT}`, `--env=${process.env.INFISICAL_ENV ?? "dev"}`, "--path=/media", "--silent", "--", uv, "run", "--python", "3.12", "--with-requirements", "apps/worker/requirements.txt",
+    cmd: [infisical, "run", `--projectId=${INFISICAL_PROJECT}`, `--env=${process.env.INFISICAL_ENV ?? "dev"}`, "--path=/edit-relay", "--silent", "--", uv, "run", "--python", "3.12", "--with-requirements", "apps/worker/requirements.txt",
       "--with", "boto3==1.40.31", "python", "apps/worker/export_v3.py"],
   };
 }

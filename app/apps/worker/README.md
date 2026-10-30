@@ -4,7 +4,7 @@ The house export of a whole edit whose footage is all in the cloud runs on
 Modal when that's quicker than this Mac (`apps/server/src/modal_exports.ts`,
 on with `EDIT_MODAL_EXPORTS=1` and `EDIT_WORKER_ROOT`, both set by `just dev`).
 For each export the server runs `export_v3.py` under `infisical run` (R2's keys
-from the team project's `/media`, for that process only): it deploys the
+from the Platform project's `/edit-relay`, for that process only): it deploys the
 `edit-exports-v3` app when this checkout's build isn't the deployed one
 (`sections_v3.py`, `api_v3.py`), then renders the edit in sections on a shared
 pool of L40S GPUs, verifies every frame of the joined file on CPU workers,

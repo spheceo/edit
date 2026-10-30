@@ -640,7 +640,11 @@ function importShare(importing: NonNullable<ProjectStatus["importing"]>) {
  * them out").
  */
 /** A script being written from its videos (Script mode's import): what it's on and how far. */
-type Writing = { id: string; title: string; stage: string; percent: number; detail: string };
+/** `startedAt`: when the import began, as the server says. */
+type Writing = { id: string; title: string; stage: string; percent: number; detail: string; startedAt?: number };
+
+/** When each import and each of its steps was first seen here, by script: kept while Home is open, so reopening its dialog doesn't start the clock again. */
+const SEEN = new Map<string, Record<string, number>>();
 
 /** A script import that stopped: what it asks (a decision) or why it failed. */
 type ScriptIssueRow = {
@@ -886,17 +890,19 @@ function ImportDialog({ id, writing, issues, onClose }: { id: string | null; wri
   const last = useRef<Writing | null>(null);
   if (live) last.current = live;
   const shown: Writing | null = live ?? (stopped ? { id: stopped.id, title: stopped.title, stage: stopped.stage, percent: stopped.progress ?? 0, detail: "" } : last.current);
-  const [began, setBegan] = useState<Record<string, number>>({});
   const [now, setNow] = useState(() => Date.now());
   const step = shown ? stepOf(shown) : "download";
   useEffect(() => {
-    setBegan({});
     last.current = null;
   }, [id]);
-  useEffect(() => {
-    if (!shown) return;
-    setBegan((times) => (times[step] ? times : { ...times, [step]: Date.now(), ...(times.start ? {} : { start: Date.now() }) }));
-  }, [shown?.id, step]);
+  // The import's start as the server gives it, else when this page first saw it; each step's, when this page first saw it.
+  const seen = shown ? (SEEN.get(shown.id) ?? {}) : {};
+  if (shown) {
+    seen.start = shown.startedAt ?? seen.start ?? Date.now();
+    seen[step] ??= Date.now();
+    SEEN.set(shown.id, seen);
+  }
+  const began = seen;
   useEffect(() => {
     if (id === null) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);

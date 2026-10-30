@@ -854,25 +854,25 @@ function useIssueDialogs(issue: ScriptIssueRow) {
   return { items, dialogs, said, retry, showError: () => setOpen("error"), replace: () => setOpen("replace") };
 }
 
-/** The stopped import's answers as buttons, in its import dialog. */
+/**
+ * A stopped import's answers at the foot of its import dialog: the one thing
+ * to do (Retry), the other way out (another link, or going on without what
+ * failed), nothing more; the error is already in the step above, and Dismiss
+ * is on Home's list. The user, Oct 30: "too many options ... minimizing the
+ * number of options and the amount of thinking that someone has to do".
+ */
 function IssueActions({ issue }: { issue: ScriptIssueRow }) {
-  const { items, dialogs, retry, showError, replace } = useIssueDialogs(issue);
+  const { dialogs, retry, replace } = useIssueDialogs(issue);
   return (
     <>
-      <span className="flex items-center gap-2">
-        <Button size="sm" variant="primary" onClick={retry}>
-          Retry
-        </Button>
-        <Button size="sm" onClick={replace}>
-          Replace…
-        </Button>
-        <Button size="sm" variant="ghost" onClick={showError}>
-          View error
-        </Button>
-        <IconButton label="More" onClick={(event) => toggleMenu(event.currentTarget, items, { width: 220 })}>
-          <Ellipsis size={16} />
-        </IconButton>
-      </span>
+      {issue.decision?.kind === "failed_recordings" ? (
+        <Button onClick={() => void answerIssue(issue, { kind: "skip_failed" })}>Go on without them</Button>
+      ) : (
+        <Button onClick={replace}>Replace…</Button>
+      )}
+      <Button variant="primary" onClick={retry}>
+        Retry
+      </Button>
       {dialogs}
     </>
   );
@@ -1018,23 +1018,22 @@ function ImportDialog({ id, writing, issues, onClose }: { id: string | null; wri
             );
           })}
         </ol>
-        {stopped && (
-          <div className="flex flex-wrap items-center">
+        {/* One row: Close, and only what fits where it is (stopped: Replace and Retry; in: Open the script). */}
+        <div className="flex items-center gap-2">
+          <span className="mr-auto text-[12px] text-faint">{began.start && !stopped && !done ? `Running for ${elapsed(now - began.start)}` : ""}</span>
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+          {stopped ? (
             <IssueActions issue={stopped} />
-          </div>
-        )}
-        <div className="flex items-center justify-between">
-          <span className="text-[12px] text-faint">{began.start && !stopped ? `Running for ${elapsed(now - began.start)}` : ""}</span>
-          <div className="flex gap-2">
-            <Button variant="subtle" onClick={onClose}>
-              Close
-            </Button>
-            {id !== null && (
-              <Button variant={done ? "primary" : "subtle"} onClick={() => navigate(`/scripts/${id}`)}>
+          ) : (
+            done &&
+            id !== null && (
+              <Button variant="primary" onClick={() => navigate(`/scripts/${id}`)}>
                 Open the script
               </Button>
-            )}
-          </div>
+            )
+          )}
         </div>
       </div>
     </Modal>

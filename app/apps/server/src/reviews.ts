@@ -748,10 +748,29 @@ export function changes(before: Project, after: Project): { clips: string[]; ran
 const checkpoints = new Map<string, Project>();
 
 /** Records the agent's fix of a note: what changed since the last one, kept here and sent to Repack. */
-export async function done(app: App, projectId: string, noteId: string, summary: string): Promise<Note["fix"]> {
+/**
+ * The note an agent means: its id, or a start of it only one of the
+ * project's notes has (Oct 30: a turn resumed after a restart had only the
+ * ids' starts, and the review refused them all); a reply is its note's (the
+ * review resolves notes, never replies: "A reply is not resolved; its note is").
+ */
+export function noteIdOf(home: string, projectId: string, given: string): string {
+  const notes = read(home).notes;
+  let id = given.trim().replace(/^\[|\]$/g, "");
+  if (notes[id]?.project !== projectId) {
+    const starting = Object.values(notes).filter((note) => note.project === projectId && id.length >= 6 && note.id.startsWith(id));
+    if (starting.length === 1) id = starting[0]!.id;
+    else if (starting.length > 1) throw new Error(`${given} could be ${starting.length} notes: give its whole id`);
+  }
+  const parent = notes[id]?.parentId;
+  return parent && notes[parent]?.project === projectId ? parent : id;
+}
+
+export async function done(app: App, projectId: string, given: string, summary: string): Promise<Note["fix"]> {
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
   const home = app.store.home;
+  const noteId = noteIdOf(home, projectId, given);
   const state = read(home);
   const note = state.notes[noteId];
   if (note === undefined || note.project !== projectId) throw new Error(`no note ${noteId} on this project's review`);
@@ -831,8 +850,9 @@ function statusCallMissing(error: unknown): boolean {
  * One result per unchanged reason: `reviews:status` replaces another
  * "Not changed" reply. The local copy is written only after Repack accepts it.
  */
-export async function unfixed(app: App, projectId: string, noteId: string, reason: string): Promise<void> {
+export async function unfixed(app: App, projectId: string, given: string, reason: string): Promise<void> {
   const home = app.store.home;
+  const noteId = noteIdOf(home, projectId, given);
   const note = read(home).notes[noteId];
   if (note === undefined || note.project !== projectId) throw new Error(`no note ${noteId} on this project's review`);
   const details = reason.trim();
@@ -973,6 +993,8 @@ export function start(app: App, every = POLL_MS): void {
   };
   checkTimer = setTimeout(check, Math.min(6_000, every));
   checkTimer.unref?.();
+  // After the agent's cut turns have carried on (serve.ts resumes them ~20 s in), so a follow never sees "not running" too soon.
+  setTimeout(() => resumeFixes(app), 60_000).unref?.();
 }
 
 export function stop(): void {
@@ -1227,6 +1249,65 @@ export async function fixReady(app: App, project: string, reviewId: string, note
     throw error;
   }
   diag.info("review", `${live.project.name}: Ready for changes: the agent is fixing ${mine.length} note(s)`);
+  noteFix(home, project, { reviewId, noteIds: mine.map((note) => note.id), before, at: Date.now() });
+  try {
+    await followFix(app, project, reviewId, mine.map((note) => note.id), before, every);
+  } finally {
+    noteFix(home, project, null);
+  }
+}
+
+/** Fixes under way, by project: what a restart needs to follow one to its share (review-fixes.json). */
+type Taken = { reviewId: string; noteIds: string[]; before: string; at: number };
+const FIXES = "review-fixes.json";
+
+function takenFixes(home: string): Record<string, Taken> {
+  try {
+    return JSON.parse(fs.readFileSync(join(home, FIXES), "utf8")) as Record<string, Taken>;
+  } catch {
+    return {};
+  }
+}
+
+function noteFix(home: string, project: string, taken: Taken | null): void {
+  const all = takenFixes(home);
+  if (taken === null) delete all[project];
+  else all[project] = taken;
+  writeAtomic(join(home, FIXES), JSON.stringify(all));
+}
+
+/**
+ * The fixes a restart cut short, followed again: the agent's turn carries on
+ * by itself (agent.ts), and this exports and shares when it ends, as the run
+ * before would have (Oct 30: one stayed at "starting…" on the page and was
+ * never shared after a restart).
+ */
+export function resumeFixes(app: App): void {
+  const home = app.store.home;
+  for (const [project, taken] of Object.entries(takenFixes(home))) {
+    if (readying.has(project) || app.store.get(project) === null || Date.now() - taken.at > FIX_TURN_MS) {
+      if (!readying.has(project)) noteFix(home, project, null);
+      continue;
+    }
+    readying.add(project);
+    diag.info("review", `${project}: Ready for changes: following the fix a restart cut short`);
+    void followFix(app, project, taken.reviewId, taken.noteIds, taken.before)
+      .catch(async (error: unknown) => {
+        diag.warn("review", `${project}: Ready for changes: ${diag.messageOf(error)}`);
+        await progress(taken.reviewId, { state: "failed", error: diag.messageOf(error) });
+      })
+      .finally(() => {
+        noteFix(home, project, null);
+        readying.delete(project);
+      });
+  }
+}
+
+/** Follows the agent's fix to its end, then exports and shares it (the share ends the request on the page). */
+async function followFix(app: App, project: string, reviewId: string, noteIds: string[], before: string, every = followMs): Promise<void> {
+  const home = app.store.home;
+  const panel = seams.agentPanel(app);
+  const mine = noteIds.flatMap((id) => (read(home).notes[id] ? [read(home).notes[id]!] : []));
   // Follow the turn (and Edit's own follow-ups to it) to its end, saying how many notes are answered.
   const began = Date.now();
   let said = 0;
@@ -1390,11 +1471,12 @@ registerTool("feedback_unfixed", async ({ app, args, projectId }: ToolCall) => {
 });
 
 registerTool("feedback_answer", async ({ app, args, projectId }: ToolCall) => {
-  const note = str(args.note);
+  const asked = str(args.note);
   const given = str(args.answer);
-  if (note === null || given === null) throw new Error("note (its id) and answer are required");
+  if (asked === null || given === null) throw new Error("note (its id) and answer are required");
   const answer = forReviewer(given);
   const home = app.store.home;
+  const note = noteIdOf(home, projectId, asked);
   const own = read(home).notes[note];
   if (own === undefined || own.project !== projectId) throw new Error(`no note ${note} on this project's review`);
   const latest = read(home).shared[projectId]?.versions.reduce((most, one) => Math.max(most, one.n), 0) ?? own.version;

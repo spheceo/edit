@@ -5,8 +5,10 @@ import { expect, test } from "bun:test";
 
 import type { Project } from "../src/model.ts";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
-import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, posterSecond, read, restoreArchived, shareable, waiting, type Note, type Version } from "../src/reviews.ts";
+import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, noteIdOf, posterSecond, read, restoreArchived, shareable, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import * as tools from "../src/tools.ts";
@@ -206,4 +208,15 @@ test("a version's full-quality file sits beside its review copy, keeping the exp
   expect(fullKeyOf("edit/reviews/p1/abc", "/x/Judge v3.mp4")).toBe("edit/reviews/p1/abc/full.mp4");
   expect(fullKeyOf("edit/reviews/p1/abc", "/x/Judge v3.MOV")).toBe("edit/reviews/p1/abc/full.mov");
   expect(fullKeyOf("edit/reviews/p1/abc", "/x/odd.mkv")).toBe("edit/reviews/p1/abc/full.mp4");
+});
+
+test("an agent's note id: a start only one note has, and a reply, both mean the note the review resolves", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "edit-notes-"));
+  const note = (id: string, parentId: string | null, project = "p1") => ({ id, reviewId: "r", project, version: 1, ms: 0, endMs: null, text: "", author: "JJ", status: "open", parentId });
+  fs.writeFileSync(path.join(home, "reviews.json"), JSON.stringify({ cursor: 0, shared: {}, notes: { s575epqw5vrzfmx6nf60nag6b18h6g3g: note("s575epqw5vrzfmx6nf60nag6b18h6g3g", "s57parent0000000000000000000000"), s57parent0000000000000000000000: note("s57parent0000000000000000000000", null), s575z2tdma98gervrzkadae78x8h7kgz: note("s575z2tdma98gervrzkadae78x8h7kgz", null), s575zother: note("s575zother", null, "p2") } }));
+  expect(noteIdOf(home, "p1", "s575z2td")).toBe("s575z2tdma98gervrzkadae78x8h7kgz");
+  expect(noteIdOf(home, "p1", "[s575z2tdma98gervrzkadae78x8h7kgz]")).toBe("s575z2tdma98gervrzkadae78x8h7kgz");
+  expect(noteIdOf(home, "p1", "s575epqw")).toBe("s57parent0000000000000000000000");
+  // Too short to say which: left as given (the review then says there's no such note).
+  expect(noteIdOf(home, "p1", "s575")).toBe("s575");
 });

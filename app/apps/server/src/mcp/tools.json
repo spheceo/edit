@@ -2213,7 +2213,7 @@
     "name": "repack_subtitles"
   },
   {
-    "description": "The watcher: Gemini watches the footage (a few minutes at a time, with sound) and says who speaks each subtitle line, correcting the speakers in the transcript (a voice the transcriber merged with another becomes its own, named when the footage says the name; a second conversation going on behind the one followed goes to a hidden \"Background talk\" voice), and, for a subtitled video, marks its segments (footage to subtitle, already subtitled e.g. a cold open with burned-in subtitles, narration, other). Answers are cached per window, so a re-run costs nothing unless force. Then the people of every window are joined into one cast by how they look (one name, role and colour per person, whatever voices the transcriber gave them; cast_failed when that couldn't be had: run it again), and a turn two windows give to two people is watched again across their edge to decide (second_looks). Returns the windows watched, the cost (USD), the lines re-assigned (count and examples), the people seen per window and the segments. Run repack_subtitles (a subtitled video) or add_subtitles (an edit) after it.",
+    "description": "The watcher: Claude Opus looks at the footage (a few minutes at a time, as frames every 2 seconds, with the transcript and the voices transcription heard) and says who speaks each subtitle line, correcting the speakers in the transcript (a voice the transcriber merged with another becomes its own, named when the footage says the name; a second conversation going on behind the one followed goes to a hidden \"Background talk\" voice), and, for a subtitled video, marks its segments (footage to subtitle, already subtitled e.g. a cold open with burned-in subtitles, narration, other). Answers are cached per window, so a re-run costs nothing unless force. Then the people of every window are joined into one cast by how they look (one name, role and colour per person, whatever voices the transcriber gave them; cast_failed when that couldn't be had: run it again), and a turn two windows give to two people is watched again across their edge to decide (second_looks). Returns the windows watched, the cost (USD), the lines re-assigned (count and examples), the people seen per window and the segments. Run repack_subtitles (a subtitled video) or add_subtitles (an edit) after it.",
     "inputSchema": {
       "properties": {
         "force": {
@@ -2637,7 +2637,7 @@
   },
   {
     "name": "review_motion",
-    "description": "Watch a short rendered edit with sound. start/end are timeline seconds, at most 12s. Renders the actual shared compositor at 480p, asks the existing audiovisual watcher for concrete motion/audio/legibility observations, caches its answer and deletes the temporary video. Optional question focuses the review (a card reveal, text sweep, speech/music boundary). Advisory sample observations do not certify the whole edit. Do not recheck unchanged samples.",
+    "description": "Look at a short rendered edit's motion, frame by frame. start/end are timeline seconds, at most 12s. Renders the actual shared compositor at 480p, shows Claude its frames (four a second) for concrete motion, legibility and picture observations, caches its answer and deletes the temporary video. It can't hear: sound, speech/music boundaries and levels aren't checked. Optional question focuses the review (a card reveal, text sweep). Advisory sample review, not a certification of the whole edit.",
     "inputSchema": {
       "type": "object",
       "properties": {

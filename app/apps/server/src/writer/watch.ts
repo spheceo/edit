@@ -89,7 +89,7 @@ function prepareInput(script: Script, dir: string): void {
 }
 
 /** The stretches of footage with a picture, by recording: [group, from, to] in ms. A joined case's audio recordings, or an audio file, have nothing to see. */
-async function stretches(script: Script): Promise<[number, number, number][]> {
+export async function stretches(script: Script): Promise<[number, number, number][]> {
   const parts = script.parts ?? [];
   if (parts.length === 0) {
     const video = await media.streams(script.originalPath).then((found) => found.video, () => false);

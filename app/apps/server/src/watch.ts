@@ -17,6 +17,7 @@
 // caches made by earlier versions still hit.
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 
 import type { App } from "./app.ts";
 import * as bridges from "./bridges.ts";
@@ -38,11 +39,21 @@ import type { TimedWord, Window, WatchOptions } from "./seams.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
 import { isSubtitled } from "./store.ts";
 import * as tools from "./tools.ts";
+import * as aiClaude from "./ai_claude.ts";
+import * as claudeAsk from "./writer/claude.ts";
 import type { Transcript, Word } from "./transcribe.ts";
 
 export type { Window, WatchOptions } from "./seams.ts";
 
-export const MODEL = "google/gemini-3.8-flash";
+/**
+ * Who watches: Opus, from frames (askClaude), since Oct 30 (the user: "I just
+ * wanna get rid of gemini"; on Son Spent it said the same speaker as Gemini on
+ * 86% of lines and the same role on 81%, most of the rest short interjections
+ * or which officer). Gemini's earlier answers stay readable: `GEMINI` names
+ * their cache keys, so footage watched before isn't watched again.
+ */
+export const MODEL = "claude-opus-5-5";
+const GEMINI = "google/gemini-3.8-flash";
 /** A window's length: long enough to know the people in it, short enough to watch closely (s). */
 const TARGET = 240.0;
 const SHORTEST = 150.0;
@@ -66,7 +77,8 @@ const MAX_CLIP_BYTES = 15 * 1024 * 1024;
 /** How long a model call may take before it's given up on (tests shorten it). */
 // On Gemini's free tier a window waits its turn and out its 429s (gemini.ts), so it gets longer.
 export const timing = {
-  askLimitMs: trim(process.env.EDIT_AI_PROVIDER ?? "") === "gemini" ? 600_000 : TIMEOUT_MS + 15_000,
+  /** Opus reads a window's sheets in about 40 s; a slow one is usually stuck. */
+  askLimitMs: 240_000,
 };
 
 
@@ -427,9 +439,9 @@ function hexOf(bytes: Uint8Array): string {
 }
 
 /** The cache key of a window's answer: the file, the stretch and its lines. */
-export function cacheKey(key: string, window: Window, lines: WatchLine[]): string {
+export function cacheKey(key: string, window: Window, lines: WatchLine[], model: string = MODEL): string {
   // The instructions too: changed ones can't reuse a stale answer.
-  let text = `${MODEL}\n${WATCH_SYSTEM}\n${key}\n${fixed(window.start, 3)}\n${fixed(window.end, 3)}\n`;
+  let text = `${model}\n${WATCH_SYSTEM}\n${key}\n${fixed(window.start, 3)}\n${fixed(window.end, 3)}\n`;
   for (const line of lines) text += `${line.text}\n`;
   return hexOf(sha256(text).slice(0, 10));
 }
@@ -611,8 +623,12 @@ export function unfence(given: string): string {
   return trim(text);
 }
 
-/** Asks the model about one window's clip; the answer and what it cost. */
-async function ask(clip: string, text: string, lines: number, scratch: string, effort: string | null = "low"): Promise<[Answer, number]> {
+/**
+ * The window asked of the AI gateway (OpenAI-style, the clip as a video file):
+ * the tests' stand-in for Claude (ai_claude.viaGateway), as they stood in for
+ * Gemini. Never Edit's own path since Oct 30.
+ */
+async function askGateway(clip: string, text: string, lines: number, scratch: string, effort: string | null = "low"): Promise<[Answer, number]> {
   let data: string;
   try {
     data = fs.readFileSync(clip).toString("base64");
@@ -620,7 +636,7 @@ async function ask(clip: string, text: string, lines: number, scratch: string, e
     throw new Error(ioMessage(error));
   }
   const request: Record<string, unknown> = {
-    model: MODEL,
+    model: GEMINI,
     messages: [
       { role: "system", content: WATCH_SYSTEM },
       {
@@ -665,6 +681,42 @@ async function ask(clip: string, text: string, lines: number, scratch: string, e
   return [answer, cost];
 }
 
+/** Seconds between the frames Claude is shown, and how many frames a contact sheet holds (columns × rows). */
+export const SHEET = { every: 2, columns: 4, rows: 3 };
+
+/**
+ * Claude's turn at a window (Oct 30, the user: "I just wanna get rid of
+ * gemini"): it takes neither video nor sound, so it sees the clip as contact
+ * sheets of frames, one every 2 s, and hears it only through the transcript's
+ * voice labels. The same question and the same answer as Gemini's.
+ */
+export async function askClaude(clip: string, text: string, lines: number, model: string, label = `Claude ${model} watching a window`): Promise<Answer> {
+  const folder = fs.mkdtempSync(join(os.tmpdir(), "edit-sheets-"));
+  try {
+    const { every, columns, rows } = SHEET;
+    const child = Bun.spawn([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", clip, "-vf", `fps=1/${every},scale=320:-2,tile=${columns}x${rows}`, "-q:v", "4", join(folder, "sheet-%02d.jpg")], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+    const [said, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    if (code !== 0) throw new Error(`the frames couldn't be taken: ${trim(said).split("\n").pop() ?? code}`);
+    const sheets = fs.readdirSync(folder).filter((name) => name.endsWith(".jpg")).sort();
+    const per = columns * rows;
+    const shown = sheets.map((name, index) => `Sheet ${index + 1} (${join(folder, name)}): seconds ${index * per * every} to ${((index + 1) * per - 1) * every} of the clip`).join("\n");
+    const prompt = `${text}\n\nThe clip as contact sheets (read every one, in order). Each holds ${per} frames, one every ${every} seconds, left to right then top to bottom: its first frame is at the second given, the next ${every} s later.\n${shown}`;
+    const answer = await claudeAsk.askPatiently({ model, system: CLAUDE_WATCH_SYSTEM, prompt, schema: schema() as Record<string, unknown>, read: folder, label });
+    const given = answer.structured ?? claudeAsk.planOf(answer);
+    if (given === null) throw new Error("the model gave no answer");
+    const read = readAnswer(given);
+    const letters = new Set(read.people.map((person) => person.id));
+    const answered = new Set(read.lines.filter((line) => letters.has(line.who) && line.n >= 0 && line.n < lines).map((line) => line.n));
+    if (answered.size < lines * 0.9) throw new Error(`the model answered ${answered.size} of ${lines} lines`);
+    return read;
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+/** Gemini's instructions, for a model that sees frames and can't hear. */
+const CLAUDE_WATCH_SYSTEM = `You can't hear this clip and see it only as frames, one every few seconds, on contact sheets. Wherever the instructions below say to listen or to judge a voice, judge instead by who is in the picture while a line is said (who faces the camera, who the camera points at, who holds the phone or radio), by the conversation (questions and answers, "I" and "you", names used, who is addressed) and by each line's label, which marks the voices a speech system heard.\n\n${WATCH_SYSTEM}`;
+
 /** `work`, or "the model took too long" after `ms`. */
 async function within<T>(ms: number, work: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -697,7 +749,9 @@ export async function watchWindow(
     // Answers asked under another media key (carried over to a cloud proxy,
     // or shared by another machine: `keys.json`, cloud_media.ts) count too.
     const others = otherKeys(dir).map((other) => join(dir, `${cacheKey(other, window, lines)}.json`));
-    for (const file of [cached, ...others]) {
+    // Gemini's answers from before the switch, as good as any.
+    const earlier = [mediaKey(source), ...otherKeys(dir)].map((other) => join(dir, `${cacheKey(other, window, lines, GEMINI)}.json`));
+    for (const file of [cached, ...others, ...earlier]) {
       try {
         const value = serdeParse(fs.readFileSync(file, "utf8")) as { answer?: unknown } | null;
         if (value !== null && typeof value === "object" && value.answer !== undefined) return [readAnswer(value.answer), 0.0, true];
@@ -706,7 +760,6 @@ export async function watchWindow(
       }
     }
   }
-  route();
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch (error) {
@@ -728,7 +781,9 @@ export async function watchWindow(
   let last = "";
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
-      const [answer, cost] = await within(timing.askLimitMs, ask(clip, text, lines.length, join(dir, `${key}.request.json`)));
+      const [answer, cost] = aiClaude.viaGateway.on
+        ? await within(timing.askLimitMs, askGateway(clip, text, lines.length, join(dir, `${key}.request.json`)))
+        : [await within(timing.askLimitMs, askClaude(clip, text, lines.length, MODEL, "Claude opus watching footage")), 0.0];
       spent += cost;
       fs.rmSync(clip, { force: true });
       const saved = { model: MODEL, start: window.start, end: window.end, cost, answer: written(answer) };
@@ -1062,11 +1117,6 @@ export async function watchFootage(app: App, projectId: string, options: WatchOp
 
 /** Starts watching `projectId`'s footage in the background (the editing workflow does at its start). */
 export function watchInBackground(app: App, projectId: string): void {
-  try {
-    route();
-  } catch {
-    return;
-  }
   const job = jobs.begin(app.store.home, "watch", projectId, {});
   void diag
     .timeAsync("watch", "watch footage (background)", () => watchFootage(app, projectId, { force: false, segments: null }))
@@ -1328,7 +1378,8 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   }
   // Who is who across the windows: one person, one name, whatever voices
   // diarisation gave them (cast.ts).
-  const reconciled = await castOf.reconcile(sightings, join(app.store.cacheDir(), "watch-cast"), post);
+  // Matched across windows by Claude too (ai_claude.ts), not Gemini.
+  const reconciled = await castOf.reconcile(sightings, join(app.store.cacheDir(), "watch-cast"), aiClaude.spills);
   if (reconciled !== null) cost += reconciled.cost;
   const cast = reconciled !== null && "people" in reconciled ? reconciled : null;
   // Never quiet: without a cast a person split by diarisation stays two people.

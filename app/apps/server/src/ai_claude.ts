@@ -15,8 +15,12 @@ type Part = { type?: string; text?: string; image_url?: { url?: string } };
 type Message = { role?: string; content?: string | Part[] };
 type Request = { messages?: Message[]; response_format?: { json_schema?: { schema?: Record<string, unknown> } } };
 
+/** The tests' switch (test/setup.ts): questions go to the AI gateway (their stand-in server), not Claude. */
+export const viaGateway = { on: false };
+
 /** Asks the gateway request in `bodyFile` of Claude (`model`, Opus by default); answers as the gateway would. */
 export async function post(bodyFile: string, model: string = claude.OPUS, label = "Claude opus answering a small question"): Promise<unknown> {
+  if (viaGateway.on) return (await import("./watch.ts")).post(bodyFile);
   const request = JSON.parse(fs.readFileSync(bodyFile, "utf8")) as Request;
   const messages = request.messages ?? [];
   const system = messages.filter((message) => message.role === "system").map((message) => textOf(message.content)).join("\n\n");

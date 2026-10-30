@@ -77,7 +77,8 @@ export interface CastPlan {
   mains: Map<number, string>;
 }
 
-const MODEL = "google/gemini-3.8-flash";
+/** Who answers: Claude (ai_claude.ts) since Oct 30, not Gemini; part of each answer's cache key. */
+const MODEL = "claude-opus";
 /** A new prompt or answer shape is a new cache file. */
 const VERSION = "cast-v1";
 const TIMEOUT_MS = 90_000;

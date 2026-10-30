@@ -305,6 +305,8 @@ export interface WriterScriptRow {
   built: boolean;
   /** Its kind of video, when Writer says. */
   style: Style | null;
+  /** Written over several videos (from this Mac's copy until the server's list says). */
+  compilation?: boolean;
 }
 
 export interface ProjectStatus {

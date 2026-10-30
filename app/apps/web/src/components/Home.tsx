@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileText, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileText, Files, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
@@ -151,7 +151,7 @@ export function Home() {
   const projectRows: Listed[] = [
     ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one, importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true) })),
+    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: { ...one, compilation: one.compilation ?? localScripts.find((local) => local.id === one.id)?.compilation }, importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true) })),
   ].sort((a, b) => b.at - a.at);
   const subtitledRows: Listed[] = [
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
@@ -658,6 +658,8 @@ type ScriptIssueRow = {
   dismissedAt?: number;
   /** Its first prompt still to start. */
   firstBuild?: boolean;
+  /** Written over several videos. */
+  compilation?: boolean;
   /** Its script being written (a build running on this Mac). */
   building?: boolean;
 };
@@ -997,7 +999,7 @@ function changedLabel(ms: number) {
 }
 
 /** Name, status, length, when it last changed and its ⋯: the columns every row lines up on. */
-const COLUMNS = "grid grid-cols-[minmax(0,2.6fr)_minmax(0,1.3fr)_64px_92px_30px] items-center gap-4";
+const COLUMNS = "grid grid-cols-[minmax(0,2.4fr)_minmax(0,1.5fr)_64px_92px_30px] items-center gap-4";
 
 /** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */
 function ProjectTable({
@@ -1157,6 +1159,19 @@ function ScriptLink({ id }: { id: string }) {
   );
 }
 
+/** What a script is, in its row's status: its kind of video, and one script or a compilation of several videos ("Bodycam compilation"). */
+function ScriptKind({ script }: { script: WriterScriptRow }) {
+  const style = STYLES.find((option) => option.value === script.style)?.label;
+  const label = style === undefined ? (script.compilation ? "Compilation" : "Script") : `${style} ${script.compilation ? "compilation" : "script"}`;
+  const Icon = script.compilation ? Files : FileText;
+  return (
+    <span title={label} className="flex h-[22px] min-w-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary">
+      <Icon size={12} className="shrink-0" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
 /** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
 function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; onChanged: () => void; onImport?: () => void }) {
   const [starting, setStarting] = useState(false);
@@ -1196,7 +1211,7 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
         </span>
         <StartedBy by={script.createdBy ?? undefined} size={24} className="ml-auto shrink-0" />
       </div>
-      <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
+      <div role="cell" className="flex min-w-0 items-center gap-1">
         {importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (its row opens the import).
           <span className="flex min-w-0 items-center gap-2" title={importing.step}>
@@ -1209,10 +1224,7 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
         ) : importing ? (
           <span className={cx("flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium tabular", importing.stopped ? "text-warning" : "text-info")}>{importing.word}</span>
         ) : (
-          <span className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary">
-            <FileText size={12} />
-            Script
-          </span>
+          <ScriptKind script={script} />
         )}
         {writing && !importing && <span className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-info">Writing</span>}
         {/* Its next step, as a button of its own at the end of the status. */}

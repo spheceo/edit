@@ -1,6 +1,6 @@
 # Speed plan
 
-Cloud functionality remains required for every project. [New cloud-first opportunities](cloud-first-opportunities.md) explores independent ways to reduce work, move cloud transfers off the Mac, share source-time artifacts, compact subtitles and overlap delivery with rendering.
+Cloud functionality remains required for every project.
 
 Changes to make Edit much faster from import to export, more reliable, lighter on RAM and disk, and good over Tailscale. Numbers come from `~/.edit/logs/edit.log` (Oct 15–17) unless noted.
 
@@ -20,7 +20,7 @@ Landed on `main` after the rewrite. **Measured end to end on Young Actress** (29
 - **Fractional rates.** `settings.ntsc` runs a project at fps×1000/1001 (23.976, 29.97): a subtitled video takes its footage's exact rate, so every frame is shown once; exports are exactly 24000/1001. Projects made before keep 24 (changing a project's rate would move every clip by 0.1%).
 - **7.1 started: Drive → R2 in the cloud** (`apps/relay/src/jobs.ts`, deployed Oct 18). A Cloudflare Workflow copies a Drive file into an R2 multipart upload 64 MiB at a time, each part a durable step (bytes piped through, never held; only ETags kept), checks the size, records the original in the registry (Convex `edit:putMedia`) and aborts its upload if it fails. The job's id is the file, key and the file's checksum, so asking again finds it and a changed file is a new copy. Edit's script import asks the relay first and follows the job's progress (the parts in R2), streaming through the Mac only when the relay can't (`cloud_media.ts` `driveInTheCloud`, `EDIT_CLOUD_JOBS=0` to skip). Tested: a 68 MB file through `wrangler dev`, byte for byte the same as Drive's (MD5); deployed, **Young Actress's 3.5 GB original copied in 115 s** (~30 MB/s) with the Mac only asking how far it had got (the Oct 17 baseline downloaded it to the Mac in 174 s before uploading it again), 10 ranges across part boundaries identical to Drive's. Not yet tried: a Worker restart mid-copy (each part is a retried step), 7.2–7.6. Other clients (and the parity harness) still get whole projects.
 - **4.7 done.** Only subtitled videos upload to Drive. Every project keeps its exports in a list that survives restarts, with download (Mac or Tailscale), show and delete.
-- **Subtitles** (`docs/subtitles-plan.md`, *Done*): the cast with person ids enforced by `Project::validate`, one colour rule (ΔE 28) for both subtitlers, and timing that never starts a line late.
+- **Subtitles** (done): the cast with person ids enforced by `Project::validate`, one colour rule (ΔE 28) for both subtitlers, and timing that never starts a line late.
 
 ## 0. First: media back on the internal disk
 

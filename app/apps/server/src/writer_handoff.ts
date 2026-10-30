@@ -1,4 +1,4 @@
-// Writer's scripts into Edit (docs/plans/2026-10-22-share-review-handoff.md):
+// Writer's scripts into Edit:
 // Writer is where scripts are written, and its scripts sync to Repack's
 // Convex with their files on R2 (`writer:listScripts` / `getScript`, read
 // through Edit's relay, which never lets Edit write them). Importing one

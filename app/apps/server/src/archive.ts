@@ -1,4 +1,4 @@
-// Archived projects (docs/plans/2026-10-22-archive-projects.md): a member
+// Archived projects: a member
 // archives an Edit project on Repack's Projects page to free its big files
 // (Repack's server deletes its footage on R2 that no active project uses);
 // this machine, hearing it, deletes the project's exports and its footage

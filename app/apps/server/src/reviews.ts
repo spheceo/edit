@@ -1,4 +1,4 @@
-// Repack reviews of an edit (docs/plans/2026-10-22-share-review-handoff.md):
+// Repack reviews of an edit:
 // an export shared to a Repack link, where anyone with it comments at a
 // moment of the video (as on Frame.io, which it replaces); the notes followed
 // here while Edit runs; the agent set on them when a reviewer clicks "Ready

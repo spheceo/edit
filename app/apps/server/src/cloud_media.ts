@@ -1207,7 +1207,7 @@ async function excerptMedia(
 }
 
 // ---------------------------------------------------------------------------
-// Archived projects (docs/plans/2026-10-22-archive-projects.md): their big
+// Archived projects: their big
 // files freed, and brought back from their sources on restore.
 
 /** What a media's cache folder keeps when its project is archived: the analysis (it cost money, and makes a restore free). */

@@ -29,21 +29,47 @@ export function elapsed(ms: number): string {
  * An import's percentage as shown: what the server says, crept forward while
  * it says the same thing (a long step, like joining a 10-hour preview, reports
  * no progress of its own), so it never sits still (the user, Oct 30: "we always
- * get stuck at 60% visually"). It eases toward a few points on, never past 99,
- * and never goes back: a new number from the server carries on from whichever
- * is further.
+ * get stuck at 60% visually", then "now we're kinda stuck on 67"). It slows as
+ * it goes but never stops: about 3 points in the first minute, 7 by five, 12 by
+ * twenty, never past 99 and never back. A new number from the server carries on
+ * from whichever is further.
  */
 const CREEP = new Map<string, { said: number; from: number; since: number; shown: number }>();
-const ROOM = 8;
-const EASE_MS = 4 * 60_000;
+const SCALE = 4;
+const MINUTE = 60_000;
+/** Kept on this browser, so a reload carries on rather than dropping back to the server's number. */
+const KEPT = "edit.import.creep";
+function kept(id: string): { said: number; from: number; since: number; shown: number } | undefined {
+  try {
+    const one = (JSON.parse(localStorage.getItem(KEPT) ?? "{}") as Record<string, { said: number; from: number; since: number }>)[id];
+    return one === undefined ? undefined : { ...one, shown: one.from };
+  } catch {
+    return undefined;
+  }
+}
+function keep(id: string, entry: { said: number; from: number; since: number }): void {
+  try {
+    const all = JSON.parse(localStorage.getItem(KEPT) ?? "{}") as Record<string, { said: number; from: number; since: number }>;
+    all[id] = entry;
+    // Only the last few imports.
+    const ids = Object.keys(all).slice(-12);
+    localStorage.setItem(KEPT, JSON.stringify(Object.fromEntries(ids.map((key) => [key, all[key]]))));
+  } catch {
+    // Private mode or full: kept for this page only.
+  }
+}
 export function creeping(id: string, said: number, now = Date.now()): number {
-  const seen = CREEP.get(id);
+  let seen = CREEP.get(id);
+  if (seen === undefined) {
+    seen = kept(id);
+    if (seen !== undefined) CREEP.set(id, seen);
+  }
   if (seen === undefined || seen.said !== said) {
     const from = Math.max(said, seen?.shown ?? 0);
     CREEP.set(id, { said, from, since: now, shown: from });
+    keep(id, { said, from, since: now });
     return from;
   }
-  const room = Math.max(0, Math.min(ROOM, 99 - seen.from));
-  seen.shown = Math.max(seen.shown, seen.from + room * (1 - Math.exp(-(now - seen.since) / EASE_MS)));
+  seen.shown = Math.min(99, Math.max(seen.shown, seen.from + SCALE * Math.log1p((now - seen.since) / MINUTE)));
   return seen.shown;
 }

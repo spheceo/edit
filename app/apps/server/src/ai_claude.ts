@@ -9,9 +9,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 
 import { join } from "./paths.ts";
+import * as tools from "./tools.ts";
 import * as claude from "./writer/claude.ts";
 
-type Part = { type?: string; text?: string; image_url?: { url?: string } };
+type Part = { type?: string; text?: string; image_url?: { url?: string }; file?: { filename?: string; file_data?: string } };
 type Message = { role?: string; content?: string | Part[] };
 type Request = { messages?: Message[]; response_format?: { json_schema?: { schema?: Record<string, unknown> } } };
 
@@ -35,6 +36,18 @@ export async function post(bodyFile: string, model: string = claude.OPUS, label 
           ? message.content
           : (message.content ?? [])
               .map((part) => {
+                // A video (a gateway request's file part): contact sheets, a frame a second, as the watcher shows Claude (watch.ts).
+                const video = part.type === "file" ? /^data:video\/\w+;base64,(.+)$/s.exec(part.file?.file_data ?? "") : null;
+                if (video !== null) {
+                  const clip = join(folder, `video-${images.length + 1}.mp4`);
+                  fs.writeFileSync(clip, Buffer.from(video[1]!, "base64"));
+                  const first = images.length;
+                  const made = Bun.spawnSync([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", clip, "-vf", "fps=1,scale=320:-2,tile=4x3", "-q:v", "4", join(folder, `sheets-${first}-%02d.jpg`)]);
+                  if (made.exitCode !== 0) throw new Error("the video's frames couldn't be taken");
+                  const sheets = fs.readdirSync(folder).filter((name) => name.startsWith(`sheets-${first}-`)).sort();
+                  images.push(...sheets.map((name) => join(folder, name)));
+                  return `[The video, as contact sheets of 12 frames, one a second, left to right then top to bottom:\n${sheets.map((name, index) => `Sheet ${index + 1} (${join(folder, name)}): seconds ${index * 12} to ${index * 12 + 11}`).join("\n")}]`;
+                }
                 const data = part.type === "image_url" ? /^data:image\/(\w+);base64,(.+)$/s.exec(part.image_url?.url ?? "") : null;
                 if (data === null) return part.text ?? "";
                 const path = join(folder, `image-${images.length + 1}.${data[1] === "jpeg" ? "jpg" : data[1]}`);

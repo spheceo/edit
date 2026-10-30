@@ -33,6 +33,7 @@ import { atOnce, described, names, said, type Dot } from "./seats.ts";
 import { stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
 import type { Transcript } from "./transcribe.ts";
+import * as aiClaude from "./ai_claude.ts";
 
 /** The cache file for one key: `moving-seats-v1-<hash>.json`. */
 export function fileFor(key: string): string {
@@ -267,7 +268,7 @@ async function look(source: string, work: string, transcript: Transcript, people
   };
   const scratch = join(work, `request-${index}.json`);
   fs.writeFileSync(scratch, stableStringify(request));
-  const response = (await seams.watch.post(scratch)) as { choices?: { message?: { content?: unknown } }[] } | null;
+  const response = (await aiClaude.post(scratch, undefined, "Claude opus following the speakers")) as { choices?: { message?: { content?: unknown } }[] } | null;
   const content = response?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("the model gave no answer");
   const answer = serdeParse(seams.watch.unfence(content)) as { stills?: unknown };

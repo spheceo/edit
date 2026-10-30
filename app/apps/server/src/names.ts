@@ -23,6 +23,7 @@ import { join } from "./paths.ts";
 import { serdeParse } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
+import * as aiClaude from "./ai_claude.ts";
 
 /** Scribe bills a request with more than 100 key terms for at least 20 seconds. */
 export const MOST_TERMS = 100;
@@ -146,7 +147,7 @@ async function ask(id: string, title: string, given: Source[], hash: string, pat
   try {
     fs.writeFileSync(scratch, stableStringify(request));
     response = await Promise.race([
-      seams.watch.post(scratch),
+      aiClaude.post(scratch, undefined, "Claude opus listing the case's names"),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the model took too long")), TIMEOUT_MS)),
     ]);
   } finally {

@@ -26,6 +26,7 @@ import * as seams from "./seams.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
 import type { Transcript } from "./transcribe.ts";
+import * as aiClaude from "./ai_claude.ts";
 
 /** Frames a second looked at, and their size: enough to see a cut. */
 const FPS = 2.0;
@@ -538,7 +539,7 @@ async function look(
   const scratch = join(work, `request-${index}-${fixed(start, 0)}.json`);
   // Keys sorted, as serde_json writes a `json!` value (the gateway mock keys answers by the request).
   fs.writeFileSync(scratch, stableStringify(request));
-  const response = (await seams.watch.post(scratch)) as { choices?: { message?: { content?: unknown } }[] } | null;
+  const response = (await aiClaude.post(scratch, undefined, "Claude opus placing the speakers")) as { choices?: { message?: { content?: unknown } }[] } | null;
   const content = response?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("the model gave no answer");
   let answer: unknown;

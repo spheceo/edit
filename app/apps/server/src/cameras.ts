@@ -20,6 +20,7 @@ import * as diag from "./diag.ts";
 import { serdeParse, trim } from "./rust.ts";
 import * as tools from "./tools.ts";
 import type { Transcript } from "./transcribe.ts";
+import * as aiClaude from "./ai_claude.ts";
 
 /** Seconds between frames read (more on a long file: at most `MOST` frames). */
 const EVERY = 5;
@@ -151,7 +152,6 @@ async function videoLength(source: string): Promise<number | null> {
 
 /** Reads the camera IDs off `source`: sheets of edge strips, one model call each. Null without a route. */
 export async function read(source: string, seconds: number): Promise<Reading | null> {
-  const watch = await import("./watch.ts");
   const step = Math.max(EVERY, seconds / MOST);
   const dir = fs.mkdtempSync(`${os.tmpdir()}/edit-cameras-`);
   try {
@@ -178,7 +178,7 @@ export async function read(source: string, seconds: number): Promise<Reading | n
       fs.writeFileSync(body, JSON.stringify(question(fs.readFileSync(`${dir}/${name}`).toString("base64"), count)));
       let answer: unknown;
       try {
-        answer = await watch.post(body);
+        answer = await aiClaude.post(body, undefined, "Claude opus reading the bodycams' IDs");
       } catch (error) {
         // No cloud token or gateway key: no cameras, not a failed transcript.
         if (/needs the cloud token/.test(diag.messageOf(error))) return null;

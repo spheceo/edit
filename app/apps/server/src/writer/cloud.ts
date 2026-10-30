@@ -669,7 +669,8 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
     const smallJson = name.endsWith(".json") && size < 2_000_000;
     const present = !smallJson && isFile(path) && fs.statSync(path).size === size;
     // Footage isn't downloaded: the page plays it from the cloud (`stream`), so a first sync brings the scripts at once.
-    if (storage.isFootage(name) && !present) {
+    // Nor are a transcription's pieces, needed only to finish one cut short (a new Mac fetched thousands, Oct 30).
+    if ((storage.isFootage(name) || /(^|\/)pieces\//u.test(name)) && !present) {
       if (isFile(path)) fs.rmSync(path);
       files[name] = { key, size, mtime: known?.files[name]?.mtime ?? 0 };
       left.push(name);

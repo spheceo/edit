@@ -1,56 +1,60 @@
-import { Check, ExternalLink, LoaderCircle, Wrench, X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { claudeBusy, setupClaude, useAgent, useClaudeSupport, watchClaudeSupport } from "../lib/agent";
-import { useMachine } from "../lib/api";
+import { ExternalLink, LoaderCircle } from "lucide-react";
+import { useEffect } from "react";
+import { setupClaude, useAgent, useClaudeSupport, watchClaudeSupport } from "../lib/agent";
 
-/** The CLI opens Claude's website; the account and password stay with Claude. */
-export function ClaudeSetupCard({ initial = false }: { initial?: boolean }) {
+/**
+ * Claude Code, when someone has to do something about it: one line saying
+ * what and the button that does it. Never shown once Claude is ready, nor
+ * while Edit updates or checks it by itself (the user, Oct 30: people kept
+ * sending screenshots of a "Claude is ready" card that came back after being
+ * closed). The CLI opens Claude's website; the account stays with Claude.
+ */
+export function ClaudeSetupCard() {
   const { status, error } = useClaudeSupport();
   const notInstalled = useAgent((state) => state.status?.state === "missing");
-  const missing = notInstalled || (initial && !status?.path);
-  const machine = useMachine();
-  const [dismissed, setDismissed] = useState<number | null>(null);
   useEffect(watchClaudeSupport, []);
-  const busy = claudeBusy(status);
-  if (!initial && (!status || status.phase === "idle" || (status.phase === "ready" && dismissed === status.checkedAt)) && !error) return null;
+  const signingIn = status?.phase === "signing_in";
+  const needs = notInstalled || status?.phase === "needs_login" || status?.phase === "error" || signingIn;
+  if (!needs) return null;
+  const said = notInstalled
+    ? "Claude Code isn't set up on this Mac."
+    : signingIn
+      ? "Finish signing in to Claude on its website."
+      : status?.phase === "needs_login"
+        ? "Claude needs you to sign in."
+        : (error || status?.error || "Claude Code isn't answering.");
   return (
-    <div className="m-3 shrink-0 rounded-xl border border-line bg-raised p-3 text-[12px]">
-      <div className="flex items-center gap-2 font-medium">
-        {busy ? <LoaderCircle size={14} className="animate-spin" /> : status?.phase === "ready" ? <Check size={14} /> : <Wrench size={14} />}
-        <span>Claude Code on {machine}</span>
-        {status?.phase === "ready" && <button type="button" aria-label="Dismiss Claude diagnosis" onClick={() => setDismissed(status.checkedAt)} className="ml-auto rounded p-1 text-muted hover:bg-hover"><X size={14} /></button>}
-      </div>
-      <p role="status" aria-live="polite" className="mt-2 leading-relaxed text-muted">
-        {status?.message || "Edit can set up Claude Code and check that it can send a request. Sign in on Claude's website when it opens."}
-      </p>
-      {(error || status?.error) && <p role="alert" className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-danger">{error || status?.error}</p>}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {busy ? (
-          <>
-            {status?.url && <a href={status.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 rounded-lg bg-hover px-3 py-2 font-medium">Open sign-in page <ExternalLink size={12} /></a>}
-            <button type="button" onClick={() => void setupClaude("cancel")} className="rounded-lg px-3 py-2 text-muted hover:bg-hover hover:text-fg">Cancel</button>
-          </>
-        ) : status?.phase === "ready" ? null : (
-          <>
-            <button type="button" onClick={() => void setupClaude(missing ? "repair" : "login")} className="rounded-lg bg-hover px-3 py-2 font-medium">{missing ? "Set up Claude" : status?.phase === "needs_login" ? "Sign in to Claude" : "Reconnect Claude"}</button>
-            <button type="button" onClick={() => void setupClaude("diagnose")} className="rounded-lg px-3 py-2 text-muted hover:bg-hover hover:text-fg">Check Claude</button>
-            {status?.phase === "error" && <button type="button" onClick={() => void setupClaude("repair")} className="rounded-lg px-3 py-2 text-muted hover:bg-hover hover:text-fg">Update and repair</button>}
-          </>
-        )}
-      </div>
-      {Boolean(status?.checks.length) && (
-        <details className="mt-3 text-muted">
-          <summary className="cursor-pointer hover:text-fg">Diagnosis</summary>
-          <div className="mt-2 max-h-40 space-y-3 overflow-auto">
-            {status?.checks.map((check, index) => (
-              <div key={`${check.name}-${index}`}>
-                <div className={check.ok ? "text-success" : "text-warning"}>{check.name}: {check.ok ? "passed" : "needs attention"}</div>
-                <pre className="mt-1 font-sans whitespace-pre-wrap break-words">{check.detail}</pre>
-              </div>
-            ))}
-          </div>
-        </details>
+    <SetupLine text={said}>
+      {signingIn ? (
+        <>
+          <LoaderCircle size={13} className="animate-spin text-muted" />
+          {status?.url && (
+            <a href={status.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-fg hover:underline">
+              Open sign-in page <ExternalLink size={11} />
+            </a>
+          )}
+          <button type="button" onClick={() => void setupClaude("cancel")} className="text-muted hover:text-fg">
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button type="button" onClick={() => void setupClaude(notInstalled ? "repair" : status?.phase === "needs_login" ? "login" : "repair")} className="font-medium text-fg hover:underline">
+          {notInstalled ? "Set up Claude" : status?.phase === "needs_login" ? "Sign in" : "Repair"}
+        </button>
       )}
+    </SetupLine>
+  );
+}
+
+/** One thing to set up: what's wrong, then what to do. */
+export function SetupLine({ text, children }: { text: string; children?: React.ReactNode }) {
+  return (
+    <div className="flex min-h-9 items-center gap-3 px-3 text-[13px]">
+      <span className="size-1.5 shrink-0 rounded-full bg-warning" />
+      <span className="min-w-0 flex-1 truncate text-secondary" title={text}>
+        {text}
+      </span>
+      <span className="flex shrink-0 items-center gap-3">{children}</span>
     </div>
   );
 }

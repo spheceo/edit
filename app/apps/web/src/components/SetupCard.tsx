@@ -1,11 +1,13 @@
-// "Finish setting up Edit": what this machine is missing, with the fix for each.
+// What this machine still needs set up, one line each with its fix; nothing
+// once it's all there (the user, Oct 30: "make this a lot cleaner and a lot
+// shorter").
 
-import { Check, Copy, RotateCw, TriangleAlert } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { copyText } from "../lib/diagnostics";
-import { cx } from "./ui";
-import { ClaudeSetupCard } from "./ClaudeSetupCard";
+import { useClaudeSupport, useAgent } from "../lib/agent";
+import { ClaudeSetupCard, SetupLine } from "./ClaudeSetupCard";
 
 interface SetupCheck {
   id: string;
@@ -17,57 +19,46 @@ interface SetupCheck {
 
 export function SetupCard() {
   const [checks, setChecks] = useState<SetupCheck[] | null>(null);
-  const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const claude = useClaudeSupport((state) => state.status?.phase);
+  const claudeMissing = useAgent((state) => state.status?.state === "missing");
 
   const check = async () => {
-    setChecking(true);
     try {
       const response = await fetch("/api/setup");
       if (response.ok) setChecks(((await response.json()) as { checks: SetupCheck[] }).checks);
     } catch {
       // The project list already reports an unreachable server.
-    } finally {
-      setChecking(false);
     }
   };
 
   useEffect(() => {
     void check();
+    // Fixed in a terminal meanwhile: looked at again when Edit comes back to the front.
+    const again = () => document.visibilityState === "visible" && void check();
+    document.addEventListener("visibilitychange", again);
+    return () => document.removeEventListener("visibilitychange", again);
   }, []);
 
-  const missing = checks?.filter((item) => !item.ok) ?? [];
-  if (missing.length === 0) return <ClaudeSetupCard />;
+  // Claude has its own line (ClaudeSetupCard), shown only when there's something to do.
+  const missing = checks?.filter((item) => !item.ok && item.id !== "claude") ?? [];
+  const claudeLine = claudeMissing || claude === "needs_login" || claude === "error" || claude === "signing_in";
+  if (missing.length === 0 && !claudeLine) return null;
   return (
-    <div className="mt-8 rounded-xl border border-warning/25 bg-warning-soft p-4">
-      <div className="flex items-center gap-2">
-        <TriangleAlert size={15} className="text-warning" />
-        <span className="text-[13px] font-medium">Finish setting up Edit</span>
-        <button
-          title="Check again"
-          onClick={() => void check()}
-          className="ml-auto flex size-7 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-fg"
-        >
-          <RotateCw size={13} className={cx(checking && "animate-spin")} />
-        </button>
-      </div>
-      <div className="mt-2 flex flex-col gap-2">
-        {missing.map((item) => item.id === "claude" ? <ClaudeSetupCard key={item.id} initial /> : (
-          <div key={item.id} className="flex items-center gap-3 text-[13px]">
-            <div className="min-w-0 flex-1">
-              <span className="text-fg">{item.title}</span> <span className="text-muted">is missing. {item.why}</span>
-            </div>
-            <button
-              title="Copy"
-              onClick={() => void copyText(item.fix).then((done) => done && setCopied(item.id))}
-              className="flex max-w-[440px] items-center gap-2 rounded-md border border-line bg-black/40 px-2 py-1 font-mono text-[11px] text-muted hover:text-fg"
-            >
-              <span className="truncate">{item.fix}</span>
-              {copied === item.id ? <Check size={12} className="shrink-0 text-success" /> : <Copy size={12} className="shrink-0" />}
-            </button>
-          </div>
-        ))}
-      </div>
+    <div className="mt-6 divide-y divide-line overflow-hidden rounded-lg border border-line">
+      <ClaudeSetupCard />
+      {missing.map((item) => (
+        <SetupLine key={item.id} text={`${item.title} is missing. ${item.why}`}>
+          <button
+            title="Copy the command that installs it"
+            onClick={() => void copyText(item.fix).then((done) => done && setCopied(item.id))}
+            className="flex max-w-[320px] items-center gap-2 rounded-md bg-raised px-2 py-1 font-mono text-[11px] text-muted hover:text-fg"
+          >
+            <span className="truncate">{item.fix}</span>
+            {copied === item.id ? <Check size={12} className="shrink-0 text-success" /> : <Copy size={12} className="shrink-0" />}
+          </button>
+        </SetupLine>
+      ))}
     </div>
   );
 }

@@ -36,7 +36,7 @@ import {
   openAgent,
   providerName,
   sendToAgent,
-  setupClaude,
+  useClaudeSupport,
   stopAgent,
   useAgent,
   type AgentEntry,
@@ -106,15 +106,12 @@ export function AgentPanel() {
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-1.5 pl-3.5">
         <AgentMark size={15} />
         <span className="font-medium">{providerName(status)}</span>
-        {status?.provider !== "codex" && <IconButton label="Check Claude" className="ml-auto" onClick={() => void setupClaude("diagnose")}><Wrench size={14} /></IconButton>}
         {entries.length > 0 && (
           <IconButton label="New chat" className="ml-auto" disabled={busy || !entries.length} onClick={newChat}>
             <SquarePen size={14} />
           </IconButton>
         )}
       </div>
-
-      {entries.length > 0 && status?.provider !== "codex" && <ClaudeSetupCard />}
 
       <div
         ref={list}
@@ -328,9 +325,18 @@ function ToolCall({ call }: { call: AgentEntry }) {
   );
 }
 
-/** Claude Code missing or signed out: the steps to fix it on the machine running Edit, and a re-check. */
+/** Claude Code missing or signed out: what to do, on one line (nothing to show while Edit readies it by itself). */
 function SetupClaude() {
-  return <ClaudeSetupCard initial />;
+  const phase = useClaudeSupport((state) => state.status?.phase);
+  const missing = useAgent((state) => state.status?.state === "missing");
+  if (missing || phase === "needs_login" || phase === "error" || phase === "signing_in") {
+    return (
+      <div className="overflow-hidden rounded-lg border border-line">
+        <ClaudeSetupCard />
+      </div>
+    );
+  }
+  return <Empty title="Getting Claude ready" detail="Edit is checking Claude Code on this Mac. This takes a moment." />;
 }
 
 /** Codex missing or signed out: the steps to fix it on the machine running Edit, and a re-check. */

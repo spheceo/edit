@@ -341,7 +341,8 @@ async function downloadNow(
 /** One way of asking YouTube: straight from this Mac, with the editor's sign-in from Chrome, or through the paid proxy (never with the sign-in). */
 interface Route {
   proxy: string | null;
-  signIn: string[];
+  /** The editor's YouTube sign-in from Chrome, read only when this route is tried. */
+  signIn: boolean;
 }
 
 /**
@@ -352,15 +353,16 @@ interface Route {
  * things work").
  */
 function routesFor(proxy: string, straight: number): Route[] {
-  const routes: Route[] = Array.from({ length: straight }, () => ({ proxy: null, signIn: [] }));
-  if (proxy !== "") routes.push({ proxy, signIn: [] });
-  const signIn = cookieArgs();
-  if (signIn.length > 0) routes.push({ proxy: null, signIn });
+  const routes: Route[] = Array.from({ length: straight }, () => ({ proxy: null, signIn: false }));
+  if (proxy !== "") routes.push({ proxy, signIn: false });
+  // Chrome's folder is looked in only when it comes to this: macOS warns the
+  // person whenever Edit reads another app's data (Oct 30: "Data Access Blocked").
+  if (process.platform === "darwin" && process.env.EDIT_YOUTUBE_SIGNIN !== "0") routes.push({ proxy: null, signIn: true });
   return routes;
 }
 
 function said(route: Route): string {
-  return route.proxy !== null ? " (proxy)" : route.signIn.length > 0 ? " (with the YouTube sign-in from Chrome)" : "";
+  return route.proxy !== null ? " (proxy)" : route.signIn ? " (with the YouTube sign-in from Chrome)" : "";
 }
 
 /** Whether a video needs a signed-in YouTube (age, members, private): only the sign-in can help. */
@@ -375,7 +377,7 @@ function needsSignIn(stderr: string): boolean {
  */
 function nextRoute(routes: Route[], attempt: number, stderr: string): number | null {
   if (needsSignIn(stderr)) {
-    const at = routes.findIndex((route, index) => index > attempt && route.signIn.length > 0);
+    const at = routes.findIndex((route, index) => index > attempt && route.signIn);
     return at < 0 ? null : at;
   }
   return attempt + 1 < routes.length && (refused(stderr) || noVideo(stderr)) ? attempt + 1 : null;
@@ -391,6 +393,8 @@ async function runYtdlp(
   format: string | null = null,
 ): Promise<{ path: string | null; stderr: string }> {
   const proxy = route.proxy;
+  const signIn = route.signIn ? cookieArgs() : [];
+  if (route.signIn && signIn.length === 0) return { path: null, stderr: "ERROR: no YouTube sign-in in Chrome on this Mac" };
   const runtime = runtimeArgs();
   const command = [
     binary,
@@ -424,7 +428,7 @@ async function runYtdlp(
     "--print",
     "after_move:EDIT-FILE %(filepath)s",
     ...(proxy === null ? [] : ["--proxy", proxy]),
-    ...(proxy === null ? route.signIn : []),
+    ...(proxy === null ? signIn : []),
     url,
   ];
   let child: Bun.Subprocess<"ignore", "pipe", "pipe">;

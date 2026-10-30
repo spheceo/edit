@@ -28,6 +28,37 @@ export function start(app: App): void {
   const data = store.dataDir(app.store.home);
   drive.hooks.accessToken = () => app.library.accessToken();
   build.usePort(app.port);
+  // Writer's folder is another app's data: macOS warns the person each time
+  // Edit reads it ("Data Access Blocked", Oct 30), so it's read once per Mac.
+  const once = join(data, "writer-folder-read");
+  if (!fs.existsSync(once)) adoptWriter(data);
+  try {
+    fs.mkdirSync(data, { recursive: true });
+    fs.writeFileSync(once, new Date().toISOString());
+  } catch (error) {
+    diag.warn("writer", `noting Writer's folder as read: ${diag.messageOf(error)}`);
+  }
+  store.markInterrupted(data);
+  for (const id of store.ids(data)) jobs.markInterrupted(data, id);
+  cloud.start(data);
+  reviews.start(app, data);
+  // Idle scripts' footage left to the cloud.
+  storage.start(data);
+  // Each script and the edit made from it kept in step.
+  scriptSync.start(app);
+  // Archives and restores heard from the cloud, acted on every 20 s.
+  setInterval(() => archive.react(app, data), 20_000);
+  for (const begin of starters) {
+    try {
+      begin(app);
+    } catch (error) {
+      diag.warn("writer", diag.messageOf(error));
+    }
+  }
+}
+
+/** Writer's scripts, its cloud record and its review notes, taken into Script mode. */
+function adoptWriter(data: string): void {
   try {
     const adopted = store.adoptWriterFolder(data, WRITER_FOLDER());
     if (adopted > 0) diag.info("writer", `brought ${adopted} scripts in from Writer's folder on this Mac`);
@@ -46,22 +77,5 @@ export function start(app: App): void {
     }
   } catch (error) {
     diag.warn("writer", `Writer's cloud record wasn't taken: ${diag.messageOf(error)}`);
-  }
-  store.markInterrupted(data);
-  for (const id of store.ids(data)) jobs.markInterrupted(data, id);
-  cloud.start(data);
-  reviews.start(app, data);
-  // Idle scripts' footage left to the cloud.
-  storage.start(data);
-  // Each script and the edit made from it kept in step.
-  scriptSync.start(app);
-  // Archives and restores heard from the cloud, acted on every 20 s.
-  setInterval(() => archive.react(app, data), 20_000);
-  for (const begin of starters) {
-    try {
-      begin(app);
-    } catch (error) {
-      diag.warn("writer", diag.messageOf(error));
-    }
   }
 }

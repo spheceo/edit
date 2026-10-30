@@ -12,6 +12,7 @@ import { isFile } from "../paths.ts";
 import * as build from "./build.ts";
 import * as casefiles from "./casefiles.ts";
 import * as chat from "./chat.ts";
+import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
 import { checkClips } from "./edits.ts";
 import * as exact from "./exact.ts";
@@ -203,17 +204,31 @@ export async function exactOnce(app: App, data: string, id: string, job: Job): P
  * again on those times, without any piece that has no sound. Hearing that
  * fails leaves the captions' cut, and says so.
  */
+/**
+ * The footage exact hearing reads, on this Mac: null when it's here, else why
+ * it couldn't come back. A script imported on another Mac points at that Mac's
+ * file, and one whose footage was left to the cloud has none here, so what's
+ * heard is the preview (the footage's own sound, one file), fetched from the
+ * cloud; bringing back the recordings didn't bring it (Oct 30, When Teen
+ * Delinquents: 824 MB of recordings back, then "No such file or directory").
+ */
+async function footageHere(app: App | null, data: string, dir: string, script: Script, job: Job): Promise<string | null> {
+  if (isFile(footagePath(dir, script))) return null;
+  job.stage("Bringing the footage back to hear it");
+  try {
+    if (cloud.fileKey(data, script.id, "proxy.mp4")?.key) await cloud.fetchPreview(data, script.id);
+    else if (app !== null) await storage.bringBack(app, data, script.id, job, true);
+  } catch (error) {
+    checkStopped(job);
+    return diag.messageOf(error);
+  }
+  return isFile(footagePath(dir, script)) ? null : "its preview isn't in the cloud";
+}
+
 async function cutExactly(app: App, data: string, dir: string, script: Script, plan: Plan, clips: Clip[], peaks: ArrayLike<number>, job: Job): Promise<[Clip[], string]> {
   // Footage cleared from this Mac once the cloud held it comes back first.
-  if (!isFile(footagePath(dir, script))) {
-    job.stage("Bringing the footage back to hear it");
-    try {
-      await storage.bringBack(app, data, script.id, job);
-    } catch (error) {
-      checkStopped(job);
-      return [clips, `The footage isn't on this Mac and couldn't be brought back (${diag.messageOf(error)}), so its cuts follow YouTube's captions. Build again to try once more.`];
-    }
-  }
+  const away = await footageHere(app, data, dir, script, job);
+  if (away !== null) return [clips, `The footage isn't on this Mac and couldn't be brought back (${away}), so its cuts follow YouTube's captions. Build again to try once more.`];
   const words = script.words;
   let heard: exact.Report;
   try {
@@ -266,6 +281,8 @@ export async function reviseWith(data: string, id: string, request: string, said
   if (exact.wanted(now)) {
     const words = now.words;
     try {
+      const away = await footageHere(null, data, dir, now, job);
+      if (away !== null) throw new Error(`the footage isn't on this Mac and couldn't be brought back: ${away}`);
       const heard = await exact.run(now, dir, footagePath(dir, now), done.clips, job.stage, job.signal);
       if (heard.stretches > 0) {
         const remapped = exact.remapFrom(words, done.clips, now.words, now.durationMs);

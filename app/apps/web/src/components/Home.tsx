@@ -145,14 +145,17 @@ export function Home() {
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
     ...cloudSubtitled.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: null })),
   ].sort((a, b) => b.at - a.at);
-  // What needs someone: scripts not yet an edit (being written, or ready and
-  // nobody started it), edits on a review link not approved yet, and imports
-  // that stopped. Edits being worked on and finished ones wait in All projects.
+  // What needs someone: edits on a review link not approved yet, and edits
+  // whose import stopped; scripts whose import stopped are the box above the
+  // list, with their answers. Ordinary scripts and the edits being worked on
+  // wait in All projects (the user, Oct 30: "we shouldn't show just normal
+  // scripts in the main view").
   const needsYou = projectRows.filter((row) => {
+    if (row.local === null && row.cloud === null) return false;
     const state = statuses[row.local?.id ?? row.cloud?.id ?? ""];
-    const stage = stageOf(row, state);
-    return stage === "scripting" || stage === "ready" || stage === "review" || Boolean(state?.importing?.error);
+    return stageOf(row, state) === "review" || Boolean(state?.importing?.error);
   });
+  const stoppedScripts = issues.filter((issue) => !writing.some((one) => one.id === issue.id)).length;
   // A search looks through every project; otherwise the tab's.
   const searching = words !== "";
   const rows = !showEdits ? subtitledRows : searching || view === "all" ? projectRows : needsYou;
@@ -228,7 +231,7 @@ export function Home() {
                 {(
                   [
                     // What needs someone first; the rest a tab away (the user, Oct 30: "you mainly see projects that need you").
-                    ["needs", "Needs you", needsYou.length] as [View, string, number],
+                    ["needs", "Needs you", needsYou.length + stoppedScripts] as [View, string, number],
                     ["all", "All projects", projectRows.length] as [View, string, number],
                     ["subtitled", "Subtitled", subtitledRows.length] as [View, string, number],
                   ] as [View, string, number][]
@@ -274,12 +277,12 @@ export function Home() {
               <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits} statuses={statuses} importing={new Set(writing.map((one) => one.id))} onImport={setWatching} />
             ) : searching ? (
               <p className="mt-16 text-center text-muted">Nothing matches “{query.trim()}”.</p>
-            ) : view === "needs" ? (
+            ) : view === "needs" && stoppedScripts === 0 ? (
               <div className="mt-6 rounded-xl border border-line px-4 py-10 text-center">
                 <div className="text-[14px] font-medium">Nothing needs you</div>
-                <p className="mt-1 text-[12px] text-muted">New scripts, stopped imports and edits waiting on review show up here.</p>
+                <p className="mt-1 text-[12px] text-muted">Stopped imports and edits waiting on review show up here.</p>
               </div>
-            ) : (
+            ) : view === "needs" ? null : (
               <p className="mt-16 text-center text-muted">Nothing here.</p>
             )}
           </>

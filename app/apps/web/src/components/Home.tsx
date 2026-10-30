@@ -10,7 +10,7 @@ import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
-import { STYLES, type ProjectSummary, type Style } from "../lib/types";
+import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu } from "./ContextMenu";
@@ -43,7 +43,7 @@ export function Home() {
     const stopped = () =>
       void fetch("/api/writer/scripts")
         .then((answer) => (answer.ok ? answer.json() : []))
-        .then((rows: unknown) => setIssues(Array.isArray(rows) ? (rows as ScriptIssueRow[]).filter((row) => row.status === "needs_choice" || row.status === "error") : []), () => {});
+        .then((rows: unknown) => setLocalScripts(Array.isArray(rows) ? (rows as ScriptIssueRow[]) : []), () => {});
     look();
     stopped();
     const timer = setInterval(() => {
@@ -53,7 +53,9 @@ export function Home() {
     }, 4_000);
     return () => clearInterval(timer);
   }, []);
-  const [issues, setIssues] = useState<ScriptIssueRow[]>([]);
+  // Script mode's scripts as this Mac has them: what stopped (any Mac's), and who started each.
+  const [localScripts, setLocalScripts] = useState<ScriptIssueRow[]>([]);
+  const issues = localScripts.filter((row) => row.status === "needs_choice" || row.status === "error");
   const account = useAccount((state) => state.account);
   // Someone who writes scripts and makes no videos: Script mode is their home.
   useEffect(() => {
@@ -256,7 +258,7 @@ export function Home() {
               </div>
             </div>
 
-            <Imports projects={projects ?? []} statuses={statuses} writing={writing} issues={issues} />
+            <Imports projects={projects ?? []} statuses={statuses} writing={writing} issues={issues} scripts={localScripts} />
             {rows.length > 0 ? (
               <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits && searching} statuses={statuses} />
             ) : (
@@ -610,7 +612,10 @@ type ScriptIssueRow = {
   id: string;
   title: string;
   status: string;
+  /** Where it got to: downloading, transcribing, … */
+  stage: string;
   error: string | null;
+  createdBy?: Creator;
   decision?: { kind: string; summary: string; failed?: { id: string; title: string; error: string }[] };
 };
 
@@ -646,6 +651,9 @@ function ScriptIssue({ issue }: { issue: ScriptIssueRow }) {
         <button onClick={() => navigate(`/scripts/${issue.id}`)} className="min-w-0 shrink truncate text-left text-fg hover:underline">
           {issue.title}
         </button>
+        <StartedBy by={issue.createdBy} size={20} className="shrink-0" />
+        {/* Where it stopped, so it's plain what's being fixed. */}
+        <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-secondary">Stopped {stageWords(issue.stage)}</span>
         <span className="min-w-0 flex-1 truncate text-[12px] text-muted" title={said}>
           {said}
         </span>
@@ -690,7 +698,22 @@ function ScriptIssue({ issue }: { issue: ScriptIssueRow }) {
   );
 }
 
-function Imports({ projects, statuses, writing, issues }: { projects: ProjectSummary[]; statuses: Record<string, ProjectStatus>; writing: Writing[]; issues: ScriptIssueRow[] }) {
+/** An import's stage in words ("while downloading"). */
+function stageWords(stage: string): string {
+  const words: Record<string, string> = {
+    reading: "while reading the footage",
+    downloading: "while downloading",
+    joining: "while joining the videos",
+    transcribing: "while transcribing",
+    processing: "while finishing",
+    researching: "while researching",
+    speakers: "while naming the speakers",
+    ready: "after the import",
+  };
+  return words[stage] ?? (stage ? `at ${stage}` : "");
+}
+
+function Imports({ projects, statuses, writing, issues, scripts }: { projects: ProjectSummary[]; statuses: Record<string, ProjectStatus>; writing: Writing[]; issues: ScriptIssueRow[]; scripts: ScriptIssueRow[] }) {
   const running = projects.flatMap((project) => {
     const importing = statuses[project.id]?.importing;
     return importing ? [{ project, importing }] : [];
@@ -718,6 +741,7 @@ function Imports({ projects, statuses, writing, issues }: { projects: ProjectSum
           <span className="flex min-w-0 items-center gap-2 truncate text-[13px] text-fg">
             <FileText size={13} className="shrink-0 text-muted" />
             <span className="truncate">{one.title || "New script"}</span>
+            <StartedBy by={scripts.find((row) => row.id === one.id)?.createdBy} size={20} className="shrink-0" />
           </span>
           <span className="h-1 overflow-hidden rounded-full bg-raised">
             <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(1, one.percent / 100)) * 100)}%` }} />

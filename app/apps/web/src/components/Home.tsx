@@ -1033,7 +1033,7 @@ function changedLabel(ms: number) {
  * a short category). The table sets the columns and each row takes them up
  * (subgrid), so they line up row to row.
  */
-const TABLE = "grid grid-cols-[minmax(0,1fr)_repeat(6,auto)_24px] gap-x-6";
+const TABLE = "grid grid-cols-[minmax(0,1fr)_repeat(7,auto)] gap-x-6";
 const COLUMNS = "col-span-full grid grid-cols-subgrid items-center";
 
 /** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */
@@ -1173,7 +1173,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
         <button
           title="More"
           onClick={card.menu}
-          className="flex size-6 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
+          className="flex size-7 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
         >
           <Ellipsis size={15} />
         </button>
@@ -1351,7 +1351,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
               { width: 180 },
             );
           }}
-          className="flex size-6 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
+          className="flex size-7 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
         >
           <Ellipsis size={15} />
         </button>

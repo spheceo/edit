@@ -17,6 +17,7 @@
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
+import * as relay from "./relay.ts";
 import * as tools from "./tools.ts";
 import { compiled } from "./update.ts";
 import { cookieArgs } from "./youtube_signin.ts";
@@ -299,7 +300,7 @@ async function downloadNow(
   }
   let binary = await ytdlp(home);
   const url = `https://www.youtube.com/watch?v=${id}`;
-  const proxy = process.env.PROXY_URL?.trim() ?? "";
+  const proxy = await proxyUrl();
   const routes = routesFor(proxy, 2);
   let failure = "";
   let updated = false;
@@ -336,6 +337,29 @@ async function downloadNow(
     attempt = next;
   }
   throw new Error(`YouTube video ${id} couldn't be downloaded: ${failure}`);
+}
+
+/** The relay's proxy, asked for once in a while (it's the same for everyone). */
+let fromRelay: { url: string; at: number } | null = null;
+
+/**
+ * The YouTube proxy: this machine's own (`PROXY_URL`, the dev server's), else
+ * the relay's, which gives it to signed-in people only (installed Edits carry
+ * no keys: until Oct 30 a teammate's download YouTube refused had no proxy).
+ * Only used when YouTube refuses a download straight; never logged.
+ */
+export async function proxyUrl(): Promise<string> {
+  const own = process.env.PROXY_URL?.trim() ?? "";
+  if (own !== "") return own;
+  if (fromRelay !== null && Date.now() - fromRelay.at < 10 * 60_000) return fromRelay.url;
+  try {
+    const answer = await relay.json<{ proxyUrl?: string | null }>("GET", "/v1/proxy", null, "the YouTube proxy", 20);
+    fromRelay = { url: typeof answer.proxyUrl === "string" ? answer.proxyUrl.trim() : "", at: Date.now() };
+  } catch (error) {
+    diag.warn("youtube", `asking the relay for the YouTube proxy: ${diag.messageOf(error)}`);
+    return "";
+  }
+  return fromRelay.url;
 }
 
 /** One way of asking YouTube: straight from this Mac, with the editor's sign-in from Chrome, or through the paid proxy (never with the sign-in). */
@@ -505,7 +529,7 @@ export const PREVIEW_FORMAT = "b[vcodec^=avc1][height<=480][ext=mp4]/bv*[vcodec^
 export async function downloadRange(home: string, id: string, range: [number, number], dir: string, progress: (bytes: number, total: number | null, name: string) => void = () => {}, format: string | null = null): Promise<Downloaded> {
   if (!/^[A-Za-z0-9_-]{11}$/.test(id) || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0] || range[1] - range[0] > 600) throw new Error("YouTube excerpt needs a valid video and a source range of at most 10 minutes");
   fs.mkdirSync(dir, { recursive: true });
-  const binary = await ytdlp(home); const proxy = process.env.PROXY_URL?.trim() ?? "";
+  const binary = await ytdlp(home); const proxy = await proxyUrl();
   const routes = routesFor(proxy, 1);
   let failure = "";
   for (let attempt: number | null = 0; attempt !== null; ) {

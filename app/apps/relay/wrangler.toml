@@ -9,7 +9,7 @@ preview_urls = false
 # Secrets: in Infisical (Repack's project, folder /edit-relay; ElevenLabs and Maps values live there directly),
 # pushed with `bun scripts/push-secrets.ts --yes` (dry run without --yes; values on wrangler's
 # stdin, never printed). For `wrangler dev`, apps/relay/.dev.vars, gitignored. Never in this file:
-#   ELEVENLABS_MAIN_KEY, ELEVENLABS_VOICES_KEY, GOOGLE_MAPS_KEY
+#   ELEVENLABS_MAIN_KEY, ELEVENLABS_VOICES_KEY, GOOGLE_MAPS_KEY, PROXY_URL (the YouTube proxy, /v1/proxy)
 # Edit's cloud (/v1/cloud/*, src/cloud.ts; signed-in people only, src/auth.ts):
 #   R2_ACCOUNT_ID          Cloudflare account id (<id>.r2.cloudflarestorage.com)
 #   R2_ACCESS_KEY_ID       an R2 API token's S3 access key id

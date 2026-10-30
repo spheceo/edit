@@ -160,3 +160,14 @@
     background: none;
   }
 }
+
+/* Home's rows as the list changes under them: a new one slides in, a renamed one flashes once. */
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(-4px); }
+}
+@keyframes row-flash {
+  from { background: color-mix(in srgb, var(--color-info) 16%, transparent); }
+  to { background: transparent; }
+}
+.row-new { animation: row-in 360ms ease-out; }
+.row-changed { animation: row-flash 1.6s ease-out; }

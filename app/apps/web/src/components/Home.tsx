@@ -2,7 +2,7 @@ import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudU
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
-import { editStyles, makesVideos, useAccount, writesScripts } from "../lib/account";
+import { editStyles, useAccount, writesScripts } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { hasImportLinks, importPaste } from "../lib/import-input";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
@@ -13,6 +13,8 @@ import { ago, shortDuration } from "../lib/time";
 import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
 import { elapsed, STEPS, stepOf } from "../writer/import-steps";
+import { prefetchScript } from "../writer/opened";
+import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Tile } from "./Logo";
@@ -27,14 +29,15 @@ const FORMAT = { width: 1920, height: 1080, fps: 30 };
 const SHORTS_FORMAT = { width: 1080, height: 1920, fps: 30 };
 
 export function Home() {
-  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
-  const [cloud, setCloud] = useState<CloudList | null>(null);
-  const [statuses, setStatuses] = useState<Record<string, ProjectStatus>>({});
+  // What Home showed last, at once; the fresh answers take its place as they come.
+  const [projects, setProjects] = useKept<ProjectSummary[] | null>("home.projects", null);
+  const [cloud, setCloud] = useKept<CloudList | null>("home.cloud", null);
+  const [statuses, setStatuses] = useKept<Record<string, ProjectStatus>>("home.statuses", {});
   const [creating, setCreating] = useState(false);
   // Script mode's scripts: one list with the edits (the user, Oct 30: "merge the two applications as much as possible").
-  const [scripts, setScripts] = useState<WriterScriptRow[]>([]);
+  const [scripts, setScripts] = useKept<WriterScriptRow[]>("home.scripts", []);
   // Scripts being written from videos, as Script mode's imports say.
-  const [writing, setWriting] = useState<Writing[]>([]);
+  const [writing, setWriting] = useKept<Writing[]>("home.writing", []);
   useEffect(() => {
     const look = () =>
       void fetch("/api/writer/progress")
@@ -55,15 +58,10 @@ export function Home() {
     return () => clearInterval(timer);
   }, []);
   // Script mode's scripts as this Mac has them: what stopped (any Mac's), and who started each.
-  const [localScripts, setLocalScripts] = useState<ScriptIssueRow[]>([]);
+  const [localScripts, setLocalScripts] = useKept<ScriptIssueRow[]>("home.localScripts", []);
   // A script import opened over Home (from the strip or its row).
   const [watching, setWatching] = useState<string | null>(null);
   const issues = localScripts.filter((row) => row.status === "needs_choice" || row.status === "error");
-  const account = useAccount((state) => state.account);
-  // Someone who writes scripts and makes no videos: Script mode is their home.
-  useEffect(() => {
-    if (!makesVideos(account) && writesScripts(account)) navigate("/scripts", true);
-  }, [account]);
   const [query, setQuery] = useState("");
   // One stage at a time (or the subtitled videos), remembered on this browser.
   const [view, setView] = useState<View>(() => {
@@ -82,10 +80,11 @@ export function Home() {
 
   const refresh = () => {
     // The cloud’s list is fetched beside this machine’s, never in its way.
+    // Not reached this time: the last list stays (its error says so).
     void cloudApi
       .projects()
       .then(setCloud)
-      .catch(() => setCloud(null));
+      .catch((error: unknown) => setCloud((last) => (last === null ? null : { ...last, error: (error as Error).message, offline: true })));
     if (writesScripts(useAccount.getState().account)) {
       void api
         .writerScripts()
@@ -897,7 +896,26 @@ function ProjectTable({
   onImport: (id: string) => void;
 }) {
   const idOf = (row: Listed) => row.local?.id ?? row.cloud?.id ?? `script-${row.script!.id}`;
-  const rowOf = (row: Listed) =>
+  const nameOf = (row: Listed) => row.local?.name ?? row.cloud?.name ?? row.script?.title ?? "";
+  // What came in since the list was last shown: new rows slide in, renamed ones flash once (state B
+  // laid over state A, rather than the list built again).
+  const seen = useRef<Map<string, string> | null>(null);
+  const [lately, setLately] = useState<{ added: Set<string>; renamed: Set<string> }>({ added: new Set(), renamed: new Set() });
+  const signature = rows.map((row) => `${idOf(row)}=${nameOf(row)}`).join("\n");
+  useEffect(() => {
+    const now = new Map(rows.map((row) => [idOf(row), nameOf(row)]));
+    const before = seen.current;
+    seen.current = now;
+    if (before === null) return;
+    const added = new Set([...now.keys()].filter((id) => !before.has(id)));
+    const renamed = new Set([...now.entries()].filter(([id, name]) => before.has(id) && before.get(id) !== name).map(([id]) => id));
+    if (added.size === 0 && renamed.size === 0) return;
+    setLately({ added, renamed });
+    const timer = setTimeout(() => setLately({ added: new Set(), renamed: new Set() }), 1800);
+    return () => clearTimeout(timer);
+  }, [signature]);
+  const rowOf = (row: Listed) => <div className={cx(lately.added.has(idOf(row)) && "row-new", lately.renamed.has(idOf(row)) && "row-changed")}>{rowBody(row)}</div>;
+  const rowBody = (row: Listed) =>
     row.local !== null ? (
       <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} />
     ) : row.cloud !== null ? (
@@ -1003,6 +1021,7 @@ function ScriptLink({ id }: { id: string }) {
   return (
     <button
       title="Open its script"
+      onMouseEnter={() => prefetchScript(id)}
       onClick={(event) => {
         event.stopPropagation();
         navigate(`/scripts/${id}`);
@@ -1033,7 +1052,7 @@ function ScriptTableRow({ script, onChanged, onImport }: { script: WriterScriptR
     }
   };
   return (
-    <div role="row" onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
+    <div role="row" onMouseEnter={() => !onImport && prefetchScript(script.id)} onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
         <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[script.style ?? "bodycam"] ?? STYLE_COLOURS.bodycam }} />
         <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={script.title}>

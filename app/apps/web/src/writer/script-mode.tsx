@@ -8,6 +8,8 @@ import { LitStyle } from "./comments";
 import { ImportScreen } from "./import-screen";
 import { useAccount } from "./account";
 import { openDialog } from "../lib/dialogs";
+import { useKept } from "../lib/kept";
+import { lastOpened } from "./opened";
 import { navigate, usePath } from "../lib/route";
 import { startScrollbars } from "./scrollbars";
 import "./writer.css";
@@ -69,16 +71,18 @@ export function ScriptMode() {
     markPointer();
     startScrollbars();
   }, []);
-  const [ready, setReady] = useState(false);
-  const [scripts, setScripts] = useState<Summary[]>([]);
+  // The list as last seen shows at once; a script opened before opens at once (then catches up).
+  const [scripts, setScripts] = useKept<Summary[]>("scripts.list", []);
+  const [ready, setReady] = useState(() => scripts.length > 0);
   const [claude, setClaude] = useState<ClaudeStatus | null>(null);
   const [progress, setProgress] = useState<ImportProgress[]>([]);
-  const [open, setOpen] = useState<Script | null>(null);
+  const [open, setOpen] = useState<Script | null>(() => (route.name === "script" ? (lastOpened.get(route.id) ?? null) : null));
   const [error, setError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<{ id: string; title: string } | null>(null);
   const [account] = useAccount();
   const acceptScript = (fresh: Script) => setOpen((current) => {
     if (current?.id === fresh.id && (fresh.revision < current.revision || (fresh.revision === current.revision && fresh.updatedAt < current.updatedAt))) return current;
+    lastOpened.set(fresh.id, fresh);
     return fresh;
   });
   const setRoute = (next: Route) => navigate(pathOf(next));
@@ -119,7 +123,11 @@ export function ScriptMode() {
   }, []);
 
   useEffect(() => {
-    if (route.name !== "script" || !ready) return;
+    if (route.name !== "script") return;
+    // Opened before: it shows at once while the fresh copy comes.
+    const kept = lastOpened.get(route.id);
+    if (kept) setOpen((current) => (current?.id === kept.id ? current : kept));
+    if (!ready) return;
     let gone = false;
     void getScript(route.id).then((fresh) => { if (!gone) acceptScript(fresh); }).catch((cause) => { if (!gone) setError(message(cause)); });
     return () => { gone = true; };

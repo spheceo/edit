@@ -129,12 +129,12 @@ export function Home() {
   // it's still in the importing phase").
   const importingNow = new Map<string, Importing>();
   for (const one of localScripts) {
-    if (one.status === "processing") importingNow.set(one.id, { word: `Importing ${Math.round(one.progress ?? 0)}%`, stopped: false });
+    if (one.status === "processing") importingNow.set(one.id, { word: `Importing ${Math.round(one.progress ?? 0)}%`, stopped: false, percent: one.progress ?? 0 });
     else if (one.status === "error" || one.status === "needs_choice") importingNow.set(one.id, { word: one.status === "needs_choice" ? "Waiting on a choice" : "Stopped", stopped: true });
     // In, but its first prompt not started yet: still importing until the workflow is under way.
     else if (one.firstBuild) importingNow.set(one.id, { word: "Starting the workflow", stopped: false });
   }
-  for (const one of writing) importingNow.set(one.id, { word: `Importing ${Math.round(one.percent)}%`, stopped: false });
+  for (const one of writing) importingNow.set(one.id, { word: `Importing ${Math.round(one.percent)}%`, stopped: false, percent: one.percent, step: one.detail || one.stage });
   const count = (projects?.length ?? 0) + cloudOnly.length + scriptOnly.length;
 
   // What the search and filters keep.
@@ -151,7 +151,7 @@ export function Home() {
   const projectRows: Listed[] = [
     ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined)).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one, importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true) })),
+    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one, importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true) })),
   ].sort((a, b) => b.at - a.at);
   const subtitledRows: Listed[] = [
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
@@ -282,7 +282,7 @@ export function Home() {
               </div>
             </div>
 
-            <Imports projects={projects ?? []} statuses={statuses} writing={writing} issues={issues} scripts={localScripts} onOpen={setWatching} />
+            <Imports writing={writing} issues={issues} onOpen={setWatching} />
             <ImportDialog id={watching} writing={writing} issues={issues} onClose={() => setWatching(null)} />
             {rows.length > 0 ? (
               // Edits grouped by stage, script to finished video.
@@ -315,7 +315,7 @@ type Listed =
   | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing; writing?: boolean };
 
 /** A script's import while it isn't done: its word for it ("Importing 40%", "Stopped"). */
-type Importing = { word: string; stopped: boolean };
+type Importing = { word: string; stopped: boolean; percent?: number; step?: string };
 
 /**
  * Where a project is on its way, script to finished video: Home lists them by
@@ -817,7 +817,7 @@ function IssueActions({ issue }: { issue: ScriptIssueRow }) {
  * title opens it over Home.
  */
 function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: string) => void }) {
-  const { items, dialogs, said, showError } = useIssueDialogs(issue);
+  const { items, dialogs } = useIssueDialogs(issue);
   return (
     <div className={cx(COLUMNS, "min-h-14 border-t border-line px-4 py-2.5 text-[13px]")}>
       <div className="flex min-w-0 items-center gap-2.5">
@@ -832,9 +832,6 @@ function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: st
         <span title={`Stopped ${stageWords(issue.stage)}`} className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
           {stageName(issue.stage)}
         </span>
-        <button onClick={showError} className="min-w-0 truncate text-left text-[12px] text-muted hover:text-fg" title="View the whole error">
-          {said}
-        </button>
       </div>
       <IconButton label={`What to do about “${issue.title}”`} onClick={(event) => toggleMenu(event.currentTarget, items, { width: 220 })}>
         <Ellipsis size={16} />
@@ -971,77 +968,23 @@ function ImportDialog({ id, writing, issues, onClose }: { id: string | null; wri
   );
 }
 
-function Imports({ projects, statuses, writing, issues, scripts, onOpen }: { projects: ProjectSummary[]; statuses: Record<string, ProjectStatus>; writing: Writing[]; issues: ScriptIssueRow[]; scripts: ScriptIssueRow[]; onOpen: (id: string) => void }) {
-  const running = projects.flatMap((project) => {
-    const importing = statuses[project.id]?.importing;
-    return importing ? [{ project, importing }] : [];
-  });
-  // A script both stopped and running again (being answered) shows as running.
+/**
+ * Imports that stopped, at the top of Home: each one's answers in its ⋯ menu
+ * (View error, Retry, Replace…, Dismiss…). Answered, it leaves for the table's
+ * Importing, with its bar; nothing stopped, nothing shown. The user, Oct 30:
+ * "the needs you be at the top and once you retry it moves to importing at
+ * the bottom with the progress bar and percentage".
+ */
+function Imports({ writing, issues, onOpen }: { writing: Writing[]; issues: ScriptIssueRow[]; onOpen: (id: string) => void }) {
+  // A script both stopped and running again (being answered) is running.
   const open = issues.filter((issue) => !writing.some((one) => one.id === issue.id));
-  if (running.length === 0 && writing.length === 0 && open.length === 0) return null;
-  const total = running.length + writing.length;
+  if (open.length === 0) return null;
   return (
     <div className="mt-6 overflow-hidden rounded-xl border border-line">
-      <div className="flex h-10 items-center gap-3 bg-panel px-4 text-[12px] font-medium text-muted">
-        {total > 0 && `Importing ${total} ${total === 1 ? "project" : "projects"}`}
-        {open.length > 0 && <span className="text-warning">{open.length} stopped</span>}
-      </div>
+      <div className="flex h-10 items-center bg-panel px-4 text-[12px] font-medium text-warning">{open.length} stopped</div>
       {open.map((issue) => (
         <ScriptIssue key={issue.id} issue={issue} onOpen={onOpen} />
       ))}
-      {writing.map((one) => (
-        <button
-          key={one.id}
-          onClick={() => onOpen(one.id)}
-          title={one.detail || undefined}
-          // The stopped rows' columns: name and who started it, then how far (a short bar, the number, the step).
-          className={cx(COLUMNS, "min-h-14 w-full border-t border-line px-4 py-2.5 text-left text-[13px] transition-colors hover:bg-panel")}
-        >
-          <span className="flex min-w-0 items-center gap-2.5">
-            <FileText size={14} className="shrink-0 text-muted" />
-            <span className="truncate text-[14px] text-fg">{one.title || "New script"}</span>
-            <StartedBy by={scripts.find((row) => row.id === one.id)?.createdBy} size={24} className="ml-auto shrink-0" />
-          </span>
-          <span className="col-span-3 flex min-w-0 items-center gap-2.5">
-            <span className="h-1 w-20 shrink-0 overflow-hidden rounded-full bg-raised">
-              <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(1, one.percent / 100)) * 100)}%` }} />
-            </span>
-            {/* A number, so it's plain the import is moving (the user, Oct 30: "progress helps us know if the software is working or not"). */}
-            <span className="shrink-0 text-[12px] text-fg tabular">{Math.round(Math.max(0, Math.min(100, one.percent)))}%</span>
-            <span className="min-w-0 truncate text-[12px] text-muted">{one.detail || one.stage}</span>
-          </span>
-        </button>
-      ))}
-      {running.map(({ project, importing }) => {
-        const stuck = importStuck(importing);
-        const share = importing.state === "downloading" ? (importing.share ?? importing.ready / Math.max(importing.files, 1)) : 1;
-        return (
-          <button
-            key={project.id}
-            onClick={() => navigate(`/p/${project.id}`)}
-            title={importing.error ?? undefined}
-            className={cx(COLUMNS, "min-h-14 w-full border-t border-line px-4 py-2.5 text-left text-[13px] transition-colors hover:bg-panel")}
-          >
-            <span className="flex min-w-0 items-center gap-2.5">
-              <FileVideo size={14} className="shrink-0 text-muted" />
-              <span className="truncate text-[14px] text-fg">{project.name}</span>
-              <StartedBy by={project.created_by} size={24} className="ml-auto shrink-0" />
-            </span>
-            <span className="col-span-3 flex min-w-0 items-center gap-2.5">
-              <span className="h-1 w-20 shrink-0 overflow-hidden rounded-full bg-raised">
-                <span className={cx("block h-full rounded-full transition-[width] duration-500", stuck ? "bg-warning" : "bg-info")} style={{ width: `${Math.round(share * 100)}%` }} />
-              </span>
-            <span className={cx("min-w-0 truncate text-[12px] tabular", stuck ? "text-warning" : "text-muted")}>
-              {stuck
-                ? importing.state === "failed" ? "Failed: open it" : "Needs you: open it"
-                : importing.state === "downloading"
-                  ? `${Math.round(share * 100)}% · ${importing.ready} of ${importing.files} files`
-                  : { transcribing: "Hearing the footage", placing: "Laying it out", voicing: "Voicing the cut-ins" }[importing.state] ?? importing.state}
-            </span>
-            </span>
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -1254,8 +1197,16 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
         <StartedBy by={script.createdBy ?? undefined} size={24} className="ml-auto shrink-0" />
       </div>
       <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
-        {importing ? (
-          // Still importing: how far, or that it stopped (its row opens the import).
+        {importing && !importing.stopped && importing.percent !== undefined ? (
+          // Importing: how far (its row opens the import).
+          <span className="flex min-w-0 items-center gap-2" title={importing.step}>
+            <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-raised">
+              <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
+            </span>
+            <span className="shrink-0 text-[12px] text-fg tabular">{Math.round(Math.max(0, Math.min(100, importing.percent)))}%</span>
+            {importing.step && <span className="min-w-0 truncate text-[12px] text-muted">{importing.step}</span>}
+          </span>
+        ) : importing ? (
           <span className={cx("flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium tabular", importing.stopped ? "text-warning" : "text-info")}>{importing.word}</span>
         ) : (
           <span className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary">

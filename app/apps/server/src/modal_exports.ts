@@ -6,11 +6,10 @@
  * and the footage stay in Modal's cache: exporting again after a small
  * change renders only what it touched.
  *
- * On when the server starts with `EDIT_MODAL_EXPORTS=1`, `EDIT_WORKER_ROOT`
- * (the checkout's `app/`, whose worker it runs) and Repack beside it
- * (`EDIT_REPACK_ROOT`, default `<root>/../../repack`: its Infisical injection
- * gives the driver R2's keys for that process only); Modal is signed in on
- * the Mac. The house export of a whole edit whose footage is all in the
+ * On when the server starts with `EDIT_MODAL_EXPORTS=1` and `EDIT_WORKER_ROOT`
+ * (the checkout's `app/`, whose worker it runs); Infisical's CLI gives the
+ * driver R2's keys for that process only (`infisical run`, the `/media`
+ * folder), so nothing needs Repack's checkout; Modal is signed in on the Mac. The house export of a whole edit whose footage is all in the
  * cloud goes there when this Mac is busy or it's long (`cloudBetter`); anything else (another format, size or shape, a span,
  * chapters, footage only on this Mac) is exported here as before.
  */
@@ -139,20 +138,21 @@ function used(project: Project): Project["media"] {
   return project.media.filter((media) => ids.has(media.id));
 }
 
-/** The driver's command (Repack's injection, then uv's Python with the worker's requirements), or why there's none. */
+/** The team's Infisical project (where R2's keys live, in `/media`). */
+const INFISICAL_PROJECT = "cdf4a0c5-eca4-4415-af3a-40871af285f3";
+
+/** The driver's command (Infisical's injection, then uv's Python with the worker's requirements), or why there's none. */
 function command(): { cwd: string; cmd: string[] } {
   const root = workerRoot();
   if (!fs.existsSync(join(root, "apps", "worker", "export_v3.py"))) {
     throw new Error("cloud exports need EDIT_WORKER_ROOT (the checkout's app/ folder)");
   }
-  const repack = process.env.EDIT_REPACK_ROOT ?? join(root, "..", "..", "repack");
-  const env = join(repack, "scripts", "env.ts");
-  const bun = Bun.which("bun");
+  const infisical = Bun.which("infisical");
   const uv = Bun.which("uv");
-  if (!fs.existsSync(env) || bun === null || uv === null) throw new Error("cloud exports need Bun, uv and Repack's scripts/env.ts on this Mac");
+  if (infisical === null || uv === null) throw new Error("cloud exports need Infisical's CLI (signed in) and uv on this Mac");
   return {
     cwd: root,
-    cmd: [bun, "--no-env-file", env, "--path=/media", "--", uv, "run", "--python", "3.12", "--with-requirements", "apps/worker/requirements.txt",
+    cmd: [infisical, "run", `--projectId=${INFISICAL_PROJECT}`, `--env=${process.env.INFISICAL_ENV ?? "dev"}`, "--path=/media", "--silent", "--", uv, "run", "--python", "3.12", "--with-requirements", "apps/worker/requirements.txt",
       "--with", "boto3==1.40.31", "python", "apps/worker/export_v3.py"],
   };
 }

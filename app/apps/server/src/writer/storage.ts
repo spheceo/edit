@@ -81,11 +81,11 @@ const busy = (id: string): boolean => jobs.running(id) || importing(id);
 const offered = new Set<string>();
 
 /** Leaves an idle script's footage to the cloud, as the module notes say: the bytes freed. */
-export async function free(data: string, id: string, now = Date.now()): Promise<number> {
+export async function free(data: string, id: string, now = Date.now(), idle = IDLE_MS): Promise<number> {
   if (busy(id) || archive.archived(data, id)) return 0;
   const dir = store.scriptDir(data, id);
   const script = store.read(dir);
-  if (script.status !== "ready" || now - script.updatedAt < IDLE_MS || cloud.revOf(data, id) === null || cloud.refused(id) !== null) return 0;
+  if (script.status !== "ready" || now - script.updatedAt < idle || cloud.revOf(data, id) === null || cloud.refused(id) !== null) return 0;
   const own = recordings(dir, script).flatMap((recording) => (recording.span === null && recording.file.startsWith(`${dir}/`) && isFile(recording.file) ? [recording.file.slice(dir.length + 1)] : []));
   if (own.some((name) => !shared(dir).has(name)) && !offered.has(id) && editCloud.enabled()) {
     offered.add(id);
@@ -96,7 +96,7 @@ export async function free(data: string, id: string, now = Date.now()): Promise<
   let bytes = 0;
   for (const name of footageFiles(dir)) {
     const stat = fs.statSync(join(dir, name));
-    if (now - stat.mtimeMs < IDLE_MS) continue;
+    if (now - stat.mtimeMs < idle) continue;
     const kept = cloud.fileKey(data, id, name);
     if (!inEdit.has(name) && !(kept !== null && kept.key !== "" && kept.size === stat.size && kept.mtime === Math.floor(stat.mtimeMs))) continue;
     leaving.push(name);
@@ -189,8 +189,18 @@ export async function bringBack(app: App, data: string, id: string, job?: jobs.J
   return missing;
 }
 
-/** Leaves idle scripts' footage to the cloud a couple of minutes after Edit starts, then every ten. */
+/**
+ * Leaves idle scripts' footage to the cloud a couple of minutes after Edit
+ * starts, then every ten; and a script's the moment a sync puts it there (the
+ * user, Oct 30: a preview kept here only while it's made, "deleted at once"
+ * once the cloud has it): only files the cloud holds as they are here go.
+ */
 export function start(data: string): void {
+  cloud.onPushed((id) => {
+    void free(data, id, Date.now(), 0)
+      .then((bytes) => bytes > 0 && diag.info("writer", `${id.slice(0, 8)}: ${Math.round(bytes / 1e6)} MB left to the cloud as soon as it was there`))
+      .catch((error: unknown) => diag.warn("writer", `${id.slice(0, 8)}: its footage stays here: ${diag.messageOf(error)}`));
+  });
   let running = false;
   const round = async () => {
     if (running) return;

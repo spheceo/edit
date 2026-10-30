@@ -164,6 +164,12 @@ export const revOf = (data: string, id: string): number | null => loadLedger(dat
 /** A script file's key and size in the cloud, as this Mac last synced it. */
 export const fileKey = (data: string, id: string, name: string): Kept | null => loadLedger(data).scripts[id]?.files[name] ?? null;
 
+/** Told of each script a sync has just put in the cloud (storage.ts leaves its footage there at once). */
+const pushedHooks: ((id: string) => void)[] = [];
+export function onPushed(hook: (id: string) => void): void {
+  pushedHooks.push(hook);
+}
+
 /**
  * Writer's own record of what each script is in the cloud, taken once when
  * its scripts were brought in, so nothing goes up again: the copies were made
@@ -575,6 +581,7 @@ async function tick(data: string, pull: boolean): Promise<number> {
         refusals.delete(id);
         ledger.scripts[id] = pushed;
         save();
+        for (const hook of pushedHooks) hook(id);
       }
     } catch (error) {
       const problem = error instanceof Problem ? error : new Problem(diag.messageOf(error));

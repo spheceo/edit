@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileText, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Search, Share2, Trash2, TriangleAlert } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileText, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
@@ -16,12 +16,12 @@ import { elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
 import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
-import { toggleMenu } from "./ContextMenu";
+import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { Logo, Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
-import { Button, cx, Modal, spring } from "./ui";
+import { Button, cx, IconButton, Modal, spring } from "./ui";
 
 // Every project is 1080p at 30 fps.
 const FORMAT = { width: 1920, height: 1080, fps: 30 };
@@ -61,7 +61,7 @@ export function Home() {
   const [localScripts, setLocalScripts] = useKept<ScriptIssueRow[]>("home.localScripts", []);
   // A script import opened over Home (from the strip or its row).
   const [watching, setWatching] = useState<string | null>(null);
-  const issues = localScripts.filter((row) => row.status === "needs_choice" || row.status === "error");
+  const issues = localScripts.filter((row) => (row.status === "needs_choice" || row.status === "error") && !row.dismissedAt);
   const [query, setQuery] = useState("");
   // One stage at a time (or the subtitled videos), remembered on this browser.
   const [view, setView] = useState<View>(() => {
@@ -253,7 +253,6 @@ export function Home() {
                       style === option.value ? "border-line-strong bg-raised text-fg" : "border-line text-secondary hover:bg-hover",
                     )}
                   >
-                    <span className="size-1.5 rounded-full" style={{ background: STYLE_COLOURS[option.value] }} />
                     {option.label}
                   </button>
                 ))}
@@ -312,9 +311,6 @@ function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
 
 /** Which list Home shows (remembered on this browser). */
 const VIEW = "edit.home.view";
-
-/** Each kind of video’s colour (its dot on cards and filters). */
-const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#c4a7ff", commentary: "#e5be72", shorts: "#5fd38d" };
 
 /** What each kind of video makes: the New project pills' tooltips. */
 const STYLE_NOTES: Record<Style, string> = {
@@ -622,76 +618,90 @@ type ScriptIssueRow = {
   error: string | null;
   createdBy?: Creator;
   decision?: { kind: string; summary: string; failed?: { id: string; title: string; error: string }[] };
+  /** Dismissed from "need you" (still stopped). */
+  dismissedAt?: number;
 };
 
+/** Answers a stopped import; it carries on in the background and Home follows it. */
+async function answerIssue(issue: ScriptIssueRow, choice: Record<string, unknown>) {
+  const writer = await import("../writer/api");
+  void writer.resumeImport(issue.id, choice as Parameters<typeof writer.resumeImport>[1]).catch((cause) => useEditor.getState().toastError(cause, `carry on “${issue.title}”`));
+}
+
 /**
- * An import stopped part-way, held where it is until someone answers: try it
- * again, go on without what failed, or give another link for a video (a
- * Drive copy of a YouTube video that won't download). The user, Oct 30: "if
- * something goes wrong, it's blocked, it's frozen at that state, and then we
- * can come in, fix it, and unblock it".
+ * What can be done about a stopped import, each in a dialog of its own: see
+ * the whole error, try again, go on without what failed, give another link
+ * for a video, or take it off the list. The user, Oct 30: "if something goes
+ * wrong, it's blocked, it's frozen at that state, and then we can come in,
+ * fix it, and unblock it"; and the answers in a ⋯ menu, "the exact error ...
+ * in a dialog box", Replace a dialog, and Dismiss confirmed.
  */
-/** What can be done about a stopped import: try again, go on without what failed, or another link for a video. */
-function IssueActions({ issue, wide = false }: { issue: ScriptIssueRow; wide?: boolean }) {
-  const [replacing, setReplacing] = useState(false);
+function useIssueDialogs(issue: ScriptIssueRow) {
+  const [open, setOpen] = useState<"error" | "replace" | "dismiss" | null>(null);
   const [url, setUrl] = useState("");
   const failed = issue.decision?.failed ?? [];
   const [which, setWhich] = useState(failed[0]?.id ?? "");
-  const [busy, setBusy] = useState(false);
-  const answer = async (choice: Record<string, unknown>) => {
-    setBusy(true);
-    try {
-      const writer = await import("../writer/api");
-      // The import carries on in the background; Home follows it.
-      void writer.resumeImport(issue.id, choice as Parameters<typeof writer.resumeImport>[1]).catch((cause) => useEditor.getState().toastError(cause, `carry on “${issue.title}”`));
-      setReplacing(false);
-    } finally {
-      setTimeout(() => setBusy(false), 1500);
-    }
+  const [copied, setCopied] = useState(false);
+  const close = () => setOpen(null);
+  const said = issue.decision?.summary ?? issue.error ?? "It stopped without saying why.";
+  const full = [said, ...failed.map((one) => `${one.title}: ${one.error}`)].join("\n\n");
+  const retry = () => {
+    close();
+    void answerIssue(issue, { kind: "retry" });
   };
-  return (
+  const items: MenuItem[] = [
+    { label: "View error", icon: <TriangleAlert size={14} />, onSelect: () => setOpen("error") },
+    { label: "Retry", icon: <RotateCw size={14} />, onSelect: retry },
+    ...(issue.decision?.kind === "failed_recordings" ? [{ label: "Go on without them", icon: <SkipForward size={14} />, onSelect: () => void answerIssue(issue, { kind: "skip_failed" }) }] : []),
+    { label: "Replace…", icon: <Replace size={14} />, onSelect: () => setOpen("replace") },
+    { separator: true },
+    { label: "Dismiss…", icon: <X size={14} />, danger: true, onSelect: () => setOpen("dismiss") },
+  ];
+  const dialogs = (
     <>
-      <span className={cx("flex shrink-0 items-center gap-3 text-[12px] font-medium", wide && "gap-2")}>
-        {wide ? (
-          <>
-            <Button size="sm" variant="primary" disabled={busy} onClick={() => void answer({ kind: "retry" })}>
-              Retry
+      <Modal open={open === "error"} onClose={close} width={520}>
+        <div className="p-6">
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Why “{issue.title}” stopped</h2>
+          <p className="mt-1 text-[13px] text-muted">Stopped {stageWords(issue.stage)}{issue.progress ? `, ${Math.round(issue.progress)}% in` : ""}. It waits there until it’s answered.</p>
+          <pre className="mt-4 max-h-[320px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-black p-3 font-mono text-[12px] leading-relaxed text-secondary select-text">{full}</pre>
+          <div className="mt-[22px] flex items-center justify-between gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                void navigator.clipboard?.writeText(full).then(() => {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1500);
+                });
+              }}
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
             </Button>
-            {issue.decision?.kind === "failed_recordings" && (
-              <Button size="sm" disabled={busy} onClick={() => void answer({ kind: "skip_failed" })}>
-                Go on without
+            <div className="flex gap-2">
+              <Button variant="subtle" onClick={() => setOpen("replace")}>
+                Replace…
               </Button>
-            )}
-            <Button size="sm" disabled={busy} onClick={() => setReplacing(!replacing)}>
-              Replace…
-            </Button>
-          </>
-        ) : (
-          <>
-            <button disabled={busy} onClick={() => void answer({ kind: "retry" })} className="text-fg hover:underline disabled:opacity-50">
-              Retry
-            </button>
-            {issue.decision?.kind === "failed_recordings" && (
-              <button disabled={busy} onClick={() => void answer({ kind: "skip_failed" })} className="text-muted hover:text-fg disabled:opacity-50">
-                Go on without
-              </button>
-            )}
-            <button disabled={busy} onClick={() => setReplacing(!replacing)} className="text-muted hover:text-fg disabled:opacity-50">
-              Replace…
-            </button>
-          </>
-        )}
-      </span>
-      {replacing && (
+              <Button variant="primary" onClick={retry}>
+                Retry
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+      <Modal open={open === "replace"} onClose={close} width={460}>
         <form
-          className={cx("flex items-center gap-2", wide ? "mt-3 w-full" : "mt-2 basis-full pl-6")}
+          className="p-6"
           onSubmit={(event) => {
             event.preventDefault();
-            if (url.trim() !== "") void answer({ kind: "replace", url: url.trim(), ...(failed.length > 0 ? { id: which } : {}) });
+            if (url.trim() === "") return;
+            close();
+            void answerIssue(issue, { kind: "replace", url: url.trim(), ...(failed.length > 0 ? { id: which } : {}) });
+            setUrl("");
           }}
         >
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Replace a video</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">Give another link for {failed.length > 0 ? "a video that failed" : "this import’s video"}, such as a Google Drive copy of a YouTube video that won’t download. The import carries on from where it stopped.</p>
           {failed.length > 1 && (
-            <select value={which} onChange={(event) => setWhich(event.target.value)} className="h-8 max-w-[220px] rounded-md border border-line bg-black px-2 text-[12px]">
+            <select value={which} onChange={(event) => setWhich(event.target.value)} className="mt-4 h-9 w-full rounded-md border border-line bg-black px-2 text-[13px]">
               {failed.map((one) => (
                 <option key={one.id} value={one.id}>
                   {one.title}
@@ -699,38 +709,90 @@ function IssueActions({ issue, wide = false }: { issue: ScriptIssueRow; wide?: b
               ))}
             </select>
           )}
-          <input autoFocus value={url} onChange={(event) => setUrl(event.target.value)} placeholder="A YouTube or Google Drive link to use instead" className="h-8 min-w-0 flex-1 rounded-md border border-line bg-black px-2 text-[12px] outline-none placeholder:text-faint focus:border-muted" />
-          <Button type="submit" size="sm" disabled={busy || url.trim() === ""}>
-            Use it
-          </Button>
+          <input autoFocus value={url} onChange={(event) => setUrl(event.target.value)} placeholder="A YouTube or Google Drive link" className="mt-4 h-9 w-full rounded-md border border-line bg-black px-3 text-[13px] outline-none placeholder:text-faint focus:border-muted" />
+          <div className="mt-[22px] flex justify-end gap-2">
+            <Button type="button" variant="subtle" onClick={close}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={url.trim() === ""}>
+              Use this link
+            </Button>
+          </div>
         </form>
-      )}
+      </Modal>
+      <Modal open={open === "dismiss"} onClose={close} width={380}>
+        <div className="p-6">
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Dismiss “{issue.title}”?</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">It comes off this list for everyone and stays stopped where it is. Its script keeps what was imported, and Retry there still carries it on.</p>
+          <div className="mt-[22px] flex justify-end gap-2">
+            <Button variant="subtle" onClick={close}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                close();
+                void answerIssue(issue, { kind: "dismiss" });
+              }}
+            >
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+  return { items, dialogs, said, retry, showError: () => setOpen("error"), replace: () => setOpen("replace") };
+}
+
+/** The stopped import's answers as buttons, in its import dialog. */
+function IssueActions({ issue }: { issue: ScriptIssueRow }) {
+  const { items, dialogs, retry, showError, replace } = useIssueDialogs(issue);
+  return (
+    <>
+      <span className="flex items-center gap-2">
+        <Button size="sm" variant="primary" onClick={retry}>
+          Retry
+        </Button>
+        <Button size="sm" onClick={replace}>
+          Replace…
+        </Button>
+        <Button size="sm" variant="ghost" onClick={showError}>
+          View error
+        </Button>
+        <IconButton label="More" onClick={(event) => toggleMenu(event.currentTarget, items, { width: 220 })}>
+          <Ellipsis size={16} />
+        </IconButton>
+      </span>
+      {dialogs}
     </>
   );
 }
 
 /**
- * An import stopped part-way, held where it is until someone answers: try it
- * again, go on without what failed, or give another link for a video (a
- * Drive copy of a YouTube video that won't download). The user, Oct 30: "if
- * something goes wrong, it's blocked, it's frozen at that state, and then we
- * can come in, fix it, and unblock it". Its title opens it over Home.
+ * A stopped import on Home's "need you" list: who started it and where it
+ * stopped in columns of their own, the error's first words (the whole of it
+ * a click away), and the answers in the ⋯ menu at the far right. Its title
+ * opens it over Home.
  */
 function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: string) => void }) {
-  const said = issue.decision?.summary ?? issue.error ?? "Stopped.";
+  const { items, dialogs, said, showError } = useIssueDialogs(issue);
   return (
-    <div className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-2.5 text-[13px]">
-      <TriangleAlert size={13} className="shrink-0 text-warning" />
-      <button onClick={() => onOpen(issue.id)} className="min-w-0 shrink truncate text-left text-fg hover:underline">
+    <div className="grid grid-cols-[13px_20px_minmax(0,1.3fr)_176px_minmax(0,1fr)_28px] items-center gap-x-3 border-t border-line px-4 py-2.5 text-[13px]">
+      <TriangleAlert size={13} className="text-warning" />
+      <StartedBy by={issue.createdBy} size={20} />
+      <button onClick={() => onOpen(issue.id)} className="min-w-0 truncate text-left text-fg hover:underline" title={issue.title}>
         {issue.title}
       </button>
-      <StartedBy by={issue.createdBy} size={20} className="shrink-0" />
       {/* Where it stopped, so it's plain what's being fixed. */}
-      <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-secondary">Stopped {stageWords(issue.stage)}</span>
-      <span className="min-w-0 flex-1 truncate text-[12px] text-muted" title={said}>
+      <span className="justify-self-start rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-secondary">Stopped {stageWords(issue.stage)}</span>
+      <button onClick={showError} className="min-w-0 truncate text-left text-[12px] text-muted hover:text-fg" title="View the whole error">
         {said}
-      </span>
-      <IssueActions issue={issue} />
+      </button>
+      <IconButton label={`What to do about “${issue.title}”`} onClick={(event) => toggleMenu(event.currentTarget, items, { width: 220 })}>
+        <Ellipsis size={16} />
+      </IconButton>
+      {dialogs}
     </div>
   );
 }
@@ -827,7 +889,7 @@ function ImportDialog({ id, writing, issues, onClose }: { id: string | null; wri
         </ol>
         {stopped && (
           <div className="flex flex-wrap items-center">
-            <IssueActions issue={stopped} wide />
+            <IssueActions issue={stopped} />
           </div>
         )}
         <div className="flex items-center justify-between">
@@ -1028,7 +1090,6 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
     <>
       <div role="row" onClick={card.open} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
-          <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[project.style] ?? STYLE_COLOURS.bodycam }} title={STYLES.find((option) => option.value === project.style)?.label} />
           {card.nameInput ?? (
             <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.problem ?? project.name}>
               {project.name}
@@ -1107,7 +1168,6 @@ function ScriptTableRow({ script, onChanged, onImport }: { script: WriterScriptR
   return (
     <div role="row" onMouseEnter={() => !onImport && prefetchScript(script.id)} onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
-        <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[script.style ?? "bodycam"] ?? STYLE_COLOURS.bodycam }} />
         <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={script.title}>
           {script.title || "Untitled script"}
         </span>
@@ -1139,7 +1199,6 @@ function ScriptTableRow({ script, onChanged, onImport }: { script: WriterScriptR
 function CloudTableRow({ project, onChanged }: { project: CloudProject; onChanged: () => void }) {
   const [deleting, setDeleting] = useState(false);
   const summary = project.summary ?? {};
-  const style = (summary.style as Style | undefined) ?? "bodycam";
   const seconds = summary.durationFrames && summary.fps ? summary.durationFrames / summary.fps : null;
   const remove = async () => {
     setDeleting(false);
@@ -1154,7 +1213,6 @@ function CloudTableRow({ project, onChanged }: { project: CloudProject; onChange
     <>
       <div role="row" onClick={() => navigate(`/p/${project.id}`)} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
-          <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[style] ?? STYLE_COLOURS.bodycam }} />
           <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.name}>
             {project.name}
           </span>
@@ -1578,7 +1636,6 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
                   kind === option.value ? "border-line-strong bg-raised text-fg" : "border-line text-muted hover:text-fg",
                 )}
               >
-                <span className="size-1.5 rounded-full" style={{ background: STYLE_COLOURS[option.value] }} />
                 {option.label}
               </button>
             ))}

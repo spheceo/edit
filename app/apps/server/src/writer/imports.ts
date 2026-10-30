@@ -326,6 +326,12 @@ export async function resume(app: App, data: string, id: string, choice: Choice)
     const wordsMissing = script.status === "ready" && script.words.length === 0 && !script.noSpeech;
     if (!(script.status === "error" || script.status === "needs_choice" || wordsMissing)) throw new Error("This import isn't waiting on anything.");
     const decision = script.decision;
+    if (choice.kind === "dismiss") {
+      script.dismissedAt = Date.now();
+      script.updatedAt = Date.now();
+      store.write(dir, script);
+      return script;
+    }
     if (choice.kind === "cancel") {
       delete script.decision;
       script.status = "error";
@@ -365,6 +371,7 @@ export async function resume(app: App, data: string, id: string, choice: Choice)
     else if (choice.kind === "replace") replaceSource(dir, script, choice.id ?? null, choice.url.trim());
     else if (choice.kind !== "retry") throw new Error("That answer doesn't fit what this import asked.");
     delete script.decision;
+    delete script.dismissedAt;
     script.status = "processing";
     script.error = null;
     script.updatedAt = Date.now();

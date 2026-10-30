@@ -69,7 +69,9 @@ export type Choice =
   | { kind: "no_transcript" }
   /** A video that failed, given another link (a Drive copy of a YouTube video that won't download): `id` the failed one's, or none for the script's own video. */
   | { kind: "replace"; id?: string; url: string }
-  | { kind: "cancel" };
+  | { kind: "cancel" }
+  /** Taken off Home's "need you" list, left stopped as it is (Retry or Replace still answer it later). */
+  | { kind: "dismiss" };
 
 export type Check = { name: string; ok: boolean; detail: string };
 
@@ -83,6 +85,8 @@ export type SyncedClip = { id: string; cutIn: boolean; startMs: number; endMs: n
 export type EditLink = { project: string; clips: SyncedClip[]; outOfStep?: string };
 
 export type Script = {
+  /** A stopped import someone dismissed from Home's "need you": when. Cleared when it's answered. */
+  dismissedAt?: number;
   /** Built as soon as its import is ready, with this note (New project's first message): set when it's made, gone once the build starts. */
   firstBuild?: { note: string };
   speakerCheck?: { total: number; checked: number; failed: string[]; at: number; needsApply?: boolean };
@@ -145,6 +149,7 @@ export type Script = {
 export type Archive = { at: number; by: string; freedBytes: number; restoring: boolean; missing: string[] };
 
 export type Summary = {
+  dismissedAt?: number;
   archive?: Archive;
   createdBy?: Creator;
   /** Footage a commentary was written from: that commentary's title. The list keeps it inside it. */

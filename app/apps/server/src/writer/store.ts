@@ -98,6 +98,7 @@ export function summary(script: Script): Summary {
     building: false,
     sourceKind: script.sourceKind,
     ...(script.decision ? { decision: script.decision } : {}),
+    ...(script.dismissedAt ? { dismissedAt: script.dismissedAt } : {}),
     draftWords: script.commentary?.draft ? draftWords(script.commentary.draft) : 0,
     compilation: script.compilation ?? false,
     ...(script.docExport ? { docExportedAt: script.docExport.exportedAt } : {}),

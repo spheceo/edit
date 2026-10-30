@@ -458,7 +458,8 @@ function pause(dir: string, script: Script, decision: Decision): "paused" {
 }
 
 /** A preview still to make, made beside the words. */
-type Build = () => Promise<void>;
+/** Makes the preview, saying how far it is (0–100). */
+type Build = (onPercent: (percent: number) => void) => Promise<void>;
 type Fetched = "paused" | "one" | { joined: Build | null };
 
 async function pipeline(app: App, dir: string, script: Script): Promise<"done" | "paused"> {
@@ -500,16 +501,31 @@ async function pipeline(app: App, dir: string, script: Script): Promise<"done" |
     joined = true;
   }
   if (!joined) build = await singlePreview(dir, script);
-  const preview: Promise<void> = build === null ? Promise.resolve() : build();
+  // How far the preview is, said while the import waits on it (the user, Oct 30: it sat at 60% through a long join).
+  let previewPercent = 0;
+  const preview: Promise<void> = build === null ? Promise.resolve() : build((percent) => (previewPercent = percent));
+  const waitOn = async (words: string) => {
+    // From where the import is toward 59 (transcription starts at 60); past that already, it holds.
+    const from = script.progress;
+    const to = Math.max(from, 59);
+    const tell = () => say(script, `${words}: ${previewPercent}%.`, script.stage, from + Math.floor(((to - from) * previewPercent) / 100));
+    tell();
+    const ticker = setInterval(tell, 2000);
+    try {
+      await preview;
+    } finally {
+      clearInterval(ticker);
+    }
+  };
   // Its failure is said where it's waited for.
   preview.catch(() => {});
   let made = false;
   void preview.then(() => (made = true), () => (made = true));
-  if ((await words(app, dir, script, preview)) === "paused") return "paused";
+  if ((await words(app, dir, script, waitOn)) === "paused") return "paused";
   // Ready once its preview is: the words were heard beside it.
   if (!made) {
     script.stage = "processing";
-    say(script, "Finishing the preview.");
+    await waitOn("Finishing the preview");
   }
   await preview;
   // A joined preview made beside the words gives the overview after them.
@@ -529,7 +545,7 @@ async function pipeline(app: App, dir: string, script: Script): Promise<"done" |
 }
 
 /** The case's PDFs, the words and who says them, while `preview` is made. */
-async function words(app: App, dir: string, script: Script, preview: Promise<void>): Promise<"done" | "paused"> {
+async function words(app: App, dir: string, script: Script, waitOn: (words: string) => Promise<void>): Promise<"done" | "paused"> {
   // A Drive case folder's PDFs (reports, court papers), read for the case's facts before the footage is heard: their names are what the transcriber listens for.
   if (script.sourceKind === "drive") {
     const link = drive.parse(script.sourceUrl);
@@ -556,8 +572,7 @@ async function words(app: App, dir: string, script: Script, preview: Promise<voi
   }
   // A recording heard only from the preview (none of its own here) waits for it.
   if (transcription.recordings(dir, script).some((recording) => !isFile(recording.file))) {
-    say(script, "Making the preview.");
-    await preview;
+    await waitOn("Making the preview");
   }
   script.stage = "transcribing";
   script.progress = 60;
@@ -580,8 +595,7 @@ async function words(app: App, dir: string, script: Script, preview: Promise<voi
   else {
     // The watcher watches the preview, or the video itself: a joined case has only its preview.
     if (!isFile(script.originalPath)) {
-      say(script, "Making the preview.");
-      await preview;
+      await waitOn("Making the preview");
     }
     const watched = await watchSpeakers(script, dir);
     if (watched || Object.keys(script.speakers ?? {}).length === 0) {
@@ -665,12 +679,12 @@ async function singlePreview(dir: string, script: Script): Promise<Build | null>
   const proxy = store.proxyPath(dir);
   if (await previewFits(proxy, script.durationMs)) return null;
   const [source, duration, label] = [script.originalPath, script.durationMs, jobs.named(script.id, script.title)];
-  return async () => {
+  return async (onPercent) => {
     fs.rmSync(proxy, { force: true });
     const partial = making(proxy);
     const began = Date.now();
     try {
-      await media.encodeProxy(source, partial, duration);
+      await media.encodeProxy(source, partial, duration, onPercent);
       fs.renameSync(partial, proxy);
       diag.info("writer", `${label}: 480p preview made: ${clock(duration)} of footage in ${Math.round((Date.now() - began) / 1000)} s`);
     } catch (error) {
@@ -686,10 +700,10 @@ async function audioPreview(dir: string, script: Script, found: media.Streams): 
   const proxy = store.proxyPath(dir);
   if (await previewFits(proxy, script.durationMs)) return null;
   const [source, streams] = [script.originalPath, { ...found, durationMs: script.durationMs }];
-  return async () => {
+  return async (onPercent) => {
     const partial = making(proxy);
     try {
-      await media.join([{ path: source, streams }], partial);
+      await media.join([{ path: source, streams }], partial, onPercent);
       fs.renameSync(partial, proxy);
     } catch (error) {
       fs.rmSync(partial, { force: true });
@@ -963,9 +977,11 @@ async function encodePiece(dir: string, source: string, label: string): Promise<
   const partial = piece.replace(/\.[^./]+$/, ".partial.mp4");
   try {
     fs.mkdirSync(join(dir, "pieces"), { recursive: true });
-    await media.join([{ path: source, streams: { ...found, durationMs: held } }], partial);
+    const encoder = await media.join([{ path: source, streams: { ...found, durationMs: held } }], partial);
     fs.renameSync(partial, piece);
-    diag.info("writer", `${label}: its preview piece (${clock(held)}) encoded in ${Math.round((Date.now() - began) / 1000)} s`);
+    const took = Math.max(1, Date.now() - began);
+    // Which encoder and how fast: a piece at a few times real time is libx264, or a slow read from the cloud.
+    diag.info("writer", `${label}: its preview piece (${clock(held)}) encoded in ${Math.round(took / 1000)} s on ${encoder}, ${(held / took).toFixed(1)}× real time${media.isRemote(source) ? ", read from the cloud" : ""}`);
   } catch (error) {
     fs.rmSync(partial, { force: true });
     diag.warn("writer", `${label}: its preview piece couldn't be encoded, so the preview is encoded whole: ${diag.messageOf(error)}`);
@@ -1002,13 +1018,18 @@ async function joinPreview(dir: string, script: Script, items: [string, string, 
   }
   const pieces = items.map(([, path]) => piecePath(dir, path));
   const label = jobs.named(script.id, script.title);
-  return async () => {
+  return async (onPercent) => {
     const partial = making(proxy);
     const began = Date.now();
     try {
       const whole = await Promise.all(pieces.map((piece, index) => previewFits(piece, made[index]!.durationMs)));
+      diag.info("writer", `${label}: joining ${items.length} ${what} into the preview (${clock(startMs)}), ${whole.filter(Boolean).length} of ${pieces.length} already encoded as pieces`);
       const copied =
-        pieces.length > 1 && whole.every(Boolean) ? await media.append(pieces[0]!, pieces.slice(1), partial) : pieces.length === 1 && whole[0] === true ? (fs.renameSync(pieces[0]!, partial), true) : (await media.join(toJoin, partial), false);
+        pieces.length > 1 && whole.every(Boolean)
+          ? await media.append(pieces[0]!, pieces.slice(1), partial, onPercent, undefined, false, label)
+          : pieces.length === 1 && whole[0] === true
+            ? (fs.renameSync(pieces[0]!, partial), true)
+            : (await media.join(toJoin, partial, onPercent), false);
       fs.renameSync(partial, proxy);
       diag.info("writer", `${label}: ${items.length} ${what} joined into the preview (${clock(startMs)}) in ${Math.round((Date.now() - began) / 1000)} s${copied ? ", copied from the pieces encoded as they came down" : ""}`);
       fs.rmSync(join(dir, "pieces"), { recursive: true, force: true });

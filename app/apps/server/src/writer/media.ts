@@ -28,6 +28,8 @@ export function input(path: string): string[] {
 
 /** A path fit for a log line: a cloud original's address is a credential. */
 const shown = (path: string): string => (isUrl(path) ? "the footage in the cloud" : path);
+/** Read from a link (the cloud's copy), not a file here. */
+export const isRemote = (path: string): boolean => isUrl(path);
 
 export async function streams(path: string): Promise<Streams> {
   const text = await run(ffprobe(), ["-v", "error", ...input(path), "-show_entries", "stream=codec_type", "-show_entries", "format=duration", "-of", "json", path], { timeoutMs: 60_000 });
@@ -102,19 +104,36 @@ const HARDWARE = "h264_videotoolbox";
  * the hardware encoder is many times that.
  */
 const HARDWARE_DECODE = ["-hwaccel", "videotoolbox"];
-/** The hardware encoder at a quality close to libx264's CRF 27, a key frame a second, High profile. */
-const HARDWARE_ENCODE = ["-c:v", HARDWARE, "-profile:v", "high", "-q:v", "65", "-g", "30", "-pix_fmt", "yuv420p"];
+/** The hardware encoder at a quality close to libx264's CRF 27, a key frame a second, High profile, TV range (`RANGE`). */
+const HARDWARE_ENCODE = ["-c:v", HARDWARE, "-profile:v", "high", "-q:v", "65", "-g", "30", "-pix_fmt", "yuv420p", "-color_range", "tv"];
+/**
+ * Every piece in TV range, whatever its recording was. Axon bodycam files are
+ * full range (yuvj420p), and `format=yuv420p` alone kept their range flag, so
+ * their pieces never matched the rest: the join re-encoded them to match, they
+ * still didn't, and it encoded the whole case again with libx264 (Oct 30, 591):
+ * 10 h of footage, 95 minutes, the Mac at load 30).
+ */
+const RANGE = ":out_range=tv";
 
 /** Fitted to `height` (a cheap software scale; the encoding is the hardware's), padded and set to the rate; `width` null keeps the shape as it shows. */
 function hardwarePicture(width: number | null, height: number): string {
-  const fit = width === null ? `scale=w='trunc(iw*sar*${height}/ih/2)*2':h=${height}` : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`;
+  const fit = width === null ? `scale=w='trunc(iw*sar*${height}/ih/2)*2':h=${height}${RANGE}` : `scale=${width}:${height}:force_original_aspect_ratio=decrease${RANGE},pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`;
   return `${fit},setsar=1,fps=30,format=yuv420p`;
 }
 
-/** Runs an ffmpeg encode, reporting 0–100 of `totalMs` from its progress clock; a failed one leaves no file. */
+/** A command at nice 10 where the system has `nice`, else as it is. */
+const NICE = process.platform !== "win32" && fs.existsSync("/usr/bin/nice");
+const lowered = (command: string, args: string[]): [string, string[]] => (NICE ? ["/usr/bin/nice", ["-n", "10", command, ...args]] : [command, args]);
+
+/**
+ * Runs an ffmpeg encode, reporting 0–100 of `totalMs` from its progress clock;
+ * a failed one leaves no file. At a lower priority (nice 10): an import's
+ * encode is background work, and at full priority a long libx264 join held the
+ * Mac at load 30 and Edit's own answers took seconds (Oct 30).
+ */
 async function encode(args: string[], dest: string, totalMs: number, onPercent: (percent: number) => void, signal?: AbortSignal): Promise<void> {
   try {
-    await run(ffmpeg(), args, {
+    await run(...lowered(ffmpeg(), args), {
       timeoutMs: toolTime(totalMs),
       ...(signal ? { signal } : {}),
       onLine: (line) => {
@@ -147,17 +166,22 @@ async function joinHardware(part: JoinPart, dest: string, onPercent: (percent: n
   );
 }
 
-/** One video's 480p piece, on the video hardware where it can, else libx264. */
-async function joinOne(part: JoinPart, dest: string, onPercent: (percent: number) => void, hardware: boolean, signal?: AbortSignal): Promise<void> {
+/** Which encoder made a piece, for the logs: the Mac's video hardware, or libx264 (several times slower). */
+export type Encoder = "the video hardware" | "libx264";
+
+/** One video's 480p piece, on the video hardware where it can, else libx264: which did. */
+async function joinOne(part: JoinPart, dest: string, onPercent: (percent: number) => void, hardware: boolean, signal?: AbortSignal): Promise<Encoder> {
   if (hardware) {
     try {
-      return await joinHardware(part, dest, onPercent, signal);
+      await joinHardware(part, dest, onPercent, signal);
+      return "the video hardware";
     } catch (error) {
       if (signal?.aborted) throw error;
       diag.warn("writer", `the video hardware couldn't encode ${shown(part.path)}, so libx264 does: ${diag.scrub(diag.messageOf(error))}`);
     }
   }
   await joinSized([part], dest, onPercent, 854, 480, "27", signal);
+  return "libx264";
 }
 
 /**
@@ -166,14 +190,17 @@ async function joinOne(part: JoinPart, dest: string, onPercent: (percent: number
  * 854×480; an audio recording plays over black and a silent video gets
  * silence, so picture and sound stay in step at every join.
  */
-export function join(parts: JoinPart[], dest: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal): Promise<void> {
-  return parts.length === 1 && parts[0]!.streams.video ? joinOne(parts[0]!, dest, onPercent, true, signal) : joinSized(parts, dest, onPercent, 854, 480, "27", signal);
+export async function join(parts: JoinPart[], dest: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal): Promise<Encoder> {
+  if (parts.length === 1 && parts[0]!.streams.video) return joinOne(parts[0]!, dest, onPercent, true, signal);
+  await joinSized(parts, dest, onPercent, 854, 480, "27", signal);
+  return "libx264";
 }
 
 /** As `join`, encoded as `like` was (the hardware or libx264), so it copies onto `like` end to end. */
-export async function joinLike(parts: JoinPart[], dest: string, like: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal): Promise<void> {
+export async function joinLike(parts: JoinPart[], dest: string, like: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal): Promise<Encoder> {
   if (parts.length === 1 && parts[0]!.streams.video) return joinOne(parts[0]!, dest, onPercent, ((await encoderOf(like)) ?? "").includes(HARDWARE), signal);
-  return joinSized(parts, dest, onPercent, 854, 480, "27", signal);
+  await joinSized(parts, dest, onPercent, 854, 480, "27", signal);
+  return "libx264";
 }
 
 /** The video encoder a file was made with, as ffmpeg tags it. */
@@ -210,7 +237,7 @@ async function joinSized(parts: JoinPart[], dest: string, onPercent: (percent: n
     const length = seconds(part.streams.durationMs);
     filters.push(
       part.streams.video
-        ? `[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p,trim=duration=${length},setpts=PTS-STARTPTS[v${index}]`
+        ? `[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease${RANGE},pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p,trim=duration=${length},setpts=PTS-STARTPTS[v${index}]`
         : `color=c=black:s=${width}x${height}:r=30:d=${length},format=yuv420p,setsar=1[v${index}]`,
       part.streams.audio
         ? `[${index}:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=duration=${length},asetpts=PTS-STARTPTS[a${index}]`
@@ -219,7 +246,7 @@ async function joinSized(parts: JoinPart[], dest: string, onPercent: (percent: n
     joined += `[v${index}][a${index}]`;
   }
   filters.push(`${joined}concat=n=${parts.length}:v=1:a=1[v][a]`);
-  args.push("-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", crf, "-g", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest);
+  args.push("-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", crf, "-g", "30", "-color_range", "tv", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest);
   await encode(args, dest, total, onPercent, signal);
 }
 
@@ -243,7 +270,7 @@ async function formatOf(path: string): Promise<string | null> {
  * encoded again; pieces that don't match, or a copy the wrong length, are
  * joined afresh. Says whether the streams were copied.
  */
-export async function append(base: string, more: string[], dest: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal, matched = false): Promise<boolean> {
+export async function append(base: string, more: string[], dest: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal, matched = false, label = "the preview"): Promise<boolean> {
   const pieces = await Promise.all([base, ...more].map(async (path): Promise<JoinPart> => ({ path, streams: await streams(path) })));
   const total = pieces.reduce((sum, piece) => sum + piece.streams.durationMs, 0);
   if (total > MAX_CASE_MS) throw new Error("Use footage between a second and twenty hours in all.");
@@ -259,6 +286,9 @@ export async function append(base: string, more: string[], dest: string, onPerce
     for (const format of all) if (format !== null) tally.set(format, (tally.get(format) ?? 0) + 1);
     const most = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
     if (matched || most === null) {
+      // The slow way, every piece encoded again: said, with what still differed, so a long join is never a mystery.
+      const odd = all.map((format, index) => (format === most ? null : `${shown(pieces[index]!.path)}: ${(format ?? "unreadable").replaceAll("\n", " ")}`)).filter(Boolean);
+      diag.warn("writer", `${label}: the pieces still don't match after encoding the odd ones again, so all ${pieces.length} are encoded again with libx264 (most are ${most?.replaceAll("\n", " ") ?? "unreadable"}; ${odd.join("; ")})`);
       await join(pieces, dest, onPercent, signal);
       return false;
     }
@@ -274,10 +304,12 @@ export async function append(base: string, more: string[], dest: string, onPerce
         }
         const again = dest.replace(/\.[^./]+$/, `.like-${index}.mp4`);
         made.push(again);
+        const began = Date.now();
         await joinLike([piece], again, like, () => {}, signal);
+        diag.info("writer", `${label}: ${shown(piece.path)} (${Math.round(piece.streams.durationMs / 60_000)} min) encoded again to match the others in ${Math.round((Date.now() - began) / 1000)} s: it was ${(all[index] ?? "unreadable").replaceAll("\n", " ")}, they are ${most.replaceAll("\n", " ")}`);
         fixed.push(again);
       }
-      return await append(fixed[0]!, fixed.slice(1), dest, onPercent, signal, true);
+      return await append(fixed[0]!, fixed.slice(1), dest, onPercent, signal, true, label);
     } finally {
       for (const path of made) fs.rmSync(path, { force: true });
     }
@@ -299,7 +331,8 @@ export async function append(base: string, more: string[], dest: string, onPerce
       onPercent(100);
       return true;
     }
-  }
+    diag.warn("writer", `${label}: the pieces copied end to end came out ${found === null ? "unreadable" : `${Math.round(found.durationMs / 1000)} s long, not ${Math.round(total / 1000)} s`}, so all ${pieces.length} are encoded again with libx264`);
+  } else diag.warn("writer", `${label}: the pieces couldn't be copied end to end, so all ${pieces.length} are encoded again with libx264`);
   await join(pieces, dest, onPercent, signal);
   return false;
 }
@@ -320,7 +353,7 @@ export async function encodeProxy(source: string, dest: string, durationMs: numb
     diag.warn("writer", `the video hardware couldn't encode ${source}, so libx264 does: ${diag.messageOf(error)}`);
   }
   await encode(
-    ["-hide_banner", "-y", "-i", source, "-vf", "scale=-2:480,fps=30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
+    ["-hide_banner", "-y", "-i", source, "-vf", `scale=-2:480${RANGE},fps=30`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p", "-color_range", "tv", "-g", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
     dest,
     durationMs,
     onPercent,

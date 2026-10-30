@@ -39,3 +39,23 @@ test("joins mixed recordings, appends by copying, and reads the sound's peaks", 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }, 120_000);
+
+// Oct 30, 591): Axon bodycam recordings are full range (yuvj420p); their
+// pieces kept that flag, never matched the rest, and the join encoded all 10
+// hours again with libx264. Every piece is TV range now, so they copy.
+test("a full-range recording's piece matches the others and joins by copying", async () => {
+  const dir = fs.mkdtempSync(joinPath(os.tmpdir(), "writer-range-"));
+  try {
+    const [full, normal] = [joinPath(dir, "full.mp4"), joinPath(dir, "normal.mp4")];
+    make(["-f", "lavfi", "-i", "testsrc=s=1280x720:d=2", "-f", "lavfi", "-i", "sine=d=2", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuvj420p", "-color_range", "pc"], full);
+    make(["-f", "lavfi", "-i", "testsrc=s=1280x720:d=2", "-f", "lavfi", "-i", "sine=d=2", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p"], normal);
+    const pieces = [joinPath(dir, "a.mp4"), joinPath(dir, "b.mp4")];
+    for (const [index, source] of [full, normal].entries()) await join([{ path: source, streams: await streams(source) }], pieces[index]!);
+    const formats = pieces.map((piece) => Bun.spawnSync(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", piece]).stdout.toString().trim());
+    expect(formats).toEqual(["yuv420p", "yuv420p"]);
+    const joined = joinPath(dir, "joined.mp4");
+    expect(await append(pieces[0]!, [pieces[1]!], joined)).toBe(true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 120_000);

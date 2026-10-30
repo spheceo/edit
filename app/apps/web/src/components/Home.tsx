@@ -151,7 +151,7 @@ export function Home() {
   const projectRows: Listed[] = [
     ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined)).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one, importing: importingNow.get(one.id) })),
+    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined)).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one, importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true) })),
   ].sort((a, b) => b.at - a.at);
   const subtitledRows: Listed[] = [
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
@@ -312,7 +312,7 @@ type View = "needs" | "all" | "subtitled";
 type Listed =
   | { at: number; local: ProjectSummary; cloud: null; script: WriterScriptRow | null }
   | { at: number; local: null; cloud: CloudProject; script: WriterScriptRow | null }
-  | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing };
+  | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing; writing?: boolean };
 
 /** A script's import while it isn't done: its word for it ("Importing 40%", "Stopped"). */
 type Importing = { word: string; stopped: boolean };
@@ -323,19 +323,21 @@ type Importing = { word: string; stopped: boolean };
  * editing, these projects are done editing … a natural progression of our
  * projects here instead of dumping the whole list").
  */
-type Stage = "scripting" | "ready" | "importing" | "editing" | "review" | "done";
+type Stage = "toscript" | "scripting" | "ready" | "importing" | "editing" | "review" | "done";
 
 const STAGES: { value: Stage; label: string }[] = [
+  // The footage and its words in, the script not written yet (the user, Oct 30: "know which projects are ready to script").
+  { value: "importing", label: "Importing" },
+  { value: "toscript", label: "Ready to script" },
   { value: "scripting", label: "Scripting" },
   { value: "ready", label: "Ready to edit" },
-  { value: "importing", label: "Importing" },
   { value: "editing", label: "Editing" },
   { value: "review", label: "In review" },
   { value: "done", label: "Done" },
 ];
 
 function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
-  if (row.local === null && row.cloud === null) return row.importing ? "importing" : row.script.built ? "ready" : "scripting";
+  if (row.local === null && row.cloud === null) return row.importing ? "importing" : row.script.built ? "ready" : row.writing ? "scripting" : "toscript";
   if (state === undefined) return "editing";
   if (state.importing !== null) return "importing";
   if (state.approved !== null) return "done";
@@ -656,6 +658,8 @@ type ScriptIssueRow = {
   dismissedAt?: number;
   /** Its first prompt still to start. */
   firstBuild?: boolean;
+  /** Its script being written (a build running on this Mac). */
+  building?: boolean;
 };
 
 /** Answers a stopped import; it carries on in the background and Home follows it. */
@@ -1098,7 +1102,7 @@ function ProjectTable({
     ) : row.cloud !== null ? (
       <CloudTableRow project={row.cloud} onChanged={onChanged} />
     ) : (
-      <ScriptTableRow script={row.script} importing={row.importing} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
+      <ScriptTableRow script={row.script} importing={row.importing} writing={row.writing === true} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
     );
   // One stage (or the subtitled videos): newest first, by when they changed.
   const groups = !grouped
@@ -1211,8 +1215,22 @@ function ScriptLink({ id }: { id: string }) {
 }
 
 /** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
-function ScriptTableRow({ script, importing, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; onChanged: () => void; onImport?: () => void }) {
+function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; onChanged: () => void; onImport?: () => void }) {
   const [starting, setStarting] = useState(false);
+  // Ready to script: Claude writes it (as the script page's Build the script does), followed on its page.
+  const write = async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    setStarting(true);
+    try {
+      const writer = await import("../writer/api");
+      await writer.startBuild(script.id, "");
+      navigate(`/scripts/${script.id}`);
+    } catch (error) {
+      useEditor.getState().toastError(error, `write “${script.title}”`);
+    } finally {
+      setStarting(false);
+    }
+  };
   const start = async (event: React.MouseEvent) => {
     event.stopPropagation();
     setStarting(true);
@@ -1245,10 +1263,12 @@ function ScriptTableRow({ script, importing, onChanged, onImport }: { script: Wr
             Script
           </span>
         )}
-        {script.built && !importing && (
-          <button onClick={(event) => void start(event)} disabled={starting} className="flex h-[22px] shrink-0 items-center rounded-full px-2 text-[12px] font-medium text-info hover:bg-hover disabled:opacity-60">
-            {starting ? "Starting…" : "Start the edit"}
-          </button>
+        {writing && !importing && <span className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-info">Writing</span>}
+        {/* Its next step, as a button of its own at the end of the status. */}
+        {!importing && !writing && (
+          <Button size="sm" className="ml-auto shrink-0" disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))}>
+            {starting ? "Starting…" : script.built ? "Start the edit" : "Write the script"}
+          </Button>
         )}
       </div>
       <span role="cell" className="text-right text-[13px] text-secondary tabular">

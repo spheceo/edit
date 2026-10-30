@@ -22,7 +22,9 @@ import { join } from "./paths.ts";
 import { clipEnd, mediaOf, reusedMedia, trackOf } from "./project.ts";
 import { round } from "./rust.ts";
 import * as tools from "./tools.ts";
+import * as claudeAi from "./ai_claude.ts";
 import * as watch from "./watch.ts";
+import * as claude from "./writer/claude.ts";
 
 const FILE = "marks-v1.json";
 const FOOTAGE_FILE = "footage-marks-v1.json";
@@ -166,7 +168,8 @@ async function look(media: Media, file: string): Promise<void> {
   fs.writeFileSync(scratch, JSON.stringify(request));
   let response: unknown;
   try {
-    response = await watch.post(scratch);
+    // Claude, not Gemini (ai_claude.ts): it boxed LAW&CRIME's bug within a few points of where it is (Oct 30).
+    response = await claudeAi.post(scratch, claude.OPUS, "Claude opus looking for watermarks");
   } finally {
     fs.rmSync(scratch, { force: true });
   }

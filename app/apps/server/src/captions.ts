@@ -22,7 +22,7 @@ import type { App } from "./app.ts";
 import { captionSize, hex, parseTranscript, subtitleName, subtitleRow, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import { fixTurns } from "./turns.ts";
-import { post } from "./watch.ts";
+import { spills as post } from "./ai_claude.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import type {

@@ -8,7 +8,7 @@ import type { Script, Word } from "@edit/types/writer";
 import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
 import { fixTurns, type TurnWord } from "../turns.ts";
-import { post } from "../watch.ts";
+import { spills as post } from "../ai_claude.ts";
 import { partAt } from "./tidy.ts";
 
 /** How many words went to another speaker. */

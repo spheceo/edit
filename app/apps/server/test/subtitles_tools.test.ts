@@ -2,7 +2,7 @@
 // and the pieces it shares with captions.
 
 import { afterEach, expect, spyOn, test } from "bun:test";
-import * as watchModule from "../src/watch.ts";
+import * as aiModule from "../src/ai_claude.ts";
 
 import type { App } from "../src/app.ts";
 import { hex, subtitleName, timing, transcriptOf } from "../src/captions_core.ts";
@@ -456,7 +456,7 @@ test("an edit's subtitles: a source's narrator under their own label, and a word
   const { app, dir, store, cleanup } = fixtureHome("narrator-edit");
   // The reporter's "…when investigators questioned / him after this incident" came out on the sergeant's line.
   const answer = { cuts: [{ line: 0, first: "That's the voice of the sergeant when investigators questioned him.", second: "I'm yelling the whole time." }] };
-  const gateway = spyOn(watchModule, "post").mockImplementation(async () => ({ choices: [{ message: { content: JSON.stringify(answer) } }] }));
+  const gateway = spyOn(aiModule, "spills").mockImplementation(async () => ({ choices: [{ message: { content: JSON.stringify(answer) } }] }));
   try {
     const id = await footage(app, dir);
     const report: Transcript = {

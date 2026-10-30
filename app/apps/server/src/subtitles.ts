@@ -47,7 +47,7 @@ import { compareKeys } from "./stable.ts";
 import { isSubtitled, SUBTITLE_NAME } from "./store.ts";
 import { join } from "./paths.ts";
 import { fixTurns } from "./turns.ts";
-import { post } from "./watch.ts";
+import { spills as post } from "./ai_claude.ts";
 import type { Transcript, Word } from "./transcribe.ts";
 
 export type { ClipMutes, Cue, Found, HouseWords, Line, SubtitleOptions, Suggestion, TimedWord } from "./seams.ts";

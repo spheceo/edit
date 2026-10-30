@@ -16,7 +16,8 @@ import { join } from "./paths.ts";
 import { serdeParse } from "./rust.ts";
 
 const VERSION = "turns-v1";
-const MODEL = "google/gemini-3.8-flash";
+/** Who answers (ai_claude.ts runs it on Opus since Oct 30, not Gemini); part of each answer's cache key. */
+const MODEL = "claude-opus";
 /** Turns one call reads; the next window starts a little before this one ends. */
 const WINDOW = 120;
 const OVERLAP = 6;

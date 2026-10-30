@@ -118,9 +118,11 @@ export function Home() {
   // A script's edit: the one made from it here, else (made on another Mac, or from its Doc) the project of the same name.
   const named = new Map([...(projects ?? []).map((project) => [project.name, project.id] as const), ...cloudOnly.map((project) => [project.name, project.id] as const)].map(([name, id]) => [name.trim().toLowerCase(), id]));
   const editOf = (one: WriterScriptRow) => (one.project !== null && listedIds.has(one.project) ? one.project : (named.get(one.title.trim().toLowerCase()) ?? null));
+  // Whether a script is a compilation: the cloud's list says, else this Mac's copy.
+  const withKind = (one: WriterScriptRow): WriterScriptRow => ({ ...one, compilation: one.compilation ?? localScripts.find((local) => local.id === one.id)?.compilation });
   const scriptOf = new Map(scripts.flatMap((one) => {
     const edit = editOf(one);
-    return edit !== null ? [[edit, one] as const] : [];
+    return edit !== null ? [[edit, withKind(one)] as const] : [];
   }));
   const scriptOnly = scripts.filter((one) => editOf(one) === null);
   // A script still importing (running, stopped or waiting on a choice) isn't
@@ -151,7 +153,7 @@ export function Home() {
   const projectRows: Listed[] = [
     ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: { ...one, compilation: one.compilation ?? localScripts.find((local) => local.id === one.id)?.compilation }, importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true) })),
+    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true) })),
   ].sort((a, b) => b.at - a.at);
   const subtitledRows: Listed[] = [
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
@@ -1052,7 +1054,7 @@ function ProjectTable({
     row.local !== null ? (
       <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} />
     ) : row.cloud !== null ? (
-      <CloudTableRow project={row.cloud} onChanged={onChanged} />
+      <CloudTableRow project={row.cloud} script={row.script} onChanged={onChanged} />
     ) : (
       <ScriptTableRow script={row.script} importing={row.importing} writing={row.writing === true} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
     );
@@ -1265,7 +1267,7 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
 }
 
 /** A project only in the cloud: opening it downloads it to this Mac. */
-function CloudTableRow({ project, onChanged }: { project: CloudProject; onChanged: () => void }) {
+function CloudTableRow({ project, script = null, onChanged }: { project: CloudProject; script?: WriterScriptRow | null; onChanged: () => void }) {
   const [deleting, setDeleting] = useState(false);
   const summary = project.summary ?? {};
   const seconds = summary.durationFrames && summary.fps ? summary.durationFrames / summary.fps : null;
@@ -1287,7 +1289,7 @@ function CloudTableRow({ project, onChanged }: { project: CloudProject; onChange
           </span>
           <StartedBy by={project.created_by} projectId={project.id} size={24} className="ml-auto shrink-0" />
         </div>
-        <Category style={summary.style} />
+        <Category style={summary.style} compilation={script?.compilation} />
         <Type kind={summary.subtitles ? "subtitles" : "edit"} />
         <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
           {project.holder && <CloudBadge editor={project.holder} />}

@@ -119,7 +119,10 @@ export function Home() {
   const named = new Map([...(projects ?? []).map((project) => [project.name, project.id] as const), ...cloudOnly.map((project) => [project.name, project.id] as const)].map(([name, id]) => [name.trim().toLowerCase(), id]));
   const editOf = (one: WriterScriptRow) => (one.project !== null && listedIds.has(one.project) ? one.project : (named.get(one.title.trim().toLowerCase()) ?? null));
   // Whether a script is a compilation: the cloud's list says, else this Mac's copy.
-  const withKind = (one: WriterScriptRow): WriterScriptRow => ({ ...one, compilation: one.compilation ?? localScripts.find((local) => local.id === one.id)?.compilation });
+  const withKind = (one: WriterScriptRow): WriterScriptRow => {
+    const here = localScripts.find((local) => local.id === one.id);
+    return { ...one, compilation: one.compilation ?? here?.compilation, runFailed: one.runFailed ?? here?.runFailed ?? null };
+  };
   const scriptOf = new Map(scripts.flatMap((one) => {
     const edit = editOf(one);
     return edit !== null ? [[edit, withKind(one)] as const] : [];
@@ -165,7 +168,8 @@ export function Home() {
   // wait in All projects (the user, Oct 30: "we shouldn't show just normal
   // scripts in the main view").
   const needsYou = projectRows.filter((row) => {
-    if (row.local === null && row.cloud === null) return false;
+    // A script whose Claude run failed (the user, Oct 30: "projects that have failed like this deserve a needs you").
+    if (row.local === null && row.cloud === null) return Boolean(row.script.runFailed) && !row.writing && !row.importing;
     const state = statuses[row.local?.id ?? row.cloud?.id ?? ""];
     return stageOf(row, state) === "review" || Boolean(state?.importing?.error);
   });
@@ -683,6 +687,8 @@ type ScriptIssueRow = {
   firstBuild?: boolean;
   /** Written over several videos. */
   compilation?: boolean;
+  /** Its last Claude run ended without finishing: when, and what it said. */
+  runFailed?: { at: number; error: string } | null;
   /** Its script being written (a build running on this Mac). */
   building?: boolean;
 };
@@ -1223,6 +1229,8 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
   const [starting, setStarting] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [why, setWhy] = useState(false);
+  const failed = script.runFailed ?? null;
   // Its ⋯, as an edit's: open it, and (when this Mac has it) rename or delete it.
   const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -1230,6 +1238,12 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
       event.currentTarget,
       [
         { label: "Open script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) },
+        ...(failed !== null
+          ? ([
+              { label: "View error", icon: <TriangleAlert size={14} />, onSelect: () => setWhy(true) },
+              { label: "Run again", icon: <RotateCw size={14} />, onSelect: () => void write() },
+            ] satisfies MenuItem[])
+          : []),
         ...(here
           ? ([
               { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(script.title) },
@@ -1264,8 +1278,8 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
     }
   };
   // Ready to script: Claude writes it (as the script page's Build the script does), followed on its page.
-  const write = async (event: React.MouseEvent) => {
-    event.stopPropagation();
+  const write = async (event?: React.MouseEvent) => {
+    event?.stopPropagation();
     setStarting(true);
     try {
       const writer = await import("../writer/api");
@@ -1321,6 +1335,12 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
             <LoaderCircle size={12} className="animate-spin" />
             Writing
           </span>
+        ) : failed !== null ? (
+          // Its last run failed: said in orange, and a click runs it again (what went wrong is in its tooltip and ⋯ View error).
+          <button disabled={starting} title={`Claude's last run stopped: ${failed.error}\nClick to run it again.`} onClick={(event) => void write(event)} className={cx(CHIP, "cursor-pointer text-warning transition-colors hover:bg-hover disabled:opacity-60")}>
+            <RotateCw size={12} />
+            {starting ? "Starting…" : "Run failed"}
+          </button>
         ) : (
           // Its next step: the pill's shape, filled, so it reads as the button it is (the user, Oct 30: "these are ctas").
           <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className={cx(PILL, "cursor-pointer bg-fg font-semibold text-bg transition-colors hover:bg-white disabled:opacity-60")}>
@@ -1362,6 +1382,27 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
             </Button>
           </div>
         </form>
+      </Modal>
+      <Modal open={why} onClose={() => setWhy(false)} width={460}>
+        <div className="p-6">
+          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Claude's last run stopped</h2>
+          <p className="mt-1 text-[13px] text-muted">{failed ? ago(failed.at) : ""}</p>
+          <pre className="mt-3 max-h-60 overflow-auto rounded-md bg-raised p-3 text-[12px] leading-relaxed whitespace-pre-wrap text-secondary">{failed?.error}</pre>
+          <div className="mt-[22px] flex justify-end gap-2">
+            <Button variant="subtle" onClick={() => setWhy(false)}>
+              Close
+            </Button>
+            <Button
+              variant="light"
+              onClick={() => {
+                setWhy(false);
+                void write();
+              }}
+            >
+              Run again
+            </Button>
+          </div>
+        </div>
       </Modal>
       <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
         <div className="p-6">

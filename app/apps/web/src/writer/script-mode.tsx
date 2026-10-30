@@ -4,7 +4,6 @@ import { CommentaryEditor } from "./commentary-view";
 import { Editor } from "./editor";
 import { Library } from "./library";
 import { Icon, startToastTimer } from "./ui";
-import { SyncDock } from "./sync-dock";
 import { LitStyle } from "./comments";
 import { ImportScreen } from "./import-screen";
 import { useAccount } from "./account";
@@ -266,7 +265,6 @@ export function ScriptMode() {
         />
       )}
       <LitStyle />
-      <SyncDock onOpen={(id) => setRoute({ name: "script", id })} />
     </div>
   );
 }

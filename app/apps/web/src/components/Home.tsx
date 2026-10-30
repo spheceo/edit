@@ -1,6 +1,6 @@
 import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileText, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Search, Share2, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 
 import { editStyles, makesVideos, useAccount, writesScripts } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
@@ -12,6 +12,7 @@ import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
 import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
+import { elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu } from "./ContextMenu";
 import { Logo, Tile } from "./Logo";
@@ -55,6 +56,8 @@ export function Home() {
   }, []);
   // Script mode's scripts as this Mac has them: what stopped (any Mac's), and who started each.
   const [localScripts, setLocalScripts] = useState<ScriptIssueRow[]>([]);
+  // A script import opened over Home (from the strip or its row).
+  const [watching, setWatching] = useState<string | null>(null);
   const issues = localScripts.filter((row) => row.status === "needs_choice" || row.status === "error");
   const account = useAccount((state) => state.account);
   // Someone who writes scripts and makes no videos: Script mode is their home.
@@ -258,9 +261,10 @@ export function Home() {
               </div>
             </div>
 
-            <Imports projects={projects ?? []} statuses={statuses} writing={writing} issues={issues} scripts={localScripts} />
+            <Imports projects={projects ?? []} statuses={statuses} writing={writing} issues={issues} scripts={localScripts} onOpen={setWatching} />
+            <ImportDialog id={watching} writing={writing} onClose={() => setWatching(null)} />
             {rows.length > 0 ? (
-              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits && searching} statuses={statuses} />
+              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits && searching} statuses={statuses} importing={new Set(writing.map((one) => one.id))} onImport={setWatching} />
             ) : (
               <p className="mt-16 text-center text-muted">{searching ? `Nothing matches “${query.trim()}”.` : "Nothing here."}</p>
             )}
@@ -713,7 +717,86 @@ function stageWords(stage: string): string {
   return words[stage] ?? (stage ? `at ${stage}` : "");
 }
 
-function Imports({ projects, statuses, writing, issues, scripts }: { projects: ProjectSummary[]; statuses: Record<string, ProjectStatus>; writing: Writing[]; issues: ScriptIssueRow[]; scripts: ScriptIssueRow[] }) {
+/**
+ * A script's import, open over Home: each step, how far it is, what it's on
+ * and for how long (the user, Oct 30: clicking a project still importing
+ * "should pop up on the home page and shouldn't redirect you to the script
+ * page"). Once it's in, it says so and opens the script.
+ */
+function ImportDialog({ id, writing, onClose }: { id: string | null; writing: Writing[]; onClose: () => void }) {
+  const live = writing.find((one) => one.id === id) ?? null;
+  const last = useRef<Writing | null>(null);
+  if (live) last.current = live;
+  const shown = live ?? last.current;
+  const [began, setBegan] = useState<Record<string, number>>({});
+  const [now, setNow] = useState(() => Date.now());
+  const step = shown ? stepOf(shown) : "download";
+  useEffect(() => {
+    setBegan({});
+    last.current = null;
+  }, [id]);
+  useEffect(() => {
+    if (!shown) return;
+    setBegan((times) => (times[step] ? times : { ...times, [step]: Date.now(), ...(times.start ? {} : { start: Date.now() }) }));
+  }, [shown?.id, step]);
+  useEffect(() => {
+    if (id === null) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [id]);
+  const done = id !== null && live === null && last.current !== null;
+  const at = done ? STEPS.length : STEPS.findIndex((candidate) => candidate.key === step);
+  const percent = done ? 100 : Math.round(Math.max(0, Math.min(100, shown?.percent ?? 0)));
+  return (
+    <Modal open={id !== null} onClose={onClose} width={560}>
+      <div className="flex flex-col gap-5 p-6">
+        <div>
+          <h2 className="truncate text-[17px] font-semibold tracking-[-0.2px]">{shown?.title || "Importing"}</h2>
+          <p className="mt-1 text-[13px] text-muted">{done ? "The footage is in." : "Getting the footage ready. It keeps going if you close this."}</p>
+        </div>
+        <div>
+          <div className="flex items-baseline gap-3">
+            <span className="text-[28px] font-semibold tabular">{percent}%</span>
+            <span className="truncate text-[13px] text-muted">{done ? "Ready" : shown?.detail || "Starting…"}</span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-raised">
+            <div className="h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${percent}%` }} />
+          </div>
+        </div>
+        <ol className="flex flex-col gap-1">
+          {STEPS.map((candidate, index) => {
+            const state = index < at ? "done" : index === at ? "now" : "later";
+            return (
+              <li key={candidate.key} className={cx("flex items-start gap-3 rounded-lg px-3 py-2", state === "now" && "bg-raised")}>
+                <span className={cx("mt-1.5 size-2 shrink-0 rounded-full", state === "done" ? "bg-success" : state === "now" ? "animate-pulse bg-info" : "border border-line-strong")} />
+                <div className="min-w-0 flex-1">
+                  <div className={cx("text-[13px] font-medium", state === "later" ? "text-muted" : "text-fg")}>{candidate.label}</div>
+                  <div className="truncate text-[12px] text-muted">{state === "now" && shown?.detail ? shown.detail : candidate.hint}</div>
+                </div>
+                <span className="shrink-0 text-[12px] text-faint tabular">{state === "now" && began[candidate.key] ? elapsed(now - began[candidate.key]!) : state === "done" ? "Done" : ""}</span>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] text-faint">{began.start ? `Running for ${elapsed(now - began.start)}` : ""}</span>
+          <div className="flex gap-2">
+            <Button variant="subtle" onClick={onClose}>
+              Close
+            </Button>
+            {id !== null && (
+              <Button variant={done ? "primary" : "subtle"} onClick={() => navigate(`/scripts/${id}`)}>
+                Open the script
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function Imports({ projects, statuses, writing, issues, scripts, onOpen }: { projects: ProjectSummary[]; statuses: Record<string, ProjectStatus>; writing: Writing[]; issues: ScriptIssueRow[]; scripts: ScriptIssueRow[]; onOpen: (id: string) => void }) {
   const running = projects.flatMap((project) => {
     const importing = statuses[project.id]?.importing;
     return importing ? [{ project, importing }] : [];
@@ -734,7 +817,7 @@ function Imports({ projects, statuses, writing, issues, scripts }: { projects: P
       {writing.map((one) => (
         <button
           key={one.id}
-          onClick={() => navigate(`/scripts/${one.id}`)}
+          onClick={() => onOpen(one.id)}
           title={one.detail || undefined}
           className="grid w-full grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-4 border-t border-line px-4 py-2.5 text-left transition-colors hover:bg-panel"
         >
@@ -799,6 +882,8 @@ function ProjectTable({
   subtitled,
   grouped,
   statuses,
+  importing,
+  onImport,
 }: {
   rows: Listed[];
   cardProps: (project: ProjectSummary) => CardProps;
@@ -807,6 +892,9 @@ function ProjectTable({
   /** A search across stages: each stage's matches under its name. */
   grouped: boolean;
   statuses: Record<string, ProjectStatus>;
+  /** Scripts still importing: their row opens the import over Home. */
+  importing: Set<string>;
+  onImport: (id: string) => void;
 }) {
   const idOf = (row: Listed) => row.local?.id ?? row.cloud?.id ?? `script-${row.script!.id}`;
   const rowOf = (row: Listed) =>
@@ -815,7 +903,7 @@ function ProjectTable({
     ) : row.cloud !== null ? (
       <CloudTableRow project={row.cloud} onChanged={onChanged} />
     ) : (
-      <ScriptTableRow script={row.script} onChanged={onChanged} />
+      <ScriptTableRow script={row.script} onChanged={onChanged} onImport={importing.has(row.script.id) ? () => onImport(row.script.id) : undefined} />
     );
   // One stage (or the subtitled videos): newest first, by when they changed.
   const groups = !grouped
@@ -928,7 +1016,7 @@ function ScriptLink({ id }: { id: string }) {
 }
 
 /** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
-function ScriptTableRow({ script, onChanged }: { script: WriterScriptRow; onChanged: () => void }) {
+function ScriptTableRow({ script, onChanged, onImport }: { script: WriterScriptRow; onChanged: () => void; onImport?: () => void }) {
   const [starting, setStarting] = useState(false);
   const start = async (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -945,7 +1033,7 @@ function ScriptTableRow({ script, onChanged }: { script: WriterScriptRow; onChan
     }
   };
   return (
-    <div role="row" onClick={() => navigate(`/scripts/${script.id}`)} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
+    <div role="row" onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
         <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[script.style ?? "bodycam"] ?? STYLE_COLOURS.bodycam }} />
         <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={script.title}>

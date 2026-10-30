@@ -1388,30 +1388,6 @@
 .writer-root .settings-what span { font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .writer-root .settings-row > button, .writer-root .settings-row > .select { flex-shrink: 0; }
 .writer-root .settings-row .select-md { min-width: 128px; }
-/* The bottom-left dock: what's under way, its list opening upward. */
-.writer-root .sync-dock { position: fixed; left: 12px; bottom: 12px; z-index: 45; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.writer-root .sync-chip { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px 0 10px; border: 1px solid var(--line-strong); border-radius: 99px; background: var(--surface); box-shadow: 0 6px 18px #0008; color: var(--text-2); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.writer-root .sync-chip:hover:not(:disabled), .writer-root .sync-chip[aria-expanded="true"] { background: var(--hover); border-color: var(--line-strong); color: var(--text); }
-.writer-root .sync-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--play); }
-.writer-root .sync-chip.busy i { animation: writer-pulse 1.4s ease-in-out infinite; }
-.writer-root .sync-chip.warn i { background: var(--warning); }
-.writer-root .sync-chip.bad i { background: var(--danger); }
-.writer-root .sync-list { width: 340px; max-height: min(420px, calc(100vh - 80px)); overflow-y: auto; display: flex; flex-direction: column; padding: 4px 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 32px #000b; font-size: 12px; transform-origin: bottom left; animation: writer-menu-in 0.12s ease-out; }
-.writer-root .sync-cloud { margin: 0; padding: 9px 0; color: var(--text-2); line-height: 1.45; }
-.writer-root .sync-cloud.warn { color: var(--warning); }
-.writer-root .sync-cloud.bad { color: var(--danger); }
-.writer-root .sync-item { display: flex; flex-direction: column; gap: 4px; height: auto; padding: 9px 0; border: 0; border-radius: 0; background: none; text-align: left; color: var(--text); font-weight: inherit; cursor: pointer; }
-.writer-root .sync-cloud + .sync-item, .writer-root .sync-item + .sync-item { border-top: 1px solid var(--line); }
-.writer-root .sync-item:hover:not(:disabled) { background: none; border-color: var(--line); }
-.writer-root .sync-item:hover:not(:disabled) b { text-decoration: underline; text-underline-offset: 2px; }
-.writer-root .sync-item:disabled { cursor: default; opacity: 1; }
-.writer-root .sync-head { display: flex; justify-content: space-between; gap: 8px; min-width: 0; font-variant-numeric: tabular-nums; }
-.writer-root .sync-head b { font-weight: 500; }
-.writer-root .sync-step { color: var(--text-2); font-size: 11.5px; }
-.writer-root .sync-bar { position: relative; height: 3px; border-radius: 2px; background: var(--line-strong); overflow: hidden; }
-.writer-root .sync-bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); transition: width 0.4s; }
-.writer-root .sync-bar[data-unknown] i { width: 30%; animation: writer-sync-slide 1.4s ease-in-out infinite; }
-@keyframes writer-sync-slide { from { left: -30%; } to { left: 100%; } }
 /* The list's header and filters, as Edit's Home: a wide search, sections, style pills. */
 .writer-root .app-header .list-search { flex: 1; width: auto; max-width: 420px; margin: 0 0 0 16px; }
 .writer-root .update-inline { display: flex; align-items: center; gap: 8px; }

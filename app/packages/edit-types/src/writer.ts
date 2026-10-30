@@ -67,6 +67,8 @@ export type Choice =
   | { kind: "skip_failed" }
   | { kind: "select"; ids: string[] }
   | { kind: "no_transcript" }
+  /** A video that failed, given another link (a Drive copy of a YouTube video that won't download): `id` the failed one's, or none for the script's own video. */
+  | { kind: "replace"; id?: string; url: string }
   | { kind: "cancel" };
 
 export type Check = { name: string; ok: boolean; detail: string };
@@ -81,6 +83,8 @@ export type SyncedClip = { id: string; cutIn: boolean; startMs: number; endMs: n
 export type EditLink = { project: string; clips: SyncedClip[]; outOfStep?: string };
 
 export type Script = {
+  /** Built as soon as its import is ready, with this note (New project's first message): set when it's made, gone once the build starts. */
+  firstBuild?: { note: string };
   speakerCheck?: { total: number; checked: number; failed: string[]; at: number; needsApply?: boolean };
   id: string;
   title: string;

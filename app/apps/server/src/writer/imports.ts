@@ -131,15 +131,15 @@ export async function fromFile(app: App, data: string, source: string, link: str
 }
 
 /** A title given is kept in place of the video's own, which is looked up otherwise. */
-export async function fromYoutube(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null): Promise<Script> {
+export async function fromYoutube(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null, then: Script["firstBuild"] | null = null): Promise<Script> {
   youtube.checkUrl(url);
-  return start(app, data, newScript(givenTitle(title) ?? "YouTube video", "youtube", url.trim(), ""), await article(link), kind);
+  return start(app, data, newScript(givenTitle(title) ?? "YouTube video", "youtube", url.trim(), ""), await article(link), kind, then);
 }
 
 /** A Drive file, or a folder of recordings joined in name order, as Repack takes them; a title given is kept in place of the folder's name. */
-export async function fromDrive(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null): Promise<Script> {
+export async function fromDrive(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null, then: Script["firstBuild"] | null = null): Promise<Script> {
   drive.parse(url);
-  return start(app, data, newScript(givenTitle(title) ?? "Google Drive footage", "drive", url.trim(), ""), await article(link), kind);
+  return start(app, data, newScript(givenTitle(title) ?? "Google Drive footage", "drive", url.trim(), ""), await article(link), kind, then);
 }
 
 /** A compilation's lines: each a video link, or "REUSE" and a link for a case the channel already covered, as Repack takes them. */
@@ -218,8 +218,8 @@ export async function checkVideos(app: App, given: string[]): Promise<VideoCheck
 }
 
 /** Several videos joined in order: a compilation, one case each, or (`oneCase`) one Courtroom case whose hearing runs across them. A link's `t` is a hint to where the case starts in that video. */
-export function fromCompilation(app: App, data: string, title: string, urls: string[], oneCase: boolean, kind: Kind | null): Promise<Script> {
-  return compilationWith(app, data, title, urls, oneCase, kind, null, []);
+export function fromCompilation(app: App, data: string, title: string, urls: string[], oneCase: boolean, kind: Kind | null, then: Script["firstBuild"] | null = null): Promise<Script> {
+  return compilationWith(app, data, title, urls, oneCase, kind, null, [], then);
 }
 
 /**
@@ -255,7 +255,7 @@ export async function fromBrief(app: App, data: string, text: string, kind: Kind
   return compilationWith(app, data, parsed.title, videos.map((link) => link.url), true, "courtroom", found, labels);
 }
 
-async function compilationWith(app: App, data: string, title: string, given: string[], oneCase: boolean, kind: Kind | null, found: Research | null, labels: Label[]): Promise<Script> {
+async function compilationWith(app: App, data: string, title: string, given: string[], oneCase: boolean, kind: Kind | null, found: Research | null, labels: Label[], then: Script["firstBuild"] | null = null): Promise<Script> {
   const name = title.trim();
   if (name === "" || [...name].length > 180) throw new Error("Give it a title (up to 180 characters).");
   const [urls, reuses] = linesFor(given, oneCase);
@@ -264,10 +264,11 @@ async function compilationWith(app: App, data: string, title: string, given: str
   if (oneCase) script.kind = "courtroom";
   script.reuses = reuses;
   script.labels = labels;
-  return start(app, data, script, found, kind);
+  return start(app, data, script, found, kind, then);
 }
 
-async function start(app: App, data: string, script: Script, found: Research | null, kind: Kind | null): Promise<Script> {
+async function start(app: App, data: string, script: Script, found: Research | null, kind: Kind | null, then: Script["firstBuild"] | null = null): Promise<Script> {
+  if (then !== null) script.firstBuild = then;
   // Only kinds of script this person may write, starting as the first format they may.
   if (script.sourceKind === "compilation" && !script.compilation) {
     if (kind !== null && kind !== "courtroom") throw new Error("Videos of one Courtroom case must use the Courtroom format.");
@@ -275,6 +276,7 @@ async function start(app: App, data: string, script: Script, found: Research | n
   } else script.kind = kind ?? (script.compilation ? can.firstCompilationKind() : can.firstSingleKind());
   can.requireKind(script, script.kind);
   const done = busy(script.id);
+  let result: Script;
   try {
     const dir = store.scriptDir(data, script.id);
     fs.mkdirSync(dir, { recursive: true });
@@ -282,15 +284,42 @@ async function start(app: App, data: string, script: Script, found: Research | n
     store.libraryChanged();
     // The producer's article is the case's research: no search runs.
     if (found !== null) research.keep(dir, found);
-    return await run(app, dir, script);
+    result = await run(app, dir, script);
   } finally {
     done();
+  }
+  buildWhenReady(app, data, result);
+  return result;
+}
+
+/** Where the build a script was made with is started (routes.ts: a job like the Build button's). */
+export const hooks = { build: (_app: App, _id: string, _note: string): void => {} };
+
+/**
+ * A script made with a first build (New project's first message, or none:
+ * "start the script workflow") is built as soon as its import is ready, from
+ * whichever way it got there (straight through, or resumed after a pause).
+ */
+function buildWhenReady(app: App, data: string, script: Script): void {
+  if (script.status !== "ready" || script.firstBuild === undefined) return;
+  const dir = store.scriptDir(data, script.id);
+  const note = script.firstBuild.note;
+  try {
+    const now = store.read(dir);
+    delete now.firstBuild;
+    store.write(dir, now);
+    delete script.firstBuild;
+    hooks.build(app, script.id, note);
+    diag.info("writer", `${jobs.named(script.id, script.title)}: its import is ready, so its build started${note ? " with the note given" : ""}`);
+  } catch (error) {
+    diag.warn("writer", `${jobs.named(script.id, script.title)}: starting its build after the import: ${diag.messageOf(error)}`);
   }
 }
 
 /** Answers a paused import, or retries a failed one, then carries on. */
 export async function resume(app: App, data: string, id: string, choice: Choice): Promise<Script> {
   const done = busy(id);
+  let result: Script;
   try {
     const dir = store.scriptDir(data, id);
     const script = store.read(dir);
@@ -333,16 +362,46 @@ export async function resume(app: App, data: string, id: string, choice: Choice)
       manifest.chosen = choice.ids;
       parts.writeManifest(dir, manifest);
     } else if (choice.kind === "no_transcript" && decision?.kind === "no_speech") script.noSpeech = true;
+    else if (choice.kind === "replace") replaceSource(dir, script, choice.id ?? null, choice.url.trim());
     else if (choice.kind !== "retry") throw new Error("That answer doesn't fit what this import asked.");
     delete script.decision;
     script.status = "processing";
     script.error = null;
     script.updatedAt = Date.now();
     store.write(dir, script);
-    return await run(app, dir, script);
+    result = await run(app, dir, script);
   } finally {
     done();
   }
+  buildWhenReady(app, data, result);
+  return result;
+}
+
+/**
+ * A video that failed, given another link: a compilation's video `id` (its
+ * index), or the script's own video. A YouTube video that won't download is
+ * often on the team's Drive (the user, Oct 30: "if it's a YouTube video, you
+ * can then enter a Google Drive video as a replacement, or you can then retry").
+ */
+function replaceSource(dir: string, script: Script, id: string | null, url: string): void {
+  const kind = drive.isDrive(url) ? "drive" : youtube.isYoutube(url) ? "youtube" : null;
+  if (kind === null) throw new Error("Give a YouTube or Google Drive link to the video.");
+  if (kind === "drive") drive.parse(url);
+  else youtube.checkUrl(url);
+  if (script.sourceKind === "compilation") {
+    const videos = parts.readVideos(dir);
+    const index = Number(id);
+    if (videos === null || !Number.isInteger(index) || videos.videos[index] === undefined) throw new Error("That video isn't one of this compilation's.");
+    note(script, `${videos.videos[index]!.title || videos.videos[index]!.url} replaced by ${url}`);
+    videos.videos[index] = { ...videos.videos[index]!, url };
+    videos.skipped = videos.skipped.filter((one) => one !== String(index));
+    parts.writeVideos(dir, videos);
+    return;
+  }
+  if (script.sourceKind !== "youtube" && script.sourceKind !== "drive") throw new Error("Only a video link can be replaced.");
+  note(script, `${script.sourceUrl} replaced by ${url}`);
+  script.sourceKind = kind;
+  script.sourceUrl = url;
 }
 
 /** Runs the pipeline. A failure, or even a bug, ends as a failed import that says so and can be retried; it never leaves the script stuck importing. */

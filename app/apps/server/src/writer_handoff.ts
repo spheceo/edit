@@ -26,7 +26,7 @@ import { withDocuments } from "./writer/casefiles.ts";
 import * as writerResearch from "./writer/research.ts";
 import * as writerStore from "./writer/store.ts";
 import type { Router } from "./http/router.ts";
-import type { ScriptBlock, Style } from "./model.ts";
+import type { Creator, ScriptBlock, Style } from "./model.ts";
 import * as script from "./script.ts";
 import * as scriptSync from "./script_sync.ts";
 import { markReusedScript, parseScriptText } from "./compilation_input.ts";
@@ -229,10 +229,17 @@ export function projectFor(app: App, id: string): string | null {
   return project !== undefined && app.store.get(project) !== null ? project : null;
 }
 
+/** Who started a script, as the cloud's row has it. */
+function creatorOf(value: unknown): Creator | null {
+  const given = value as { sub?: unknown; name?: unknown; picture?: unknown } | null | undefined;
+  if (typeof given?.sub !== "string" || given.sub === "" || typeof given.name !== "string") return null;
+  return typeof given.picture === "string" && given.picture !== "" ? { sub: given.sub, name: given.name, picture: given.picture } : { sub: given.sub, name: given.name };
+}
+
 /** Writer's scripts in the cloud, newest first (deleted ones left out), each with the Edit project made from it here. */
 export async function list(
   app: App,
-): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null; clips: number; durationMs: number; built: boolean; style: Style | null }[]> {
+): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; createdBy: Creator | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null; clips: number; durationMs: number; built: boolean; style: Style | null }[]> {
   const made = imports(app.store.home);
   if (!cloud.enabled()) throw new Error("Writer's scripts need Edit's cloud (the relay token)");
   const rows = (await cloud.query("writer:listScripts", {})) as Record<string, unknown>[];
@@ -251,6 +258,8 @@ export async function list(
       rev: Number(row.rev ?? 0),
       updatedAt: Number(row.updatedAt ?? 0),
       updatedBy: typeof row.updatedBy === "string" ? row.updatedBy : null,
+      // Who started it, as the cloud recorded it from their sign-in (Home shows them on its row).
+      createdBy: creatorOf(row.createdBy),
       // From Writer's library row: a built script has its footage cut into clips (a source being researched is one whole clip, or none).
       ...(() => {
         const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown; kind?: unknown; sourceKind?: unknown };

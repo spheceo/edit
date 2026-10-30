@@ -239,16 +239,16 @@ export function routes(router: Router<App>): void {
       return answer(async () => detail(dataOf(context.app), await imports.fromFile(context.app, dataOf(context.app), String(given.path ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null)));
     })
     .post("/api/writer/scripts/youtube", async (context) => {
-      const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromYoutube(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null)));
+      const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind; build?: string }>(context);
+      return answer(async () => detail(dataOf(context.app), await imports.fromYoutube(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, firstBuild(given.build))));
     })
     .post("/api/writer/scripts/drive", async (context) => {
-      const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromDrive(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null)));
+      const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind; build?: string }>(context);
+      return answer(async () => detail(dataOf(context.app), await imports.fromDrive(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, firstBuild(given.build))));
     })
     .post("/api/writer/scripts/compilation", async (context) => {
-      const given = await body<{ title?: string; urls?: string[]; case?: boolean; kind?: Kind }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromCompilation(context.app, dataOf(context.app), String(given.title ?? ""), Array.isArray(given.urls) ? given.urls.map(String) : [], given.case === true, given.kind ?? null)));
+      const given = await body<{ title?: string; urls?: string[]; case?: boolean; kind?: Kind; build?: string }>(context);
+      return answer(async () => detail(dataOf(context.app), await imports.fromCompilation(context.app, dataOf(context.app), String(given.title ?? ""), Array.isArray(given.urls) ? given.urls.map(String) : [], given.case === true, given.kind ?? null, firstBuild(given.build))));
     })
     .post("/api/writer/scripts/brief", async (context) => {
       const given = await body<{ text?: string; kind?: Kind }>(context);
@@ -679,6 +679,14 @@ function reviewState(data: string, scriptId: string): { notes: reviews.Note[]; b
 }
 
 /** Starts the work's job on a script the person may see; its first status. */
+/** An import's first build (New project's first message): `build` given, even empty, builds when the import is ready. */
+const firstBuild = (build: unknown): { note: string } | null => (typeof build === "string" ? { note: build.trim().slice(0, 4_000) } : null);
+
+// A script made with a first build is built once its import is ready, as the Build button would.
+imports.hooks.build = (app, id, note) => {
+  startJob(app, id, { kind: "build", note }, (job) => scripting.buildOnce(app, dataOf(app), id, note, undefined, job));
+};
+
 export function startJob(app: App, scriptId: string, work: jobs.Work, run: (job: jobs.Job) => Promise<jobs.Outcome>, after?: () => void): BuildStatus {
   const data = dataOf(app);
   const script = readFor(data, scriptId);

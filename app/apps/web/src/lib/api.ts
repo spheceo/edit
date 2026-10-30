@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { note, recordTiming, routeOf } from "./diagnostics";
 import type { ExportOptions } from "./exporting";
 import type { Patch } from "./patch";
-import type { DriveFile, MediaStatus, Project, ProjectSummary, ScriptJob, Style, Transcript } from "./types";
+import type { Creator, DriveFile, MediaStatus, Project, ProjectSummary, ScriptJob, Style, Transcript } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -294,6 +294,8 @@ export interface WriterScriptRow {
   rev: number;
   updatedAt: number;
   updatedBy: string | null;
+  /** Who started it. */
+  createdBy?: Creator | null;
   project: string | null;
   /** Sent to Edit from Writer ("Send to Edit"): when, by whom, and whether the script changed since. */
   handoff: { at: number; by: string | null; changed: boolean } | null;

@@ -11,6 +11,7 @@ import type * as Sdk from "@anthropic-ai/claude-agent-sdk";
 import { baseOptions, findClaude, sdk } from "../claude.ts";
 import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
+import * as live from "./live.ts";
 
 /** The model every build, revision and check that reads the whole script uses: Opus 5.5, pinned. */
 export const OPUS = "claude-opus-5-5";
@@ -163,10 +164,26 @@ export async function ask(question: Question): Promise<Answer> {
   try {
     for await (const message of run) {
       if (message.type === "assistant") {
-        const reply = message.message as { stop_reason?: string | null; usage?: { output_tokens?: number } };
+        const reply = message.message as { stop_reason?: string | null; usage?: { output_tokens?: number }; content?: unknown };
+        // The chat's live turn (live.ts): its words, and each tool as it starts.
+        if (question.tools && Array.isArray(reply.content))
+          for (const block of reply.content as { type?: string; text?: string; id?: string; name?: string }[]) {
+            if (block.type === "text" && typeof block.text === "string") live.said(block.text);
+            else if (block.type === "tool_use" && typeof block.id === "string") live.tool({ id: block.id, tool: (block.name ?? "").replace(/^mcp__writer__/, ""), label: "", state: "running" });
+          }
         answer.replies++;
         answer.biggestReply = Math.max(answer.biggestReply, reply.usage?.output_tokens ?? 0);
         if (reply.stop_reason === "max_tokens" || reply.stop_reason === "refusal") stops.push(reply.stop_reason);
+      } else if (message.type === "user" && question.tools) {
+        // Each tool's answer settles its row: done or refused, and what it said of itself.
+        const content = (message.message as { content?: unknown }).content;
+        if (Array.isArray(content))
+          for (const block of content as { type?: string; tool_use_id?: string; is_error?: boolean; content?: unknown }[]) {
+            if (block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+            const text = typeof block.content === "string" ? block.content : Array.isArray(block.content) ? (block.content as { text?: unknown }[]).map((part) => (typeof part.text === "string" ? part.text : "")).join("\n") : "";
+            const detail = live.detailOf(text);
+            live.tool({ id: block.tool_use_id, label: "", state: block.is_error === true ? "error" : "done", ...(detail ? { detail } : {}) });
+          }
       } else if (message.type === "result") finished = message as unknown as Record<string, unknown>;
     }
   } catch (error) {

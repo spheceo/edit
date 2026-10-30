@@ -6,6 +6,11 @@
   color-scheme: dark;
   /* The spheceo kit (design/kit/tokens.css), under Writer's names: dark,
      grey steps and hairlines, red acts, white marks, no gold. */
+  /* Repack's names for the same, for the chat ported from Repack (chat/). */
+  --text-secondary: var(--text-2);
+  --border: var(--line);
+  --border-strong: var(--line-strong);
+  --playhead: var(--play);
   --bg: #0b0b0b;
   --panel: #111111;
   --surface: #151515;
@@ -65,7 +70,8 @@
 .writer-root .scroll-thumb { position: fixed; z-index: 1000; width: 6px; height: 6px; border-radius: 99px; background: rgba(255, 255, 255, 0.28); opacity: 0; pointer-events: none; transition: opacity 0.25s; }
 .writer-root .scroll-thumb.on { opacity: 1; pointer-events: auto; cursor: default; }
 .writer-root .scroll-thumb.on:hover { background: rgba(255, 255, 255, 0.42); }
-.writer-root button {
+/* (Not the chat ported from Repack, .repack-chat: its own styles, as Repack has them.) */
+.writer-root button:not(:where(.repack-chat button)) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -79,8 +85,13 @@
   white-space: nowrap;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
-.writer-root button:hover:not(:disabled) { background: var(--hover); border-color: #3a3a3a; }
-.writer-root button:disabled { opacity: 0.4; cursor: default; }
+.writer-root button:not(:where(.repack-chat button)):hover:not(:disabled) { background: var(--hover); border-color: #3a3a3a; }
+.writer-root button:not(:where(.repack-chat button)):disabled { opacity: 0.4; cursor: default; }
+/* Repack's base for the same (its globals.css), under the ported chat. */
+.writer-root .repack-chat :where(button) { cursor: pointer; }
+.writer-root .repack-chat :where(button):disabled { opacity: 0.45; cursor: not-allowed; }
+.writer-root .repack-chat :where(button) :where(svg) { flex-shrink: 0; }
+.writer-root .repack-chat :where(p), .writer-root .repack-chat:where(p) { margin: 0; }
 /* Keyboard focus: a white ring with a gap, on anything you can press. */
 .writer-root :where(button, a, [role="button"], [role="tab"], [role="menuitem"], [tabindex]):focus-visible { outline: none; box-shadow: var(--focus-ring); }
 /* After a click, no ring (main.tsx marks the page until Tab); fields still brighten their border. */

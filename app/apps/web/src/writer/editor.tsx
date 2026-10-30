@@ -1,5 +1,6 @@
 import { type CSSProperties, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Asked, ChatLog, Composer, ResetAsk, Said, Working, useChatDraft } from "./agent";
+import { ChatLog, Composer, ResetAsk, useChatDraft } from "./agent";
+import { AgentTurn, ChatNotice, UserMessage } from "./chat/chat-log";
 import { buildStatus, clearChat, completeTranscription, correctWord, editProject, getChat, getResearch, getScript, importReuses, message, previewSrc, resetScript, resolveProposals, restoreVersion, retrySpeakers, saveClips, setHeading, startBuild, startEdit, startRevision, stopJob } from "./api";
 import { navigate } from "../lib/route";
 import { breathe, clock, insertAt, isCutIn, keptMs, purposes, splitClip } from "./clips";
@@ -156,6 +157,8 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   const [copied, setCopied] = useState(false);
   const [started, setStarted] = useState<number | null>(null);
   const [stage, setStage] = useState("");
+  // What Claude has said and the tools it ran so far, for the live turn (Repack's chat).
+  const [liveTurn, setLiveTurn] = useState<NonNullable<BuildStatus["turn"]> | null>(null);
   const [chat, setChat] = useState<ChatTurn[]>([]);
   // What was just asked, shown until the conversation on disk has it.
   const [sent, setSent] = useState<string | null>(null);
@@ -389,11 +392,14 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
       }
       if (job?.running) {
         setStage(job.stage);
-        window.setTimeout(poll, 3000);
+        setLiveTurn(job.turn ?? null);
+        // Often, so the tools come in as they run.
+        window.setTimeout(poll, 1000);
         return;
       }
       watching.current = false;
       setStarted(null);
+      setLiveTurn(null);
       void loadChat().finally(() => setSent(null));
       if (!job) return;
       seen(script.id, job.finishedAt);
@@ -825,11 +831,13 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
             )}
             {chat.map((turn, index) =>
               turn.role === "producer" ? (
-                <Asked key={`${turn.at}-${index}`} text={turn.text} at={turn.at} onRetry={!busy && (index === chat.length - 1 || (index === chat.length - 2 && !!chat[index + 1].failed)) ? () => void (cueCount ? revise(turn.text) : build(turn.text.replace(/^Build the script\.?\s*/i, ""))) : undefined} />
+                <UserMessage key={`${turn.at}-${index}`} text={turn.text} at={new Date(turn.at).toISOString()} onRetry={!busy && (index === chat.length - 1 || (index === chat.length - 2 && !!chat[index + 1].failed)) ? () => void (cueCount ? revise(turn.text) : build(turn.text.replace(/^Build the script\.?\s*/i, ""))) : undefined} />
               ) : (
                 <Fragment key={`${turn.at}-${index}`}>
-                  {/* A reset asks with its own line and card, as Edit does, not a reply. */}
-                  {!turn.reset && <Said text={turn.text} at={turn.at} costUsd={turn.costUsd} failed={turn.failed} />}
+                  {/* Repack's chat: the answer with its tools folded behind how long it worked; a failure as its notice. A reset asks with its own line and card. */}
+                  {!turn.reset && !turn.failed && <AgentTurn text={turn.text} trace={turn.trace} workedMs={turn.workedMs} partial={turn.partial} at={new Date(turn.at).toISOString()} />}
+                  {!turn.reset && turn.failed && !!turn.trace?.length && <AgentTurn text="" trace={turn.trace} workedMs={turn.workedMs} partial={turn.partial} at={new Date(turn.at).toISOString()} />}
+                  {!turn.reset && turn.failed && <ChatNotice>{turn.text}</ChatNotice>}
                   {turn.reset && (
                     <ResetAsk
                       state={turn.reset}
@@ -852,7 +860,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
                 </Fragment>
               ),
             )}
-            {sent && working && <Asked text={sent} />}
+            {sent && working && <UserMessage text={sent} />}
             {cueCount > 0 && !busy && !chat.length && (
               <div className="turn">
                 <p className="muted">
@@ -873,10 +881,12 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
               </div>
             )}
             {working && (
-              <Working
-                stage={stage}
-                since={started}
-                hint={
+              <AgentTurn
+                live
+                text={liveTurn?.text ?? ""}
+                trace={liveTurn?.trace}
+                waitingLabel={stage || "Thinking"}
+                waitingNote={
                   stage === "Editing the script"
                     ? "Edits usually take a minute or two."
                     : /reused/i.test(stage) || stage.startsWith("Adding the footage")

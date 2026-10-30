@@ -1,0 +1,254 @@
+/*
+ * The agent conversation as a reading surface: the producer's messages in a
+ * quiet outlined bubble, the agent's turns as plain prose with the tools it
+ * ran set between the words in the order they happened.
+ */
+.user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.bubble {
+  max-width: 88%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px 12px 4px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Script words the message quotes, set apart above what it asks. */
+.bubbleQuote {
+  display: block;
+  margin: 2px -4px 8px;
+  padding: 7px 10px;
+  border-left: 2px solid #3b82f6;
+  border-radius: 0 6px 6px 0;
+  background: var(--hover);
+}
+.bubbleQuote > span:first-child {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.bubbleQuoteText {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.stopped {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* Copy and time stay out of the way until the message is pointed at. */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.turn > .actions {
+  margin-top: -6px;
+}
+.user:focus-within > .actions,
+.turn:focus-within > .actions {
+  opacity: 1;
+}
+@media (hover: hover) and (pointer: fine) {
+  .user:hover > .actions,
+  .turn:hover > .actions {
+    opacity: 1;
+  }
+}
+@media (hover: none) {
+  .actions {
+    opacity: 1;
+  }
+}
+.actions > :where(button) {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--faint);
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.actions > :where(button):hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* Tools read as a margin list, not as chips. */
+.tools {
+  display: flex;
+  flex-direction: column;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+.tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.tool > :where(svg) {
+  flex: none;
+  color: var(--faint);
+}
+.tool > :where(span, small) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool > :where(span) {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+/* What came of it, after what was called. */
+.tool > :where(small) {
+  color: var(--faint);
+  font-size: 11.5px;
+}
+.tool[data-state="error"] {
+  color: var(--danger);
+}
+.tool[data-state="error"] > :where(svg) {
+  color: var(--danger);
+}
+.tool[data-state="error"] {
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+.tool[data-state="error"] > :where(small) {
+  color: var(--danger);
+  white-space: normal;
+}
+
+/* How long a finished turn took; opens the tools it ran. */
+.worked {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 3px;
+  height: 22px;
+  margin: 0 0 -4px -7px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.worked:hover {
+  background: var(--hover);
+  color: var(--text-secondary);
+}
+.chevron {
+  transition: transform 0.15s;
+}
+.worked[aria-expanded="true"] > .chevron {
+  transform: rotate(90deg);
+}
+
+/* Whatever is in progress shimmers: a running tool, or the wait for words. */
+.thinking,
+.tool[data-state="running"] > :where(span) {
+  background: linear-gradient(
+    90deg,
+    var(--faint) 0%,
+    var(--faint) 40%,
+    var(--text) 50%,
+    var(--faint) 60%,
+    var(--faint) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+.thinking {
+  align-self: flex-start;
+  font-size: 12px;
+}
+.waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+/* The model's latest line of thought, kept to two lines. */
+.waitingNote {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking,
+  .tool[data-state="running"] > :where(span) {
+    background: none;
+    color: var(--faint);
+    animation: none;
+  }
+  .actions,
+  .worked,
+  .chevron {
+    transition: none;
+  }
+}
+
+/* Repack's script-editor.module.css .chatNotice: why an answer failed. */
+.notice {
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}

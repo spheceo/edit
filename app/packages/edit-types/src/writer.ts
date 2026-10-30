@@ -254,6 +254,8 @@ export type BuildStatus = {
   report: string | null;
   costUsd: number | null;
   error: string | null;
+  /** While it runs: what Claude has said so far and the tools it ran, for the chat's live turn. */
+  turn?: { text: string; trace: ToolGroup[] };
 };
 
 /** A moment a commentary brief needs, as the clip search planned it. */
@@ -449,6 +451,19 @@ export type DocComment = {
 /** A rewrite of saved narration Claude proposed, for the producer to accept or decline. */
 export type Proposal = { id: string; cutIn: string; before: string; after: string; at: number };
 
+/** A tool Claude ran in a turn, as Repack's chat shows it (domain/script-turn.ts): which, how it went, and what came of it. */
+export type ToolCall = {
+  id: string;
+  tool?: string;
+  /** Its words while running and once settled; empty: the chat names it from `tool`. */
+  label: string;
+  detail?: string;
+  state: "running" | "done" | "error";
+};
+
+/** Tools run back to back, and where in the answer they happened (its length then). */
+export type ToolGroup = { at: number; calls: ToolCall[] };
+
 /** One message in a footage script's conversation with the editor. */
 export type ChatTurn = {
   role: "producer" | "editor";
@@ -456,6 +471,10 @@ export type ChatTurn = {
   at: number;
   costUsd?: number;
   failed?: boolean;
+  /** The tools Claude ran for this answer, how long it worked, and whether it stopped before finishing. */
+  trace?: ToolGroup[];
+  workedMs?: number;
+  partial?: boolean;
   /** Claude asked to start the script over: pending until the producer answers. */
   reset?: "pending" | "accepted" | "declined";
 };

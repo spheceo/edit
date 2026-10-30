@@ -13,6 +13,7 @@ import type { BuildStatus } from "@edit/types/writer";
 import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
 import { join } from "../paths.ts";
+import * as live from "./live.ts";
 import { scriptDir } from "./store.ts";
 
 /** What a job's work is handed: its stop signal and a way to say what it's doing. */
@@ -113,7 +114,9 @@ function keep(data: string, id: string, job: BuildStatus): void {
   const path = file(data, id);
   if (path === null) return;
   try {
-    writeAtomic(path, JSON.stringify(job));
+    // The live turn is for the page while it runs; the chat keeps it once done.
+    const { turn: _live, ...kept } = job;
+    writeAtomic(path, JSON.stringify(kept));
   } catch {
     // The status on disk is for after a restart; this run still has it.
   }
@@ -200,7 +203,10 @@ export function start(data: string, id: string, title: string, work: Work, run: 
   const controller = new AbortController();
   stops.set(id, controller);
   const context: Job = { id, signal: controller.signal, stage: (text) => stage(id, text) };
-  void (async () => {
+  // What Claude says and the tools it runs, for the chat's live turn (live.ts).
+  const turn: live.Turn = { text: "", trace: [], startedAt: job.startedAt };
+  job.turn = turn;
+  void live.within(turn, async () => {
     try {
       const [report, cost] = await run(context);
       checkStopped(context);
@@ -216,10 +222,11 @@ export function start(data: string, id: string, title: string, work: Work, run: 
     } finally {
       job.running = false;
       job.finishedAt = Date.now();
+      delete job.turn;
       keep(data, id, job);
       stops.delete(id);
     }
-  })();
+  });
   return job;
 }
 

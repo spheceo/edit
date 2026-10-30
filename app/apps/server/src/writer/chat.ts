@@ -9,6 +9,7 @@ import type { ChatTurn } from "@edit/types/writer";
 
 import { writeAtomic } from "../files.ts";
 import { join } from "../paths.ts";
+import * as live from "./live.ts";
 
 /** Turns kept, and how many recent ones go back to Claude. */
 const KEPT = 80;
@@ -28,7 +29,7 @@ function write(dir: string, turns: ChatTurn[]): void {
 
 export function add(dir: string, role: ChatTurn["role"], text: string, costUsd: number | null = null, failed = false): void {
   const turns = read(dir);
-  turns.push({ role, text: text.trim(), at: Date.now(), ...(costUsd === null ? {} : { costUsd }), ...(failed ? { failed } : {}) });
+  turns.push({ role, text: text.trim(), at: Date.now(), ...(costUsd === null ? {} : { costUsd }), ...(failed ? { failed } : {}), ...(role === "editor" ? worked(failed) : {}) });
   try {
     write(dir, turns);
   } catch {
@@ -50,6 +51,20 @@ export function settleReset(dir: string, accepted: boolean): void {
   if (turn === undefined) throw new Error("Claude hasn't asked to start over.");
   turn.reset = accepted ? "accepted" : "declined";
   write(dir, turns);
+}
+
+/**
+ * An answer's work, from the job's live turn (live.ts): the tools Claude ran
+ * and how long it worked, as Repack's chat folds them behind "Worked for 2m".
+ * The answer saved is the job's report, not what Claude said on the way, so
+ * the tools come before it.
+ */
+function worked(failed: boolean): Pick<ChatTurn, "trace" | "workedMs" | "partial"> {
+  const turn = live.turn();
+  if (turn === undefined) return {};
+  // One block: what Claude said between them isn't kept, so they read as one run of work.
+  const calls = turn.trace.flatMap((group) => group.calls.map((call) => (call.state === "running" ? { ...call, state: failed ? ("error" as const) : ("done" as const) } : call)));
+  return { ...(calls.length > 0 ? { trace: [{ at: 0, calls }] } : {}), workedMs: Date.now() - turn.startedAt, ...(failed ? { partial: true } : {}) };
 }
 
 /** Starts the conversation again; the script's edits stay. */

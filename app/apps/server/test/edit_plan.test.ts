@@ -396,11 +396,18 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_pla
   // No window overlaps another.
   const windows = result.windows as { centre: [number, number]; width: number }[];
   expect(windows.length).toBe(3);
-  // The windows move with the camera; the wallpaper fills the frame and stays still (Oct 29).
+  // One camera over the whole screen: the wallpaper moves with it too (Oct 30), and always covers the frame, its edge never in view (Oct 29).
   const wall = p.clips.find((own) => own.name === "Desktop · wallpaper")!;
-  expect(wall.keyframes?.x ?? []).toEqual([]);
-  expect(wall.keyframes?.scale ?? []).toEqual([]);
-  expect(wall.type === "video" && [wall.transform.x, wall.transform.y]).toEqual([0, 0]);
+  expect((wall.keyframes?.x ?? []).length).toBeGreaterThan(1);
+  if (wall.type !== "video") throw new Error("the wallpaper is a picture");
+  const { width: W, height: H } = p.settings;
+  const fitted = Math.min(W / 1344, H / 752);
+  for (let frame = 0; frame < wall.duration; frame += 5) {
+    const at = (key: "x" | "y" | "scale") => sample(wall.keyframes?.[key] ?? [], frame) ?? wall.transform[key];
+    const [halfW, halfH] = [(1344 * fitted * at("scale")) / 2, (752 * fitted * at("scale")) / 2];
+    expect(halfW - Math.abs(at("x"))).toBeGreaterThanOrEqual(W / 2 - 1);
+    expect(halfH - Math.abs(at("y"))).toBeGreaterThanOrEqual(H / 2 - 1);
+  }
   // Only the keys the camera's curve needs.
   const keys = p.clips.filter((own) => own.name?.startsWith("Desktop ·") === true).reduce((sum, own) => sum + Object.values(own.keyframes ?? {}).reduce((n, list) => n + list.length, 0), 0);
   expect(keys).toBeLessThan(900);

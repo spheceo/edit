@@ -594,14 +594,24 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   // A picture's scale so it's `width` desktop pixels wide (the renderer fits media to the frame at scale 1).
   const scaleFor = (media: Media, width: number) => width / (Math.max(media.width, 1) * Math.min(W / Math.max(media.width, 1), H / Math.max(media.height, 1)));
 
-  // The wallpaper, filling the frame and still: only the windows move with
-  // the camera. It moved with them over a desktop the camera could pull back
-  // past, and its edge came into view with black beyond (the user, Oct 29:
-  // "Why is the background moving along with the elements? This is not
-  // supposed to be happening at all").
+  // The wallpaper moves with the camera like everything on the screen: one
+  // camera over one desktop, the windows only opening and closing on it (the
+  // team, Oct 30: "it is the camera moving around in the photo viewers and
+  // file viewers, rather than the file and photo viewers moving around on the
+  // screen and the Windows screen staying static"). It's big enough that its
+  // edge never comes into view, wherever the camera goes: on Oct 29 it showed
+  // with black beyond ("Why is the background moving along with the
+  // elements?"), and the wallpaper was held still instead.
   const wallpaper = mediaOf(project, art.wallpaper);
   if (wallpaper === undefined) throw new Error("desktop: the wallpaper wasn't prepared (run it through apply_edit_plan)");
-  const cover = Math.max(W / Math.max(wallpaper.width, 1), H / Math.max(wallpaper.height, 1)) * wallpaper.width;
+  const aspect = Math.max(wallpaper.width, 1) / Math.max(wallpaper.height, 1);
+  let [reachX, reachY] = [DW / 2, DH / 2];
+  for (let frame = 0; frame < total; frame += Math.max(Math.round(2 * s), 1)) {
+    const pose = camera(frame);
+    reachX = Math.max(reachX, Math.abs(pose.x - DW / 2) + W / 2 / pose.z);
+    reachY = Math.max(reachY, Math.abs(pose.y - DH / 2) + H / 2 / pose.z);
+  }
+  const wide = Math.max(2 * reachX, 2 * reachY * aspect) * 1.02;
   add({
     type: "video",
     name: `${spec.prefix}wallpaper`,
@@ -611,7 +621,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     frame: { width: 0, shadow: 0 },
     start: spec.start,
     duration: total,
-    transform: { x: 0, y: 0, scale: scaleFor(wallpaper, cover) * 1.01, rotation: 0 },
+    ...keysFor(DW / 2, DH / 2, scaleFor(wallpaper, wide), null, 0),
   });
 
   const zOrder = laid.map((_, index) => index).sort((a, b) => laid[a]!.spec.z - laid[b]!.spec.z || a - b);

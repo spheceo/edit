@@ -12,7 +12,7 @@ import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
 import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
 import { AppMenu } from "./AppMenu";
-import { elapsed, STEPS, stepOf } from "../writer/import-steps";
+import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
 import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
@@ -131,12 +131,12 @@ export function Home() {
   // it's still in the importing phase").
   const importingNow = new Map<string, Importing>();
   for (const one of localScripts) {
-    if (one.status === "processing") importingNow.set(one.id, { word: `Importing ${Math.round(one.progress ?? 0)}%`, stopped: false, percent: one.progress ?? 0 });
+    if (one.status === "processing") importingNow.set(one.id, { word: `Importing ${Math.floor(creeping(one.id, one.progress ?? 0))}%`, stopped: false, percent: creeping(one.id, one.progress ?? 0) });
     else if (one.status === "error" || one.status === "needs_choice") importingNow.set(one.id, { word: one.status === "needs_choice" ? "Waiting on a choice" : "Stopped", stopped: true });
     // In, but its first prompt not started yet: still importing until the workflow is under way.
     else if (one.firstBuild) importingNow.set(one.id, { word: "Starting the workflow", stopped: false });
   }
-  for (const one of writing) importingNow.set(one.id, { word: `Importing ${Math.round(one.percent)}%`, stopped: false, percent: one.percent, step: one.detail || one.stage });
+  for (const one of writing) importingNow.set(one.id, { word: `Importing ${Math.floor(creeping(one.id, one.percent))}%`, stopped: false, percent: creeping(one.id, one.percent), step: one.detail || one.stage });
   const count = (projects?.length ?? 0) + cloudOnly.length + scriptOnly.length;
 
   // What the search and filters keep.
@@ -929,7 +929,7 @@ function ImportDialog({ id, writing, issues, onClose }: { id: string | null; wri
   const done = id !== null && live === null && stopped === null && last.current !== null;
   const why = stopped ? (stopped.decision?.summary ?? stopped.error ?? "Stopped.") : null;
   const at = done ? STEPS.length : STEPS.findIndex((candidate) => candidate.key === step);
-  const percent = done ? 100 : Math.round(Math.max(0, Math.min(100, shown?.percent ?? 0)));
+  const percent = done ? 100 : Math.floor(Math.max(0, Math.min(100, live ? creeping(live.id, live.percent, now) : (shown?.percent ?? 0))));
   return (
     <Modal open={id !== null} onClose={onClose} width={560}>
       <div className="flex flex-col gap-5 p-6">
@@ -1282,7 +1282,7 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
             <span className="h-1 w-8 shrink-0 overflow-hidden rounded-full bg-line">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
-            Importing {Math.round(Math.max(0, Math.min(100, importing.percent)))}%
+            Importing {Math.floor(Math.max(0, Math.min(100, importing.percent)))}%
           </span>
         ) : importing ? (
           <span className={cx(CHIP, "tabular", importing.stopped ? "text-warning" : "text-info")}>

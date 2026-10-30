@@ -990,20 +990,21 @@ function Imports({ projects, statuses, writing, issues, scripts, onOpen }: { pro
           key={one.id}
           onClick={() => onOpen(one.id)}
           title={one.detail || undefined}
-          className="grid w-full grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-4 border-t border-line px-4 py-2.5 text-left transition-colors hover:bg-panel"
+          // The stopped rows' columns: name and who started it, then how far (a short bar, the number, the step).
+          className={cx(COLUMNS, "min-h-14 w-full border-t border-line px-4 py-2.5 text-left text-[13px] transition-colors hover:bg-panel")}
         >
-          <span className="flex min-w-0 items-center gap-2 truncate text-[13px] text-fg">
-            <FileText size={13} className="shrink-0 text-muted" />
-            <span className="truncate">{one.title || "New script"}</span>
-            <StartedBy by={scripts.find((row) => row.id === one.id)?.createdBy} size={20} className="shrink-0" />
+          <span className="flex min-w-0 items-center gap-2.5">
+            <FileText size={14} className="shrink-0 text-muted" />
+            <span className="truncate text-[14px] text-fg">{one.title || "New script"}</span>
+            <StartedBy by={scripts.find((row) => row.id === one.id)?.createdBy} size={24} className="ml-auto shrink-0" />
           </span>
-          <span className="h-1 overflow-hidden rounded-full bg-raised">
-            <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(1, one.percent / 100)) * 100)}%` }} />
-          </span>
-          {/* A number, so it's plain the import is moving (the user, Oct 30: "progress helps us know if the software is working or not"). */}
-          <span className="flex max-w-[320px] items-baseline gap-2 truncate text-[12px] text-muted" title={one.detail || one.stage}>
-            <span className="text-fg tabular">{Math.round(Math.max(0, Math.min(100, one.percent)))}%</span>
-            <span className="truncate">{one.detail || one.stage}</span>
+          <span className="col-span-3 flex min-w-0 items-center gap-2.5">
+            <span className="h-1 w-20 shrink-0 overflow-hidden rounded-full bg-raised">
+              <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(1, one.percent / 100)) * 100)}%` }} />
+            </span>
+            {/* A number, so it's plain the import is moving (the user, Oct 30: "progress helps us know if the software is working or not"). */}
+            <span className="shrink-0 text-[12px] text-fg tabular">{Math.round(Math.max(0, Math.min(100, one.percent)))}%</span>
+            <span className="min-w-0 truncate text-[12px] text-muted">{one.detail || one.stage}</span>
           </span>
         </button>
       ))}
@@ -1015,18 +1016,24 @@ function Imports({ projects, statuses, writing, issues, scripts, onOpen }: { pro
             key={project.id}
             onClick={() => navigate(`/p/${project.id}`)}
             title={importing.error ?? undefined}
-            className="grid w-full grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-4 border-t border-line px-4 py-2.5 text-left transition-colors hover:bg-panel"
+            className={cx(COLUMNS, "min-h-14 w-full border-t border-line px-4 py-2.5 text-left text-[13px] transition-colors hover:bg-panel")}
           >
-            <span className="truncate text-[13px] text-fg">{project.name}</span>
-            <span className="h-1 overflow-hidden rounded-full bg-raised">
-              <span className={cx("block h-full rounded-full transition-[width] duration-500", stuck ? "bg-warning" : "bg-info")} style={{ width: `${Math.round(share * 100)}%` }} />
+            <span className="flex min-w-0 items-center gap-2.5">
+              <FileVideo size={14} className="shrink-0 text-muted" />
+              <span className="truncate text-[14px] text-fg">{project.name}</span>
+              <StartedBy by={project.created_by} size={24} className="ml-auto shrink-0" />
             </span>
-            <span className={cx("text-[12px] tabular", stuck ? "text-warning" : "text-muted")}>
+            <span className="col-span-3 flex min-w-0 items-center gap-2.5">
+              <span className="h-1 w-20 shrink-0 overflow-hidden rounded-full bg-raised">
+                <span className={cx("block h-full rounded-full transition-[width] duration-500", stuck ? "bg-warning" : "bg-info")} style={{ width: `${Math.round(share * 100)}%` }} />
+              </span>
+            <span className={cx("min-w-0 truncate text-[12px] tabular", stuck ? "text-warning" : "text-muted")}>
               {stuck
                 ? importing.state === "failed" ? "Failed: open it" : "Needs you: open it"
                 : importing.state === "downloading"
                   ? `${Math.round(share * 100)}% · ${importing.ready} of ${importing.files} files`
                   : { transcribing: "Hearing the footage", placing: "Laying it out", voicing: "Voicing the cut-ins" }[importing.state] ?? importing.state}
+            </span>
             </span>
           </button>
         );

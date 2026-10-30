@@ -3,11 +3,18 @@ import { createPortal } from "react-dom";
 import { portalRoot } from "./portal";
 import { Icon } from "./ui";
 
-export type ScriptSelection = { id: string; input: HTMLTextAreaElement; start: number; end: number; quote: string };
+/** Words selected in the script: in one narration (`id`, its characters), or across the page (`spans`: no one narration, so no comment). `input` is the narration's text or textarea, or the page. */
+export type ScriptSelection = { id: string; input: HTMLElement; start: number; end: number; quote: string; spans?: boolean };
 
 /** Repack's selection mirror, measured in document pixels and then scaled once. */
 function selectionRect(selection: ScriptSelection) {
   const { input, start, end } = selection;
+  // Text read as the page (not a textarea): the browser's own selection says where it is.
+  if (!(input instanceof HTMLTextAreaElement)) {
+    const live = window.getSelection();
+    const box = live && live.rangeCount > 0 && !live.isCollapsed ? live.getRangeAt(0).getClientRects()[0] : null;
+    return box ? { left: box.left, top: box.top, bottom: box.bottom, width: box.width } : null;
+  }
   const mirror = document.createElement("div");
   const style = getComputedStyle(input);
   for (const property of ["font-family", "font-size", "font-weight", "font-style", "line-height", "letter-spacing", "word-spacing", "text-align", "text-indent", "text-transform", "tab-size", "direction", "padding"]) mirror.style.setProperty(property, style.getPropertyValue(property));
@@ -59,7 +66,11 @@ export function ScriptSelectionActions({ selection, scroller, onComment, onChat,
     return () => { window.removeEventListener("pointerdown", away, true); window.removeEventListener("keydown", key); };
   }, [selection.input, onDismiss]);
   return createPortal(<div ref={pill} className="script-selection" role="toolbar" aria-label="Selected script text" data-script-selection-actions style={{ left: position.left, top: position.top, visibility: position.visible ? "visible" : "hidden" }} onMouseDown={(event) => event.preventDefault()}>
-    <button type="button" onClick={onComment}><Icon name="note" size={14} /> Add comment</button>
+    {selection.spans ? (
+      <button type="button" onClick={() => { void navigator.clipboard?.writeText(selection.quote); onDismiss(); }}><Icon name="copy" size={14} /> Copy</button>
+    ) : (
+      <button type="button" onClick={onComment}><Icon name="note" size={14} /> Add comment</button>
+    )}
     <span className="tool-divider" />
     <button type="button" onClick={onChat}><Icon name="quote" size={14} /> Add to chat</button>
   </div>, portalRoot());

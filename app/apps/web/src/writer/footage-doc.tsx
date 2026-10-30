@@ -66,6 +66,48 @@ export function FootageDoc({
   // The timestamp a comment is being written on, and its words so far.
   const [writing, setWriting] = useState<{ id: string; text: string; anchor?: Note["anchor"] } | null>(null);
   const [selection, setSelection] = useState<ScriptSelection | null>(null);
+  // The script selected as a document: across paragraphs by dragging, or all of it with ⌘A (the user,
+  // Oct 30: "select the whole script and not just only a small section"). One narration's own words are its Grow's.
+  useEffect(() => {
+    const page = () => canvas.current?.querySelector<HTMLElement>(".page-body") ?? null;
+    const across = () => {
+      const body = page();
+      const live = window.getSelection();
+      if (!body || !live || live.isCollapsed || !body.contains(live.anchorNode) || !body.contains(live.focusNode)) return;
+      const within = (node: Node | null) => (node instanceof Element ? node : node?.parentElement)?.closest(".grow-read") ?? null;
+      const [from, to] = [within(live.anchorNode), within(live.focusNode)];
+      if (from !== null && from === to) return;
+      const quote = live.toString().trim();
+      if (quote !== "") setSelection({ id: "", input: body, start: 0, end: 0, quote, spans: true });
+    };
+    const up = () => window.setTimeout(across, 0);
+    const key = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "a") return;
+      const body = page();
+      if (!body) return;
+      const active = document.activeElement;
+      // A narration being typed in selects its own words first; a second ⌘A, with all of them selected, takes the whole script.
+      if (active instanceof HTMLTextAreaElement && body.contains(active)) {
+        if (active.selectionStart > 0 || active.selectionEnd < active.value.length) return;
+        active.blur();
+      } else if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || (active instanceof HTMLElement && active.isContentEditable)) return;
+      else if (!body.closest(".document")?.contains(active) && active !== document.body) return;
+      event.preventDefault();
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      const live = window.getSelection();
+      live?.removeAllRanges();
+      live?.addRange(range);
+      across();
+    };
+    const node = canvas.current;
+    node?.addEventListener("mouseup", up);
+    window.addEventListener("keydown", key);
+    return () => {
+      node?.removeEventListener("mouseup", up);
+      window.removeEventListener("keydown", key);
+    };
+  }, []);
   const [botNotes, setBotNotes] = useState(false);
   const saveNote = () => {
     if (!writing?.text.trim()) return setWriting(null);
@@ -237,7 +279,7 @@ export function FootageDoc({
     });
     return proposal ? <section className="proposed-narration" aria-label={`Proposed narration ${index + 1}`}>
       {wordDiff(proposal.before, proposal.after).map((piece, at) => piece.kind === "same" ? <span key={at}>{piece.text}</span> : piece.kind === "add" ? <ins key={at}>{piece.text}</ins> : <del key={at}>{piece.text}</del>)}
-    </section> : <Grow className="narration" label={`Narration ${index + 1}`} value={text} disabled={disabled} placeholder="Write the narration for this cut-in…" bands={[...(bands?.get(cue.id) ?? []), ...localBands]} onCommit={(text) => onNarration(cue.id, text)} onWords={(start, end, _rect, input) => setSelection({ id: cue.id, input, start, end, quote: input.value.slice(start, end) })} />;
+    </section> : <Grow className="narration" label={`Narration ${index + 1}`} value={text} disabled={disabled} placeholder="Write the narration for this cut-in…" bands={[...(bands?.get(cue.id) ?? []), ...localBands]} onCommit={(text) => onNarration(cue.id, text)} onWords={(start, end, _rect, input) => setSelection({ id: cue.id, input, start, end, quote: (input instanceof HTMLTextAreaElement ? input.value : (input.textContent ?? "")).slice(start, end) })} />;
   };
   const proposals = script.proposals ?? [];
   const quoteToChat = (picked: Pick<ScriptSelection, "id" | "start" | "end" | "quote">) => {

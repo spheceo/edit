@@ -469,13 +469,14 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   // Repack's chat does, with what the producer has selected as "this".
   const revise = async (retry?: string) => {
     const words = (retry ?? note).trim();
-    const request = quote && !retry ? `Quoted from narration ${quote.narrationNumber} (clip ${quote.id}, characters ${quote.start}–${quote.end}):\n“${quote.quote}”\n\n${words}` : words;
+    // A quote across paragraphs (or the whole script) belongs to no one narration.
+    const request = quote && !retry ? (quote.id === "" ? `Quoted from the script:\n“${quote.quote}”\n\n${words}` : `Quoted from narration ${quote.narrationNumber} (clip ${quote.id}, characters ${quote.start}–${quote.end}):\n“${quote.quote}”\n\n${words}`) : words;
     if (!request) return;
     setError(null);
     setStage("Editing the script");
     try {
       const job = await startRevision(script.id, request, {
-        selected: quote && !retry ? [quote.id] : selected,
+        selected: quote && !retry && quote.id !== "" ? [quote.id] : selected,
         picked: picked ? [picked.startMs, picked.endMs] : null,
         playheadMs: Math.round(playhead.ms),
       });

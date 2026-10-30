@@ -206,7 +206,13 @@ export function Paper({
   );
 }
 
-/** A textarea that grows with its text and saves when it loses focus. */
+/**
+ * Text that reads as the page until it's clicked, then a textarea that grows
+ * with it and saves when it loses focus. Read as text, the whole script
+ * selects as one document, across paragraphs and with ⌘A (the user, Oct 30:
+ * "be able to select the whole script and not just only a small section");
+ * a textarea held each paragraph's selection inside it.
+ */
 export function Grow({
   value,
   disabled,
@@ -227,15 +233,28 @@ export function Grow({
   oneLine?: boolean;
   /** Review bands on the text (review.tsx): drawn under it, their notes shown on hover. */
   bands?: Band[];
-  /** Words selected (snapped to whole words, as the review page snaps them): where, and where on screen. */
-  onWords?: (start: number, end: number, rect: DOMRect, input: HTMLTextAreaElement) => void;
+  /** Words selected (snapped to whole words, as the review page snaps them): where, and where on screen; `input` the text or its textarea. */
+  onWords?: (start: number, end: number, rect: DOMRect, input: HTMLElement) => void;
   onCommit: (text: string) => void;
 }) {
   const [text, setText] = useState(value);
+  const [editing, setEditing] = useState(false);
+  // Where the click that opened it for typing landed, as a character in the text.
+  const caret = useRef<number | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
+  const shown = useRef<HTMLDivElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
   const banded = !!bands?.length;
   useEffect(() => setText(value), [value]);
+  // Opened for typing: focused, the caret where the click was.
+  useLayoutEffect(() => {
+    const node = area.current;
+    if (!editing || !node) return;
+    node.focus();
+    const at = caret.current ?? node.value.length;
+    node.setSelectionRange(at, at);
+    caret.current = null;
+  }, [editing]);
   useLayoutEffect(() => {
     const node = area.current;
     if (!node) return;
@@ -246,7 +265,59 @@ export function Grow({
     if (!copy) return;
     const style = window.getComputedStyle(node);
     for (const key of MIRRORED) copy.style.setProperty(key, style.getPropertyValue(key));
-  }, [text, banded]);
+  }, [text, banded, editing]);
+  // Reading: the text as the page shows it, selectable with the rest of the script.
+  if (!editing) {
+    return (
+      <div
+        ref={shown}
+        className={className ? `${className} grow-read` : "grow-read"}
+        role="textbox"
+        aria-label={label}
+        aria-readonly={disabled || undefined}
+        aria-multiline={!oneLine}
+        tabIndex={disabled ? -1 : 0}
+        data-placeholder={placeholder}
+        onFocus={(event) => {
+          // Tabbed to: typing starts at its end.
+          if (!disabled && event.target === event.currentTarget && !event.currentTarget.matches(":active")) setEditing(true);
+        }}
+        onPointerMove={
+          banded
+            ? (event) => {
+                const ids = markAt(event.clientX, event.clientY);
+                showTip(ids.length ? { ids, x: event.clientX, y: event.clientY } : null);
+                hoverNote(ids[0] ?? null);
+              }
+            : undefined
+        }
+        onPointerLeave={
+          banded
+            ? () => {
+                showTip(null);
+                hoverNote(null);
+              }
+            : undefined
+        }
+        onMouseUp={(event) => {
+          const node = event.currentTarget;
+          const selection = window.getSelection();
+          // Words selected here: the comment and chat pill; across paragraphs, the page's own (footage-doc.tsx).
+          if (selection && !selection.isCollapsed) {
+            if (node.contains(selection.anchorNode) && node.contains(selection.focusNode)) readPicked(node, selection);
+            return;
+          }
+          const ids = banded ? markAt(event.clientX, event.clientY) : [];
+          if (ids.length) return openNote(ids[0]);
+          if (disabled) return;
+          caret.current = offsetAt(node, event.clientX, event.clientY);
+          setEditing(true);
+        }}
+      >
+        {text === "" ? null : banded && bands ? marked(text, bands) : text}
+      </div>
+    );
+  }
   const textarea = (
     <textarea
       ref={area}
@@ -264,7 +335,10 @@ export function Grow({
           event.currentTarget.blur();
         }
       }}
-      onBlur={() => text !== value && onCommit(text)}
+      onBlur={() => {
+        if (text !== value) onCommit(text);
+        setEditing(false);
+      }}
       onPointerMove={
         banded
           ? (event) => {
@@ -294,18 +368,29 @@ export function Grow({
     />
   );
   function markAt(x: number, y: number) {
-    const marks = [...(mirror.current?.querySelectorAll<HTMLElement>("mark") ?? [])];
+    const marks = [...((editing ? mirror.current : shown.current)?.querySelectorAll<HTMLElement>("mark") ?? [])];
     const hit = marks.find((mark) => [...mark.getClientRects()].some((box) => x >= box.left - 2 && x <= box.right + 2 && y >= box.top && y <= box.bottom));
     return (hit?.dataset.ids ?? "").split(" ").filter(Boolean);
+  }
+  // Words selected in the text as read: the same, from where the selection sits in it.
+  function readPicked(node: HTMLElement, selection: Selection) {
+    const range = selection.getRangeAt(0);
+    const [a, b] = [offsetIn(node, range.startContainer, range.startOffset), offsetIn(node, range.endContainer, range.endOffset)];
+    snap(Math.min(a, b), Math.max(a, b), node);
   }
   // Selected words, widened to whole words (the review page's snapToWords).
   function picked(node: HTMLTextAreaElement) {
     if (!onWords || node.selectionStart === node.selectionEnd) return;
-    let [start, end] = [node.selectionStart, node.selectionEnd];
-    while (start > 0 && /[\p{L}\p{N}'’-]/u.test(node.value[start - 1])) start -= 1;
-    while (end < node.value.length && /[\p{L}\p{N}'’-]/u.test(node.value[end])) end += 1;
-    while (start < end && /\s/.test(node.value[start])) start += 1;
-    while (end > start && /\s/.test(node.value[end - 1])) end -= 1;
+    snap(node.selectionStart, node.selectionEnd, node);
+  }
+  function snap(from: number, to: number, node: HTMLElement) {
+    if (!onWords || from === to) return;
+    const value = text;
+    let [start, end] = [from, to];
+    while (start > 0 && /[\p{L}\p{N}'’-]/u.test(value[start - 1])) start -= 1;
+    while (end < value.length && /[\p{L}\p{N}'’-]/u.test(value[end])) end += 1;
+    while (start < end && /\s/.test(value[start])) start += 1;
+    while (end > start && /\s/.test(value[end - 1])) end -= 1;
     if (end > start) onWords(start, end, node.getBoundingClientRect(), node);
   }
   if (!banded || !bands) return textarea;
@@ -318,6 +403,27 @@ export function Grow({
       {textarea}
     </div>
   );
+}
+
+/** Where `node` (and `offset` in it) falls in `root`'s text, counting characters. */
+function offsetIn(root: HTMLElement, node: Node, offset: number): number {
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  try {
+    range.setEnd(node, offset);
+  } catch {
+    return 0;
+  }
+  return range.toString().length;
+}
+
+/** The character of `root`'s text under a point (where a click puts the caret). */
+function offsetAt(root: HTMLElement, x: number, y: number): number | null {
+  const position = (document as Document & { caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint?.(x, y);
+  if (position && root.contains(position.offsetNode)) return offsetIn(root, position.offsetNode, position.offset);
+  const range = document.caretRangeFromPoint?.(x, y);
+  if (range && root.contains(range.startContainer)) return offsetIn(root, range.startContainer, range.startOffset);
+  return null;
 }
 
 /** What the copy behind a banded field takes from it, so its lines break alike. */

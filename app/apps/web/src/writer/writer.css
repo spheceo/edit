@@ -1521,3 +1521,13 @@
 /* Edit's logo leads Script mode's header: a way back to the edits. */
 .writer-root .app-header button.brand { border: 0; background: none; padding: 0; cursor: pointer; }
 .writer-root .app-header .seg { margin-left: 6px; }
+/* Text read as the page until it's clicked (paper.tsx Grow): laid out as its textarea, selectable with the whole script. */
+.writer-root .grow-read { white-space: pre-wrap; overflow-wrap: break-word; cursor: text; user-select: text; }
+.writer-root .grow-read:focus { outline: none; }
+.writer-root .grow-read:empty::before { content: attr(data-placeholder); color: #9a9a9a; }
+.writer-root .grow-read ::selection { background: #3b82f6; color: #fff; }
+.writer-root .grow-read mark { color: inherit; border-radius: 2px; background: color-mix(in srgb, #2fbf71 26%, transparent); }
+.writer-root .grow-read mark[data-kind="open"], .writer-root .grow-read mark[data-kind="note"] { background: #fdf1c7; box-shadow: 0 0 0 2px #fdf1c7; transition: background 0.12s, box-shadow 0.12s; }
+.writer-root .page .block[data-state] .grow-read mark[data-kind="note"] { background: #f8d66d; box-shadow: 0 0 0 2px #f8d66d; }
+.writer-root .grow-read mark.cut { display: inline-block; width: 0; height: 1.1em; vertical-align: text-bottom; border-left: 2px solid #2fbf71; margin-left: -1px; background: none; box-shadow: none; }
+.writer-root .grow-read mark.cut[data-kind="open"] { border-left-color: #e0a800; }

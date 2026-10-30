@@ -72,6 +72,23 @@
   html {
     color-scheme: dark;
   }
+  /* Whatever can be clicked shows the hand (the user, Oct 30: "there are many
+     areas where we need to have the cursor pointer"): Tailwind's reset gives
+     buttons the arrow. A component's own cursor class (grab, resize) wins. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"],
+  [role="option"],
+  select:not(:disabled),
+  summary,
+  a[href],
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  input[type="range"]:not(:disabled),
+  input[type="color"]:not(:disabled),
+  label:has(> input[type="checkbox"], > input[type="radio"]) {
+    cursor: pointer;
+  }
   html,
   body,
   #root {

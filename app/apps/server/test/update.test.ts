@@ -157,7 +157,7 @@ test("the releases feed's tags: every tag, sorted", async () => {
   try {
     expect(await feedTags(`http://localhost:${server.port}/releases.atom`)).toBe("nightly-1 nightly-2 v0.0.0");
   } finally {
-    server.stop(true);
+    void server.stop(true);
   }
 });
 

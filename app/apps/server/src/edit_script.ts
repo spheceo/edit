@@ -227,8 +227,8 @@ function evaluator(): string[] {
 }
 export async function evaluate(code: string, ctx: ScriptContext, lib: { name: string; code: string }[], ms = 20_000): Promise<{ ops: Op[]; notes: string[]; lines?: (number | null)[]; error?: string }> {
   const child = Bun.spawn(evaluator(), { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, EDIT_SCRIPT_EVAL: "1" } });
-  child.stdin.write(JSON.stringify({ code, library: lib, context: ctx, run: Date.now().toString(36).slice(-4) }));
-  child.stdin.end();
+  void child.stdin.write(JSON.stringify({ code, library: lib, context: ctx, run: Date.now().toString(36).slice(-4) }));
+  void child.stdin.end();
   let late = false;
   const timer = setTimeout(() => { late = true; child.kill(); }, ms);
   try {

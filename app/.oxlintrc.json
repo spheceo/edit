@@ -1,0 +1,91 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "react"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/generated/**",
+    "apps/worker/**",
+    "apps/web/public/**"
+  ],
+  "rules": {
+    "no-control-regex": "off",
+    "require-yield": "off",
+    "unicorn/no-thenable": "off",
+    "unicorn/no-new-array": "off",
+    "react/refs": "off",
+    "react/set-state-in-effect": "off",
+    "react/purity": "off",
+    "react/immutability": "off",
+    "react/static-components": "off",
+    "react/globals": "off",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": [
+      "error",
+      {
+        "checksVoidReturn": false
+      }
+    ],
+    "typescript/await-thenable": "error",
+    "typescript/switch-exhaustiveness-check": [
+      "error",
+      {
+        "considerDefaultExhaustiveForUnions": true
+      }
+    ],
+    "typescript/require-array-sort-compare": [
+      "error",
+      {
+        "ignoreStringArrays": true
+      }
+    ],
+    "typescript/no-base-to-string": "warn",
+    "typescript/no-unnecessary-type-assertion": "off",
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "warn",
+    "typescript/no-misused-spread": "off",
+    "typescript/unbound-method": "off",
+    "typescript/restrict-template-expressions": "off",
+    "typescript/no-redundant-type-constituents": "off",
+    "unicorn/no-useless-spread": "off",
+    "unicorn/no-useless-fallback-in-spread": "off",
+    "unicorn/prefer-string-starts-ends-with": "off",
+    "unicorn/prefer-set-size": "off",
+    "no-useless-escape": "off",
+    "typescript/no-useless-default-assignment": "off",
+    "typescript/no-meaningless-void-operator": "off",
+    "typescript/no-duplicate-type-constituents": "off"
+  },
+  "overrides": [
+    {
+      "files": [
+        "apps/server/**",
+        "apps/relay/**"
+      ],
+      "rules": {
+        "react/rules-of-hooks": "off",
+        "react/exhaustive-deps": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/test/**"
+      ],
+      "rules": {
+        "typescript/no-base-to-string": "off",
+        "typescript/require-array-sort-compare": "off",
+        "typescript/await-thenable": "off"
+      }
+    }
+  ]
+}

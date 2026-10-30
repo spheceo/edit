@@ -32,6 +32,8 @@ function write(value: unknown, step: string, at: string): string | undefined {
     case "function":
     case "symbol":
       return undefined;
+    case "object":
+      break;
   }
   const inner = at + step;
   const open = step === "" ? "" : `\n${inner}`;

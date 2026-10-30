@@ -361,7 +361,8 @@ test("a card's frame is plain footage running, never a cut-in, a graphic or a cu
       ],
     } as unknown as Project;
     project.media.forEach((media) => Object.assign(media, { name: media.id }));
-    const allowed = (frame: number) => (frame >= 30 && frame <= 70) || (frame >= 230 && frame <= 270) || (frame >= 630 && frame <= 724) || (frame >= 796 && frame <= 790);
+    // 766–820 (between the flash and the narration) is too short once 30 frames are kept from each.
+    const allowed = (frame: number) => (frame >= 30 && frame <= 70) || (frame >= 230 && frame <= 270) || (frame >= 630 && frame <= 724);
     for (const seed of ["a", "b", "c", "d", "e", "f", "g", "h"]) {
       const frame = coverFrame(project, seed)!;
       expect(allowed(frame), `${seed}: ${frame}`).toBe(true);

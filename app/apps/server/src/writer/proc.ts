@@ -29,7 +29,7 @@ export async function run(program: string, args: string[], options: RunOptions =
   }
   if (options.stdin !== undefined) {
     const sink = child.stdin as Bun.FileSink;
-    sink.write(options.stdin);
+    void sink.write(options.stdin);
     void sink.end();
   }
   let killed: "time" | "stop" | null = null;

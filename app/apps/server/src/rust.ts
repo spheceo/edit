@@ -31,6 +31,7 @@ export function fixed(x: number, digits: number): string {
   const magnitude = Math.abs(x);
   // toFixed(100) is the exact decimal of every double we'll meet (and of
   // every one where a tie could matter).
+  // oxlint-disable-next-line number-arg-out-of-range -- toFixed takes up to 100 (ES2018)
   const exact = magnitude >= 1e21 ? BigInt(magnitude).toString() : magnitude.toFixed(100);
   const [whole, fraction = ""] = exact.split(".");
   let kept = (whole ?? "0") + fraction.slice(0, digits).padEnd(digits, "0");
@@ -225,6 +226,7 @@ export function debugInts(items: readonly number[]): string {
   return `[${items.join(", ")}]`;
 }
 
+// oxlint-disable-next-line no-loss-of-precision -- i64::MAX as Rust's `as f64` has it (2^63), on purpose
 const I64_MAX = 9_223_372_036_854_775_807;
 
 /** `x as i64`: truncated toward zero, NaN as 0, saturating. */

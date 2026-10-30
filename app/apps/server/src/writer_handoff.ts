@@ -333,7 +333,7 @@ export async function importScript(app: App, id: string): Promise<{ project: str
   // The two kept in step from here (script_sync.ts): the script remembers its edit and each clip as both have it.
   const own = writerStore.scriptDir(writerStore.dataDir(app.store.home), id);
   if (fs.existsSync(join(own, "script.json")) && scriptSync.follows(given)) writerStore.update(own, (kept) => void (kept.edit = scriptSync.linkOf(live.project.id, kept)), true);
-  script.start(app, live.project.id, false);
+  void script.start(app, live.project.id, false);
   writeAtomic(join(app.store.home, "writer-imports.json"), JSON.stringify({ ...imports(app.store.home), [id]: live.project.id }));
   diag.info("script", `${given.title}: imported from Writer (${parsed.blocks.length} blocks)`);
   return { project: live.project.id };

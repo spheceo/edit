@@ -280,7 +280,7 @@ test("a real loopback connection can reach the local CLI endpoint", async () => 
     const response = await fetch(`http://127.0.0.1:${server.port}/api/remote-support`, { signal: AbortSignal.timeout(2000) });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ device: "device1", enabled: true });
-  } finally { server.stop(true); await f.clean(); }
+  } finally { void server.stop(true); await f.clean(); }
 });
 
 test("a resume is carried out once, reports what happened and never installs an update", async () => {

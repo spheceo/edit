@@ -228,6 +228,14 @@ dev: wasm web-install (native "debug")
     bun run --cwd apps/web dev
 
 # Format, lint and test
+# oxlint with type-aware rules (.oxlintrc.json): the kinds of bug the
+# typechecker misses (promises nobody awaits, a hook out of place, comparisons
+# that can't be true). Errors fail; warnings are counted for clean-up.
+lint:
+    node_modules/.bin/oxlint --type-aware --tsconfig apps/server/tsconfig.json apps/server
+    node_modules/.bin/oxlint --type-aware --tsconfig apps/web/tsconfig.json apps/web
+    node_modules/.bin/oxlint apps/relay/src packages
+
 check: types
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
@@ -242,4 +250,5 @@ check: types
     bun run --cwd apps/web typecheck
     bun run --cwd apps/web test
     bun run --cwd apps/server typecheck
+    just lint
     bun run --cwd apps/server test

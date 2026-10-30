@@ -183,12 +183,12 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
           return setLooking((value) => !value);
         case "k":
         case "K":
-          if (current) review(current, current.status === "kept" ? "new" : "kept");
+          if (current) void review(current, current.status === "kept" ? "new" : "kept");
           return;
         case "x":
         case "X":
         case "Backspace":
-          if (current) review(current, current.status === "rejected" ? "new" : "rejected");
+          if (current) void review(current, current.status === "rejected" ? "new" : "rejected");
           return;
         case "Escape":
           if (looking) {

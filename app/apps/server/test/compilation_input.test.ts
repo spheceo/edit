@@ -103,7 +103,7 @@ test("the Trello relay receives Edit's bearer and retains labeled attachments; r
     denied = true;
     await expect(readCard("https://trello.com/c/AbCd1234/title")).rejects.toThrow("Edit permission required");
   } finally {
-    server.stop(true);
+    void server.stop(true);
     if (oldUrl === undefined) delete process.env.EDIT_WRITER_RELAY_URL; else process.env.EDIT_WRITER_RELAY_URL = oldUrl;
     if (oldToken === undefined) delete process.env.EDIT_RELAY_TOKEN; else process.env.EDIT_RELAY_TOKEN = oldToken;
   }

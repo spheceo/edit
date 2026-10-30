@@ -82,7 +82,7 @@ test("footage that can't be fetched waits for the person: another link, or go on
         ],
       };
     });
-    start(app, id, false);
+    void start(app, id, false);
     await settle(id);
     expect(asked).toEqual(["FILEcase0001", "FILEcase0002"]);
     expect(scripts.get(id)!.state).toBe("waiting");

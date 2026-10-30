@@ -630,7 +630,7 @@ export async function curl(config: string, args: string[]): Promise<[number, Uin
   }
   let written = true;
   try {
-    child.stdin.write(config);
+    await child.stdin.write(config);
     await child.stdin.end();
   } catch {
     written = false;

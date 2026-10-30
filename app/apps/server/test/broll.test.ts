@@ -415,7 +415,7 @@ test.skipIf(ffmpeg === null || ffprobe === null)("a streamed cloud clip is cut t
     expect(seen[0]![1]).toBe(true);
     expect(fs.existsSync(seen[0]![0])).toBe(false);
   } finally {
-    server.stop(true);
+    void server.stop(true);
     cleanup();
   }
 });

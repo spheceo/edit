@@ -298,7 +298,7 @@ async function put(session: string, path: string, type: string, progress: (share
   }
   let written = true;
   try {
-    child.stdin.write(config);
+    await child.stdin.write(config);
     await child.stdin.end();
   } catch {
     written = false;

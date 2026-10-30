@@ -2022,7 +2022,7 @@ export class Codex {
       {
         write: (line) => {
           try {
-            child.stdin.write(line);
+            void child.stdin.write(line);
             void child.stdin.flush();
           } catch {
             // Gone: the reader ends and says so.

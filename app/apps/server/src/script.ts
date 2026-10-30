@@ -97,7 +97,7 @@ export async function replaceFootage(app: App, id: string, file: string, url: st
       block.notes = [...(block.notes ?? []), `Replaced: ${file}`];
     }
   });
-  start(app, id, false);
+  void start(app, id, false);
 }
 
 /** Goes on without footage file `file`: its ranges leave the script, the rest is laid out. The person's "proceed without it". */
@@ -109,7 +109,7 @@ export async function skipFootage(app: App, id: string, file: string): Promise<v
   await app.store.update(id, "script", (edited) => {
     if (edited.script) edited.script.blocks = edited.script.blocks.filter((block) => block.kind !== "footage" || block.file !== file);
   });
-  start(app, id, false);
+  void start(app, id, false);
 }
 
 // ---------------------------------------------------------------------------

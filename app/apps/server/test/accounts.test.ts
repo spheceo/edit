@@ -79,7 +79,7 @@ beforeAll(() => {
 
 afterEach(() => accounts.resetForTests());
 afterAll(() => {
-  server.stop(true);
+  void server.stop(true);
   delete process.env.EDIT_KEYCHAIN_FILE;
   delete process.env.EDIT_ACCOUNTS_URL;
   fs.rmSync(dir, { recursive: true, force: true });

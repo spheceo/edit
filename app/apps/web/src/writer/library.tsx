@@ -904,7 +904,7 @@ function ImportDialog({
   };
   // A card fills the dialog as Repack's Start script does: a case card's
   // footage, article and name; a compilation card's title and links, checked.
-  const useCard = (card: TrelloCard) => {
+  const takeCard = (card: TrelloCard) => {
     setTrello(null);
     setError(null);
     setChecked(null);
@@ -936,7 +936,7 @@ function ImportDialog({
     void trelloCard(link)
       .then((card) => {
         if (card.problem) setError(`${card.name}: ${card.problem}`);
-        else useCard(card);
+        else takeCard(card);
       })
       .catch((cause) => setError(message(cause)))
       .finally(() => setReadingCard(false));
@@ -1152,7 +1152,7 @@ function ImportDialog({
           )}
         </div>
         {trello ? (
-          <TrelloPicker list={cards[trello]} problem={cardsProblem} all={allCards} onUse={useCard} />
+          <TrelloPicker list={cards[trello]} problem={cardsProblem} all={allCards} onUse={takeCard} />
         ) : (
         <div className="source" key={source} ref={fields}>
           {source !== "commentary" && <label className="creation-format">

@@ -29,6 +29,7 @@ test("numbers are read as serde_json reads them without float_roundtrip", () => 
   expect(serdeNumber("13.866666666666667")).toBe(13.866666666666667);
   expect(serdeNumber("0.30000000000000004")).toBe(0.30000000000000004);
   expect(serdeNumber("-1.5e3")).toBe(-1500);
+  // oxlint-disable-next-line no-loss-of-precision -- the double the string parses to, on purpose
   expect(serdeNumber("12345678901234567890123.5")).toBe(12345678901234567000000);
   expect(serdeNumber("-0")).toBe(-0);
   expect(serdeParse<{ a: number[] }>('{"a": [9.299999999999999, 1.25]}').a).toEqual([9.3, 1.25]);

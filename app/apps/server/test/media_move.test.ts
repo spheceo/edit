@@ -169,7 +169,7 @@ test("edit media refuses while a server holds the data folder, and use/off set t
         `Edit is running with ${home} — quit it (or stop \`edit serve\`) first on port ${server.port}`,
       );
     } finally {
-      server.stop(true);
+      void server.stop(true);
     }
   } finally {
     console.log = log;

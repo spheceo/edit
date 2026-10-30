@@ -571,7 +571,7 @@ async function scriptAttach(context: RouteContext<App>): Promise<Response> {
   } catch (error) {
     throw badOf(error);
   }
-  script.start(app, id, false);
+  void script.start(app, id, false);
   return sortedJson({ job: app.scripts.get(id), project: live.project, rev: live.rev });
 }
 
@@ -588,7 +588,7 @@ async function scriptResume(context: RouteContext<App>): Promise<Response> {
   }
   const live = projectOr404(app, id);
   if (!recut && script.laidOut(live.project) && !pendingCase(live.project)) throw new ApiError(409, "this script's import finished: Re-cut to lay it out again");
-  script.start(app, id, recut);
+  void script.start(app, id, recut);
   return sortedJson({ job: app.scripts.get(id) });
 }
 

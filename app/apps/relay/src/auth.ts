@@ -65,6 +65,59 @@ async function sha256(text: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
 }
 
+/** How often the accounts site's cut-offs are read (each running copy of the relay keeps them meanwhile). */
+const CUT_OFFS_EVERY_MS = 60_000;
+
+/** People whose sign-ins an admin ended (removed, signed out everywhere, Edit taken away): when, by person. */
+let cutOffs: { read: number; at: Map<string, number> } | null = null;
+let reading: Promise<void> | null = null;
+
+/** How the list is fetched (tests give their own). */
+let fetchCutOffs = (url: string): Promise<Response> => fetch(url, { signal: AbortSignal.timeout(3_000) });
+
+/** Tests: where the cut-offs come from, and forget the ones read so the next request reads them again. */
+export function useCutOffs(read: ((url: string) => Promise<Response>) | null): void {
+  fetchCutOffs = read ?? ((url) => fetch(url, { signal: AbortSignal.timeout(3_000) }));
+  cutOffs = null;
+  reading = null;
+}
+
+/** The accounts site's cut-offs (`/app/revoked`, the last two hours): one read a minute, the last list kept when it can't be read. */
+async function readCutOffs(env: AuthEnv): Promise<void> {
+  const at = new Map(cutOffs?.at ?? []);
+  try {
+    const answer = await fetchCutOffs(`${issuer(env)}/app/revoked`);
+    if (!answer.ok) throw new Error(`the accounts site answered ${answer.status}`);
+    const body = (await answer.json()) as { revoked?: { sub?: unknown; at?: unknown; aud?: unknown }[] };
+    at.clear();
+    for (const one of body.revoked ?? []) {
+      if (typeof one.sub !== "string" || typeof one.at !== "number") continue;
+      // Another app's access taken away isn't Edit's.
+      if (one.aud !== undefined && one.aud !== null && one.aud !== "edit") continue;
+      at.set(one.sub, Math.max(at.get(one.sub) ?? 0, one.at));
+    }
+  } catch (error) {
+    console.log(JSON.stringify({ route: "cut-offs", unread: String(error) }));
+  }
+  cutOffs = { read: Date.now(), at };
+}
+
+/**
+ * Whether a person's token was issued before an admin ended their sign-ins:
+ * the relay refuses it within a minute of the cut-off, not when the token
+ * runs out an hour later (the user, Oct 30: a lost laptop's sign-in).
+ */
+async function cutOff(env: AuthEnv, sub: string, issuedAt: number): Promise<boolean> {
+  if (cutOffs === null || Date.now() - cutOffs.read > CUT_OFFS_EVERY_MS) {
+    reading ??= readCutOffs(env).finally(() => {
+      reading = null;
+    });
+    await reading;
+  }
+  const at = cutOffs?.at.get(sub);
+  return at !== undefined && issuedAt * 1000 <= at;
+}
+
 /** What `authorization` says about the caller: a person, or nothing usable (null). */
 export async function caller(request: Request, env: AuthEnv): Promise<Caller | null> {
   const sent = request.headers.get("authorization") ?? "";
@@ -74,6 +127,8 @@ export async function caller(request: Request, env: AuthEnv): Promise<Caller | n
   try {
     const { payload } = await jwtVerify(token, keysOf(env), { issuer: issuer(env), audience: "edit", clockTolerance: SKEW_SECONDS, algorithms: ["RS256"] });
     if (typeof payload.sub !== "string" || payload.sub === "" || typeof payload.exp !== "number") return null;
+    // Signed out by an admin since this token was made: as good as no token (they sign in again, if they still may).
+    if (await cutOff(env, payload.sub, typeof payload.iat === "number" ? payload.iat : 0)) return null;
     const perms = Array.isArray(payload.perms) ? payload.perms.filter((one): one is string => typeof one === "string") : [];
     const text = (value: unknown) => (typeof value === "string" && value !== "" ? value : undefined);
     const found: Caller = { kind: "person", sub: payload.sub, perms, admin: payload.admin === true };

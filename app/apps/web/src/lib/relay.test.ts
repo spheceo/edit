@@ -1,6 +1,6 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { useKeys } from "../../../relay/src/auth";
+import { useCutOffs, useKeys } from "../../../relay/src/auth";
 import { presign, validKey, validPrefix, writerReadable } from "../../../relay/src/cloud";
 import relay, { TranscriptionBudget, type Env } from "../../../relay/src/index";
 
@@ -18,6 +18,8 @@ let USE_ONLY = "";
 beforeAll(async () => {
   const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
   useKeys(createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), kid: "t1", alg: "RS256" }] }));
+  // Nobody cut off (the accounts site's list), unless a test says so.
+  useCutOffs(async () => Response.json({ at: Date.now(), revoked: [] }));
   PERSON = await new SignJWT({ perms: ["use", "cloud", "drive", "ai", "export", "edit.bodycam"], admin: false }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
   NAMED = await new SignJWT({ perms: ["use", "edit.bodycam"], admin: false, name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" }).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject("person-t").setIssuedAt().setExpirationTime("1h").sign(privateKey);
   const sign = (claims: Record<string, unknown>, sub = "person-t") => new SignJWT(claims).setProtectedHeader({ alg: "RS256", kid: "t1" }).setIssuer("https://accounts.spheceo.com").setAudience("edit").setSubject(sub).setIssuedAt().setExpirationTime("1h").sign(privateKey);
@@ -28,7 +30,10 @@ beforeAll(async () => {
   USE_ONLY = await sign({ perms: ["use", "cloud", "drive"], admin: false }, "person-u");
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
-afterAll(() => useKeys(null));
+afterAll(() => {
+  useKeys(null);
+  useCutOffs(null);
+});
 
 describe("relay atomic spend reservations", () => {
   it("counts concurrent in-flight requests before permitting more spend", async () => {

@@ -3,7 +3,7 @@
 
 import { exportJWK, generateKeyPair, SignJWT, createLocalJWKSet, type JWK } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { allow, budgetKey, caller, useKeys } from "../../../relay/src/auth";
+import { allow, budgetKey, caller, useCutOffs, useKeys } from "../../../relay/src/auth";
 import { cloud } from "../../../relay/src/cloud";
 import { reportRefused, WRITABLE } from "../../../relay/src/authz";
 import relay, { type Env } from "../../../relay/src/index";
@@ -15,6 +15,8 @@ let jwk: JWK;
 let otherJwk: JWK;
 
 beforeAll(async () => {
+  // Nobody cut off (the accounts site's list), unless a test says so.
+  useCutOffs(async () => Response.json({ at: Date.now(), revoked: [] }));
   const pair = await generateKeyPair("RS256", { extractable: true });
   privateKey = pair.privateKey;
   jwk = { ...(await exportJWK(pair.publicKey)), kid: "k1", alg: "RS256", use: "sig" };
@@ -93,6 +95,31 @@ describe("relay sign-in gate", () => {
     expect([given.status, await given.json()]).toEqual([200, { proxyUrl: "http://login:secret@gateway.test:823" }]);
     // Without one set: none, said plainly.
     expect(await (await relay.fetch(asked(await token({ perms: ["use"] }), "https://relay/v1/proxy"), env())).json()).toEqual({ proxyUrl: null });
+  });
+
+  it("refuses a token made before an admin cut its person off, within a minute, and only for Edit", async () => {
+    useKeys(createLocalJWKSet({ keys: [jwk] }));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const made = await token();
+    const listed = (revoked: unknown[]) => useCutOffs(async (url) => {
+      expect(url).toBe(`${ISSUER}/app/revoked`);
+      return Response.json({ at: Date.now(), revoked });
+    });
+    listed([]);
+    expect(await caller(asked(made), env())).not.toBeNull();
+    // Signed out everywhere after this token was made: refused, as if signed out.
+    listed([{ sub: "person-1", at: Date.now() + 1_000 }]);
+    expect(await caller(asked(made), env())).toBeNull();
+    // Signed in again after the cut-off: a new token is fine.
+    listed([{ sub: "person-1", at: Date.now() - 120_000 }]);
+    expect(await caller(asked(made), env())).not.toBeNull();
+    // Another app's access taken away isn't Edit's.
+    listed([{ sub: "person-1", at: Date.now() + 1_000, aud: "writer" }]);
+    expect(await caller(asked(made), env())).not.toBeNull();
+    // The list unreadable: nobody is refused for it (the relay never goes down with the accounts site).
+    useCutOffs(async () => new Response("down", { status: 503 }));
+    expect(await caller(asked(made), env())).not.toBeNull();
+    useCutOffs(async () => Response.json({ at: Date.now(), revoked: [] }));
   });
 
   it("fetches the accounts site's keys, and again once for a key it hasn't seen", async () => {

@@ -574,6 +574,12 @@ async function tick(data: string, pull: boolean): Promise<number> {
     try {
       const pushed = await push(id, dir, script, body, known, files);
       if (pushed === "overtaken") {
+        // Another Mac saved it first: theirs comes down, then this waits a
+        // little longer each time, so a newer copy that can't come down (its
+        // body not in the cloud) isn't asked for every few seconds (Oct 30:
+        // Predator Tutor, 167 times in 20 minutes).
+        const wait = Math.min((backoff.get(id)?.wait ?? BACKOFF_FIRST / 4) * 2, BACKOFF_MAX);
+        backoff.set(id, { until: Date.now() + wait, wait });
         waiting++;
         syncSoon();
       } else {
@@ -697,8 +703,11 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   const given = withCreator(body, row.createdBy);
   writeAtomic(bodyPath, Buffer.from(given));
   diag.info("writer", `${jobs.named(id, title)}: rev ${rev} came from ${String(row.updatedBy ?? "another Mac")}`);
-  const summary = row.summary as { kind?: unknown; runFailed?: unknown } | undefined;
-  ledger.scripts[id] = { rev, body: hash(given), files, summary: typeof summary?.kind !== "string" ? 0 : summary.runFailed === undefined ? 1 : SUMMARY_VERSION };
+  // Taken as current whichever version of Edit saved it: a row from a Mac on
+  // an older Edit (no runFailed) pushed again here was overtaken there, round
+  // and round, while the team's Macs were on mixed versions (Oct 30).
+  const summary = row.summary as { kind?: unknown } | undefined;
+  ledger.scripts[id] = { rev, body: hash(given), files, summary: typeof summary?.kind === "string" ? SUMMARY_VERSION : 0 };
   store.libraryChanged();
 }
 

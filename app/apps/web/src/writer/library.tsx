@@ -168,7 +168,11 @@ export function Library({
   onOpen: (id: string) => void;
   onChanged: () => void;
 }) {
-  const [creating, setCreating] = useState(false);
+  // Home's New project → Write a script comes here with ?new=1.
+  const [creating, setCreating] = useState(() => new URLSearchParams(window.location.search).get("new") === "1");
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("new") === "1") window.history.replaceState(null, "", window.location.pathname);
+  }, []);
   const reviews = useReviewCounts();
   const [renaming, setRenaming] = useState<Summary | null>(null);
   const [deleting, setDeleting] = useState<Summary | null>(null);
@@ -439,7 +443,11 @@ export function Library({
 
       <ImportDialog
         open={creating}
-        onClose={() => setCreating(false)}
+        onClose={() => {
+          setCreating(false);
+          // Asked for from Home: back there.
+          navigate("/");
+        }}
         onStarted={onChanged}
         onFinished={(script) => {
           onChanged();

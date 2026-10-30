@@ -236,8 +236,15 @@ export async function list(
   const made = imports(app.store.home);
   if (!cloud.enabled()) throw new Error("Writer's scripts need Edit's cloud (the relay token)");
   const rows = (await cloud.query("writer:listScripts", {})) as Record<string, unknown>[];
+  // A commentary's sources are part of it, not scripts of their own (Script mode hides them too): only this Mac's copies say which.
+  let sources = new Set<string>();
+  try {
+    sources = new Set(writerStore.list(writerStore.dataDir(app.store.home)).flatMap((one) => (one.inCommentary ? [one.id] : [])));
+  } catch {
+    // No scripts here yet.
+  }
   return (Array.isArray(rows) ? rows : [])
-    .filter((row) => row.deletedAt === undefined || row.deletedAt === null)
+    .filter((row) => (row.deletedAt === undefined || row.deletedAt === null) && !sources.has(String(row.scriptId ?? "")))
     .map((row) => ({
       id: String(row.scriptId ?? ""),
       title: String(row.title ?? "Untitled"),

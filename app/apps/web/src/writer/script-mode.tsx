@@ -197,10 +197,12 @@ export function ScriptMode() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [working, route.name]);
 
-  const home = () => {
-    setRoute({ name: "library" });
-    refresh();
-  };
+  // Back from a script goes to Home, where scripts are listed with the edits (one app, Oct 30).
+  const home = () => navigate("/");
+  // Script mode's own list is Home's now: only a new script (Home's New project → Write a script) stays here.
+  useEffect(() => {
+    if (route.name === "library" && new URLSearchParams(window.location.search).get("new") !== "1") navigate("/", true);
+  }, [route.name]);
   // Who's signed in decides which scripts they see (can.rs): list them again when that changes.
   const grantsKey = account ? `${account.signedIn}|${account.person?.sub ?? ""}|${account.person?.admin ?? ""}|${(account.person?.perms ?? []).join(",")}` : "";
   useEffect(() => {

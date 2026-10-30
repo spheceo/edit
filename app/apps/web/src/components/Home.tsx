@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Search, Share2, Trash2, TriangleAlert } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileText, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Search, Share2, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
@@ -30,15 +30,13 @@ export function Home() {
   const [cloud, setCloud] = useState<CloudList | null>(null);
   const [statuses, setStatuses] = useState<Record<string, ProjectStatus>>({});
   const [creating, setCreating] = useState(false);
-  const [scriptCount, setScriptCount] = useState<number | null>(null);
+  // Script mode's scripts: one list with the edits (the user, Oct 30: "merge the two applications as much as possible").
+  const [scripts, setScripts] = useState<WriterScriptRow[]>([]);
   const account = useAccount((state) => state.account);
   // Someone who writes scripts and makes no videos: Script mode is their home.
   useEffect(() => {
     if (!makesVideos(account) && writesScripts(account)) navigate("/scripts", true);
   }, [account]);
-  useEffect(() => {
-    void fetch("/api/writer/scripts").then((answer) => (answer.ok ? answer.json() : null)).then((rows: unknown) => setScriptCount(Array.isArray(rows) ? rows.length : null), () => {});
-  }, []);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>(() => (localStorage.getItem(KIND) === "subtitled" ? "subtitled" : "edits"));
   const [style, setStyle] = useState<Style | null>(null);
@@ -57,6 +55,12 @@ export function Home() {
       .projects()
       .then(setCloud)
       .catch(() => setCloud(null));
+    if (writesScripts(useAccount.getState().account)) {
+      void api
+        .writerScripts()
+        .then(({ scripts }) => setScripts(scripts))
+        .catch(() => {});
+    }
     // Feedback waiting, and finished edits not exported as they are now.
     void api
       .projectStatus()
@@ -80,7 +84,16 @@ export function Home() {
 
   const remote = new Map((cloud?.projects ?? []).map((project) => [project.id, project]));
   const cloudOnly = (cloud?.projects ?? []).filter((project) => !project.local && !projects?.some((local) => local.id === project.id));
-  const count = (projects?.length ?? 0) + cloudOnly.length;
+  const listedIds = new Set([...(projects ?? []).map((project) => project.id), ...cloudOnly.map((project) => project.id)]);
+  // A script's edit: the one made from it here, else (made on another Mac, or from its Doc) the project of the same name.
+  const named = new Map([...(projects ?? []).map((project) => [project.name, project.id] as const), ...cloudOnly.map((project) => [project.name, project.id] as const)].map(([name, id]) => [name.trim().toLowerCase(), id]));
+  const editOf = (one: WriterScriptRow) => (one.project !== null && listedIds.has(one.project) ? one.project : (named.get(one.title.trim().toLowerCase()) ?? null));
+  const scriptOf = new Map(scripts.flatMap((one) => {
+    const edit = editOf(one);
+    return edit !== null ? [[edit, one] as const] : [];
+  }));
+  const scriptOnly = scripts.filter((one) => editOf(one) === null);
+  const count = (projects?.length ?? 0) + cloudOnly.length + scriptOnly.length;
 
   // What the search and filters keep.
   const words = query.trim().toLowerCase();
@@ -95,8 +108,9 @@ export function Home() {
   const showEdits = kind !== "subtitled";
   // One table, newest change first, local and cloud-only projects together.
   const rows: Listed[] = [
-    ...(showEdits ? edits : subtitled).map((project) => ({ at: project.modified_ms, local: project, cloud: null })),
-    ...(showEdits ? cloudEdits : cloudSubtitled).map((project) => ({ at: project.updated_ms, local: null, cloud: project })),
+    ...(showEdits ? edits : subtitled).map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
+    ...(showEdits ? cloudEdits : cloudSubtitled).map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
+    ...(showEdits ? scriptOnly.filter((one) => kept(one.title, one.style ?? undefined)).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one })) : []),
   ].sort((a, b) => b.at - a.at);
   const cardProps = (project: ProjectSummary) => ({
     project,
@@ -158,7 +172,6 @@ export function Home() {
               <Button variant="primary" onClick={() => setCreating(true)}>
                 <Plus size={15} strokeWidth={2.2} /> New project
               </Button>
-              {writesScripts(account) && <Button onClick={() => navigate("/scripts")}>Scripts {scriptCount !== null && <span className="font-normal text-faint tabular">{scriptCount}</span>}</Button>}
             </div>
           </motion.div>
         )}
@@ -170,7 +183,7 @@ export function Home() {
               <div className="flex h-[34px] gap-0.5 rounded-[9px] border border-line bg-panel p-0.5">
                 {(
                   [
-                    ["edits", "Edits", all.filter((project) => !project.subtitles).length + cloudEditsAll],
+                    ["edits", "Projects", all.filter((project) => !project.subtitles).length + cloudEditsAll + scriptOnly.length],
                     ["subtitled", "Subtitled videos", all.filter((project) => project.subtitles).length + cloudOnly.length - cloudEditsAll],
                   ] as [Kind, string, number][]
                 ).map(([value, label, total]) => (
@@ -185,10 +198,6 @@ export function Home() {
                     {label} <span className="font-normal text-faint tabular">{total}</span>
                   </button>
                 ))}
-                {/* Script mode: the same projects before they're edits. */}
-                <button onClick={() => navigate("/scripts")} className="flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted transition-colors hover:text-fg">
-                  Scripts {scriptCount !== null && <span className="font-normal text-faint tabular">{scriptCount}</span>}
-                </button>
               </div>
               {cloud?.on && cloud.error && (
                 <span className="text-[12px] text-warning/80" title={cloud.error}>
@@ -215,7 +224,7 @@ export function Home() {
 
             <Imports projects={projects ?? []} statuses={statuses} />
             {rows.length > 0 ? (
-              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} />
+              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} statuses={statuses} />
             ) : (
               <p className="mt-16 text-center text-muted">Nothing matches{words ? ` “${query.trim()}”` : ""}.</p>
             )}
@@ -229,8 +238,37 @@ export function Home() {
 
 type Kind = "edits" | "subtitled";
 
-/** A row of Home's table: a project on this Mac, or one only in the cloud. */
-type Listed = { at: number; local: ProjectSummary; cloud: null } | { at: number; local: null; cloud: CloudProject };
+/** A row of Home's table: a project on this Mac, one only in the cloud, or a script with no edit yet; `script`: the script it's made from. */
+type Listed =
+  | { at: number; local: ProjectSummary; cloud: null; script: WriterScriptRow | null }
+  | { at: number; local: null; cloud: CloudProject; script: WriterScriptRow | null }
+  | { at: number; local: null; cloud: null; script: WriterScriptRow };
+
+/**
+ * Where a project is on its way, script to finished video: Home lists them by
+ * it (the user, Oct 30: "ready for scripting, these projects are ready for
+ * editing, these projects are done editing … a natural progression of our
+ * projects here instead of dumping the whole list").
+ */
+type Stage = "scripting" | "ready" | "importing" | "editing" | "review" | "done";
+
+const STAGES: { value: Stage; label: string }[] = [
+  { value: "scripting", label: "Scripting" },
+  { value: "ready", label: "Ready to edit" },
+  { value: "importing", label: "Importing" },
+  { value: "editing", label: "Editing" },
+  { value: "review", label: "In review" },
+  { value: "done", label: "Done" },
+];
+
+function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
+  if (row.local === null && row.cloud === null) return row.script.built ? "ready" : "scripting";
+  if (state === undefined) return "editing";
+  if (state.importing !== null) return "importing";
+  if (state.approved !== null) return "done";
+  if (state.feedback > 0 || (state.complete && state.exported)) return "review";
+  return "editing";
+}
 
 /** Which list Home shows (remembered on this browser). */
 const KIND = "edit.home.kind";
@@ -584,12 +622,29 @@ function ProjectTable({
   cardProps,
   onChanged,
   subtitled,
+  statuses,
 }: {
   rows: Listed[];
   cardProps: (project: ProjectSummary) => CardProps;
   onChanged: () => void;
   subtitled: boolean;
+  statuses: Record<string, ProjectStatus>;
 }) {
+  // Done is folded away until asked for: the work still to do comes first.
+  const [showDone, setShowDone] = useState(false);
+  const idOf = (row: Listed) => row.local?.id ?? row.cloud?.id ?? `script-${row.script!.id}`;
+  const rowOf = (row: Listed) =>
+    row.local !== null ? (
+      <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} />
+    ) : row.cloud !== null ? (
+      <CloudTableRow project={row.cloud} onChanged={onChanged} />
+    ) : (
+      <ScriptTableRow script={row.script} onChanged={onChanged} />
+    );
+  // Subtitled videos have no stages: newest first, by when they changed.
+  const groups = subtitled
+    ? null
+    : STAGES.map((stage) => ({ ...stage, rows: rows.filter((row) => stageOf(row, statuses[row.local?.id ?? row.cloud?.id ?? ""]) === stage.value) })).filter((group) => group.rows.length > 0);
   return (
     <div role="table" aria-label="Projects" className="mt-6 overflow-hidden rounded-xl border border-line">
       <div role="row" className={cx(COLUMNS, "h-10 bg-panel px-4 text-[12px] font-medium text-muted")}>
@@ -605,22 +660,39 @@ function ProjectTable({
           Actions
         </span>
       </div>
-      {rows.map((row, index) => {
-        const label = changedLabel(row.at);
-        const heading = label !== "Today" && (index === 0 || changedLabel(rows[index - 1]!.at) !== label);
-        return (
-          <Fragment key={row.local?.id ?? row.cloud!.id}>
-            {heading && <div className="border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">{label}</div>}
-            {row.local !== null ? <TableRow {...cardProps(row.local)} subtitled={subtitled} /> : <CloudTableRow project={row.cloud} onChanged={onChanged} />}
-          </Fragment>
-        );
-      })}
+      {groups === null
+        ? rows.map((row, index) => {
+            const label = changedLabel(row.at);
+            const heading = label !== "Today" && (index === 0 || changedLabel(rows[index - 1]!.at) !== label);
+            return (
+              <Fragment key={idOf(row)}>
+                {heading && <div className="border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">{label}</div>}
+                {rowOf(row)}
+              </Fragment>
+            );
+          })
+        : groups.map((group) => {
+            const folded = group.value === "done" && !showDone;
+            return (
+              <Fragment key={group.value}>
+                <div className="flex items-center gap-2 border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">
+                  {group.label} <span className="tabular">{group.rows.length}</span>
+                  {group.value === "done" && (
+                    <button onClick={() => setShowDone(!showDone)} className="ml-1 text-muted hover:text-fg">
+                      {folded ? "Show" : "Hide"}
+                    </button>
+                  )}
+                </div>
+                {!folded && group.rows.map((row) => <Fragment key={idOf(row)}>{rowOf(row)}</Fragment>)}
+              </Fragment>
+            );
+          })}
     </div>
   );
 }
 
 /** A project on this Mac: its name, what's worth a word about it, and its ⋯. */
-function TableRow({ subtitled, ...props }: CardProps & { subtitled: boolean }) {
+function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitled: boolean; script?: WriterScriptRow | null }) {
   const { project, onChanged, remote, state } = props;
   const card = useProject(project, onChanged, props.cloudOn, props.status, remote);
   return (
@@ -636,6 +708,7 @@ function TableRow({ subtitled, ...props }: CardProps & { subtitled: boolean }) {
           <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} size={24} className="ml-auto shrink-0" />
         </div>
         <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
+          {script !== null && <ScriptLink id={script.id} />}
           {card.notice && <Notice {...card.notice} />}
           <StateChips state={state} projectId={project.id} onChanged={onChanged} />
           {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
@@ -664,6 +737,70 @@ function TableRow({ subtitled, ...props }: CardProps & { subtitled: boolean }) {
       </div>
       {card.dialogs}
     </>
+  );
+}
+
+/** The project's script, a click away: its other mode. */
+function ScriptLink({ id }: { id: string }) {
+  return (
+    <button
+      title="Open its script"
+      onClick={(event) => {
+        event.stopPropagation();
+        navigate(`/scripts/${id}`);
+      }}
+      className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary hover:bg-hover hover:text-fg"
+    >
+      <FileText size={12} />
+      Script
+    </button>
+  );
+}
+
+/** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
+function ScriptTableRow({ script, onChanged }: { script: WriterScriptRow; onChanged: () => void }) {
+  const [starting, setStarting] = useState(false);
+  const start = async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    setStarting(true);
+    try {
+      const { project } = await api.importWriter(script.id);
+      useEditor.getState().setMediaTab("downloads");
+      onChanged();
+      navigate(`/p/${project}`);
+    } catch (error) {
+      useEditor.getState().toastError(error, `start the edit of “${script.title}”`);
+    } finally {
+      setStarting(false);
+    }
+  };
+  return (
+    <div role="row" onClick={() => navigate(`/scripts/${script.id}`)} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
+      <div role="cell" className="flex min-w-0 items-center gap-2.5">
+        <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[script.style ?? "bodycam"] ?? STYLE_COLOURS.bodycam }} />
+        <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={script.title}>
+          {script.title || "Untitled script"}
+        </span>
+      </div>
+      <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
+        <span className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-secondary">
+          <FileText size={12} />
+          Script
+        </span>
+        {script.built && (
+          <button onClick={(event) => void start(event)} disabled={starting} className="flex h-[22px] shrink-0 items-center rounded-full px-2 text-[12px] font-medium text-info hover:bg-hover disabled:opacity-60">
+            {starting ? "Starting…" : "Start the edit"}
+          </button>
+        )}
+      </div>
+      <span role="cell" className="text-right text-[13px] text-secondary tabular">
+        {script.durationMs > 0 ? shortDuration(script.durationMs / 1000) : ""}
+      </span>
+      <span role="cell" className="text-right text-[13px] text-secondary" title={script.updatedBy ? `by ${script.updatedBy}` : undefined}>
+        {ago(script.updatedAt)}
+      </span>
+      <span />
+    </div>
   );
 }
 
@@ -955,6 +1092,22 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
           void create();
         }}
       >
+        {/* A project starts as a video to edit or as a script to write (which becomes its video). */}
+        {writesScripts(useAccount.getState().account) && (
+          <div className="mx-1 mb-1 flex h-[30px] w-fit gap-0.5 rounded-lg border border-line bg-black p-0.5">
+            <span className="flex items-center rounded-md bg-active px-2.5 text-[12px] font-medium text-fg">Edit a video</span>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                navigate("/scripts?new=1");
+              }}
+              className="flex items-center rounded-md px-2.5 text-[12px] font-medium text-muted hover:text-fg"
+            >
+              Write a script
+            </button>
+          </div>
+        )}
         <textarea
           autoFocus
           rows={3}

@@ -2238,7 +2238,9 @@ impl Project {
             // when a victim is in it too, and to a source's narrator (a news
             // reporter subtitled in an edit's teasers: "the narrator and
             // background talk stay white"); anyone else in white reads as nobody's.
-            if whitish(color) && !matches!(person.role.as_str(), "bystander" | "witness" | "narrator") {
+            if whitish(color)
+                && !matches!(person.role.as_str(), "bystander" | "witness" | "narrator")
+            {
                 return Err(format!(
                     "{} ({}) can't be white or a near-white grey: their words are white (only a bystander's, a witness's or a narrator's may be)",
                     person.name, person.id
@@ -2474,7 +2476,9 @@ mod validation_tests {
         // The Cop video's news reporter, subtitled in its teasers (Oct 28).
         assert!(with("narrator").is_ok());
         assert!(with("witness").is_ok());
-        assert!(with("suspect").unwrap_err().contains("only a bystander's, a witness's or a narrator's"));
+        assert!(with("suspect")
+            .unwrap_err()
+            .contains("only a bystander's, a witness's or a narrator's"));
     }
 
     #[test]

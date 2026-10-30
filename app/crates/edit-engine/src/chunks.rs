@@ -562,7 +562,12 @@ mod tests {
                     grade: Grade::default(),
                     shake: Shake::default(),
                     glitch: Glitch::default(),
-                    blur: Blur { radius: 30.0, width: 200.0, height: 100.0, ..Blur::default() },
+                    blur: Blur {
+                        radius: 30.0,
+                        width: 200.0,
+                        height: 100.0,
+                        ..Blur::default()
+                    },
                     opacity: 1.0,
                 },
             ));

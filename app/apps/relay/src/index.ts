@@ -3,6 +3,7 @@ import { exportDoc, listDocs } from "./docs";
 import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
+import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
 
 export { DriveToR2 } from "./jobs";
 export { ExportJobs } from "./exports";
@@ -23,6 +24,8 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  *                          → audio (ElevenLabs text to speech; x-request-id for stitching)
  *   POST /v1/cloud/…       Edit's cloud: R2 presigned URLs and `edit:` Convex functions,
  *                          with the cloud token only (see cloud.ts)
+ *   GET|POST /v1/ideas/…   ideas: their Convex rows, YouTube's details, the Interrogation
+ *                          board's Trello (ideas.ts), with an `ideas.*` capability
  *   GET  /health
  *
  * Spend is bounded three ways: a burst limit per IP, a daily byte quota per
@@ -48,6 +51,8 @@ export interface Env extends CloudEnv, AuthEnv {
   /** Repack's Trello key and token: Script mode's card reads (`/v1/trello/*`). */
   TRELLO_API_KEY?: string;
   TRELLO_TOKEN?: string;
+  /** The YouTube Data API's key (Repack's root YOUTUBE_API_KEY): ideas' video details (`/v1/ideas/youtube`). */
+  YOUTUBE_API_KEY?: string;
   /** DataImpulse's gateway with its login (Repack's PROXY_URL): YouTube downloads go through it when YouTube refuses them straight. */
   PROXY_URL?: string;
   DAILY_MAP_SESSIONS_PER_IP: string;
@@ -76,7 +81,7 @@ export default {
     if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
       return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
     }
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);
@@ -100,6 +105,14 @@ export default {
         return json(403, { error: "Your account can't import from Trello: an admin can give you an editing or scripts permission at accounts.spheceo.com." });
       }
       return url.pathname === "/v1/trello/card" ? trelloCard(url.searchParams.get("card") ?? "", env) : trelloCards(url.searchParams.get("list") ?? "", env);
+    }
+    // Ideas (ideas.ts): someone with an `ideas.*` capability, or an admin.
+    if (url.pathname.startsWith("/v1/ideas/")) {
+      const found = await allow(request, env, "use", url.pathname.slice("/v1/".length));
+      if (found instanceof Response) return found;
+      if (!mayIdeas(found)) return json(403, { error: NO_IDEAS });
+      if (env.CLOUD_BURST !== undefined && !(await env.CLOUD_BURST.limit({ key: `ideas:${burstKey(request, found)}` })).success) return json(429, { error: "Too many requests at once; try again in a minute." });
+      return ideasRoute(request, url, env, found);
     }
     // The YouTube proxy, to signed-in people only (as Writer's relay gives it): installed Edits carry no
     // keys, so a teammate's download YouTube refused had no proxy to fall back on (Oct 30).

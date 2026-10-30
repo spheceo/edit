@@ -6,7 +6,7 @@
 // `perms`; the relay needs only `use`, except voice generation, which is paid
 // and comes with editing (the user: "if someone has the permission to edit,
 // say bodycam, they should get full perms around voice generation"): any
-// `edit.*` capability.
+// `edit.*` capability. Ideas need `ideas.*` (ideas.ts).
 
 /** apps/../assets/brand/edit-icon.svg, the app icon (a test keeps it the same file). */
 export const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true"><defs><mask id="t2m" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/>
@@ -44,6 +44,11 @@ export const SCRIPT_CAPABILITIES = [
   { id: "review.lessons", label: "Teach the scripts from feedback", description: "Turn reviewers' feedback into lessons and keep them. Lessons are shared by every Mac and change everyone's builds.", group: "Sharing and teaching" },
 ];
 
+/** Ideas (Oct 31 2026): a case repackaged into titles and a thumbnail guide, sent to the board. One workspace for now, more later. */
+export const IDEA_CAPABILITIES = [
+  { id: "ideas.interrogation", label: "Interrogation ideas", description: "Repackage cases (YouTube videos, articles) into titles and a thumbnail guide, send them to the Interrogation board's repackaging lanes, and make the changes reviewers ask for there.", group: "Ideas" },
+];
+
 /** Whether a capability id is one of the edit styles (voice-overs come with any of them). */
 export function isEditing(id: string): boolean {
   return id.startsWith("edit.");
@@ -63,12 +68,14 @@ export function manifest() {
       { id: CAPABILITIES.commentary, label: "Commentary edits", description: "Narrated video essays, source clips, researched B-roll and motion graphics, voice-overs included.", group: "Kinds of video" },
       { id: CAPABILITIES.shorts, label: "Shorts", description: "9:16 YouTube Shorts: a video's highlights cut to 45–60 seconds, reframed, subtitled and scored.", group: "Kinds of video" },
       ...SCRIPT_CAPABILITIES,
+      ...IDEA_CAPABILITIES,
     ],
     presets: [
       { id: "subtitles", label: "Subtitles only", capabilities: [CAPABILITIES.subtitles] },
       { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.commentary, CAPABILITIES.shorts, CAPABILITIES.subtitles] },
       { id: "writer", label: "Script writer", capabilities: ["scripts.interrogation", "scripts.interrogation-compilation", "review.share"] },
-      { id: "full", label: "Everything", capabilities: [...Object.values(CAPABILITIES), ...SCRIPT_CAPABILITIES.map((one) => one.id)] },
+      { id: "ideas", label: "Repackager", capabilities: IDEA_CAPABILITIES.map((one) => one.id) },
+      { id: "full", label: "Everything", capabilities: [...Object.values(CAPABILITIES), ...SCRIPT_CAPABILITIES.map((one) => one.id), ...IDEA_CAPABILITIES.map((one) => one.id)] },
     ],
   };
 }

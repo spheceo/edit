@@ -75,11 +75,20 @@ export function reportRefused(found: Caller, key: string): string | null {
   return key.startsWith(REPORTS) && !isAdmin(found) ? "Only an admin reads problem reports." : null;
 }
 
-/** Where Edit writes in R2 (cloud_media.ts, covers.ts, reviews.ts, cloud_exports.ts, reports). */
+/** An idea's pictures (ideas/images.ts): read and written only by someone who works on ideas. */
+export const IDEAS = "edit/ideas/";
+
+/** Why `found` may not touch `key` when it's an idea's picture (null: they may). */
+export function ideaRefused(found: Caller, key: string): string | null {
+  if (!key.startsWith(IDEAS) || found.kind !== "person" || found.admin || found.perms.some((perm) => perm.startsWith("ideas."))) return null;
+  return "Your account can't work on ideas yet: an admin can give you Interrogation ideas at accounts.spheceo.com.";
+}
+
+/** Where Edit writes in R2 (cloud_media.ts, covers.ts, reviews.ts, cloud_exports.ts, reports, ideas). */
 export const WRITABLE = [
   "edit/originals/", "edit/proxies/", "edit/excerpts/", "edit/analysis/", "edit/sound/",
   "edit/covers/", "edit/reviews/", "edit/exports/assets/", "edit/exports/manifests/",
-  REPORTS,
+  REPORTS, IDEAS,
 ];
 
 /** What a non-admin may list: the analysis beside a source (cloud_media's fetchAnalysisOf). */

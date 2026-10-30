@@ -49,10 +49,9 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filt
 const text = (value: unknown, fallback = ""): string => (typeof value === "string" ? value : fallback);
 const clip = (given: string, count: number): string => [...given].slice(0, count).join("");
 
-/** One of Writer's relay's read-only Trello routes, as the signed-in person (compilation_input.ts reads cards this way too). */
+/** One of Edit's relay's read-only Trello routes, as the signed-in person (compilation_input.ts reads cards this way too; Writer's relay served them until Oct 30). */
 export async function trelloGet(route: string): Promise<Raw> {
-  const service = process.env.EDIT_WRITER_RELAY_URL ?? "https://writer-relay.sphe-g-personal.workers.dev";
-  const response = await fetch(`${service.replace(/\/$/u, "")}${route}`, { headers: relay.authHeaders(), redirect: "error", signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(`${relay.url().replace(/\/$/u, "")}${route}`, { headers: relay.authHeaders(), redirect: "error", signal: AbortSignal.timeout(30_000) });
   const value = (await response.json().catch(() => ({}))) as Raw & { error?: string };
   if (!response.ok) throw new Error(value.error ?? `Trello refused (${response.status})`);
   return value;

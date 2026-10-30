@@ -85,8 +85,8 @@ test("Writer's complete plaintext ranges/links become reusable script blocks, ne
   expect(parsed.blocks.every(reusedScriptBlock)).toBe(true);
 });
 
-test("the Trello relay receives Edit's bearer and retains labeled attachments; refused access surfaces before import", async () => {
-  const oldUrl = process.env.EDIT_WRITER_RELAY_URL;
+test("Edit's relay serves Trello: it receives Edit's bearer and retains labeled attachments; refused access surfaces before import", async () => {
+  const oldUrl = process.env.EDIT_RELAY_URL;
   const oldToken = process.env.EDIT_RELAY_TOKEN;
   let denied = false;
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
@@ -97,14 +97,14 @@ test("the Trello relay receives Edit's bearer and retains labeled attachments; r
       : Response.json({ name: "Compilation", desc: `Case 1: ${video}`, attachmentLabels: [`Case 2 (reuse) <${doc}>`, `Case 3 <${folder}>`], attachments: [doc, folder] });
   } });
   try {
-    process.env.EDIT_WRITER_RELAY_URL = server.url.origin;
+    process.env.EDIT_RELAY_URL = server.url.origin;
     process.env.EDIT_RELAY_TOKEN = "edit-test-bearer";
     expect(cardSources(await readCard("https://trello.com/c/AbCd1234/title")).map((one) => one.url)).toEqual([video, doc, folder]);
     denied = true;
     await expect(readCard("https://trello.com/c/AbCd1234/title")).rejects.toThrow("Edit permission required");
   } finally {
     void server.stop(true);
-    if (oldUrl === undefined) delete process.env.EDIT_WRITER_RELAY_URL; else process.env.EDIT_WRITER_RELAY_URL = oldUrl;
+    if (oldUrl === undefined) delete process.env.EDIT_RELAY_URL; else process.env.EDIT_RELAY_URL = oldUrl;
     if (oldToken === undefined) delete process.env.EDIT_RELAY_TOKEN; else process.env.EDIT_RELAY_TOKEN = oldToken;
   }
 });

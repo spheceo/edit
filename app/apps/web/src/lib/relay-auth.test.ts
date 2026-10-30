@@ -122,6 +122,25 @@ describe("relay sign-in gate", () => {
     useCutOffs(async () => Response.json({ at: Date.now(), revoked: [] }));
   });
 
+  it("reads Trello for people who edit or write scripts, the key kept on the relay", async () => {
+    useKeys(createLocalJWKSet({ keys: [jwk] }));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const trello = env({ TRELLO_API_KEY: "k", TRELLO_TOKEN: "t" });
+    const asked_ = vi.fn(async (url: string) => {
+      expect(url.startsWith("https://api.trello.com/1/cards/AbC123x?")).toBe(true);
+      return Response.json({ id: "AbC123x", name: "Case", desc: "https://youtu.be/dQw4w9WgXcQ", url: "https://trello.com/c/AbC123x", attachments: [] });
+    });
+    vi.stubGlobal("fetch", asked_);
+    const route = "https://relay/v1/trello/card?card=AbC123x";
+    expect((await relay.fetch(asked(null, route), trello)).status).toBe(401);
+    expect((await relay.fetch(asked(await token({ perms: ["use"] }), route), trello)).status).toBe(403);
+    const answer = await relay.fetch(asked(await token({ perms: ["use", "edit.bodycam"] }), route), trello);
+    expect(answer.status).toBe(200);
+    expect(((await answer.json()) as { name: string; desc: string }).name).toBe("Case");
+    expect(asked_).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
   it("fetches the accounts site's keys, and again once for a key it hasn't seen", async () => {
     let calls = 0;
     vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {

@@ -1,4 +1,5 @@
 import { allow, budgetKey, burstKey, mayVoice, type AuthEnv, type Caller } from "./auth";
+import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
 
@@ -41,6 +42,9 @@ export interface Env extends CloudEnv, AuthEnv {
   SPEECH_BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
   /** Google Map Tiles API key (Photorealistic 3D Tiles), for map stills. */
   GOOGLE_MAPS_KEY?: string;
+  /** Repack's Trello key and token: Script mode's card reads (`/v1/trello/*`). */
+  TRELLO_API_KEY?: string;
+  TRELLO_TOKEN?: string;
   /** DataImpulse's gateway with its login (Repack's PROXY_URL): YouTube downloads go through it when YouTube refuses them straight. */
   PROXY_URL?: string;
   DAILY_MAP_SESSIONS_PER_IP: string;
@@ -69,13 +73,22 @@ export default {
     if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
       return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
     }
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY), proxy: Boolean(env.PROXY_URL) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);
     if (url.pathname.startsWith("/v1/3dtiles/")) return withCors(await tiles(request, url, env));
     if (url.pathname === "/v1/geocode") return geocode(request, url, env);
     if (url.pathname === "/v1/outline") return outline(request, url, env);
+    // Trello, read only, for Script mode's imports (moved from Writer's relay): people who edit or write scripts.
+    if ((url.pathname === "/v1/trello/card" || url.pathname === "/v1/trello/cards") && request.method === "GET") {
+      const found = await allow(request, env, "use", "trello");
+      if (found instanceof Response) return found;
+      if (found.kind === "person" && !found.admin && !found.perms.some((perm) => perm.startsWith("edit.") || perm.startsWith("scripts."))) {
+        return json(403, { error: "Your account can't import from Trello: an admin can give you an editing or scripts permission at accounts.spheceo.com." });
+      }
+      return url.pathname === "/v1/trello/card" ? trelloCard(url.searchParams.get("card") ?? "", env) : trelloCards(url.searchParams.get("list") ?? "", env);
+    }
     // The YouTube proxy, to signed-in people only (as Writer's relay gives it): installed Edits carry no
     // keys, so a teammate's download YouTube refused had no proxy to fall back on (Oct 30).
     if (url.pathname === "/v1/proxy" && request.method === "GET") {

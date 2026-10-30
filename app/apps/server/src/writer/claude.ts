@@ -99,7 +99,7 @@ export function explain(said: string, status: number | null = null): Trouble {
   if (lower.includes("overloaded") || lower.includes("rate limit") || status === 429 || (status !== null && status >= 500 && status <= 599)) {
     return new Trouble(`Anthropic is busy or overloaded right now ("${quoted}"). Try again in a few minutes.`, true);
   }
-  if (lower.includes("could not resolve") || lower.includes("network") || lower.includes("econnreset") || lower.includes("fetch failed")) return new Trouble("Claude Code couldn't reach Anthropic. Check the connection, then build again.", true);
+  if (lower.includes("could not resolve") || lower.includes("network") || lower.includes("econnreset") || lower.includes("fetch failed") || lower.includes("enotfound") || lower.includes("can't reach the api")) return new Trouble("Claude Code couldn't reach Anthropic. Check the connection, then build again.", true);
   return new Trouble(`Claude stopped: "${quoted}" Nothing was changed.`);
 }
 
@@ -203,20 +203,29 @@ export async function ask(question: Question): Promise<Answer> {
 
 const seconds = (since: number) => `${Math.round((Date.now() - since) / 1000)} s`;
 
-/** Claude busy or overloaded gets one more try a minute later. */
+/** Waits before another try (20 s, then 60 s). */
+const AGAIN_MS = [20_000, 60_000];
+
+/**
+ * Claude busy or overloaded, or the connection to it lost for a moment (a
+ * teammate's Wi-Fi dropped DNS for seconds at a time, Oct 30: "Claude Code
+ * couldn't reach Anthropic"), gets two more tries before the build fails.
+ */
 export async function askPatiently(question: Question): Promise<Answer> {
-  try {
-    return await ask(question);
-  } catch (error) {
-    if (!(error instanceof Trouble) || !error.again) throw error;
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(resolve, 60_000);
-      question.signal?.addEventListener("abort", () => {
-        clearTimeout(timer);
-        reject(new Trouble("Stopped by you. Completed work is saved."));
-      }, { once: true });
-    });
-    return ask(question);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await ask(question);
+    } catch (error) {
+      if (!(error instanceof Trouble) || !error.again || attempt >= AGAIN_MS.length) throw error;
+      diag.warn("writer", `${question.label}: ${error.message} Trying again in ${AGAIN_MS[attempt]! / 1000} s.`);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, AGAIN_MS[attempt]);
+        question.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new Trouble("Stopped by you. Completed work is saved."));
+        }, { once: true });
+      });
+    }
   }
 }
 

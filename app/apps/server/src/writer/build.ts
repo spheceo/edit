@@ -425,16 +425,25 @@ function close(token: string): Draft | null {
 /** Edit's port, for the tools' address. */
 let port = 7700;
 
-/** One Opus turn on a draft's tools, asked again once (a minute later) if it failed before any tool call. */
+/** One Opus turn on a draft's tools, asked twice more (20 s, then a minute later) when it failed before any tool call: Claude busy, or the connection lost for a moment. */
 async function ask(system: string, prompt: string, token: string, effort: claude.Question["effort"] | null, maxTurns: number, label: string, signal?: AbortSignal): Promise<claude.Answer> {
   const question: claude.Question = { model: claude.OPUS, system, prompt, tools: `http://127.0.0.1:${port}/mcp/writer/${token}`, maxTurns, label, ...(effort ? { effort } : {}), ...(signal ? { signal } : {}) };
-  try {
-    return await claude.ask(question);
-  } catch (error) {
-    if (!(error instanceof claude.Trouble) || !error.again || (drafts.get(token)?.calls ?? 1) > 0) throw error;
-    await Bun.sleep(60_000);
-    return claude.ask(question);
+  for (const wait of [20_000, 60_000, null]) {
+    try {
+      return await claude.ask(question);
+    } catch (error) {
+      if (wait === null || !(error instanceof claude.Trouble) || !error.again || (drafts.get(token)?.calls ?? 1) > 0) throw error;
+      diag.warn("writer", `${label}: ${error.message} Trying again in ${wait / 1000} s.`);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, wait);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new claude.Trouble("Stopped by you. Completed work is saved."));
+        }, { once: true });
+      });
+    }
   }
+  throw new Error("unreachable");
 }
 
 const outputTokens = (answer: claude.Answer | null): number => ((answer?.result.usage ?? {}) as { output_tokens?: number }).output_tokens ?? 0;

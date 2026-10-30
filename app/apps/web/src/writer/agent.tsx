@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 import { openPage } from "./api";
 import { clock } from "./clips";
 import { Icon } from "./ui";
+import { useSettled } from "../lib/settled";
 
 export function useChatDraft(id: string) {
   const key = `writer.chat-draft.${id}`;
@@ -214,6 +215,8 @@ export function Composer({
   onSend: () => void;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
+  // Stop takes a click only once the work has run a moment: never the send's own second click.
+  const stoppable = useSettled(onStop !== undefined);
   useLayoutEffect(() => {
     const node = area.current;
     if (!node) return;
@@ -256,7 +259,7 @@ export function Composer({
         {extra}
         <span className="spacer" />
         {hint && <span className="faint composer-hint">{hint}</span>}
-        {onStop ? <button type="button" className="send" aria-label="Stop response" title="Stop response" onClick={onStop}><span className="stop-square" /></button> : <button type="button" className="send" aria-label={label} title={label} disabled={!canSend} onClick={onSend}><Icon name="send" size={15} /></button>}
+        {onStop ? <button type="button" className="send" aria-label="Stop response" title="Stop response" disabled={!stoppable} onClick={onStop}><span className="stop-square" /></button> : <button type="button" className="send" aria-label={label} title={label} disabled={!canSend} onClick={onSend}><Icon name="send" size={15} /></button>}
       </div>
     </div>
   );

@@ -44,6 +44,7 @@ import {
 import { buildTurns, callTitle, formatWorked, groupSummary, type Turn } from "../lib/agentTurns";
 import { api, useMachine } from "../lib/api";
 import { playhead } from "../lib/playback";
+import { useSettled } from "../lib/settled";
 import { useEditor } from "../lib/store";
 import { ProblemView } from "./ProblemView";
 import { Button, cx, IconButton } from "./ui";
@@ -537,6 +538,8 @@ function Markdown({ text }: { text: string }) {
 function Composer({ disabled }: { disabled: boolean }) {
   const [text, setText] = useState("");
   const running = useAgent((state) => state.running);
+  // Stop takes a click only once the turn has run a moment: never the send's own second click.
+  const stoppable = useSettled(running);
   const name = useAgent((state) => providerName(state.status));
   const modelName = useAgent((state) => state.modelName);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -589,8 +592,9 @@ function Composer({ disabled }: { disabled: boolean }) {
               type="button"
               aria-label="Stop"
               title="Stop"
+              disabled={!stoppable}
               onClick={stopAgent}
-              className="ml-auto flex size-7 items-center justify-center rounded-lg bg-white text-black transition-transform active:scale-90"
+              className="ml-auto flex size-7 items-center justify-center rounded-lg bg-white text-black transition-transform active:scale-90 disabled:opacity-60"
             >
               <Square size={11} fill="currentColor" />
             </button>

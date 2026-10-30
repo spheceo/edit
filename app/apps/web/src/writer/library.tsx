@@ -1,5 +1,6 @@
 import { pickFile } from "./pick";
 import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { navigate } from "../lib/route";
 import {
   checkVideos,
   createCommentary,
@@ -24,7 +25,6 @@ import { pastedTrelloCard } from "./import-input";
 import { AccountMenu } from "./account";
 import { Avatar } from "./avatar";
 import { Logo, Tile } from "../components/Logo";
-import { navigate } from "../lib/route";
 import { CAN, useGrants } from "./can";
 import { useReviewCounts } from "./review";
 import type { Brief, BriefLink, BriefRole, Choice, ClaudeStatus, ImportProgress, Kind, Script, Summary, TrelloCard, TrelloCards, TrelloList, VideoCheck } from "./types";
@@ -168,11 +168,7 @@ export function Library({
   onOpen: (id: string) => void;
   onChanged: () => void;
 }) {
-  // Home's New project → Write a script comes here with ?new=1.
-  const [creating, setCreating] = useState(() => new URLSearchParams(window.location.search).get("new") === "1");
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("new") === "1") window.history.replaceState(null, "", window.location.pathname);
-  }, []);
+  const [creating, setCreating] = useState(false);
   const reviews = useReviewCounts();
   const [renaming, setRenaming] = useState<Summary | null>(null);
   const [deleting, setDeleting] = useState<Summary | null>(null);
@@ -443,11 +439,7 @@ export function Library({
 
       <ImportDialog
         open={creating}
-        onClose={() => {
-          setCreating(false);
-          // Asked for from Home: back there.
-          navigate("/");
-        }}
+        onClose={() => setCreating(false)}
         onStarted={onChanged}
         onFinished={(script) => {
           onChanged();

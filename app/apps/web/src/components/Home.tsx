@@ -32,13 +32,28 @@ export function Home() {
   const [creating, setCreating] = useState(false);
   // Script mode's scripts: one list with the edits (the user, Oct 30: "merge the two applications as much as possible").
   const [scripts, setScripts] = useState<WriterScriptRow[]>([]);
+  // Scripts being written from videos, as Script mode's imports say.
+  const [writing, setWriting] = useState<Writing[]>([]);
+  useEffect(() => {
+    const look = () =>
+      void fetch("/api/writer/progress")
+        .then((answer) => (answer.ok ? answer.json() : []))
+        .then((rows: unknown) => setWriting(Array.isArray(rows) ? (rows as Writing[]) : []), () => {});
+    look();
+    const timer = setInterval(() => !document.hidden && look(), 4_000);
+    return () => clearInterval(timer);
+  }, []);
   const account = useAccount((state) => state.account);
   // Someone who writes scripts and makes no videos: Script mode is their home.
   useEffect(() => {
     if (!makesVideos(account) && writesScripts(account)) navigate("/scripts", true);
   }, [account]);
   const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<Kind>(() => (localStorage.getItem(KIND) === "subtitled" ? "subtitled" : "edits"));
+  // One stage at a time (or the subtitled videos), remembered on this browser.
+  const [view, setView] = useState<View>(() => {
+    const saved = localStorage.getItem(VIEW);
+    return saved === "subtitled" || STAGES.some((stage) => stage.value === saved) ? (saved as View) : "editing";
+  });
   const [style, setStyle] = useState<Style | null>(null);
 
   // Imports, agents and shares under way are followed every few seconds (many projects at once).
@@ -104,14 +119,21 @@ export function Home() {
   const cloudKept = cloudOnly.filter((project) => kept(project.name, project.summary?.style as Style | undefined));
   const cloudSubtitled = cloudKept.filter((project) => project.summary?.subtitles === true);
   const cloudEdits = cloudKept.filter((project) => project.summary?.subtitles !== true);
-  const cloudEditsAll = cloudOnly.filter((project) => project.summary?.subtitles !== true).length;
-  const showEdits = kind !== "subtitled";
-  // One table, newest change first, local and cloud-only projects together.
-  const rows: Listed[] = [
-    ...(showEdits ? edits : subtitled).map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
-    ...(showEdits ? cloudEdits : cloudSubtitled).map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...(showEdits ? scriptOnly.filter((one) => kept(one.title, one.style ?? undefined)).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one })) : []),
+  const showEdits = view !== "subtitled";
+  // Newest change first, local and cloud-only projects and scripts together.
+  const projectRows: Listed[] = [
+    ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
+    ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
+    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined)).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: one })),
   ].sort((a, b) => b.at - a.at);
+  const subtitledRows: Listed[] = [
+    ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
+    ...cloudSubtitled.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: null })),
+  ].sort((a, b) => b.at - a.at);
+  const stageCount = (stage: Stage) => projectRows.filter((row) => stageOf(row, statuses[row.local?.id ?? row.cloud?.id ?? ""]) === stage).length;
+  // A search looks through every stage; otherwise the chosen stage alone.
+  const searching = words !== "";
+  const rows = !showEdits ? subtitledRows : searching ? projectRows : projectRows.filter((row) => stageOf(row, statuses[row.local?.id ?? row.cloud?.id ?? ""]) === view);
   const cardProps = (project: ProjectSummary) => ({
     project,
     onChanged: refresh,
@@ -120,9 +142,9 @@ export function Home() {
     remote: remote.get(project.id),
     state: statuses[project.id],
   });
-  const choose = (value: Kind) => {
-    localStorage.setItem(KIND, value);
-    setKind(value);
+  const choose = (value: View) => {
+    localStorage.setItem(VIEW, value);
+    setView(value);
   };
 
   return (
@@ -183,16 +205,17 @@ export function Home() {
               <div className="flex h-[34px] gap-0.5 rounded-[9px] border border-line bg-panel p-0.5">
                 {(
                   [
-                    ["edits", "Projects", all.filter((project) => !project.subtitles).length + cloudEditsAll + scriptOnly.length],
-                    ["subtitled", "Subtitled videos", all.filter((project) => project.subtitles).length + cloudOnly.length - cloudEditsAll],
-                  ] as [Kind, string, number][]
+                    // Where each project is, script to finished video (the user, Oct 30: "a natural progression of our projects").
+                    ...STAGES.map((stage) => [stage.value, stage.label, stageCount(stage.value)] as [View, string, number]).filter(([value, , total]) => total > 0 || value === view || value === "editing"),
+                    ["subtitled", "Subtitled", subtitledRows.length] as [View, string, number],
+                  ] as [View, string, number][]
                 ).map(([value, label, total]) => (
                   <button
                     key={value}
                     onClick={() => choose(value)}
                     className={cx(
                       "flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors",
-                      kind === value ? "bg-active text-fg" : "text-muted hover:text-fg",
+                      view === value && !searching ? "bg-active text-fg" : "text-muted hover:text-fg",
                     )}
                   >
                     {label} <span className="font-normal text-faint tabular">{total}</span>
@@ -222,11 +245,11 @@ export function Home() {
               </div>
             </div>
 
-            <Imports projects={projects ?? []} statuses={statuses} />
+            <Imports projects={projects ?? []} statuses={statuses} writing={writing} />
             {rows.length > 0 ? (
-              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} statuses={statuses} />
+              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits && searching} statuses={statuses} />
             ) : (
-              <p className="mt-16 text-center text-muted">Nothing matches{words ? ` “${query.trim()}”` : ""}.</p>
+              <p className="mt-16 text-center text-muted">{searching ? `Nothing matches “${query.trim()}”.` : "Nothing here."}</p>
             )}
           </>
         )}
@@ -236,7 +259,8 @@ export function Home() {
   );
 }
 
-type Kind = "edits" | "subtitled";
+/** What Home lists: one stage of the projects, or the subtitled videos. */
+type View = Stage | "subtitled";
 
 /** A row of Home's table: a project on this Mac, one only in the cloud, or a script with no edit yet; `script`: the script it's made from. */
 type Listed =
@@ -271,12 +295,12 @@ function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
 }
 
 /** Which list Home shows (remembered on this browser). */
-const KIND = "edit.home.kind";
+const VIEW = "edit.home.view";
 
 /** Each kind of video’s colour (its dot on cards and filters). */
 const STYLE_COLOURS: Record<Style, string> = { bodycam: "#7aa2ff", interrogation: "#ff5f6d", courtroom: "#c4a7ff", commentary: "#e5be72", shorts: "#5fd38d" };
 
-/** What each kind of video makes, under the style picker. */
+/** What each kind of video makes: the New project pills' tooltips. */
 const STYLE_NOTES: Record<Style, string> = {
   bodycam: "16:9 · a narrated bodycam case or compilation, in the house voice",
   interrogation: "16:9 · an interrogation edit, narrated by your recording",
@@ -567,17 +591,38 @@ function importShare(importing: NonNullable<ProjectStatus["importing"]>) {
  * projects all importing at the same time and once they're all done we check
  * them out").
  */
-function Imports({ projects, statuses }: { projects: ProjectSummary[]; statuses: Record<string, ProjectStatus> }) {
+/** A script being written from its videos (Script mode's import): what it's on and how far. */
+type Writing = { id: string; title: string; stage: string; percent: number; detail: string };
+
+function Imports({ projects, statuses, writing }: { projects: ProjectSummary[]; statuses: Record<string, ProjectStatus>; writing: Writing[] }) {
   const running = projects.flatMap((project) => {
     const importing = statuses[project.id]?.importing;
     return importing ? [{ project, importing }] : [];
   });
-  if (running.length === 0) return null;
+  if (running.length === 0 && writing.length === 0) return null;
+  const total = running.length + writing.length;
   return (
     <div className="mt-6 overflow-hidden rounded-xl border border-line">
       <div className="flex h-10 items-center bg-panel px-4 text-[12px] font-medium text-muted">
-        Importing {running.length} {running.length === 1 ? "project" : "projects"}
+        Importing {total} {total === 1 ? "project" : "projects"}
       </div>
+      {writing.map((one) => (
+        <button
+          key={one.id}
+          onClick={() => navigate(`/scripts/${one.id}`)}
+          title={one.detail || undefined}
+          className="grid w-full grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-4 border-t border-line px-4 py-2.5 text-left transition-colors hover:bg-panel"
+        >
+          <span className="flex min-w-0 items-center gap-2 truncate text-[13px] text-fg">
+            <FileText size={13} className="shrink-0 text-muted" />
+            <span className="truncate">{one.title || "New script"}</span>
+          </span>
+          <span className="h-1 overflow-hidden rounded-full bg-raised">
+            <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(1, one.percent / 100)) * 100)}%` }} />
+          </span>
+          <span className="max-w-[220px] truncate text-[12px] text-muted">{one.stage}</span>
+        </button>
+      ))}
       {running.map(({ project, importing }) => {
         const stuck = importStuck(importing);
         const share = importing.state === "downloading" ? (importing.share ?? importing.ready / Math.max(importing.files, 1)) : 1;
@@ -622,16 +667,17 @@ function ProjectTable({
   cardProps,
   onChanged,
   subtitled,
+  grouped,
   statuses,
 }: {
   rows: Listed[];
   cardProps: (project: ProjectSummary) => CardProps;
   onChanged: () => void;
   subtitled: boolean;
+  /** A search across stages: each stage's matches under its name. */
+  grouped: boolean;
   statuses: Record<string, ProjectStatus>;
 }) {
-  // Done is folded away until asked for: the work still to do comes first.
-  const [showDone, setShowDone] = useState(false);
   const idOf = (row: Listed) => row.local?.id ?? row.cloud?.id ?? `script-${row.script!.id}`;
   const rowOf = (row: Listed) =>
     row.local !== null ? (
@@ -641,8 +687,8 @@ function ProjectTable({
     ) : (
       <ScriptTableRow script={row.script} onChanged={onChanged} />
     );
-  // Subtitled videos have no stages: newest first, by when they changed.
-  const groups = subtitled
+  // One stage (or the subtitled videos): newest first, by when they changed.
+  const groups = !grouped
     ? null
     : STAGES.map((stage) => ({ ...stage, rows: rows.filter((row) => stageOf(row, statuses[row.local?.id ?? row.cloud?.id ?? ""]) === stage.value) })).filter((group) => group.rows.length > 0);
   return (
@@ -671,22 +717,16 @@ function ProjectTable({
               </Fragment>
             );
           })
-        : groups.map((group) => {
-            const folded = group.value === "done" && !showDone;
-            return (
-              <Fragment key={group.value}>
-                <div className="flex items-center gap-2 border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">
-                  {group.label} <span className="tabular">{group.rows.length}</span>
-                  {group.value === "done" && (
-                    <button onClick={() => setShowDone(!showDone)} className="ml-1 text-muted hover:text-fg">
-                      {folded ? "Show" : "Hide"}
-                    </button>
-                  )}
-                </div>
-                {!folded && group.rows.map((row) => <Fragment key={idOf(row)}>{rowOf(row)}</Fragment>)}
-              </Fragment>
-            );
-          })}
+        : groups.map((group) => (
+            <Fragment key={group.value}>
+              <div className="flex items-center gap-2 border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">
+                {group.label} <span className="tabular">{group.rows.length}</span>
+              </div>
+              {group.rows.map((row) => (
+                <Fragment key={idOf(row)}>{rowOf(row)}</Fragment>
+              ))}
+            </Fragment>
+          ))}
     </div>
   );
 }
@@ -938,240 +978,258 @@ function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSumm
 
 type Preview = Awaited<ReturnType<typeof api.scriptPreview>>;
 
-/** One field (a name for a blank project, or a Google Doc link to start from its script) and the kind of video. */
-/** `only`: the kind of video Home is filtered to: its Writer scripts are the ones listed, and a new project is that kind. */
-function NewProject({ open, onClose, only = null }: { open: boolean; onClose: () => void; only?: Style | null }) {
-  const [text, setText] = useState("");
-  const [style, setStyle] = useState<Style>("bodycam");
-  // Only the styles this account makes full edits in (none: subtitled videos only, which start as a plain project).
-  const allowed = editStyles(useAccount((state) => state.account));
-  const styles = STYLES.filter((option) => allowed === null || allowed.has(option.value));
-  const [busy, setBusy] = useState(false);
-  const [preview, setPreview] = useState<{ url: string; result?: Preview; error?: string } | null>(null);
-  const toast = useEditor((state) => state.toast);
-  // The team's voice-over recording, for a kind of video narrated by one: a file, or a Drive link to it.
-  const [voiceFile, setVoiceFile] = useState<File | null>(null);
-  const [voiceLink, setVoiceLink] = useState("");
-  const voicePicker = useRef<HTMLInputElement>(null);
-  // The style the script's heading named ("COURT …"), until the person picks another.
-  const [picked, setPicked] = useState(false);
-  const [scripts, setScripts] = useState<WriterScriptRow[] | null>(null);
-  const [starting, setStarting] = useState<string | null>(null);
-  // The first message to its agent, sent when the import is done; the import then runs here on Home.
-  const [prompt, setPrompt] = useState("");
-  const url = text.trim();
-  const script = hasImportLinks(url);
+/** What a paste is: a script's Doc (an edit), videos (a script to write), or a name. */
+const DOC = /docs\.google\.com\/document\//i;
+const VIDEO = /(youtube\.com\/(watch|shorts|live)|youtu\.be\/|drive\.google\.com\/(file|drive\/folders|open))/i;
+const LINK = /^https?:\/\//i;
 
-  // A fresh dialog each time, with Writer’s scripts as they are now.
+/** Script mode's kinds for Edit's styles (bodycam is a FOIA script there); shorts and commentary have none. */
+const WRITER_KIND: Partial<Record<Style, "foia" | "interrogation" | "courtroom">> = { bodycam: "foia", interrogation: "interrogation", courtroom: "courtroom" };
+
+/**
+ * New project, in one box: paste what you have (a script's Doc, videos, a
+ * Trello card) or type a name, pick the kind of video, and go. A Doc starts
+ * the edit; videos start a script that becomes the edit (the user, Oct 30:
+ * "too many options in the dialog box … make it a lot cleaner and a lot
+ * easier to use"). `only`: the kind Home is filtered to.
+ */
+function NewProject({ open, onClose, only = null }: { open: boolean; onClose: () => void; only?: Style | null }) {
+  const account = useAccount((state) => state.account);
+  const allowed = editStyles(account);
+  const writes = writesScripts(account);
+  const [text, setText] = useState("");
+  const [mode, setMode] = useState<"edit" | "write">("edit");
+  const [chosen, setChosen] = useState(false);
+  const [style, setStyle] = useState<Style>("bodycam");
+  const [picked, setPicked] = useState(false);
+  const [title, setTitle] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const voicePicker = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<{ url: string; result?: Preview; error?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const toast = useEditor((state) => state.toast);
+
+  const input = text.trim();
+  const lines = input.split(/\s*\n\s*/).filter((line) => line !== "");
+  const links = lines.flatMap((line) => line.split(/\s+/)).filter((word) => LINK.test(word));
+  const videos = links.filter((link) => VIDEO.test(link));
+  const hasDoc = links.some((link) => DOC.test(link));
+  const caseLinks = hasImportLinks(input);
+  // Videos alone are a script to write; a Doc (or a Trello card, a review link) is an edit.
+  const guessed: "edit" | "write" = writes && videos.length > 0 && !hasDoc && videos.length === links.length ? "write" : "edit";
+  const shown = chosen ? mode : guessed;
+  const styles = STYLES.filter((option) => (shown === "write" ? option.value === "commentary" || WRITER_KIND[option.value] !== undefined : allowed === null || allowed.has(option.value)));
+  const kind = styles.some((option) => option.value === style) ? style : (styles[0]?.value ?? "bodycam");
+  const commentary = kind === "commentary";
+  const needsTitle = shown === "write" && (commentary || videos.length > 1);
+  const recording = shown === "edit" && hasDoc && NARRATION[kind] === "recording";
+
+  // A fresh dialog each time.
   useEffect(() => {
     if (!open) return;
     setText("");
+    setTitle("");
     setPrompt("");
-    setPreview(null);
     setVoiceFile(null);
-    setVoiceLink("");
+    setPreview(null);
+    setError(null);
+    setChosen(false);
     setPicked(false);
-    if (only !== null && (allowed === null || allowed.has(only))) setStyle(only);
-    else if (styles.length > 0 && !styles.some((option) => option.value === style)) setStyle(styles[0]!.value);
-    let alive = true;
-    api
-      .writerScripts()
-      .then(({ scripts }) => alive && setScripts(scripts))
-      .catch(() => alive && setScripts([]));
-    return () => {
-      alive = false;
-    };
+    if (only !== null) setStyle(only);
   }, [open]);
 
-  // Writer’s scripts, newest first, narrowed by what’s typed.
-  const words = script ? "" : url.toLowerCase();
-  const fromWriter = (scripts ?? [])
-    .filter((one) => one.built && (words === "" || one.title.toLowerCase().includes(words)))
-    // Home filtered to a kind of video: that kind’s scripts (and any Writer hasn’t said).
-    .filter((one) => only === null || one.style === null || one.style === only)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-  const startScript = async (one: WriterScriptRow) => {
-    if (one.project !== null) {
-      onClose();
-      navigate(`/p/${one.project}`);
-      return;
-    }
-    setStarting(one.id);
-    try {
-      const { project } = await api.importWriter(one.id);
-      useEditor.getState().setMediaTab("downloads");
-      onClose();
-      // With a first message the import runs in the background, here on Home.
-      if (prompt.trim() !== "") {
-        await api.firstPrompt(project, prompt.trim());
-        toast(`Importing “${one.title}”: your message goes to its agent when it’s in`, "info");
-        return;
-      }
-      navigate(`/p/${project}`);
-    } catch (error) {
-      useEditor.getState().toastError(error, "start the edit from Writer");
-    } finally {
-      setStarting(null);
-    }
-  };
-
-  // Read the Doc as soon as a link is pasted: its title names the project.
+  // A script Doc is read as soon as it's pasted: its title names the project and its heading the kind.
   useEffect(() => {
-    if (!script) {
+    if (shown !== "edit" || !caseLinks) {
       setPreview(null);
       return;
     }
     let alive = true;
-    setPreview({ url });
+    setPreview({ url: input });
     const timer = setTimeout(() => {
       api
-        .scriptPreview(url)
-        .then((result) => alive && setPreview({ url, result }))
-        .catch((error) => alive && setPreview({ url, error: (error as Error).message }));
+        .scriptPreview(input)
+        .then((result) => alive && setPreview({ url: input, result }))
+        .catch((cause) => alive && setPreview({ url: input, error: (cause as Error).message }));
     }, 250);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
-  }, [url, script]);
-
-  // The script says which kind of video it is: that's the style, unless the person chose one.
+  }, [input, caseLinks, shown]);
   const named = preview?.result?.style;
   useEffect(() => {
     if (named && !picked && (allowed === null || allowed.has(named))) setStyle(named);
   }, [named, picked]);
-  const recording = script && NARRATION[style] === "recording";
-  const ready = !script || Boolean(preview?.result);
+
+  const ready = input !== "" && !(needsTitle && title.trim() === "") && !(shown === "edit" && caseLinks && !preview?.result);
+  const what =
+    shown === "write"
+      ? commentary
+        ? `A commentary from ${links.length} ${links.length === 1 ? "source" : "sources"}`
+        : videos.length > 1
+          ? `A compilation of ${videos.length} videos`
+          : videos.length === 1
+            ? "A script from this video"
+            : ""
+      : caseLinks
+        ? preview?.error
+          ? null
+          : preview?.result
+            ? `${preview.result.title || "Untitled script"} · ${preview.result.files} ${preview.result.files === 1 ? "source" : "sources"} · ${preview.result.narration} cut-ins${preview.result.whole ? "" : ` · ${shortDuration(preview.result.seconds)}`}`
+            : "Reading the links…"
+        : input !== ""
+          ? "An empty project"
+          : "";
+
   const create = async () => {
-    if (!ready) return;
-    // A script makes a full edit: not for an account of subtitled videos only (the server refuses it too).
-    if (script && allowed !== null && !allowed.has(style)) {
-      toast("Your account can’t make full edits: an admin can give you an Edit style at accounts.spheceo.com.", "error");
-      return;
-    }
+    if (!ready || busy) return;
     setBusy(true);
+    setError(null);
     try {
-      const name = script ? preview?.result?.title || "Untitled" : url || "Untitled";
-      const { project } = await api.createProject({ name, style, ...(style === "shorts" ? SHORTS_FORMAT : FORMAT) });
-      if (script) {
+      if (shown === "write") {
+        // The import runs on: Home shows it until the script is ready to open.
+        const writer = await import("../writer/api");
+        const started = commentary
+          ? writer.createCommentary(title.trim(), links)
+          : videos.length > 1
+            ? writer.importCompilation(title.trim(), videos, false, WRITER_KIND[kind])
+            : DRIVE.test(videos[0]!)
+              ? writer.importDrive(videos[0]!, undefined, undefined, WRITER_KIND[kind])
+              : writer.importYoutube(videos[0]!, undefined, undefined, WRITER_KIND[kind]);
+        if (commentary) {
+          const script = await started;
+          onClose();
+          navigate(`/scripts/${script.id}`);
+          return;
+        }
+        started.catch((cause) => useEditor.getState().toastError(cause, "write the script"));
+        onClose();
+        toast("Writing the script: its footage is coming in", "info");
+        return;
+      }
+      if (caseLinks && allowed !== null && !allowed.has(kind)) {
+        setError("Your account can’t make full edits: an admin can give you an Edit style at accounts.spheceo.com.");
+        return;
+      }
+      const name = caseLinks ? preview?.result?.title || "Untitled" : input;
+      const { project } = await api.createProject({ name, style: kind, ...(kind === "shorts" ? SHORTS_FORMAT : FORMAT) });
+      if (caseLinks) {
         // The recording first, so the import places it instead of voicing the cut-ins.
-        if (recording && (voiceFile !== null || voiceLink.trim() !== "")) {
+        if (recording && voiceFile !== null) {
           try {
-            if (voiceFile !== null) await api.uploadFile(project.id, voiceFile, `voiceover-${clientId}`);
-            else await api.importDrive(project.id, voiceLink.trim(), false, clientId);
-          } catch (error) {
-            // The edit still starts, on a stand-in voice; the Script tab offers the recording again.
-            useEditor.getState().toastError(error, "add the voice-over");
+            await api.uploadFile(project.id, voiceFile, `voiceover-${clientId}`);
+          } catch (cause) {
+            useEditor.getState().toastError(cause, "add the voice-over");
           }
         }
-        await api.attachScript(project.id, url);
+        await api.attachScript(project.id, input);
         useEditor.getState().setMediaTab("downloads");
       }
-      // After the script, so it waits for the import the script started.
       if (prompt.trim() !== "") await api.firstPrompt(project.id, prompt.trim());
       onClose();
-      // A script with a first message imports in the background: start the next one.
-      if (script && prompt.trim() !== "") {
+      // With a first message the import runs in the background: start the next one.
+      if (caseLinks && prompt.trim() !== "") {
         toast(`Importing “${name}”: your message goes to its agent when it’s in`, "info");
         return;
       }
       navigate(`/p/${project.id}`);
-    } catch (error) {
-      useEditor.getState().toastError(error, "start the project");
+    } catch (cause) {
+      setError((cause as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
+  const field = "h-9 w-full rounded-lg border border-line bg-black px-3 text-[13px] outline-none placeholder:text-faint focus:border-muted";
   return (
-    <Modal open={open} onClose={onClose} width={520}>
+    <Modal open={open} onClose={onClose} width={560}>
       <form
-        className="p-2"
+        className="flex flex-col gap-4 p-6"
         onSubmit={(event) => {
           event.preventDefault();
           void create();
         }}
       >
-        {/* A project starts as a video to edit or as a script to write (which becomes its video). */}
-        {writesScripts(useAccount.getState().account) && (
-          <div className="mx-1 mb-1 flex h-[30px] w-fit gap-0.5 rounded-lg border border-line bg-black p-0.5">
-            <span className="flex items-center rounded-md bg-active px-2.5 text-[12px] font-medium text-fg">Edit a video</span>
+        <h2 className="text-[17px] font-semibold tracking-[-0.2px]">New project</h2>
+        <div>
+          <textarea
+            autoFocus
+            rows={3}
+            value={text}
+            placeholder="Paste a script Doc, videos or a Trello card, or type a name"
+            onChange={(event) => setText(event.target.value)}
+            onPaste={(event) => {
+              const plain = event.clipboardData.getData("text/plain");
+              const pasted = importPaste(event.clipboardData.getData("text/html"), plain);
+              if (pasted === plain) return;
+              event.preventDefault();
+              const node = event.currentTarget;
+              setText(text.slice(0, node.selectionStart) + pasted + text.slice(node.selectionEnd));
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void create();
+            }}
+            className="w-full resize-none rounded-lg border border-line bg-black px-3 py-2.5 text-[14px] outline-none placeholder:text-faint focus:border-muted"
+          />
+          <div className="mt-1.5 min-h-[18px] truncate text-[12px] text-muted">
+            {preview?.error ? <ProblemView error={preview.error} doing="read the links" className="whitespace-normal" /> : what === "Reading the links…" ? <span className="shimmer">{what}</span> : what}
+          </div>
+        </div>
+
+        {writes && input !== "" && (
+          <div className="flex h-[30px] w-fit gap-0.5 rounded-lg border border-line bg-black p-0.5">
+            {(
+              [
+                ["write", "Write a script"],
+                ["edit", "Edit the video"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                type="button"
+                key={value}
+                onClick={() => {
+                  setMode(value);
+                  setChosen(true);
+                }}
+                className={cx("rounded-md px-3 text-[12px] font-medium transition-colors", shown === value ? "bg-active text-fg" : "text-muted hover:text-fg")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-1.5">
+          {styles.map((option) => (
             <button
               type="button"
+              key={option.value}
+              title={STYLE_NOTES[option.value]}
               onClick={() => {
-                onClose();
-                navigate("/scripts?new=1");
+                setStyle(option.value);
+                setPicked(true);
               }}
-              className="flex items-center rounded-md px-2.5 text-[12px] font-medium text-muted hover:text-fg"
+              className={cx(
+                "flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors",
+                kind === option.value ? "border-line-strong bg-raised text-fg" : "border-line text-muted hover:text-fg",
+              )}
             >
-              Write a script
+              <span className="size-1.5 rounded-full" style={{ background: STYLE_COLOURS[option.value] }} />
+              {option.label}
             </button>
-          </div>
-        )}
-        <textarea
-          autoFocus
-          rows={3}
-          value={text}
-          placeholder="Name a project, find a Writer script, or paste case links (Docs, Drive, YouTube, Trello, a finished video’s review link)"
-          onChange={(event) => setText(event.target.value)}
-          onPaste={(event) => {
-            const plain = event.clipboardData.getData("text/plain");
-            const pasted = importPaste(event.clipboardData.getData("text/html"), plain);
-            if (pasted === plain) return;
-            event.preventDefault();
-            const node = event.currentTarget;
-            setText(text.slice(0, node.selectionStart) + pasted + text.slice(node.selectionEnd));
-          }}
-          className="w-full resize-y rounded-lg bg-transparent px-3 py-2 text-[14px] outline-none placeholder:text-faint"
-        />
-        {(script || fromWriter.length > 0) && (
-          <input
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder="First message to its agent (optional): sent when the import is done, which then runs here"
-            className="mx-3 mb-2 h-8 w-[calc(100%-24px)] rounded-md border border-line bg-black px-2 text-[13px] outline-none placeholder:text-faint focus:border-muted"
-          />
-        )}
-        {script && (
-          <div className="truncate px-3 pb-2 text-[12px] text-muted">
-            {preview?.error ? (
-              <ProblemView error={preview.error} doing="read the script" className="whitespace-normal py-1" />
-            ) : preview?.result ? (
-              <span className="tabular">
-                <span className="text-fg">{preview.result.title || "Untitled script"}</span> · {preview.result.files} {preview.result.files === 1 ? "source" : "sources"} · {preview.result.narration} cut-ins · {preview.result.whole ? "duration after import" : shortDuration(preview.result.seconds)}
-                {preview.result.cardScript && (
-                  <span className="block truncate whitespace-normal text-faint">
-                    Follows the card’s script “{preview.result.cardScript.title}”: it covers {preview.result.cardScript.covered} of the card’s{" "}
-                    {preview.result.cardScript.cases} cases
-                  </span>
-                )}
-                {preview.result.finished?.map((one) => (
-                  <span key={one} className="block truncate whitespace-normal text-faint">
-                    Puts in the finished video “{one}”, played as it is
-                  </span>
-                ))}
-                {preview.result.reused?.map((one) => (
-                  <span key={one.doc} className="block truncate whitespace-normal text-faint">
-                    Reuses “{one.title || "a linked script"}” as written ({one.footage} {one.footage === 1 ? "range" : "ranges"})
-                  </span>
-                ))}
-                {preview.result.skipped?.map((one) => (
-                  <span key={one.doc} className="block whitespace-normal text-faint">
-                    Left out “{one.title || `docs.google.com/…/${one.doc.slice(0, 8)}`}”: {one.why}
-                  </span>
-                ))}
-              </span>
-            ) : (
-              <span className="shimmer">Reading the case links…</span>
-            )}
-          </div>
+          ))}
+        </div>
+
+        {needsTitle && <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Title" className={field} />}
+        {shown === "edit" && caseLinks && (
+          <input value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="First message to its agent (optional), sent when the import is done" className={field} />
         )}
         {recording && (
-          <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2 text-[12px]">
-            <span className="font-medium">Voice-over</span>
-            <Button type="button" size="sm" onClick={() => voicePicker.current?.click()}>
-              {voiceFile ? voiceFile.name : "Choose the recording"}
-            </Button>
+          <button type="button" onClick={() => voicePicker.current?.click()} className="w-fit text-[12px] text-muted hover:text-fg">
+            {voiceFile ? `Voice-over: ${voiceFile.name}` : "+ Add the voice-over recording (optional: a stand-in voice until then)"}
             <input
               ref={voicePicker}
               type="file"
@@ -1182,76 +1240,21 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
                 event.currentTarget.value = "";
               }}
             />
-            {voiceFile === null && (
-              <input
-                value={voiceLink}
-                onChange={(event) => setVoiceLink(event.target.value)}
-                placeholder="or a Google Drive link to it"
-                className="h-7 min-w-[180px] flex-1 rounded-md border border-line bg-black px-2 outline-none placeholder:text-faint focus:border-muted"
-              />
-            )}
-            <span className="basis-full text-faint">
-              {STYLES.find((one) => one.value === style)?.label} videos are narrated by your recording. Optional now: until it’s added, a stand-in voice is used.
-            </span>
-          </div>
+          </button>
         )}
-        {!script && fromWriter.length > 0 && (
-          <div className="border-t border-line px-1 pt-2 pb-1">
-            <div className="px-2 pb-1 text-[13px] font-medium text-muted">From Writer</div>
-            <div className="max-h-[264px] overflow-y-auto">
-              {fromWriter.map((one) => (
-                <button
-                  type="button"
-                  key={one.id}
-                  disabled={starting !== null}
-                  onClick={() => void startScript(one)}
-                  className="group flex h-11 w-full items-center gap-3 rounded-lg px-2 text-left transition-colors hover:bg-hover disabled:opacity-60"
-                >
-                  <img src="/writer-mark.svg" alt="" className="size-[18px] shrink-0" />
-                  {one.style !== null && <span title={STYLES.find((option) => option.value === one.style)?.label} className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[one.style] }} />}
-                  <span className="min-w-0 flex-1 truncate text-[13px]">{one.title}</span>
-                  <span className="shrink-0 text-[12px] text-faint tabular group-hover:hidden">
-                    {one.durationMs > 0 ? `${shortDuration(one.durationMs / 1000)} · ` : ""}
-                    {ago(one.updatedAt)}
-                  </span>
-                  <span className="hidden shrink-0 text-[12px] font-medium text-fg group-hover:inline">
-                    {starting === one.id ? "Starting…" : one.project !== null ? "Open" : "Edit it"}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {styles.length > 0 && (
-          <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-[12px] text-faint">
-            <span className="size-1.5 shrink-0 rounded-full" style={{ background: STYLE_COLOURS[style] }} />
-            {STYLE_NOTES[style]}
-          </div>
-        )}
-        <div className="flex items-center gap-2 border-t border-line px-1 pt-2 pb-0.5">
-          <div className={cx("mr-auto flex rounded-lg bg-black p-0.5 ring-1 ring-line", styles.length === 0 && "invisible")}>
-            {styles.map((option) => (
-              <button
-                type="button"
-                key={option.value}
-                onClick={() => {
-                  setStyle(option.value);
-                  setPicked(true);
-                }}
-                className={cx(
-                  "h-7 rounded-md px-3 text-[12px] font-medium transition-colors",
-                  style === option.value ? "bg-active text-fg" : "text-muted hover:text-fg",
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+
+        {error && <p className="text-[12px] text-danger">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="subtle" onClick={onClose}>
+            Cancel
+          </Button>
           <Button type="submit" variant="primary" disabled={busy || !ready}>
-            {busy ? "Creating…" : "Create"}
+            {busy ? "Starting…" : shown === "write" ? "Write the script" : caseLinks ? "Start the edit" : "Create"}
           </Button>
         </div>
       </form>
     </Modal>
   );
 }
+
+const DRIVE = /drive\.google\.com/i;

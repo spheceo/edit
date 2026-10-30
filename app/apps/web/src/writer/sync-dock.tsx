@@ -27,8 +27,10 @@ export function SyncDock({ onOpen }: { onOpen: (script: string) => void }) {
 
   useEffect(() => {
     let live = true;
-    // An update shows on its own button at the top (update.tsx).
-    const ask = () => void getActivity().then((found) => live && setWork(found.filter((item) => item.key !== "update")), () => {});
+    // An update shows on its own button at the top (update.tsx); the cloud's
+    // own copying is Edit's business, not the person's (Oct 30: "downloading
+    // from cloud … kind of doesn't make sense"): only its problems show.
+    const ask = () => void getActivity().then((found) => live && setWork(found.filter((item) => item.key !== "update" && item.key !== "cloud")), () => {});
     ask();
     const timer = window.setInterval(ask, 1500);
     return () => {
@@ -61,8 +63,7 @@ export function SyncDock({ onOpen }: { onOpen: (script: string) => void }) {
 
   const state = cloud?.state ?? "";
   const trouble = state === "offline" || state === "error";
-  const syncing = state === "syncing";
-  const shown = work.length > 0 || trouble || syncing;
+  const shown = work.length > 0 || trouble;
   useEffect(() => {
     if (!shown) setOpen(false);
   }, [shown]);
@@ -85,9 +86,7 @@ export function SyncDock({ onOpen }: { onOpen: (script: string) => void }) {
       ? "Offline: everything is saved on this Mac and syncs when the connection is back."
       : state === "error"
         ? (cloud?.error ?? "The cloud refused something; Edit keeps trying.")
-        : syncing && !work.some((item) => item.key === "cloud")
-          ? `Syncing with the cloud${left}.`
-          : null;
+        : null;
 
   return (
     <div className="sync-dock" ref={root}>

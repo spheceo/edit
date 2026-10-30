@@ -23,6 +23,7 @@ import { native } from "./native/index.ts";
 import { duration as projectDuration, fps as fpsOf } from "./project.ts";
 import { isFile } from "./paths.ts";
 import * as research from "./research.ts";
+import * as researchCloud from "./research_cloud.ts";
 import * as review from "./review.ts";
 import { display, fixed, round, toI64, trim } from "./rust.ts";
 import * as script from "./script.ts";
@@ -181,7 +182,7 @@ registerTool("look_at_found", async ({ app, args, projectId }): Promise<Content[
   const shown = waiting.slice(offset, offset + count);
   if (shown.length === 0) return text(`no found images waiting from ${offset} (${total} waiting)`);
   const thumbs = await Promise.all(
-    shown.map(async (item) => (await research.thumbnail(item.file)) ?? { width: 320, height: 240, pixels: Buffer.alloc(320 * 240 * 4) }),
+    shown.map(async (item) => (await research.thumbnail(await researchCloud.image(item.file).catch(() => item.file))) ?? { width: 320, height: 240, pixels: Buffer.alloc(320 * 240 * 4) }),
   );
   const sheet = await native().composeSheet(thumbs, 6, "png");
   const list = shown.map((item, index) => `${offset + index + 1} ${item.id} — ${item.title} (${item.page})`).join("\n");
@@ -675,12 +676,13 @@ export function researchRoutes(router: Router<App>): void {
     }
   });
   router.post("/api/projects/{id}/research/{item}", researchReview);
-  router.get("/api/projects/{id}/research/{item}/image", ({ app, params, request }) => {
+  router.get("/api/projects/{id}/research/{item}/image", async ({ app, params, request }) => {
     // The project's own research only, and only a project the person may open (the audit, Oct 23).
     projectOr404(app, params.id ?? "");
     const found = research.items(app.store.home, params.id ?? "").find((own) => own.id === params.item);
     if (found === undefined) throw notFound("no such found image");
-    return serveFile(request, found.file);
+    // Found on another Mac: taken from the cloud the first time it's shown.
+    return serveFile(request, await researchCloud.image(found.file));
   });
 }
 

@@ -901,7 +901,9 @@ export async function reviewFound(app: App, id: string, item: string, status: st
   if (found === undefined) throw new Error("no such found image");
   let media = found.media ?? null;
   if (status === "kept" && media === null) {
-    const [, added, errors] = await importPaths(app, id, [found.file], false, origin);
+    // Found on another Mac, or freed here: taken from the cloud first.
+    const { image } = await import("./research_cloud.ts");
+    const [, added, errors] = await importPaths(app, id, [await image(found.file)], false, origin);
     const mediaId = added[0];
     if (mediaId === undefined) throw new Error(`couldn't add it to the media bin: ${debugStrings(errors)}`);
     const name = takeChars(found.title, 80);

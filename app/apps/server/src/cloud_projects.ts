@@ -40,6 +40,7 @@ import * as cloud from "./cloud.ts";
 import { ConvexFailure } from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
 import * as diag from "./diag.ts";
+import * as researchCloud from "./research_cloud.ts";
 import { readState as readStateFile } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
 import { ApiError } from "./http/errors.ts";
@@ -1514,9 +1515,12 @@ async function download(app: App, cloudProjects: Cloud, id: string): Promise<voi
   const [project, rev] = fetched;
   cloudProjects.take(id, project, rev);
   diag.info("cloud", `${id} downloaded from the cloud (rev ${rev})`);
-  // The editor opens now; the footage follows in the background.
+  // The editor opens now; the footage follows in the background, and the research another Mac did.
   void cloudMedia.ensureLocal(app, id).catch((error: unknown) => {
     diag.warn("cloud", `fetching ${id}'s footage: ${diag.messageOf(error)}`);
+  });
+  void researchCloud.pull(app, id).catch((error: unknown) => {
+    diag.warn("cloud", `fetching ${id}'s research: ${diag.messageOf(error)}`);
   });
 }
 

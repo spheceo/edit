@@ -103,6 +103,17 @@ export function serialize(transcript: Transcript): string {
 /** Waits before asking a busy relay again (a 429), then gives up. */
 const BUSY_WAITS = [15, 30, 60, 60, 60, 60];
 
+/**
+ * Cloudflare's gateway answers (the relay or Scribe behind it slow or briefly
+ * down: 524 is "no answer within 100 s"), asked again twice: Oct 30, one 524
+ * on one 40-second piece stopped a 6.7-hour import after every other
+ * recording was heard. The request may have been billed; asking again costs a
+ * piece (or, for a whole file, its hearing) once more, far less than an
+ * import stopped for it.
+ */
+const GATEWAY = new Set([502, 503, 504, 520, 522, 524]);
+const GATEWAY_WAITS = [20, 60];
+
 /** How long a wait before asking again lasts (tests make it instant). */
 export const timing = { sleep: (seconds: number) => Bun.sleep(seconds * 1000) };
 
@@ -267,6 +278,7 @@ async function lengthOf(audio: string): Promise<number> {
 async function ask(audio: string, keyterms: readonly string[], again = false): Promise<Transcript> {
   const auth = relay.authHeaders();
   const waits = [...BUSY_WAITS];
+  const gateway = [...GATEWAY_WAITS];
   let status: number;
   let body: string;
   let names = [...keyterms];
@@ -289,6 +301,14 @@ async function ask(audio: string, keyterms: readonly string[], again = false): P
       diag.warn("media", `transcription refused the case's names (${status}: ${body.trim().slice(0, 200)}); asking without them`);
       names = [];
       continue;
+    }
+    if (GATEWAY.has(status)) {
+      const wait = gateway.shift();
+      if (wait !== undefined) {
+        diag.warn("media", `transcription answered ${status} at the gateway: asking again in ${wait} s`);
+        await timing.sleep(wait);
+        continue;
+      }
     }
     // The day's allowance used up isn't busy: asking again only waits minutes for the same answer.
     if (status === 429 && !/allowance/i.test(body)) {

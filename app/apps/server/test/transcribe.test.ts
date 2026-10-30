@@ -195,3 +195,23 @@ test.skipIf(ffmpeg === null)("a long file is heard whole and in pieces at once, 
     cleanup();
   }
 });
+
+test.skipIf(ffmpeg === null)("a gateway timeout (524) is asked again twice, then said", async () => {
+  const { dir, cleanup } = scratch("transcribe-gateway");
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    mock.on("POST", "/v1/transcribe", () => new Response("error code: 524", { status: 524 }), 1);
+    await run(source, `${dir}/cache/transcript.json`);
+    expect(mock.calls("/v1/transcribe", "POST").length - before).toBe(2);
+    expect(JSON.parse(fs.readFileSync(`${dir}/cache/transcript.json`, "utf8"))).toEqual(parseScribe(scribeAnswer()));
+    const again = mock.calls("/v1/transcribe", "POST").length;
+    mock.on("POST", "/v1/transcribe", () => new Response("error code: 524", { status: 524 }), 3);
+    await expect(run(source, `${dir}/cache/later.json`)).rejects.toThrow("transcription failed (524)");
+    expect(mock.calls("/v1/transcribe", "POST").length - again).toBe(3);
+  } finally {
+    cleanup();
+  }
+});

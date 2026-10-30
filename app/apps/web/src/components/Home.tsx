@@ -770,31 +770,53 @@ function IssueActions({ issue }: { issue: ScriptIssueRow }) {
 }
 
 /**
- * A stopped import on Home's "need you" list: who started it and where it
- * stopped in columns of their own, the error's first words (the whole of it
- * a click away), and the answers in the ⋯ menu at the far right. Its title
- * opens it over Home.
+ * A stopped import on Home's "need you" list, in the table's columns below it
+ * (the name with who started it at its end, then where it stopped and why),
+ * so the avatars line up between the two; the error's first words (the whole
+ * of it a click away), and the answers in the ⋯ menu at the far right. Its
+ * title opens it over Home.
  */
 function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: string) => void }) {
   const { items, dialogs, said, showError } = useIssueDialogs(issue);
   return (
-    <div className="grid grid-cols-[13px_20px_minmax(0,1.3fr)_176px_minmax(0,1fr)_28px] items-center gap-x-3 border-t border-line px-4 py-2.5 text-[13px]">
-      <TriangleAlert size={13} className="text-warning" />
-      <StartedBy by={issue.createdBy} size={20} />
-      <button onClick={() => onOpen(issue.id)} className="min-w-0 truncate text-left text-fg hover:underline" title={issue.title}>
-        {issue.title}
-      </button>
-      {/* Where it stopped, so it's plain what's being fixed. */}
-      <span className="justify-self-start rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-secondary">Stopped {stageWords(issue.stage)}</span>
-      <button onClick={showError} className="min-w-0 truncate text-left text-[12px] text-muted hover:text-fg" title="View the whole error">
-        {said}
-      </button>
+    <div className={cx(COLUMNS, "min-h-14 border-t border-line px-4 py-2.5 text-[13px]")}>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <TriangleAlert size={14} className="shrink-0 text-warning" />
+        <button onClick={() => onOpen(issue.id)} className="truncate text-left text-[14px] text-fg hover:underline hover:underline-offset-[3px]" title={issue.title}>
+          {issue.title}
+        </button>
+        <StartedBy by={issue.createdBy} size={24} className="ml-auto shrink-0" />
+      </div>
+      <div className="col-span-3 flex min-w-0 items-center gap-2">
+        {/* Where it stopped, so it's plain what's being fixed (the list already says it stopped). */}
+        <span title={`Stopped ${stageWords(issue.stage)}`} className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
+          {stageName(issue.stage)}
+        </span>
+        <button onClick={showError} className="min-w-0 truncate text-left text-[12px] text-muted hover:text-fg" title="View the whole error">
+          {said}
+        </button>
+      </div>
       <IconButton label={`What to do about “${issue.title}”`} onClick={(event) => toggleMenu(event.currentTarget, items, { width: 220 })}>
         <Ellipsis size={16} />
       </IconButton>
       {dialogs}
     </div>
   );
+}
+
+/** An import's stage as a chip's word ("Transcribing"). */
+function stageName(stage: string): string {
+  const names: Record<string, string> = {
+    reading: "Reading",
+    downloading: "Downloading",
+    joining: "Joining",
+    transcribing: "Transcribing",
+    processing: "Finishing",
+    researching: "Researching",
+    speakers: "Naming speakers",
+    ready: "After import",
+  };
+  return names[stage] ?? (stage ? stage[0]!.toUpperCase() + stage.slice(1) : "Stopped");
 }
 
 /** An import's stage in words ("while downloading"). */

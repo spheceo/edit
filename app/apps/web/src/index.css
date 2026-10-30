@@ -188,3 +188,20 @@
 }
 .row-new { animation: row-in 360ms ease-out; }
 .row-changed { animation: row-flash 1.6s ease-out; }
+
+/* Edit's loader (Logo.tsx Loader): each clip stretches and settles in turn, the playhead sweeps across. */
+.edit-loader .loader-clip { transform-box: fill-box; transform-origin: left center; animation: edit-loader-clip 1.6s cubic-bezier(.45, 0, .2, 1) infinite; }
+.edit-loader .loader-clip-2 { animation-delay: .18s; }
+.edit-loader .loader-clip-3 { animation-delay: .36s; }
+.edit-loader .loader-head { animation: edit-loader-head 1.6s cubic-bezier(.45, 0, .2, 1) infinite; }
+@keyframes edit-loader-clip {
+  0%, 100% { transform: scaleX(1); opacity: 1; }
+  45% { transform: scaleX(.42); opacity: .55; }
+}
+@keyframes edit-loader-head {
+  0%, 100% { transform: translateX(-30px); }
+  50% { transform: translateX(6px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .edit-loader .loader-clip, .edit-loader .loader-head { animation: none; }
+}

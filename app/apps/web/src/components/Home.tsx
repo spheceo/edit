@@ -39,15 +39,25 @@ export function Home() {
   // Scripts being written from videos, as Script mode's imports say.
   const [writing, setWriting] = useKept<Writing[]>("home.writing", []);
   useEffect(() => {
-    const look = () =>
+    // One ask of each at a time: on a busy Mac an answer can take longer than the 4 s between looks.
+    const out = { progress: false, scripts: false };
+    const look = () => {
+      if (out.progress) return;
+      out.progress = true;
       void fetch("/api/writer/progress")
         .then((answer) => (answer.ok ? answer.json() : []))
-        .then((rows: unknown) => setWriting(Array.isArray(rows) ? (rows as Writing[]) : []), () => {});
+        .then((rows: unknown) => setWriting(Array.isArray(rows) ? (rows as Writing[]) : []), () => {})
+        .finally(() => (out.progress = false));
+    };
     // Script imports stopped on any Mac (a failed video, a cut connection): open issues, answered here.
-    const stopped = () =>
+    const stopped = () => {
+      if (out.scripts) return;
+      out.scripts = true;
       void fetch("/api/writer/scripts")
         .then((answer) => (answer.ok ? answer.json() : []))
-        .then((rows: unknown) => setLocalScripts(Array.isArray(rows) ? (rows as ScriptIssueRow[]) : []), () => {});
+        .then((rows: unknown) => setLocalScripts(Array.isArray(rows) ? (rows as ScriptIssueRow[]) : []), () => {})
+        .finally(() => (out.scripts = false));
+    };
     look();
     stopped();
     const timer = setInterval(() => {

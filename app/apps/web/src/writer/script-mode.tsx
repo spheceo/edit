@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+
+import { Loader } from "../components/Logo";
 import { claudeStatus, getProgress, getScript, listScripts, message, onLibrary } from "./api";
 import { CommentaryEditor } from "./commentary-view";
 import { Editor } from "./editor";
@@ -86,6 +88,10 @@ export function ScriptMode() {
     return fresh;
   });
   const setRoute = (next: Route) => navigate(pathOf(next));
+  /** The script this page last read whole, so the list arriving doesn't read it again. */
+  const fetched = useRef<string | null>(null);
+  // Another script, or this one opened again: read afresh.
+  useEffect(() => () => { fetched.current = null; }, [route]);
 
   const refresh = () => {
     void listScripts().then(setScripts).catch((cause) => setError(message(cause)));
@@ -110,11 +116,15 @@ export function ScriptMode() {
     };
     connect();
     // Hidden windows stop asking; the next look catches up.
+    // One ask at a time: on a busy Mac an answer can take seconds, and asks every 0.8 s piled up behind each other.
+    let asking = false;
     const timer = window.setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || asking) return;
+      asking = true;
       void getProgress()
         .then((list) => setProgress(Array.isArray(list) ? list : []))
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => { asking = false; });
     }, 800);
     return () => {
       window.clearTimeout(waiting);
@@ -127,10 +137,19 @@ export function ScriptMode() {
     // Opened before: it shows at once while the fresh copy comes.
     const kept = lastOpened.get(route.id);
     if (kept) setOpen((current) => (current?.id === kept.id ? current : kept));
-    if (!ready) return;
-    let gone = false;
-    void getScript(route.id).then((fresh) => { if (!gone) acceptScript(fresh); }).catch((cause) => { if (!gone) setError(message(cause)); });
-    return () => { gone = true; };
+    // Asked for at once, beside the list rather than after it (the user, Oct 30:
+    // "why does it take so long to open pages"); before the server answers at
+    // all, it's asked again once the list comes.
+    // Asked once (a second ask while the first is out only queues behind it on a busy Mac).
+    if (fetched.current === route.id) return;
+    fetched.current = route.id;
+    const id = route.id;
+    void getScript(id)
+      .then((fresh) => acceptScript(fresh))
+      .catch((cause) => {
+        if (fetched.current === id) fetched.current = null;
+        if (ready) setError(message(cause));
+      });
   }, [route, ready]);
 
   // A script open here that another Mac changed comes down through the cloud
@@ -212,8 +231,9 @@ export function ScriptMode() {
   }, [route.name]);
   // Who's signed in decides which scripts they see (can.rs): list them again when that changes.
   const grantsKey = account ? `${account.signedIn}|${account.person?.sub ?? ""}|${account.person?.admin ?? ""}|${(account.person?.perms ?? []).join(",")}` : "";
+  // (Not on the first look: the connect above lists them already.)
   useEffect(() => {
-    if (grantsKey) refresh();
+    if (grantsKey && ready) refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grantsKey]);
   const opened = route.name === "script" && open && open.id === route.id ? open : null;
@@ -249,7 +269,13 @@ export function ScriptMode() {
             </button>
             <div className="title-block" data-tauri-drag-region>Scripts</div>
           </header>
-          <p className={error ? "notice" : "empty"}>{error ?? "Opening…"}</p>
+          {error ? (
+            <p className="notice">{error}</p>
+          ) : (
+            <div className="flex flex-1 items-center justify-center">
+              <Loader label="Opening the script…" />
+            </div>
+          )}
         </div>
       ) : (
         <Library

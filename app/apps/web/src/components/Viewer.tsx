@@ -14,6 +14,7 @@ import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { ProblemView } from "./ProblemView";
 import { cx, IconButton } from "./ui";
+import { Loader } from "./Logo";
 import { rate } from "../lib/types";
 
 const useFrame = () => useSyncExternalStore(playhead.subscribe, () => Math.floor(playhead.frame));
@@ -126,9 +127,8 @@ export function Viewer() {
         )}
         {/* Its first frame on the way: said in the middle, not a corner badge on a black screen (the user, Oct 30: "we need a better loading view"). */}
         {!error && !framed && !empty && (
-          <div role="status" className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3">
-            <span className="size-6 animate-spin rounded-full border-2 border-white/15 border-t-white/70" />
-            <span className="shimmer text-[13px] text-muted">Loading the preview…</span>
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <Loader size={32} label="Loading the preview…" />
           </div>
         )}
         {!error && framed && buffering && (

@@ -7,6 +7,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { loadAccount, onThisMac, signIn, signInWithCode, useAccount } from "../lib/account";
 import { Tile } from "./Logo";
+import { Loader } from "./Logo";
 import { Button } from "./ui";
 
 /** The app once someone’s signed in; this screen until then. */
@@ -16,7 +17,13 @@ export function SignInGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     void loadAccount().finally(() => setLoaded(true));
   }, []);
-  if (!loaded && account === null) return null;
+  // Who's signed in still coming: Edit's loader, as the page shows before the app's code is in.
+  if (!loaded && account === null)
+    return (
+      <div className="fixed inset-0 grid place-items-center">
+        <Loader />
+      </div>
+    );
   // The server didn’t answer: let the app show its own "can’t reach Edit".
   if (account === null || account.signed_in || !account.required) return <>{children}</>;
   return <SignInScreen />;

@@ -667,7 +667,16 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   }
   if (known !== undefined && known.rev >= rev) return;
   const body = await fetchBytes(String(row.bodyKey ?? ""));
-  if (body === null) throw new Problem("Its body isn't in the cloud.");
+  if (body === null) {
+    // The newest revision lost its body (two Macs once pushed the same body under one key, and the
+    // loser's clean-up deleted it): no Mac can take it, so a Mac holding the script saves its copy as
+    // the next revision rather than asking for the missing one for ever.
+    if (!isFile(join(dir, "script.json"))) throw new Problem("Its body isn't in the cloud.");
+    diag.warn("writer", `${jobs.named(id, title)}: rev ${rev}'s body isn't in the cloud, so this Mac's copy is saved as the next revision`);
+    ledger.scripts[id] = { rev, body: "", files: known?.files ?? {}, summary: 0 };
+    syncSoon();
+    return;
+  }
   const bodyPath = join(dir, "script.json");
   const atStart = isFile(bodyPath) ? hash(fs.readFileSync(bodyPath)) : null;
   if (atStart !== null && atStart !== hash(body) && changedHere(dir, known)) keepCopy(data, dir, "conflicted copy");
@@ -744,7 +753,9 @@ async function push(id: string, dir: string, script: Script, body: Uint8Array, k
     }
   }
   const digest = hash(body);
-  const bodyKey = `${PREFIX}/${id}/body/${base + 1}-${digest.slice(0, 12)}.json`;
+  // Unique to this push, as its files are: two Macs pushing the same body on the same revision named it alike, and the loser's
+  // clean-up deleted the winner's body (Oct 30, Predator Tutor's rev 5: "Its body isn't in the cloud" on every Mac).
+  const bodyKey = `${PREFIX}/${id}/body/${base + 1}-${digest.slice(0, 12)}-${pushId}.json`;
   await uploadBytes(bodyKey, body);
   const answer = await convex("mutation", "writer:commitScript", {
     scriptId: id,

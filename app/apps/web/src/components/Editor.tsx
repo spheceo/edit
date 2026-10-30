@@ -142,8 +142,10 @@ export function Editor({ id }: { id: string }) {
   }
   if (!project || project.id !== id) {
     return (
-      <div className="flex h-full items-center justify-center text-muted">
+      // Said, not just a dot: a long edit takes a while to open (the user, Oct 30: "we need a better loading view").
+      <div role="status" className="flex h-full flex-col items-center justify-center gap-3 text-muted">
         <Spinner />
+        <span className="shimmer text-[13px]">Opening the project…</span>
       </div>
     );
   }

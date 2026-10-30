@@ -69,6 +69,8 @@ class Preview {
   /** The error is the engine refusing the project (cleared when it takes one). */
   private refused = false;
   buffering = false;
+  /** A frame of this project has been shown: until then the viewer says it's loading, in its middle. */
+  framed = false;
   /** Waiting on a frame for long enough that something's probably wrong. */
   stuck = false;
   private waitingSince: number | undefined;
@@ -351,6 +353,7 @@ class Preview {
     for (const clip of project.clips) if (before.get(clip.id) !== clip) changed.add(clip.id);
     // Pictures already on the GPU stay for the clips that didn't change.
     for (const id of changed) this.copied.delete(id);
+    if (previous?.id !== project.id) this.framed = false;
     this.project = project;
     this.error = null;
     this.refused = false;
@@ -828,6 +831,7 @@ class Preview {
       changed = true;
     }
     this.setBuffering(false);
+    if (!this.framed) { this.framed = true; this.notify(); }
     if (!changed && this.renderedFrame === frame) return;
     this.use((engine) => {
       if (this.canvas) engine.resize(this.canvas.width, this.canvas.height);

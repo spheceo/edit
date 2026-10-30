@@ -44,6 +44,7 @@ export function Viewer() {
   const [error, setError] = useState<string | null>(null);
   const [buffering, setBuffering] = useState(false);
   const [stuck, setStuck] = useState(false);
+  const [framed, setFramed] = useState(preview.framed);
   const fullscreen = useFullscreen();
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -70,7 +71,7 @@ export function Viewer() {
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); });
+    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); });
     void preview.attach(canvas);
     return () => {
       off();
@@ -123,14 +124,21 @@ export function Viewer() {
             <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />
           </div>
         )}
-        {!error && buffering && (
+        {/* Its first frame on the way: said in the middle, not a corner badge on a black screen (the user, Oct 30: "we need a better loading view"). */}
+        {!error && !framed && !empty && (
+          <div role="status" className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <span className="size-6 animate-spin rounded-full border-2 border-white/15 border-t-white/70" />
+            <span className="shimmer text-[13px] text-muted">Loading the preview…</span>
+          </div>
+        )}
+        {!error && framed && buffering && (
           <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
             <span className="size-3 animate-spin rounded-full border border-white/20 border-t-white/80" /> Loading frame…
           </div>
         )}
         {!error && buffering && stuck && (
           <button
-            className="absolute right-3 bottom-11 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted underline underline-offset-2 hover:text-fg"
+            className={cx("absolute rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted underline underline-offset-2 hover:text-fg", framed ? "right-3 bottom-11" : "bottom-[calc(50%-64px)] left-1/2 -translate-x-1/2")}
             onClick={() => openReport(`The preview has been stuck on "Loading frame…" at frame ${Math.floor(playhead.frame)}`)}
           >
             Stuck? Report it

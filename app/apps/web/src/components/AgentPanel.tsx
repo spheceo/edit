@@ -107,7 +107,9 @@ export function AgentPanel() {
         }}
         className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
       >
-        {!loaded ? null : !entries.length && status && !status.ready ? (
+        {!loaded ? (
+          <ChatLoading />
+        ) : !entries.length && status && !status.ready ? (
           status.provider === "codex" ? <SetupCodex /> : <SetupClaude />
         ) : !entries.length ? (
           <Empty title="Ask for an edit" detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
@@ -581,5 +583,24 @@ function Composer({ disabled }: { disabled: boolean }) {
         </div>
       </div>
     </form>
+  );
+}
+
+/** The chat while it loads: the shape of a conversation, pulsing, rather than an empty panel (the user, Oct 30: "we need a better loading view"). */
+function ChatLoading() {
+  const line = "h-2.5 animate-pulse rounded-full bg-raised";
+  return (
+    <div role="status" aria-label="Loading the chat" className="flex flex-col gap-5 pt-1">
+      {[0, 1].map((turn) => (
+        <div key={turn} className="flex flex-col gap-3">
+          <div className="ml-auto h-8 w-[55%] animate-pulse rounded-xl bg-raised" />
+          <div className="flex flex-col gap-2">
+            <div className={cx(line, "w-[88%]")} />
+            <div className={cx(line, "w-[72%]")} />
+            <div className={cx(line, turn === 0 ? "w-[80%]" : "w-[46%]")} />
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

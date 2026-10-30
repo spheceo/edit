@@ -290,6 +290,8 @@ export class Agents implements seams.AgentPanel {
   private authRetried = new Set<string>();
   /** Each project's automatic follow-ups for the user's last message: its generation, how many, the flags left at the last. */
   private followedUp = new Map<string, { generation: number; sent: number; count: number }>();
+  /** Projects whose chat goes when their turn ends (`new_chat`). */
+  private resetAfter = new Set<string>();
   /** Token use of each project's running turn. */
   private usage = new Map<string, TurnUsage>();
   private dir: string;
@@ -701,7 +703,13 @@ export class Agents implements seams.AgentPanel {
     return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, auth_retry: this.legacyClaudeRetry(project) });
   }
 
+  /** The agent's `new_chat` (the user asked for one): this chat goes when the turn now running ends. */
+  resetAfterTurn(project: string): void {
+    this.resetAfter.add(project);
+  }
+
   reset(project: string): void {
+    this.resetAfter.delete(project);
     this.authPending.delete(project);
     this.saveAuthPending();
     this.authRetried.delete(project);
@@ -1567,6 +1575,11 @@ export class Agents implements seams.AgentPanel {
       }
     }
     this.finish(project, error);
+    // The user asked for a new chat: this one ends with the turn, and the next message starts afresh.
+    if (this.resetAfter.has(project)) {
+      this.reset(project);
+      return;
+    }
     if (error === null && !halted) this.followUp(project, generation);
   }
 

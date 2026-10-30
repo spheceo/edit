@@ -19,7 +19,6 @@ import {
   SlidersHorizontal,
   Spline,
   Square,
-  SquarePen,
   SquarePlus,
   Trash2,
   Type,
@@ -32,9 +31,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
-  newChat,
   openAgent,
-  providerName,
   sendToAgent,
   useClaudeSupport,
   stopAgent,
@@ -47,7 +44,7 @@ import { playhead } from "../lib/playback";
 import { useSettled } from "../lib/settled";
 import { useEditor } from "../lib/store";
 import { ProblemView } from "./ProblemView";
-import { Button, cx, IconButton } from "./ui";
+import { Button, cx } from "./ui";
 import { ClaudeSetupCard } from "./ClaudeSetupCard";
 
 /** Claude’s mark (Simple Icons’ path), in Claude’s orange: the agent runs on the user’s Claude Code. */
@@ -77,9 +74,7 @@ export function OpenAIMark({ size = 16 }: { size?: number }) {
 
 export function AgentPanel() {
   const projectId = useEditor((state) => state.project?.id);
-  const hasScript = useEditor((state) => !!state.project?.script);
   const { status, entries, running, loaded } = useAgent();
-  const busy = running;
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const turns = buildTurns(entries, running);
@@ -104,16 +99,6 @@ export function AgentPanel() {
 
   return (
     <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line pr-1.5 pl-3.5">
-        <AgentMark size={15} />
-        <span className="font-medium">{providerName(status)}</span>
-        {entries.length > 0 && (
-          <IconButton label="New chat" className="ml-auto" disabled={busy || !entries.length} onClick={newChat}>
-            <SquarePen size={14} />
-          </IconButton>
-        )}
-      </div>
-
       <div
         ref={list}
         onScroll={(event) => {
@@ -125,7 +110,7 @@ export function AgentPanel() {
         {!loaded ? null : !entries.length && status && !status.ready ? (
           status.provider === "codex" ? <SetupCodex /> : <SetupClaude />
         ) : !entries.length ? (
-          <Empty title={`Edit with ${providerName(status)}`} detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
+          <Empty title="Ask for an edit" detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
         ) : (
           <div className="flex flex-col gap-4">
             {turns.map((turn, index) => (
@@ -136,17 +121,6 @@ export function AgentPanel() {
       </div>
 
       {projectId && <ResetCard projectId={projectId} />}
-      {hasScript && loaded && status?.ready && (
-        <button
-          type="button"
-          className="mx-3 mb-2 rounded-lg border border-line px-3 py-2 text-left text-[12px] text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
-          disabled={busy}
-          title="Recover missing transcripts and narration, then continue unfinished editing stages while preserving completed work."
-          onClick={() => void sendToAgent("Resume this edit from the current timeline. Load resume-edit, recover missing transcripts and voice-overs using saved work, then finish the remaining editing stages across every case. Preserve completed subtitles, narration, graphics, music, trims and deliberate deletions. Do not reset, reimport or re-cut. Report blockers and unresolved speaker checks.")}
-        >
-          Resume edit <span className="text-muted">· recover missing work</span>
-        </button>
-      )}
       {!(status && !status.ready) && <Composer disabled={!status?.ready} />}
     </section>
   );
@@ -188,7 +162,7 @@ function TurnView({ turn, known }: { turn: Turn; known: Set<string> }) {
       {turn.user && (
         <motion.div
           {...appear(fresh(turn.user.id) && !turn.user.id.startsWith("user-"))}
-          className="mb-1 ml-8 self-end rounded-2xl bg-raised px-3 py-2 text-[13px] whitespace-pre-wrap text-fg ring-1 ring-line"
+          className="mb-1 ml-8 max-w-[calc(100%-2rem)] self-end rounded-2xl bg-raised px-3 py-2 text-[13px] whitespace-pre-wrap text-fg ring-1 ring-line [overflow-wrap:anywhere]"
         >
           {turn.user.text}
         </motion.div>
@@ -404,10 +378,7 @@ function CopyLine({ text, index }: { text: string; index?: number }) {
 function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
   return (
     <div className="flex min-h-full flex-col justify-center px-2 text-center">
-      <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-raised text-fg ring-1 ring-line">
-        <AgentMark size={20} />
-      </span>
-      <div className="mt-3 font-medium">{title}</div>
+      <div className="font-medium">{title}</div>
       <p className="mx-auto mt-1 max-w-[270px] text-[12px] leading-relaxed text-muted">{detail}</p>
       {children}
     </div>
@@ -540,7 +511,6 @@ function Composer({ disabled }: { disabled: boolean }) {
   const running = useAgent((state) => state.running);
   // Stop takes a click only once the turn has run a moment: never the send's own second click.
   const stoppable = useSettled(running);
-  const name = useAgent((state) => providerName(state.status));
   const modelName = useAgent((state) => state.modelName);
   const input = useRef<HTMLTextAreaElement>(null);
 
@@ -565,12 +535,12 @@ function Composer({ disabled }: { disabled: boolean }) {
         <textarea
           ref={input}
           name="message"
-          aria-label={`Message ${name}`}
+          aria-label="Message the agent"
           autoComplete="off"
           value={text}
           disabled={disabled}
           rows={2}
-          placeholder={running ? `${name} is working…` : "Start the editing workflow, or ask for a change…"}
+          placeholder={running ? "Working…" : "Start the editing workflow, or ask for a change…"}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             event.stopPropagation();
@@ -584,8 +554,7 @@ function Composer({ disabled }: { disabled: boolean }) {
         />
         <div className="mt-1 flex items-center gap-1">
           <span className="flex h-6 items-center gap-1.5 px-1 text-[11px] font-medium text-muted" title="Edit picks the model and how hard it thinks">
-            <ClaudeMark size={12} />
-            {modelName ?? "Claude"}
+            {modelName ?? ""}
           </span>
           {running ? (
             <button

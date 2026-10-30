@@ -1829,6 +1829,20 @@
     "name": "revoice_cut_in"
   },
   {
+    "description": "Starts a new chat for this project, only when the user asks (\"new chat\", \"start a new session\", \"clear the chat\"): this conversation ends when your turn does and the user's next message starts a fresh one. The edit, its media and the project are untouched. Say so in one line, then stop.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "new_chat"
+  },
+  {
     "description": "Resets the edit to the script's first layout, only when the user asks. Every clip goes, and the script's footage ranges, cut-in cards and voice-overs are laid out again as the import left them; media, transcripts, research, the script and the review link stay. Only when the user asks for it (\"reset the video\", \"start the edit over\"): the chat asks them to accept or reject, and this waits for the answer. Then stop; the user starts the editing workflow when they want.",
     "inputSchema": {
       "properties": {

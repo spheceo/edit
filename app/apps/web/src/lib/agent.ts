@@ -223,11 +223,6 @@ export const stopAgent = () => {
   if (project) void fetchRetrying(`/api/projects/${project}/agent/stop`, { method: "POST" });
 };
 
-export const newChat = () => {
-  const project = useAgent.getState().project;
-  if (project) void fetchRetrying(`/api/projects/${project}/agent/reset`, { method: "POST" });
-};
-
 /** Live events from the server (see store.ts connectEvents). */
 export function applyAgentEvent(event: { project: string; event: string; [key: string]: unknown }) {
   if (event.event === "claude") {

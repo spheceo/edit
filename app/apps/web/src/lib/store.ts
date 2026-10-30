@@ -79,6 +79,8 @@ interface EditorState {
   /** The project's script import (footage downloads), while one exists. */
   scriptJob: ScriptJob | null;
   timelineHeight: number;
+  /** The chat's width, set by dragging its edge. */
+  agentWidth: number;
   toasts: Toast[];
   agentActive: number;
   /** The agent asked to reset the edit (`reset_edit`) and waits for the user's Accept / Reject in the chat. */
@@ -103,6 +105,7 @@ interface EditorState {
   setSideTab(tab: SideTab): void;
   setMediaTab(tab: MediaTab): void;
   setTimelineHeight(height: number): void;
+  setAgentWidth(width: number): void;
   /** Back to the default height (the divider's double-click). */
   resetTimelineHeight(): void;
   toast(text: string, tone?: Toast["tone"]): void;
@@ -220,6 +223,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   mediaTab: readSetting("edit.mediaTab") === "script" ? "script" : "media",
   scriptJob: null,
   timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
+  agentWidth: Number(readSetting("edit.agentWidth")) || 340,
   toasts: [],
   agentActive: 0,
   resetAsked: false,
@@ -332,6 +336,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   setMediaTab: (mediaTab) => {
     if (mediaTab !== "downloads") writeSetting("edit.mediaTab", mediaTab);
     set({ mediaTab, showMedia: true });
+  },
+  setAgentWidth: (width) => {
+    writeSetting("edit.agentWidth", String(Math.round(width)));
+    set({ agentWidth: width });
   },
   setTimelineHeight: (height) => {
     writeSetting("edit.timelineHeight", String(Math.round(height)));

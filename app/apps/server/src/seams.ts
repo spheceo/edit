@@ -851,6 +851,8 @@ export interface AgentPanel extends Agents {
   stop(project: string): Promise<void>;
   /** Forgets a project's chat (and its Codex thread). */
   reset(project: string): void;
+  /** Forgets it once the turn now running ends (the agent's `new_chat`), so its last words are seen. */
+  resetAfterTurn?(project: string): void;
   /** Where new turns run: "claude" (the user's Claude Code) or "codex". */
   setProvider(provider: "claude" | "codex"): void;
   /** Settings: each CLI's status (`claude`, `codex`) and the `provider` chosen. */

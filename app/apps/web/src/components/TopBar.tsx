@@ -7,7 +7,6 @@ import { syncLabel } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
-import { AgentMark } from "./AgentPanel";
 import { AppMenu } from "./AppMenu";
 import { toggleMenu } from "./ContextMenu";
 import { Tile } from "./Logo";
@@ -20,10 +19,7 @@ export function TopBar({ onShare }: { onShare: () => void }) {
   const createdBy = useEditor((state) => state.project?.created_by);
   const projectId = useEditor((state) => state.project?.id);
   const down = useConnection((state) => state.down);
-  const agentActive = useEditor((state) => state.agentActive > 0);
-  const showAgent = useEditor((state) => state.showAgent);
   const exportState = useEditor((state) => state.exportState);
-  const toggle = useEditor((state) => state.toggle);
   // Made from a script in Script mode: the same project's other mode.
   const scriptId = useEditor((state) => state.project?.script?.source)?.match(/^writer:([\w-]+)$/)?.[1];
 
@@ -59,10 +55,6 @@ export function TopBar({ onShare }: { onShare: () => void }) {
             <FileText size={14} /> Script
           </Button>
         )}
-        <IconButton label="Toggle agent" active={showAgent} onClick={() => toggle("showAgent")} className="relative">
-          <AgentMark size={14} />
-          {agentActive && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-agent" />}
-        </IconButton>
         <DriveButton />
         <Button variant="primary" className="ml-1.5" onClick={onShare}>
           {exportState?.state === "running" ? (

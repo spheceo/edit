@@ -104,6 +104,16 @@ export async function reset(app: App, id: string): Promise<{ clips: number; voic
   return { clips, voiceover };
 }
 
+// "New chat" (Oct 30): the panel has no button for it any more; the user asks
+// the agent, which calls this, says so, and its turn ends the conversation.
+// The next message starts a fresh one; the edit itself is untouched.
+registerTool("new_chat", ({ app, projectId }: ToolCall) => {
+  const panel = seams.agentPanel(app);
+  if (panel.resetAfterTurn === undefined) throw new Error("this agent can't start a new chat");
+  panel.resetAfterTurn(projectId);
+  return text("This conversation ends when your turn does; the user's next message starts a new one with none of it. Say so in one short line and stop.");
+});
+
 registerTool("reset_edit", async ({ app, projectId }: ToolCall) => {
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");

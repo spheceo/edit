@@ -205,8 +205,8 @@ export function Home() {
           )}
           <div className="ml-auto flex items-center gap-1.5">
             <UpdateButton />
-            {/* One red main action a screen: on an empty Home, the empty state's button is it. */}
-            <Button variant={projects && count === 0 ? "subtle" : "primary"} onClick={() => setCreating(true)}>
+            {/* One main action a screen, in white (the user, Oct 30): on an empty Home, the empty state's button is it. */}
+            <Button variant={projects && count === 0 ? "subtle" : "light"} onClick={() => setCreating(true)}>
               <Plus size={15} strokeWidth={2.2} /> New project
             </Button>
             <AppMenu />
@@ -230,7 +230,7 @@ export function Home() {
                 : "Projects live on this machine. Import footage, cut it, and let an agent build the polish."}
             </p>
             <div className="mt-6 flex gap-2">
-              <Button variant="primary" onClick={() => setCreating(true)}>
+              <Button variant="light" onClick={() => setCreating(true)}>
                 <Plus size={15} strokeWidth={2.2} /> New project
               </Button>
             </div>
@@ -1033,7 +1033,7 @@ function changedLabel(ms: number) {
  * a short category). The table sets the columns and each row takes them up
  * (subgrid), so they line up row to row.
  */
-const TABLE = "grid grid-cols-[minmax(0,1fr)_repeat(7,auto)] gap-x-6";
+const TABLE = "grid grid-cols-[minmax(0,1fr)_repeat(7,auto)] gap-x-5";
 const COLUMNS = "col-span-full grid grid-cols-subgrid items-center";
 
 /** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */

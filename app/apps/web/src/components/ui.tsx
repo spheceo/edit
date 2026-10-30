@@ -13,8 +13,8 @@ export { cx };
 export const spring = { duration: 0.18, ease: [0.2, 0, 0, 1] } as const;
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  /** primary: the one main action (red); subtle: secondary (an edge); ghost: none; danger: destructive among others (tinted); destructive: a dialog’s final destructive answer (solid red). */
-  variant?: "primary" | "ghost" | "subtle" | "danger" | "destructive";
+  /** primary: the one main action (red); light: a main action in white (Home's New project); subtle: secondary (an edge); ghost: none; danger: destructive among others (tinted); destructive: a dialog’s final destructive answer (solid red). */
+  variant?: "primary" | "light" | "ghost" | "subtle" | "danger" | "destructive";
   size?: "sm" | "md" | "lg";
 };
 
@@ -27,6 +27,7 @@ export function Button({ variant = "subtle", size = "md", className, ...props }:
         "inline-flex items-center justify-center gap-1.5 border font-medium whitespace-nowrap transition-[background,border-color,color,opacity] duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] disabled:pointer-events-none disabled:opacity-45",
         size === "sm" ? "h-7 rounded-md px-2.5 text-[12px]" : size === "lg" ? "h-10 rounded-lg px-4 text-[14px]" : "h-[34px] rounded-lg px-3.5 text-[13px]",
         variant === "primary" && "border-primary bg-primary text-white hover:border-primary-hover hover:bg-primary-hover",
+        variant === "light" && "border-fg bg-fg font-semibold text-bg hover:border-white hover:bg-white",
         variant === "subtle" && "border-line-strong bg-transparent text-fg hover:bg-hover",
         variant === "ghost" && "border-transparent text-secondary hover:bg-hover hover:text-fg",
         variant === "danger" && "border-[#ff003373] bg-danger-soft text-danger hover:bg-[#ff003338]",

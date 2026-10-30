@@ -991,8 +991,8 @@ function Imports({ writing, issues, onOpen }: { writing: Writing[]; issues: Scri
   const open = issues.filter((issue) => !writing.some((one) => one.id === issue.id));
   if (open.length === 0) return null;
   return (
-    <div className="mt-6 overflow-hidden rounded-xl border border-line">
-      <div className="flex h-10 items-center bg-panel px-4 text-[12px] font-medium text-warning">{open.length} stopped</div>
+    <div className={cx(TABLE, "mt-6 overflow-hidden rounded-xl border border-line")}>
+      <div className="col-span-full flex h-10 items-center bg-panel px-4 text-[12px] font-medium text-warning">{open.length} stopped</div>
       {open.map((issue) => (
         <ScriptIssue key={issue.id} issue={issue} onOpen={onOpen} />
       ))}
@@ -1008,8 +1008,15 @@ function changedLabel(ms: number) {
 }
 
 /** Name, status, length, when it last changed and its ⋯: the columns every row lines up on. */
-/** Name, category, type, creator, status, length, updated, ⋯ (the user, Oct 30: the kind and the type each a column of their own, "Bodycam Compilation" one label). */
-const COLUMNS = "grid grid-cols-[minmax(0,1fr)_152px_84px_112px_150px_60px_72px_24px] items-center gap-3";
+/**
+ * Home's table: name, category, type, creator, status, length, updated, ⋯.
+ * The name takes what's left; every other column is as wide as its widest
+ * entry, with the same space between each (the user, Oct 30: no wide gap after
+ * a short category). The table sets the columns and each row takes them up
+ * (subgrid), so they line up row to row.
+ */
+const TABLE = "grid grid-cols-[minmax(0,1fr)_repeat(6,auto)_24px] gap-x-6";
+const COLUMNS = "col-span-full grid grid-cols-subgrid items-center";
 
 /** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */
 function ProjectTable({
@@ -1050,7 +1057,7 @@ function ProjectTable({
     const timer = setTimeout(() => setLately({ added: new Set(), renamed: new Set() }), 1800);
     return () => clearTimeout(timer);
   }, [signature]);
-  const rowOf = (row: Listed) => <div className={cx(lately.added.has(idOf(row)) && "row-new", lately.renamed.has(idOf(row)) && "row-changed")}>{rowBody(row)}</div>;
+  const rowOf = (row: Listed) => <div className={cx(COLUMNS, lately.added.has(idOf(row)) && "row-new", lately.renamed.has(idOf(row)) && "row-changed")}>{rowBody(row)}</div>;
   const rowBody = (row: Listed) =>
     row.local !== null ? (
       <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} />
@@ -1064,7 +1071,7 @@ function ProjectTable({
     ? null
     : STAGES.map((stage) => ({ ...stage, rows: rows.filter((row) => stageOf(row, statuses[row.local?.id ?? row.cloud?.id ?? ""]) === stage.value) })).filter((group) => group.rows.length > 0);
   return (
-    <div role="table" aria-label="Projects" className="mt-6 overflow-hidden rounded-xl border border-line">
+    <div role="table" aria-label="Projects" className={cx(TABLE, "mt-6 overflow-hidden rounded-xl border border-line")}>
       <div role="row" className={cx(COLUMNS, "h-10 bg-panel px-4 text-[12px] font-medium text-muted")}>
         <span role="columnheader">Name</span>
         <span role="columnheader">Category</span>
@@ -1087,14 +1094,14 @@ function ProjectTable({
             const heading = label !== "Today" && (index === 0 || changedLabel(rows[index - 1]!.at) !== label);
             return (
               <Fragment key={idOf(row)}>
-                {heading && <div className="border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">{label}</div>}
+                {heading && <div className="col-span-full border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">{label}</div>}
                 {rowOf(row)}
               </Fragment>
             );
           })
         : groups.map((group) => (
             <Fragment key={group.value}>
-              <div className="flex items-center gap-2 border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">
+              <div className="col-span-full flex items-center gap-2 border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">
                 {group.label} <span className="tabular">{group.rows.length}</span>
               </div>
               {group.rows.map((row) => (
@@ -1125,7 +1132,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
         <CreatorCell by={remote?.created_by ?? project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
           {/* Where its files are, in a slot of its own so the statuses line up, then its one status: what's wrong with it, else where it stands. */}
-          <Place sync={card.cloudNews ? card.status : undefined} streams={card.mostlyRemote} />
+          <Place sync={card.cloudNews ? card.status : undefined} />
           {card.notice ? (
             <Notice {...card.notice} />
           ) : (
@@ -1254,15 +1261,13 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
       <Type kind="script" />
       <CreatorCell by={script.createdBy ?? undefined} />
       <div role="cell" className="flex min-w-0 items-center gap-1.5">
-        <Place />
         {importing && !importing.stopped && importing.percent !== undefined ? (
-          // Importing: how far (its row opens the import).
+          // Importing: how far (the step in its tooltip; its row opens the import).
           <span className="flex min-w-0 items-center gap-2" title={importing.step}>
             <span className="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-raised">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
             <span className="shrink-0 text-[12px] text-fg tabular">{Math.round(Math.max(0, Math.min(100, importing.percent)))}%</span>
-            {importing.step && <span className="min-w-0 truncate text-[12px] text-muted">{importing.step}</span>}
           </span>
         ) : importing ? (
           <span className={cx("truncate text-[13px] tabular", importing.stopped ? "text-warning" : "text-info")}>{importing.word}</span>
@@ -1312,7 +1317,6 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
         <Type kind={summary.subtitles ? "subtitles" : "edit"} script={script?.id ?? null} />
         <CreatorCell by={project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
-          <Place away />
           {project.holder && <StateChips editor={project.holder} />}
         </div>
         <span role="cell" className="text-right text-[13px] text-secondary tabular">
@@ -1350,20 +1354,15 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
   );
 }
 
-/** Where a project's files are, as one quiet icon at the end of its status: only on the cloud, out of step with it, or streaming from it; nothing when it's simply here and in sync. */
-function Place({ sync, streams = false, away = false }: { sync?: CloudStatus; streams?: boolean; away?: boolean }) {
-  const [Icon, title, tone] = away
-    ? [CloudDownload, "Not on this Mac yet: opening it downloads it", "text-faint"]
-    : sync?.sync === "conflict"
-      ? [CloudAlert, sync.message ?? "A conflict: this Mac’s changes were kept as a copy.", "text-warning"]
-      : sync?.dirty || sync?.sync === "offline"
-        ? [CloudOff, "Changes saved on this Mac haven’t reached the cloud yet.", "text-warning"]
-        : streams
-          ? [CloudDownload, "Its footage streams from the cloud", "text-faint"]
-          : [null, "", ""];
+/** A project out of step with the cloud, said in its status: a conflict, or changes not synced yet; nothing when it's in sync (most projects, so no mark). */
+function Place({ sync }: { sync?: CloudStatus }) {
+  const trouble = sync?.sync === "conflict" ? ([CloudAlert, "Conflict", sync.message ?? "A conflict: this Mac’s changes were kept as a copy."] as const) : sync?.dirty || sync?.sync === "offline" ? ([CloudOff, "Not synced", "Changes saved on this Mac haven’t reached the cloud yet."] as const) : null;
+  if (trouble === null) return null;
+  const [Icon, text, title] = trouble;
   return (
-    <span title={title || undefined} className={cx("flex w-4 shrink-0 items-center justify-center", tone)}>
-      {Icon !== null && <Icon size={13} />}
+    <span title={title} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
+      <Icon size={12} />
+      {text}
     </span>
   );
 }

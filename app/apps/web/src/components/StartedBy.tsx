@@ -35,6 +35,7 @@ export function StartedBy({
   projectId,
   title: given,
   className,
+  placeholder = false,
 }: {
   by: Creator | null | undefined;
   size?: 20 | 24 | 32;
@@ -42,9 +43,12 @@ export function StartedBy({
   /** Its tooltip; "Started by <name> · <date>" by default, null for none (the account menu’s own row). */
   title?: string | null;
   className?: string;
+  /** An empty circle in its place when no one's known (a table's rows keep their shape). */
+  placeholder?: boolean;
 }) {
   const [failed, setFailed] = useState<string | null>(null);
-  if (!by || by.name === "") return null;
+  if (!by || by.name === "")
+    return placeholder ? <span title="Who started it wasn’t recorded" className={cx("inline-block shrink-0 rounded-full border border-dashed border-line-strong", className)} style={{ width: size, height: size }} /> : null;
   const on = projectId === undefined ? null : startedOn(projectId);
   const title = given === null ? undefined : (given ?? `Started by ${by.name}${on === null ? "" : ` · ${on}`}`);
   const hue = hueOf(by.name);

@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Captions, FileText, Film, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Captions, FileText, Film, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
@@ -359,15 +359,6 @@ const STYLE_NOTES: Record<Style, string> = {
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
 
-/** A quiet mark among a row’s chips: its footage isn’t on this Mac yet (opening it downloads it). */
-function NotHere({ title }: { title: string }) {
-  return (
-    <span title={title} className="flex shrink-0 items-center px-1 text-faint">
-      <CloudDownload size={13} />
-    </span>
-  );
-}
-
 interface NoticeProps {
   tone: "warn" | "bad" | "info";
   text: string;
@@ -548,8 +539,16 @@ interface CardProps {
 }
 
 /** Chips for a project’s review notes waiting and a finished edit not exported as it is now. */
-function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; projectId?: string; onChanged?: () => void }) {
+function StateChips({ state, projectId, onChanged, editor = null }: { state?: ProjectStatus; projectId?: string; onChanged?: () => void; editor?: string | null }) {
   const toast = useEditor((store) => store.toast);
+  // Someone else has it open: that comes first (it opens read-only).
+  if (editor !== null)
+    return (
+      <span title={`${editor} is editing it now: it opens read-only until they close it.`} className="flex h-[22px] min-w-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
+        <Lock size={12} className="shrink-0" />
+        <span className="truncate">{editor} is editing</span>
+      </span>
+    );
   if (state === undefined) return null;
   if (state.archived !== null) {
     const restore = (event: React.MouseEvent) => {
@@ -578,9 +577,9 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
       </span>
     );
   }
-  return (
-    <>
-      {state.importing !== null && (
+  // One status a row, the one that matters most (the user, Oct 30: a row of chips was "a mess").
+  const first = [
+    state.importing !== null && (
         <span
           title={state.importing.error ?? `Importing: ${state.importing.state}`}
           className={cx("flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
@@ -588,26 +587,26 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
           {importStuck(state.importing) ? <TriangleAlert size={12} /> : <LoaderCircle size={12} className="animate-spin" />}
           {importStuck(state.importing) ? "Import needs you" : `Importing ${importShare(state.importing)}`}
         </span>
-      )}
-      {state.working && (
+      ),
+    state.working && (
         <span title="Its agent is working on it" className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium text-agent">
           <span className="size-1.5 animate-pulse rounded-full bg-agent" />
           Agent working
         </span>
-      )}
-      {state.sharing !== null && (
+      ),
+    state.sharing !== null && (
         <span title={`Sharing: ${state.sharing}`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info">
           <Share2 size={12} />
           Sharing
         </span>
-      )}
-      {state.approved !== null && (
+      ),
+    state.approved !== null && (
         <span title={`Version ${state.approved} was approved on its review`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-success">
           <Check size={12} />
           Approved v{state.approved}
         </span>
-      )}
-      {state.approved === null && state.feedback > 0 && (
+      ),
+    state.approved === null && state.feedback > 0 && (
         <span
           title={`${state.feedback} open note${state.feedback === 1 ? "" : "s"} on its Repack review`}
           className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info"
@@ -615,15 +614,15 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
           <MessageSquare size={12} />
           {state.feedback} {state.feedback === 1 ? "note" : "notes"}
         </span>
-      )}
-      {state.complete && !state.exported && (
+      ),
+    state.complete && !state.exported && (
         <span title="The edit is finished, but what it is now hasn’t been exported" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
           <FileVideo size={12} />
           Not exported
         </span>
-      )}
-    </>
-  );
+      ),
+  ].find(Boolean);
+  return first || null;
 }
 
 /** An import waiting on the person (a file it couldn't get) or failed. */
@@ -829,11 +828,11 @@ function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: st
   return (
     <div className={cx(COLUMNS, "min-h-14 border-t border-line px-4 py-2.5 text-[13px]")}>
       <div className="flex min-w-0 items-center gap-2.5">
+        <StartedBy by={issue.createdBy} size={24} placeholder />
         <TriangleAlert size={14} className="shrink-0 text-warning" />
         <button onClick={() => onOpen(issue.id)} className="truncate text-left text-[14px] text-fg hover:underline hover:underline-offset-[3px]" title={issue.title}>
           {issue.title}
         </button>
-        <StartedBy by={issue.createdBy} size={24} className="ml-auto shrink-0" />
       </div>
       <div className="col-span-5 flex min-w-0 items-center gap-2">
         {/* Where it stopped, so it's plain what's being fixed (the list already says it stopped). */}
@@ -1112,28 +1111,34 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
     <>
       <div role="row" onClick={card.open} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
+          <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} size={24} placeholder />
           {card.nameInput ?? (
             <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.problem ?? project.name}>
               {project.name}
             </span>
           )}
-          <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} size={24} className="ml-auto shrink-0" />
         </div>
         <Category style={project.style} compilation={script?.compilation} />
         <Type kind={project.subtitles ? "subtitles" : "edit"} />
-        <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
-          {script !== null && <ScriptLink id={script.id} />}
-          {card.notice && <Notice {...card.notice} />}
-          <StateChips state={state} projectId={project.id} onChanged={onChanged} />
-          {card.cloudNews && <CloudBadge status={card.status} editor={card.editor} />}
+        <div role="cell" className="flex min-w-0 items-center gap-2">
+          {/* Its one status: what's wrong with it, else where it is. */}
+          {card.notice ? (
+            <Notice {...card.notice} />
+          ) : (
+            <StateChips state={state} projectId={project.id} onChanged={onChanged} editor={card.editor} />
+          )}
           {card.drive ? (
-            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className="flex h-[22px] items-center rounded-full bg-raised px-2 text-[12px] font-medium text-success hover:bg-hover">
+            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-success hover:bg-hover">
               On Drive ↗
             </button>
           ) : (
-            subtitled && <span className="text-[12px] text-faint">Not uploaded</span>
+            subtitled && <span className="shrink-0 text-[12px] text-faint">Not uploaded</span>
           )}
-          {card.mostlyRemote && <NotHere title="Its footage streams from the cloud" />}
+          {/* Then, always in the same place at its end: its script and where its files are. */}
+          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+            {script !== null && <ScriptLink id={script.id} />}
+            <Place sync={card.cloudNews ? card.status : undefined} streams={card.mostlyRemote} />
+          </span>
         </div>
         <span role="cell" className="text-right text-[13px] text-secondary tabular">
           {project.problem ? "" : shortDuration(project.duration_frames / project.fps)}
@@ -1164,9 +1169,9 @@ function ScriptLink({ id }: { id: string }) {
         event.stopPropagation();
         navigate(`/scripts/${id}`);
       }}
-      className="flex size-[22px] shrink-0 items-center justify-center rounded-full bg-raised text-secondary hover:bg-hover hover:text-fg"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg"
     >
-      <FileText size={12} />
+      <FileText size={13} />
     </button>
   );
 }
@@ -1227,10 +1232,10 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
   return (
     <div role="row" onMouseEnter={() => !onImport && prefetchScript(script.id)} onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
+        <StartedBy by={script.createdBy ?? undefined} size={24} placeholder />
         <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={script.title}>
           {script.title || "Untitled script"}
         </span>
-        <StartedBy by={script.createdBy ?? undefined} size={24} className="ml-auto shrink-0" />
       </div>
       <Category style={script.style} compilation={script.compilation} />
       <Type kind="script" />
@@ -1284,17 +1289,18 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
     <>
       <div role="row" onClick={() => navigate(`/p/${project.id}`)} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
+          <StartedBy by={project.created_by} projectId={project.id} size={24} placeholder />
           <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.name}>
             {project.name}
           </span>
-          <StartedBy by={project.created_by} projectId={project.id} size={24} className="ml-auto shrink-0" />
         </div>
         <Category style={summary.style} compilation={script?.compilation} />
         <Type kind={summary.subtitles ? "subtitles" : "edit"} />
-        <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1">
-          {project.holder && <CloudBadge editor={project.holder} />}
-          <span className="flex items-center gap-1 text-[12px] text-faint" title="Not on this Mac yet: opening it downloads it">
-            <CloudDownload size={13} /> Not on this Mac
+        <div role="cell" className="flex min-w-0 items-center gap-2">
+          {project.holder && <StateChips editor={project.holder} />}
+          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+            {script !== null && <ScriptLink id={script.id} />}
+            <Place away />
           </span>
         </div>
         <span role="cell" className="text-right text-[13px] text-secondary tabular">
@@ -1332,20 +1338,22 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
   );
 }
 
-/** A cloud project’s badge: who’s editing it, else whether it’s in sync. */
-function CloudBadge({ status, editor }: { status?: CloudStatus; editor: string | null }) {
-  const [Icon, text, title] = editor
-    ? [Lock, `${editor} is editing`, `${editor} is editing it now: it opens read-only until they close it.`]
-    : status?.sync === "conflict"
-      ? [CloudAlert, "Conflict", status.message ?? "A conflict: this Mac’s changes were kept as a copy."]
-      : status?.dirty || status?.sync === "offline"
-        ? [CloudOff, "Not synced", "Changes saved on this Mac haven’t reached the cloud yet."]
-        : [CloudCheck, "Cloud", "In the team’s cloud"];
+/** Where a project's files are, as one quiet icon at the end of its status: only on the cloud, out of step with it, or streaming from it; nothing when it's simply here and in sync. */
+function Place({ sync, streams = false, away = false }: { sync?: CloudStatus; streams?: boolean; away?: boolean }) {
+  const [Icon, title, tone] = away
+    ? [CloudDownload, "Not on this Mac yet: opening it downloads it", "text-faint"]
+    : sync?.sync === "conflict"
+      ? [CloudAlert, sync.message ?? "A conflict: this Mac’s changes were kept as a copy.", "text-warning"]
+      : sync?.dirty || sync?.sync === "offline"
+        ? [CloudOff, "Changes saved on this Mac haven’t reached the cloud yet.", "text-warning"]
+        : streams
+          ? [CloudDownload, "Its footage streams from the cloud", "text-faint"]
+          : [null, "", ""];
+  if (Icon === null) return null;
   return (
-    <div title={title} className="flex h-[22px] items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-fg">
-      <Icon size={13} className={editor ? "text-warning" : undefined} />
-      {text}
-    </div>
+    <span title={title} className={cx("flex size-6 items-center justify-center", tone)}>
+      <Icon size={13} />
+    </span>
   );
 }
 

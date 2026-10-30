@@ -828,13 +828,15 @@ function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: st
   return (
     <div className={cx(COLUMNS, "min-h-14 border-t border-line px-4 py-2.5 text-[13px]")}>
       <div className="flex min-w-0 items-center gap-2.5">
-        <StartedBy by={issue.createdBy} size={24} placeholder />
         <TriangleAlert size={14} className="shrink-0 text-warning" />
         <button onClick={() => onOpen(issue.id)} className="truncate text-left text-[14px] text-fg hover:underline hover:underline-offset-[3px]" title={issue.title}>
           {issue.title}
         </button>
       </div>
-      <div className="col-span-5 flex min-w-0 items-center gap-2">
+      <span />
+      <Type kind="script" />
+      <CreatorCell by={issue.createdBy} />
+      <div className="col-span-3 flex min-w-0 items-center gap-2">
         {/* Where it stopped, so it's plain what's being fixed (the list already says it stopped). */}
         <span title={`Stopped ${stageWords(issue.stage)}`} className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
           {stageName(issue.stage)}
@@ -1006,8 +1008,8 @@ function changedLabel(ms: number) {
 }
 
 /** Name, status, length, when it last changed and its ⋯: the columns every row lines up on. */
-/** Name, category, type, status, length, updated, ⋯ (the user, Oct 30: the kind and the type each a column of their own, "Bodycam Compilation" one label). */
-const COLUMNS = "grid grid-cols-[minmax(0,1fr)_152px_84px_150px_60px_72px_24px] items-center gap-3";
+/** Name, category, type, creator, status, length, updated, ⋯ (the user, Oct 30: the kind and the type each a column of their own, "Bodycam Compilation" one label). */
+const COLUMNS = "grid grid-cols-[minmax(0,1fr)_152px_84px_112px_150px_60px_72px_24px] items-center gap-3";
 
 /** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */
 function ProjectTable({
@@ -1067,6 +1069,7 @@ function ProjectTable({
         <span role="columnheader">Name</span>
         <span role="columnheader">Category</span>
         <span role="columnheader">Type</span>
+        <span role="columnheader">Creator</span>
         <span role="columnheader">Status</span>
         <span role="columnheader" className="text-right">
           Length
@@ -1111,7 +1114,6 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
     <>
       <div role="row" onClick={card.open} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
-          <StartedBy by={remote?.created_by ?? project.created_by} projectId={project.id} size={24} placeholder />
           {card.nameInput ?? (
             <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.problem ?? project.name}>
               {project.name}
@@ -1120,6 +1122,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
         </div>
         <Category style={project.style} compilation={script?.compilation} />
         <Type kind={project.subtitles ? "subtitles" : "edit"} script={script?.id ?? null} />
+        <CreatorCell by={remote?.created_by ?? project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
           {/* Where its files are, in a slot of its own so the statuses line up, then its one status: what's wrong with it, else where it stands. */}
           <Place sync={card.cloudNews ? card.status : undefined} streams={card.mostlyRemote} />
@@ -1183,6 +1186,19 @@ function Category({ style, compilation = false }: { style?: Style | null; compil
   );
 }
 
+/** Who started it: their picture and first name ("Siphesihle Mbuyisa" → Siphesihle); an empty circle when no one's recorded. */
+function CreatorCell({ by, projectId }: { by: Creator | null | undefined; projectId?: string }) {
+  const name = by?.name.trim() ?? "";
+  // An account named by its email shows the part before the @.
+  const first = (name.includes("@") && !name.includes(" ") ? name.split("@")[0]! : name).split(/\s+/u)[0] ?? "";
+  return (
+    <span role="cell" className="flex min-w-0 items-center gap-2 text-[13px] text-secondary">
+      <StartedBy by={by} projectId={projectId} size={20} placeholder />
+      <span className="truncate">{first}</span>
+    </span>
+  );
+}
+
 /** What a row is: a script, an edit, or a subtitled video. */
 function Type({ kind, script = null }: { kind: "script" | "edit" | "subtitles"; script?: string | null }) {
   const [Icon, label] = kind === "script" ? [FileText, "Script"] : kind === "edit" ? [Film, "Edit"] : [Captions, "Subtitles"];
@@ -1230,13 +1246,13 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
   return (
     <div role="row" onMouseEnter={() => !onImport && prefetchScript(script.id)} onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
-        <StartedBy by={script.createdBy ?? undefined} size={24} placeholder />
         <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={script.title}>
           {script.title || "Untitled script"}
         </span>
       </div>
       <Category style={script.style} compilation={script.compilation} />
       <Type kind="script" />
+      <CreatorCell by={script.createdBy ?? undefined} />
       <div role="cell" className="flex min-w-0 items-center gap-1.5">
         <Place />
         {importing && !importing.stopped && importing.percent !== undefined ? (
@@ -1288,13 +1304,13 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
     <>
       <div role="row" onClick={() => navigate(`/p/${project.id}`)} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
-          <StartedBy by={project.created_by} projectId={project.id} size={24} placeholder />
           <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.name}>
             {project.name}
           </span>
         </div>
         <Category style={summary.style} compilation={script?.compilation} />
         <Type kind={summary.subtitles ? "subtitles" : "edit"} script={script?.id ?? null} />
+        <CreatorCell by={project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
           <Place away />
           {project.holder && <StateChips editor={project.holder} />}

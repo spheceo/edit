@@ -501,9 +501,6 @@
 .writer-root .icon-tool[aria-pressed="true"] { background: var(--hover); color: var(--text); }
 /* Program monitor */
 .writer-root .monitor { background: var(--panel); }
-/* The picture meets the panel's top edge: no grey line above it, its corners rounded as the panel's. */
-.writer-root .editor-grid > .monitor { border-top: 0; overflow: hidden; }
-.writer-root .editor-grid > .monitor .screen { border-radius: 10px 10px 0 0; }
 .writer-root .screen { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; background: #000; overflow: hidden; container-type: size; }
 /* Pinned to the screen, so a wide, short panel (an ultrawide) letterboxes the picture rather than cropping it: sized by the grid, a video took its height from its width and ran past the screen's bottom. */
 .writer-root .screen video { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: contain; cursor: pointer; }
@@ -706,7 +703,8 @@
 .writer-root .turn.notes ul { margin: 0; }
 /* The editing room: Repack's script page. A top bar, then docked panels */
 .writer-root .studio { height: 100%; display: flex; flex-direction: column; background: #000; }
-.writer-root .topbar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; height: 46px; padding: 0 10px 0 8px; border-bottom: 1px solid var(--line); }
+/* No line under it: the panels below have their own edges (the user, Oct 30). */
+.writer-root .topbar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; height: 46px; padding: 0 10px 0 8px; }
 .writer-root .title-block { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; color: var(--faint); font-size: 13px; }
 .writer-root .title-block h1 { overflow: hidden; color: var(--text); font-size: 13.5px; font-weight: 500; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .writer-root .save-state { flex-shrink: 0; font-size: 12px; color: var(--muted); }

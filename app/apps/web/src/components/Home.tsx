@@ -14,6 +14,7 @@ import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/ty
 import { AppMenu } from "./AppMenu";
 import { elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
+import { useBeta } from "../lib/beta";
 import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
@@ -69,6 +70,8 @@ export function Home() {
     return saved === "subtitled" || STAGES.some((stage) => stage.value === saved) ? (saved as View) : "editing";
   });
   const [style, setStyle] = useState<Style | null>(null);
+  // Settings → Beta: the edits on a board instead of the stage tabs and list (on until turned off).
+  const board = useBeta((state) => state.board);
 
   // Imports, agents and shares under way are followed every few seconds (many projects at once).
   const busy = Object.values(statuses).some((one) => one.importing !== null || one.working || one.sharing !== null);
@@ -220,8 +223,10 @@ export function Home() {
               <div className="flex h-[34px] gap-0.5 rounded-[9px] border border-line bg-panel p-0.5">
                 {(
                   [
-                    // Where each project is, script to finished video (the user, Oct 30: "a natural progression of our projects").
-                    ...STAGES.map((stage) => [stage.value, stage.label, stageCount(stage.value)] as [View, string, number]).filter(([value, , total]) => total > 0 || value === view || value === "editing"),
+                    // Where each project is, script to finished video (the user, Oct 30: "a natural progression of our projects"); the board has them all.
+                    ...(board
+                      ? [["editing", "Board", projectRows.length] as [View, string, number]]
+                      : STAGES.map((stage) => [stage.value, stage.label, stageCount(stage.value)] as [View, string, number]).filter(([value, , total]) => total > 0 || value === view || value === "editing")),
                     ["subtitled", "Subtitled", subtitledRows.length] as [View, string, number],
                   ] as [View, string, number][]
                 ).map(([value, label, total]) => (
@@ -230,7 +235,7 @@ export function Home() {
                     onClick={() => choose(value)}
                     className={cx(
                       "flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors",
-                      view === value && !searching ? "bg-active text-fg" : "text-muted hover:text-fg",
+                      (board ? (value === "subtitled") === !showEdits : view === value && !searching) ? "bg-active text-fg" : "text-muted hover:text-fg",
                     )}
                   >
                     {label} <span className="font-normal text-faint tabular">{total}</span>
@@ -261,7 +266,9 @@ export function Home() {
 
             <Imports projects={projects ?? []} statuses={statuses} writing={writing} issues={issues} scripts={localScripts} onOpen={setWatching} />
             <ImportDialog id={watching} writing={writing} issues={issues} onClose={() => setWatching(null)} />
-            {rows.length > 0 ? (
+            {board && showEdits ? (
+              <Board rows={projectRows} statuses={statuses} cloud={cloud} writing={writing} issues={issues} onImport={setWatching} />
+            ) : rows.length > 0 ? (
               <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits && searching} statuses={statuses} importing={new Set(writing.map((one) => one.id))} onImport={setWatching} />
             ) : (
               <p className="mt-16 text-center text-muted">{searching ? `Nothing matches “${query.trim()}”.` : "Nothing here."}</p>
@@ -270,6 +277,108 @@ export function Home() {
         )}
       </div>
       <NewProject open={creating} onClose={() => setCreating(false)} only={style} />
+    </div>
+  );
+}
+
+/**
+ * Home's board (Settings → Beta, on until turned off): every edit in four
+ * columns, where it is on its way from script to finished video, each card
+ * its title, who started it and one word of how it stands; only what needs
+ * someone is coloured (amber), or what's moving now (blue). The user, Oct 30:
+ * "as minimal as possible and us to have as little confusion as possible,
+ * especially for the admins who are going to be ... overseeing everything".
+ */
+const BOARD: { label: string; stages: Stage[] }[] = [
+  { label: "Script", stages: ["scripting", "ready"] },
+  { label: "Edit", stages: ["importing", "editing"] },
+  { label: "Review", stages: ["review"] },
+  { label: "Done", stages: ["done"] },
+];
+
+/** How many cards a column shows before "N more". */
+const BOARD_SHOWN = 12;
+
+type Standing = { word: string; tone: "warning" | "info" | "muted" };
+
+function Board({ rows, statuses, cloud, writing, issues, onImport }: { rows: Listed[]; statuses: Record<string, ProjectStatus>; cloud: CloudList | null; writing: Writing[]; issues: ScriptIssueRow[]; onImport: (id: string) => void }) {
+  const [all, setAll] = useState<Record<string, boolean>>({});
+  const standing = (row: Listed, stage: Stage): Standing => {
+    if (row.local === null && row.cloud === null) {
+      const id = row.script.id;
+      if (issues.some((issue) => issue.id === id)) return { word: "Stopped", tone: "warning" };
+      const going = writing.find((one) => one.id === id);
+      if (going) return { word: `Importing ${Math.round(going.percent)}%`, tone: "info" };
+      return { word: stage === "ready" ? "Ready to edit" : "Scripting", tone: "muted" };
+    }
+    const id = row.local?.id ?? row.cloud?.id ?? "";
+    const state = statuses[id];
+    // Someone else's Mac has it open: as the list's lock badge says it.
+    const remote = row.cloud ?? cloud?.projects?.find((one) => one.id === id);
+    const holder = remote?.holder && !remote.here ? remote.holder : null;
+    if (state?.importing) return { word: state.importing.error ? "Import stopped" : "Importing", tone: state.importing.error ? "warning" : "info" };
+    if (state?.working) return { word: "Agent working", tone: "info" };
+    if (state?.sharing) return { word: "Sharing", tone: "info" };
+    if (holder) return { word: `${holder} editing`, tone: "info" };
+    if (stage === "done") return { word: `Approved v${state?.approved ?? ""}`, tone: "muted" };
+    if (stage === "review") return state && state.feedback > 0 ? { word: `${state.feedback} ${state.feedback === 1 ? "note" : "notes"}`, tone: "warning" } : { word: "Waiting on review", tone: "muted" };
+    return { word: state?.complete && !state.exported ? "Not exported" : "Editing", tone: "muted" };
+  };
+  const open = (row: Listed) => {
+    if (row.local) {
+      if (row.local.problem) useEditor.getState().toastError(row.local.problem, `open “${row.local.name}”`);
+      else navigate(`/p/${row.local.id}`);
+    } else if (row.cloud) navigate(`/p/${row.cloud.id}`);
+    else if (writing.some((one) => one.id === row.script.id) || issues.some((issue) => issue.id === row.script.id)) onImport(row.script.id);
+    else navigate(`/scripts/${row.script.id}`);
+  };
+  return (
+    <div className="mt-6 grid grid-cols-4 gap-3">
+      {BOARD.map((column) => {
+        // What needs someone first, then the newest change.
+        const cards = rows
+          .flatMap((row) => {
+            const stage = stageOf(row, statuses[row.local?.id ?? row.cloud?.id ?? ""]);
+            return column.stages.includes(stage) ? [{ row, said: standing(row, stage) }] : [];
+          })
+          .sort((a, b) => Number(b.said.tone === "warning") - Number(a.said.tone === "warning"));
+        const shown = all[column.label] ? cards : cards.slice(0, BOARD_SHOWN);
+        return (
+          <section key={column.label} className="min-w-0">
+            <h3 className="flex items-baseline gap-1.5 px-1 pb-2.5 text-[12px] font-semibold">
+              {column.label} <span className="font-normal text-faint tabular">{cards.length}</span>
+            </h3>
+            <div className="flex flex-col gap-1.5">
+              {shown.map(({ row, said }) => {
+                const title = row.local?.name ?? row.cloud?.name ?? row.script?.title ?? "";
+                const by = row.local?.created_by ?? row.cloud?.created_by ?? row.script?.createdBy ?? undefined;
+                return (
+                  <button
+                    key={row.local?.id ?? row.cloud?.id ?? row.script?.id}
+                    onClick={() => open(row)}
+                    onMouseEnter={() => row.local === null && row.cloud === null && prefetchScript(row.script.id)}
+                    className="rounded-[10px] border border-line bg-panel px-[11px] py-2.5 text-left transition-colors hover:border-line-strong"
+                  >
+                    <span className="line-clamp-2 text-[13px] leading-[1.35] text-fg" title={title}>
+                      {title || "Untitled"}
+                    </span>
+                    <span className="mt-2 flex min-w-0 items-center gap-1.5 text-[12px]">
+                      <StartedBy by={by ?? undefined} size={20} className="shrink-0" />
+                      <span className={cx("truncate", said.tone === "warning" ? "text-warning" : said.tone === "info" ? "text-info" : "text-muted")}>{said.word}</span>
+                    </span>
+                  </button>
+                );
+              })}
+              {cards.length > shown.length && (
+                <button onClick={() => setAll({ ...all, [column.label]: true })} className="px-1 py-1.5 text-left text-[12px] text-muted hover:text-fg">
+                  {cards.length - shown.length} more
+                </button>
+              )}
+              {cards.length === 0 && <p className="px-1 py-1.5 text-[12px] text-faint">Nothing here.</p>}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { Bug, Ellipsis, LogIn, LogOut, ScrollText, Settings, UserRound } from "l
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { loadAccount, signIn, signOut, useAccount } from "../lib/account";
+import { useBeta } from "../lib/beta";
 import { closeDialog, openDialog, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
@@ -11,7 +12,7 @@ import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { api, type YoutubeSignIn } from "../lib/api";
 import { ProblemView } from "./ProblemView";
 import { StartedBy } from "./StartedBy";
-import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
+import { Button, cx, IconButton, Modal, Select, Switch, Tabs } from "./ui";
 
 export function AppMenu() {
   const account = useAccount((state) => state.account);
@@ -368,6 +369,7 @@ function SettingsDialog() {
             />
           </Row>
         </Group>
+        <BetaGroup />
       </div>
       <div className="flex items-center gap-3 px-6 pt-5 pb-6">
         <span className="text-[13px] text-faint" title={status?.enabled ? "Built by the release workflow" : "A dev build: it never updates itself"}>
@@ -378,6 +380,18 @@ function SettingsDialog() {
         </Button>
       </div>
     </>
+  );
+}
+
+/** Features being tried out (lib/beta.ts): each one a switch, on until turned off. */
+function BetaGroup() {
+  const { board, setBoard } = useBeta();
+  return (
+    <Group title="Beta">
+      <Row name="Board on Home" detail="Every edit in four columns: Script, Edit, Review and Done. Off: the stage tabs and the list.">
+        <Switch checked={board} onChange={setBoard} />
+      </Row>
+    </Group>
   );
 }
 

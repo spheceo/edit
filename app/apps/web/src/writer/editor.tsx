@@ -613,7 +613,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
           >
             <Icon name="panel" />
           </button>
-          <EditButton script={script} disabled={busy || !cueCount} onProblem={setError} />
+          <EditButton script={script} disabled={busy || !cueCount} unbuilt={!cueCount} onProblem={setError} />
           <ReviewButton script={script} open={openNotes} approved={review.approved} onClick={() => setReviewOpen(true)} />
           <Menu
             label="More"
@@ -987,7 +987,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
  * is one, else made from the script (its footage, narration as voice-over,
  * the cut laid out) and opened.
  */
-function EditButton({ script, disabled, onProblem }: { script: Script; disabled: boolean; onProblem: (problem: string) => void }) {
+function EditButton({ script, disabled, unbuilt, onProblem }: { script: Script; disabled: boolean; unbuilt: boolean; onProblem: (problem: string) => void }) {
   const [project, setProject] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   useEffect(() => {
@@ -1007,7 +1007,7 @@ function EditButton({ script, disabled, onProblem }: { script: Script; disabled:
     }
   };
   return (
-    <button type="button" className={project === null ? "ghost" : "primary"} disabled={(disabled && project === null) || starting} title={project === null ? "Start the edit from this script: its footage, voice-over and cut" : "This script's edit"} onClick={() => void go()}>
+    <button type="button" className={project === null ? "ghost" : "primary"} disabled={(disabled && project === null) || starting} title={project !== null ? "This script's edit" : unbuilt ? "Build the script first: this copy has no cut-ins yet, so there's no cut to edit" : "Start the edit from this script: its footage, voice-over and cut"} onClick={() => void go()}>
       {starting ? "Starting the edit…" : project === null ? "Start the edit" : "Open the edit"}
     </button>
   );

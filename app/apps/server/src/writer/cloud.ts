@@ -40,6 +40,16 @@ const PART_SIZE = 64 * 1024 * 1024;
 const BACKOFF_FIRST = 30_000;
 const BACKOFF_MAX = 3_600_000;
 const LESSONS_KEY = "writer/lessons.json";
+/** Whether a script body has its cut written: any cut-in (an unbuilt script is its recordings whole). */
+function builtIn(body: Uint8Array): boolean {
+  try {
+    const script = JSON.parse(new TextDecoder().decode(body)) as { clips?: { kind?: string }[] };
+    return (script.clips ?? []).some((clip) => clip.kind === "cut-in");
+  } catch {
+    return false;
+  }
+}
+
 /** The library row's shape: 1 added `kind`, 2 `runFailed` (Oct 30). A script whose cloud row is older is pushed again. */
 const SUMMARY_VERSION = 2;
 
@@ -679,7 +689,20 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   }
   const bodyPath = join(dir, "script.json");
   const atStart = isFile(bodyPath) ? hash(fs.readFileSync(bodyPath)) : null;
-  if (atStart !== null && atStart !== hash(body) && changedHere(dir, known)) keepCopy(data, dir, "conflicted copy");
+  if (atStart !== null && atStart !== hash(body) && changedHere(dir, known)) {
+    // A built script is never replaced by an unbuilt copy of it: this Mac's
+    // stays the script, saved as the next revision, and theirs adds nothing
+    // (Oct 31, M's CORRUPT Cops: his build came back unbuilt from another
+    // Mac's older copy, the build only in a "conflicted copy", so Start the
+    // edit stayed greyed out).
+    if (builtIn(fs.readFileSync(bodyPath)) && !builtIn(body)) {
+      diag.warn("writer", `${jobs.named(id, title)}: rev ${rev} from another Mac isn't built and this Mac's is, so this Mac's is saved as the next revision`);
+      ledger.scripts[id] = { rev, body: "", files: known?.files ?? {}, summary: 0 };
+      syncSoon();
+      return;
+    }
+    keepCopy(data, dir, "conflicted copy");
+  }
   fs.mkdirSync(dir, { recursive: true });
   const files: Record<string, Kept> = {};
   const left: string[] = [];

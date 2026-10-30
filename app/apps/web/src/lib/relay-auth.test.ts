@@ -141,6 +141,28 @@ describe("relay sign-in gate", () => {
     vi.unstubAllGlobals();
   });
 
+  it("lists a script's Google Docs for the review page's signed-in reviewers only, from the same Drive folder", async () => {
+    useKeys(createLocalJWKSet({ keys: [jwk] }));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const docs = env({ GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r", DOCS_BURST: { limit: async () => ({ success: true }) } } as Partial<Env>);
+    const google = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://oauth2.googleapis.com/token")) return Response.json({ access_token: "a", expires_in: 3600 });
+      if (url.includes("name+%3D+%27Writer+scripts%27") || url.includes("name = 'Writer scripts'") || decodeURIComponent(url).includes("name = 'Writer scripts'")) return Response.json({ files: [{ id: "folder1" }] });
+      expect(decodeURIComponent(url.replace(/\+/g, " "))).toContain("appProperties has { key='writerScript' and value='abcdef12' }");
+      return Response.json({ files: [{ id: "doc1", name: "(DRAFT) Case", createdTime: "2026-10-30T00:00:00Z", appProperties: { writerKind: "draft" } }] });
+    });
+    vi.stubGlobal("fetch", google);
+    const route = "https://relay/v1/docs/exports?script=abcdef12";
+    expect((await relay.fetch(asked(null, route), docs)).status).toBe(401);
+    // An Edit sign-in is the wrong app for this route.
+    expect((await relay.fetch(asked(await token(), route), docs)).status).toBe(401);
+    const answer = await relay.fetch(asked(await token({}, { aud: "feedback" }), route), docs);
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual([{ id: "doc1", url: "https://docs.google.com/document/d/doc1/edit", name: "(DRAFT) Case", draft: true, createdAt: "2026-10-30T00:00:00Z", state: "live" }]);
+    vi.unstubAllGlobals();
+  });
+
   it("fetches the accounts site's keys, and again once for a key it hasn't seen", async () => {
     let calls = 0;
     vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {

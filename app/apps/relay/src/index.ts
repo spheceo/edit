@@ -1,4 +1,5 @@
-import { allow, budgetKey, burstKey, mayVoice, type AuthEnv, type Caller } from "./auth";
+import { allow, budgetKey, burstKey, caller, mayVoice, type AuthEnv, type Caller } from "./auth";
+import { exportDoc, listDocs } from "./docs";
 import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
@@ -42,6 +43,8 @@ export interface Env extends CloudEnv, AuthEnv {
   SPEECH_BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
   /** Google Map Tiles API key (Photorealistic 3D Tiles), for map stills. */
   GOOGLE_MAPS_KEY?: string;
+  /** The review page's Docs requests a minute per person. */
+  DOCS_BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
   /** Repack's Trello key and token: Script mode's card reads (`/v1/trello/*`). */
   TRELLO_API_KEY?: string;
   TRELLO_TOKEN?: string;
@@ -80,6 +83,15 @@ export default {
     if (url.pathname.startsWith("/v1/3dtiles/")) return withCors(await tiles(request, url, env));
     if (url.pathname === "/v1/geocode") return geocode(request, url, env);
     if (url.pathname === "/v1/outline") return outline(request, url, env);
+    // Google Docs exports of a script for the review page (moved from Writer's relay): anyone signed in to
+    // the review site (aud "feedback"), a few a minute each; the team account's token stays here.
+    if ((url.pathname === "/v1/docs/export" && request.method === "POST") || (url.pathname === "/v1/docs/exports" && request.method === "GET")) {
+      const found = await caller(request, env, "feedback");
+      if (found === null) return json(401, { error: "Sign in to the review page (this route answers signed-in reviewers only)." });
+      console.log(JSON.stringify({ route: url.pathname, who: found.kind === "person" ? found.sub : found.kind }));
+      if (!(await env.DOCS_BURST.limit({ key: found.kind === "person" ? found.sub : "unknown" })).success) return json(429, { error: "Too many Docs requests at once; try again in a minute." });
+      return url.pathname === "/v1/docs/export" ? exportDoc(request, env) : listDocs(url.searchParams.get("script") ?? "", env);
+    }
     // Trello, read only, for Script mode's imports (moved from Writer's relay): people who edit or write scripts.
     if ((url.pathname === "/v1/trello/card" || url.pathname === "/v1/trello/cards") && request.method === "GET") {
       const found = await allow(request, env, "use", "trello");

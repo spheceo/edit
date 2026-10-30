@@ -106,6 +106,16 @@ namespace_id = "7702"
 limit = 30
 period = 60
 
+# The review page's Google Docs exports a minute per person (moved from
+# Writer's relay, which allowed about as many). 7711: no other relay's.
+[[ratelimits]]
+name = "DOCS_BURST"
+namespace_id = "7711"
+
+[ratelimits.simple]
+limit = 20
+period = 60
+
 # Atomic daily reservations, including requests still in flight.
 [[durable_objects.bindings]]
 name = "BUDGET"

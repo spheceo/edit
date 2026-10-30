@@ -108,3 +108,20 @@ test("on the fixing computer it takes the request, follows the agent's turn and,
     cleanup();
   }
 });
+
+test("a fix goes up in place of the latest version unless it has a reviewer's comment", () => {
+  const { home, cleanup } = fixtureHome("ready-versions");
+  try {
+    const note = (id: string, version: number, extra: Record<string, unknown> = {}) => ({ id, reviewId: "r1", project: "p", version, ms: 0, endMs: null, text: "x", author: "Marc", status: "open", parentId: null, createdAt: 1, updatedAt: 1, ...extra });
+    const versions = [1, 2].map((n) => ({ n, timeline: "t", path: "/nowhere.mp4", fps: 30, durationMs: 10_000, clips: [] }));
+    const notes = { a: note("a", 1), b: note("b", 2, { parentId: "a" }), c: note("c", 2, { fromApp: true }) };
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes, shared: { p: { reviewId: "r1", url: "u", versions } } }));
+    // Notes on v1, a reply and the agent's own words on v2: v2 is replaced.
+    expect(reviews.onLatest(home, "p")).toEqual([]);
+    // A comment on v2: the fix is v3.
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: { ...notes, d: note("d", 2) }, shared: { p: { reviewId: "r1", url: "u", versions } } }));
+    expect(reviews.onLatest(home, "p").map((one) => one.id)).toEqual(["d"]);
+  } finally {
+    cleanup();
+  }
+});

@@ -34,6 +34,7 @@ import { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as update from "./update.ts";
 import * as writer from "./writer/index.ts";
+import * as ideas from "./ideas/index.ts";
 import { BUILD, NIGHTLY, RELEASE } from "./version.ts";
 
 /** A place to listen: an IP and port, as Rust's SocketAddr shows it ("127.0.0.1:7700", "[::1]:7700"). */
@@ -225,6 +226,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   optional("archive", () => archive.start(app));
   // Script mode: Writer's scripts on this Mac brought in once, and its background work.
   optional("writer", () => writer.start(app));
+  // Ideas: runs this Mac had going when it stopped, marked stopped in the cloud.
+  optional("ideas", () => ideas.start(app));
   // A new project's first message, sent to its agent once its import is done.
   optional("first prompt", () => firstPrompt.start(app));
   // Research goes to the cloud, so the project opened on another Mac has it.

@@ -8,6 +8,7 @@
 //     agent/styles/<style>/skills/<name>.md    its own skill, or its version of a house one
 //     agent/shared/<name>.md                   text taken in with {{> name}}
 //     agent/writer/<name>.md                   Script mode's guides (Repack's, word for word)
+//     agent/ideas/<name>.md                    the ideas' craft (Sphe Research's, word for word)
 //
 // A file may open with frontmatter (`---` lines of `key: value`); a house
 // skill's `description` is its line in the instructions' SKILLS list, which
@@ -102,6 +103,13 @@ export function writerGuide(name: string): string {
   const text = FILES[`writer/${name}.md`];
   if (text === undefined) throw new Error(`agent text: no agent/writer/${name}.md`);
   return text;
+}
+
+/** One of the ideas' guides (agent/ideas/<name>.md): its text without the frontmatter. */
+export function ideasGuide(name: string): string {
+  const text = FILES[`ideas/${name}.md`];
+  if (text === undefined) throw new Error(`agent text: no agent/ideas/${name}.md`);
+  return parse(text).body;
 }
 
 /** Every file's path under agent/ (the test checks each one is used). */

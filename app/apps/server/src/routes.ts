@@ -48,6 +48,7 @@ import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
 import * as writer from "./writer/routes.ts";
+import * as ideas from "./ideas/routes.ts";
 import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
 import * as remoteSupport from "./remote_support.ts";
@@ -85,6 +86,7 @@ export function buildRouter(): Router<App> {
   windowFocus.routes(router);
   writerHandoff.routes(router);
   writer.routes(router);
+  ideas.routes(router);
   archive.routes(router);
   covers.routes(router);
   avatars.routes(router);

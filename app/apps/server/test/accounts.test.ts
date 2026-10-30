@@ -19,6 +19,8 @@ const app = { store: { home: join(dir, "home") }, port: 7799 } as unknown as App
 const challenges = new Map<string, string>();
 const seen: { path: string; body: Record<string, string> }[] = [];
 let refreshes = 0;
+/** The token the stand-in relay's cut-off refuses (the first it saw). */
+let cutOff: string | null = null;
 const devices: string[] = [];
 const polls = new Map<string, number>();
 /** What the site answers each poll of a device sign-in, in turn ("ok" signs in). */
@@ -48,6 +50,12 @@ beforeAll(() => {
         polls.set(code, 0);
         return Response.json({ device_code: code, user_code: "BCDF-GHJK", verification_uri: "https://accounts.test/device", verification_uri_complete: "https://accounts.test/device?code=BCDF-GHJK", expires_in: deviceExpires, interval: 0.02 });
       }
+      // Standing in for the relay too: a cut-off refuses the first token it sees, as a token made before it.
+      if (url.pathname === "/v1/test/cut-off") {
+        const bearer = request.headers.get("authorization");
+        cutOff ??= bearer;
+        return bearer === cutOff ? Response.json({ error: "Sign in to Edit" }, { status: 401 }) : Response.json({ ok: true });
+      }
       // Standing in for the relay too: what a tile request carried.
       if (url.pathname.startsWith("/v1/3dtiles/")) return Response.json({ bearer: request.headers.get("authorization"), query: url.search }, { headers: { "cache-control": "max-age=60" } });
       if (url.pathname !== "/app/token") return new Response("not found", { status: 404 });
@@ -69,7 +77,7 @@ beforeAll(() => {
         if (body.refresh_token === "dead-token-aaaaaaaa") return Response.json({ error: "invalid_grant", error_description: "Signed out elsewhere." }, { status: 400 });
         if (body.refresh_token === "busy-token-aaaaaaaa") return Response.json({ error: "temporarily_unavailable" }, { status: 429, headers: { "retry-after": "60" } });
         refreshes += 1;
-        return Response.json({ access_token: jwt({ perms: ["use"], email: "someone@gmail.com" }), token_type: "Bearer", expires_in: 3600, refresh_token: `refresh-${refreshes + 1}-aaaaaaaa`, user: { email: "someone@gmail.com", name: "Someone", image: null } });
+        return Response.json({ access_token: jwt({ perms: ["use"], email: "someone@gmail.com", n: refreshes }), token_type: "Bearer", expires_in: 3600, refresh_token: `refresh-${refreshes + 1}-aaaaaaaa`, user: { email: "someone@gmail.com", name: "Someone", image: null } });
       }
       return Response.json({ error: "unsupported_grant_type" }, { status: 400 });
     },
@@ -256,5 +264,25 @@ test("a project made while signed in records who started it; signed out, nobody"
     expect(fixture.store.get(made.project.id)?.project.created_by).toEqual(by);
   } finally {
     fixture.cleanup();
+  }
+});
+
+test("a token the relay refuses (a cut-off made after it) is renewed once and the call sent again", async () => {
+  const authorize = new URL(accounts.begin(app));
+  challenges.set("code-cut", authorize.searchParams.get("code_challenge")!);
+  expect((await accounts.finish(app, new URLSearchParams({ code: "code-cut", state: authorize.searchParams.get("state")! }))).ok).toBe(true);
+  process.env.EDIT_RELAY_URL = process.env.EDIT_ACCOUNTS_URL;
+  try {
+    const before = accounts.accessToken();
+    expect(await relay.json("GET", "/v1/test/cut-off", null, "the test", 5)).toEqual({ ok: true });
+    expect(cutOff).toBe(`Bearer ${before}`);
+    expect(accounts.accessToken()).not.toBe(before);
+    // Refused again within the minute: no second renewal, the refusal said.
+    cutOff = `Bearer ${accounts.accessToken()}`;
+    const renewals = refreshes;
+    await expect(relay.json("GET", "/v1/test/cut-off", null, "the test", 5)).rejects.toThrow(/401/u);
+    expect(refreshes).toBe(renewals);
+  } finally {
+    delete process.env.EDIT_RELAY_URL;
   }
 });

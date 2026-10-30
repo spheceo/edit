@@ -117,16 +117,22 @@ export async function forwardTiles(request: Request, from: URL): Promise<Respons
   return new Response(answer.body, { status: answer.status, headers });
 }
 
-/** Sends one request to the relay; a network failure is `UNREACHABLE: <why>`. */
-async function send(method: string, route: string, body: unknown, timeoutSeconds: number): Promise<Response> {
-  const headers: Record<string, string> = authHeaders();
+/**
+ * Sends one request to the relay; a network failure is `UNREACHABLE: <why>`.
+ * Refused (401) with a person's token, the sign-in is renewed and the request
+ * sent once more (accounts.renewRefused: a cut-off refuses tokens made before it).
+ */
+async function send(method: string, route: string, body: unknown, timeoutSeconds: number, again = false): Promise<Response> {
+  const used = token();
+  const headers: Record<string, string> = authHeaders(used);
   let payload: string | undefined;
   if (body !== undefined && body !== null) {
     headers["content-type"] = "application/json";
     payload = JSON.stringify(body);
   }
+  let response: Response;
   try {
-    return await fetch(`${url()}${route}`, {
+    response = await fetch(`${url()}${route}`, {
       method,
       headers,
       body: payload,
@@ -135,6 +141,11 @@ async function send(method: string, route: string, body: unknown, timeoutSeconds
   } catch (error) {
     throw new Error(`${UNREACHABLE}: ${messageOf(error)}`);
   }
+  if (response.status === 401 && !again && used !== null && used !== envToken() && (await accounts.renewRefused(used))) {
+    await response.body?.cancel();
+    return send(method, route, body, timeoutSeconds, true);
+  }
+  return response;
 }
 
 /**

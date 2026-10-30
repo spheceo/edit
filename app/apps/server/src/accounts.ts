@@ -296,6 +296,28 @@ export function renew(home: string | null = state.home): Promise<void> {
   return state.refreshing;
 }
 
+/** When the relay last refused a token and a renewal was asked for (at most one a minute). */
+let lastRefused = 0;
+
+/**
+ * The relay refused the access token `used`: renewed once, at most once a
+ * minute, so a token made after a cut-off goes in its place rather than this
+ * one being refused for the rest of its hour. On Oct 30 accounts ended one
+ * Feedback sign-in of the user's and published a cut-off for all their apps:
+ * every Edit of theirs was refused until its token next renewed. True when
+ * there's a different token to try.
+ */
+export async function renewRefused(used: string | null): Promise<boolean> {
+  if (state.home === null) return false;
+  if (accessToken() !== used) return accessToken() !== null;
+  if (Date.now() - lastRefused < 60_000) return false;
+  lastRefused = Date.now();
+  diag.info("accounts", "the relay refused the sign-in's token; renewing it");
+  await renew();
+  const now = accessToken();
+  return now !== null && now !== used;
+}
+
 /** Headless `edit serve` (no window, no browser): it signs in with a code printed on the terminal. */
 let headless = false;
 export function signInOnTerminal(on: boolean): void {

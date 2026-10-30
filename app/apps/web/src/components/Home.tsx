@@ -131,6 +131,8 @@ export function Home() {
   for (const one of localScripts) {
     if (one.status === "processing") importingNow.set(one.id, { word: `Importing ${Math.round(one.progress ?? 0)}%`, stopped: false });
     else if (one.status === "error" || one.status === "needs_choice") importingNow.set(one.id, { word: one.status === "needs_choice" ? "Waiting on a choice" : "Stopped", stopped: true });
+    // In, but its first prompt not started yet: still importing until the workflow is under way.
+    else if (one.firstBuild) importingNow.set(one.id, { word: "Starting the workflow", stopped: false });
   }
   for (const one of writing) importingNow.set(one.id, { word: `Importing ${Math.round(one.percent)}%`, stopped: false });
   const count = (projects?.length ?? 0) + cloudOnly.length + scriptOnly.length;
@@ -652,6 +654,8 @@ type ScriptIssueRow = {
   decision?: { kind: string; summary: string; failed?: { id: string; title: string; error: string }[] };
   /** Dismissed from "need you" (still stopped). */
   dismissedAt?: number;
+  /** Its first prompt still to start. */
+  firstBuild?: boolean;
 };
 
 /** Answers a stopped import; it carries on in the background and Home follows it. */

@@ -149,6 +149,8 @@ export type Script = {
 export type Archive = { at: number; by: string; freedBytes: number; restoring: boolean; missing: string[] };
 
 export type Summary = {
+  /** Its first prompt (New project's first message) still to start: it's still importing. */
+  firstBuild?: boolean;
   dismissedAt?: number;
   archive?: Archive;
   createdBy?: Creator;

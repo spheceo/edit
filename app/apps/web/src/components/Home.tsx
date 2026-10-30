@@ -1007,7 +1007,7 @@ function changedLabel(ms: number) {
 
 /** Name, status, length, when it last changed and its ⋯: the columns every row lines up on. */
 /** Name, category, type, status, length, updated, ⋯ (the user, Oct 30: the kind and the type each a column of their own, "Bodycam Compilation" one label). */
-const COLUMNS = "grid grid-cols-[minmax(0,1fr)_158px_64px_minmax(150px,0.45fr)_64px_92px_30px] items-center gap-3";
+const COLUMNS = "grid grid-cols-[minmax(0,1fr)_152px_84px_150px_60px_72px_24px] items-center gap-3";
 
 /** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */
 function ProjectTable({
@@ -1119,9 +1119,10 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
           )}
         </div>
         <Category style={project.style} compilation={script?.compilation} />
-        <Type kind={project.subtitles ? "subtitles" : "edit"} />
-        <div role="cell" className="flex min-w-0 items-center gap-2">
-          {/* Its one status: what's wrong with it, else where it is. */}
+        <Type kind={project.subtitles ? "subtitles" : "edit"} script={script?.id ?? null} />
+        <div role="cell" className="flex min-w-0 items-center gap-1.5">
+          {/* Where its files are, in a slot of its own so the statuses line up, then its one status: what's wrong with it, else where it stands. */}
+          <Place sync={card.cloudNews ? card.status : undefined} streams={card.mostlyRemote} />
           {card.notice ? (
             <Notice {...card.notice} />
           ) : (
@@ -1134,11 +1135,6 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
           ) : (
             subtitled && <span className="shrink-0 text-[12px] text-faint">Not uploaded</span>
           )}
-          {/* Then, always in the same place at its end: its script and where its files are. */}
-          <span className="ml-auto flex shrink-0 items-center gap-0.5">
-            {script !== null && <ScriptLink id={script.id} />}
-            <Place sync={card.cloudNews ? card.status : undefined} streams={card.mostlyRemote} />
-          </span>
         </div>
         <span role="cell" className="text-right text-[13px] text-secondary tabular">
           {project.problem ? "" : shortDuration(project.duration_frames / project.fps)}
@@ -1149,7 +1145,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
         <button
           title="More"
           onClick={card.menu}
-          className="flex size-[30px] items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
+          className="flex size-6 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
         >
           <Ellipsis size={15} />
         </button>
@@ -1159,7 +1155,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
   );
 }
 
-/** The project's script, a click away: its other mode (an icon: the Type column already says it's an edit). */
+/** The project's script, a click away: its other mode (an icon beside its Type). */
 function ScriptLink({ id }: { id: string }) {
   return (
     <button
@@ -1169,9 +1165,9 @@ function ScriptLink({ id }: { id: string }) {
         event.stopPropagation();
         navigate(`/scripts/${id}`);
       }}
-      className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg"
+      className="-my-1 flex size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-hover hover:text-fg"
     >
-      <FileText size={13} />
+      <FileText size={12} />
     </button>
   );
 }
@@ -1188,12 +1184,14 @@ function Category({ style, compilation = false }: { style?: Style | null; compil
 }
 
 /** What a row is: a script, an edit, or a subtitled video. */
-function Type({ kind }: { kind: "script" | "edit" | "subtitles" }) {
+function Type({ kind, script = null }: { kind: "script" | "edit" | "subtitles"; script?: string | null }) {
   const [Icon, label] = kind === "script" ? [FileText, "Script"] : kind === "edit" ? [Film, "Edit"] : [Captions, "Subtitles"];
   return (
     <span role="cell" className="flex min-w-0 items-center gap-1.5 text-[13px] text-secondary">
       <Icon size={13} className="shrink-0" />
       {label}
+      {/* An edit made from a script: that script, a click away. */}
+      {script !== null && <ScriptLink id={script} />}
     </span>
   );
 }
@@ -1239,7 +1237,8 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
       </div>
       <Category style={script.style} compilation={script.compilation} />
       <Type kind="script" />
-      <div role="cell" className="flex min-w-0 items-center gap-1">
+      <div role="cell" className="flex min-w-0 items-center gap-1.5">
+        <Place />
         {importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (its row opens the import).
           <span className="flex min-w-0 items-center gap-2" title={importing.step}>
@@ -1295,13 +1294,10 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
           </span>
         </div>
         <Category style={summary.style} compilation={script?.compilation} />
-        <Type kind={summary.subtitles ? "subtitles" : "edit"} />
-        <div role="cell" className="flex min-w-0 items-center gap-2">
+        <Type kind={summary.subtitles ? "subtitles" : "edit"} script={script?.id ?? null} />
+        <div role="cell" className="flex min-w-0 items-center gap-1.5">
+          <Place away />
           {project.holder && <StateChips editor={project.holder} />}
-          <span className="ml-auto flex shrink-0 items-center gap-0.5">
-            {script !== null && <ScriptLink id={script.id} />}
-            <Place away />
-          </span>
         </div>
         <span role="cell" className="text-right text-[13px] text-secondary tabular">
           {seconds !== null ? shortDuration(seconds) : ""}
@@ -1315,7 +1311,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
             event.stopPropagation();
             toggleMenu(event.currentTarget, [{ label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) }], { width: 160 });
           }}
-          className="flex size-[30px] items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
+          className="flex size-6 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
         >
           <Ellipsis size={15} />
         </button>
@@ -1349,10 +1345,9 @@ function Place({ sync, streams = false, away = false }: { sync?: CloudStatus; st
         : streams
           ? [CloudDownload, "Its footage streams from the cloud", "text-faint"]
           : [null, "", ""];
-  if (Icon === null) return null;
   return (
-    <span title={title} className={cx("flex size-6 items-center justify-center", tone)}>
-      <Icon size={13} />
+    <span title={title || undefined} className={cx("flex w-4 shrink-0 items-center justify-center", tone)}>
+      {Icon !== null && <Icon size={13} />}
     </span>
   );
 }

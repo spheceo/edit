@@ -1796,7 +1796,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
                 ? commentary
                   ? "Paste the sources: videos, articles, posts. The first is the brief."
                   : "Paste the footage: YouTube or Drive videos, or a Trello card. A case the channel already covered goes in as a reuse."
-                : "Paste the script’s Google Doc. A finished video added under it goes in whole, as a reuse."
+                : "Paste the script’s Google Doc, or all its text (copied from the Doc, links and all). A finished video added under it goes in whole, as a reuse."
             }
             onChange={(event) => setText(event.target.value)}
             onPaste={(event) => {

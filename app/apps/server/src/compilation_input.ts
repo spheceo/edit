@@ -167,7 +167,40 @@ export interface CompilationReaders {
 }
 
 /** Resolve every source before saving: failures never create a partial script. */
+/**
+ * A script pasted rather than linked: a Doc's words copied with their links
+ * (New project's box keeps each as [text](url)), read as the Doc itself would
+ * be. Oct 30, the team: an external writer's Doc this Mac's Google account
+ * can't open ("we can't add" it), and pasting it lost the timestamps' links.
+ * Null when the text isn't a script: lines of links (a compilation), a title.
+ */
+export function pastedScript(text: string): Parsed | null {
+  // A Doc's comment markers ("[a]", linked to the comment) aren't the script's words.
+  const lines = text.split(/\r?\n/u).map((line) => line.replace(/\[\[[a-z]{1,3}\]\]\(#cmnt\d+\)/gu, "").trim()).filter((line) => line !== "");
+  const linked = /\[[^\]]+\]\(https?:\/\/[^)\s]+\)/u;
+  // Narration: a line of words with no link in it.
+  const prose = lines.filter((line) => !/https?:\/\//u.test(line) && line.split(/\s+/u).length >= 12).length;
+  if (lines.length < 3 || prose < 1 || !lines.some((line) => linked.test(line))) return null;
+  const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  const html = `<html><body>${lines
+    .map((line) => {
+      let out = "";
+      let at = 0;
+      for (const match of line.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gu)) {
+        out += escape(line.slice(at, match.index)) + `<a href="${escape(match[2]!)}">${escape(match[1]!)}</a>`;
+        at = match.index! + match[0].length;
+      }
+      return `<p>${out}${escape(line.slice(at))}</p>`;
+    })
+    .join("")}</body></html>`;
+  const parsed = script.parse(html);
+  return parsed.blocks.some((block) => block.kind === "footage") ? parsed : null;
+}
+
 export async function readCompilation(input: string, app: App, overrides: Partial<CompilationReaders> = {}): Promise<Parsed> {
+  // A Doc's words pasted in: the script itself.
+  const pasted = pastedScript(input);
+  if (pasted !== null) return pasted;
   const readers: CompilationReaders = { doc: script.fetchDoc, folder: (id) => videosIn(app, id), card: readCard, ...overrides };
   let sources = sourceLines(input);
   if (!sources.length) throw new Error("Paste Google Docs scripts, Google Drive folders or files, YouTube videos, or a Trello card.");

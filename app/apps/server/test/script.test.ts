@@ -328,7 +328,7 @@ test("a shared Doc is read with its title; one that isn't says how to share it",
   );
   mock.on("GET", "/accounts.google.com/ServiceLogin", () => new Response("<html><body>sign in</body></html>"));
   await expect(fetchDoc("PRIVATE123456")).rejects.toThrow(
-    "Couldn't read that Google Doc. Share it so anyone with the link can view, then try again.",
+    "Couldn't read that Google Doc. Share it so anyone with the link can view, or copy all its text (⌘A, ⌘C in the Doc) and paste that here instead.",
   );
 });
 
@@ -406,7 +406,7 @@ test("a Doc only the team can see is read with the team's sign-in; Google's own 
     expect(await fetchDoc("TEAMDOC12345")).toEqual([DOC, "Team case"]);
     // The sign-in can't see it: the public link, and what went wrong said for what it is.
     mock.on("GET", "/docs.google.com/document/d/GONEDOC12345/export", () => new Response("", { status: 404 }));
-    await expect(fetchDoc("GONEDOC12345")).rejects.toThrow("That Google Doc doesn't exist: it was deleted, or the link is wrong.");
+    await expect(fetchDoc("GONEDOC12345")).rejects.toThrow("That Google Doc doesn't exist, or this Mac's Google account can't see it.");
     mock.on("GET", "/docs.google.com/document/d/BUSYDOC12345/export", () => new Response("", { status: 503 }));
     await expect(fetchDoc("BUSYDOC12345")).rejects.toThrow("Google Docs is busy right now. Try again in a minute.");
   } finally {

@@ -149,18 +149,24 @@ export async function run(source: string, target: string, keyterms: readonly str
       const pieces = plan(seconds);
       const piecesDir = withExtension(target, "pieces");
       const names = createHash("sha256").update(keyterms.join("\n")).digest("hex").slice(0, 12);
+      // How long each hearing took, for the log: the whole file's, and each piece's.
+      const began = Date.now();
+      let wholeMs = 0;
+      const pieceMs: number[] = [];
       const [whole, heard] = await Promise.all([
         // Any earlier hearing of the whole file will do: only its voices are
         // used, so it's asked without the names (which cost a fifth more:
         // the audit, Oct 23); the pieces spell them.
-        saved(withExtension(target, "whole.json"), fixed3(seconds), () => ask(audio, [], again)),
+        saved(withExtension(target, "whole.json"), fixed3(seconds), () => ask(audio, [], again)).finally(() => (wholeMs = Date.now() - began)),
         limited(pieces, PIECES_AT_ONCE, (piece, index) =>
           saved(`${piecesDir}/${names}-${index}-${fixed3(piece.from)}-${fixed3(piece.to)}.json`, "", async () => {
             const file = withExtension(target, `piece-${index}.ogg`);
+            const asked = Date.now();
             try {
               await encode(["-ss", fixed3(piece.from), "-t", fixed3(piece.to - piece.from), "-i", audio], file, "could not cut the audio");
               return await ask(file, keyterms, again);
             } finally {
+              pieceMs.push(Date.now() - asked);
               fs.rmSync(file, { force: true });
             }
           }).then((part) =>
@@ -189,7 +195,10 @@ export async function run(source: string, target: string, keyterms: readonly str
       voicesFrom(words, whole.words);
       transcript = { model: whole.model, language: whole.language, words };
       fs.rmSync(piecesDir, { recursive: true, force: true });
-      diag.info("media", `${source}: heard in ${pieces.length} pieces for its words and whole for its voices (${words.length} words)`);
+      const sorted = [...pieceMs].sort((a, b) => a - b);
+      const secs = (ms: number) => `${Math.round(ms / 1000)} s`;
+      const timing = sorted.length === 0 ? "all saved from before" : `pieces typically ${secs(sorted[Math.floor(sorted.length / 2)]!)}, the slowest ${secs(sorted.at(-1)!)}${sorted.length < pieces.length ? `, ${pieces.length - sorted.length} saved from before` : ""}; the whole ${secs(wholeMs)}`;
+      diag.info("media", `${source}: heard in ${pieces.length} pieces for its words and whole for its voices (${words.length} words) in ${secs(Date.now() - began)}: ${timing}`);
     }
   } finally {
     fs.rmSync(audio, { force: true });

@@ -73,7 +73,35 @@ function busy(id: string): () => void {
   };
 }
 
+/**
+ * Where each running import's time went, by stage, as `say` hears them: the
+ * import's last line breaks it down (the user, Oct 30: "logging how long things
+ * take ... breaking down everything").
+ */
+const stages = new Map<string, { stage: string; since: number; spent: Map<string, number> }>();
+
+function noteStage(id: string, stage: string): void {
+  const now = Date.now();
+  const at = stages.get(id);
+  if (at === undefined) return void stages.set(id, { stage, since: now, spent: new Map() });
+  if (at.stage === stage) return;
+  at.spent.set(at.stage, (at.spent.get(at.stage) ?? 0) + now - at.since);
+  at.stage = stage;
+  at.since = now;
+}
+
+/** "downloading 52 min, processing 1 h 35 min, transcribing 26 min": the import's time by stage, then forgotten. */
+function stageTimes(id: string): string {
+  const at = stages.get(id);
+  stages.delete(id);
+  if (at === undefined) return "";
+  at.spent.set(at.stage, (at.spent.get(at.stage) ?? 0) + Date.now() - at.since);
+  const took = (ms: number) => (ms >= 3_600_000 ? `${Math.floor(ms / 3_600_000)} h ${Math.round((ms % 3_600_000) / 60_000)} min` : ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`);
+  return [...at.spent.entries()].filter(([, ms]) => ms >= 1000).map(([stage, ms]) => `${stage || "starting"} ${took(ms)}`).join(", ");
+}
+
 function say(script: Script, detail: string, stage = script.stage, percent = script.progress): void {
+  if (running.has(script.id)) noteStage(script.id, stage);
   if (running.has(script.id)) latest.set(script.id, { id: script.id, title: script.title, stage, percent, detail, ...(started.has(script.id) ? { startedAt: started.get(script.id)! } : {}) });
 }
 
@@ -429,12 +457,14 @@ async function run(app: App, dir: string, script: Script): Promise<Script> {
     const seconds = `${Math.round((Date.now() - began) / 1000)} s`;
     // Its recordings and words, shared with Edit mode in the background.
     if (step === "done") handoff.shareSoon(store.dataDir(app.store.home), script.id);
-    if (step === "done") diag.info("writer", `${jobs.named(script.id, script.title)}: imported in ${seconds}: ${clock(script.durationMs)} of footage, ${script.words.length} words, ${new Set(script.words.map((word) => word.speaker).filter(Boolean)).size} voices`);
-    else diag.warn("writer", `${jobs.named(script.id, script.title)}: paused after ${seconds} for a choice: ${script.decision?.summary ?? ""}`);
+    const spent = stageTimes(script.id);
+    if (step === "done") diag.info("writer", `${jobs.named(script.id, script.title)}: imported in ${seconds}: ${clock(script.durationMs)} of footage, ${script.words.length} words, ${new Set(script.words.map((word) => word.speaker).filter(Boolean)).size} voices${spent ? ` (${spent})` : ""}`);
+    else diag.warn("writer", `${jobs.named(script.id, script.title)}: paused after ${seconds}${spent ? ` (${spent})` : ""} for a choice: ${script.decision?.summary ?? ""}`);
     return script;
   } catch (error) {
     const message = diag.messageOf(error);
-    diag.error("writer", `${jobs.named(script.id, script.title)}: stopped after ${Math.round((Date.now() - began) / 1000)} s: ${message}`);
+    const spent = stageTimes(script.id);
+    diag.error("writer", `${jobs.named(script.id, script.title)}: stopped after ${Math.round((Date.now() - began) / 1000)} s${spent ? ` (${spent})` : ""}: ${message}`);
     script.status = "error";
     script.error = message;
     delete script.decision;

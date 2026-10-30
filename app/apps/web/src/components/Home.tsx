@@ -28,9 +28,13 @@ const FORMAT = { width: 1920, height: 1080, fps: 30 };
 /** A YouTube Short's frame: 9:16. */
 const SHORTS_FORMAT = { width: 1080, height: 1920, fps: 30 };
 
+/** How long a project someone started stays in their Needs you before it goes to review. */
+const NEW_FOR_MS = 3 * 24 * 3600_000;
+
 export function Home() {
   // What Home showed last, at once; the fresh answers take its place as they come.
   const [projects, setProjects] = useKept<ProjectSummary[] | null>("home.projects", null);
+  const account = useAccount((state) => state.account);
   const [cloud, setCloud] = useKept<CloudList | null>("home.cloud", null);
   const [statuses, setStatuses] = useKept<Record<string, ProjectStatus>>("home.statuses", {});
   const [creating, setCreating] = useState(false);
@@ -177,11 +181,24 @@ export function Home() {
   // list, with their answers. Ordinary scripts and the edits being worked on
   // wait in All projects (the user, Oct 30: "we shouldn't show just normal
   // scripts in the main view").
+  // A project the signed-in person started in the last three days is in front
+  // of them until it goes to review (the user, Oct 30: "it's confusing to add a
+  // new project and not have it right in front of you"): importing, being
+  // drafted, or the first draft waiting for a look.
+  const me = account?.person?.name.trim().toLowerCase() ?? null;
+  const startedMs = (row: Listed): number => {
+    const id = row.local?.id ?? row.cloud?.id ?? null;
+    const at = id === null ? NaN : Number(/^p(\d{12,})-/u.exec(id)?.[1] ?? NaN);
+    return Number.isFinite(at) ? at : (localScripts.find((one) => one.id === row.script?.id)?.createdAt ?? row.script?.updatedAt ?? 0);
+  };
+  const starter = (row: Listed) => (row.local !== null ? (remote.get(row.local.id)?.created_by ?? row.local.created_by) : row.cloud !== null ? row.cloud.created_by : row.script.createdBy);
+  const justStarted = (row: Listed) => me !== null && starter(row)?.name.trim().toLowerCase() === me && Date.now() - startedMs(row) < NEW_FOR_MS;
   const needsYou = projectRows.filter((row) => {
     // A script whose Claude run failed (the user, Oct 30: "projects that have failed like this deserve a needs you").
-    if (row.local === null && row.cloud === null) return Boolean(row.script.runFailed) && !row.writing && !row.importing;
+    if (row.local === null && row.cloud === null) return (Boolean(row.script.runFailed) && !row.writing && !row.importing) || justStarted(row);
     const state = statuses[row.local?.id ?? row.cloud?.id ?? ""];
-    return stageOf(row, state) === "review" || Boolean(state?.importing?.error);
+    const stage = stageOf(row, state);
+    return stage === "review" || Boolean(state?.importing?.error) || (justStarted(row) && stage !== "done");
   });
   const stoppedScripts = issues.filter((issue) => !writing.some((one) => one.id === issue.id)).length;
   // A search looks through every project; otherwise the tab's.
@@ -699,6 +716,8 @@ type ScriptIssueRow = {
   compilation?: boolean;
   /** Its last Claude run ended without finishing: when, and what it said. */
   runFailed?: { at: number; error: string } | null;
+  /** When it was started. */
+  createdAt?: number;
   /** Its script being written (a build running on this Mac). */
   building?: boolean;
 };

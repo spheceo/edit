@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Captions, FileText, Film, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Captions, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
@@ -21,7 +21,7 @@ import { Logo, Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
-import { Button, cx, IconButton, Modal, spring } from "./ui";
+import { Button, cx, IconButton, Modal, Spinner, spring } from "./ui";
 
 // Every project is 1080p at 30 fps.
 const FORMAT = { width: 1920, height: 1080, fps: 30 };
@@ -604,7 +604,7 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
           title={state.importing.error ?? `Importing: ${state.importing.state}`}
           className={cx(CHIP, "tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
         >
-          {importStuck(state.importing) ? <TriangleAlert size={12} /> : <LoaderCircle size={12} className="animate-spin" />}
+          {importStuck(state.importing) ? <TriangleAlert size={12} /> : <Spinner size={12} />}
           {importStuck(state.importing) ? "Import stuck" : `Importing ${importShare(state.importing)}`}
         </span>
       ),
@@ -1337,12 +1337,12 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
           </span>
         ) : importing ? (
           <span className={cx(CHIP, "tabular", importing.stopped ? "text-warning" : "text-info")}>
-            {importing.stopped ? <TriangleAlert size={12} /> : <LoaderCircle size={12} className="animate-spin" />}
+            {importing.stopped ? <TriangleAlert size={12} /> : <Spinner size={12} />}
             {importing.word}
           </span>
         ) : writing ? (
           <span className={cx(CHIP, "text-info")}>
-            <LoaderCircle size={12} className="animate-spin" />
+            <Spinner size={12} />
             Writing
           </span>
         ) : failed !== null ? (

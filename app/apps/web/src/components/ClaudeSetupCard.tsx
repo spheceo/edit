@@ -1,6 +1,7 @@
-import { ExternalLink, LoaderCircle } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { useEffect } from "react";
 import { setupClaude, useAgent, useClaudeSupport, watchClaudeSupport } from "../lib/agent";
+import { Spinner } from "./ui";
 
 /**
  * Claude Code, when someone has to do something about it: one line saying
@@ -27,7 +28,7 @@ export function ClaudeSetupCard() {
     <SetupLine text={said}>
       {signingIn ? (
         <>
-          <LoaderCircle size={13} className="animate-spin text-muted" />
+          <Spinner size={13} />
           {status?.url && (
             <a href={status.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-fg hover:underline">
               Open sign-in page <ExternalLink size={11} />

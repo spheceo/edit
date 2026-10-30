@@ -317,11 +317,16 @@ export function Tabs<T extends string>({
   );
 }
 
-export function Spinner({ className }: { className?: string }) {
+/** Something on its way, in a line or a button: Edit's loader at a small size (the user, Oct 30: "i like the spinner we have lets use that more"). */
+export function Spinner({ className, size = 14 }: { className?: string; size?: number }) {
   return (
-    <svg className={cx("animate-spin", className)} viewBox="0 0 24 24" fill="none" width="14" height="14">
-      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
-      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    <svg className={cx("edit-loader shrink-0 overflow-visible", className)} viewBox="0 0 64 64" width={size} height={size} aria-hidden>
+      <rect className="loader-clip" x="8" y="16" width="46" height="9.5" rx="3" fill="#5b8cff" />
+      <rect className="loader-clip loader-clip-2" x="8" y="29" width="30" height="9.5" rx="3" fill="#ff4f9a" />
+      <rect className="loader-clip loader-clip-3" x="8" y="42" width="46" height="9.5" rx="3" fill="#ffc23d" />
+      <g className="loader-head">
+        <path d="M41.5 8h7a.5.5 0 0 1 .5.5v3.4a1 1 0 0 1-.3.7L46 15.4V55a1 1 0 0 1-2 0V15.4l-2.7-2.8a1 1 0 0 1-.3-.7V8.5a.5.5 0 0 1 .5-.5z" fill="#fff" />
+      </g>
     </svg>
   );
 }

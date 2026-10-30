@@ -1,5 +1,5 @@
 import { explain } from "@edit/types/problems";
-import { Check, ChevronDown, CircleAlert, Download, Film, LoaderCircle, X } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, Download, Film, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, type ExportActivity as Activity } from "../lib/api";
@@ -7,7 +7,7 @@ import { useAccount } from "../lib/account";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { ProblemView } from "./ProblemView";
-import { Button, IconButton } from "./ui";
+import { Button, IconButton, Spinner } from "./ui";
 
 export const exportActive = (job: Activity) => job.state === "queued" || job.state === "running";
 export function exportLabel(job: Activity): string {
@@ -64,7 +64,7 @@ export function ExportActivity() {
     <div ref={root} className="fixed top-14 right-3 z-40 max-w-[calc(100vw-24px)]">
       <button type="button" aria-expanded={open} aria-controls="export-activity" onClick={() => setOpen(!open)}
         className="ml-auto flex h-9 items-center gap-2 rounded-lg border border-line bg-panel px-3 text-[12px] text-fg shadow-lg hover:bg-raised">
-        {active ? <LoaderCircle size={14} className="animate-spin" /> : failed ? <CircleAlert size={14} className="text-danger" /> : completed ? <Check size={14} className="text-success" /> : <Film size={14} />}
+        {active ? <Spinner /> : failed ? <CircleAlert size={14} className="text-danger" /> : completed ? <Check size={14} className="text-success" /> : <Film size={14} />}
         {active ? [rendering ? `${rendering} exporting` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(" · ") : failed ? "Export needs attention" : completed ? "Exports ready" : "Export activity"}
         <ChevronDown size={13} />
       </button>

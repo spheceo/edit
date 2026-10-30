@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { openPage } from "./api";
 import { clock } from "./clips";
+import { Spinner } from "../components/ui";
 import { Icon } from "./ui";
 import { useSettled } from "../lib/settled";
 
@@ -140,7 +141,7 @@ export function ResetAsk({ state, busy, onAnswer }: { state: "pending" | "accept
   return (
     <>
       <p className="reset-status">
-        {state === "pending" ? <span className="reset-spinner" aria-hidden="true" /> : <Icon name={state === "accepted" ? "check" : "minus"} size={14} />}
+        {state === "pending" ? <Spinner size={13} /> : <Icon name={state === "accepted" ? "check" : "minus"} size={14} />}
         Reset the script · {state === "pending" ? "waiting for you" : state === "accepted" ? "done" : "rejected"}
       </p>
       {state === "pending" && (

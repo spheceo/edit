@@ -13,7 +13,7 @@ import { importProgress } from "../lib/import_progress";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { ProblemView } from "./ProblemView";
-import { cx, IconButton } from "./ui";
+import { cx, IconButton, Spinner } from "./ui";
 import { Loader } from "./Logo";
 import { rate } from "../lib/types";
 
@@ -133,7 +133,7 @@ export function Viewer() {
         )}
         {!error && framed && buffering && (
           <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
-            <span className="size-3 animate-spin rounded-full border border-white/20 border-t-white/80" /> Loading frame…
+            <Spinner size={12} /> Loading frame…
           </div>
         )}
         {!error && buffering && stuck && (

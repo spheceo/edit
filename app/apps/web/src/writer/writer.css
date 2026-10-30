@@ -1417,8 +1417,6 @@
 /* Claude asking to reset the script, answered in the chat, as Edit asks. */
 .writer-root .reset-status { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; color: var(--muted); font-size: 13px; }
 .writer-root .reset-status svg { color: var(--muted); }
-.writer-root .reset-spinner { width: 15px; height: 15px; border: 2px solid var(--line-strong); border-top-color: var(--muted); border-radius: 50%; animation: writer-reset-spin 0.9s linear infinite; }
-@keyframes writer-reset-spin { to { transform: rotate(360deg); } }
 .writer-root .reset-ask { display: flex; flex-direction: column; gap: 8px; margin: 0 0 14px; padding: 14px 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); font-size: 13.5px; }
 .writer-root .reset-ask b { display: flex; align-items: center; gap: 10px; font-weight: 500; font-size: 14.5px; color: var(--text); }
 .writer-root .reset-ask b svg { color: #f5b544; }

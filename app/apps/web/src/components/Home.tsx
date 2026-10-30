@@ -261,7 +261,7 @@ export function Home() {
             </div>
 
             <Imports projects={projects ?? []} statuses={statuses} writing={writing} issues={issues} scripts={localScripts} onOpen={setWatching} />
-            <ImportDialog id={watching} writing={writing} onClose={() => setWatching(null)} />
+            <ImportDialog id={watching} writing={writing} issues={issues} onClose={() => setWatching(null)} />
             {rows.length > 0 ? (
               <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits && searching} statuses={statuses} importing={new Set(writing.map((one) => one.id))} onImport={setWatching} />
             ) : (
@@ -617,6 +617,8 @@ type ScriptIssueRow = {
   status: string;
   /** Where it got to: downloading, transcribing, … */
   stage: string;
+  /** How far it got (0–100). */
+  progress?: number;
   error: string | null;
   createdBy?: Creator;
   decision?: { kind: string; summary: string; failed?: { id: string; title: string; error: string }[] };
@@ -629,7 +631,8 @@ type ScriptIssueRow = {
  * something goes wrong, it's blocked, it's frozen at that state, and then we
  * can come in, fix it, and unblock it".
  */
-function ScriptIssue({ issue }: { issue: ScriptIssueRow }) {
+/** What can be done about a stopped import: try again, go on without what failed, or another link for a video. */
+function IssueActions({ issue, wide = false }: { issue: ScriptIssueRow; wide?: boolean }) {
   const [replacing, setReplacing] = useState(false);
   const [url, setUrl] = useState("");
   const failed = issue.decision?.failed ?? [];
@@ -646,37 +649,42 @@ function ScriptIssue({ issue }: { issue: ScriptIssueRow }) {
       setTimeout(() => setBusy(false), 1500);
     }
   };
-  const said = issue.decision?.summary ?? issue.error ?? "Stopped.";
   return (
-    <div className="border-t border-line px-4 py-2.5 text-[13px]">
-      <div className="flex items-center gap-3">
-        <TriangleAlert size={13} className="shrink-0 text-warning" />
-        <button onClick={() => navigate(`/scripts/${issue.id}`)} className="min-w-0 shrink truncate text-left text-fg hover:underline">
-          {issue.title}
-        </button>
-        <StartedBy by={issue.createdBy} size={20} className="shrink-0" />
-        {/* Where it stopped, so it's plain what's being fixed. */}
-        <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-secondary">Stopped {stageWords(issue.stage)}</span>
-        <span className="min-w-0 flex-1 truncate text-[12px] text-muted" title={said}>
-          {said}
-        </span>
-        <span className="flex shrink-0 items-center gap-3 text-[12px] font-medium">
-          <button disabled={busy} onClick={() => void answer({ kind: "retry" })} className="text-fg hover:underline disabled:opacity-50">
-            Retry
-          </button>
-          {issue.decision?.kind === "failed_recordings" && (
-            <button disabled={busy} onClick={() => void answer({ kind: "skip_failed" })} className="text-muted hover:text-fg disabled:opacity-50">
-              Go on without
+    <>
+      <span className={cx("flex shrink-0 items-center gap-3 text-[12px] font-medium", wide && "gap-2")}>
+        {wide ? (
+          <>
+            <Button size="sm" variant="primary" disabled={busy} onClick={() => void answer({ kind: "retry" })}>
+              Retry
+            </Button>
+            {issue.decision?.kind === "failed_recordings" && (
+              <Button size="sm" disabled={busy} onClick={() => void answer({ kind: "skip_failed" })}>
+                Go on without
+              </Button>
+            )}
+            <Button size="sm" disabled={busy} onClick={() => setReplacing(!replacing)}>
+              Replace…
+            </Button>
+          </>
+        ) : (
+          <>
+            <button disabled={busy} onClick={() => void answer({ kind: "retry" })} className="text-fg hover:underline disabled:opacity-50">
+              Retry
             </button>
-          )}
-          <button disabled={busy} onClick={() => setReplacing(!replacing)} className="text-muted hover:text-fg disabled:opacity-50">
-            Replace…
-          </button>
-        </span>
-      </div>
+            {issue.decision?.kind === "failed_recordings" && (
+              <button disabled={busy} onClick={() => void answer({ kind: "skip_failed" })} className="text-muted hover:text-fg disabled:opacity-50">
+                Go on without
+              </button>
+            )}
+            <button disabled={busy} onClick={() => setReplacing(!replacing)} className="text-muted hover:text-fg disabled:opacity-50">
+              Replace…
+            </button>
+          </>
+        )}
+      </span>
       {replacing && (
         <form
-          className="mt-2 flex items-center gap-2 pl-6"
+          className={cx("flex items-center gap-2", wide ? "mt-3 w-full" : "mt-2 basis-full pl-6")}
           onSubmit={(event) => {
             event.preventDefault();
             if (url.trim() !== "") void answer({ kind: "replace", url: url.trim(), ...(failed.length > 0 ? { id: which } : {}) });
@@ -697,6 +705,32 @@ function ScriptIssue({ issue }: { issue: ScriptIssueRow }) {
           </Button>
         </form>
       )}
+    </>
+  );
+}
+
+/**
+ * An import stopped part-way, held where it is until someone answers: try it
+ * again, go on without what failed, or give another link for a video (a
+ * Drive copy of a YouTube video that won't download). The user, Oct 30: "if
+ * something goes wrong, it's blocked, it's frozen at that state, and then we
+ * can come in, fix it, and unblock it". Its title opens it over Home.
+ */
+function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: string) => void }) {
+  const said = issue.decision?.summary ?? issue.error ?? "Stopped.";
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-2.5 text-[13px]">
+      <TriangleAlert size={13} className="shrink-0 text-warning" />
+      <button onClick={() => onOpen(issue.id)} className="min-w-0 shrink truncate text-left text-fg hover:underline">
+        {issue.title}
+      </button>
+      <StartedBy by={issue.createdBy} size={20} className="shrink-0" />
+      {/* Where it stopped, so it's plain what's being fixed. */}
+      <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-[11px] font-medium text-secondary">Stopped {stageWords(issue.stage)}</span>
+      <span className="min-w-0 flex-1 truncate text-[12px] text-muted" title={said}>
+        {said}
+      </span>
+      <IssueActions issue={issue} />
     </div>
   );
 }
@@ -722,11 +756,13 @@ function stageWords(stage: string): string {
  * "should pop up on the home page and shouldn't redirect you to the script
  * page"). Once it's in, it says so and opens the script.
  */
-function ImportDialog({ id, writing, onClose }: { id: string | null; writing: Writing[]; onClose: () => void }) {
+function ImportDialog({ id, writing, issues, onClose }: { id: string | null; writing: Writing[]; issues: ScriptIssueRow[]; onClose: () => void }) {
   const live = writing.find((one) => one.id === id) ?? null;
+  // Stopped (and not running again): where it got to, why, and what can be done, here on Home.
+  const stopped = live === null ? (issues.find((one) => one.id === id) ?? null) : null;
   const last = useRef<Writing | null>(null);
   if (live) last.current = live;
-  const shown = live ?? last.current;
+  const shown: Writing | null = live ?? (stopped ? { id: stopped.id, title: stopped.title, stage: stopped.stage, percent: stopped.progress ?? 0, detail: "" } : last.current);
   const [began, setBegan] = useState<Record<string, number>>({});
   const [now, setNow] = useState(() => Date.now());
   const step = shown ? stepOf(shown) : "download";
@@ -743,7 +779,8 @@ function ImportDialog({ id, writing, onClose }: { id: string | null; writing: Wr
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [id]);
-  const done = id !== null && live === null && last.current !== null;
+  const done = id !== null && live === null && stopped === null && last.current !== null;
+  const why = stopped ? (stopped.decision?.summary ?? stopped.error ?? "Stopped.") : null;
   const at = done ? STEPS.length : STEPS.findIndex((candidate) => candidate.key === step);
   const percent = done ? 100 : Math.round(Math.max(0, Math.min(100, shown?.percent ?? 0)));
   return (
@@ -751,15 +788,26 @@ function ImportDialog({ id, writing, onClose }: { id: string | null; writing: Wr
       <div className="flex flex-col gap-5 p-6">
         <div>
           <h2 className="truncate text-[17px] font-semibold tracking-[-0.2px]">{shown?.title || "Importing"}</h2>
-          <p className="mt-1 text-[13px] text-muted">{done ? "The footage is in." : "Getting the footage ready. It keeps going if you close this."}</p>
+          <p className="mt-1 flex items-center gap-2 text-[13px] text-muted">
+            {stopped ? (
+              <>
+                <StartedBy by={stopped.createdBy} size={20} className="shrink-0" />
+                Stopped {stageWords(stopped.stage)}. It waits here until it's answered.
+              </>
+            ) : done ? (
+              "The footage is in."
+            ) : (
+              "Getting the footage ready. It keeps going if you close this."
+            )}
+          </p>
         </div>
         <div>
           <div className="flex items-baseline gap-3">
             <span className="text-[28px] font-semibold tabular">{percent}%</span>
-            <span className="truncate text-[13px] text-muted">{done ? "Ready" : shown?.detail || "Starting…"}</span>
+            <span className="truncate text-[13px] text-muted">{done ? "Ready" : stopped ? "Stopped" : shown?.detail || "Starting…"}</span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-raised">
-            <div className="h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${percent}%` }} />
+            <div className={cx("h-full rounded-full transition-[width] duration-500", stopped ? "bg-warning" : "bg-info")} style={{ width: `${percent}%` }} />
           </div>
         </div>
         <ol className="flex flex-col gap-1">
@@ -767,18 +815,23 @@ function ImportDialog({ id, writing, onClose }: { id: string | null; writing: Wr
             const state = index < at ? "done" : index === at ? "now" : "later";
             return (
               <li key={candidate.key} className={cx("flex items-start gap-3 rounded-lg px-3 py-2", state === "now" && "bg-raised")}>
-                <span className={cx("mt-1.5 size-2 shrink-0 rounded-full", state === "done" ? "bg-success" : state === "now" ? "animate-pulse bg-info" : "border border-line-strong")} />
+                <span className={cx("mt-1.5 size-2 shrink-0 rounded-full", state === "done" ? "bg-success" : state === "now" ? (stopped ? "bg-warning" : "animate-pulse bg-info") : "border border-line-strong")} />
                 <div className="min-w-0 flex-1">
                   <div className={cx("text-[13px] font-medium", state === "later" ? "text-muted" : "text-fg")}>{candidate.label}</div>
-                  <div className="truncate text-[12px] text-muted">{state === "now" && shown?.detail ? shown.detail : candidate.hint}</div>
+                  <div className={cx("text-[12px]", state === "now" && stopped ? "whitespace-normal text-warning" : "truncate text-muted")}>{state === "now" && why ? why : state === "now" && shown?.detail ? shown.detail : candidate.hint}</div>
                 </div>
-                <span className="shrink-0 text-[12px] text-faint tabular">{state === "now" && began[candidate.key] ? elapsed(now - began[candidate.key]!) : state === "done" ? "Done" : ""}</span>
+                <span className="shrink-0 text-[12px] text-faint tabular">{state === "now" && !stopped && began[candidate.key] ? elapsed(now - began[candidate.key]!) : state === "done" ? "Done" : ""}</span>
               </li>
             );
           })}
         </ol>
+        {stopped && (
+          <div className="flex flex-wrap items-center">
+            <IssueActions issue={stopped} wide />
+          </div>
+        )}
         <div className="flex items-center justify-between">
-          <span className="text-[12px] text-faint">{began.start ? `Running for ${elapsed(now - began.start)}` : ""}</span>
+          <span className="text-[12px] text-faint">{began.start && !stopped ? `Running for ${elapsed(now - began.start)}` : ""}</span>
           <div className="flex gap-2">
             <Button variant="subtle" onClick={onClose}>
               Close
@@ -811,7 +864,7 @@ function Imports({ projects, statuses, writing, issues, scripts, onOpen }: { pro
         {open.length > 0 && <span className="text-warning">{open.length} {open.length === 1 ? "needs" : "need"} you</span>}
       </div>
       {open.map((issue) => (
-        <ScriptIssue key={issue.id} issue={issue} />
+        <ScriptIssue key={issue.id} issue={issue} onOpen={onOpen} />
       ))}
       {writing.map((one) => (
         <button

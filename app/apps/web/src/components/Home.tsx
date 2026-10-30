@@ -359,7 +359,7 @@ const STYLE_NOTES: Record<Style, string> = {
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
 
-/** Every status in Home's table looks alike: one pill, its icon, a few words, its colour saying how much it matters; each as wide as the column (the widest of them), so they line up. */
+/** Every status in Home's table looks alike: one pill, its icon, a word or two of about the same length (Write script, Not exported, 7 comments, Cloud only), its colour saying how much it matters; each as wide as the column (the widest of them), so they line up without empty tails. */
 const CHIP = "flex h-[22px] min-w-0 flex-1 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium whitespace-nowrap";
 
 interface NoticeProps {
@@ -549,7 +549,7 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
     return (
       <span title={`${editor} is editing it now: it opens read-only until they close it.`} className={cx(CHIP, "text-warning")}>
         <Lock size={12} className="shrink-0" />
-        <span className="truncate">{editor} is editing</span>
+        <span className="truncate">Being edited</span>
       </span>
     );
   if (state === undefined) return null;
@@ -588,7 +588,7 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
           className={cx(CHIP, "tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
         >
           {importStuck(state.importing) ? <TriangleAlert size={12} /> : <LoaderCircle size={12} className="animate-spin" />}
-          {importStuck(state.importing) ? "Import needs you" : `Importing ${importShare(state.importing)}`}
+          {importStuck(state.importing) ? "Import stuck" : `Importing ${importShare(state.importing)}`}
         </span>
       ),
     state.working && (
@@ -1279,10 +1279,10 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
         {importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (the step in its tooltip; its row opens the import).
           <span className={cx(CHIP, "text-info tabular")} title={importing.step}>
-            <span className="h-1 w-8 shrink-0 overflow-hidden rounded-full bg-line">
+            <span className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-line">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
-            Importing {Math.floor(Math.max(0, Math.min(100, importing.percent)))}%
+            {Math.floor(Math.max(0, Math.min(100, importing.percent)))}%
           </span>
         ) : importing ? (
           <span className={cx(CHIP, "tabular", importing.stopped ? "text-warning" : "text-info")}>
@@ -1298,7 +1298,7 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
           // Its next step, a status like the others that's also its button.
           <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className={cx(CHIP, "text-secondary transition-colors hover:bg-hover hover:text-fg disabled:opacity-60")}>
             {script.built ? <Film size={12} /> : <PenLine size={12} />}
-            {starting ? "Starting…" : script.built ? "Start the edit" : "Write the script"}
+            {starting ? "Starting…" : script.built ? "Start edit" : "Write script"}
           </button>
         )}
       </div>
@@ -1344,7 +1344,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
           ) : (
             <span title="Not on this Mac yet: opening it downloads it" className={cx(CHIP, "text-muted")}>
               <CloudDownload size={12} />
-              Not on this Mac
+              Cloud only
             </span>
           )}
         </div>

@@ -77,16 +77,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # The preview engine engine-cache.yml built on main for these Rust
+      # sources; compiled here only when it isn't there yet.
+      - id: wasm
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: app/apps/web/src/engine/pkg
+          key: wasm-${{ hashFiles('app/Cargo.toml', 'app/Cargo.lock', 'app/.cargo/**', 'app/crates/**', '!app/crates/**/node_modules/**', 'app/scripts/build-wasm.sh') }}
+      - if: steps.wasm.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # Restored, never saved: a tag's cache is only readable by that tag (engine-cache.yml saves on main).
+      - if: steps.wasm.outputs.cache-hit != 'true'
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: app
-      - name: Install wasm-bindgen (the version in Cargo.lock)
-        run: |
-          version="$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
-          cargo install wasm-bindgen-cli --version "$version" --locked
+          save-if: false
+      - if: steps.wasm.outputs.cache-hit != 'true'
+        run: scripts/build-wasm.sh
       # Pinned: a binary compiled by Bun 1.4.4 hung at start under the hardened
       # runtime for Writer (Oct 23); 1.4.0 is what Edit is built and checked with.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -94,8 +103,6 @@ jobs:
           bun-version: 1.4.0
       - name: Build the UI
         run: |
-          cargo build -p edit-wasm --target wasm32-unknown-unknown --release
-          wasm-bindgen --target web --out-dir apps/web/src/engine/pkg target/wasm32-unknown-unknown/release/edit_wasm.wasm
           bun install --cwd apps/web --frozen-lockfile
           bun run --cwd apps/web build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -112,13 +119,26 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # The addon and window helper engine-cache.yml built on main for these
+      # Rust sources (~5 of the build's minutes); compiled here only when
+      # they aren't there yet.
+      - id: engine
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            app/crates/edit-native/edit-native.node
+            app/target/${{ matrix.target }}/release/edit-window
+          key: engine-${{ matrix.target }}-${{ hashFiles('app/Cargo.toml', 'app/Cargo.lock', 'app/.cargo/**', 'app/crates/**', '!app/crates/**/node_modules/**', 'app/scripts/build-native.sh') }}
+      - if: steps.engine.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - if: steps.engine.outputs.cache-hit != 'true'
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ matrix.target }}
           workspaces: app
+          save-if: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: web-dist
@@ -144,18 +164,7 @@ jobs:
             aarch64-apple-darwin) bun_target=bun-darwin-arm64 ;;
           esac
           bun install --frozen-lockfile
-          touch "$RUNNER_TEMP/addon-start"
-          (cd crates/edit-native && bun install --frozen-lockfile \
-            && bunx napi build --release --target ${{ matrix.target }} --dts index.d.ts \
-            && codesign -s - -f edit-native.node)
-          # C and Objective-C built for a newer macOS than Edit's oldest (13.0,
-          # .cargo/config.toml) bind newer classes strongly: the addon then
-          # won't load there and the window stays black (nightly-13 on 15.3).
-          newer="$(find "target/${{ matrix.target }}/release/build" -path '*/out/*.a' -newer "$RUNNER_TEMP/addon-start" \
-            -exec sh -c 'otool -l "$1" | awk -v f="$1" "/ minos / && \$2+0 > 13 {print f\": macOS \" \$2}"' _ {} \; | sort -u)"
-          if [ -n "$newer" ]; then echo "built for a newer macOS than 13.0:"; echo "$newer"; exit 1; fi
-          cargo build --release --locked -p edit-window --target ${{ matrix.target }}
-          codesign -s - -f "target/${{ matrix.target }}/release/edit-window"
+          if [ "${{ steps.engine.outputs.cache-hit }}" != true ]; then scripts/build-native.sh ${{ matrix.target }}; fi
           bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node \
             --window "target/${{ matrix.target }}/release/edit-window"
           mkdir package

@@ -1096,10 +1096,10 @@ function ProjectTable({
         <span role="columnheader">Type</span>
         <span role="columnheader">Creator</span>
         <span role="columnheader">Status</span>
-        <span role="columnheader" className="text-right">
+        <span role="columnheader">
           Length
         </span>
-        <span role="columnheader" className="text-right">
+        <span role="columnheader">
           Updated
         </span>
         <span role="columnheader" className="sr-only">
@@ -1164,10 +1164,10 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
             subtitled && <span className="shrink-0 text-[12px] text-faint">Not uploaded</span>
           )}
         </div>
-        <span role="cell" className="text-right text-[13px] text-secondary tabular">
+        <span role="cell" className="text-[13px] text-secondary tabular">
           {project.problem ? "" : shortDuration(project.duration_frames / project.fps)}
         </span>
-        <span role="cell" className="text-right text-[13px] text-secondary">
+        <span role="cell" className="text-[13px] text-secondary">
           {ago(project.modified_ms)}
         </span>
         <button
@@ -1329,10 +1329,10 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
           </button>
         )}
       </div>
-      <span role="cell" className="text-right text-[13px] text-secondary tabular">
+      <span role="cell" className="text-[13px] text-secondary tabular">
         {script.durationMs > 0 ? shortDuration(script.durationMs / 1000) : ""}
       </span>
-      <span role="cell" className="text-right text-[13px] text-secondary" title={script.updatedBy ? `by ${script.updatedBy}` : undefined}>
+      <span role="cell" className="text-[13px] text-secondary" title={script.updatedBy ? `by ${script.updatedBy}` : undefined}>
         {ago(script.updatedAt)}
       </span>
       <button
@@ -1416,10 +1416,10 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
             </span>
           )}
         </div>
-        <span role="cell" className="text-right text-[13px] text-secondary tabular">
+        <span role="cell" className="text-[13px] text-secondary tabular">
           {seconds !== null ? shortDuration(seconds) : ""}
         </span>
-        <span role="cell" className="text-right text-[13px] text-secondary" title={`by ${project.updated_by}`}>
+        <span role="cell" className="text-[13px] text-secondary" title={`by ${project.updated_by}`}>
           {ago(project.updated_ms)}
         </span>
         <button

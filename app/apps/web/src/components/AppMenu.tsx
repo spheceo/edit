@@ -278,10 +278,10 @@ function ReportDialog() {
 }
 
 /**
- * The YouTube sign-in from Chrome: what it's for, how it stands, and what to
- * do next, step by step (the team: "give clear instructions on how to do it
- * and how to give Edit the permissions"). Check brings up the Mac's Keychain
- * dialog now, while these words are on screen, not in the middle of an import.
+ * The YouTube sign-in from Chrome: how it stands and what to do next, in a
+ * line (what it's for on hover). Check brings up the Mac's Keychain dialog
+ * now, while the line says to choose Always Allow, not in the middle of an
+ * import.
  */
 function YoutubeGroup() {
   const [state, setState] = useState<YoutubeSignIn | null>(null);
@@ -299,37 +299,27 @@ function YoutubeGroup() {
       .catch(setFailed)
       .finally(() => setChecking(false));
   };
-  const steps: ReactNode = !state ? null : !state.chrome ? (
-    <>Install Google Chrome, open youtube.com in it and sign in (top right), then press Check.</>
+  // One line for where it stands (the user, Oct 30: the steps were "too verbose").
+  const detail: ReactNode = !state ? null : !state.chrome ? (
+    "Needs Google Chrome, signed in to YouTube."
   ) : !state.profile ? (
-    <>Open Chrome, go to youtube.com and sign in (top right) with the team’s YouTube account. Then press Check.</>
+    "Sign in to YouTube in Chrome, then Check."
   ) : state.allowed === true ? (
-    <>Ready: Edit uses the YouTube sign-in of Chrome’s “{state.profile.name}” profile when a video needs one.</>
+    <>Using Chrome’s “{state.profile.name}” profile.</>
   ) : (
     <>
-      {state.problem && <span className="text-danger">{state.problem} </span>}
-      Chrome’s “{state.profile.name}” profile is signed in to YouTube. Press Check: your Mac asks whether “security” may use “Chrome Safe
-      Storage”. Type your Mac’s password and choose <b>Always Allow</b> (not Allow or Deny). That’s all: it won’t ask again.
+      Press Check, then choose <b>Always Allow</b> on your Mac.
     </>
   );
   return (
     <Group title="YouTube">
       <Row
         name="Sign-in from Chrome"
-        detail={
-          <>
-            Some videos (age-restricted, members-only, or when YouTube asks for a sign-in) only download for a signed-in account.
-            {steps && (
-              <>
-                <br />
-                {steps}
-              </>
-            )}
-          </>
-        }
+        detail={<span title="For videos YouTube only gives a signed-in account: age-restricted, members-only, or when it asks for a sign-in.">{detail}</span>}
+        bad={state?.allowed === true ? undefined : (state?.problem ?? undefined)}
       >
         <Button onClick={check} disabled={checking || !state?.chrome}>
-          {checking ? "Waiting for your Mac…" : "Check"}
+          {checking ? "Waiting…" : "Check"}
         </Button>
       </Row>
       {failed !== null && (

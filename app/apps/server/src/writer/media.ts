@@ -93,17 +93,21 @@ export interface JoinPart {
 
 /** The encoder that makes previews on the Mac's video hardware. */
 const HARDWARE = "h264_videotoolbox";
-/** Decode on the video hardware and keep the frames there. */
-const HARDWARE_DECODE = ["-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld"];
+/**
+ * Decode on the video hardware, the frames handed on in memory. Kept on the
+ * hardware (videotoolbox_vld and scale_vt), a recording whose frames changed
+ * format part-way made FFmpeg rebuild its filters and fail ("Function not
+ * implemented"): every Axon and redacted bodycam file of Oct 30's imports
+ * fell to libx264, two to three times real time on a Mac loaded to 40, where
+ * the hardware encoder is many times that.
+ */
+const HARDWARE_DECODE = ["-hwaccel", "videotoolbox"];
 /** The hardware encoder at a quality close to libx264's CRF 27, a key frame a second, High profile. */
 const HARDWARE_ENCODE = ["-c:v", HARDWARE, "-profile:v", "high", "-q:v", "65", "-g", "30", "-pix_fmt", "yuv420p"];
 
-/** Fitted to `height` on the hardware, brought back to pad and set the rate; `width` null keeps the shape as it shows. */
+/** Fitted to `height` (a cheap software scale; the encoding is the hardware's), padded and set to the rate; `width` null keeps the shape as it shows. */
 function hardwarePicture(width: number | null, height: number): string {
-  const fit =
-    width === null
-      ? `scale_vt=w='trunc(iw*sar*${height}/ih/2)*2':h=${height},hwdownload,format=nv12`
-      : `scale_vt=w='trunc(min(${width}/iw\\,${height}/ih)*iw/2)*2':h='trunc(min(${width}/iw\\,${height}/ih)*ih/2)*2',hwdownload,format=nv12,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`;
+  const fit = width === null ? `scale=w='trunc(iw*sar*${height}/ih/2)*2':h=${height}` : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`;
   return `${fit},setsar=1,fps=30,format=yuv420p`;
 }
 
@@ -239,15 +243,44 @@ async function formatOf(path: string): Promise<string | null> {
  * encoded again; pieces that don't match, or a copy the wrong length, are
  * joined afresh. Says whether the streams were copied.
  */
-export async function append(base: string, more: string[], dest: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal): Promise<boolean> {
+export async function append(base: string, more: string[], dest: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal, matched = false): Promise<boolean> {
   const pieces = await Promise.all([base, ...more].map(async (path): Promise<JoinPart> => ({ path, streams: await streams(path) })));
   const total = pieces.reduce((sum, piece) => sum + piece.streams.durationMs, 0);
   if (total > MAX_CASE_MS) throw new Error("Use footage between a second and twenty hours in all.");
   const first = await formatOf(base);
   const formats = await Promise.all(more.map(formatOf));
   if (first === null || formats.some((format) => format !== first)) {
-    await join(pieces, dest, onPercent, signal);
-    return false;
+    // Pieces encoded two ways (some on the hardware, some by libx264 when it
+    // refused them): only the odd ones out are encoded again, as most of them
+    // were, and all are then copied end to end. Oct 30, a 6.7-hour case's 15
+    // pieces (3 and 11) were encoded again whole, most of an hour.
+    const all = [first, ...formats];
+    const tally = new Map<string, number>();
+    for (const format of all) if (format !== null) tally.set(format, (tally.get(format) ?? 0) + 1);
+    const most = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    if (matched || most === null) {
+      await join(pieces, dest, onPercent, signal);
+      return false;
+    }
+    const paths = [base, ...more];
+    const like = paths[all.indexOf(most)]!;
+    const made: string[] = [];
+    try {
+      const fixed: string[] = [];
+      for (const [index, piece] of pieces.entries()) {
+        if (all[index] === most) {
+          fixed.push(piece.path);
+          continue;
+        }
+        const again = dest.replace(/\.[^./]+$/, `.like-${index}.mp4`);
+        made.push(again);
+        await joinLike([piece], again, like, () => {}, signal);
+        fixed.push(again);
+      }
+      return await append(fixed[0]!, fixed.slice(1), dest, onPercent, signal, true);
+    } finally {
+      for (const path of made) fs.rmSync(path, { force: true });
+    }
   }
   const list = dest.replace(/\.[^./]+$/, "") + ".txt";
   fs.writeFileSync(list, pieces.map((piece) => `file '${piece.path.replaceAll("'", "'\\''")}'\n`).join(""));

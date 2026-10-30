@@ -360,7 +360,8 @@ const STYLE_NOTES: Record<Style, string> = {
 };
 
 /** Every status in Home's table looks alike: one pill, its icon, a word or two of about the same length (Write script, Not exported, 7 comments, Cloud only), its colour saying how much it matters; each as wide as the column (the widest of them) with its words centred, so they line up as one even column. */
-const CHIP = "flex h-[22px] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full bg-raised px-2.5 text-[12px] leading-none font-medium whitespace-nowrap";
+const PILL = "flex h-[22px] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-2.5 text-[12px] leading-none whitespace-nowrap";
+const CHIP = `${PILL} bg-raised font-medium`;
 
 interface NoticeProps {
   tone: "warn" | "bad" | "info";
@@ -1278,8 +1279,8 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
             Writing
           </span>
         ) : (
-          // Its next step, a status like the others that's also its button.
-          <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className={cx(CHIP, "text-secondary transition-colors hover:bg-hover hover:text-fg disabled:opacity-60")}>
+          // Its next step: the pill's shape, filled, so it reads as the button it is (the user, Oct 30: "these are ctas").
+          <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className={cx(PILL, "cursor-pointer bg-fg font-semibold text-bg transition-colors hover:bg-white disabled:opacity-60")}>
             {script.built ? <Film size={12} /> : <PenLine size={12} />}
             {starting ? "Starting…" : script.built ? "Start edit" : "Write script"}
           </button>

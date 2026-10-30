@@ -452,28 +452,37 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
   const base = project.tracks.find((track) => track.kind === "video")?.id;
   const issues: unknown[] = [];
   for (const block of project.script?.blocks ?? []) {
-    if (block.kind !== "footage" || block.media == null || block.words == null || block.clip == null) continue;
-    const transcript = transcripts.get(block.media);
-    if (transcript === undefined) continue;
+    if (block.kind !== "footage" || block.media == null) continue;
+    const transcript = transcripts.get(block.media) ?? { words: [] };
     const offset = block.media_start ?? 0;
-    const [cutIn, cutOut] = seams.script.align(transcript.words, null, block.words, block.start - offset, block.end - offset);
-    if (cutIn === null || cutOut === null) continue;
+    // Where the range plays: found again by its first and last words when the Doc names them, else its own times.
+    const [given, until] = block.cut ?? [block.start, block.end];
+    const [foundIn, foundOut] = block.words != null && transcript.words.length > 0 ? seams.script.align(transcript.words, null, block.words, block.start - offset, block.end - offset) : [null, null];
+    const [cutIn, cutOut] = foundIn !== null && foundOut !== null ? [foundIn, foundOut] : [given - offset, until - offset];
+    if (!(cutOut > cutIn)) continue;
     // The range's clip and the footage clips that carry it on, butted on the
     // timeline (a cut for B-roll over it), each picking up within a second of
     // where the last left off: the same moment played elsewhere doesn't count.
-    const footage = project.clips.filter((clip) => clip.type === "video" && clip.track === base && clip.media === block.media);
+    // A recording without picture (a 911 call) plays as sound on any track.
+    const call = project.media.find((media) => media.id === block.media)?.kind === "audio";
+    const footage = project.clips.filter((clip) => (clip.type === "audio" ? call && clip.media === block.media : clip.type === "video" && !call && clip.track === base && clip.media === block.media));
     const span = (clip: Clip): [number, number] => {
-      const from = clip.type === "video" ? clip.source_in : 0;
-      const speed = clip.type === "video" ? clip.speed : 1;
+      const from = clip.type === "video" || clip.type === "audio" ? clip.source_in : 0;
+      const speed = clip.type === "video" || clip.type === "audio" ? clip.speed : 1;
       return [from, from + (clip.duration / fps) * speed];
     };
     // A pause cut out of the range (dead air in a teaser) skips only silence:
     // the next piece may pick up later as long as no word was skipped.
     const words = transcript.words.filter((word) => word.end > cutIn + 0.02 && word.start < cutOut - 0.02 && trim(word.text) !== "");
     const silent = (from: number, to: number) => !words.some((word) => word.end > from + 0.05 && word.start < to - 0.05);
-    let current = footage.find((clip) => clip.id === block.clip);
-    if (current === undefined) continue;
+    let current = block.clip == null ? undefined : footage.find((clip) => clip.id === block.clip);
     const played: [number, number][] = [];
+    // Its clip gone (cut away, moved, or rebuilt from another recording): what
+    // of the range plays anywhere on the footage track counts, the rest is
+    // missing (Oct 30: She Left Him's intro lost six ranges this way, and the
+    // audit skipped them all).
+    const gone = current === undefined;
+    if (gone) for (const clip of footage) if (span(clip)[1] > cutIn && span(clip)[0] < cutOut) played.push(span(clip));
     while (current !== undefined) {
       played.push(span(current));
       const [, ends] = span(current);
@@ -506,12 +515,109 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
       issues.push({
         kind: "off_script",
         range: block.label,
-        clip: block.clip,
+        ...(gone ? { clip_gone: true } : { clip: block.clip }),
         script_seconds: [round(cutIn * 100) / 100, round(cutOut * 100) / 100],
         seconds_not_played: round(missing * 10) / 10,
-        fix: "realign_script, or put the range back whole",
+        fix: gone ? "its clip is gone: put the range back where the script has it, from its own recording, its first word to its last" : "realign_script, or put the range back whole",
       });
     }
+  }
+  return issues;
+}
+
+/**
+ * Script ranges played out of the script's order (`script_order`): each
+ * range should first play after the one before it does (a teaser replayed
+ * later in the body is fine). She Left Him's interview-room teasers had moved
+ * into the body ("the clips in the entire intro are not correct according to
+ * the script"; "the script is followed 100%").
+ */
+export function scriptOrder(project: Project): unknown[] {
+  const fps = fpsOf(project);
+  const base = project.tracks.find((track) => track.kind === "video")?.id;
+  const issues: unknown[] = [];
+  let at = 0;
+  let before: string | null = null;
+  for (const block of project.script?.blocks ?? []) {
+    if (block.kind !== "footage" || block.media == null) continue;
+    const offset = block.media_start ?? 0;
+    const [from, to] = (block.cut ?? [block.start, block.end]).map((second) => second - offset) as [number, number];
+    const starts = project.clips
+      .filter((clip) => clip.type === "video" && clip.track === base && clip.media === block.media && clip.source_in < to - 0.1 && clip.source_in + (clip.duration / fps) * clip.speed > from + 0.1)
+      .map((clip) => clip.start)
+      .sort((a, b) => a - b);
+    if (starts.length === 0) continue;
+    const next = starts.find((start) => start >= at - fps);
+    if (next === undefined) issues.push({ kind: "script_order", range: block.label, plays_at_seconds: round((starts[0]! / fps) * 10) / 10, script_has_it_after: before, fix: "move it to where the script has it: after the range before it" });
+    else at = next;
+    before = block.label;
+  }
+  return issues;
+}
+
+/**
+ * Narration over the footage's own sound (`voiceover_in_footage`): a
+ * voice-over that starts while the footage still plays with its sound, or the
+ * footage's sound coming back while the narration still talks. The team, on
+ * the Bookkeeper: "VO starts here where we are still inside the footage -
+ * critical mistake throughout the entire video"; "we start the real sound
+ * before we are out of the cut in. Small mistakes like these may not happen
+ * anywhere in the video". A fade over the cut (the sounds dissolving) and a
+ * few frames either side are fine.
+ */
+export function narrationInFootage(project: Project): unknown[] {
+  if (project.style === "commentary" || project.style === "shorts") return [];
+  const fps = fpsOf(project);
+  const near = Math.round(fps / 5);
+  const audible = (clip: Clip): boolean => clip.type === "audio" && clip.volume_db > -30 && trackOf(project, clip.track)?.muted !== true;
+  const narrations = project.clips.filter((clip) => audible(clip) && seams.voiceover.isVoiceover(project, clip));
+  const footage = project.clips.filter((clip) => audible(clip) && "media" in clip && project.media.find((media) => media.id === clip.media)?.kind === "video");
+  const issues: unknown[] = [];
+  for (const said of narrations) {
+    for (const sound of footage) {
+      if (sound.start < said.start - near && clipEnd(sound) - sound.fade_out > said.start + near) {
+        issues.push({ kind: "voiceover_in_footage", at: said.start, clip: said.id, footage: sound.id, footage_until: clipEnd(sound), fix: "start the narration once the footage and its sound are out (after the transition), or end the footage there" });
+        break;
+      }
+      if (sound.start > said.start + near && sound.start + sound.fade_in < clipEnd(said) - near) {
+        issues.push({ kind: "voiceover_in_footage", at: sound.start, clip: said.id, footage: sound.id, narration_until: clipEnd(said), fix: "bring the footage (picture and sound) back once the narration has ended, or end the narration first" });
+        break;
+      }
+    }
+  }
+  return issues;
+}
+
+/**
+ * Footage shown before the video gets to it (`footage_ahead`): a picture over
+ * a cut-in after the intro taken from a script range that only plays later
+ * (more than ~45 s on: a cut-in teasing what comes right after it is fine).
+ * The team, She Left Him: "It is a complete no-go to show this footage right
+ * here, as this is something that appears later in the video"; "Throughout the
+ * entire video, we need to ensure that we don't show footage that obviously is
+ * something we haven't seen yet".
+ */
+export function footageAhead(project: Project, introEnd: number): unknown[] {
+  const fps = fpsOf(project);
+  const base = project.tracks.find((track) => track.kind === "video")?.id;
+  const span = (clip: Clip): [number, number] => (clip.type === "video" ? [clip.source_in, clip.source_in + (clip.duration / fps) * clip.speed] : [0, 0]);
+  // Where each script range first plays: its footage on the main track with its sound.
+  const ranges = (project.script?.blocks ?? []).flatMap((block) => {
+    if (block.kind !== "footage" || block.media == null) return [];
+    const offset = block.media_start ?? 0;
+    const [from, to] = (block.cut ?? [block.start, block.end]).map((second) => second - offset) as [number, number];
+    const plays = project.clips.filter((clip) => clip.type === "video" && clip.track === base && clip.media === block.media && span(clip)[0] < to - 0.1 && span(clip)[1] > from + 0.1 && project.clips.some((sound) => sound.type === "audio" && sound.media === clip.media && sound.start < clipEnd(clip) && clipEnd(sound) > clip.start && sound.volume_db > -30));
+    return plays.length === 0 ? [] : [{ label: block.label, media: block.media, from, to, at: Math.min(...plays.map((clip) => clip.start)) }];
+  });
+  const issues: unknown[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "video" || clip.start < introEnd) continue;
+    const [from, to] = span(clip);
+    // Every range that has this moment (a recap can be in two): the first to play decides.
+    const showing = ranges.filter((range) => range.media === clip.media && Math.min(range.to, to) - Math.max(range.from, from) > 0.5).sort((a, b) => a.at - b.at);
+    const later = showing[0];
+    if (later === undefined || later.at <= clipEnd(clip) + 45 * fps) continue;
+    issues.push({ kind: "footage_ahead", clip: clip.id, at: clip.start, shows: later.label, which_plays_at_seconds: round((later.at / fps) * 10) / 10, fix: "show what the video has reached instead (an earlier moment, a photo, a graphic): this footage only plays later" });
   }
   return issues;
 }

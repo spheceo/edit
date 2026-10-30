@@ -81,7 +81,9 @@ export const hooks = {
   cutMidWord: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.cutMidWord(project, transcripts),
   deadAir: (project: Project, transcripts: Map<string, Transcript>, spans: [number, number][]): Json[] =>
     seams.editReview.deadAir(project, transcripts, spans),
-  offScript: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.offScript(project, transcripts),
+  offScript: (project: Project, transcripts: Map<string, Transcript>): Json[] => [...seams.editReview.offScript(project, transcripts), ...seams.editReview.scriptOrder(project)],
+  narrationInFootage: (project: Project): Json[] => seams.editReview.narrationInFootage(project),
+  footageAhead: (project: Project, introEnd: number): Json[] => seams.editReview.footageAhead(project, introEnd),
   textNotSaid: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.textNotSaid(project, transcripts),
   textLate: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.textLate(project, transcripts) as Json[],
   unsubtitledSpeech: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.unsubtitledSpeech(project, transcripts),
@@ -1110,9 +1112,14 @@ const LONGEST_INTRO = 40;
  * LONGEST_INTRO (`intro_long`: the team wanted ~30 s of the strongest
  * emotional moments ending on the arrest, "change our intro clips… so they
  * look a bit more like this video", over our ~60 s with calm room shots).
+ * An edit with a script plays its teasers as written ("please follow the
+ * script strictly"), so only one without is told to cut them.
  */
+/** Whether the edit's footage comes from a script's ranges (a Doc or Script mode), which then decide its teasers. */
+const scripted = (project: Project): boolean => project.script?.blocks.some((block) => block.kind === "footage") ?? false;
+
 export function introLong(project: Project, teasers: [number, number][]): Json[] {
-  if (project.style !== "bodycam" || teasers.length === 0) return [];
+  if (project.style !== "bodycam" || teasers.length === 0 || scripted(project)) return [];
   const fps = project.settings.fps;
   const [start, end] = [Math.min(...teasers.map(([from]) => from)), Math.max(...teasers.map(([, to]) => to))];
   // The teasers' footage, not the narration of a cut-in between them.
@@ -1281,7 +1288,8 @@ const ARREST = /\b(you'?re|you are) (now )?under arrest\b|\bunder arrest\b|\bcuf
  * ended on a calm line). Names the arrest line found, to end on it.
  */
 export function introWithoutArrest(project: Project, heard: Map<string, Transcript>, teasers: [number, number][]): Json[] {
-  if (project.style !== "bodycam" || teasers.length === 0) return [];
+  // A script decides where its intro ends ("according to the script, the intro stops after this"): only an edit without one is told to end on the arrest.
+  if (project.style !== "bodycam" || teasers.length === 0 || scripted(project)) return [];
   const fps = project.settings.fps;
   const end = Math.max(...teasers.map(([, to]) => to));
   // What the intro's last 10 s say.
@@ -1350,6 +1358,8 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   ] : [
     ...hooks.calloutTiming(project, heard),
     ...hooks.offScript(project, heard),
+    ...hooks.narrationInFootage(project),
+    ...hooks.footageAhead(project, Math.max(0, ...parts.filter((part) => part.kind === "intro").map((part) => part.end))),
     ...hooks.textNotSaid(project, heard),
     ...hooks.textLate(project, heard),
     ...hooks.unsubtitledSpeech(project, heard),
@@ -1406,7 +1416,7 @@ const FIXABLE = [
   "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
-  "off_script", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
+  "off_script", "script_order", "voiceover_in_footage", "footage_ahead", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
   "blur_off_shot", "sfx_long", "sfx_late_hit", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "viewer_over_cut",
   "intro_uncaptioned", "short_length", "short_unfilled", "short_subject_off", "short_unsubtitled", "short_no_music", "short_music_stops",

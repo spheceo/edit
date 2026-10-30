@@ -597,6 +597,10 @@ test("a bodycam intro past 40 s is flagged; an interrogation's isn't", () => {
   // A cut-in between the teasers isn't counted: 20 s + 18 s of teasers.
   expect(introLong(p, [[0, 20 * 30], [45 * 30, 63 * 30]])).toEqual([]);
   expect(introLong(p, [[0, 28 * 30]])).toEqual([]);
+  // A script's teasers are played as written.
+  p.script = { blocks: [{ kind: "footage", media: "m1", start: 5, end: 7 }] } as unknown as Project["script"];
+  expect(introLong(p, [[0, 30 * 30], [36 * 30, 50 * 30]])).toEqual([]);
+  p.script = undefined;
   p.style = "interrogation";
   expect(introLong(p, [[0, 90 * 30]])).toEqual([]);
 });
@@ -613,6 +617,10 @@ test("a bodycam intro that doesn't end on the arrest is flagged, naming the arre
   expect(issues.map((issue) => [issue.kind, issue.arrest.at_seconds])).toEqual([["intro_no_arrest", 60]]);
   // Ending on it: nothing to say.
   heard.set("m1", { words: words("you're under arrest for risk of injury", 6) } as unknown as Transcript);
+  expect(introWithoutArrest(p, heard, [[0, 300]])).toEqual([]);
+  // An edit with a script: the script decides where its intro ends.
+  heard.set("m1", { words: [...words("it will be the worst nightmare", 5), ...words("you're under arrest for risk of injury", 60)] } as unknown as Transcript);
+  p.script = { blocks: [{ kind: "footage", media: "m1", start: 5, end: 7 }] } as unknown as Project["script"];
   expect(introWithoutArrest(p, heard, [[0, 300]])).toEqual([]);
 });
 

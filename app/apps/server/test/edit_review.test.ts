@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { calloutTiming, cutMidWord, lineFrames, offScript, spokenWords, subtitleCoverage, textLate, textNotSaid, unsubtitledSpeech } from "../src/edit_review.ts";
+import { calloutTiming, cutMidWord, footageAhead, lineFrames, narrationInFootage, offScript, scriptOrder, spokenWords, subtitleCoverage, textLate, textNotSaid, unsubtitledSpeech } from "../src/edit_review.ts";
 import type { AudioClip, Clip, Project, TextClip } from "../src/model.ts";
 import { addTrack, newProject } from "../src/project.ts";
 import type { Transcript } from "../src/transcribe.ts";
@@ -173,6 +173,65 @@ test("footage_that_stops_short_of_its_script_range_is_flagged", () => {
   // Played whole, nothing to say.
   (p.clips[0] as { duration: number }).duration = 190;
   expect(offScript(p, new Map([["m7", TEASER]]))).toEqual([]);
+});
+
+test("a_script_range_whose_clip_is_gone_is_flagged_unless_its_footage_plays_elsewhere", () => {
+  const p = footageProject();
+  p.script = {
+    source: "doc",
+    blocks: [{ kind: "footage", url: "u", file: "f", start: 272, end: 278, label: "4:32-4:38", notes: ["start...it"], media: "m7", words: ["start", "it"], clip: "gone" }],
+  } as Project["script"];
+  // Its footage plays whole from another clip: nothing to say.
+  (p.clips[0] as { duration: number }).duration = 190;
+  expect(offScript(p, new Map([["m7", TEASER]]))).toEqual([]);
+  // Cut from the edit altogether, and with no words to find it by.
+  p.clips.splice(0, 1);
+  delete (p.script!.blocks[0] as { words?: unknown }).words;
+  const [issue] = offScript(p, new Map()) as Record<string, unknown>[];
+  expect(issue).toMatchObject({ kind: "off_script", range: "4:32-4:38", clip_gone: true });
+});
+
+test("a_script_range_played_before_the_one_the_script_has_before_it_is_flagged", () => {
+  const p = footageProject();
+  p.clips.push({ ...(p.clips[0] as Clip), id: "c26", start: 150, source_in: 100 } as Clip);
+  const range = (label: string, start: number) => ({ kind: "footage", url: "u", file: "f", start, end: start + 4, label, notes: [], media: "m7" });
+  p.script = { source: "doc", blocks: [range("first", 272.2), range("second", 100)] } as unknown as Project["script"];
+  expect(scriptOrder(p)).toEqual([]);
+  p.script = { source: "doc", blocks: [range("second", 100), range("first", 272.2)] } as unknown as Project["script"];
+  expect((scriptOrder(p) as Record<string, unknown>[]).map((issue) => [issue.kind, issue.range])).toEqual([["script_order", "first"]]);
+});
+
+test("narration_over_the_footages_own_sound_is_flagged_either_way", () => {
+  const p = footageProject();
+  const a2 = addTrack(p, "audio");
+  p.media.push({ id: "vo", name: "Cut-in 1", path: "/vo.mp3", kind: "audio", duration: 10, width: 0, height: 0, fps: 0, has_audio: true });
+  // The voice-over starts at 100 while the footage's sound runs to 150.
+  p.clips.push(sound("n1", a2, "vo", 100, 90, { name: "Voice-over" }));
+  expect((narrationInFootage(p) as Record<string, unknown>[]).map((issue) => [issue.kind, issue.at])).toEqual([["voiceover_in_footage", 100]]);
+  // Starting as the footage ends: fine.
+  (p.clips.at(-1) as { start: number }).start = 150;
+  expect(narrationInFootage(p)).toEqual([]);
+  // The footage's sound back at 200 while the narration talks to 240.
+  p.clips.push(sound("c27", p.tracks.find((track) => track.kind === "audio")!.id, "m7", 200, 60, { source_in: 300 }));
+  expect((narrationInFootage(p) as Record<string, unknown>[]).map((issue) => [issue.kind, issue.at])).toEqual([["voiceover_in_footage", 200]]);
+});
+
+test("a_cut_in_showing_footage_that_only_plays_later_is_flagged", () => {
+  const p = footageProject();
+  const a1 = p.tracks.find((track) => track.kind === "audio")!.id;
+  const v2 = addTrack(p, "video");
+  const range = (label: string, start: number) => ({ kind: "footage", url: "u", file: "f", start, end: start + 4, label, notes: [], media: "m7" });
+  p.script = { source: "doc", blocks: [range("teaser", 272.2), range("later", 100)] } as unknown as Project["script"];
+  // "later" plays at 3000 with its sound; a cut-in at 300 shows a moment of it.
+  p.clips.push({ ...(p.clips[0] as Clip), id: "c26", start: 3000, source_in: 100 } as Clip);
+  p.clips.push(sound("c27", a1, "m7", 3000, 150, { source_in: 100 }));
+  p.clips.push({ ...(p.clips[0] as Clip), id: "c28", track: v2, start: 300, duration: 60, source_in: 101 } as Clip);
+  expect((footageAhead(p, 0) as Record<string, unknown>[]).map((issue) => [issue.kind, issue.clip, issue.shows])).toEqual([["footage_ahead", "c28", "later"]]);
+  // In the intro, or teasing what plays right after it: fine.
+  expect(footageAhead(p, 400)).toEqual([]);
+  (p.clips.find((clip) => clip.id === "c26") as { start: number }).start = 600;
+  (p.clips.find((clip) => clip.id === "c27") as { start: number }).start = 600;
+  expect(footageAhead(p, 0)).toEqual([]);
 });
 
 test("a_caption_that_isnt_what_is_said_is_flagged", () => {

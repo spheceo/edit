@@ -703,7 +703,7 @@ async function fetchYoutube(app: App, dir: string, script: Script): Promise<void
     store.write(dir, script);
   }
   const began = Date.now();
-  const shared = await youtube.fetch(app, script.sourceUrl, (percent) => say(script, "Downloading from YouTube.", "downloading", 5 + Math.floor((percent * 14) / 100)));
+  const shared = await youtube.fetch(app, script.sourceUrl, (percent) => say(script, `Downloading from YouTube: ${Math.floor(percent)}%.`, "downloading", 5 + Math.floor((percent * 14) / 100)));
   script.originalPath = youtube.place(shared, dest);
   diag.info("writer", `${jobs.named(script.id, script.title)}: YouTube video downloaded in ${Math.round((Date.now() - began) / 1000)} s`);
   store.write(dir, script);
@@ -841,7 +841,8 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
   let finished = 0;
   const report = () => {
     const bytes = pulled.reduce((sum, value) => sum + value, 0);
-    say(script, wanted.length === 1 ? "Downloading from Google Drive." : `Downloading recordings from Google Drive (${finished} of ${wanted.length} done).`, "downloading", 5 + Math.min(Math.floor((bytes * 33) / totalBytes), 33));
+    const share = `${Math.min(100, Math.floor((bytes * 100) / Math.max(totalBytes, 1)))}%`;
+    say(script, wanted.length === 1 ? `Downloading from Google Drive: ${share}.` : `Downloading recordings from Google Drive: ${share} (${finished} of ${wanted.length} done).`, "downloading", 5 + Math.min(Math.floor((bytes * 33) / totalBytes), 33));
   };
   const failed: [number, { id: string; title: string; error: string }][] = [];
   await lanes(wanted, DOWNLOADS, async ([index, recording], step) => {

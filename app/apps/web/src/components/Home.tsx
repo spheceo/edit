@@ -722,7 +722,11 @@ function Imports({ projects, statuses, writing, issues }: { projects: ProjectSum
           <span className="h-1 overflow-hidden rounded-full bg-raised">
             <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(1, one.percent / 100)) * 100)}%` }} />
           </span>
-          <span className="max-w-[220px] truncate text-[12px] text-muted">{one.stage}</span>
+          {/* A number, so it's plain the import is moving (the user, Oct 30: "progress helps us know if the software is working or not"). */}
+          <span className="flex max-w-[320px] items-baseline gap-2 truncate text-[12px] text-muted" title={one.detail || one.stage}>
+            <span className="text-fg tabular">{Math.round(Math.max(0, Math.min(100, one.percent)))}%</span>
+            <span className="truncate">{one.detail || one.stage}</span>
+          </span>
         </button>
       ))}
       {running.map(({ project, importing }) => {
@@ -743,7 +747,7 @@ function Imports({ projects, statuses, writing, issues }: { projects: ProjectSum
               {stuck
                 ? importing.state === "failed" ? "Failed: open it" : "Needs you: open it"
                 : importing.state === "downloading"
-                  ? `${importing.ready} of ${importing.files} files`
+                  ? `${Math.round(share * 100)}% · ${importing.ready} of ${importing.files} files`
                   : { transcribing: "Hearing the footage", placing: "Laying it out", voicing: "Voicing the cut-ins" }[importing.state] ?? importing.state}
             </span>
           </button>

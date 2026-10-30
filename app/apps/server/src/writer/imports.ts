@@ -49,6 +49,8 @@ const MAX_IMPORTS = 3;
 
 const running = new Set<string>();
 const latest = new Map<string, ImportProgress>();
+/** When each running import began. */
+const started = new Map<string, number>();
 
 /** Whether this script is importing right now. */
 export const importing = (id: string): boolean => running.has(id);
@@ -63,14 +65,16 @@ function busy(id: string): () => void {
   if (running.has(id)) throw new Error("This import is already running.");
   if (running.size >= MAX_IMPORTS) throw new Error(`${MAX_IMPORTS} imports are already running. Try again when one finishes.`);
   running.add(id);
+  started.set(id, Date.now());
   return () => {
     running.delete(id);
     latest.delete(id);
+    started.delete(id);
   };
 }
 
 function say(script: Script, detail: string, stage = script.stage, percent = script.progress): void {
-  if (running.has(script.id)) latest.set(script.id, { id: script.id, title: script.title, stage, percent, detail });
+  if (running.has(script.id)) latest.set(script.id, { id: script.id, title: script.title, stage, percent, detail, ...(started.has(script.id) ? { startedAt: started.get(script.id)! } : {}) });
 }
 
 const clock = (ms: number): string => {

@@ -191,6 +191,8 @@ export type ImportProgress = {
   stage: string;
   percent: number;
   detail: string;
+  /** When this run of the import began, so its dialog's clock starts there, not when it's opened. */
+  startedAt?: number;
 };
 
 export type Settings = {

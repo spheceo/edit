@@ -30,7 +30,7 @@ import { readJson, type Router } from "./http/router.ts";
 import { chunkFolder, clipMap, deleteExport, holdExport, lastChunks, listExports, mapFile, timelineHash } from "./exports.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
-import type { Clip, ExportOptions, Project } from "./model.ts";
+import type { Clip, ExportOptions, Project, ScriptJob } from "./model.ts";
 import { join } from "./paths.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { clipEnd, fps as fpsOf, trackOf } from "./project.ts";
@@ -1540,7 +1540,26 @@ function sorted(value: unknown, status = 200): Response {
 /** Each project's state for the home screen: open feedback, a finished edit, and whether its current timeline is exported. */
 const statusCache = new Map<string, { rev: number; exportsAt: number; exported: boolean }>();
 
-type Status = { feedback: number; complete: boolean; exported: boolean; approved: number | null; archived: { restoring: boolean; error: string | null } | null };
+/**
+ * A project's line on Home. `importing`: its import while it runs (files
+ * ready of all, the share of their bytes in, what it's doing); `working`: its
+ * agent is on a turn; `sharing`: how its share is going (Home shows many
+ * projects' work at once: the user, Oct 30, "five projects all importing at
+ * the same time and once they're all done we check them out").
+ */
+type Status = {
+  feedback: number; complete: boolean; exported: boolean; approved: number | null; archived: { restoring: boolean; error: string | null } | null;
+  importing: { state: string; ready: number; files: number; share: number | null; error: string | null } | null; working: boolean; sharing: string | null;
+};
+
+/** An import as Home shows it: null once it's done. */
+function importing(job: ScriptJob | null): Status["importing"] {
+  if (job === null || job.state === "done") return null;
+  const sized = job.files.filter((file) => (file.total ?? 0) > 0);
+  const total = sized.reduce((sum, file) => sum + file.total!, 0);
+  const share = total > 0 ? sized.reduce((sum, file) => sum + (file.state === "done" ? file.total! : Math.min(file.bytes, file.total!)), 0) / total : null;
+  return { state: job.state, ready: job.files.filter((file) => file.state === "done").length, files: job.files.length, share, error: job.error ?? null };
+}
 
 export function projectStatus(app: App): Record<string, Status> {
   const home = app.store.home;
@@ -1562,9 +1581,19 @@ export function projectStatus(app: App): Record<string, Status> {
     }
     out[summary.id] = { feedback: open[summary.id] ?? 0, complete: finished(app, summary.id), exported: cached.exported, approved: shared[summary.id]?.approved?.version ?? null,
       archived: here[summary.id] === undefined ? null : { restoring: here[summary.id]!.restoring === true, error: here[summary.id]!.error ?? null },
+      importing: importing(app.scripts.get(summary.id)), working: working(app, summary.id), sharing: sharing.get(summary.id) ?? null,
     };
   }
   return out;
+}
+
+/** Whether the project's agent is on a turn. */
+function working(app: App, project: string): boolean {
+  try {
+    return (seams.agentPanel(app).chat(project) as { running?: boolean }).running === true;
+  } catch {
+    return false;
+  }
 }
 
 /** A whole edit (or a round of feedback) has run to its end in the project's chat, and nothing is running now. */
@@ -1587,8 +1616,12 @@ export function routes(router: Router<App>): void {
     const given = (await readJson<unknown>(context).catch(() => ({}))) as Record<string, unknown>;
     const id = context.params.id ?? "";
     if (context.app.store.get(id) === null) throw new ApiError(404, "no such project");
-    const options = typeof given?.options === "object" && given.options !== null && !Array.isArray(given.options) ? (given.options as Partial<ExportOptions>) : {};
-    const started = exportAndShare(context.app, id, options, given?.replace === true);
+    // From Home (no options): the last Share's settings, and in place of the latest version unless it has comments, as a fix goes up.
+    const home = context.app.store.home;
+    const options = typeof given?.options === "object" && given.options !== null && !Array.isArray(given.options) ? (given.options as Partial<ExportOptions>) : (read(home).shareOptions?.[id] ?? {});
+    const versions = read(home).shared[id]?.versions.length ?? 0;
+    const replace = given?.byRule === true ? versions > 0 && onLatest(home, id).length === 0 : given?.replace === true;
+    const started = exportAndShare(context.app, id, options, replace);
     started.catch((error: unknown) => diag.warn("review", `sharing ${id}: ${diag.messageOf(error)}`));
     // Refused at once (already sharing, no cloud) says so; else it runs on.
     const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 300))]).catch((error: unknown) => {

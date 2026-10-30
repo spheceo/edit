@@ -264,6 +264,8 @@ export const api = {
   mediaDrive: () => request<MediaDrive>("GET", "/api/media-drive"),
   /** Per project: open review notes, a finished edit, and whether what it is now is exported. */
   projectStatus: () => request<Record<string, ProjectStatus>>("GET", "/api/projects/status"),
+  /** A new project's first message to its agent, sent when its import is done. */
+  firstPrompt: (id: string, text: string) => request<{ ok: boolean }>("POST", `/api/projects/${id}/first-prompt`, { text }),
   /** The project's Repack review: its link, its notes with their frames, the agent's fixes. */
   review: (id: string) => request<Review>("GET", `/api/projects/${id}/review`),
   /** Shares a whole export for review (the newest without `path`); `started` while it uploads. */
@@ -271,7 +273,9 @@ export const api = {
     request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/review/share`, path === undefined ? {} : { path }),
   /** Approves the latest shared version: the review closes and the other versions' files (and their exports here) are deleted. */
   /** Share: exports the whole edit, then puts it on the project's review link (a new version after the first). */
-  shareProject: (id: string, options: ExportOptions, replace = false) => request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/share`, { options, replace }),
+  /** `options` null: the last Share's settings; `byRule`: in place of the latest version unless it has comments (Home's Share). */
+  shareProject: (id: string, options: ExportOptions | null, replace = false, byRule = false) =>
+    request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/share`, { ...(options === null ? {} : { options }), replace, byRule }),
   /** A reset the agent is asking about (`reset_edit`), and the user's answer to it. */
   resetAsked: (id: string) => request<{ pending: { asked_ms: number } | null }>("GET", `/api/projects/${id}/reset`),
   answerReset: (id: string, accept: boolean) => request<{ answered: boolean }>("POST", `/api/projects/${id}/reset`, { accept }),
@@ -309,6 +313,12 @@ export interface ProjectStatus {
   approved: number | null;
   /** Archived on Repack (its big files freed), with a restore under way or failed. */
   archived: { restoring: boolean; error: string | null } | null;
+  /** Its import while it runs: files ready of all, the share of their bytes in (null: sizes not known yet), what it's doing. */
+  importing: { state: string; ready: number; files: number; share: number | null; error: string | null } | null;
+  /** Its agent is on a turn. */
+  working: boolean;
+  /** How its share is going, while it runs. */
+  sharing: string | null;
 }
 
 /** A note on a project's Repack review, as Edit has it. */

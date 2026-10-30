@@ -25,6 +25,7 @@ import { allowedHosts } from "./http/host.ts";
 import { holdLock } from "./media_drive/layout.ts";
 import { initNative } from "./native/index.ts";
 import * as archive from "./archive.ts";
+import * as firstPrompt from "./first_prompt.ts";
 import * as reviews from "./reviews.ts";
 import { buildRouter } from "./routes.ts";
 import * as seams from "./seams.ts";
@@ -223,6 +224,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   optional("archive", () => archive.start(app));
   // Script mode: Writer's scripts on this Mac brought in once, and its background work.
   optional("writer", () => writer.start(app));
+  // A new project's first message, sent to its agent once its import is done.
+  optional("first prompt", () => firstPrompt.start(app));
   let quitting = false;
   const quit = (code: number) => {
     // A second signal, or a cloud push that never answers, doesn't hold Edit open.

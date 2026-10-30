@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, Lock, MessageSquare, Pencil, Plus, Search, Trash2, TriangleAlert } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Search, Share2, Trash2, TriangleAlert } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
@@ -42,6 +42,14 @@ export function Home() {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<Kind>(() => (localStorage.getItem(KIND) === "subtitled" ? "subtitled" : "edits"));
   const [style, setStyle] = useState<Style | null>(null);
+
+  // Imports, agents and shares under way are followed every few seconds (many projects at once).
+  const busy = Object.values(statuses).some((one) => one.importing !== null || one.working || one.sharing !== null);
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => void api.projectStatus().then(setStatuses).catch(() => {}), 3_000);
+    return () => clearInterval(timer);
+  }, [busy]);
 
   const refresh = () => {
     // The cloud’s list is fetched beside this machine’s, never in its way.
@@ -205,6 +213,7 @@ export function Home() {
               </div>
             </div>
 
+            <Imports projects={projects ?? []} statuses={statuses} />
             {rows.length > 0 ? (
               <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} />
             ) : (
@@ -310,6 +319,15 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     }
     onChanged();
   };
+  const share = async () => {
+    try {
+      await api.shareProject(project.id, null, false, true);
+      toast(`Sharing “${project.name}”: exporting it now`, "info");
+      onChanged();
+    } catch (error) {
+      useEditor.getState().toastError(error, `share “${project.name}”`);
+    }
+  };
   const open = () => {
     if (renaming) return;
     if (project.problem) useEditor.getState().toastError(project.problem, `open “${project.name}”`);
@@ -321,6 +339,8 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
       event.currentTarget,
       [
         { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(true) },
+        // Shared from here, many projects at once (an export that would wait here goes to the cloud).
+        ...(project.problem ? [] : [{ label: "Share for review", icon: <Share2 size={14} />, onSelect: () => void share() }]),
         ...(drive
           ? [
               { label: "Copy Drive link", icon: <Copy size={14} />, onSelect: () => void copyDriveLink(drive.url, toast) },
@@ -448,6 +468,27 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
   }
   return (
     <>
+      {state.importing !== null && (
+        <span
+          title={state.importing.error ?? `Importing: ${state.importing.state}`}
+          className={cx("flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
+        >
+          {importStuck(state.importing) ? <TriangleAlert size={12} /> : <LoaderCircle size={12} className="animate-spin" />}
+          {importStuck(state.importing) ? "Import needs you" : `Importing ${importShare(state.importing)}`}
+        </span>
+      )}
+      {state.working && (
+        <span title="Its agent is working on it" className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium text-agent">
+          <span className="size-1.5 animate-pulse rounded-full bg-agent" />
+          Agent working
+        </span>
+      )}
+      {state.sharing !== null && (
+        <span title={`Sharing: ${state.sharing}`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info">
+          <Share2 size={12} />
+          Sharing
+        </span>
+      )}
       {state.approved !== null && (
         <span title={`Version ${state.approved} was approved on its review`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-success">
           <Check size={12} />
@@ -470,6 +511,60 @@ function StateChips({ state, projectId, onChanged }: { state?: ProjectStatus; pr
         </span>
       )}
     </>
+  );
+}
+
+/** An import waiting on the person (a file it couldn't get) or failed. */
+const importStuck = (importing: NonNullable<ProjectStatus["importing"]>) => importing.state === "waiting" || importing.state === "failed";
+
+/** How far an import is: its bytes while it downloads, then the step it's on. */
+function importShare(importing: NonNullable<ProjectStatus["importing"]>) {
+  if (importing.state === "downloading") return importing.share !== null ? `${Math.round(importing.share * 100)}%` : `${importing.ready}/${importing.files}`;
+  return { transcribing: "· hearing", placing: "· laying out", voicing: "· voicing" }[importing.state] ?? "";
+}
+
+/**
+ * Every import under way, at the top of Home: the projects started together
+ * come in side by side, each with how far it is (the user, Oct 30: "five
+ * projects all importing at the same time and once they're all done we check
+ * them out").
+ */
+function Imports({ projects, statuses }: { projects: ProjectSummary[]; statuses: Record<string, ProjectStatus> }) {
+  const running = projects.flatMap((project) => {
+    const importing = statuses[project.id]?.importing;
+    return importing ? [{ project, importing }] : [];
+  });
+  if (running.length === 0) return null;
+  return (
+    <div className="mt-6 overflow-hidden rounded-xl border border-line">
+      <div className="flex h-10 items-center bg-panel px-4 text-[12px] font-medium text-muted">
+        Importing {running.length} {running.length === 1 ? "project" : "projects"}
+      </div>
+      {running.map(({ project, importing }) => {
+        const stuck = importStuck(importing);
+        const share = importing.state === "downloading" ? (importing.share ?? importing.ready / Math.max(importing.files, 1)) : 1;
+        return (
+          <button
+            key={project.id}
+            onClick={() => navigate(`/p/${project.id}`)}
+            title={importing.error ?? undefined}
+            className="grid w-full grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-4 border-t border-line px-4 py-2.5 text-left transition-colors hover:bg-panel"
+          >
+            <span className="truncate text-[13px] text-fg">{project.name}</span>
+            <span className="h-1 overflow-hidden rounded-full bg-raised">
+              <span className={cx("block h-full rounded-full transition-[width] duration-500", stuck ? "bg-warning" : "bg-info")} style={{ width: `${Math.round(share * 100)}%` }} />
+            </span>
+            <span className={cx("text-[12px] tabular", stuck ? "text-warning" : "text-muted")}>
+              {stuck
+                ? importing.state === "failed" ? "Failed: open it" : "Needs you: open it"
+                : importing.state === "downloading"
+                  ? `${importing.ready} of ${importing.files} files`
+                  : { transcribing: "Hearing the footage", placing: "Laying it out", voicing: "Voicing the cut-ins" }[importing.state] ?? importing.state}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -725,6 +820,8 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
   const [picked, setPicked] = useState(false);
   const [scripts, setScripts] = useState<WriterScriptRow[] | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
+  // The first message to its agent, sent when the import is done; the import then runs here on Home.
+  const [prompt, setPrompt] = useState("");
   const url = text.trim();
   const script = hasImportLinks(url);
 
@@ -732,6 +829,7 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
   useEffect(() => {
     if (!open) return;
     setText("");
+    setPrompt("");
     setPreview(null);
     setVoiceFile(null);
     setVoiceLink("");
@@ -766,6 +864,12 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
       const { project } = await api.importWriter(one.id);
       useEditor.getState().setMediaTab("downloads");
       onClose();
+      // With a first message the import runs in the background, here on Home.
+      if (prompt.trim() !== "") {
+        await api.firstPrompt(project, prompt.trim());
+        toast(`Importing “${one.title}”: your message goes to its agent when it’s in`, "info");
+        return;
+      }
       navigate(`/p/${project}`);
     } catch (error) {
       useEditor.getState().toastError(error, "start the edit from Writer");
@@ -826,7 +930,14 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
         await api.attachScript(project.id, url);
         useEditor.getState().setMediaTab("downloads");
       }
+      // After the script, so it waits for the import the script started.
+      if (prompt.trim() !== "") await api.firstPrompt(project.id, prompt.trim());
       onClose();
+      // A script with a first message imports in the background: start the next one.
+      if (script && prompt.trim() !== "") {
+        toast(`Importing “${name}”: your message goes to its agent when it’s in`, "info");
+        return;
+      }
       navigate(`/p/${project.id}`);
     } catch (error) {
       useEditor.getState().toastError(error, "start the project");
@@ -860,6 +971,14 @@ function NewProject({ open, onClose, only = null }: { open: boolean; onClose: ()
           }}
           className="w-full resize-y rounded-lg bg-transparent px-3 py-2 text-[14px] outline-none placeholder:text-faint"
         />
+        {(script || fromWriter.length > 0) && (
+          <input
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="First message to its agent (optional): sent when the import is done, which then runs here"
+            className="mx-3 mb-2 h-8 w-[calc(100%-24px)] rounded-md border border-line bg-black px-2 text-[13px] outline-none placeholder:text-faint focus:border-muted"
+          />
+        )}
         {script && (
           <div className="truncate px-3 pb-2 text-[12px] text-muted">
             {preview?.error ? (

@@ -309,6 +309,8 @@ export interface ScriptJobs {
 export interface ScriptSeam {
   readonly CUT_IN_SECONDS: number;
   attach(project: Project, source: string, parsed: Parsed): void;
+  /** Whether the script's footage is laid out on the timeline (its import got that far). */
+  laidOut(project: Project): boolean;
   /** "1h02m03s": a time in an excerpt's name (seconds rounded, half away from zero). */
   clock(seconds: number): string;
   excerptExtension(ext: string): string;

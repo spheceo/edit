@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The engine's Mac binaries: the Node addon (crates/edit-native/edit-native.node)
 # and the window helper (target/<target>/release/edit-window), both signed ad
-# hoc. Run from app/ by the release and by engine-cache.yml, which keeps them
-# by a hash of the Rust sources so a release without Rust changes reuses them.
+# hoc, with copies of both in engine/. Run from app/ by the release and by
+# engine-cache.yml, which keeps engine/ by a hash of the Rust sources so a
+# release without Rust changes reuses it (not target/: rust-cache prunes the
+# workspace's own outputs there before a later step could save them).
 set -euo pipefail
 target="$1"
 stamp="$(mktemp)"
@@ -17,3 +19,5 @@ newer="$(find "target/$target/release/build" -path '*/out/*.a' -newer "$stamp" \
 if [ -n "$newer" ]; then echo "built for a newer macOS than 13.0:"; echo "$newer"; exit 1; fi
 cargo build --release --locked -p edit-window --target "$target"
 codesign -s - -f "target/$target/release/edit-window"
+mkdir -p engine
+cp crates/edit-native/edit-native.node "target/$target/release/edit-window" engine/

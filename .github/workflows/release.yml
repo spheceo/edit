@@ -125,9 +125,7 @@ jobs:
       - id: engine
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: |
-            app/crates/edit-native/edit-native.node
-            app/target/${{ matrix.target }}/release/edit-window
+          path: app/engine
           key: engine-${{ matrix.target }}-${{ hashFiles('app/Cargo.toml', 'app/Cargo.lock', 'app/.cargo/**', 'app/crates/**', '!app/crates/**/node_modules/**', 'app/scripts/build-native.sh') }}
       - if: steps.engine.outputs.cache-hit != 'true'
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -164,7 +162,13 @@ jobs:
             aarch64-apple-darwin) bun_target=bun-darwin-arm64 ;;
           esac
           bun install --frozen-lockfile
-          if [ "${{ steps.engine.outputs.cache-hit }}" != true ]; then scripts/build-native.sh ${{ matrix.target }}; fi
+          if [ "${{ steps.engine.outputs.cache-hit }}" = true ]; then
+            mkdir -p "target/${{ matrix.target }}/release"
+            cp engine/edit-native.node crates/edit-native/
+            cp engine/edit-window "target/${{ matrix.target }}/release/"
+          else
+            scripts/build-native.sh ${{ matrix.target }}
+          fi
           bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node \
             --window "target/${{ matrix.target }}/release/edit-window"
           mkdir package

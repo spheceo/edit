@@ -289,7 +289,7 @@ test("an_evidence_board_marks_each_photo_and_lands_a_shutter_on_it", () => {
   );
   // The cut's own shutter (with its flash) just before the first photo.
   p.clips.push(clip({ id: "cut", track: "a5", type: "audio", media: "s1", name: "Shutter", start: 97, duration: 5 }));
-  const assets: Assets = { shutter: { media: "s1", hit: 0.085, volume_db: -12 }, desktops: [] };
+  const assets: Assets = { shutter: { media: "s1", hit: 0.085, volume_db: -12 } };
   const board = {
     op: "evidence_board",
     start: 96,
@@ -317,7 +317,7 @@ test("an_evidence_board_marks_each_photo_and_lands_a_shutter_on_it", () => {
   const quiet = boardProject(1);
   const none = applyWith(quiet, [{ op: "evidence_board", start: 0, shutters: false, items: [{ media: "m1", at: 20 }] }], assets);
   expect((none.results[0] as Record<string, unknown>).shutters).toEqual([]);
-  expect(needs([{ op: "evidence_board", shutters: false }])).toEqual({ shutter: false, desktops: [] });
+  expect(needs([{ op: "evidence_board", shutters: false }])).toEqual({ shutter: false });
 });
 
 test("a desktop whose first note is said as it starts opens on its windows, not zooming out of the footage first", () => {
@@ -334,7 +334,7 @@ test("a desktop whose first note is said as it starts opens on its windows, not 
     p.media.push(media({ id: `f${index}`, name: app, path: `/${app}${index}.png`, kind: "image", duration: 30, width: w, height: h }));
     frames[frameKey(app, w, h)] = `f${index}`;
   });
-  const result = applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } }).results[0] as Record<string, unknown>;
+  const result = applyWith(p, [op], { shutter: null, screen: { wallpaper: "wall", frames } }).results[0] as Record<string, unknown>;
   expect((result.camera as Record<string, unknown>).opens_from_footage).toBe(false);
   expect(result.lines_at).toEqual([308]);
   expect(p.clips.some((own) => own.name?.startsWith("Desktop · Video Player") === true)).toBe(false);
@@ -366,7 +366,7 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_pla
   });
   // The tape before carries an uploader's logo top right (watermarks.ts found it).
   const logos = { room: [{ text: "Code Blue Cam logo", box: [0.88, 0.02, 0.97, 0.12] as [number, number, number, number] }] };
-  const applied = applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames, marks: logos } });
+  const applied = applyWith(p, [op], { shutter: null, screen: { wallpaper: "wall", frames, marks: logos } });
   const result = applied.results[0] as Record<string, unknown>;
   const camera = result.camera as Record<string, unknown>;
   expect([camera.opens_from_footage, camera.ends_in_footage]).toEqual([true, true]);
@@ -413,8 +413,8 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_pla
   expect(keys).toBeLessThan(900);
   valid(p);
   // The same picture twice in one desktop is refused; the old picture graphics are retired.
-  expect(() => applyWith(p, [{ ...op, windows: [op.windows[0], { ...op.windows[0], at: 400 }] }], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } })).toThrow(/two windows/);
-  expect(() => applyWith(p, [{ op: "desktop_profile", start: 0, duration: 90, media: "mug", lines: ["x"] }], { shutter: null, desktops: [] })).toThrow(/retired/);
+  expect(() => applyWith(p, [{ ...op, windows: [op.windows[0], { ...op.windows[0], at: 400 }] }], { shutter: null, screen: { wallpaper: "wall", frames } })).toThrow(/two windows/);
+  expect(() => applyWith(p, [{ op: "desktop_profile", start: 0, duration: 90, media: "mug", lines: ["x"] }], { shutter: null })).toThrow(/retired/);
 });
 
 test("desktop windows named together open at least a second apart", () => {
@@ -440,7 +440,7 @@ test("desktop windows named together open at least a second apart", () => {
     p.media.push(media({ id: `f${index}`, name: app, path: `/${app}${index}.png`, kind: "image", duration: 30, width: w, height: h }));
     frames[frameKey(app, w, h)] = `f${index}`;
   });
-  applyWith(p, [op], { shutter: null, desktops: [], screen: { wallpaper: "wall", frames } });
+  applyWith(p, [op], { shutter: null, screen: { wallpaper: "wall", frames } });
   const opens = ["Desktop · Photo Viewer · mug", "Desktop · Photo Viewer · home", "Desktop · Notepad"].map((name) => p.clips.find((own) => own.name === name)!.start);
   expect(opens[1]! - opens[0]!).toBeGreaterThanOrEqual(30);
   expect(opens[2]! - opens[1]!).toBeGreaterThanOrEqual(30);
@@ -664,7 +664,7 @@ test("the_reference_effects_build_valid_clips", () => {
       viewer,
       { op: "call", start: 600, end: 720, color: "blue" },
     ],
-    { shutter: null, desktops: [], screen: { wallpaper: "fv", frames: { [frameKey("file_viewer", w, h)]: "fv" } } },
+    { shutter: null, screen: { wallpaper: "fv", frames: { [frameKey("file_viewer", w, h)]: "fv" } } },
   );
   expect(applied.results.length).toBe(5);
   expect(p.clips.some((own) => own.type === "text" && own.text === "[ACTUAL PHOTO]")).toBe(true);

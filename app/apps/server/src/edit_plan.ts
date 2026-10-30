@@ -5,7 +5,6 @@
 
 import { clipFrom, keyframesFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
-import * as desktop from "./desktop.ts";
 import * as screen from "./desktop_screen.ts";
 import * as framing from "./framing.ts";
 import * as vignettes from "./vignettes.ts";
@@ -73,8 +72,6 @@ export interface Applied {
 export interface Assets {
   /** The bundled camera shutter, for evidence boards. */
   shutter: Shutter | null;
-  /** The desktop profile's pictures, one set per pair of window titles. */
-  desktops: desktop.Art[];
   /** The Windows screen's wallpaper and window frames (desktop ops, cover_cut_in desktop and picture shots). */
   screen?: screen.Art | null;
 }
@@ -90,14 +87,12 @@ export interface Shutter {
 /** What a plan's operations need brought in first. */
 export interface Needs {
   shutter: boolean;
-  /** [photo viewer title, notepad title] per desktop profile. */
-  desktops: [string, string][];
   /** Window frames the Windows screens need drawn ([app, width, height]); the wallpaper with them. */
   screens?: [screen.AppKind, number, number][];
 }
 
 export function needs(operations: Json[], project: Project | null = null): Needs {
-  const out: Needs = { shutter: false, desktops: [] };
+  const out: Needs = { shutter: false };
   const sizes: [screen.AppKind, number, number][] = [];
   const want = (given: Args, open: boolean) => {
     if (project === null) return;
@@ -121,10 +116,6 @@ export function needs(operations: Json[], project: Project | null = null): Needs
       if (drawn !== null && !sizes.some(([app, w, h]) => app === "file_viewer" && w === drawn[0] && h === drawn[1])) sizes.push(["file_viewer", drawn[0], drawn[1]]);
     }
     if (operation.op === "evidence_board" && operation.shutters !== false) out.shutter = true;
-    if (operation.op === "desktop_profile") {
-      const titles = desktop.titles(operation);
-      if (!out.desktops.some(([a, b]) => a === titles[0] && b === titles[1])) out.desktops.push(titles);
-    }
   }
   if (sizes.length > 0) out.screens = sizes;
   return out;
@@ -154,7 +145,7 @@ const str = (value: unknown): string | null => (typeof value === "string" ? valu
 
 /** A plan with no house assets (tests). */
 export function apply(project: Project, operations: Json[]): Applied {
-  return applyWith(project, operations, { shutter: null, desktops: [] });
+  return applyWith(project, operations, { shutter: null });
 }
 
 /** Applies every operation to `project` (changed in place), then validates it once. Throws what failed. */

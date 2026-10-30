@@ -6,13 +6,8 @@
 // - `intro_captions`: the teasers' subtitles as Red Thread's: small boxed
 //   lines that come up word by word, white on black, the lines that matter in
 //   a red box; the same for everyone (no role colours in the intro).
-// - `photo_inset`: a person's photo, small and framed in white in a corner,
-//   their name typed above it, over the room gone black and white.
 // - `countdown`: "INTERROGATION STARTS IN 01:18" in the top-left corner,
 //   ticking down through the prologue to the frame the tape rolls.
-// - `map_pin`: a photo beside the house on a top-down map, a red line drawn
-//   from the house to it.
-// - `split_screen`: two faces side by side, each half of the frame, with a tag.
 // - `fast_forward`: the room skipping ahead: black and white, the picture
 //   tearing in bursts, "FF >>" in the corner.
 // - `disclaimer`: the card before the tape: "DISCLAIMER" in red over a short text.
@@ -22,7 +17,7 @@
 
 import { clipFrom } from "./clips.ts";
 import type { Project } from "./model.ts";
-import { addTrack, clipEnd, clipOf, fps as fpsOf, freshId, mediaOf, trackOf } from "./project.ts";
+import { addTrack, clipEnd, fps as fpsOf, freshId, mediaOf, trackOf } from "./project.ts";
 import { charCount, round, splitWhitespace, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 
@@ -30,7 +25,6 @@ type Args = Record<string, unknown>;
 type Rgba = [number, number, number, number];
 
 const int = (value: unknown): number | null => (typeof value === "number" && Number.isInteger(value) ? value : null);
-const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
 const str = (value: unknown): string | null => (typeof value === "string" && trim(value) !== "" ? trim(value) : null);
 
 /** The intro's red: the slams, the line to the house, the flash. */
@@ -43,7 +37,6 @@ export const RED_TEXT: Rgba = [1, 0.1, 0.1, 1];
 function glow(k: number): Args {
   return { enabled: true, color: null, radius: 46 * k, strength: 0.5 };
 }
-const PAPER: Rgba = [0.97, 0.97, 0.95, 1];
 
 function push(project: Project, made: string[], fields: Args): string {
   const id = freshId(project, "c");
@@ -79,18 +72,6 @@ function lineWidth(text: string, size: number): number {
 function rgba(value: unknown, fallback: Rgba): Rgba {
   if (Array.isArray(value) && value.length === 4 && value.every((part) => typeof part === "number")) return value as Rgba;
   return fallback;
-}
-
-/** A picture's (or a video's) shown size at scale 1 (fitted to the frame) and its media. */
-function fitted(project: Project, mediaId: unknown, what: string) {
-  if (typeof mediaId !== "string") throw new Error(`${what} needs media (a picture's or a video's media id)`);
-  const media = mediaOf(project, mediaId);
-  if (media === undefined) throw new Error(`no media ${mediaId}`);
-  if (media.kind !== "image" && media.kind !== "video") throw new Error(`${mediaId} isn't a picture or a video`);
-  const [width, height] = [project.settings.width, project.settings.height];
-  const [w, h] = [Math.max(media.width ?? width, 1), Math.max(media.height ?? height, 1)];
-  const fit = Math.min(width / w, height / h);
-  return { media, w, h, fit };
 }
 
 // ---------------------------------------------------------------------------
@@ -158,81 +139,6 @@ export function introCaptions(project: Project, args: Args): Record<string, unkn
 }
 
 // ---------------------------------------------------------------------------
-// photo_inset
-
-/**
- * A person's photo in a corner (`{"op":"photo_inset","media":"m4","name":
- * "Michelle Williams","start":F,"end":F,"corner":"top-left"}`): framed in
- * white with a shadow, a third of the frame's height (`size`), easing in from
- * 92%, their name typed on above it, over the picture beneath gone black and
- * white (`desaturate: false` keeps its colour). For a video, `source_in`.
- */
-export function photoInset(project: Project, args: Args): Record<string, unknown> {
-  const [start, end] = span(args, "photo_inset", 12);
-  const { media, w, h, fit } = fitted(project, args.media, "photo_inset");
-  const [width, height] = [project.settings.width, project.settings.height];
-  const k = height / 1080;
-  const corner = str(args.corner) ?? "top-left";
-  if (!["top-left", "top-right", "bottom-left", "bottom-right"].includes(corner)) throw new Error("photo_inset corner: top-left, top-right, bottom-left or bottom-right");
-  const share = Math.min(Math.max(num(args.size) ?? 0.34, 0.15), 0.6);
-  const scale = (share * height) / (h * fit);
-  const [shownW, shownH] = [w * fit * scale, h * fit * scale];
-  const name = str(args.name);
-  const margin = 0.06 * width;
-  const nameRoom = name === null ? 0 : 56 * k;
-  const left = corner.endsWith("left");
-  const top = corner.startsWith("top");
-  const x = (left ? -1 : 1) * (width / 2 - margin - shownW / 2);
-  const y = top ? -height / 2 + 0.08 * height + nameRoom + shownH / 2 : height / 2 - 0.1 * height - shownH / 2;
-  const duration = end - start;
-  const last = Math.max(duration - 1, 1);
-  const made: string[] = [];
-  if (args.desaturate !== false) {
-    push(project, made, {
-      type: "adjustment",
-      name: "Photo inset · black and white",
-      track: addTrack(project, "video"),
-      start,
-      duration,
-      fade_in: 4,
-      fade_out: 6,
-      grade: { saturation: -1, contrast: 0.12 },
-    });
-  }
-  const photo = push(project, made, {
-    type: "video",
-    name: `Photo inset · ${name ?? media.name}`,
-    track: addTrack(project, "video"),
-    start,
-    duration,
-    media: media.id,
-    source_in: num(args.source_in) ?? 0,
-    fade_in: 6,
-    fade_out: 6,
-    transform: { x, y, scale },
-    frame: { width: 8 * k, color: PAPER, shadow: 0.6 },
-    keyframes: { scale: [key(0, scale * 0.92, "out"), key(Math.min(8, last), scale), key(last, scale * 1.03)] },
-  });
-  let label: string | null = null;
-  if (name !== null) {
-    const size = 34 * k;
-    label = push(project, made, {
-      type: "text",
-      name: "Photo inset · name",
-      track: addTrack(project, "video"),
-      start: start + 4,
-      duration: duration - 4,
-      fade_out: 6,
-      text: name,
-      style: { font: "Geist", weight: 600, size: round(size), color: WHITE, glow: { enabled: false }, background: null, shadow: shadow(k), align: left ? "left" : "right" },
-      transform: { x: x + (left ? -1 : 1) * (shownW / 2 - lineWidth(name, size) / 2), y: y - shownH / 2 - 30 * k },
-      animation: { preset: "typewriter", duration: 1, stagger: 1.5 },
-    });
-  }
-  return { clips: made, photo, name: label };
-}
-
-// ---------------------------------------------------------------------------
 // countdown
 
 /** "01:18": minutes and seconds. */
@@ -288,144 +194,6 @@ export function countdown(project: Project, args: Args): Record<string, unknown>
     });
   }
   return { clips: made.length, track, from: clock((end - start) / fps) };
-}
-
-// ---------------------------------------------------------------------------
-// map_pin
-
-/**
- * A photo pinned to the house on a top-down map (`{"op":"map_pin","media":"m4",
- * "name":"Michelle Williams","map":"<the map's clip id>","building":{"x":…,
- * "y":…},"start":F,"end":F}`; map_view's `building` gives x and top/bottom):
- * the photo framed in white off to the side with more room, its name in a
- * box under it, a red line drawn from the house to the name as it comes in.
- */
-export function mapPin(project: Project, args: Args): Record<string, unknown> {
-  const [start, end] = span(args, "map_pin", 12);
-  const { media, w, h, fit } = fitted(project, args.media, "map_pin");
-  const map = typeof args.map === "string" ? clipOf(project, args.map) : undefined;
-  if (map === undefined) throw new Error("map_pin needs map: the map's clip id");
-  const building = (typeof args.building === "object" && args.building !== null ? args.building : {}) as Args;
-  const bx = num(building.x);
-  const by = num(building.y) ?? (num(building.top) !== null && num(building.bottom) !== null ? (num(building.top)! + num(building.bottom)!) / 2 : null);
-  if (bx === null || by === null) throw new Error("map_pin needs building {x, y} (or map_view's building, with top and bottom)");
-  const [width, height] = [project.settings.width, project.settings.height];
-  const k = height / 1080;
-  const scale = (0.3 * height) / (h * fit);
-  const [shownW, shownH] = [w * fit * scale, h * fit * scale];
-  const side = str(args.side) ?? (bx > 0 ? "left" : "right");
-  const x = Math.min(Math.max(bx + (side === "left" ? -1 : 1) * 0.26 * width, -width / 2 + 0.05 * width + shownW / 2), width / 2 - 0.05 * width - shownW / 2);
-  const y = Math.min(Math.max(by - 0.04 * height, -height / 2 + 0.08 * height + shownH / 2), height / 2 - 0.16 * height - shownH / 2);
-  const name = str(args.name);
-  if (name === null) throw new Error("map_pin needs name (the person in the photo)");
-  const duration = end - start;
-  const last = Math.max(duration - 1, 1);
-  const made: string[] = [];
-  const photo = push(project, made, {
-    type: "video",
-    name: `Map pin · ${name}`,
-    track: addTrack(project, "video"),
-    start: start + 6,
-    duration: duration - 6,
-    media: media.id,
-    source_in: num(args.source_in) ?? 0,
-    fade_in: 6,
-    fade_out: 6,
-    transform: { x, y, scale },
-    frame: { width: 7 * k, color: PAPER, shadow: 0.6 },
-    keyframes: { scale: [key(0, scale * 0.92, "out"), key(Math.min(8, last), scale)] },
-  });
-  const label = push(project, made, {
-    type: "text",
-    name: "Map pin · name",
-    track: addTrack(project, "video"),
-    start,
-    duration,
-    fade_out: 6,
-    text: name,
-    style: {
-      font: "Geist",
-      weight: 600,
-      size: round(26 * k),
-      color: WHITE,
-      glow: { enabled: false },
-      background: { color: [0, 0, 0, 1], opacity: 0.9, pad_x: 10 * k, pad_y: 6 * k },
-      leader: { x: bx, y: by, width: 4 * k, color: RED, draw: 8, attach: "nearest", fade: 4 },
-    },
-    transform: { x, y: y + shownH / 2 + 26 * k },
-    animation: { preset: "fade", duration: 6 },
-  });
-  return { clips: made, photo, label };
-}
-
-// ---------------------------------------------------------------------------
-// split_screen
-
-/**
- * Two faces side by side (`{"op":"split_screen","left":"m4","right":"m9",
- * "start":F,"end":F,"tags":["MICHELLE WILLIAMS","GREG WILLIAMS"]}`): each
- * picture fills its half of the frame (cropped to it), a hard cut in and out;
- * `tags` in boxes low on each half (`tag_colors`: each box's colour, the
- * person's role colour). For a video, `left_in`/`right_in` seconds.
- */
-export function splitScreen(project: Project, args: Args): Record<string, unknown> {
-  const [start, end] = span(args, "split_screen", 12);
-  const [width, height] = [project.settings.width, project.settings.height];
-  const k = height / 1080;
-  const tags = Array.isArray(args.tags) ? args.tags : [];
-  const colors = Array.isArray(args.tag_colors) ? args.tag_colors : [];
-  const made: string[] = [];
-  const duration = end - start;
-  const last = Math.max(duration - 1, 1);
-  const halves: ["left" | "right", unknown, unknown][] = [
-    ["left", args.left, args.left_in],
-    ["right", args.right, args.right_in],
-  ];
-  halves.forEach(([side, mediaId, sourceIn], index) => {
-    const { media, w, h, fit } = fitted(project, mediaId, `split_screen ${side}`);
-    const cover = Math.max(width / 2 / (w * fit), height / (h * fit));
-    // The share of the picture's width that shows in its half, the rest cropped evenly off its sides.
-    const shown = Math.min(width / 2 / (w * fit * cover), 1);
-    const cut = (1 - shown) / 2;
-    const x = (side === "left" ? -1 : 1) * (width / 4);
-    push(project, made, {
-      type: "video",
-      name: `Split screen · ${side}`,
-      track: addTrack(project, "video"),
-      start,
-      duration,
-      media: media.id,
-      source_in: num(sourceIn) ?? 0,
-      transform: { x, scale: cover },
-      crop: { left: cut, right: cut },
-      keyframes: { scale: [key(0, cover), key(last, cover * 1.02)] },
-    });
-    const tag = str(tags[index]);
-    if (tag !== null) {
-      const color = rgba(colors[index], [0, 0, 0, 1]);
-      const light = color[0] * 0.3 + color[1] * 0.59 + color[2] * 0.11 > 0.6;
-      push(project, made, {
-        type: "text",
-        name: `Split screen · ${side} tag`,
-        track: addTrack(project, "video"),
-        start: start + 4,
-        duration: duration - 4,
-        fade_out: 4,
-        text: tag,
-        style: {
-          font: "Geist",
-          weight: 700,
-          size: round(30 * k),
-          color: light ? [0.05, 0.05, 0.05, 1] : WHITE,
-          glow: { enabled: false },
-          background: { color, opacity: 1, pad_x: 12 * k, pad_y: 7 * k },
-        },
-        transform: { x, y: 0.36 * height },
-        animation: { preset: "fade", duration: 6 },
-      });
-    }
-  });
-  return { clips: made };
 }
 
 // ---------------------------------------------------------------------------

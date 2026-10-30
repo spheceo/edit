@@ -3,7 +3,7 @@ import { beforeAll, expect, test } from "bun:test";
 import * as cutin from "../src/cutin.ts";
 import { frameKey } from "../src/desktop_screen.ts";
 import { needs } from "../src/edit_plan.ts";
-import { bareStills, dateDrift, dateTitle, evidenceCard, placeLabel } from "../src/graphics.ts";
+import { bareStills, dateDrift, dateTitle, placeLabel } from "../src/graphics.ts";
 import type { Project, TextClip, VideoClip } from "../src/model.ts";
 import { native } from "../src/native/index.ts";
 import { clip, clipById, level, media, project as newProject, stubNative } from "./helpers/model.ts";
@@ -69,7 +69,7 @@ test("a_boxed_or_glowing_date_is_flagged", () => {
   expect(flagged[0]!.boxed).toBe(true);
 });
 
-test("a_found_photo_is_a_card_never_a_bare_still", () => {
+test("a_found_photo_shown_bare_is_flagged", () => {
   const p = project();
   // As the edit had it: the 4:3 news photo at scale 1, plain B-roll.
   p.clips.push(
@@ -91,19 +91,6 @@ test("a_found_photo_is_a_card_never_a_bare_still", () => {
   const flagged = bareStills(p);
   expect(flagged.length).toBe(1);
   expect(flagged[0]!.letterboxed).toBe(true);
-  // As a card instead.
-  p.clips = [];
-  const made = evidenceCard(p, { media: "m1", start: 0, end: 120, label: "The building on Capitol Avenue" });
-  expect((made.clips as string[]).length).toBe(4);
-  expect(bareStills(p)).toEqual([]);
-  // The photo fits inside the frame with its label under it, and the backdrop fills it.
-  const photo = p.clips.find((own) => own.name === "Evidence card · photo") as VideoClip;
-  expect(photo.frame).toBeDefined();
-  const fit = Math.min(Math.fround(1920 / 895), Math.fround(1080 / 671));
-  expect(671 * fit * photo.transform.scale * 1.04).toBeLessThan(1080 * 0.75);
-  valid(p);
-  // Footage is never an evidence card.
-  expect(() => evidenceCard(p, { media: "m2", start: 0, end: 30 })).toThrow();
 });
 
 test("a_picture_picked_as_a_cut_in_shot_goes_on_a_desktop_the_footage_zooms_out_into", () => {

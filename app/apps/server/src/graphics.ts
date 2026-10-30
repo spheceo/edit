@@ -347,16 +347,6 @@ export function card(
   return made;
 }
 
-/** `{"op":"evidence_card","media":"m4","start":F,"end":F,"label":"The building"}` on new tracks above everything there. */
-export function evidenceCard(project: Project, args: Args): Record<string, unknown> {
-  if (typeof args.media !== "string") throw new Error("evidence_card needs media (a picture's media id)");
-  const media = args.media;
-  const range = span(args, "evidence_card");
-  const tracks = cardTracksOnTop(project);
-  const made = card(project, media, range, typeof args.label === "string" ? args.label : null, tracks, "Evidence card · ");
-  return { clips: made };
-}
-
 /**
  * Whether some clip above `clip` (a higher track) on screen with it makes a
  * picture part of a designed graphic: a framed photo (a card or a board), a

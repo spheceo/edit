@@ -2183,7 +2183,7 @@ export function hearWords(app: App, project: Project, operations: Json[]): void 
 
 export async function planAssets(app: App, project: Project, operations: Json[]): Promise<[editPlan.Assets, seams.Made[]]> {
   const needs = editPlan.needs(operations, project);
-  const assets: editPlan.Assets = { shutter: null, desktops: [] };
+  const assets: editPlan.Assets = { shutter: null };
   const made: seams.Made[] = [];
   const home = app.store.home;
   if (needs.shutter) {
@@ -2208,19 +2208,6 @@ export async function planAssets(app: App, project: Project, operations: Json[])
       volume = -14;
     }
     assets.shutter = { media: mediaId, hit: sound.hit, volume_db: f32(volume) };
-  }
-  for (const [photoTitle, notepadTitle] of needs.desktops) {
-    const { width, height } = project.settings;
-    const paths = await diag.timeOnAsync("agent", "desktop profile: draw", "", () =>
-      native().desktopFiles(width, height, photoTitle, notepadTitle),
-    );
-    const [ids, fresh] = await houseMedia(app, project, paths);
-    made.push(...fresh);
-    const [wallpaper, photoViewer, notepad] = ids;
-    if (ids.length !== 3 || wallpaper === undefined || photoViewer === undefined || notepad === undefined) {
-      throw new Error("desktop pictures");
-    }
-    assets.desktops.push({ photo_title: photoTitle, notepad_title: notepadTitle, wallpaper, photo_viewer: photoViewer, notepad });
   }
   if (needs.screens !== undefined && needs.screens.length > 0) {
     const { width, height } = project.settings;

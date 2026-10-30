@@ -608,11 +608,11 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
       ),
     state.approved === null && state.feedback > 0 && (
         <span key="notes"
-          title={`${state.feedback} open note${state.feedback === 1 ? "" : "s"} on its Repack review`}
+          title={`${state.feedback} open comment${state.feedback === 1 ? "" : "s"} on its review`}
           className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info"
         >
           <MessageSquare size={12} />
-          {state.feedback} {state.feedback === 1 ? "note" : "notes"}
+          {state.feedback} {state.feedback === 1 ? "comment" : "comments"}
         </span>
       ),
     state.complete && !state.exported && (
@@ -621,6 +621,18 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
           Not exported
         </span>
       ),
+    // Nothing pressing: still where it stands, so no row's status is blank (the user, Oct 30: "7 comments. or No comments").
+    state.complete && state.exported ? (
+      <span key="quiet" title="Exported and on its review, with no open comments" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-muted">
+        <MessageSquare size={12} />
+        No comments
+      </span>
+    ) : (
+      <span key="quiet" title="Still being edited" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-muted">
+        <Pencil size={12} />
+        In progress
+      </span>
+    ),
   ].find(Boolean);
   return first || null;
 }
@@ -1317,7 +1329,14 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
         <Type kind={summary.subtitles ? "subtitles" : "edit"} script={script?.id ?? null} />
         <CreatorCell by={project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
-          {project.holder && <StateChips editor={project.holder} />}
+          {project.holder ? (
+            <StateChips editor={project.holder} />
+          ) : (
+            <span title="Not on this Mac yet: opening it downloads it" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-muted">
+              <CloudDownload size={12} />
+              Not on this Mac
+            </span>
+          )}
         </div>
         <span role="cell" className="text-right text-[13px] text-secondary tabular">
           {seconds !== null ? shortDuration(seconds) : ""}

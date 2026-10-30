@@ -76,7 +76,7 @@ let reading: Promise<void> | null = null;
 let fetchCutOffs = (url: string): Promise<Response> => fetch(url, { signal: AbortSignal.timeout(3_000) });
 
 /** Tests: where the cut-offs come from, and forget the ones read so the next request reads them again. */
-export function useCutOffs(read: ((url: string) => Promise<Response>) | null): void {
+export function readCutOffsWith(read: ((url: string) => Promise<Response>) | null): void {
   fetchCutOffs = read ?? ((url) => fetch(url, { signal: AbortSignal.timeout(3_000) }));
   cutOffs = null;
   reading = null;

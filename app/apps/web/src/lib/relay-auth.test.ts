@@ -3,7 +3,7 @@
 
 import { exportJWK, generateKeyPair, SignJWT, createLocalJWKSet, type JWK } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { allow, budgetKey, caller, useCutOffs, useKeys } from "../../../relay/src/auth";
+import { allow, budgetKey, caller, readCutOffsWith, useKeys } from "../../../relay/src/auth";
 import { cloud } from "../../../relay/src/cloud";
 import { reportRefused, WRITABLE } from "../../../relay/src/authz";
 import relay, { type Env } from "../../../relay/src/index";
@@ -16,7 +16,7 @@ let otherJwk: JWK;
 
 beforeAll(async () => {
   // Nobody cut off (the accounts site's list), unless a test says so.
-  useCutOffs(async () => Response.json({ at: Date.now(), revoked: [] }));
+  readCutOffsWith(async () => Response.json({ at: Date.now(), revoked: [] }));
   const pair = await generateKeyPair("RS256", { extractable: true });
   privateKey = pair.privateKey;
   jwk = { ...(await exportJWK(pair.publicKey)), kid: "k1", alg: "RS256", use: "sig" };
@@ -101,7 +101,7 @@ describe("relay sign-in gate", () => {
     useKeys(createLocalJWKSet({ keys: [jwk] }));
     vi.spyOn(console, "log").mockImplementation(() => {});
     const made = await token();
-    const listed = (revoked: unknown[]) => useCutOffs(async (url) => {
+    const listed = (revoked: unknown[]) => readCutOffsWith(async (url) => {
       expect(url).toBe(`${ISSUER}/app/revoked`);
       return Response.json({ at: Date.now(), revoked });
     });
@@ -117,9 +117,9 @@ describe("relay sign-in gate", () => {
     listed([{ sub: "person-1", at: Date.now() + 1_000, aud: "writer" }]);
     expect(await caller(asked(made), env())).not.toBeNull();
     // The list unreadable: nobody is refused for it (the relay never goes down with the accounts site).
-    useCutOffs(async () => new Response("down", { status: 503 }));
+    readCutOffsWith(async () => new Response("down", { status: 503 }));
     expect(await caller(asked(made), env())).not.toBeNull();
-    useCutOffs(async () => Response.json({ at: Date.now(), revoked: [] }));
+    readCutOffsWith(async () => Response.json({ at: Date.now(), revoked: [] }));
   });
 
   it("reads Trello for people who edit or write scripts, the key kept on the relay", async () => {

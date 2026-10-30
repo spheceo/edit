@@ -359,8 +359,8 @@ const STYLE_NOTES: Record<Style, string> = {
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
 
-/** Every status in Home's table looks alike: one pill, its icon, a few words, its colour saying how much it matters. */
-const CHIP = "flex h-[22px] min-w-0 shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium whitespace-nowrap";
+/** Every status in Home's table looks alike: one pill, its icon, a few words, its colour saying how much it matters; each as wide as the column (the widest of them), so they line up. */
+const CHIP = "flex h-[22px] min-w-0 flex-1 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium whitespace-nowrap";
 
 interface NoticeProps {
   tone: "warn" | "bad" | "info";

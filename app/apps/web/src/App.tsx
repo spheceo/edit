@@ -35,7 +35,8 @@ export function App() {
         </motion.div>
       </AnimatePresence>
       <Toasts />
-      <ExportActivity />
+      {/* Edit's exports, on Home and in the editor; a script page has none of its own, and the pill sat over its top bar (the user, Oct 31). */}
+      {!scripts && <ExportActivity />}
       <AppDialogs />
       <ContextMenuHost />
     </MotionConfig>

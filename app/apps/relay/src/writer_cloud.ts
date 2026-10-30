@@ -17,7 +17,7 @@
  * under `writer/reports/` are put by anyone, read only by an admin.
  */
 import type { Caller } from "./auth";
-import { BadRequest, escapeXml, isObject, objectUrl, r2Config, r2Fetch, Upstream, unescapeXml, xmlValue, type CloudEnv, type R2 } from "./cloud";
+import { BadRequest, convexPaused, escapeXml, isObject, objectUrl, r2Config, r2Fetch, Upstream, unescapeXml, xmlValue, type CloudEnv, type R2 } from "./cloud";
 
 const HOUR = 3600;
 const MAX_DELETE = 40;
@@ -261,6 +261,8 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
   if (typeof body.path !== "string" || !Object.hasOwn(WRITER_FUNCTIONS, body.path)) return json(403, { error: "That function isn't one Script mode calls." });
   if (body.args !== undefined && !isObject(body.args)) return json(400, { error: "args must be an object." });
   if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) return json(503, { error: "Convex is not configured on the relay yet." });
+  const paused = convexPaused(env);
+  if (paused !== null) return paused;
   const needs = WRITER_FUNCTIONS[body.path]!;
   const args = { ...((body.args as Record<string, unknown> | undefined) ?? {}) };
   if (needs === "any" && !anyWork(grants)) return refuse("write scripts");

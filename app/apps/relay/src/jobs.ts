@@ -57,6 +57,7 @@ export interface JobsEnv {
   R2_SECRET_ACCESS_KEY?: string;
   R2_BUCKET?: string;
   CONVEX_URL?: string;
+  CONVEX_PAUSED?: string;
   CONVEX_SERVICE_TOKEN?: string;
   /** The cloud proxy worker's web endpoint (Modal, apps/worker/proxy.py) and its shared token. */
   MODAL_PROXY_URL?: string;
@@ -240,7 +241,8 @@ async function existingSize(r2: R2, key: string): Promise<number | null> {
 
 async function register(env: JobsEnv, params: DriveParams, size: number): Promise<void> {
   // A test copy (edit/test/…) never names a Drive file's original.
-  if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN || params.key.startsWith("edit/test/")) return;
+  // While the database moves, a copy isn't registered (Edit registers footage again when it's next used).
+  if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN || params.key.startsWith("edit/test/") || env.CONVEX_PAUSED === "1") return;
   const answer = await fetch(`${env.CONVEX_URL.replace(/\/+$/, "")}/api/mutation`, {
     method: "POST",
     headers: { "content-type": "application/json" },

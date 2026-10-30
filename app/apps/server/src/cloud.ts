@@ -847,7 +847,8 @@ export async function convexCall(kind: string, path: string, args: unknown, time
     } catch (error) {
       if (isBug(error)) throw error;
       const message = diag.messageOf(error);
-      throw message.startsWith(relay.UNREACHABLE) ? ConvexFailure.unreachable(message) : ConvexFailure.relay(message);
+      // The relay pausing the database while it moves reads as offline: work waits here and is saved after.
+      throw message.startsWith(relay.UNREACHABLE) || message.includes("cloud is moving to its new home") ? ConvexFailure.unreachable(message) : ConvexFailure.relay(message);
     }
     return convexValue(answer);
   });

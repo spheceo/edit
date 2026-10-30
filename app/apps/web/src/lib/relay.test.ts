@@ -334,6 +334,15 @@ describe("relay cloud endpoints", () => {
     expect((await call("convex", { kind: "query", path: "edit:listMedia", args: {} })).status).toBe(200);
   });
 
+  it("answers every database call with a pause while the database moves, and nothing reaches it", async () => {
+    const reached = vi.fn(async () => Response.json({ status: "success", value: [] }));
+    vi.stubGlobal("fetch", reached);
+    const paused = await call("convex", { kind: "mutation", path: "edit:commitProject", args: { projectId: "p1", baseRev: 3 } }, { env: { ...env, CONVEX_PAUSED: "1" } });
+    expect(paused.status).toBe(503);
+    expect(((await paused.json()) as { error: string }).error).toContain("cloud is moving to its new home");
+    expect(reached).not.toHaveBeenCalled();
+  });
+
   it("keeps a project outside the caller's kinds of video from being read or changed", async () => {
     const { paths } = cloudWith(bodycam, [bodycam, { projectId: "p2", summary: { style: "bodycam", subtitles: true } }, { projectId: "p3", summary: { footageOnly: true } }]);
     // A subtitler: the bodycam edit is left out of the list, refused when opened, locked or saved.

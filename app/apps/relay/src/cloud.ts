@@ -41,6 +41,8 @@ export interface CloudEnv extends JobsEnv, ModalEnv {
   R2_BUCKET?: string;
   /** The Convex deployment (https://….convex.cloud), shared with Repack. */
   CONVEX_URL?: string;
+  /** "1" while the database moves to its new home: every call answers 503 (see `convexPaused`). */
+  CONVEX_PAUSED?: string;
   /** Passed as `args.token` to every `edit:` function, which checks it. */
   CONVEX_SERVICE_TOKEN?: string;
   /** Vercel's AI Gateway, for the footage watcher (/v1/cloud/ai/chat). */
@@ -550,6 +552,8 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
   }
   if (body.args !== undefined && !isObject(body.args)) return json(400, { error: "args must be an object." });
   if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) return json(503, { error: "Convex is not configured on the relay yet." });
+  const paused = convexPaused(env);
+  if (paused !== null) return paused;
   // A project outside the caller's kinds isn't changed, and only who started it (or an admin) deletes it.
   if (PROJECT_WRITES.has(body.path)) {
     const args = (body.args ?? {}) as Record<string, unknown>;
@@ -643,4 +647,16 @@ export function isObject(value: unknown): value is Record<string, unknown> {
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+/** What Edit is told while the database moves: it reads as offline there, so work is kept and saved after. */
+export const PAUSED_MESSAGE = "Edit's cloud is moving to its new home: a few minutes. Your work is kept on this Mac and saved when it's back.";
+
+/**
+ * While the database moves to its new home (`CONVEX_PAUSED` "1", Oct 30: off
+ * Repack's deployment): every call waits as if offline, so nothing is written
+ * to the old one after its data was copied.
+ */
+export function convexPaused(env: { CONVEX_PAUSED?: string }): Response | null {
+  return env.CONVEX_PAUSED === "1" ? json(503, { error: PAUSED_MESSAGE }) : null;
 }

@@ -357,6 +357,7 @@ function retry(app: App) {
 /** Called after startup; an offline account retries without starting any work. */
 export function start(app: App) {
   observe(app);
+  actions.keepLatest(app);
   const account = accounts.status();
   const allowed = account.admin === true || (Array.isArray(account.perms) && account.perms.includes("use"));
   prepareEnrollment(app, allowed ? accounts.creator()?.sub ?? null : null);

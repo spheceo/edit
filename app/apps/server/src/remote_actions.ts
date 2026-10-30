@@ -192,8 +192,40 @@ export async function diagnostics(app: App): Promise<string> {
   return key;
 }
 
+/** How often this Mac looks whether its latest report has changed, and the longest it goes without sending one. */
+const LATEST_EVERY_MS = 5 * 60_000;
+const LATEST_AT_LEAST_MS = 60 * 60_000;
+const keeping = new WeakSet<App>();
+
+/**
+ * Keeps this Mac's latest report in the cloud while Edit runs
+ * (problem_reports.publishLatest): sent when what needs attention changes
+ * (looked at every five minutes), else once an hour, so an admin sees what
+ * failed on a Mac that has since been closed.
+ */
+export function keepLatest(app: App): void {
+  if (keeping.has(app)) return;
+  keeping.add(app);
+  let sent = "";
+  let sentAt = 0;
+  const look = async () => {
+    try {
+      const text = diag.scrub(await report(app, "Kept up to date by Edit itself (the latest from this Mac)."));
+      const needs = text.slice(text.indexOf("Needs attention:"), text.indexOf("Machine:"));
+      if (needs === sent && Date.now() - sentAt < LATEST_AT_LEAST_MS) return;
+      await problemReports.publishLatest(app.store.home, app.machine, text);
+      sent = needs;
+      sentAt = Date.now();
+    } catch (error) {
+      diag.warn("reports", `keeping this Mac's latest report: ${diag.messageOf(error)}`);
+    }
+  };
+  setTimeout(() => void look(), 60_000).unref?.();
+  setInterval(() => void look(), LATEST_EVERY_MS).unref?.();
+}
+
 /** This Mac's report: what needs attention, the machine, the work under way, the problems, projects, scripts, timings and log. */
-export async function report(app: App): Promise<string> {
+export async function report(app: App, why = "Diagnostics asked for by an admin (edit remote diagnostics)."): Promise<string> {
   const log = logTail(app, 3000);
   const slow = diag.timings().slice(0, 30).map((timing) => JSON.stringify(timing));
   const setup = await fetch(`http://127.0.0.1:${app.port}/api/setup`, { signal: AbortSignal.timeout(15_000) })
@@ -212,7 +244,7 @@ export async function report(app: App): Promise<string> {
     errors = [];
   }
   return [
-    "Diagnostics asked for by an admin (edit remote diagnostics).",
+    why,
     `Edit ${BUILD} · ${diag.osName()} ${diag.archName()} · up ${diag.human(diag.uptime())}`,
     "",
     "Needs attention:",

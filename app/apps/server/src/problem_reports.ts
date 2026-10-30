@@ -46,6 +46,49 @@ export async function send(home: string, machine: string, report: string): Promi
   return { key };
 }
 
+const LATEST = `${PREFIX}latest/`;
+
+/**
+ * This Mac's latest report, in the cloud under its name, replacing the one
+ * before: kept up to date while Edit runs (remote_actions.keepLatest), so an
+ * admin reads what went wrong on a Mac that's off and fixes it before it's
+ * back (the user, Oct 30: "even when their computers are off we know what
+ * failed for them and we're able to fix them").
+ */
+export async function publishLatest(home: string, machine: string, report: string): Promise<void> {
+  if (!cloud.enabled()) return;
+  const person = accounts.status() as { person?: { name?: string; email?: string } | null };
+  const from = person.person ? `${person.person.name ?? ""} <${person.person.email ?? ""}>` : "unknown";
+  const body = `From: ${from}\nMac: ${machine}\nEdit: ${BUILD}\nSent: ${new Date().toISOString()}\n\n${report.trim()}`.slice(0, MAX_BYTES);
+  const dir = join(home, "reports-sent");
+  fs.mkdirSync(dir, { recursive: true });
+  const local = join(dir, "latest.txt");
+  fs.writeFileSync(local, body);
+  await cloud.uploadFile(local, `${LATEST}${slug(machine)}.txt`);
+}
+
+/** Every Mac's latest report, newest first, fetched fresh to `<home>/reports-inbox/latest/`. Only an admin may. */
+export async function latest(home: string): Promise<Pulled[]> {
+  const status = accounts.status() as { admin?: boolean };
+  if (status.admin !== true) throw new Error("Only an admin can read the team's problem reports.");
+  const inbox = join(home, "reports-inbox", "latest");
+  fs.mkdirSync(inbox, { recursive: true });
+  const out: Pulled[] = [];
+  for (const object of await cloud.list(LATEST)) {
+    const path = join(inbox, object.key.slice(LATEST.length).replace(/\//g, "_"));
+    await cloud.download(object.key, path);
+    out.push(pulled(object.key, path));
+  }
+  return out.sort((a, b) => (a.sent < b.sent ? 1 : -1));
+}
+
+function pulled(key: string, path: string): Pulled {
+  const text = fs.readFileSync(path, "utf8");
+  const field = (name: string) => new RegExp(`^${name}: (.*)$`, "m").exec(text)?.[1] ?? "";
+  const rest = text.split("\n\n").slice(1).join("\n\n");
+  return { key, from: field("From"), mac: field("Mac"), sent: field("Sent"), summary: rest.split("\n").filter((line) => line.trim() !== "").slice(0, 3).join(" ").slice(0, 300), path };
+}
+
 export interface Pulled {
   key: string;
   from: string;
@@ -73,10 +116,7 @@ export async function pull(home: string, days: number): Promise<Pulled[]> {
     for (const object of objects) {
       const path = join(inbox, object.key.slice(PREFIX.length).replace(/\//g, "_"));
       if (!fs.existsSync(path)) await cloud.download(object.key, path);
-      const text = fs.readFileSync(path, "utf8");
-      const field = (name: string) => new RegExp(`^${name}: (.*)$`, "m").exec(text)?.[1] ?? "";
-      const rest = text.split("\n\n").slice(1).join("\n\n");
-      out.push({ key: object.key, from: field("From"), mac: field("Mac"), sent: field("Sent"), summary: rest.split("\n").filter((line) => line.trim() !== "").slice(0, 3).join(" ").slice(0, 300), path });
+      out.push(pulled(object.key, path));
     }
   }
   return out.sort((a, b) => (a.sent < b.sent ? 1 : -1));

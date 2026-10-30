@@ -137,6 +137,14 @@ export function buildRouter(): Router<App> {
         throw bad(diag.messageOf(error));
       }
     })
+    // Every Mac's latest report (problem_reports.latest), whether it's on or not.
+    .get("/api/reports/latest", async ({ app }) => {
+      try {
+        return json({ reports: await problemReports.latest(app.store.home) });
+      } catch (error) {
+        throw bad(diag.messageOf(error));
+      }
+    })
     .get("/api/reports", async ({ app, query }) => {
       const days = Number(query.get("days") ?? "7");
       try {

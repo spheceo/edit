@@ -15,7 +15,7 @@ preview_urls = false
 #   R2_ACCESS_KEY_ID       an R2 API token's S3 access key id
 #   R2_SECRET_ACCESS_KEY   and its secret
 #   R2_BUCKET              the bucket (shared with Repack; Edit only uses edit/…)
-#   CONVEX_URL             the Convex deployment, https://….convex.cloud
+#   CONVEX_URL             the Convex deployment: mamagi since Oct 30 (Infisical prod /mamagi; /edit-relay references it)
 #   CONVEX_SERVICE_TOKEN   added as args.token to every edit: function call
 # Cloud jobs (/v1/cloud/jobs/*, src/jobs.ts: Drive → R2 without the Mac) also
 # need Google's sign-in, the same three Edit uses for Drive:

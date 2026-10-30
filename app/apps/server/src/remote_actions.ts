@@ -40,9 +40,9 @@ export const KINDS = ["update", "diagnostics", "resume"] as const;
 export type Kind = (typeof KINDS)[number];
 
 /**
- * Actions that ride on a resume's target: Repack's Convex knows update,
+ * Actions that ride on a resume's target: the database knows update,
  * diagnostics and resume, and these words are never a project's (`p<ms>-<n>`)
- * or a script's (a UUID) id, so they needed no deploy of Repack's Convex. A
+ * or a script's (a UUID) id, so they needed no deploy of the database. A
  * build from before them answers "There's no project unstick" and changes
  * nothing.
  */

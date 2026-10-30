@@ -8,7 +8,7 @@
 // with its note, so the timeline shows what the agent changed for whom and
 // why ("did the agent actually do what we said we wanted it to do?").
 //
-// Repack's Convex has the reviews (`reviews:*`, through the relay, which
+// The database (mamagi, Oct 30; Repack's Convex before) has the reviews (`reviews:*`, through the relay, which
 // makes every call Edit's). This machine keeps `<home>/reviews.json`: each
 // shared project's review and versions (with the clips each export had where,
 // so a note's moment on an old export still finds its clip after later

@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Captions, FileText, Film, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Captions, FileText, Film, FileVideo, LoaderCircle, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
@@ -359,6 +359,9 @@ const STYLE_NOTES: Record<Style, string> = {
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
 
+/** Every status in Home's table looks alike: one pill, its icon, a few words, its colour saying how much it matters. */
+const CHIP = "flex h-[22px] min-w-0 shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium whitespace-nowrap";
+
 interface NoticeProps {
   tone: "warn" | "bad" | "info";
   text: string;
@@ -372,7 +375,7 @@ function Notice({ tone, text, title }: NoticeProps) {
     <span
       title={title}
       className={cx(
-        "flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium",
+        CHIP,
         tone === "info" ? "text-fg" : tone === "bad" ? "text-danger" : "text-warning",
       )}
     >
@@ -544,7 +547,7 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
   // Someone else has it open: that comes first (it opens read-only).
   if (editor !== null)
     return (
-      <span title={`${editor} is editing it now: it opens read-only until they close it.`} className="flex h-[22px] min-w-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
+      <span title={`${editor} is editing it now: it opens read-only until they close it.`} className={cx(CHIP, "text-warning")}>
         <Lock size={12} className="shrink-0" />
         <span className="truncate">{editor} is editing</span>
       </span>
@@ -565,7 +568,7 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
     return (
       <span
         title={state.archived.error ?? "Archived on Repack: its footage and exports were freed; the project and its transcripts are kept"}
-        className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium text-muted"
+        className={cx(CHIP, "text-muted")}
       >
         <Archive size={12} />
         {state.archived.restoring ? "Restoring…" : "Archived"}
@@ -582,26 +585,26 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
     state.importing !== null && (
         <span key="importing"
           title={state.importing.error ?? `Importing: ${state.importing.state}`}
-          className={cx("flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
+          className={cx(CHIP, "tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
         >
           {importStuck(state.importing) ? <TriangleAlert size={12} /> : <LoaderCircle size={12} className="animate-spin" />}
           {importStuck(state.importing) ? "Import needs you" : `Importing ${importShare(state.importing)}`}
         </span>
       ),
     state.working && (
-        <span key="working" title="Its agent is working on it" className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium text-agent">
+        <span key="working" title="Its agent is working on it" className={cx(CHIP, "text-agent")}>
           <span className="size-1.5 animate-pulse rounded-full bg-agent" />
           Agent working
         </span>
       ),
     state.sharing !== null && (
-        <span key="sharing" title={`Sharing: ${state.sharing}`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info">
+        <span key="sharing" title={`Sharing: ${state.sharing}`} className={cx(CHIP, "text-info")}>
           <Share2 size={12} />
           Sharing
         </span>
       ),
     state.approved !== null && (
-        <span key="approved" title={`Version ${state.approved} was approved on its review`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-success">
+        <span key="approved" title={`Version ${state.approved} was approved on its review`} className={cx(CHIP, "text-success")}>
           <Check size={12} />
           Approved v{state.approved}
         </span>
@@ -609,26 +612,26 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
     state.approved === null && state.feedback > 0 && (
         <span key="notes"
           title={`${state.feedback} open comment${state.feedback === 1 ? "" : "s"} on its review`}
-          className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info"
+          className={cx(CHIP, "text-info")}
         >
           <MessageSquare size={12} />
           {state.feedback} {state.feedback === 1 ? "comment" : "comments"}
         </span>
       ),
     state.complete && !state.exported && (
-        <span key="export" title="The edit is finished, but what it is now hasn’t been exported" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
+        <span key="export" title="The edit is finished, but what it is now hasn’t been exported" className={cx(CHIP, "text-warning")}>
           <FileVideo size={12} />
           Not exported
         </span>
       ),
     // Nothing pressing: still where it stands, so no row's status is blank (the user, Oct 30: "7 comments. or No comments").
     state.complete && state.exported ? (
-      <span key="quiet" title="Exported and on its review, with no open comments" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-muted">
+      <span key="quiet" title="Exported and on its review, with no open comments" className={cx(CHIP, "text-muted")}>
         <MessageSquare size={12} />
         No comments
       </span>
     ) : (
-      <span key="quiet" title="Still being edited" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-muted">
+      <span key="quiet" title="Still being edited" className={cx(CHIP, "text-muted")}>
         <Pencil size={12} />
         In progress
       </span>
@@ -850,7 +853,7 @@ function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: st
       <CreatorCell by={issue.createdBy} />
       <div className="col-span-3 flex min-w-0 items-center gap-2">
         {/* Where it stopped, so it's plain what's being fixed (the list already says it stopped). */}
-        <span title={`Stopped ${stageWords(issue.stage)}`} className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
+        <span title={`Stopped ${stageWords(issue.stage)}`} className={cx(CHIP, "text-warning")}>
           {stageName(issue.stage)}
         </span>
       </div>
@@ -1151,7 +1154,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
             <StateChips state={state} projectId={project.id} onChanged={onChanged} editor={card.editor} />
           )}
           {card.drive ? (
-            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className="flex h-[22px] shrink-0 items-center rounded-full bg-raised px-2 text-[12px] font-medium text-success hover:bg-hover">
+            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className={cx(CHIP, "text-success hover:bg-hover")}>
               On Drive ↗
             </button>
           ) : (
@@ -1275,20 +1278,27 @@ function ScriptTableRow({ script, importing, writing, onChanged, onImport }: { s
       <div role="cell" className="flex min-w-0 items-center gap-1.5">
         {importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (the step in its tooltip; its row opens the import).
-          <span className="flex min-w-0 items-center gap-2" title={importing.step}>
-            <span className="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-raised">
+          <span className={cx(CHIP, "text-info tabular")} title={importing.step}>
+            <span className="h-1 w-8 shrink-0 overflow-hidden rounded-full bg-line">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
-            <span className="shrink-0 text-[12px] text-fg tabular">{Math.round(Math.max(0, Math.min(100, importing.percent)))}%</span>
+            Importing {Math.round(Math.max(0, Math.min(100, importing.percent)))}%
           </span>
         ) : importing ? (
-          <span className={cx("truncate text-[13px] tabular", importing.stopped ? "text-warning" : "text-info")}>{importing.word}</span>
+          <span className={cx(CHIP, "tabular", importing.stopped ? "text-warning" : "text-info")}>
+            {importing.stopped ? <TriangleAlert size={12} /> : <LoaderCircle size={12} className="animate-spin" />}
+            {importing.word}
+          </span>
         ) : writing ? (
-          <span className="text-[13px] text-info">Writing…</span>
+          <span className={cx(CHIP, "text-info")}>
+            <LoaderCircle size={12} className="animate-spin" />
+            Writing
+          </span>
         ) : (
-          // Its next step, quiet until the row is under the pointer (its section already says the stage).
-          <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className="truncate text-[13px] text-muted transition-colors group-hover:text-fg hover:underline hover:underline-offset-[3px] disabled:opacity-60">
-            {starting ? "Starting…" : script.built ? "Start the edit →" : "Write the script →"}
+          // Its next step, a status like the others that's also its button.
+          <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className={cx(CHIP, "text-secondary transition-colors hover:bg-hover hover:text-fg disabled:opacity-60")}>
+            {script.built ? <Film size={12} /> : <PenLine size={12} />}
+            {starting ? "Starting…" : script.built ? "Start the edit" : "Write the script"}
           </button>
         )}
       </div>
@@ -1332,7 +1342,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
           {project.holder ? (
             <StateChips editor={project.holder} />
           ) : (
-            <span title="Not on this Mac yet: opening it downloads it" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-muted">
+            <span title="Not on this Mac yet: opening it downloads it" className={cx(CHIP, "text-muted")}>
               <CloudDownload size={12} />
               Not on this Mac
             </span>
@@ -1379,7 +1389,7 @@ function Place({ sync }: { sync?: CloudStatus }) {
   if (trouble === null) return null;
   const [Icon, text, title] = trouble;
   return (
-    <span title={title} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
+    <span title={title} className={cx(CHIP, "text-warning")}>
       <Icon size={12} />
       {text}
     </span>

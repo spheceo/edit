@@ -580,7 +580,7 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
   // One status a row, the one that matters most (the user, Oct 30: a row of chips was "a mess").
   const first = [
     state.importing !== null && (
-        <span
+        <span key="importing"
           title={state.importing.error ?? `Importing: ${state.importing.state}`}
           className={cx("flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
         >
@@ -589,25 +589,25 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
         </span>
       ),
     state.working && (
-        <span title="Its agent is working on it" className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium text-agent">
+        <span key="working" title="Its agent is working on it" className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 text-[12px] font-medium text-agent">
           <span className="size-1.5 animate-pulse rounded-full bg-agent" />
           Agent working
         </span>
       ),
     state.sharing !== null && (
-        <span title={`Sharing: ${state.sharing}`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info">
+        <span key="sharing" title={`Sharing: ${state.sharing}`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info">
           <Share2 size={12} />
           Sharing
         </span>
       ),
     state.approved !== null && (
-        <span title={`Version ${state.approved} was approved on its review`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-success">
+        <span key="approved" title={`Version ${state.approved} was approved on its review`} className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-success">
           <Check size={12} />
           Approved v{state.approved}
         </span>
       ),
     state.approved === null && state.feedback > 0 && (
-        <span
+        <span key="notes"
           title={`${state.feedback} open note${state.feedback === 1 ? "" : "s"} on its Repack review`}
           className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-info"
         >
@@ -616,7 +616,7 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
         </span>
       ),
     state.complete && !state.exported && (
-        <span title="The edit is finished, but what it is now hasn’t been exported" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
+        <span key="export" title="The edit is finished, but what it is now hasn’t been exported" className="flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-raised px-2 text-[12px] font-medium text-warning">
           <FileVideo size={12} />
           Not exported
         </span>

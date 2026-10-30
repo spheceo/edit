@@ -39,9 +39,15 @@ export function watchForFreezes() {
   useAgent.subscribe((next, prev) => count("useAgent", next, prev));
   useView.subscribe((next, prev) => count("useView", next, prev));
   let beat = performance.now();
+  // A hidden tab's timers run about once a minute (Chrome's throttling), so a
+  // beat that late is the tab out of sight, not the page stuck: Oct 30, a
+  // background tab said "stuck for 59.8 s" 300 times in four hours.
+  let hiddenMeanwhile = document.hidden;
+  document.addEventListener("visibilitychange", () => (hiddenMeanwhile = true));
   setInterval(() => {
     const now = performance.now();
-    const late = now - beat - 250;
+    const late = hiddenMeanwhile || document.hidden ? 0 : now - beat - 250;
+    hiddenMeanwhile = document.hidden;
     beat = now;
     const total = [...counts.values()].reduce((sum, times) => sum + times, 0);
     // At most one report every 10 s, so a long freeze doesn't flood the log.

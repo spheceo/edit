@@ -24,7 +24,6 @@ import * as handoff from "./handoff.ts";
 import * as jobs from "./jobs.ts";
 import * as media from "./media.ts";
 import { caseNames } from "./names.ts";
-import { nameVoices } from "./naming.ts";
 import * as parts from "./parts.ts";
 import * as research from "./research.ts";
 import * as reuse from "./reuse.ts";
@@ -623,25 +622,11 @@ async function words(app: App, dir: string, script: Script, waitOn: (words: stri
   }
   // The transcript is kept before the optional visual check, so a stopped import has its words on disk too.
   store.write(dir, script);
-  // Who speaks each line, by watching the footage, then names for the voices. Neither can stop the import: a failure leaves the voices as heard, and the build names them again.
-  // Words from YouTube's captions have turns, not voices: who says each is read, not watched.
-  if (script.captions) await readTurns(script, dir, (detail, percent) => say(script, detail, "transcribing", percent));
-  else {
-    // The watcher watches the preview, or the video itself: a joined case has only its preview.
-    if (!isFile(script.originalPath)) {
-      await waitOn("Making the preview");
-    }
-    const watched = await watchSpeakers(script, dir);
-    if (watched || Object.keys(script.speakers ?? {}).length === 0) {
-      say(script, "Naming the speakers.");
-      try {
-        await nameVoices(script, watched);
-        diag.info("writer", `${jobs.named(script.id, script.title)}: speakers named: ${Object.values(script.speakers ?? {}).join(", ")}`);
-      } catch (error) {
-        diag.warn("writer", `${jobs.named(script.id, script.title)}: speakers not named: ${diag.messageOf(error)}`);
-      }
-    }
-  }
+  // Who says each line, read from the conversation by Opus (caption_turns.ts), for every import: the voices
+  // transcription heard and YouTube's caption turns alike. Not watched: Gemini watching every minute of the
+  // footage cost about $0.70 an hour of it, $17 on Oct 30 for scripts that use well under an hour each (the
+  // user: "we can still replace this with just opus"). A failure is a note: the voices stay as heard.
+  await readTurns(script, dir, (detail, percent) => say(script, detail, "transcribing", percent));
   // Words that spilled across a change of speaker go back to who said them.
   say(script, "Putting each word with its speaker.");
   await fixSpills(script, dir).catch((error: unknown) => diag.warn("writer", `${script.title}: spilled words weren't fixed: ${diag.messageOf(error)}`));
@@ -674,28 +659,6 @@ export async function readTurns(script: Script, dir: string, onStep: ((detail: s
     Object.assign(script, before);
     diag.warn("writer", `${jobs.named(script.id, script.title)}: who says each line couldn't be read: ${diag.messageOf(error)}`);
     note(script, `Who says each line couldn't be read (${diag.messageOf(error)}): the transcript is YouTube's captions, its turns unnamed. Retry unfinished speaker checks to read them again.`);
-    return false;
-  }
-}
-
-/** The watcher, right after transcription: whether it corrected any of the footage. Whatever goes wrong is a note and the transcript as heard. */
-async function watchSpeakers(script: Script, dir: string): Promise<boolean> {
-  script.progress = 90;
-  say(script, "Checking who speaks.");
-  const before = structuredClone(script);
-  try {
-    const report = await watch.run(script, dir, (done, count, cached) => say(script, `Checking who speaks: ${done} of ${count} stretches checked.${cached > 0 ? ` ${cached} saved checks reused.` : ""}`, "transcribing", 90 + Math.floor((done * 8) / Math.max(count, 1))));
-    if (report === null) return false;
-    diag.info("writer", `${jobs.named(script.id, script.title)}: speaker check: ${report.windows} stretches, ${report.cached} saved answers reused, ${report.failed.length} unchecked, ${report.linesChanged} lines corrected`);
-    if (report.failed.length > 0) {
-      note(script, `The transcript is ready. Visual speaker checks couldn't finish for ${report.failed.length} of ${report.windows} footage stretches (${report.failed[0]}). Those stretches keep their audio-based speaker labels, which may combine or split voices incorrectly; no transcript words were removed.`);
-    }
-    store.write(dir, script);
-    watch.applied(dir);
-    return true;
-  } catch (error) {
-    Object.assign(script, before);
-    note(script, `Edit couldn't watch the footage to check who speaks (${diag.messageOf(error)}). The speakers are as heard.`);
     return false;
   }
 }
@@ -1186,10 +1149,9 @@ export async function complete(app: App, data: string, id: string, job: jobs.Job
   await storage.bringBack(app, data, id, job);
   await transcription.transcribe(app, script, dir, (done, total) => job.stage(`Completing transcription: ${Math.floor((done * 100) / Math.max(total, 1))}%`), job.signal);
   jobs.checkStopped(job);
-  if (script.captions) {
-    job.stage("Reading who says each line");
-    await readTurns(script, dir, null, job.signal);
-  } else if (Object.keys(script.speakers ?? {}).length === 0) await nameVoices(script, false, job.signal).catch(() => {});
+  // Who says each line, read again by Opus over the words now complete (as the import does).
+  job.stage("Reading who says each line");
+  await readTurns(script, dir, null, job.signal);
   jobs.checkStopped(job);
   const fresh = store.read(dir);
   if (fresh.revision !== revision) throw new Error("The project changed during transcription. The transcripts are saved; complete transcription again to apply them.");
@@ -1208,30 +1170,19 @@ export async function complete(app: App, data: string, id: string, job: jobs.Job
 }
 
 /** Retry unfinished speaker checks, as a job: completed answers are reused; only unfinished checks ask again. */
-export async function retrySpeakers(app: App, data: string, id: string, job: jobs.Job): Promise<jobs.Outcome> {
+export async function retrySpeakers(_app: App, data: string, id: string, job: jobs.Job): Promise<jobs.Outcome> {
   const dir = store.scriptDir(data, id);
   const script = store.read(dir);
   const revision = script.revision;
   let said: string;
   let cost = 0;
-  if (script.captions) {
-    // Words from YouTube's captions: who speaks is read, not watched.
+  {
+    // Read, not watched, for every script (as the import does).
     const names = await caseNames(dir, script).catch(() => []);
     const report = await caption_turns.run(script, dir, names, notesOf(dir), (done, total) => job.stage(`Reading who says each line: ${done} of ${total}`), job.signal);
     script.notes = (script.notes ?? []).filter((one) => !one.startsWith("Who says each line"));
     if (report.failed > 0) script.notes.push(`Who says each line couldn't be read for ${report.failed} of ${report.windows} stretches; their lines keep the speaker before them. Retry unfinished speaker checks to read them again.`);
     said = `Read who says each line in ${report.windows - report.failed} of ${report.windows} stretches (${report.cached} kept); ${report.people} people.`;
-  } else {
-    const status = watch.status(dir);
-    if (!(status !== null && (status.failed.length > 0 || status.needsApply))) throw new Error("There are no unfinished speaker checks.");
-    // Watching needs the footage: back from the cloud if it was left there.
-    await storage.bringBack(app, data, id, job);
-    const report = await watch.run(script, dir, (done, total, cached) => job.stage(`Checking speakers: ${done} of ${total}; ${cached} saved checks reused`), job.signal);
-    if (report === null) throw new Error("There is no video speech to check.");
-    watch.clearNotes(script);
-    if (report.failed.length > 0) script.notes!.push(`Visual speaker checks couldn't finish for ${report.failed.length} of ${report.windows} stretches. Retry unfinished speaker checks to continue; the transcript is kept.`);
-    said = `Checked ${report.windows - report.failed.length} of ${report.windows} footage stretches. ${report.cached} saved checks reused; ${report.failed.length} still unfinished.`;
-    cost = report.cost;
   }
   jobs.checkStopped(job);
   job.stage("Putting each word with its speaker");

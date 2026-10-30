@@ -1,6 +1,7 @@
 // Who says each line, read from the conversation, for words from YouTube's
 // captions (captions.ts), as Repack's line check reads them: no voices to
-// tell apart and nothing watched. Sonnet runs it, in two steps:
+// tell apart and nothing watched. Opus runs it, in two steps (for every
+// import since Oct 30, the voices Scribe heard included):
 //
 // 1. The cast. It reads lines from across the footage (each recording's
 //    opening, then lines spread through the rest) with the case's names, and
@@ -27,7 +28,8 @@ import { describe } from "./brief.ts";
 import * as claude from "./claude.ts";
 import { clock } from "./paragraphs.ts";
 
-const MODEL = claude.SONNET;
+/** Opus: it reads every import's lines now, in place of Gemini watching the footage (Oct 30). */
+const MODEL = claude.OPUS;
 /** Lines one call reads; the next window starts this many lines before it ends. */
 const WINDOW = 120;
 const OVERLAP = 6;
@@ -102,7 +104,7 @@ const askSonnet =
     } catch {
       // Not asked yet.
     }
-    const answer = (await claude.structured(MODEL, SYSTEM, schema, prompt, signal, "Claude sonnet reading who says each line")) as Record<string, unknown>;
+    const answer = (await claude.structured(MODEL, SYSTEM, schema, prompt, signal, "Claude opus reading who says each line")) as Record<string, unknown>;
     writeAtomic(file, JSON.stringify(answer));
     return [answer, false];
   };

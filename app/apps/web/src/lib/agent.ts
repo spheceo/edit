@@ -193,7 +193,8 @@ export async function openAgent(project: string) {
   }
 }
 
-export async function sendToAgent(text: string) {
+/** `playhead`: the editor's frame when the message was written, so the agent starts there. */
+export async function sendToAgent(text: string, playhead?: number) {
   const state = useAgent.getState();
   if (!state.project) return;
   // Show the message now; the server's copy replaces it when it arrives.
@@ -207,7 +208,7 @@ export async function sendToAgent(text: string) {
     await fetchRetrying(`/api/projects/${state.project}/agent`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(playhead === undefined ? { text } : { text, playhead: String(Math.round(playhead)) }),
     }).then(json);
   } catch (error) {
     useAgent.setState((current) => ({

@@ -8,11 +8,13 @@ import type { App } from "./app.ts";
 import * as broll from "./broll.ts";
 import * as diag from "./diag.ts";
 import * as drive from "./drive.ts";
+import { cachedTranscripts } from "./edit_tools.ts";
 import * as footageLevels from "./footage_levels.ts";
 import { isBug } from "./guard.ts";
 import { ApiError, bad, notFound } from "./http/errors.ts";
 import { badShape, readBytes, readJson, type RouteContext, type Router } from "./http/router.ts";
 import * as library from "./library.ts";
+import { playheadContext } from "./playhead.ts";
 import { handlerFor, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import type { AudioClip } from "./model.ts";
 import { native } from "./native/index.ts";
@@ -451,7 +453,7 @@ async function agentRetryClaudeRoute(context: RouteContext<App>): Promise<Respon
 async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
   const { app } = context;
   const id = context.params.id ?? "";
-  const given = await body(context, "AgentMessage", ["text"], ["effort", "model"]);
+  const given = await body(context, "AgentMessage", ["text"], ["effort", "model", "playhead"]);
   const said = given.text!.trim();
   if (said === "") throw bad("say something");
   // The agent edits the project: a cloud project needs this machine's lock.
@@ -461,8 +463,12 @@ async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
     if (isBug(error)) throw error;
     throw new ApiError(423, diag.messageOf(error));
   }
+  // Sent from the editor: where its playhead is, read to the agent with the message.
+  const frame = given.playhead === null ? Number.NaN : Number(given.playhead);
+  const live = Number.isFinite(frame) ? app.store.get(id) : null;
+  const where = live === null ? "" : playheadContext(live.project, frame, cachedTranscripts(app, live.project, false));
   try {
-    await seams.agentPanel(app).send(id, said, given.model ?? null, given.effort ?? null);
+    await seams.agentPanel(app).send(id, said, given.model ?? null, given.effort ?? null, where);
   } catch (error) {
     failed(error);
   }

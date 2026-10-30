@@ -43,6 +43,7 @@ import {
 } from "../lib/agent";
 import { buildTurns, callTitle, formatWorked, groupSummary, type Turn } from "../lib/agentTurns";
 import { api, useMachine } from "../lib/api";
+import { playhead } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import { ProblemView } from "./ProblemView";
 import { Button, cx, IconButton } from "./ui";
@@ -538,7 +539,8 @@ function Composer({ disabled }: { disabled: boolean }) {
     const message = text.trim();
     if (!message || running || disabled) return;
     setText("");
-    void sendToAgent(message);
+    // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
+    void sendToAgent(message, playhead.frame);
   };
 
   return (

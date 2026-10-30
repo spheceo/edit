@@ -738,8 +738,9 @@ export class Agents implements seams.AgentPanel {
   }
 
   /** Sends a message, starting or resuming the project's Codex thread. */
-  send(project: string, text: string, model: string | null, effort: string | null): Promise<void> {
-    return this.sendTurn(project, text, model, effort, null);
+  /** `context`: what the agent reads after the message but the chat doesn't show (where the playhead is and what's under it). */
+  send(project: string, text: string, model: string | null, effort: string | null, context = ""): Promise<void> {
+    return this.sendTurn(project, text, model, effort, null, false, context);
   }
 
   private async sendTurn(
@@ -749,6 +750,7 @@ export class Agents implements seams.AgentPanel {
     effort: string | null,
     generation: number | null,
     replay = false,
+    context = "",
   ): Promise<void> {
     if (this.store.get(project) === null) throw new Error("no such project");
     let sending = this.sending.get(project);
@@ -790,7 +792,7 @@ export class Agents implements seams.AgentPanel {
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
       try {
-        await this.prepareTurn(project, text, model, effort, current, provider, replay);
+        await this.prepareTurn(project, text, model, effort, current, provider, replay, context);
       } catch (error) {
         const said = isBug(error) ? crashed("the agent turn", error) : diag.messageOf(error);
         if (provider === "claude" && claude.signInProblem(said) && this.waitForClaudeLogin(project, current, text, false)) return;
@@ -811,10 +813,11 @@ export class Agents implements seams.AgentPanel {
     generation: number,
     provider: Provider,
     replay = false,
+    context = "",
   ): Promise<void> {
     const live = this.store.get(project);
     if (live === null) throw new Error("no such project");
-    if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation, replay);
+    if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation, replay, context);
     const codex = await this.codex();
     const chat = this.withChat(project);
     if (!stillOn(chat, generation)) throw new Error("Stopped.");
@@ -883,7 +886,7 @@ export class Agents implements seams.AgentPanel {
     this.emit(project, { event: "status", running: true });
     const params: Record<string, unknown> = {
       threadId: thread,
-      input: [{ type: "text", text, text_elements: [] }],
+      input: [{ type: "text", text: text + context, text_elements: [] }],
       approvalPolicy: "never",
     };
     if (selection.model !== null) params.model = selection.model;
@@ -919,7 +922,7 @@ export class Agents implements seams.AgentPanel {
    * pre-approved, the instructions as its system prompt, and its messages
    * mapped onto the chat as they stream in.
    */
-  private async claudeTurn(project: string, text: string, model: string | null, effort: string | null, generation: number, replay = false): Promise<void> {
+  private async claudeTurn(project: string, text: string, model: string | null, effort: string | null, generation: number, replay = false, context = ""): Promise<void> {
     const live = this.store.get(project);
     if (live === null) throw new Error("no such project");
     const chat = this.withChat(project);
@@ -973,7 +976,7 @@ export class Agents implements seams.AgentPanel {
     now.provider = "claude";
     this.save(project);
     this.emit(project, { event: "status", running: true });
-    await this.runClaude(project, generation, text, options);
+    await this.runClaude(project, generation, text + context, options);
   }
 
   /**

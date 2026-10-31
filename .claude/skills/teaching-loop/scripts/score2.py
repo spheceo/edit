@@ -30,6 +30,8 @@ broll = [(p['start'], p['end']) for p in parts if p['kind'] == 'broll']
 dur = ctx['duration_frames']
 def within(spans, f): return any(s <= f < e for s, e in spans)
 def path(c): return med.get(c.get('media'), {}).get('path', '')
+# Music and sound effects say so on the media (`library`): a cloud copy's path no longer says library/.
+def library(c): return med.get(c.get('media'), {}).get('library') or ('music' if '/library/music/' in path(c) else 'sfx' if ('/library/sfx/' in path(c) or '/.edit/sfx/' in path(c)) else None)
 R = {'project': pid, 'name': d['name'], 'minutes': round(dur / fps / 60, 1), 'clips': len(clips), 'audit': dict(kinds)}
 
 # Narration words on the timeline: (seconds, word) from every cut-in.
@@ -84,7 +86,7 @@ R['I1_text'] = {'texts': texts, 'matched': len(leads), 'early>=0.3s': len(early)
                 'median_lead_s': sorted(leads)[len(leads) // 2] if leads else None, 'under_0.5s': short}
 
 # I2 music: beds, their lengths, level issues.
-music = [c for c in clips if c['type'] == 'audio' and '/library/music/' in path(c)]
+music = [c for c in clips if c['type'] == 'audio' and library(c) == 'music']
 lens = sorted(round(c['duration'] / fps, 1) for c in music)
 R['I2_music'] = {'beds': len(music), 'median_len_s': lens[len(lens) // 2] if lens else None, 'max_len_s': lens[-1] if lens else None,
                  'music_loud': kinds['music_loud'], 'music_mood': kinds['music_mood'], 'mid_narration_changes': kinds['music_change_mid_narration']}
@@ -124,7 +126,7 @@ R['I8_pictures'] = {'image_clips': len(viewers), 'distinct_images': len({c['medi
 
 # I9 clicks on pop-ups: a sound starting within 6 frames of each File Viewer / photo / callout.
 pops = [c for c in clips if re.match(r'(File Viewer|Photo inset|Name callout|Callout|Quote|Red quote)', c.get('name') or '', re.I)]
-sfx = [c for c in clips if c['type'] == 'audio' and ('/library/sfx/' in path(c) or '/.edit/sfx/' in path(c))]
+sfx = [c for c in clips if c['type'] == 'audio' and library(c) == 'sfx']
 clicked = sum(1 for p in pops if any(-20 <= s['start'] - p['start'] <= 8 for s in sfx))
 R['I9_sound'] = {'pop_ups': len(pops), 'with_sound': clicked, 'sfx': len(sfx), 'tape_start_unmarked': kinds['tape_start_unmarked'], 'hook_unmarked': kinds['hook_unmarked']}
 

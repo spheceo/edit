@@ -1,6 +1,6 @@
 import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, ExternalLink, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { editStyles, useAccount, writesScripts } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
@@ -19,7 +19,7 @@ import { prefetchScript } from "../writer/opened";
 import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
-import { AsideStatus, BackMark, BY, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, NAME, PILL, ROW, RowButtons, TableShape, tableColumns, Updated, useAside, withAside } from "./HomeTable";
+import { AsideStatus, BackMark, BY, Category, CATEGORY, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, LENGTH, LengthCell, layoutFor, NAME, PILL, ROW, RowButtons, StatusCell, TableShape, Updated, useAside, withAside } from "./HomeTable";
 import { HomeSidebar, nameOf, placeOf, SECTIONS, type Section, type Where } from "./HomeSidebar";
 import { Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
@@ -398,7 +398,7 @@ export function Home() {
                   <span className="font-normal text-faint/50">/</span>
                 </>
               )}
-              {title.name}
+              <span className="truncate">{title.name}</span>
               {!loading && <span className="ml-1 font-medium text-faint tabular">{total}</span>}
             </h1>
             <div className="ml-auto flex items-center gap-1.5">
@@ -529,6 +529,18 @@ function FirstEdit({ cloudOn, onNew }: { cloudOn: boolean; onNew: () => void }) 
  * the list built again).
  */
 function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string; label: string | null; items: Item[] }[]; solo: boolean; cross: boolean; lengthLabel: string }) {
+  // As wide as the window lets it be: the columns a name can spare go first (Length, then Category).
+  const table = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(1200);
+  useLayoutEffect(() => {
+    const element = table.current;
+    if (!element) return;
+    setWidth(element.clientWidth);
+    const watch = new ResizeObserver(([entry]) => setWidth(entry!.contentRect.width));
+    watch.observe(element);
+    return () => watch.disconnect();
+  }, []);
+  const layout = layoutFor(width, solo);
   const seen = useRef<Map<string, string> | null>(null);
   const [lately, setLately] = useState<{ added: Set<string>; renamed: Set<string> }>({ added: new Set(), renamed: new Set() });
   const rows = groups.flatMap((group) => group.items);
@@ -548,19 +560,31 @@ function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string;
   }, [signature]);
   return (
     <TableShape.Provider value={{ cross }}>
-      <div role="table" aria-label="Projects" data-solo={solo || undefined} className="group/table grid gap-x-4 gap-y-px" style={{ gridTemplateColumns: tableColumns(solo) }}>
+      <div
+        ref={table}
+        role="table"
+        aria-label="Projects"
+        data-solo={solo || undefined}
+        data-compact={layout.compact || undefined}
+        data-slim={layout.slim || undefined}
+        data-faces={layout.faces || undefined}
+        className="group/table grid gap-x-4 gap-y-px"
+        style={{ gridTemplateColumns: layout.columns }}
+      >
         <div role="row" className={cx(COLUMNS, "px-3 pt-1.5 pb-2 text-[11px] font-semibold text-faint/70")}>
           <span role="columnheader">Name</span>
-          <span role="columnheader">Category</span>
+          <span role="columnheader" className={CATEGORY}>
+            Category
+          </span>
           <span role="columnheader">Status</span>
           <span role="columnheader" className={BY}>
             By
           </span>
-          <span role="columnheader">{lengthLabel}</span>
-          <span role="columnheader">Updated</span>
-          <span role="columnheader" className="sr-only">
-            Actions
+          <span role="columnheader" className={LENGTH}>
+            {lengthLabel}
           </span>
+          <span role="columnheader">Updated</span>
+          <span role="columnheader" aria-label="Actions" />
         </div>
         {groups.map((group) => (
           <Fragment key={group.key}>
@@ -845,8 +869,8 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
           title={state.importing.error ?? `Importing: ${state.importing.state}`}
           className={cx(CHIP, "tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
         >
-          {importStuck(state.importing) ? <TriangleAlert size={12} /> : <Spinner size={12} />}
-          {importStuck(state.importing) ? "Import stuck" : `Importing ${importShare(state.importing)}`}
+          {importStuck(state.importing) ? <TriangleAlert size={12} className="shrink-0" /> : <Spinner size={12} />}
+          <span className="truncate">{importStuck(state.importing) ? "Import stuck" : `Importing ${importShare(state.importing)}`}</span>
         </span>
       ),
     state.working && (
@@ -1116,20 +1140,20 @@ function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: st
           {issue.title}
         </span>
       </div>
-      <span role="cell" />
-      <div role="cell" className="flex min-w-0 items-center gap-2">
+      <Category text="" />
+      <StatusCell>
         {aside.entry ? (
           <AsideStatus entry={aside.entry} />
         ) : (
           // Where it stopped, so it's plain what's being fixed.
           <span title={`Stopped ${stageWords(issue.stage)}: ${issue.decision?.summary ?? issue.error ?? "it stopped without saying why"}`} className={cx(CHIP, "text-warning")}>
-            <TriangleAlert size={12} />
-            Stopped · {stageName(issue.stage)}
+            <TriangleAlert size={12} className="shrink-0" />
+            <span className="truncate">Stopped · {stageName(issue.stage)}</span>
           </span>
         )}
-      </div>
+      </StatusCell>
       <CreatorCell by={issue.createdBy} />
-      <span role="cell" />
+      <LengthCell />
       <Updated at={issue.createdAt ?? 0} />
       <RowButtons aside={aside.button} items={items} width={220} />
       {/* Its dialogs open over Home; clicks inside them aren't the row's. */}
@@ -1296,7 +1320,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
           )}
         </div>
         <Category style={project.style} compilation={script?.compilation} />
-        <div role="cell" className="flex min-w-0 items-center gap-1.5">
+        <StatusCell>
           {aside.entry ? (
             <AsideStatus entry={aside.entry} />
           ) : (
@@ -1313,11 +1337,9 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
               )}
             </>
           )}
-        </div>
+        </StatusCell>
         <CreatorCell by={remote?.created_by ?? project.created_by} projectId={project.id} />
-        <span role="cell" className="text-[13px] text-muted tabular">
-          {project.problem ? "" : shortDuration(project.duration_frames / project.fps)}
-        </span>
+        <LengthCell>{project.problem ? "" : shortDuration(project.duration_frames / project.fps)}</LengthCell>
         <Updated at={project.modified_ms} />
         <RowButtons aside={aside.button} items={items} width={190} />
       </div>
@@ -1425,7 +1447,7 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
         </span>
       </div>
       <Category style={script.style} compilation={script.compilation} />
-      <div role="cell" className="flex min-w-0 items-center gap-1.5">
+      <StatusCell>
         {aside.entry ? (
           <AsideStatus entry={aside.entry} />
         ) : importing && !importing.stopped && importing.percent !== undefined ? (
@@ -1438,8 +1460,8 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
           </span>
         ) : importing ? (
           <span className={cx(CHIP, "tabular", importing.stopped ? "text-warning" : "text-info")}>
-            {importing.stopped ? <TriangleAlert size={12} /> : <Spinner size={12} />}
-            {importing.word}
+            {importing.stopped ? <TriangleAlert size={12} className="shrink-0" /> : <Spinner size={12} />}
+            <span className="truncate">{importing.word}</span>
           </span>
         ) : writing ? (
           <span className={cx(CHIP, "text-info")}>
@@ -1459,11 +1481,9 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
             {starting ? "Starting…" : script.built ? "Start edit" : "Write script"}
           </button>
         )}
-      </div>
+      </StatusCell>
       <CreatorCell by={script.createdBy ?? undefined} />
-      <span role="cell" className="text-[13px] text-muted tabular">
-        {script.durationMs > 0 ? shortDuration(script.durationMs / 1000) : ""}
-      </span>
+      <LengthCell>{script.durationMs > 0 ? shortDuration(script.durationMs / 1000) : ""}</LengthCell>
       <Updated at={script.updatedAt} title={script.updatedBy ? `by ${script.updatedBy}` : undefined} />
       <RowButtons aside={aside.button} items={items} width={180} />
     </div>
@@ -1568,7 +1588,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
           </span>
         </div>
         <Category style={summary.style} compilation={script?.compilation} />
-        <div role="cell" className="flex min-w-0 items-center gap-1.5">
+        <StatusCell>
           {aside.entry ? (
             <AsideStatus entry={aside.entry} />
           ) : project.holder ? (
@@ -1579,11 +1599,9 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
               Cloud only
             </span>
           )}
-        </div>
+        </StatusCell>
         <CreatorCell by={project.created_by} projectId={project.id} />
-        <span role="cell" className="text-[13px] text-muted tabular">
-          {seconds !== null ? shortDuration(seconds) : ""}
-        </span>
+        <LengthCell>{seconds !== null ? shortDuration(seconds) : ""}</LengthCell>
         <Updated at={project.updated_ms} title={`by ${project.updated_by}`} />
         <RowButtons aside={aside.button} items={items} width={180} />
       </div>

@@ -8,7 +8,7 @@ import { ArrowUpRight, CircleAlert, ExternalLink, Eye, Lightbulb, MessageSquare,
 import { useCallback, useEffect, useState } from "react";
 
 import { Button, cx, Modal, Spinner, Switch } from "../components/ui";
-import { AsideStatus, BackMark, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, NAME, ROW, RowButtons, Updated, useAside, withAside } from "../components/HomeTable";
+import { AsideStatus, BackMark, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LengthCell, NAME, ROW, RowButtons, StatusCell, Updated, useAside, withAside } from "../components/HomeTable";
 import { ideasApi, NICHE, viewsLabel, type ChangeCard, type IdeaRow, type IdeasHome } from "../lib/ideas";
 import { useKept } from "../lib/kept";
 import { laterKey } from "../lib/later";
@@ -115,18 +115,16 @@ export function IdeaTableRow({ row }: { row: IdeaRow }) {
         <span className={NAME}>{summary.title}</span>
       </div>
       <Category text={summary.niche ? NICHE[summary.niche].label : ""} />
-      <div role="cell" className="flex min-w-0 items-center">
-        {aside.entry ? <AsideStatus entry={aside.entry} /> : <Status row={row} />}
-      </div>
+      <StatusCell>{aside.entry ? <AsideStatus entry={aside.entry} /> : <Status row={row} />}</StatusCell>
       <CreatorCell by={row.createdBy === null ? null : { sub: row.createdBy.sub, name: row.createdBy.name, ...(row.createdBy.picture !== null ? { picture: row.createdBy.picture } : {}) }} />
-      <span role="cell" className="flex min-w-0 items-center gap-1.5 text-[13px] text-muted tabular" title={summary.views !== null ? `${summary.views.toLocaleString()} views` : undefined}>
+      <LengthCell title={summary.views !== null ? `${summary.views.toLocaleString()} views` : undefined}>
         {summary.views !== null && (
           <>
             <Eye size={13} className="shrink-0 text-faint" />
             {viewsLabel(summary.views).replace(/ views?$/u, "")}
           </>
         )}
-      </span>
+      </LengthCell>
       <Updated at={row.updatedAt} title={row.updatedBy ? `by ${row.updatedBy}` : undefined} />
       <RowButtons aside={aside.button} items={items} />
     </div>
@@ -165,7 +163,7 @@ export function CardTableRow({ card, onOpened }: { card: ChangeCard; onOpened?: 
         <span className={NAME}>{card.name}</span>
       </div>
       <Category text={card.list} />
-      <div role="cell" className="flex min-w-0 items-center">
+      <StatusCell>
         {aside.entry ? (
           <AsideStatus entry={aside.entry} />
         ) : (
@@ -173,9 +171,9 @@ export function CardTableRow({ card, onOpened }: { card: ChangeCard; onOpened?: 
             {opening ? <Spinner size={12} /> : <MessageSquare size={12} />} Changes requested
           </span>
         )}
-      </div>
+      </StatusCell>
       <CreatorCell by={null} />
-      <span role="cell" />
+      <LengthCell />
       <span role="cell" />
       <RowButtons aside={aside.button} items={items} />
     </div>

@@ -11,6 +11,7 @@ import { AlarmClock, Captions, Check, Clock, Ellipsis, FileText, Film, Lightbulb
 import { createContext, useContext, type ReactNode } from "react";
 
 import { asideChoices, asleep, backLabel, type Later, type LaterEntry, type LaterKey } from "../lib/later";
+export { layoutFor } from "../lib/home-layout";
 import { ago } from "../lib/time";
 import { STYLES, type Creator, type Style } from "../lib/types";
 import { openMenu, toggleMenu, type MenuItem } from "./ContextMenu";
@@ -31,25 +32,45 @@ export const NAME = "truncate text-[13.5px] font-medium text-fg/90 group-hover:t
 
 /** Every status looks alike: an outlined pill in the colour of how much it matters (the portal's). */
 export const PILL = "inline-flex h-[22px] min-w-0 shrink-0 items-center gap-1.5 rounded-full border border-current/25 px-2.5 text-[11.5px] leading-none whitespace-nowrap";
-export const CHIP = `${PILL} font-medium`;
+export const CHIP = `${PILL} max-w-full overflow-hidden font-medium`;
 
 /** How the table is laid out now: `cross` (rows of every kind: each says what it is). */
 export const TableShape = createContext<{ cross: boolean }>({ cross: false });
 
-/**
- * The By column's cells, hidden (out of the grid) when the table is solo
- * (Mine: every row is yours): the table says so (data-solo) and its columns
- * follow from the same switch, so a row never has a cell more than the
- * table has columns (one did, its buttons wrapping under its name).
- */
-export const BY = "group-data-[solo]/table:hidden";
-
 /** Later, as Home has it, for every row. */
 export const LaterContext = createContext<Later | null>(null);
 
-/** The table's columns: name, category, status, by (unless solo: the table is then data-solo, which hides its cells), length, updated, the row's buttons. */
-export function tableColumns(solo: boolean): string {
-  return ["minmax(0,1fr)", "minmax(0,8.5rem)", "minmax(0,13rem)", ...(solo ? [] : ["7.5rem"]), "4rem", "5rem", "4.25rem"].join(" ");
+/**
+ * Columns the table can do without, hidden (out of the grid) by the table's
+ * own switches, which its columns follow too, so a row never has a cell more
+ * than the table has columns (one did, its buttons wrapping under its name):
+ * By in Mine (data-solo: every row is yours); when the table is narrow,
+ * Length (data-compact), then Category (data-slim), then By's names (only
+ * the faces, data-faces), then a narrower Status, so a name always has room
+ * (the user, Oct 31: "ensure on this new dashboard we have zero ui issues
+ * like this"; Edit's window is 960 px wide at the least).
+ */
+export const BY = "group-data-[solo]/table:hidden";
+export const LENGTH = "group-data-[compact]/table:hidden";
+export const CATEGORY = "group-data-[slim]/table:hidden";
+const BY_NAME = "group-data-[faces]/table:hidden";
+
+/** A row's status: its pills, onto a second line rather than into the next column. */
+export function StatusCell({ children }: { children: ReactNode }) {
+  return (
+    <div role="cell" className="flex min-w-0 flex-wrap items-center gap-1.5 py-0.5">
+      {children}
+    </div>
+  );
+}
+
+/** A row's length (an idea's views). */
+export function LengthCell({ children, title }: { children?: ReactNode; title?: string }) {
+  return (
+    <span role="cell" className={cx("flex min-w-0 items-center gap-1.5 truncate text-[13px] text-muted tabular", LENGTH)} title={title}>
+      {children}
+    </span>
+  );
 }
 
 /** What a row is, before its name where the list mixes kinds (Needs you, Later, Done, a search). */
@@ -69,7 +90,7 @@ export function Category({ style, compilation = false, text: given }: { style?: 
   const label = STYLES.find((option) => option.value === style)?.label ?? "";
   const text = given ?? (compilation ? `${label} Compilation`.trim() : label);
   return (
-    <span role="cell" className="truncate text-[13px] text-muted" title={text || undefined}>
+    <span role="cell" className={cx("truncate text-[13px] text-muted", CATEGORY)} title={text || undefined}>
       {text}
     </span>
   );
@@ -83,7 +104,7 @@ export function CreatorCell({ by, projectId }: { by: Creator | null | undefined;
   return (
     <span role="cell" className={cx("flex min-w-0 items-center gap-2 text-[13px] text-muted", BY)}>
       <StartedBy by={by} projectId={projectId} size={20} placeholder />
-      <span className="truncate">{first}</span>
+      <span className={cx("truncate", BY_NAME)}>{first}</span>
     </span>
   );
 }
@@ -91,7 +112,7 @@ export function CreatorCell({ by, projectId }: { by: Creator | null | undefined;
 /** When it was last changed. */
 export function Updated({ at, title }: { at: number; title?: string }) {
   return (
-    <span role="cell" className="text-[13px] text-muted tabular" title={title}>
+    <span role="cell" className="truncate text-[13px] text-muted tabular" title={title}>
       {ago(at)}
     </span>
   );
@@ -144,13 +165,15 @@ export function useAside(key: LaterKey | null, title: string) {
         ];
   const button = !usable ? null : entry !== null ? (
     <button
+      title="Bring back now"
+      aria-label={`Bring “${title}” back now`}
       onClick={(event) => {
         event.stopPropagation();
         later.back(key, title);
       }}
-      className={cx("flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-white/[0.09] px-2 text-[12px] font-medium text-secondary transition-[opacity,color,border-color] hover:border-white/[0.16] hover:text-fg", HOVER_BUTTON)}
+      className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-hover hover:text-fg", HOVER_BUTTON)}
     >
-      <Undo2 size={13} /> Bring back
+      <Undo2 size={14} />
     </button>
   ) : (
     <button

@@ -19,7 +19,7 @@ import { prefetchScript } from "../writer/opened";
 import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
-import { AsideStatus, BackMark, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, NAME, PILL, ROW, RowButtons, TableShape, tableColumns, Updated, useAside, withAside } from "./HomeTable";
+import { AsideStatus, BackMark, BY, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, NAME, PILL, ROW, RowButtons, TableShape, tableColumns, Updated, useAside, withAside } from "./HomeTable";
 import { HomeSidebar, nameOf, placeOf, SECTIONS, type Section, type Where } from "./HomeSidebar";
 import { Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
@@ -547,13 +547,15 @@ function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
   return (
-    <TableShape.Provider value={{ solo, cross }}>
-      <div role="table" aria-label="Projects" className="grid gap-x-4 gap-y-px" style={{ gridTemplateColumns: tableColumns(solo) }}>
+    <TableShape.Provider value={{ cross }}>
+      <div role="table" aria-label="Projects" data-solo={solo || undefined} className="group/table grid gap-x-4 gap-y-px" style={{ gridTemplateColumns: tableColumns(solo) }}>
         <div role="row" className={cx(COLUMNS, "px-3 pt-1.5 pb-2 text-[11px] font-semibold text-faint/70")}>
           <span role="columnheader">Name</span>
           <span role="columnheader">Category</span>
           <span role="columnheader">Status</span>
-          {!solo && <span role="columnheader">By</span>}
+          <span role="columnheader" className={BY}>
+            By
+          </span>
           <span role="columnheader">{lengthLabel}</span>
           <span role="columnheader">Updated</span>
           <span role="columnheader" className="sr-only">

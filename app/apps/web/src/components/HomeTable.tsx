@@ -33,13 +33,21 @@ export const NAME = "truncate text-[13.5px] font-medium text-fg/90 group-hover:t
 export const PILL = "inline-flex h-[22px] min-w-0 shrink-0 items-center gap-1.5 rounded-full border border-current/25 px-2.5 text-[11.5px] leading-none whitespace-nowrap";
 export const CHIP = `${PILL} font-medium`;
 
-/** How the table is laid out now: `solo` (Mine: every row is yours, so no By column), `cross` (rows of every kind: each says what it is). */
-export const TableShape = createContext<{ solo: boolean; cross: boolean }>({ solo: false, cross: false });
+/** How the table is laid out now: `cross` (rows of every kind: each says what it is). */
+export const TableShape = createContext<{ cross: boolean }>({ cross: false });
+
+/**
+ * The By column's cells, hidden (out of the grid) when the table is solo
+ * (Mine: every row is yours): the table says so (data-solo) and its columns
+ * follow from the same switch, so a row never has a cell more than the
+ * table has columns (one did, its buttons wrapping under its name).
+ */
+export const BY = "group-data-[solo]/table:hidden";
 
 /** Later, as Home has it, for every row. */
 export const LaterContext = createContext<Later | null>(null);
 
-/** The table's columns: name, category, status, by (unless solo), length, updated, the row's buttons. */
+/** The table's columns: name, category, status, by (unless solo: the table is then data-solo, which hides its cells), length, updated, the row's buttons. */
 export function tableColumns(solo: boolean): string {
   return ["minmax(0,1fr)", "minmax(0,8.5rem)", "minmax(0,13rem)", ...(solo ? [] : ["7.5rem"]), "4rem", "5rem", "4.25rem"].join(" ");
 }
@@ -69,13 +77,11 @@ export function Category({ style, compilation = false, text: given }: { style?: 
 
 /** Who started it: their picture and first name ("Siphesihle Mbuyisa" → Siphesihle); none in Mine, where it's always you. */
 export function CreatorCell({ by, projectId }: { by: Creator | null | undefined; projectId?: string }) {
-  const { solo } = useContext(TableShape);
-  if (solo) return null;
   const name = by?.name.trim() ?? "";
   // An account named by its email shows the part before the @.
   const first = (name.includes("@") && !name.includes(" ") ? name.split("@")[0]! : name).split(/\s+/u)[0] ?? "";
   return (
-    <span role="cell" className="flex min-w-0 items-center gap-2 text-[13px] text-muted">
+    <span role="cell" className={cx("flex min-w-0 items-center gap-2 text-[13px] text-muted", BY)}>
       <StartedBy by={by} projectId={projectId} size={20} placeholder />
       <span className="truncate">{first}</span>
     </span>

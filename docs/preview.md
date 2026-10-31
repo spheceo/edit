@@ -15,7 +15,14 @@ last) with a `.json` saying which picture it shows. `lib/playback.ts` shows it i
 `<video>` over the canvas while its revision is the one on screen and nothing waits to
 save: play follows the video's clock, a seek sets its time, and nothing is decoded live.
 An edit drops back to the live preview below until the next render lands (a smooth play
-that goes stale pauses there). Measured Oct 31: the 48 s Vanilla Extract short (cloud
+that goes stale pauses there), and the page asks for none while the agent is mid-turn.
+An edit whose footage is all in the cloud renders on Modal instead (`modal_exports.run`,
+the house export's pool, its sections and sound cached there so a render after an edit
+redoes only what it touched), kept in R2 as `edit/playback/<project>/<picture hash>.mp4`
+(any Mac opening the same picture uses it at once) and streamed to the viewer through
+`streamFromCloud`'s blocks; the one it replaces is removed. Measured Oct 31 on the
+16-Year-Old (26 min, cloud footage): 3 min 04 s on Modal against ~50 min here, then 6 s
+played in 6 s with no frame dropped and no stall while two imports loaded this Mac. Measured Oct 31: the 48 s Vanilla Extract short (cloud
 footage) rendered in 68 s and played 515 frames with none dropped; the first render of a
 long cloud edit reads all its footage once from R2 (about 13 frames/s from South Africa).
 

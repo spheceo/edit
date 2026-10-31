@@ -1,6 +1,7 @@
 import { Maximize, Minimize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { useAgent } from "../lib/agent";
 import { api } from "../lib/api";
 import { openReport } from "../lib/diagnostics";
 import { paramAt, projectDuration, setParam } from "../lib/edit";
@@ -102,16 +103,18 @@ export function Viewer() {
     api.playback(projectId).then((status) => { if (live && useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     return () => { live = false; };
   }, [projectId]);
-  // Asked for once the edits settle, unless it's rendering (or failed on) this revision.
+  // Asked for once the edits settle, unless it's rendering (or failed on) this revision; never mid-turn
+  // (the agent changes the edit many times a turn: each render would be stale before it landed).
   const hasClips = (project?.clips.length ?? 0) > 0;
+  const agentBusy = useAgent((state) => state.project === projectId && state.running);
   useEffect(() => {
-    if (projectId === null || dirty || !hasClips) return;
+    if (projectId === null || dirty || !hasClips || agentBusy) return;
     if (playback !== null && playback.rev === rev && playback.state !== "none") return;
     const timer = setTimeout(() => {
       api.renderPlayback(projectId).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     }, SMOOTH_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [projectId, rev, dirty, hasClips, playback]);
+  }, [projectId, rev, dirty, hasClips, agentBusy, playback]);
 
   useEffect(() => {
     if (project) preview.setProject(project, versions);

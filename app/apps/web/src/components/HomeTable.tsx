@@ -4,12 +4,13 @@
 // faint column names, rounded rows with no lines between them, outlined
 // status pills, the row's buttons on hover, a right click for its menu. And
 // Later: a clock on every row sets it aside (Tomorrow, Monday, a week, until
-// it's brought back), the Later list's rows bring it back.
+// it's brought back), the Later list's rows bring it back sooner, and on its
+// day a row is marked Back until someone opens it.
 
-import { Captions, Clock, Ellipsis, FileText, Film, Lightbulb, Undo2 } from "lucide-react";
+import { AlarmClock, Captions, Check, Clock, Ellipsis, FileText, Film, Lightbulb, Undo2 } from "lucide-react";
 import { createContext, useContext, type ReactNode } from "react";
 
-import { asideChoices, backLabel, type Later, type LaterEntry, type LaterKey } from "../lib/later";
+import { asideChoices, asleep, backLabel, type Later, type LaterEntry, type LaterKey } from "../lib/later";
 import { ago } from "../lib/time";
 import { STYLES, type Creator, type Style } from "../lib/types";
 import { openMenu, toggleMenu, type MenuItem } from "./ContextMenu";
@@ -98,17 +99,40 @@ export function AsideStatus({ entry }: { entry: LaterEntry }) {
   );
 }
 
-/** A row's Later: whether it's set aside, its menu items (Set aside ›, or Bring back) and its hover button. */
+/** Back from Later: before its name, until someone opens it (the user, Oct 31: "comes back clearly formatted showing like this was awoken"). */
+export function BackMark({ entry }: { entry: LaterEntry }) {
+  const who = entry.by?.name.split(/\s+/u)[0] ?? "Someone";
+  const day = (ms: number) => new Date(ms).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+  const midnight = new Date().setHours(0, 0, 0, 0);
+  const since = entry.until! >= midnight ? "today" : entry.until! >= midnight - 86_400_000 ? "yesterday" : `since ${new Date(entry.until!).toLocaleDateString(undefined, { weekday: "short" })}`;
+  return (
+    <span className={cx(CHIP, "border-info/40 bg-info-soft text-info")} title={`${who} set it aside on ${day(entry.at)}; it's been back since ${day(entry.until!)}. Opening it clears this.`}>
+      <AlarmClock size={12} />
+      Back {since}
+    </span>
+  );
+}
+
+/**
+ * A row's Later: whether it's set aside (`entry`) or back and not opened yet
+ * (`woke`), its menu items, its hover button, and `seen` for its click (once
+ * back, opening it clears the Back mark).
+ */
 export function useAside(key: LaterKey | null, title: string) {
   const later = useContext(LaterContext);
-  const entry = key !== null && later !== null ? (later.entries.get(key) ?? null) : null;
+  const found = key !== null && later !== null ? (later.entries.get(key) ?? null) : null;
+  const entry = found !== null && asleep(found) ? found : null;
+  const woke = found !== null && entry === null ? found : null;
   const usable = key !== null && later !== null && later.on;
-  const choices = (): MenuItem[] => asideChoices().map((choice) => ({ label: choice.label, ...(choice.hint ? { hint: choice.hint } : {}), onSelect: () => later!.set(key!, choice.until, title) }));
+  const choices = (): MenuItem[] => asideChoices().map((choice) => ({ label: choice.label, ...(choice.day ? { detail: choice.day } : {}), onSelect: () => later!.set(key!, choice.until, title) }));
   const items: MenuItem[] = !usable
     ? []
     : entry !== null
-      ? [{ label: "Bring back", icon: <Undo2 size={14} />, onSelect: () => later.back(key, title) }]
-      : [{ label: "Set aside", icon: <Clock size={14} />, submenu: choices() }];
+      ? [{ label: "Bring back now", icon: <Undo2 size={14} />, onSelect: () => later.back(key, title) }]
+      : [
+          { label: woke !== null ? "Set aside again" : "Set aside", icon: <Clock size={14} />, submenu: choices() },
+          ...(woke !== null ? [{ label: "Clear the Back mark", icon: <Check size={14} />, onSelect: () => later.seen(key) }] : []),
+        ];
   const button = !usable ? null : entry !== null ? (
     <button
       onClick={(event) => {
@@ -125,14 +149,17 @@ export function useAside(key: LaterKey | null, title: string) {
       aria-label={`Set “${title}” aside`}
       onClick={(event) => {
         event.stopPropagation();
-        toggleMenu(event.currentTarget, [{ heading: "Set aside until" }, ...choices()], { width: 220 });
+        toggleMenu(event.currentTarget, [{ heading: "Set aside until" }, ...choices()], { width: 230 });
       }}
       className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
     >
       <Clock size={14} />
     </button>
   );
-  return { entry, items, button };
+  const seen = () => {
+    if (woke !== null && later !== null) later.seen(key!);
+  };
+  return { entry, woke, items, button, seen };
 }
 
 /** A row's own menu items with Later's before its last part (Delete, after its separator). */

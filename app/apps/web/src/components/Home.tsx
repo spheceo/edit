@@ -7,7 +7,7 @@ import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { hasImportLinks, importPaste } from "../lib/import-input";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
-import { laterKey, useLater, type LaterKey } from "../lib/later";
+import { asleep, laterKey, useLater, type LaterKey } from "../lib/later";
 import { navigate } from "../lib/route";
 import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
@@ -19,7 +19,7 @@ import { prefetchScript } from "../writer/opened";
 import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
-import { AsideStatus, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, NAME, PILL, ROW, RowButtons, TableShape, tableColumns, Updated, useAside, withAside } from "./HomeTable";
+import { AsideStatus, BackMark, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, NAME, PILL, ROW, RowButtons, TableShape, tableColumns, Updated, useAside, withAside } from "./HomeTable";
 import { HomeSidebar, nameOf, placeOf, SECTIONS, type Section, type Where } from "./HomeSidebar";
 import { Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
@@ -305,11 +305,20 @@ export function Home() {
     }
   }
 
-  const aside = (item: Item) => item.key !== null && later.entries.has(item.key);
+  // Set aside still (in Later), or back on its day and not opened yet (marked Back, first in Needs you).
+  const entryOf = (item: Item) => (item.key === null ? undefined : later.entries.get(item.key));
+  const aside = (item: Item) => {
+    const entry = entryOf(item);
+    return entry !== undefined && asleep(entry);
+  };
+  const backAt = (item: Item) => {
+    const entry = entryOf(item);
+    return entry !== undefined && !asleep(entry) ? entry.until! : null;
+  };
   const isIn = (item: Item, place: Where): boolean => {
     if (place === "later") return aside(item);
     if (aside(item)) return false;
-    if (place === "needs") return item.needs;
+    if (place === "needs") return item.needs || backAt(item) !== null;
     if (place === "done") return item.stage === "done";
     const { section, stage } = placeOf(place);
     return item.section === section && (stage === null ? item.stage !== "done" : item.stage === stage);
@@ -331,6 +340,9 @@ export function Home() {
     if (section !== null && stage === null) {
       const stages = SECTIONS.find((one) => one.key === section)!.stages;
       groups = stages.map((one) => ({ key: one.key, label: one.label, items: here.filter((item) => item.stage === one.key).sort(newest) })).filter((group) => group.items.length > 0);
+    } else if (shownWhere === "needs") {
+      // What's back from Later first, the latest back on top; then the rest, newest first.
+      groups = [{ key: "needs", label: null, items: here.sort((a, b) => (backAt(b) ?? -1) - (backAt(a) ?? -1) || newest(a, b)) }];
     } else if (shownWhere === "later") {
       const until = (item: Item) => later.entries.get(item.key!)?.until ?? Number.MAX_SAFE_INTEGER;
       groups = [{ key: "later", label: null, items: here.sort((a, b) => until(a) - until(b)) }];
@@ -368,7 +380,7 @@ export function Home() {
     : shownWhere === "needs"
       ? { title: "You’re all caught up", text: "Stopped imports, edits waiting on review and ideas waiting on changes show up here." }
       : shownWhere === "later"
-        ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back." }
+        ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back. On its day it’s back, at the top of Needs you." }
         : mine && others > 0
           ? { title: "Nothing of yours here", text: `Everyone shows the team’s ${others}.` }
           : { title: "Nothing here", text: shownWhere === "done" ? "Approved edits move here by themselves." : "Nothing is at this stage now." };
@@ -1085,9 +1097,18 @@ function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: st
   const aside = useAside(laterKey("script", issue.id), issue.title);
   const items = withAside(own, aside.items);
   return (
-    <div role="row" onClick={() => onOpen(issue.id)} onContextMenu={contextMenu(items, 220)} className={cx(COLUMNS, ROW)}>
+    <div
+      role="row"
+      onClick={() => {
+        aside.seen();
+        onOpen(issue.id);
+      }}
+      onContextMenu={contextMenu(items, 220)}
+      className={cx(COLUMNS, ROW)}
+    >
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
         <KindMark kind="script" />
+        {aside.woke && <BackMark entry={aside.woke} />}
         <TriangleAlert size={14} className="shrink-0 text-warning" />
         <span className={NAME} title={issue.title}>
           {issue.title}
@@ -1254,9 +1275,18 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
   const items = withAside(card.items, aside.items);
   return (
     <>
-      <div role="row" onClick={card.open} onContextMenu={contextMenu(items, 190)} className={cx(COLUMNS, ROW)}>
+      <div
+        role="row"
+        onClick={() => {
+          aside.seen();
+          card.open();
+        }}
+        onContextMenu={contextMenu(items, 190)}
+        className={cx(COLUMNS, ROW)}
+      >
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
           <KindMark kind={project.subtitles ? "subtitles" : "edit"} />
+          {aside.woke && <BackMark entry={aside.woke} />}
           {card.nameInput ?? (
             <span className={NAME} title={project.problem ?? project.name}>
               {project.name}
@@ -1374,9 +1404,20 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
   };
   return (
     <>
-    <div role="row" onMouseEnter={() => !onImport && prefetchScript(script.id)} onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} onContextMenu={contextMenu(items, 180)} className={cx(COLUMNS, ROW)}>
+    <div
+      role="row"
+      onMouseEnter={() => !onImport && prefetchScript(script.id)}
+      onClick={() => {
+        aside.seen();
+        if (onImport) onImport();
+        else navigate(`/scripts/${script.id}`);
+      }}
+      onContextMenu={contextMenu(items, 180)}
+      className={cx(COLUMNS, ROW)}
+    >
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
         <KindMark kind="script" />
+        {aside.woke && <BackMark entry={aside.woke} />}
         <span className={NAME} title={script.title}>
           {script.title || "Untitled script"}
         </span>
@@ -1508,9 +1549,18 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
   );
   return (
     <>
-      <div role="row" onClick={() => navigate(`/p/${project.id}`)} onContextMenu={contextMenu(items, 180)} className={cx(COLUMNS, ROW)}>
+      <div
+        role="row"
+        onClick={() => {
+          aside.seen();
+          navigate(`/p/${project.id}`);
+        }}
+        onContextMenu={contextMenu(items, 180)}
+        className={cx(COLUMNS, ROW)}
+      >
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
           <KindMark kind={summary.subtitles ? "subtitles" : "edit"} />
+          {aside.woke && <BackMark entry={aside.woke} />}
           <span className={NAME} title={project.name}>
             {project.name}
           </span>

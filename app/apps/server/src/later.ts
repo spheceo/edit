@@ -1,13 +1,16 @@
 // Home's Later (Oct 31 2026): what someone set aside, the team's, in mamagi
 // (`edit:listLater`, `setLater`, `clearLater`, through the relay, which names
 // who did it from their token). An edit, a script, an idea or a board card,
-// by its key; it comes back by itself at its time, or when someone brings it
-// back. The user, Oct 31: "we also need to be able to have ways to put
-// projects aside, say we want to come back to a project later".
+// by its key. On its day it's back: in its list and in Needs you, marked Back
+// until someone opens it (which clears it), or when someone brings it back
+// sooner. The user, Oct 31: "we also need to be able to have ways to put
+// projects aside, say we want to come back to a project later"; then, "does
+// it sort of get snoozed and comes back clearly formatted showing like this
+// was awoken".
 //
-//   GET  /api/later                     {entries}: what's set aside now
+//   GET  /api/later                     {entries}: what's set aside, and what's back and not opened yet
 //   POST /api/later {key, until?}       set aside until then (none: until brought back)
-//   POST /api/later {key, back: true}   brought back
+//   POST /api/later {key, back: true}   brought back, or opened once back
 
 import type { LaterEntry, LaterKey } from "@edit/types/later";
 
@@ -21,7 +24,10 @@ const KEY = /^(edit|script|idea|card):[A-Za-z0-9_-]{1,120}$/;
 
 export const isKey = (key: unknown): key is LaterKey => typeof key === "string" && KEY.test(key);
 
-/** What's set aside now: a time already passed is back, so it's left out. */
+/** A Back mark nobody opened in this long goes. */
+const BACK_FOR_MS = 14 * 86_400_000;
+
+/** What's set aside, and what's back (its time passed) and not opened yet; a Back mark two weeks old is left out. */
 export async function list(now = Date.now()): Promise<LaterEntry[]> {
   if (!cloud.enabled()) return [];
   const rows = await cloud.query("edit:listLater", {});
@@ -31,7 +37,7 @@ export async function list(now = Date.now()): Promise<LaterEntry[]> {
     const { key, until, at, by } = row as Record<string, unknown>;
     if (!isKey(key) || typeof at !== "number") return [];
     const back = typeof until === "number" ? until : null;
-    if (back !== null && back <= now) return [];
+    if (back !== null && back <= now - BACK_FOR_MS) return [];
     const who = typeof by === "object" && by !== null ? (by as Record<string, unknown>) : null;
     return [{ key, until: back, at, by: who && typeof who.name === "string" ? { sub: String(who.sub ?? ""), name: who.name, picture: typeof who.picture === "string" ? who.picture : null } : null }];
   });

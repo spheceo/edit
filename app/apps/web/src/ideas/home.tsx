@@ -4,11 +4,11 @@
 // on the board), in Needs you; the idea page a click away (the user: "one
 // tab, one mode, one page … i think thats better").
 
-import { ArrowUpRight, CircleAlert, ExternalLink, Lightbulb, MessageSquare, Send, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, CircleAlert, ExternalLink, Eye, Lightbulb, MessageSquare, Send, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button, cx, Modal, Spinner, Switch } from "../components/ui";
-import { AsideStatus, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, NAME, ROW, RowButtons, Updated, useAside, withAside } from "../components/HomeTable";
+import { AsideStatus, BackMark, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, NAME, ROW, RowButtons, Updated, useAside, withAside } from "../components/HomeTable";
 import { ideasApi, NICHE, viewsLabel, type ChangeCard, type IdeaRow, type IdeasHome } from "../lib/ideas";
 import { useKept } from "../lib/kept";
 import { laterKey } from "../lib/later";
@@ -101,13 +101,17 @@ function Status({ row }: { row: IdeaRow }) {
 export function IdeaTableRow({ row }: { row: IdeaRow }) {
   const { summary } = row;
   const aside = useAside(laterKey("idea", row.id), summary.title);
-  const open = () => navigate(`/ideas/${row.id}`);
+  const open = () => {
+    aside.seen();
+    navigate(`/ideas/${row.id}`);
+  };
   const items = withAside([{ label: "Open", icon: <ArrowUpRight size={14} />, onSelect: open }], aside.items);
   const details = [summary.source, summary.outlier && summary.outlier !== "unknown" ? `${summary.outlier} outlier` : "", summary.sources > 1 ? `${summary.sources} sources` : ""].filter(Boolean).join(" · ");
   return (
     <div role="row" onClick={open} onContextMenu={contextMenu(items)} className={cx(COLUMNS, ROW)}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5" title={details || undefined}>
         <KindMark kind="idea" />
+        {aside.woke && <BackMark entry={aside.woke} />}
         <span className={NAME}>{summary.title}</span>
       </div>
       <Category text={summary.niche ? NICHE[summary.niche].label : ""} />
@@ -115,8 +119,13 @@ export function IdeaTableRow({ row }: { row: IdeaRow }) {
         {aside.entry ? <AsideStatus entry={aside.entry} /> : <Status row={row} />}
       </div>
       <CreatorCell by={row.createdBy === null ? null : { sub: row.createdBy.sub, name: row.createdBy.name, ...(row.createdBy.picture !== null ? { picture: row.createdBy.picture } : {}) }} />
-      <span role="cell" className="truncate text-[13px] text-muted tabular">
-        {viewsLabel(summary.views)}
+      <span role="cell" className="flex min-w-0 items-center gap-1.5 text-[13px] text-muted tabular" title={summary.views !== null ? `${summary.views.toLocaleString()} views` : undefined}>
+        {summary.views !== null && (
+          <>
+            <Eye size={13} className="shrink-0 text-faint" />
+            {viewsLabel(summary.views).replace(/ views?$/u, "")}
+          </>
+        )}
       </span>
       <Updated at={row.updatedAt} title={row.updatedBy ? `by ${row.updatedBy}` : undefined} />
       <RowButtons aside={aside.button} items={items} />
@@ -130,6 +139,7 @@ export function CardTableRow({ card, onOpened }: { card: ChangeCard; onOpened?: 
   const last = card.comments.at(-1);
   const aside = useAside(laterKey("card", card.id), card.name);
   const open = () => {
+    aside.seen();
     setOpening(true);
     ideasApi
       .fromCard(card.id)
@@ -151,6 +161,7 @@ export function CardTableRow({ card, onOpened }: { card: ChangeCard; onOpened?: 
     <div role="row" onClick={open} onContextMenu={contextMenu(items)} className={cx(COLUMNS, ROW)}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5" title={last ? `${last.author}: ${last.text}` : card.list}>
         <KindMark kind="idea" />
+        {aside.woke && <BackMark entry={aside.woke} />}
         <span className={NAME}>{card.name}</span>
       </div>
       <Category text={card.list} />

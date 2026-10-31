@@ -1,6 +1,6 @@
 // Home's Later (later.ts): set aside until a time or for good, brought back,
-// a time already passed back by itself, through the relay's Convex (the cloud
-// mock's editLater).
+// back by itself on its day (and listed until opened, two weeks at most),
+// through the relay's Convex (the cloud mock's editLater).
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 
@@ -25,7 +25,7 @@ afterAll(() => {
   mock.stop();
 });
 
-test("set aside until a time or for good, brought back, and a passed time back by itself", async () => {
+test("set aside until a time or for good, brought back, and back by itself on its day until opened", async () => {
   const { app } = fixtureHome("later");
   const router = buildRouter();
   const ask = async (method: string, body?: unknown) => {
@@ -46,6 +46,7 @@ test("set aside until a time or for good, brought back, and a passed time back b
   // Brought back.
   expect((await ask("POST", { key: "idea:i1793450000000-xyz", back: true })).body).toEqual({ key: "idea:i1793450000000-xyz", back: true });
   expect((await later.list()).map((entry) => entry.key)).toEqual(["edit:p1793450000000-abc"]);
-  // Its day come: back without anyone bringing it back.
-  expect(await later.list(monday + 1)).toEqual([]);
+  // Its day come: still listed (the apps show it Back until someone opens it), and gone after two weeks unopened.
+  expect((await later.list(monday + 1)).map((entry) => entry.key)).toEqual(["edit:p1793450000000-abc"]);
+  expect(await later.list(monday + 15 * 86_400_000)).toEqual([]);
 });

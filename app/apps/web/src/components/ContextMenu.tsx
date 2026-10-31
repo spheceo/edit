@@ -22,6 +22,8 @@ export type MenuItem =
       checked?: boolean;
       /** Muted text after the label (e.g. "Default"). */
       hint?: string;
+      /** Muted text at the item's right end (a date). */
+      detail?: string;
     }
   | { separator: true }
   | { heading: string }
@@ -95,11 +97,12 @@ export function ContextMenuHost() {
   );
 }
 
-function Panel({ x, y, items, root, onLeave, width }: { x: number; y: number; items: MenuItem[]; root?: boolean; onLeave?: () => void; width?: number }) {
+/** `back`: where a submenu goes when there's no room on the right (its parent's left edge), so it sits beside its parent, never over it. */
+function Panel({ x, y, back, items, root, onLeave, width }: { x: number; y: number; back?: number; items: MenuItem[]; root?: boolean; onLeave?: () => void; width?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y, origin: "top left" });
   const [active, setActive] = useState(-1);
-  const [open, setOpen] = useState<{ index: number; x: number; y: number } | null>(null);
+  const [open, setOpen] = useState<{ index: number; x: number; y: number; back: number } | null>(null);
   const actions = items.map((item, index) => (isAction(item) && !item.disabled ? index : -1)).filter((index) => index >= 0);
   // Keep labels aligned when only some items have icons.
   const iconColumn = items.some((item) => isAction(item) && item.icon !== undefined);
@@ -111,11 +114,11 @@ function Panel({ x, y, items, root, onLeave, width }: { x: number; y: number; it
     const flipX = x + box.width > window.innerWidth - 8;
     const flipY = y + box.height > window.innerHeight - 8;
     setPosition({
-      left: Math.max(8, flipX ? x - box.width : x),
+      left: Math.max(8, flipX ? (back ?? x) - box.width : x),
       top: Math.max(8, flipY ? y - box.height : y),
       origin: `${flipY ? "bottom" : "top"} ${flipX ? "right" : "left"}`,
     });
-  }, [x, y]);
+  }, [x, y, back]);
 
   useEffect(() => {
     if (!root) return;
@@ -212,7 +215,7 @@ function Panel({ x, y, items, root, onLeave, width }: { x: number; y: number; it
               setActive(index);
               if (item.submenu) {
                 const box = event.currentTarget.getBoundingClientRect();
-                setOpen({ index, x: box.right + 2, y: box.top - 5 });
+                setOpen({ index, x: box.right + 7, y: box.top - 5, back: box.left - 7 });
               } else setOpen(null);
             }}
             onClick={() => {
@@ -232,6 +235,7 @@ function Panel({ x, y, items, root, onLeave, width }: { x: number; y: number; it
               {item.hint && <span className="ml-2 text-[11px] text-faint">{item.hint}</span>}
             </span>
             {item.shortcut && <span className="ml-4 font-mono text-[11px] text-faint">{item.shortcut}</span>}
+            {item.detail && <span className="ml-4 text-[12px] text-faint tabular">{item.detail}</span>}
             {item.checked !== undefined && (
               <span className="flex size-4 shrink-0 items-center justify-center text-fg">{item.checked && <Check size={13} strokeWidth={2.4} />}</span>
             )}
@@ -243,7 +247,7 @@ function Panel({ x, y, items, root, onLeave, width }: { x: number; y: number; it
       {createPortal(
         <AnimatePresence>
           {open && "submenu" in items[open.index] && (
-            <Panel key={open.index} x={open.x} y={open.y} items={(items[open.index] as { submenu: MenuItem[] }).submenu} />
+            <Panel key={open.index} x={open.x} y={open.y} back={open.back} items={(items[open.index] as { submenu: MenuItem[] }).submenu} />
           )}
         </AnimatePresence>,
         document.body,

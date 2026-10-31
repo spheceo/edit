@@ -14,6 +14,7 @@ What it's for: the next edit shouldn't get the same notes. The agent never sees 
 - If Claude Code hits its usage limit, wait for the reset (round.py does); don't switch models.
 - Cheap services are fair game: Codex (computer use, delegate_task) may sign in as the user to check existing credit or free tiers and put keys in Infisical (project `cdf4a0c5-eca4-4415-af3a-40871af285f3`, env `dev`). **Never buy anything.**
 - Run to the end on your own: every wait bounded, every background job watched (Monitor), nothing that can hang.
+- A trial that hits a bug in Edit or the harness: fix the root cause, verify it, log it in `LOG.md`, and run that trial again on the fix; never score around a broken tool (root `AGENTS.md`: the whole flow, no shortcuts).
 
 ## Before round 1
 1. **The answer key** (private: `$LOOP/keys/<style>.md`, never in the repo or the agent's reach): every pattern from the feedback as one row: the pattern, the team's words, how it's checked (A = audit or project data, F = frames, J = judgement). Loop 2's are in `~/edit-experiments/loop2/keys/`.

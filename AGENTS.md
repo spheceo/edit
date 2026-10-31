@@ -4,6 +4,20 @@
 
 Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as the user only: `git add`, `git commit`, and `git push` with a normal message body — no co-authors, no extra attribution trailers.
 
+## A project Sphe hands you: the whole flow, no shortcuts
+
+When Sphe hands you a project (a call video every 3–4 days, a scripting project, a normal video project), take it through Edit end to end as a real user would: every step of its flow, in order, through the app's own screens, tools and in-app agent (import, script, the editing workflow, review, the fixes, the share or export asked for). Never cut a corner to get it done: no skipped steps, no silent workarounds (the project's JSON edited by hand, a route the app never calls, a tool's job done for it), no feature dropped to finish faster (E1, Oct 31: told place_label needed the map's clip id, the agent dropped the label).
+
+When something breaks (a tool fails, a step stalls, a bug in Edit or in the agent's text or harness), the project stops at that step until it's fixed:
+1. Find the root cause, not the symptom.
+2. Fix it in the product: code, skill, audit or tool, as "Feedback from the team" below lays out.
+3. Verify the fix: a test, then the step that failed, run again on this project.
+4. Commit it, then carry on the project from that step on the fixed build. Every later project gets the fix.
+
+A fix only Sphe can unblock (a sign-in, a paid service, a decision): stop and ask; never route around it.
+
+Log each fix as you go, in `docs/feedback/<date>-<project>.md` under "Fixed on the way": what broke and where in the flow, the root cause, the fix and its commit, how it was verified. In a teaching-loop trial, in that loop's `LOG.md` too. The report to Sphe at the end lists those fixes and anything still open.
+
 ## The repo
 
 - `agent/` — what the agent is taught, as Markdown that people read and write: `instructions.md` (the core house style every agent gets), `skills/<name>.md` (one part of the edit each, loaded with the `skill` tool; frontmatter `description` is its line in the instructions' SKILLS list), `styles/<style>/notes.md` and `styles/<style>/skills/<name>.md` (a kind of video's own rules, and its versions of house skills), `shared/<name>.md` (taken in with `{{> name}}`), `writer/<name>.md` (Script mode's guides) and `ideas/<name>.md` (the ideas' title craft, Sphe Research's, word for word: docs/ideas.md). The server reads the whole folder at build time (`app/apps/server/src/agent_files.ts`, a Bun macro), so a new file is part of the build and the binary by itself, and the `skill` tool's choices follow the skill files; under `just dev`, restart the server to see an edit. Keep the team's wording and quotes: the rules were learnt edit by edit.

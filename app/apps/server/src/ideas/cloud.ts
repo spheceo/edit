@@ -97,5 +97,7 @@ export function summarize(idea: Idea): IdeaSummary {
     skipped: idea.skipped,
     duplicate: idea.duplicate?.name ?? null,
     keys: idea.sources.map(keyOf),
+    niche: idea.niche,
+    source: first?.title ?? "",
   };
 }

@@ -145,6 +145,9 @@ export type IdeaSummary = {
   duplicate: string | null;
   /** What it's made from, by key: a video's id, an article's link (so a second idea of the same case is caught). */
   keys?: string[];
+  niche?: Niche | null;
+  /** The first source's own title. */
+  source?: string;
 };
 
 /** An idea as Home lists it. */

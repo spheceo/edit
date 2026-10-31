@@ -1,24 +1,25 @@
-// The idea page (/ideas/<id>, Oct 31 2026): the case, its titles (the
-// starred one names the card), the thumbnail guide and its pictures, the
-// summary and the footage folder, beside the conversation with Claude; one
-// main action: send it to the board, or update its card once the reviewers'
-// changes are made. Sphe Research's case (Titles, Thumbnail Guide, Case) and
-// Repack's thread (a main title, a base thumbnail), on Edit's page.
+// The idea page (/ideas/<id>, Oct 31 2026). The user: "on this side of the
+// screen, please try to copy as much of the sphe research ui. it was nice.
+// and then here copy the video editor's chat that we have." So the left is
+// Sphe Research's Threads (its list of drafts, its case header and its
+// Titles / Thumbnail guide / Case form, Edit and Done per section, the main
+// title in amber), and the right is the editor's own chat (AgentPanel's turns
+// and composer, the same components). One main action: send the idea to the
+// board, or update its card once the reviewers' changes are made.
 
-import { ArrowLeft, ArrowUp, Check, CircleAlert, ExternalLink, FileText, ImagePlus, MessageSquare, RotateCw, Send, Square, Star, Trash2, TriangleAlert, X } from "lucide-react";
-import { type ClipboardEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, Image as ImageIcon, Lightbulb, Loader, MoreHorizontal, Plus, RotateCw, Search, Send, Trash2, TriangleAlert, X } from "lucide-react";
+import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ChatComposer, ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
 import { AppMenu } from "../components/AppMenu";
-import { Button, cx, IconButton, Modal, Spinner } from "../components/ui";
-import { ideasApi, imageUrl, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page, type IdeaTurn } from "../lib/ideas";
+import { StartedBy } from "../components/StartedBy";
+import { Button, cx, Modal, Spinner } from "../components/ui";
+import type { AgentEntry } from "../lib/agent";
+import { buildTurns } from "../lib/agentTurns";
+import { ideasApi, imageUrl, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page, type IdeaRow, type IdeasHome, type Niche } from "../lib/ideas";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
-import { ago } from "../lib/time";
-
-const FIELD = "w-full rounded-lg border border-line-strong bg-bg px-3 text-[13px] text-fg outline-none placeholder:text-faint focus:border-muted";
-const SECTION = "mt-8";
-const HEADING = "flex items-baseline gap-2 text-[13px] font-semibold";
-const HINT = "text-[12px] font-normal text-faint";
+import { NewIdea } from "./home";
 
 /** Home, on its Ideas tab. */
 export function backToIdeas(): void {
@@ -26,10 +27,61 @@ export function backToIdeas(): void {
   navigate("/ideas");
 }
 
+// Sphe Research's own classes (thread-form.tsx), so the page reads as it did.
+const FIELD = "w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[14.5px] leading-relaxed text-white outline-none placeholder:text-white/20 focus:border-white/18";
+const LABEL = "text-[13px] font-medium tracking-[-0.01em] text-white/45";
+const QUIET_BUTTON = "rounded-lg px-2 py-1 text-[12px] text-white/35 transition-colors hover:bg-white/[0.05] hover:text-white/80 disabled:opacity-40";
+const WHITE_BUTTON = "inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-[12px] font-medium text-black transition-colors hover:bg-white/85 disabled:opacity-40";
+
+const NICHE: Record<Niche, { label: string; dot: string }> = {
+  murder: { label: "Murder", dot: "bg-red-400/80" },
+  "child-related": { label: "Child-related", dot: "bg-amber-300/80" },
+  karen: { label: "Karen", dot: "bg-fuchsia-300/80" },
+  other: { label: "Other", dot: "bg-white/30" },
+};
+
+/** "2m", "3h", "4d": Sphe Research's compact time. */
+function compactAgo(at: number): string {
+  const seconds = Math.max(0, (Date.now() - at) / 1000);
+  if (seconds < 60) return "now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86_400)}d`;
+}
+
+function saveOnEnter(event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>, save: () => void) {
+  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+  event.preventDefault();
+  save();
+}
+
+/** The idea's card as Markdown, as the board writes one (the server's cardText). */
+function cardMarkdown(idea: Idea): string {
+  const main = idea.main ?? idea.titles[0]?.text;
+  const titles = main === undefined ? [] : [main, ...idea.titles.map((one) => one.text).filter((one) => one !== main)];
+  return [
+    idea.summary ? `Summary: ${idea.summary}\n` : "",
+    "Titles:",
+    ...titles.map((one) => `- ${one}`),
+    "",
+    "Thumbnail Guide:",
+    idea.thumbnailGuide,
+    "",
+    "Case:",
+    ...idea.sources.map((one) => one.url),
+    ...(idea.footage ? ["", "Footage:", idea.footage] : []),
+  ]
+    .filter((line, index) => line !== "" || index > 0)
+    .join("\n")
+    .trim();
+}
+
 export function IdeaScreen({ id }: { id: string }) {
   const [page, setPage] = useState<Page | null>(null);
   const [missing, setMissing] = useState<string | null>(null);
+  const [saving, setSaving] = useState<"saving" | "saved" | "error" | null>(null);
   const [sending, setSending] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const toastError = useEditor((state) => state.toastError);
   const toast = useEditor((state) => state.toast);
@@ -44,7 +96,6 @@ export function IdeaScreen({ id }: { id: string }) {
         .catch((error: unknown) => setMissing((error as Error).message)),
     [id],
   );
-  const run = page?.idea.run ?? null;
   const active = page !== null && working(page.idea);
   useEffect(() => {
     void load();
@@ -60,12 +111,20 @@ export function IdeaScreen({ id }: { id: string }) {
     void ideasApi.comments(id).then(() => load(), () => {});
   }, [changesAsked, id, load]);
 
-  const change = (patch: IdeaChange) =>
-    ideasApi
+  const change = (patch: IdeaChange) => {
+    setSaving("saving");
+    return ideasApi
       .change(id, patch)
-      .then(({ idea }) => setPage((last) => (last === null ? last : { ...last, idea })))
-      .then(() => load())
-      .catch((error: unknown) => toastError(error, "save that"));
+      .then(({ idea }) => {
+        setPage((last) => (last === null ? last : { ...last, idea }));
+        setSaving("saved");
+        return load();
+      })
+      .catch((error: unknown) => {
+        setSaving("error");
+        toastError(error, "save that");
+      });
+  };
   const act = (what: string, work: () => Promise<unknown>) => {
     setBusy(what);
     return work()
@@ -74,514 +133,970 @@ export function IdeaScreen({ id }: { id: string }) {
       .finally(() => setBusy(null));
   };
 
-  if (page === null)
-    return (
-      <div className="flex h-full flex-col">
-        <TopBar title={missing ?? ""} />
-        <div className="flex flex-1 items-center justify-center text-muted">{missing ?? <Spinner size={20} />}</div>
-      </div>
-    );
-  const { idea, place } = page;
-  const sent = idea.status === "sent" && idea.card !== null;
-  const asked = changesAsked || (idea.changes !== null && idea.changes.comments.length > 0);
-  const missingParts = [idea.titles.length === 0 ? "a title" : "", idea.thumbnailGuide.trim() === "" ? "a thumbnail guide" : "", idea.sources.length === 0 ? "the case link" : ""].filter(Boolean);
-  const main = sent ? (
-    <Button variant={asked ? "primary" : "subtle"} disabled={busy !== null || active || missingParts.length > 0} onClick={() => void act("update the card", () => ideasApi.updateCard(id).then(({ labelled }) => toast(labelled ? "The card is updated and labelled Changes Made." : "The card is updated.", "info")))}>
-      {busy === "update the card" ? <Spinner size={13} /> : <RotateCw size={14} />} Update the card
-    </Button>
-  ) : (
-    <Button variant="primary" disabled={busy !== null || active || missingParts.length > 0} title={missingParts.length > 0 ? `Still needs ${missingParts.join(", ")}` : undefined} onClick={() => setSending(true)}>
-      <Send size={14} /> Send to Trello
-    </Button>
-  );
   return (
-    <div className="flex h-full flex-col">
-      <TopBar title={idea.main ?? idea.titles[0]?.text ?? idea.sources[0]?.title ?? "New idea"}>
-        <StatusChip page={page} />
-        <div className="ml-auto flex items-center gap-1.5">
-          {idea.card !== null && (
-            <a href={idea.card.url} target="_blank" rel="noreferrer" className="flex h-[34px] items-center gap-1.5 rounded-lg px-3 text-[13px] text-secondary hover:bg-hover hover:text-fg">
-              <ExternalLink size={14} /> {place?.list || idea.card.list}
-            </a>
-          )}
-          {!sent && (
-            <Button variant="ghost" disabled={busy !== null || (idea.status === "draft" && missingParts.length > 0)} onClick={() => void change({ status: idea.status === "ready" ? "draft" : "ready" })} title={idea.status === "draft" ? "Checked and ready to go to the board" : undefined}>
-              {idea.status === "ready" ? "Back to draft" : (
-                <>
-                  <Check size={14} /> Mark ready
-                </>
-              )}
-            </Button>
-          )}
-          {place?.approved && idea.sources.some((one) => one.kind === "youtube") && (
-            <Button variant="subtle" onClick={() => startScript(idea)} title="New project: Write a script, from this idea's case">
-              <FileText size={14} /> Write the script
-            </Button>
-          )}
-          {main}
-          <AppMenu />
+    <div className="flex h-full flex-col bg-black">
+      <Header page={page} saving={saving} busy={busy} onChange={change} onAct={act} onSend={() => setSending(true)} onDeleted={backToIdeas} toast={toast} />
+      {/* The editor's gutters: 8 px round the chat's panel. */}
+      <div className="flex min-h-0 flex-1 pb-2">
+        <div className="hidden w-[19rem] shrink-0 border-r border-white/[0.06] xl:block">
+          <ThreadList selected={id} onCreate={() => setCreating(true)} />
         </div>
-      </TopBar>
-      <div className="flex min-h-0 flex-1">
-        <main className="min-w-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[760px] px-8 pt-6 pb-24">
-            <Banners page={page} busy={busy} onRepackage={(options) => void act("repackage it", () => ideasApi.repackage(id, options))} />
-            <Sources idea={idea} />
-            <Titles page={page} onChange={change} />
-            <Guide page={page} onChange={change} onUploaded={(next) => setPage((last) => (last === null ? last : { ...last, idea: next }))} />
-            {(idea.wantsSummary || idea.summary !== "") && (
-              <section className={SECTION}>
-                <div className={HEADING}>
-                  Summary <span className={HINT}>one sentence, 30 words at most</span>
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-auto">
+          {page === null ? (
+            <div className="flex h-full items-center justify-center text-[13px] text-white/40">{missing ?? <Spinner size={20} />}</div>
+          ) : (
+            <>
+              <Notices page={page} busy={busy} onRepackage={(options) => void act("repackage it", () => ideasApi.repackage(id, options))} />
+              <div className="mx-auto w-full max-w-[44rem] px-8 py-10 2xl:px-14 2xl:py-14">
+                <h1 aria-label="Main title" className="text-[27px] leading-[1.18] font-semibold tracking-[-0.03em] break-words text-white">
+                  {page.idea.main ?? page.idea.titles[0]?.text ?? <span className="text-white/15">{active ? "Repackaging…" : "No title yet"}</span>}
+                </h1>
+                <Meta idea={page.idea} />
+                <Changes page={page} busy={busy} onMake={() => void act("make the changes", () => ideasApi.repackage(id, { changes: true }))} />
+                <div className="mt-7">
+                  <CaseForm page={page} onChange={change} busy={busy !== null || active} onRegenerate={() => void act("repackage it", () => ideasApi.repackage(id, { improve: page.idea.duplicate !== null && page.idea.card === null }))} onUploaded={(idea) => setPage((last) => (last === null ? last : { ...last, idea }))} />
                 </div>
-                <Saved value={idea.summary} rows={2} placeholder="What happened, in one sentence" onSave={(summary) => change({ summary })} />
-              </section>
-            )}
-            <section className={SECTION}>
-              <div className={HEADING}>
-                Footage <span className={HINT}>the case's Google Drive folder, when someone has it</span>
               </div>
-              <Saved value={idea.footage} placeholder="https://drive.google.com/drive/folders/…" onSave={(footage) => change({ footage })} line />
-            </section>
-            <section className={SECTION}>
-              <div className={HEADING}>
-                Notes <span className={HINT}>for the team here; never on the card</span>
-              </div>
-              <Saved value={idea.notes} rows={3} placeholder="Anything worth remembering about this case" onSave={(notes) => change({ notes })} />
-            </section>
-            <Again idea={idea} busy={busy !== null || active} onRepackage={(steer) => void act("repackage it", () => ideasApi.repackage(id, { steer, improve: idea.duplicate !== null && !sent }))} onSummary={() => void change({ wantsSummary: !idea.wantsSummary })} />
-            <section className="mt-12 border-t border-line pt-6">
-              <Button variant="danger" size="sm" disabled={busy !== null} onClick={() => void act("delete the idea", () => ideasApi.remove(id).then(backToIdeas))}>
-                <Trash2 size={13} /> Delete this idea
-              </Button>
-              <span className="ml-3 text-[12px] text-faint">{idea.card !== null ? "Its card stays on the board." : "It goes for everyone."}</span>
-            </section>
-          </div>
+            </>
+          )}
         </main>
-        <Chat id={id} idea={idea} run={run} onAsked={() => void load()} />
+        <aside className="w-[400px] shrink-0 pt-2 pr-2 pl-2">{page === null ? <ChatShell loading /> : <Chat id={id} idea={page.idea} onAsked={() => void load()} />}</aside>
       </div>
-      <SendDialog open={sending} idea={idea} onClose={() => setSending(false)} onSent={() => void load()} />
+      {page !== null && <SendDialog open={sending} idea={page.idea} onClose={() => setSending(false)} onSent={() => void load()} />}
+      <NewIdea open={creating} onClose={() => setCreating(false)} onMade={() => {}} />
     </div>
   );
 }
 
-/** New project, Write a script, with the idea's main title and its case's links (Interrogation). */
-function startScript(idea: Idea): void {
-  const links = idea.sources.map((one) => one.url);
-  if (idea.footage !== "") links.push(idea.footage);
-  sessionStorage.setItem("edit.newProject", JSON.stringify({ title: idea.main ?? idea.titles[0]?.text ?? "", text: links.join("\n"), style: "interrogation" }));
-  navigate("/");
-}
+// ---------------------------------------------------------------- the header (Sphe Research's case header)
 
-function TopBar({ title, children }: { title: string; children?: ReactNode }) {
-  return (
-    <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-4">
-      <button onClick={backToIdeas} className="flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-muted hover:bg-hover hover:text-fg">
-        <ArrowLeft size={15} /> Ideas
-      </button>
-      <span className="min-w-0 truncate text-[14px] font-medium" title={title}>
-        {title}
-      </span>
-      {children}
-    </header>
-  );
-}
-
-const CHIP = "inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-raised px-2.5 text-[12px] leading-none font-medium whitespace-nowrap";
-
-function StatusChip({ page }: { page: Page }) {
-  const { idea, place } = page;
-  if (working(idea))
-    return (
-      <span className={cx(CHIP, "text-info")}>
-        <Spinner size={12} /> {idea.run?.step ?? "Working"}
-      </span>
-    );
-  if (place?.changes)
-    return (
-      <span className={cx(CHIP, "text-warning")}>
-        <MessageSquare size={12} /> Changes requested
-      </span>
-    );
-  if (idea.status === "sent") return <span className={cx(CHIP, place?.approved ? "text-success" : "text-fg")}>{place?.approved ? "Approved" : "On the board"}</span>;
-  return <span className={cx(CHIP, idea.status === "ready" ? "text-success" : "text-secondary")}>{idea.status === "ready" ? "Ready" : "Draft"}</span>;
-}
-
-/** What needs a decision: the case already on the board, a run that stopped, the reviewers' changes. */
-function Banners({ page, busy, onRepackage }: { page: Page; busy: string | null; onRepackage: (options: { improve?: boolean; changes?: boolean }) => void }) {
-  const { idea, place } = page;
-  const run = idea.run;
-  const off = busy !== null || working(idea);
-  const banners: ReactNode[] = [];
-  if (idea.duplicate !== null && idea.card === null)
-    banners.push(
-      <Banner key="dup" tone="warning" icon={<CircleAlert size={15} />} title={`Already on the board as “${idea.duplicate.name}”`} body={`${idea.duplicate.list || "Archived"}. Improve it, and Claude treats that title as the version to beat.`}>
-        <a href={idea.duplicate.url} target="_blank" rel="noreferrer">
-          <Button size="sm" variant="ghost">
-            Open card <ExternalLink size={12} />
-          </Button>
-        </a>
-        <Button size="sm" variant="subtle" disabled={off} onClick={() => onRepackage({ improve: true })}>
-          Improve it
-        </Button>
-      </Banner>,
-    );
-  if (idea.skipped !== null && idea.titles.length === 0)
-    banners.push(
-      <Banner key="skip" tone="warning" icon={<TriangleAlert size={15} />} title="Skipped" body={idea.skipped}>
-        <Button size="sm" variant="subtle" disabled={off} onClick={() => onRepackage({})}>
-          Try again
-        </Button>
-      </Banner>,
-    );
-  if (run !== null && (run.state === "failed" || run.state === "stopped"))
-    banners.push(
-      <Banner key="run" tone="danger" icon={<TriangleAlert size={15} />} title={run.state === "stopped" ? "Stopped" : "Claude stopped short"} body={run.error ?? ""}>
-        <Button size="sm" variant="subtle" disabled={off} onClick={() => onRepackage({ changes: run.what === "repackage" && idea.changes !== null && idea.card !== null })}>
-          Repackage again
-        </Button>
-      </Banner>,
-    );
-  if ((place?.changes || (idea.changes?.comments.length ?? 0) > 0) && idea.card !== null)
-    banners.push(
-      <div key="changes" className="mt-4 rounded-xl border border-[#ffb02e40] bg-warning-soft px-4 py-3">
-        <div className="flex items-center gap-2 text-[13px] font-semibold text-warning">
-          <MessageSquare size={15} /> Changes requested on the card
-        </div>
-        <ul className="mt-2 space-y-1.5">
-          {(idea.changes?.comments ?? []).map((comment) => (
-            <li key={comment.id} className="text-[13px]">
-              <span className="text-muted">{comment.author}:</span> <span className="whitespace-pre-wrap">{comment.text}</span>
-            </li>
-          ))}
-          {(idea.changes?.comments.length ?? 0) === 0 && <li className="text-[12px] text-muted">Reading the comments…</li>}
-        </ul>
-        <div className="mt-3 flex items-center gap-2">
-          <Button size="sm" variant="subtle" disabled={off || (idea.changes?.comments.length ?? 0) === 0} onClick={() => onRepackage({ changes: true })}>
-            Make these changes
-          </Button>
-          <span className="text-[12px] text-muted">Then check them, and Update the card: it gets Changes Made.</span>
-        </div>
-      </div>,
-    );
-  return <>{banners}</>;
-}
-
-function Banner({ tone, icon, title, body, children }: { tone: "warning" | "danger"; icon: ReactNode; title: string; body: string; children?: ReactNode }) {
-  return (
-    <div className={cx("mt-4 flex items-start gap-3 rounded-xl border px-4 py-3", tone === "warning" ? "border-[#ffb02e40] bg-warning-soft" : "border-[#ff003340] bg-danger-soft")}>
-      <span className={cx("mt-0.5", tone === "warning" ? "text-warning" : "text-danger")}>{icon}</span>
-      <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-semibold">{title}</div>
-        {body !== "" && <div className="mt-0.5 text-[12px] text-secondary">{body}</div>}
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">{children}</div>
-    </div>
-  );
-}
-
-function Sources({ idea }: { idea: Idea }) {
-  return (
-    <section className="mt-6">
-      <div className={HEADING}>Case</div>
-      <div className="mt-2 space-y-2">
-        {idea.sources.map((source) => (
-          <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="group flex items-center gap-3 rounded-xl border border-line p-2.5 hover:bg-panel">
-            {source.kind === "youtube" && source.thumbnail !== null ? <img src={source.thumbnail} alt="" className="h-14 w-24 shrink-0 rounded-md object-cover" /> : <span className="grid h-14 w-24 shrink-0 place-items-center rounded-md bg-panel text-faint"><FileText size={16} /></span>}
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-medium group-hover:underline group-hover:underline-offset-[3px]">{source.title || source.url}</div>
-              <div className="truncate text-[12px] text-muted">
-                {source.kind === "youtube"
-                  ? [source.channel, viewsLabel(source.views), source.outlier !== "unknown" ? `${source.outlier} outlier` : "", source.durationSeconds !== null ? `${Math.round(source.durationSeconds / 60)} min` : ""].filter(Boolean).join(" · ")
-                  : source.outlet}
-              </div>
-            </div>
-            <ExternalLink size={14} className="mr-1 shrink-0 text-faint" />
-          </a>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/** A field saved when it's left (or Enter, on a line). */
-function Saved({ value, onSave, placeholder, rows = 3, line = false, className }: { value: string; onSave: (value: string) => unknown; placeholder?: string; rows?: number; line?: boolean; className?: string }) {
-  const [text, setText] = useState(value);
-  const editing = useRef(false);
+function Header({
+  page,
+  saving,
+  busy,
+  onChange,
+  onAct,
+  onSend,
+  onDeleted,
+  toast,
+}: {
+  page: Page | null;
+  saving: "saving" | "saved" | "error" | null;
+  busy: string | null;
+  onChange: (patch: IdeaChange) => Promise<unknown>;
+  onAct: (what: string, work: () => Promise<unknown>) => Promise<unknown>;
+  onSend: () => void;
+  onDeleted: () => void;
+  toast: (text: string, tone?: "agent" | "error" | "info") => void;
+}) {
+  const [menu, setMenu] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const idea = page?.idea ?? null;
+  const place = page?.place ?? null;
   useEffect(() => {
-    if (!editing.current) setText(value);
-  }, [value]);
-  const save = () => {
-    editing.current = false;
-    if (text.trim() !== value.trim()) void onSave(text);
-  };
-  return line ? (
-    <input
-      value={text}
-      placeholder={placeholder}
-      onFocus={() => (editing.current = true)}
-      onChange={(event) => setText(event.target.value)}
-      onBlur={save}
-      onKeyDown={(event) => event.key === "Enter" && (event.target as HTMLInputElement).blur()}
-      className={cx(FIELD, "mt-2 h-[34px]", className)}
-    />
-  ) : (
-    <textarea
-      value={text}
-      rows={rows}
-      placeholder={placeholder}
-      onFocus={() => (editing.current = true)}
-      onChange={(event) => setText(event.target.value)}
-      onBlur={save}
-      className={cx(FIELD, "mt-2 resize-y py-2 leading-[1.5]", className)}
-    />
-  );
-}
-
-function Titles({ page, onChange }: { page: Page; onChange: (patch: IdeaChange) => unknown }) {
-  const { idea, problems, style } = page;
-  const [adding, setAdding] = useState("");
-  const list = idea.titles.map((one) => ({ id: one.id, text: one.text }));
-  const save = (next: { id?: string; text: string }[]) => onChange({ titles: next });
+    if (!menu) return;
+    const dismiss = () => setMenu(false);
+    window.addEventListener("mousedown", dismiss);
+    return () => window.removeEventListener("mousedown", dismiss);
+  }, [menu]);
+  const sent = idea !== null && idea.status === "sent" && idea.card !== null;
+  const active = idea !== null && working(idea);
+  const missing = idea === null ? [] : [idea.titles.length === 0 ? "a title" : "", idea.thumbnailGuide.trim() === "" ? "a thumbnail guide" : "", idea.sources.length === 0 ? "the case link" : ""].filter(Boolean);
+  const asked = place?.changes === true || (idea?.changes?.comments.length ?? 0) > 0;
   return (
-    <section className={SECTION}>
-      <div className={HEADING}>
-        Titles <span className={HINT}>the starred one names the card{style !== null ? ` · the team's run ${style.typicalWords[0]}–${style.typicalWords[1]} words` : ""}</span>
-      </div>
-      <div className="mt-2 space-y-1.5">
-        {idea.titles.map((title, index) => (
-          <div key={title.id}>
-            <div className="group flex items-center gap-1.5">
-              <IconButton label={title.text === idea.main ? "The main title: it names the card" : "Make this the main title"} active={title.text === idea.main} onClick={() => onChange({ main: title.text })}>
-                <Star size={14} className={title.text === idea.main ? "fill-current text-warning" : ""} />
-              </IconButton>
-              <Saved line value={title.text} onSave={(text) => save(list.map((one, at) => (at === index ? { id: one.id, text } : one)))} className="mt-0 flex-1" />
-              <IconButton label="Remove this title" onClick={() => save(list.filter((_, at) => at !== index))} className="opacity-0 group-hover:opacity-100">
-                <X size={14} />
-              </IconButton>
-            </div>
-            <div className="ml-9 flex gap-2 text-[11.5px]">
-              {problems[title.id] !== undefined && <span className="text-warning">This title {problems[title.id]}.</span>}
-              {title.by !== "claude" && <span className="text-faint">Written by {title.by}</span>}
-            </div>
-          </div>
-        ))}
-        <div className="flex items-center gap-1.5">
-          <span className="size-7 shrink-0" />
-          <input
-            value={adding}
-            onChange={(event) => setAdding(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || adding.trim() === "") return;
-              void save([...list, { text: adding.trim() }]);
-              setAdding("");
-            }}
-            placeholder={idea.titles.length === 0 ? "Write a title, or let Claude" : "Add a title"}
-            className={cx(FIELD, "h-[34px] flex-1 border-dashed")}
-          />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Guide({ page, onChange, onUploaded }: { page: Page; onChange: (patch: IdeaChange) => unknown; onUploaded: (idea: Idea) => void }) {
-  const { idea } = page;
-  const file = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const toastError = useEditor((state) => state.toastError);
-  const add = (files: FileList | File[]) => {
-    const picked = [...files].filter((one) => one.type.startsWith("image/"));
-    if (picked.length === 0) return;
-    setUploading(true);
-    void (async () => {
-      try {
-        for (const one of picked) onUploaded(await ideasApi.upload(idea.id, one));
-      } catch (error) {
-        toastError(error, "add the picture");
-      } finally {
-        setUploading(false);
-      }
-    })();
-  };
-  const order = idea.images.map((one) => one.id);
-  return (
-    <section className={SECTION} onPaste={(event: ClipboardEvent) => event.clipboardData.files.length > 0 && add(event.clipboardData.files)}>
-      <div className={HEADING}>
-        Thumbnail guide <span className={HINT}>one lowercase note: the place, who's in the middle, at most one action</span>
-      </div>
-      <Saved value={idea.thumbnailGuide} rows={2} placeholder="we use the interrogation room and have the suspect in the middle" onSave={(thumbnailGuide) => onChange({ thumbnailGuide })} />
-      {page.guideProblem !== null && <div className="mt-1 text-[11.5px] text-warning">The guide {page.guideProblem}.</div>}
-      {idea.guideBy !== "claude" && idea.thumbnailGuide !== "" && <div className="mt-1 text-[11.5px] text-faint">Written by {idea.guideBy}: Claude keeps it on a fresh run.</div>}
-      {idea.base !== null && (
-        <div className="mt-2 text-[12px] text-muted">
-          Base:{" "}
-          <a href={idea.base.cardUrl} target="_blank" rel="noreferrer" className="text-fg underline-offset-[3px] hover:underline">
-            {idea.base.title}
-          </a>
-          <button onClick={() => void onChange({ base: null })} className="ml-2 text-faint hover:text-fg">
-            Remove
-          </button>
+    <div className="flex h-12 shrink-0 items-center gap-2 border-b border-white/[0.06] px-3 md:px-5">
+      <button type="button" onClick={backToIdeas} className="-ml-1 flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-[12.5px] text-white/40 transition-colors hover:bg-white/[0.05] hover:text-white/85">
+        <ArrowLeft size={15} strokeWidth={1.9} />
+        Ideas
+      </button>
+      <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[11.5px] text-white/25">
+        {active ? (
+          <span className="shimmer">{idea?.run?.step ?? "Claude is working"}</span>
+        ) : saving === "saving" ? (
+          <>
+            <Loader size={12} strokeWidth={2} className="animate-spin" /> Saving
+          </>
+        ) : saving === "error" ? (
+          <span className="text-red-300/70">Not saved</span>
+        ) : saving === "saved" ? (
+          <>
+            <Check size={12} strokeWidth={2} /> Saved
+          </>
+        ) : null}
+      </span>
+      {idea !== null && <StartedBy by={{ sub: idea.createdBy, name: idea.createdBy }} size={24} title={`Started by ${idea.createdBy}`} className="hidden sm:inline-grid" />}
+      {idea?.card != null && (
+        <a href={idea.card.url} target="_blank" rel="noreferrer" title={place?.list ?? idea.card.list} className={cx("inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11.5px] transition-colors hover:bg-white/[0.05] hover:text-white/80", place?.approved ? "text-emerald-200/80" : asked ? "text-amber-200/80" : "text-white/40")}>
+          <ExternalLink size={12} strokeWidth={1.9} />
+          {place?.missing ? "Card gone" : place?.approved ? place.list : asked ? "Changes requested" : "On Trello"}
+        </a>
+      )}
+      {idea !== null && !sent && (
+        <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-white/[0.04] p-0.5">
+          {(["draft", "ready"] as const).map((status) => (
+            <button
+              key={status}
+              type="button"
+              disabled={busy !== null || (status === "ready" && idea.status !== "ready" && missing.length > 0)}
+              aria-pressed={idea.status === status}
+              title={status === "ready" ? (missing.length > 0 ? `Still needs ${missing.join(", ")}` : "Checked, and ready for the board") : "Still being written"}
+              onClick={() => idea.status !== status && void onChange({ status })}
+              className={cx(
+                "rounded-[0.4rem] px-2.5 py-1 text-[12.5px] transition-colors disabled:cursor-not-allowed disabled:opacity-30",
+                idea.status === status ? (status === "draft" ? "bg-amber-300/15 text-amber-100" : "bg-emerald-300/15 text-emerald-100") : "text-white/35 hover:text-white/70",
+              )}
+            >
+              {status === "draft" ? "Draft" : "Ready"}
+            </button>
+          ))}
         </div>
       )}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {idea.images.map((image, index) => (
-          <figure key={image.id} className="group relative w-[168px] overflow-hidden rounded-lg border border-line bg-panel">
-            <img src={imageUrl(idea.id, image.id)} alt={image.name} loading="lazy" className="aspect-video w-full object-cover" />
-            <figcaption className="flex items-center justify-between px-2 py-1 text-[11px] text-muted">
-              <span className="truncate">{index === 0 ? "Cover" : image.from === "base" ? "Base" : image.from === "video" ? "Its thumbnail" : image.name}</span>
-              <span className="flex opacity-0 group-hover:opacity-100">
-                {index > 0 && (
-                  <button title="Make this the cover" onClick={() => void onChange({ images: [image.id, ...order.filter((one) => one !== image.id)] })} className="px-1 hover:text-fg">
-                    Cover
-                  </button>
-                )}
-                <button title="Remove this picture" onClick={() => void onChange({ images: order.filter((one) => one !== image.id) })} className="px-1 hover:text-fg">
-                  <X size={12} />
-                </button>
-              </span>
-            </figcaption>
-          </figure>
+      {idea !== null &&
+        (sent ? (
+          <Button size="sm" variant={asked ? "primary" : "subtle"} disabled={busy !== null || active || missing.length > 0} onClick={() => void onAct("update the card", () => ideasApi.updateCard(idea.id).then(({ labelled }) => toast(labelled ? "The card is updated and labelled Changes Made." : "The card is updated.", "info")))}>
+            {busy === "update the card" ? <Spinner size={12} /> : <RotateCw size={13} />} Update the card
+          </Button>
+        ) : (
+          <Button size="sm" variant="primary" disabled={busy !== null || active || missing.length > 0} title={missing.length > 0 ? `Still needs ${missing.join(", ")}` : undefined} onClick={onSend}>
+            <Send size={13} /> Send to Trello
+          </Button>
         ))}
-        {idea.images.length < 8 && (
-          <button onClick={() => file.current?.click()} className="flex aspect-video w-[168px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-line-strong text-[12px] text-muted hover:bg-hover hover:text-fg">
-            {uploading ? <Spinner size={16} /> : <ImagePlus size={16} />}
-            Add a picture
-            <span className="text-[11px] text-faint">or paste one here</span>
+      {idea !== null && (
+        <div className="relative">
+          <button type="button" aria-label="Idea options" onMouseDown={(event) => event.stopPropagation()} onClick={() => setMenu((open) => !open)} className="grid size-7 place-items-center rounded-lg text-white/35 transition-colors hover:bg-white/[0.05] hover:text-white/80">
+            <MoreHorizontal size={15} strokeWidth={1.9} />
           </button>
+          {menu && (
+            <div onMouseDown={(event) => event.stopPropagation()} className="absolute top-9 right-0 z-30 w-52 rounded-xl border border-white/[0.08] bg-[#141414] p-1 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.95)]">
+              <MenuItem
+                icon={<Copy size={13} strokeWidth={1.9} />}
+                onClick={() => {
+                  setMenu(false);
+                  void navigator.clipboard?.writeText(cardMarkdown(idea)).then(() => toast("Copied as Markdown.", "info"));
+                }}
+              >
+                Copy as markdown
+              </MenuItem>
+              {idea.summary === "" && (
+                <MenuItem
+                  icon={<Plus size={13} strokeWidth={1.9} />}
+                  disabled={active}
+                  onClick={() => {
+                    setMenu(false);
+                    void onAct("ask for a summary", () => onChange({ wantsSummary: true }).then(() => ideasApi.chat(idea.id, "Write the summary: one factual sentence, 30 words at most.")));
+                  }}
+                >
+                  Ask Claude for a summary
+                </MenuItem>
+              )}
+              <MenuItem
+                danger
+                icon={<Trash2 size={13} strokeWidth={1.9} />}
+                onClick={() => {
+                  setMenu(false);
+                  setDeleting(true);
+                }}
+              >
+                Delete idea
+              </MenuItem>
+            </div>
+          )}
+        </div>
+      )}
+      <AppMenu />
+      {idea !== null && (
+        <Modal open={deleting} onClose={() => setDeleting(false)} width={400}>
+          <div className="p-5">
+            <h2 className="text-[15px] font-semibold">Delete this idea?</h2>
+            <p className="mt-1 text-[13px] text-muted">{idea.main ?? idea.sources[0]?.title}</p>
+            <p className="mt-2 text-[12px] text-faint">{idea.card !== null ? "Its card stays on the board." : "It goes for the whole team."}</p>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-line bg-bg/40 px-5 py-3">
+            <Button variant="ghost" onClick={() => setDeleting(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void onAct("delete the idea", () => ideasApi.remove(idea.id).then(onDeleted))}>
+              Delete
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ icon, children, onClick, danger, disabled }: { icon: ReactNode; children: ReactNode; onClick: () => void; danger?: boolean; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cx(
+        "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors disabled:opacity-40",
+        danger ? "text-red-200/70 hover:bg-red-500/10 hover:text-red-200" : "text-white/60 hover:bg-white/[0.06] hover:text-white/90",
+      )}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------- the list (Sphe Research's Threads)
+
+function ThreadList({ selected, onCreate }: { selected: string; onCreate: () => void }) {
+  const [home, setHome] = useState<IdeasHome | null>(null);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState<{ ready: boolean; sent: boolean }>({ ready: false, sent: false });
+  const busy = home?.ideas.some((row) => row.summary.run === "running" || row.summary.run === "queued") ?? false;
+  useEffect(() => {
+    const look = () => void ideasApi.home().then(setHome, () => {});
+    look();
+    const timer = setInterval(() => !document.hidden && look(), busy ? 3_000 : 15_000);
+    return () => clearInterval(timer);
+  }, [busy]);
+  const words = query.trim().toLowerCase();
+  const kept = (row: IdeaRow) => words === "" || `${row.summary.title} ${row.summary.source ?? ""}`.toLowerCase().includes(words);
+  const rows = (home?.ideas ?? []).filter(kept);
+  const drafts = rows.filter((row) => row.summary.status === "draft");
+  const ready = rows.filter((row) => row.summary.status === "ready");
+  const sent = rows.filter((row) => row.summary.status === "sent");
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 px-3.5 pt-4 pb-3">
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-[15px] font-medium tracking-[-0.02em] text-white/90">Ideas</h1>
+            <p className="mt-0.5 text-[12px] text-white/35">{home === null ? "Loading…" : `${drafts.length} draft${drafts.length === 1 ? "" : "s"} · ${ready.length} ready`}</p>
+          </div>
+          <button type="button" onClick={onCreate} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[12px] font-medium text-black transition-colors hover:bg-white/85">
+            <Plus size={13} strokeWidth={2} /> New
+          </button>
+        </div>
+        <label className="mt-3 flex items-center gap-2 rounded-lg bg-white/[0.04] px-2.5 py-2 transition-colors focus-within:bg-white/[0.07]">
+          <Search size={13} strokeWidth={1.9} className="shrink-0 text-white/25" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => event.key === "Escape" && setQuery("")}
+            placeholder="Search"
+            aria-label="Search ideas"
+            className="w-full bg-transparent text-[12.5px] text-white/80 outline-none placeholder:text-white/25"
+          />
+          {query && (
+            <button type="button" onClick={() => setQuery("")} aria-label="Clear search" className="shrink-0 rounded-md p-0.5 text-white/30 hover:bg-white/[0.08] hover:text-white/75">
+              <X size={13} strokeWidth={2} />
+            </button>
+          )}
+        </label>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-auto px-1.5 pb-4">
+        {home === null ? (
+          <ListSkeleton />
+        ) : rows.length === 0 ? (
+          <div className="flex flex-col items-center px-4 py-16 text-center">
+            <span className="grid size-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.02] text-white/40">
+              <Lightbulb size={16} strokeWidth={1.6} />
+            </span>
+            <p className="mt-4 text-[13.5px] text-white/55">{words ? "Nothing matches that." : "No ideas yet."}</p>
+          </div>
+        ) : (
+          <>
+            <ul className="flex flex-col">
+              {drafts.map((row) => (
+                <li key={row.id}>
+                  <Card row={row} selected={row.id === selected} />
+                </li>
+              ))}
+            </ul>
+            <Fold label="Ready" rows={ready} open={open.ready} onToggle={() => setOpen((last) => ({ ...last, ready: !last.ready }))} selected={selected} />
+            <Fold label="On the board" rows={sent} open={open.sent} onToggle={() => setOpen((last) => ({ ...last, sent: !last.sent }))} selected={selected} />
+          </>
         )}
-        <input ref={file} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={(event) => event.target.files && add(event.target.files)} />
       </div>
-    </section>
+    </div>
   );
 }
 
-function Again({ idea, busy, onRepackage, onSummary }: { idea: Idea; busy: boolean; onRepackage: (steer: string) => void; onSummary: () => void }) {
-  const [steer, setSteer] = useState(idea.steer);
-  useEffect(() => setSteer(idea.steer), [idea.steer]);
-  return (
-    <section className={SECTION}>
-      <div className={HEADING}>
-        Repackage <span className={HINT}>fresh titles and guide; what you wrote stays</span>
-      </div>
-      <div className="mt-2 flex gap-2">
-        <input value={steer} onChange={(event) => setSteer(event.target.value)} placeholder="An angle to pursue (optional)" className={cx(FIELD, "h-[34px] flex-1")} onKeyDown={(event) => event.key === "Enter" && !busy && onRepackage(steer)} />
-        <Button variant="subtle" disabled={busy} onClick={() => onRepackage(steer)}>
-          <RotateCw size={14} /> Repackage
-        </Button>
-      </div>
-      <button onClick={onSummary} className="mt-2 text-[12px] text-muted hover:text-fg">
-        {idea.wantsSummary ? "Don't write a summary" : "Write a summary too"}
-      </button>
-    </section>
-  );
-}
-
-function Tools({ tools }: { tools: NonNullable<IdeaTurn["tools"]> }) {
-  const named: Record<string, string> = { save_titles: "Titles", remove_titles: "Removed titles", set_main_title: "Main title", save_thumbnail_guide: "Thumbnail guide", save_summary: "Summary", skip_case: "Skipped", Read: "Looked at a picture" };
-  return (
-    <div className="mt-1.5 flex flex-wrap gap-1">
-      {tools.map((tool, index) => (
-        <span key={index} title={tool.detail} className={cx("inline-flex h-5 items-center gap-1 rounded-full bg-raised px-2 text-[11px]", tool.state === "error" ? "text-warning" : "text-muted")}>
-          {tool.state === "running" ? <Spinner size={10} /> : tool.state === "error" ? <TriangleAlert size={10} /> : <Check size={10} />}
-          {named[tool.name] ?? tool.name}
+function Card({ row, selected, compact = false }: { row: IdeaRow; selected: boolean; compact?: boolean }) {
+  const { summary } = row;
+  const niche = summary.niche ? NICHE[summary.niche] : null;
+  const repackaging = summary.run === "running" || summary.run === "queued";
+  const stopped = summary.status !== "sent" && (summary.run === "failed" || summary.run === "stopped" || summary.skipped !== null || summary.duplicate !== null);
+  const open = () => navigate(`/ideas/${row.id}`);
+  return compact ? (
+    <button type="button" onClick={open} className={cx("flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-colors", selected ? "bg-white/[0.07]" : "hover:bg-white/[0.04]")}>
+      <span className={cx("size-1.5 shrink-0 rounded-full", niche?.dot ?? "bg-white/20")} />
+      <span className={cx("min-w-0 flex-1 truncate text-[12.5px]", selected ? "text-white/70" : "text-white/30")} title={summary.title}>
+        {summary.title}
+      </span>
+      {row.place?.changes && <span className="shrink-0 text-[11px] text-amber-200/70">Changes</span>}
+      <span className="shrink-0 text-[11px] text-white/20 tabular-nums">{compactAgo(row.updatedAt)}</span>
+    </button>
+  ) : (
+    <button type="button" onClick={open} className={cx("flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors", selected ? "bg-white/[0.07]" : "hover:bg-white/[0.04]")}>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className={cx("size-1.5 shrink-0 rounded-full", niche?.dot ?? "bg-white/20")} />
+          <span className={cx("min-w-0 flex-1 truncate text-[11.5px]", repackaging ? "shimmer" : stopped ? "text-amber-200/60" : "text-white/35")}>
+            {repackaging ? (summary.step ?? "Repackaging") : summary.duplicate !== null ? "On the board already" : summary.skipped !== null ? "Skipped" : stopped ? "Stopped" : (niche?.label ?? "No niche yet")}
+          </span>
+          <span className="shrink-0 text-[11px] text-white/25 tabular-nums">{compactAgo(row.updatedAt)}</span>
         </span>
+        <span className={cx("mt-1 line-clamp-2 text-[13px] leading-snug", selected ? "text-white/90" : "text-white/70")} title={summary.title}>
+          {summary.title}
+        </span>
+        {summary.source && summary.source !== summary.title && (
+          <span className="mt-1 line-clamp-1 text-[11.5px] text-white/25" title={summary.source}>
+            {summary.source}
+          </span>
+        )}
+      </span>
+      {summary.thumbnail !== null ? (
+        <img src={summary.thumbnail} alt="" loading="lazy" className="mt-0.5 size-11 shrink-0 rounded-lg bg-white/[0.04] object-cover" />
+      ) : (
+        <span className="mt-0.5 grid size-11 shrink-0 place-items-center rounded-lg bg-white/[0.04] text-white/30">
+          <ImageIcon size={15} strokeWidth={1.9} />
+        </span>
+      )}
+    </button>
+  );
+}
+
+function Fold({ label, rows, open, onToggle, selected }: { label: string; rows: IdeaRow[]; open: boolean; onToggle: () => void; selected: string }) {
+  if (rows.length === 0) return null;
+  // The open idea's own section stays open.
+  const shown = open || rows.some((row) => row.id === selected);
+  return (
+    <div className="mt-2">
+      <button type="button" onClick={onToggle} aria-expanded={shown} className="group flex w-full items-center gap-2 px-2.5 py-2 text-left text-[12px] text-white/35 hover:text-white/60">
+        <span>{label}</span>
+        <span className="text-white/20 tabular-nums">{rows.length}</span>
+        <span className="h-px min-w-0 flex-1 bg-white/[0.06]" />
+        <ArrowDown size={12} strokeWidth={1.9} className={cx("text-white/20 transition-transform group-hover:text-white/45", shown && "rotate-180")} />
+      </button>
+      {shown && (
+        <ul className="flex flex-col">
+          {rows.map((row) => (
+            <li key={row.id}>
+              <Card row={row} selected={row.id === selected} compact />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ListSkeleton() {
+  const bone = "block animate-pulse rounded bg-white/[0.06]";
+  return (
+    <ul role="status" aria-label="Loading ideas" className="flex flex-col">
+      {["w-[92%]", "w-[84%]", "w-[94%]", "w-[78%]"].map((width, index) => (
+        <li key={width} className={cx("rounded-xl px-2.5 py-2.5", index === 0 && "bg-white/[0.04]")}>
+          <span className="flex items-center gap-2">
+            <span className={cx(bone, "size-1.5 shrink-0 rounded-full")} />
+            <span className={cx(bone, "h-2 w-16")} />
+          </span>
+          <span className={cx(bone, "mt-2 h-3", width)} />
+          <span className={cx(bone, "mt-1.5 h-3 w-[60%]")} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// ---------------------------------------------------------------- above the form
+
+/** The case under the title: the niche, and the video or article it's from. */
+function Meta({ idea }: { idea: Idea }) {
+  const niche = idea.niche ? NICHE[idea.niche] : null;
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      {niche !== null && (
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-white/[0.04] px-2 py-1 text-[12px] text-white/55">
+          <span className={cx("size-1.5 rounded-full", niche.dot)} />
+          {niche.label}
+        </span>
+      )}
+      {idea.sources.map((source) => (
+        <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="group flex items-center gap-3 rounded-xl px-1 py-1 transition-colors hover:bg-white/[0.03]">
+          {source.kind === "youtube" && source.thumbnail !== null && <img src={source.thumbnail} alt="" className="h-9 w-16 shrink-0 rounded-md object-cover" />}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] text-white/70 group-hover:text-white/90">{source.title || source.url}</span>
+            <span className="block truncate text-[11.5px] text-white/30">
+              {source.kind === "youtube"
+                ? [source.channel, viewsLabel(source.views), source.outlier !== "unknown" ? `${source.outlier} outlier` : "", source.durationSeconds !== null ? `${Math.round(source.durationSeconds / 60)} min` : ""].filter(Boolean).join(" · ")
+                : source.outlet}
+            </span>
+          </span>
+          <ExternalLink size={13} strokeWidth={1.9} className="shrink-0 text-white/20 group-hover:text-white/50" />
+        </a>
       ))}
     </div>
   );
 }
 
-/** The conversation with Claude about the idea, and what it's doing now. */
-function Chat({ id, idea, run, onAsked }: { id: string; idea: Idea; run: Idea["run"]; onAsked: () => void }) {
-  const key = `ideas.chat-draft.${id}`;
-  const [text, setText] = useState(() => localStorage.getItem(key) ?? "");
-  const [sending, setSending] = useState(false);
-  const log = useRef<HTMLDivElement>(null);
-  const toastError = useEditor((state) => state.toastError);
-  const busy = working(idea);
-  useEffect(() => {
-    if (text) localStorage.setItem(key, text);
-    else localStorage.removeItem(key);
-  }, [key, text]);
-  useEffect(() => {
-    log.current?.scrollTo({ top: log.current.scrollHeight });
-  }, [idea.chat.length, run?.said, run?.tools?.length]);
-  const send = () => {
-    const asked = text.trim();
-    if (asked === "" || busy || sending) return;
-    setSending(true);
-    ideasApi
-      .chat(id, asked)
-      .then(() => {
-        setText("");
-        onAsked();
-      })
-      .catch((error: unknown) => toastError(error, "ask Claude"))
-      .finally(() => setSending(false));
-  };
+/** Bands under the header, as Sphe Research's duplicate notice: the case already on the board, a skipped case, a run that stopped. */
+function Notices({ page, busy, onRepackage }: { page: Page; busy: string | null; onRepackage: (options: { improve?: boolean; changes?: boolean }) => void }) {
+  const { idea } = page;
+  const off = busy !== null || working(idea);
+  const run = idea.run;
+  const band = "shrink-0 border-b border-amber-400/20 bg-amber-400/[0.05] px-5 py-2.5";
+  const link = "underline decoration-amber-100/20 underline-offset-2 transition-colors hover:text-amber-100/90 disabled:opacity-40";
   return (
-    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line">
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-line px-4">
-        <span className="text-[13px] font-semibold">Claude</span>
-        {busy && (
-          <Button size="sm" variant="ghost" onClick={() => void ideasApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}>
-            <Square size={11} className="fill-current" /> Stop
-          </Button>
-        )}
-      </div>
-      <div ref={log} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
-        {idea.chat.length === 0 && !busy && <p className="text-[12px] text-muted">Ask for another angle, punchier titles, one more title, a different place in the thumbnail.</p>}
-        {idea.chat.map((turn, index) => (
-          <div key={index} className={turn.role === "you" ? "flex justify-end" : ""}>
-            {turn.role === "you" ? (
-              <div className="max-w-[85%] rounded-[12px] bg-raised px-3 py-2 text-[13px] whitespace-pre-wrap">{turn.text}</div>
-            ) : (
-              <div>
-                <div className={cx("text-[13px] leading-[1.55] whitespace-pre-wrap", turn.failed ? "text-warning" : "text-fg")}>{turn.text}</div>
-                {turn.tools !== undefined && turn.tools.length > 0 && <Tools tools={turn.tools} />}
-                <div className="mt-1 text-[11px] text-faint">
-                  {ago(turn.at)}
-                  {turn.workedMs !== undefined ? ` · worked ${Math.max(1, Math.round(turn.workedMs / 1000))} s` : ""}
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-        {busy && run !== null && (
-          <div>
-            <div className="flex items-center gap-2 text-[12px] text-info">
-              <Spinner size={12} /> {run.step ?? "Working"}
-              {run.holder !== "" && <span className="text-faint">· {run.by} on {run.holder}</span>}
-            </div>
-            {run.said !== undefined && run.said !== "" && <div className="mt-1.5 text-[13px] leading-[1.55] whitespace-pre-wrap text-secondary">{run.said}</div>}
-            {run.tools !== undefined && run.tools.length > 0 && <Tools tools={run.tools} />}
-          </div>
-        )}
-      </div>
-      <div className="shrink-0 border-t border-line p-3">
-        <div className="flex items-end gap-2 rounded-xl border border-line-strong bg-bg p-2 focus-within:border-muted">
-          <textarea
-            value={text}
-            rows={2}
-            disabled={busy}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                send();
-              }
-            }}
-            placeholder={busy ? "Claude is working…" : "Ask Claude to change something"}
-            className="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent px-1 text-[13px] text-fg outline-none placeholder:text-faint"
-          />
-          <IconButton label="Send" disabled={busy || sending || text.trim() === ""} onClick={send} className="bg-fg text-bg hover:bg-white hover:text-bg">
-            {sending ? <Spinner size={12} /> : <ArrowUp size={14} />}
-          </IconButton>
+    <>
+      {idea.duplicate !== null && idea.card === null && (
+        <div className={band}>
+          <p className="flex items-center gap-1.5 text-[12.5px] font-medium text-amber-100/90">
+            <TriangleAlert size={13} strokeWidth={1.9} /> This video is already on the board.
+          </p>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-amber-100/55">
+            As “{idea.duplicate.name}” ({idea.duplicate.list || "archived"}).{" "}
+            <a href={idea.duplicate.url} target="_blank" rel="noreferrer" className={link}>
+              Open
+            </a>{" "}
+            ·{" "}
+            <button type="button" disabled={off} onClick={() => onRepackage({ improve: true })} className={link}>
+              Improve it
+            </button>
+            : Claude treats that title as the version to beat.
+          </p>
         </div>
-      </div>
-    </aside>
+      )}
+      {idea.skipped !== null && idea.titles.length === 0 && (
+        <div className={band}>
+          <p className="flex items-center gap-1.5 text-[12.5px] font-medium text-amber-100/90">
+            <TriangleAlert size={13} strokeWidth={1.9} /> Skipped
+          </p>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-amber-100/55">
+            {idea.skipped}{" "}
+            <button type="button" disabled={off} onClick={() => onRepackage({})} className={link}>
+              Try again
+            </button>
+          </p>
+        </div>
+      )}
+      {run !== null && (run.state === "failed" || run.state === "stopped") && (
+        <p className="shrink-0 border-b border-red-500/15 bg-red-500/[0.04] px-5 py-2 text-[12.5px] leading-relaxed text-red-200/75">
+          {run.state === "stopped" ? "Stopped" : "Claude stopped short"}: {run.error}{" "}
+          <button type="button" disabled={off} onClick={() => onRepackage({ changes: run.what === "repackage" && idea.changes !== null && idea.card !== null })} className="underline underline-offset-2 disabled:opacity-40">
+            Repackage again
+          </button>
+        </p>
+      )}
+    </>
   );
 }
+
+/** The reviewers' comments on the card, while it waits on changes (Sphe Research's review box). */
+function Changes({ page, busy, onMake }: { page: Page; busy: string | null; onMake: () => void }) {
+  const { idea, place } = page;
+  if (idea.card === null || !(place?.changes || (idea.changes?.comments.length ?? 0) > 0)) return null;
+  const comments = idea.changes?.comments ?? [];
+  return (
+    <div className="mt-6 rounded-xl border border-amber-300/15 bg-amber-300/[0.03] p-4" aria-label="Changes requested">
+      <p className="text-[12.5px] font-medium text-amber-100/85">Changes requested on the card</p>
+      <ul className="mt-2.5 space-y-2">
+        {comments.map((comment) => (
+          <li key={comment.id} className="text-[13px] leading-relaxed text-white/75">
+            <span className="text-white/35">{comment.author}:</span> <span className="whitespace-pre-wrap">{comment.text}</span>
+          </li>
+        ))}
+        {comments.length === 0 && <li className="shimmer text-[12.5px]">Reading the comments…</li>}
+      </ul>
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+        <span className="mr-auto text-[12px] text-white/35">Check what Claude changes, then Update the card: it gets Changes Made.</span>
+        <button type="button" disabled={busy !== null || working(idea) || comments.length === 0} onClick={onMake} className={WHITE_BUTTON}>
+          Make these changes
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- the form (Sphe Research's thread form)
+
+type Section = "summary" | "titles" | "guide" | "case" | "footage" | "notes";
+
+function SectionHeader({ label, section, editing, onToggle, action, hint }: { label: string; section: Section; editing: Section | null; onToggle: (section: Section | null) => void; action?: ReactNode; hint?: string }) {
+  const active = editing === section;
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <h3 className={LABEL}>
+        {label}
+        {hint !== undefined && <span className="ml-2 text-[12px] font-normal text-white/25">{hint}</span>}
+      </h3>
+      <div className="flex items-center gap-1">
+        {action}
+        <button type="button" onClick={() => onToggle(active ? null : section)} className={QUIET_BUTTON}>
+          {active ? "Done" : "Edit"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Page; onChange: (patch: IdeaChange) => Promise<unknown>; busy: boolean; onRegenerate: () => void; onUploaded: (idea: Idea) => void }) {
+  const { idea, problems, style } = page;
+  const [editing, setEditing] = useState<Section | null>(null);
+  // What's being written in the section open for editing; saved on Done (or Enter).
+  const [titles, setTitles] = useState<{ id?: string; text: string }[]>([]);
+  const [text, setText] = useState("");
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const focus = useRef<number | null>(null);
+  useEffect(() => {
+    if (!menuFor) return;
+    const dismiss = () => setMenuFor(null);
+    window.addEventListener("mousedown", dismiss);
+    return () => window.removeEventListener("mousedown", dismiss);
+  }, [menuFor]);
+  useEffect(() => {
+    if (focus.current === null) return;
+    document.querySelector<HTMLTextAreaElement>(`[data-idea-title="${focus.current}"]`)?.focus();
+    focus.current = null;
+  }, [titles.length, editing]);
+
+  const value = (section: Section) => (section === "summary" ? idea.summary : section === "guide" ? idea.thumbnailGuide : section === "footage" ? idea.footage : section === "notes" ? idea.notes : "");
+  /** Opens a section (saving the one open before), or closes it saving what was written. */
+  const toggle = (next: Section | null) => {
+    setMenuFor(null);
+    if (editing !== null) save(editing);
+    if (next === "titles") setTitles(idea.titles.map((one) => ({ id: one.id, text: one.text })));
+    else if (next !== null) setText(value(next));
+    setEditing(next);
+  };
+  const save = (section: Section) => {
+    if (section === "titles") {
+      const next = titles.filter((one) => one.text.trim() !== "");
+      const same = next.length === idea.titles.length && next.every((one, index) => one.text.trim() === idea.titles[index]?.text && one.id === idea.titles[index]?.id);
+      if (!same) void onChange({ titles: next.map((one) => (one.id !== undefined ? { id: one.id, text: one.text.trim() } : { text: one.text.trim() })) });
+      return;
+    }
+    if (section === "case") return;
+    if (text.trim() === value(section).trim()) return;
+    const patch: IdeaChange = section === "summary" ? { summary: text } : section === "guide" ? { thumbnailGuide: text } : section === "footage" ? { footage: text } : { notes: text };
+    void onChange(patch);
+  };
+  const done = () => toggle(null);
+  const main = idea.main ?? idea.titles[0]?.text ?? null;
+  const titleRows = editing === "titles" ? titles : idea.titles.map((one) => ({ id: one.id, text: one.text }));
+  const byOf = new Map(idea.titles.map((one) => [one.id, one.by]));
+
+  return (
+    <div className="flex flex-col gap-8">
+      {(idea.summary !== "" || editing === "summary") && (
+        <section>
+          <SectionHeader label="Summary" section="summary" editing={editing} onToggle={toggle} />
+          {editing === "summary" ? (
+            <textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => saveOnEnter(event, done)} rows={2} placeholder="One short factual sentence" aria-label="Summary" className={cx(FIELD, "mt-2 min-h-[3.25rem] resize-y")} />
+          ) : (
+            <p className="mt-2 text-[14.5px] leading-relaxed text-white/80">{idea.summary}</p>
+          )}
+        </section>
+      )}
+
+      <section>
+        <SectionHeader
+          label="Titles"
+          section="titles"
+          editing={editing}
+          onToggle={toggle}
+          hint={style !== null ? `the team's run ${style.typicalWords[0]}–${style.typicalWords[1]} words` : undefined}
+          action={
+            <button type="button" onClick={onRegenerate} disabled={busy} className="rounded-lg px-2 py-1 text-[12px] text-white/55 transition-colors hover:bg-white/[0.05] hover:text-white disabled:opacity-40">
+              Regenerate titles
+            </button>
+          }
+        />
+        <ul className={cx("mt-2 flex flex-col", editing === "titles" ? "gap-2" : "gap-1")}>
+          {titleRows.length > 0 ? (
+            titleRows.map((title, index) => {
+              const isMain = main !== null && title.text.trim() === main;
+              const key = title.id ?? `new-${index}`;
+              const problem = title.id === undefined ? undefined : problems[title.id];
+              const by = title.id === undefined ? undefined : byOf.get(title.id);
+              return (
+                <li key={key} aria-label={`Title ${index + 1}`} className="flex items-start gap-2">
+                  <span className={cx("w-4 shrink-0 text-center text-[13px] leading-relaxed text-white/25", editing === "titles" && "mt-2.5")}>{index + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    {editing === "titles" ? (
+                      <textarea
+                        data-idea-title={index}
+                        value={title.text}
+                        onChange={(event) => {
+                          const next = event.target.value.replace(/\r?\n/g, " ");
+                          setTitles((last) => last.map((one, at) => (at === index ? { ...one, text: next } : one)));
+                        }}
+                        onKeyDown={(event) => saveOnEnter(event, done)}
+                        placeholder="Title option"
+                        rows={1}
+                        className={cx(FIELD, "resize-none overflow-hidden break-words whitespace-pre-wrap [field-sizing:content]", isMain && "border-amber-300/55")}
+                      />
+                    ) : (
+                      <p className={cx("text-[14.5px] leading-relaxed break-words", isMain ? "font-medium text-amber-200/90" : "text-white/85")}>{title.text}</p>
+                    )}
+                    {(problem !== undefined || (by !== undefined && by !== "claude")) && (
+                      <p className="mt-0.5 text-[11.5px] text-white/30">
+                        {problem !== undefined && <span className="text-amber-200/60">This title {problem}. </span>}
+                        {by !== undefined && by !== "claude" && <span>Written by {by}</span>}
+                      </p>
+                    )}
+                  </div>
+                  {editing === "titles" && (
+                    <div className="relative shrink-0">
+                      <button type="button" aria-label={`Title ${index + 1} options`} onMouseDown={(event) => event.stopPropagation()} onClick={() => setMenuFor((last) => (last === key ? null : key))} className="mt-0.5 grid size-8 place-items-center rounded-lg text-white/25 transition-colors hover:bg-white/[0.05] hover:text-white/70">
+                        <MoreHorizontal size={15} strokeWidth={1.9} />
+                      </button>
+                      {menuFor === key && (
+                        <div onMouseDown={(event) => event.stopPropagation()} className="absolute top-9 right-0 z-30 w-44 rounded-xl border border-white/[0.08] bg-[#141414] p-1 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.95)]">
+                          <MenuItem
+                            disabled={isMain || title.text.trim() === ""}
+                            icon={<Check size={13} strokeWidth={1.9} className={isMain ? "text-emerald-200/90" : undefined} />}
+                            onClick={() => {
+                              setMenuFor(null);
+                              const chosen = title.text.trim();
+                              // The titles as written and the main one, in one change.
+                              const next = titles.filter((one) => one.text.trim() !== "").map((one) => (one.id !== undefined ? { id: one.id, text: one.text.trim() } : { text: one.text.trim() }));
+                              setEditing(null);
+                              void onChange({ titles: next, main: chosen });
+                            }}
+                          >
+                            {isMain ? "Main title" : "Use as main title"}
+                          </MenuItem>
+                          <MenuItem
+                            danger
+                            icon={<Trash2 size={13} strokeWidth={1.9} />}
+                            onClick={() => {
+                              setMenuFor(null);
+                              setTitles((last) => last.filter((_, at) => at !== index));
+                            }}
+                          >
+                            Delete
+                          </MenuItem>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })
+          ) : (
+            <li className="text-[14.5px] text-white/25">{busy ? <span className="shimmer">Claude is writing the titles…</span> : "No titles yet"}</li>
+          )}
+        </ul>
+        <button
+          type="button"
+          onClick={() => {
+            if (editing !== "titles") {
+              setTitles([...idea.titles.map((one) => ({ id: one.id, text: one.text })), { text: "" }]);
+              if (editing !== null) save(editing);
+              setEditing("titles");
+              focus.current = idea.titles.length;
+            } else {
+              focus.current = titles.length;
+              setTitles((last) => [...last, { text: "" }]);
+            }
+          }}
+          className="mt-2 inline-flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-[12.5px] text-white/40 transition-colors hover:bg-white/[0.04] hover:text-white/80"
+        >
+          Add title
+        </button>
+      </section>
+
+      <Guide idea={idea} guideProblem={page.guideProblem} editing={editing} text={text} setText={setText} onToggle={toggle} done={done} onChange={onChange} onUploaded={onUploaded} />
+
+      <section>
+        <SectionHeader label="Case" section="case" editing={editing} onToggle={toggle} />
+        <div className="mt-2 flex flex-col gap-1">
+          {idea.sources.map((source) => (
+            <a key={source.url} href={source.url} target="_blank" rel="noreferrer" aria-label="Case link" className="block break-all text-[14.5px] text-amber-200/85 underline decoration-amber-300/30 underline-offset-2 transition-colors hover:decoration-amber-300/70">
+              {source.url}
+            </a>
+          ))}
+          {idea.sources.length === 0 && <p className="text-[14.5px] text-white/25">No case link</p>}
+          {editing === "case" && <p className="text-[12px] text-white/30">The case is the video or article the idea was made from: start a new idea for another.</p>}
+        </div>
+      </section>
+
+      <section>
+        <SectionHeader label="Footage" section="footage" editing={editing} onToggle={toggle} />
+        {editing === "footage" ? (
+          <input autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => saveOnEnter(event, done)} placeholder="https://drive.google.com/drive/folders/…" aria-label="Footage folder" className={cx(FIELD, "mt-2")} />
+        ) : idea.footage ? (
+          <a href={idea.footage} target="_blank" rel="noreferrer" className="mt-2 block break-all text-[14.5px] text-amber-200/85 underline decoration-amber-300/30 underline-offset-2 hover:decoration-amber-300/70">
+            {idea.footage}
+          </a>
+        ) : (
+          <p className="mt-2 text-[14.5px] text-white/25">No footage folder</p>
+        )}
+      </section>
+
+      <section>
+        <SectionHeader label="Notes" section="notes" editing={editing} onToggle={toggle} hint="for the team here; never on the card" />
+        {editing === "notes" ? (
+          <textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} rows={3} placeholder="Anything worth remembering about this case" aria-label="Notes" className={cx(FIELD, "mt-2 resize-y")} />
+        ) : (
+          <p className="mt-2 text-[14.5px] leading-relaxed whitespace-pre-wrap text-white/80">{idea.notes || <span className="text-white/25">No notes</span>}</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+function imageFiles(data: DataTransfer | null | undefined): File[] {
+  if (!data) return [];
+  const files = [...data.files].filter((file) => IMAGE_TYPES.includes(file.type));
+  if (files.length > 0) return files;
+  return [...data.items].flatMap((item) => (item.kind === "file" && IMAGE_TYPES.includes(item.type) ? [item.getAsFile()].filter((one): one is File => one !== null) : []));
+}
+
+const typing = (target: EventTarget | null) => target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+
+function Guide({
+  idea,
+  guideProblem,
+  editing,
+  text,
+  setText,
+  onToggle,
+  done,
+  onChange,
+  onUploaded,
+}: {
+  idea: Idea;
+  guideProblem: string | null;
+  editing: Section | null;
+  text: string;
+  setText: (value: string) => void;
+  onToggle: (section: Section | null) => void;
+  done: () => void;
+  onChange: (patch: IdeaChange) => Promise<unknown>;
+  onUploaded: (idea: Idea) => void;
+}) {
+  const file = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [over, setOver] = useState(false);
+  const toastError = useEditor((state) => state.toastError);
+  const order = useMemo(() => idea.images.map((one) => one.id), [idea.images]);
+  const upload = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      setUploading(true);
+      void (async () => {
+        try {
+          for (const one of files) onUploaded(await ideasApi.upload(idea.id, one));
+        } catch (error) {
+          toastError(error, "add the picture");
+        } finally {
+          setUploading(false);
+          if (file.current) file.current.value = "";
+        }
+      })();
+    },
+    [idea.id, onUploaded, toastError],
+  );
+  // A picture pasted anywhere on the page (not into a field) is added, as Sphe Research's form does.
+  useEffect(() => {
+    const paste = (event: ClipboardEvent) => {
+      if (typing(event.target)) return;
+      const files = imageFiles(event.clipboardData);
+      if (files.length === 0) return;
+      event.preventDefault();
+      upload(files);
+    };
+    window.addEventListener("paste", paste);
+    return () => window.removeEventListener("paste", paste);
+  }, [upload]);
+  const move = (id: string, by: number) => {
+    const at = order.indexOf(id);
+    const next = [...order];
+    next.splice(at, 1);
+    next.splice(at + by, 0, id);
+    void onChange({ images: next });
+  };
+  const drop = (event: DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    setOver(false);
+    upload(imageFiles(event.dataTransfer));
+  };
+  const caption = (index: number, from: string) => (index === 0 ? "Cover" : from === "base" ? "Base" : from === "video" ? "YouTube thumbnail" : from === "card" ? "From the card" : null);
+  return (
+    <section>
+      <SectionHeader label="Thumbnail guide" section="guide" editing={editing} onToggle={onToggle} />
+      {editing === "guide" ? (
+        <textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => saveOnEnter(event, done)} rows={1} placeholder="What the thumbnail should show" aria-label="Thumbnail guide" className={cx(FIELD, "mt-2 resize-none overflow-hidden [field-sizing:content]")} />
+      ) : (
+        <p aria-label="Thumbnail guide" className="mt-2 text-[14.5px] leading-relaxed whitespace-pre-wrap text-white/80">
+          {idea.thumbnailGuide.trim() || <span className="text-white/25">No thumbnail guide</span>}
+        </p>
+      )}
+      {(guideProblem !== null || (idea.guideBy !== "claude" && idea.thumbnailGuide !== "")) && (
+        <p className="mt-1 text-[11.5px] text-white/30">
+          {guideProblem !== null && <span className="text-amber-200/60">The guide {guideProblem}. </span>}
+          {idea.guideBy !== "claude" && idea.thumbnailGuide !== "" && <span>Written by {idea.guideBy}: a fresh run keeps it.</span>}
+        </p>
+      )}
+
+      <div className="mt-3 flex flex-col gap-3">
+        {idea.images.map((image, index) => (
+          <div key={image.id} className="group/image relative">
+            <img src={imageUrl(idea.id, image.id)} alt={image.name} loading="lazy" className="max-h-[70vh] w-full rounded-xl border border-white/[0.06] object-contain" />
+            {caption(index, image.from) !== null && (
+              <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] text-white/70 backdrop-blur">
+                {caption(index, image.from)}
+                {image.from === "base" && idea.base !== null ? ` · ${idea.base.title}` : ""}
+              </span>
+            )}
+            {(index > 0 || index < idea.images.length - 1) && (
+              <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 transition-opacity group-hover/image:opacity-100">
+                {index > 0 && <ImageAction label="Move up (the first is the cover)" onClick={() => move(image.id, -1)} icon={<ArrowUp size={13} strokeWidth={1.9} />} />}
+                {index < idea.images.length - 1 && <ImageAction label="Move down" onClick={() => move(image.id, 1)} icon={<ArrowDown size={13} strokeWidth={1.9} />} />}
+              </div>
+            )}
+            <div className="absolute top-2 right-2 opacity-0 transition-opacity group-hover/image:opacity-100">
+              <ImageAction label="Remove this picture" onClick={() => void onChange({ images: order.filter((one) => one !== image.id) })} icon={<Trash2 size={13} strokeWidth={1.9} />} />
+            </div>
+          </div>
+        ))}
+      </div>
+      {idea.base !== null && (
+        <p className="mt-2 text-[12px] text-white/35">
+          Base:{" "}
+          <a href={idea.base.cardUrl} target="_blank" rel="noreferrer" className="text-white/60 underline decoration-white/20 underline-offset-2 hover:text-white/85">
+            {idea.base.title}
+          </a>{" "}
+          <button type="button" onClick={() => void onChange({ base: null })} className="ml-1 text-white/30 hover:text-white/70">
+            Remove
+          </button>
+        </p>
+      )}
+
+      {idea.images.length < 8 && (
+        <div className="mt-3">
+          <p className={LABEL}>Add reference image</p>
+          <input ref={file} type="file" accept={IMAGE_TYPES.join(",")} multiple hidden onChange={(event) => upload([...(event.target.files ?? [])])} />
+          <button
+            type="button"
+            aria-label="Reference image dropzone"
+            disabled={uploading}
+            onClick={() => file.current?.click()}
+            onDragEnter={(event) => {
+              if (![...event.dataTransfer.types].includes("Files")) return;
+              event.preventDefault();
+              setOver(true);
+            }}
+            onDragOver={(event) => {
+              if (![...event.dataTransfer.types].includes("Files")) return;
+              event.preventDefault();
+              setOver(true);
+            }}
+            onDragLeave={() => setOver(false)}
+            onDrop={drop}
+            className={cx(
+              "mt-2 flex min-h-[4.75rem] w-full flex-col items-center justify-center gap-1 rounded-xl border border-dashed px-4 py-3 text-center transition-colors disabled:opacity-50",
+              over ? "border-white/35 bg-white/[0.05] text-white/70" : "border-white/[0.12] bg-white/[0.02] text-white/35 hover:border-white/22 hover:text-white/55",
+            )}
+          >
+            <ImageIcon size={16} strokeWidth={1.8} />
+            <span className="text-[12.5px] leading-relaxed">{uploading ? "Uploading…" : "Click to browse, drop an image, or paste"}</span>
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ImageAction({ label, onClick, icon }: { label: string; onClick: () => void; icon: ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} aria-label={label} title={label} className="grid size-8 place-items-center rounded-lg bg-black/60 text-white/70 backdrop-blur transition-opacity hover:text-white">
+      {icon}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------- the chat (the editor's own)
+
+/**
+ * The idea's conversation as the editor's chat entries: each request, the
+ * tools Claude ran for it (folded behind "Worked for …" once it's done), its
+ * answer; a turn that failed as the chat's problem. While Claude works on this
+ * Mac, its tools and words so far.
+ */
+export function entriesOf(idea: Idea): { entries: AgentEntry[]; running: boolean } {
+  const entries: AgentEntry[] = [];
+  let asked = idea.createdAt;
+  idea.chat.forEach((turn, index) => {
+    if (turn.role === "you") {
+      asked = turn.at;
+      entries.push({ id: `turn-${index}`, kind: "user", text: turn.text, at: turn.at });
+      return;
+    }
+    const began = turn.workedMs !== undefined ? turn.at - turn.workedMs : asked;
+    (turn.tools ?? []).forEach((tool, at) =>
+      entries.push({ id: `turn-${index}-${at}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: tool.state === "error" ? "failed" : tool.state === "running" ? "stopped" : "done", at: began, updated: began }),
+    );
+    entries.push({ id: `turn-${index}`, kind: turn.failed ? "error" : "assistant", text: turn.text, at: turn.at, updated: turn.at });
+  });
+  const run = idea.run;
+  const running = working(idea);
+  if (running && run !== null) {
+    (run.tools ?? []).forEach((tool, at) => entries.push({ id: `live-${run.startedAt}-${at}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: tool.state === "running" ? "running" : tool.state === "error" ? "failed" : "done", at: run.startedAt }));
+    if (run.said) entries.push({ id: `live-${run.startedAt}-said`, kind: "assistant", text: run.said, at: run.startedAt });
+  }
+  return { entries, running };
+}
+
+function ChatShell({ loading, children }: { loading?: boolean; children?: ReactNode }) {
+  return <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">{loading ? <div className="min-h-0 flex-1 px-3 py-3"><ChatLoading /></div> : children}</section>;
+}
+
+function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => void }) {
+  const list = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const toastError = useEditor((state) => state.toastError);
+  const { entries, running } = entriesOf(idea);
+  const turns = buildTurns(entries, running);
+  // What was there when the page opened doesn't animate in.
+  const known = useRef<{ idea: string; ids: Set<string> } | null>(null);
+  if (known.current?.idea !== id) known.current = { idea: id, ids: new Set(entries.map((entry) => entry.id)) };
+  useEffect(() => {
+    const node = list.current;
+    if (node && stick.current) node.scrollTop = node.scrollHeight;
+  });
+  const other = running && idea.run !== null && idea.run.tools === undefined && idea.run.said === undefined ? ` · on ${idea.run.holder}` : "";
+  return (
+    <ChatShell>
+      <div
+        ref={list}
+        onScroll={(event) => {
+          const node = event.currentTarget;
+          stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+        }}
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+      >
+        {entries.length === 0 ? (
+          <Empty title="Ask for a change" detail="Another angle, punchier titles, one more title, a different place in the thumbnail. Claude changes the idea as you watch." />
+        ) : (
+          <ChatTurns turns={turns} known={known.current.ids} thinking={running ? `${idea.run?.step ?? "Working"}${other}` : undefined} />
+        )}
+      </div>
+      <ChatComposer
+        running={running}
+        disabled={false}
+        modelName="Opus 5.5"
+        placeholder={running ? "Working…" : "Ask for another angle, or a change…"}
+        draft={`ideas.chat-draft.${id}`}
+        onSend={(message) => void ideasApi.chat(id, message).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
+        onStop={() => void ideasApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
+      />
+    </ChatShell>
+  );
+}
+
+// ---------------------------------------------------------------- sending
 
 /** Which lane the idea goes to (remembered on this Mac), checked on the board as it's sent. */
 function SendDialog({ open, idea, onClose, onSent }: { open: boolean; idea: Idea; onClose: () => void; onSent: () => void }) {

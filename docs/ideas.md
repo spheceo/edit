@@ -23,7 +23,7 @@ tab isn't there, the server answers 403 and the relay refuses `/v1/ideas/*` and
 | Their pictures | R2 under `edit/ideas/<idea>/` (uploads); a video's thumbnail and the card's pictures by their URL |
 | Relay | `app/apps/relay/src/ideas.ts`: the Convex calls, YouTube's details, the board |
 | Server | `app/apps/server/src/ideas/` (`/api/ideas`, Claude's tools at `/mcp/ideas/<token>`) |
-| UI | Home's Ideas tab (`/ideas`, `apps/web/src/ideas/home.tsx`), the idea page (`/ideas/<id>`, `page.tsx`) |
+| UI | Home's Ideas tab (`/ideas`, `apps/web/src/ideas/home.tsx`), the idea page (`/ideas/<id>`, `page.tsx`): Sphe Research's Threads on the left (its list, case header and Titles / Thumbnail guide / Case form, word for word in look), the editor's own chat on the right (`AgentPanel`'s `ChatTurns` and `ChatComposer`) |
 | Craft | `agent/ideas/interrogation.md` and `interrogation-examples.md` |
 | Types | `@edit/types/ideas` |
 

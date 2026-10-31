@@ -5,8 +5,10 @@ import {
   Check,
   ChevronRight,
   Copy,
+  CircleSlash,
   Eye,
   FileInput,
+  Image,
   FileText,
   FolderOpen,
   LayoutGrid,
@@ -20,6 +22,7 @@ import {
   Spline,
   Square,
   SquarePlus,
+  Star,
   Trash2,
   Type,
   Wrench,
@@ -114,11 +117,7 @@ export function AgentPanel() {
         ) : !entries.length ? (
           <Empty title="Ask for an edit" detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
         ) : (
-          <div className="flex flex-col gap-4">
-            {turns.map((turn, index) => (
-              <TurnView key={index} turn={turn} known={known.current.ids} />
-            ))}
-          </div>
+          <ChatTurns turns={turns} known={known.current.ids} />
         )}
       </div>
 
@@ -150,14 +149,30 @@ const appear = (fresh: boolean) =>
     transition: { duration: 0.18, ease: [0.2, 0, 0, 1] },
   }) as const;
 
+/**
+ * The conversation's turns, as the editor's chat shows them (the idea page's
+ * chat uses it too, the user, Oct 31: "copy the video editor's chat that we
+ * have"). `thinking`: what to say while a live turn has no tool running, in
+ * place of "Thinking" after a quiet moment (the idea page's run says its step).
+ */
+export function ChatTurns({ turns, known, thinking }: { turns: Turn[]; known: Set<string>; thinking?: string }) {
+  return (
+    <div className="flex flex-col gap-4">
+      {turns.map((turn, index) => (
+        <TurnView key={index} turn={turn} known={known} thinking={thinking} />
+      ))}
+    </div>
+  );
+}
+
 /** One exchange: your message, the work (folds away when done), the answer. */
-function TurnView({ turn, known }: { turn: Turn; known: Set<string> }) {
+function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<string>; thinking?: string }) {
   const [open, setOpen] = useState(false);
   const activityAt = useAgent((state) => state.activityAt);
   const quiet = useQuiet(activityAt, 450);
   const lastGroup = [...turn.parts].reverse().find((part) => part.kind === "group");
   const toolRunning = lastGroup?.kind === "group" && lastGroup.calls.some((call) => call.status === "running");
-  const thinking = turn.live && quiet && !toolRunning;
+  const thinking = turn.live && (said !== undefined || quiet) && !toolRunning;
   const fresh = (id: string) => !known.has(id);
   return (
     <div className="flex flex-col gap-1.5">
@@ -221,7 +236,7 @@ function TurnView({ turn, known }: { turn: Turn; known: Set<string> }) {
             exit={{ opacity: 0, transition: { duration: 0.08 } }}
             className="shimmer h-7 px-1.5 text-[12px] leading-7"
           >
-            Thinking
+            {said ?? "Thinking"}
           </motion.div>
         )}
       </AnimatePresence>
@@ -230,6 +245,14 @@ function TurnView({ turn, known }: { turn: Turn; known: Set<string> }) {
 }
 
 const TOOL_ICONS: Record<string, LucideIcon> = {
+  // The idea page's run (ideas/run.ts).
+  save_titles: Type,
+  remove_titles: Trash2,
+  set_main_title: Star,
+  save_thumbnail_guide: Image,
+  save_summary: FileText,
+  skip_case: CircleSlash,
+  Read: Eye,
   get_project: FileText,
   list_projects: FolderOpen,
   read_transcript: ScrollText,
@@ -377,7 +400,7 @@ function CopyLine({ text, index }: { text: string; index?: number }) {
   );
 }
 
-function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
+export function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
   return (
     <div className="flex min-h-full flex-col justify-center px-2 text-center">
       <div className="font-medium">{title}</div>
@@ -509,19 +532,55 @@ function Markdown({ text }: { text: string }) {
 }
 
 function Composer({ disabled }: { disabled: boolean }) {
-  const [text, setText] = useState("");
   const running = useAgent((state) => state.running);
+  const modelName = useAgent((state) => state.modelName);
+  return (
+    <ChatComposer
+      running={running}
+      disabled={disabled}
+      modelName={modelName ?? ""}
+      placeholder={running ? "Working…" : "Start the editing workflow, or ask for a change…"}
+      // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
+      onSend={(message) => void sendToAgent(message, playhead.frame)}
+      onStop={stopAgent}
+    />
+  );
+}
+
+/** The chat's composer: a message, the model it runs on, Send or Stop. */
+export function ChatComposer({
+  running,
+  disabled,
+  modelName,
+  placeholder,
+  onSend,
+  onStop,
+  draft,
+}: {
+  running: boolean;
+  disabled: boolean;
+  modelName: string;
+  placeholder: string;
+  onSend: (message: string) => void;
+  onStop: () => void;
+  /** Where an unsent message is kept (localStorage), if anywhere. */
+  draft?: string;
+}) {
+  const [text, setText] = useState(() => (draft === undefined ? "" : (localStorage.getItem(draft) ?? "")));
   // Stop takes a click only once the turn has run a moment: never the send's own second click.
   const stoppable = useSettled(running);
-  const modelName = useAgent((state) => state.modelName);
   const input = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (draft === undefined) return;
+    if (text) localStorage.setItem(draft, text);
+    else localStorage.removeItem(draft);
+  }, [draft, text]);
 
   const send = () => {
     const message = text.trim();
     if (!message || running || disabled) return;
     setText("");
-    // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
-    void sendToAgent(message, playhead.frame);
+    onSend(message);
   };
 
   return (
@@ -542,7 +601,7 @@ function Composer({ disabled }: { disabled: boolean }) {
           value={text}
           disabled={disabled}
           rows={2}
-          placeholder={running ? "Working…" : "Start the editing workflow, or ask for a change…"}
+          placeholder={placeholder}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             event.stopPropagation();
@@ -556,7 +615,7 @@ function Composer({ disabled }: { disabled: boolean }) {
         />
         <div className="mt-1 flex items-center gap-1">
           <span className="flex h-6 items-center gap-1.5 px-1 text-[11px] font-medium text-muted" title="Edit picks the model and how hard it thinks">
-            {modelName ?? ""}
+            {modelName}
           </span>
           {running ? (
             <button
@@ -564,7 +623,7 @@ function Composer({ disabled }: { disabled: boolean }) {
               aria-label="Stop"
               title="Stop"
               disabled={!stoppable}
-              onClick={stopAgent}
+              onClick={onStop}
               className="ml-auto flex size-7 items-center justify-center rounded-lg bg-white text-black transition-transform active:scale-90 disabled:opacity-60"
             >
               <Square size={11} fill="currentColor" />
@@ -587,7 +646,7 @@ function Composer({ disabled }: { disabled: boolean }) {
 }
 
 /** The chat while it loads: the shape of a conversation, pulsing, rather than an empty panel (the user, Oct 30: "we need a better loading view"). */
-function ChatLoading() {
+export function ChatLoading() {
   const line = "h-2.5 animate-pulse rounded-full bg-raised";
   return (
     <div role="status" aria-label="Loading the chat" className="flex flex-col gap-5 pt-1">

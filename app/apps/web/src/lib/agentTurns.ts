@@ -71,10 +71,30 @@ const args = (entry: AgentEntry): Record<string, unknown> => {
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count === 1 ? "a" : count} ${count === 1 ? one : many}`;
 
+/** What the idea page's tools did, when they said nothing of themselves. */
+const IDEA_TOOLS: Record<string, string> = {
+  save_titles: "Saved titles",
+  remove_titles: "Removed titles",
+  set_main_title: "Chose the main title",
+  save_thumbnail_guide: "Wrote the thumbnail guide",
+  save_summary: "Wrote the summary",
+};
+
 /** A short, human title for one call. */
 export function callTitle(entry: AgentEntry): string {
   const a = args(entry);
   switch (entry.tool) {
+    // The idea page's run (ideas/run.ts): the tool's own first sentence says what it did.
+    case "save_titles":
+    case "remove_titles":
+    case "set_main_title":
+    case "save_thumbnail_guide":
+    case "save_summary":
+      return entry.text || IDEA_TOOLS[entry.tool];
+    case "skip_case":
+      return "Skipped the case";
+    case "Read":
+      return "Looked at a picture";
     case "get_project":
       return "Read the project";
     case "list_projects":
@@ -132,6 +152,13 @@ export function groupSummary(calls: AgentEntry[]): string {
       contact_sheet: "frame",
       export: "started an export",
       transcribe: "started transcribing",
+      save_titles: "saved titles",
+      remove_titles: "removed titles",
+      set_main_title: "chose the main title",
+      save_thumbnail_guide: "wrote the thumbnail guide",
+      save_summary: "wrote the summary",
+      skip_case: "skipped the case",
+      Read: "picture",
     })[tool ?? ""] ?? "step";
   for (const call of calls) {
     const key = bucket(call.tool);
@@ -156,6 +183,8 @@ export function groupSummary(calls: AgentEntry[]): string {
         return `added ${plural(count, "sound effect")}`;
       case "frame":
         return `looked at ${plural(count, "frame")}`;
+      case "picture":
+        return `looked at ${plural(count, "picture")}`;
       case "step":
         return `ran ${plural(count, "step")}`;
       default:

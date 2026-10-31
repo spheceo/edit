@@ -166,7 +166,7 @@ function readCuts(value: unknown): Cut[] {
 /**
  * Moves words that spilled across a change of speaker to the right speaker,
  * in place; how many moved. `name` says who a speaker id is (the transcript's
- * names), `dir` keeps the answers, `post` asks the AI gateway (a file's body).
+ * names), `dir` keeps the answers, `post` asks Claude (a request in a file: ai_claude.ts).
  */
 export async function fixTurns(
   words: TurnWord[],

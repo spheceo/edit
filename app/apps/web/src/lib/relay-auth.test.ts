@@ -196,7 +196,7 @@ describe("relay sign-in gate", () => {
     // Without use: refused before anything runs.
     expect(await call("r2/url", ["cloud", "video.subtitles"])).toBe(403);
     // With use, whatever else (v1's names, capability ids, ones it's never heard of): past the gate.
-    for (const route of ["ai/chat", "google/token", "r2/url", "convex", "exports/start"]) {
+    for (const route of ["google/token", "r2/url", "convex", "exports/start"]) {
       expect(await call(route, ["use"])).not.toBe(403);
       expect(await call(route, ["use", "ai", "video.subtitles", "made.up-thing"])).not.toBe(403);
     }

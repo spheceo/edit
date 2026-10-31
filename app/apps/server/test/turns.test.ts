@@ -19,8 +19,8 @@ const words = () => [
 ];
 const names = (speaker: string) => (speaker === "reporter" ? "Narrator" : "Sergeant");
 
-/** A gateway that answers `cuts`, counting the asks. */
-function gateway(cuts: unknown[]) {
+/** A model that answers `cuts`, counting the asks. */
+function model(cuts: unknown[]) {
   const asked: string[] = [];
   const post = async (body: string) => {
     asked.push(fs.readFileSync(body, "utf8"));
@@ -32,7 +32,7 @@ function gateway(cuts: unknown[]) {
 test("spilled words go back to who said them, once asked (the answer kept)", async () => {
   const { dir, cleanup } = scratch("turns");
   try {
-    const { asked, post } = gateway([
+    const { asked, post } = model([
       { line: 0, first: "That's the voice of the sergeant when investigators questioned him after this incident.", second: "I'm yelling the whole time" },
     ]);
     const heard = words();
@@ -54,12 +54,12 @@ test("spilled words go back to who said them, once asked (the answer kept)", asy
 test("a cut that changes or drops a word is ignored, and no answer leaves the words as heard", async () => {
   const { dir, cleanup } = scratch("turns-bad");
   try {
-    const dropped = gateway([{ line: 0, first: "That's the voice of the sergeant when investigators questioned him.", second: "I'm yelling the whole time" }]);
+    const dropped = model([{ line: 0, first: "That's the voice of the sergeant when investigators questioned him.", second: "I'm yelling the whole time" }]);
     const heard = words();
     expect(await fixTurns(heard, names, "t", dir, dropped.post)).toBe(0);
     expect(heard.map((word) => word.speaker)).toEqual(words().map((word) => word.speaker));
     const down = async () => {
-      throw new Error("the AI gateway answered 503: request failed");
+      throw new Error("the model answered 503: request failed");
     };
     expect(await fixTurns(words(), names, "other title", dir, down)).toBe(0);
   } finally {
@@ -78,7 +78,7 @@ test("chained cuts all apply: a middle line losing words at both ends (the run-t
       ...run("voice of the sergeant when investigators questioned", "reporter"),
       ...run("him after this incident I'm yelling the whole time James stop Tim stop", "sergeant"),
     ];
-    const { post } = gateway([
+    const { post } = model([
       { line: 0, first: "one of the suspects appears to be thrown around by James just as the other officer arrives.", second: "He's fully on top of them and all I can see is his arm coming up and down." },
       { line: 1, first: "He's fully on top of them and all I can see is his arm coming up and down.", second: "That's the voice of the sergeant when investigators questioned" },
       { line: 2, first: "That's the voice of the sergeant when investigators questioned him after this incident.", second: "I'm yelling the whole time James stop Tim stop" },

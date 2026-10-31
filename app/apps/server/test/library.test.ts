@@ -3,7 +3,7 @@
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 
-import { base, gatewayThrough, googleThrough, protocols } from "../src/endpoints.ts";
+import { base, googleThrough, protocols } from "../src/endpoints.ts";
 import * as library from "../src/library.ts";
 import { cleanNote, curl, encode, notes, quote, spanLevels } from "../src/library.ts";
 import { dispatch } from "../src/mcp/index.ts";
@@ -59,18 +59,16 @@ test("curl_config_values_cannot_add_lines", () => {
   expect(() => quote("token\nheader = evil")).toThrow("a Google Drive setting contains a control character");
 });
 
-test("stand_ins_take_every_google_host_and_the_gateway", () => {
+test("stand_ins_take_every_google_host", () => {
   const drive = "https://www.googleapis.com/drive/v3/files?q=x";
   expect(googleThrough(null, drive)).toBe(drive);
   expect(protocols(null)).toBe("=https");
-  expect(gatewayThrough(null)).toBe("https://ai-gateway.vercel.sh/v1/chat/completions");
   const stand = () => base(" http://127.0.0.1:7900/ ");
   expect(base("")).toBeNull();
   expect(googleThrough(stand(), drive)).toBe("http://127.0.0.1:7900/www.googleapis.com/drive/v3/files?q=x");
   expect(googleThrough(stand(), "https://oauth2.googleapis.com/token")).toBe("http://127.0.0.1:7900/oauth2.googleapis.com/token");
   expect(protocols(stand())).toBe("=http,https");
   expect(protocols("https://mock.example")).toBe("=https");
-  expect(gatewayThrough(stand())).toBe("http://127.0.0.1:7900/v1/chat/completions");
 });
 
 test("query values are encoded byte by byte", () => {

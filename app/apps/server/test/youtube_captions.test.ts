@@ -66,8 +66,8 @@ test("missing captions fall back without repeatedly probing every excerpt", asyn
 test("the media processor uses local script source offsets and names do not trigger paid re-hearing", async () => {
   const home = fixtureHome("caption-processor");
   const mock = MockServer.start();
-  mock.gatewayAnswer = JSON.stringify({ people: ["John Smith"], places: [] });
-  const restore = mock.useEnv({ AI_GATEWAY_API_KEY: "gateway-test" });
+  mock.modelAnswer = JSON.stringify({ people: ["John Smith"], places: [] });
+  const restore = mock.useEnv();
   const previous = process.env.EDIT_YTDLP;
   try {
     process.env.EDIT_YTDLP = fake(home.dir, data);

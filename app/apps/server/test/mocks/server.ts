@@ -1,11 +1,11 @@
 // One mock for every paid or remote service the server calls: Edit's relay
-// (transcription, speech, voices, cloud: presigned R2 URLs and Convex), the AI
-// gateway (Gemini through Vercel), and Google (OAuth tokens, Drive, Docs). It
+// (transcription, speech, voices, cloud: presigned R2 URLs and Convex), a
+// stand-in for Claude (model.ts), and Google (OAuth tokens, Drive, Docs). It
 // records every request, answers with canned defaults, and a test overrides
 // any route with `on`.
 //
 // `useEnv()` points the server at it: EDIT_RELAY_URL (the relay's base),
-// EDIT_AI_GATEWAY_URL (the gateway's base: chat completions go to <base>/v1/chat/completions) and
+// EDIT_TEST_MODEL_URL (the stand-in model's base: its questions go to <base>/v1/chat/completions) and
 // EDIT_GOOGLE_API_URL (standing in for https://www.googleapis.com, OAuth's
 // token endpoint included as /token).
 
@@ -48,11 +48,11 @@ export class MockServer {
   readonly requests: Recorded[] = [];
   /** The relay's cloud routes, R2 behind its presigned URLs, and Convex's `edit:` functions (mocks/cloud.ts). */
   readonly cloud: CloudMock;
-  /** What the gateway's model answers (the message content). */
-  gatewayAnswer = "{}";
-  /** The answer to the watcher's who-is-who call (cast.ts), when set; else it gets `gatewayAnswer` like any call. */
+  /** What the stand-in model answers (the message content). */
+  modelAnswer = "{}";
+  /** The answer to the watcher's who-is-who call (cast.ts), when set; else it gets `modelAnswer` like any call. */
   castAnswer: string | null = null;
-  /** The answer to a second look at a disputed turn (bridges.ts), when set; else it gets `gatewayAnswer`. */
+  /** The answer to a second look at a disputed turn (bridges.ts), when set; else it gets `modelAnswer`. */
   bridgeAnswer: string | null = null;
   private routes: Route[] = [];
   private server: Server<undefined>;
@@ -125,7 +125,7 @@ export class MockServer {
   env(): Record<string, string> {
     return {
       EDIT_RELAY_URL: this.url,
-      EDIT_AI_GATEWAY_URL: this.url,
+      EDIT_TEST_MODEL_URL: this.url,
       EDIT_GOOGLE_API_URL: this.url,
     };
   }
@@ -194,7 +194,7 @@ export class MockServer {
     this.on("GET", "/v1/voices", () => Response.json({ voices: [] }));
     // The cloud: /v1/cloud/*, R2 behind presigned URLs, Convex.
     this.cloud.install();
-    // The AI gateway (OpenAI-style chat completions).
+    // The stand-in model (OpenAI-style chat completions: model.ts).
     this.on("POST", "/v1/chat/completions", async (request, mock) => {
       const asked = await request.text();
       const content =
@@ -202,7 +202,7 @@ export class MockServer {
           ? mock.castAnswer
           : mock.bridgeAnswer !== null && asked.includes('"name":"who"')
             ? mock.bridgeAnswer
-            : mock.gatewayAnswer;
+            : mock.modelAnswer;
       return Response.json({ choices: [{ message: { role: "assistant", content } }] });
     });
     // Google.

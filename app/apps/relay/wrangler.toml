@@ -21,9 +21,7 @@ preview_urls = false
 # need Google's sign-in, the same three Edit uses for Drive:
 #   GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DOCS_REFRESH_TOKEN
 # which /v1/cloud/google/token also hands Edit as a short-lived access token
-# (the sound library, script imports, Drive links and uploads), and the
-# footage watcher's model calls (/v1/cloud/ai/chat) need:
-#   AI_GATEWAY_API_KEY
+# (the sound library, script imports, Drive links and uploads).
 
 [vars]
 # Comma-separated voice IDs belonging to ELEVENLABS_VOICES_KEY; all others
@@ -41,12 +39,6 @@ DAILY_BYTES_PER_IP = "2160000000"  # ~150 hours (Oct 30: raised for five project
 DAILY_BYTES_TOTAL = "4320000000"  # ~300 hours (~250k credits a day at most; Oct 30: raised for five projects at once; 20 from Oct 22, after Oct 19–21's re-hearing, which names.ts and the kept pieces since stop)
 DAILY_REHEAR_BYTES = "720000000"  # ~50 hours of the day for hearing finished footage again with the case's names (Oct 22: re-hears spent the whole day by 00:20 UTC and a new import went unheard)
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
-# The AI Gateway through /v1/cloud/ai/chat (the audit, Oct 23: it had no limits): only these models,
-# and a day's spend (USD, the gateway's usage.cost) per person and across everyone.
-AI_MODELS = "google/gemini-3.8-flash"
-DAILY_AI_USD_PER_IP = "25"  # Oct 30: raised for five projects at once
-DAILY_AI_USD_TOTAL = "100"  # Oct 30: raised for five projects at once
-AI_RESERVE_USD = "0.1"            # held for each call while it runs, so calls at once can't pass the budget together; settled at its real cost
 
 # Map stills (Google Photorealistic 3D Tiles, billed per session): a day's
 # sessions per IP and across everyone (raised Oct 21 to finish a round of map

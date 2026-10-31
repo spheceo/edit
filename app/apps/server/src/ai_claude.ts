@@ -1,9 +1,9 @@
 // Edit's small model questions, asked of Claude (through Claude Code, the
-// person's own account) instead of Gemini on the AI gateway: the same request
-// they built for the gateway (OpenAI-style chat: a system prompt, text, images
-// as data URLs, a JSON schema), answered in the same shape, so the callers
-// change only which `post` they hand over. Oct 30, the user: Gemini cost $17
-// in a day; "move" the spill fix and the watermark check to Claude.
+// person's own account): each caller builds an OpenAI-style chat request (a
+// system prompt, text, images or a video as data URLs, a JSON schema) and gets
+// the answer back in that shape. Oct 30, the user: Gemini cost $17 in a day;
+// "move" the spill fix and the watermark check to Claude. Oct 31: the AI
+// Gateway is gone; the watcher's second look (bridges.ts) was its last caller.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -16,12 +16,12 @@ type Part = { type?: string; text?: string; image_url?: { url?: string }; file?:
 type Message = { role?: string; content?: string | Part[] };
 type Request = { messages?: Message[]; response_format?: { json_schema?: { schema?: Record<string, unknown> } } };
 
-/** The tests' switch (test/setup.ts): questions go to the AI gateway (their stand-in server), not Claude. */
-export const viaGateway = { on: false };
+/** The tests' stand-in for Claude (test/setup.ts: their mock server answers); null everywhere else. */
+export const standIn: { post: ((bodyFile: string) => Promise<unknown>) | null } = { post: null };
 
-/** Asks the gateway request in `bodyFile` of Claude (`model`, Opus by default); answers as the gateway would. */
+/** Asks the request in `bodyFile` of Claude (`model`, Opus by default); answers as `{choices: [{message: {content}}]}`. */
 export async function post(bodyFile: string, model: string = claude.OPUS, label = "Claude opus answering a small question"): Promise<unknown> {
-  if (viaGateway.on) return (await import("./watch.ts")).post(bodyFile);
+  if (standIn.post !== null) return standIn.post(bodyFile);
   const request = JSON.parse(fs.readFileSync(bodyFile, "utf8")) as Request;
   const messages = request.messages ?? [];
   const system = messages.filter((message) => message.role === "system").map((message) => textOf(message.content)).join("\n\n");
@@ -36,7 +36,7 @@ export async function post(bodyFile: string, model: string = claude.OPUS, label 
           ? message.content
           : (message.content ?? [])
               .map((part) => {
-                // A video (a gateway request's file part): contact sheets, a frame a second, as the watcher shows Claude (watch.ts).
+                // A video (a request's file part): contact sheets, a frame a second, as the watcher shows Claude (watch.ts).
                 const video = part.type === "file" ? /^data:video\/\w+;base64,(.+)$/s.exec(part.file?.file_data ?? "") : null;
                 if (video !== null) {
                   const clip = join(folder, `video-${images.length + 1}.mp4`);

@@ -503,18 +503,12 @@ test("track_region, transcribe, find_in_footage and the routes answer", async ()
     expect([response.status, await response.json()]).toEqual([404, { error: "no such project" }]);
     response = await post(`/api/projects/${id}/captions`, { start: "x" });
     expect(response.status).toBe(422);
-    // No key for the gateway: Claude watches since Oct 30, so it isn't asked for; the watch goes on (here to the test footage, which can't be cut).
-    const key = process.env.AI_GATEWAY_API_KEY;
-    delete process.env.AI_GATEWAY_API_KEY;
-    try {
-      response = await post(`/api/projects/${id}/watch`, { force: true });
-      expect(response.status).toBe(400);
-      const said = ((await response.json()) as { error: string }).error;
-      expect(said).not.toContain("cloud token");
-      expect(said).toContain("couldn't cut the window");
-    } finally {
-      if (key !== undefined) process.env.AI_GATEWAY_API_KEY = key;
-    }
+    // Claude watches since Oct 30, with no key of Edit's own; the watch goes on (here to the test footage, which can't be cut).
+    response = await post(`/api/projects/${id}/watch`, { force: true });
+    expect(response.status).toBe(400);
+    const said = ((await response.json()) as { error: string }).error;
+    expect(said).not.toContain("cloud token");
+    expect(said).toContain("couldn't cut the window");
   } finally {
     cleanup();
   }

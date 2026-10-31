@@ -18,7 +18,7 @@ let mock: MockServer;
 let restore: () => void;
 beforeAll(() => {
   mock = MockServer.start();
-  restore = mock.useEnv({ AI_GATEWAY_API_KEY: "gateway-key" });
+  restore = mock.useEnv();
   timing.sleep = async () => {};
   waits.sleep = (ms: number) => Bun.sleep(Math.min(ms, 20));
   tools.forget();

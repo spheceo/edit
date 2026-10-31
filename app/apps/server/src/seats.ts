@@ -537,7 +537,7 @@ async function look(
     response_format: { type: "json_schema", json_schema: { name: "faces", strict: true, schema } },
   };
   const scratch = join(work, `request-${index}-${fixed(start, 0)}.json`);
-  // Keys sorted, as serde_json writes a `json!` value (the gateway mock keys answers by the request).
+  // Keys sorted, as serde_json writes a `json!` value (the tests' stand-in model keys answers by the request).
   fs.writeFileSync(scratch, stableStringify(request));
   const response = (await aiClaude.post(scratch, undefined, "Claude opus placing the speakers")) as { choices?: { message?: { content?: unknown } }[] } | null;
   const content = response?.choices?.[0]?.message?.content;

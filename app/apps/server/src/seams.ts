@@ -732,8 +732,6 @@ export interface WatchSeam {
   readonly MODEL: string;
   cut(source: string, cache: string, window: Window, out: string): Promise<void>;
   keyframesClose(source: string): Promise<boolean>;
-  /** Posts `body` (a file) to the AI gateway. */
-  post(body: string): Promise<Json>;
   /** The JSON in a model's answer, without Markdown fences. */
   unfence(text: string): string;
   watchFootage(app: App, projectId: string, options: WatchOptions): Promise<Json>;

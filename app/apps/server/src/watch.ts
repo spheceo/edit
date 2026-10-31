@@ -7,9 +7,7 @@
 // many clips of many files, is watched once per stretch of each file its
 // clips use.
 //
-// The model is reached through the Vercel AI Gateway: through Edit's relay,
-// which holds the key, or straight with this machine's `AI_GATEWAY_API_KEY`
-// when it's set (`EDIT_AI_GATEWAY_URL` sends that to a stand-in).
+// Claude Opus watches, through Claude Code (askClaude, ai_claude.ts).
 //
 // Answers are cached per window in the media's cache dir (`watch/`), keyed as
 // they've always been keyed, and a finished watch leaves a receipt in
@@ -24,9 +22,7 @@ import * as bridges from "./bridges.ts";
 import * as castOf from "./cast.ts";
 import { parseTranscript, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
-import * as gemini from "./gemini.ts";
 import * as jobs from "./jobs.ts";
-import * as relay from "./relay.ts";
 import { ioMessage, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { mediaKey, Semaphore } from "./media.ts";
@@ -70,12 +66,10 @@ const CUTS = new Semaphore(3);
  * answers in well under a minute; a slow one is usually stuck, so try again.
  */
 const TRIES = 3;
-const TIMEOUT_MS = 150_000;
 /** A window's clip is sent inline; bigger than this and it isn't sent. */
 const MAX_CLIP_BYTES = 15 * 1024 * 1024;
 
 /** How long a model call may take before it's given up on (tests shorten it). */
-// On Gemini's free tier a window waits its turn and out its 429s (gemini.ts), so it gets longer.
 export const timing = {
   /** Opus reads a window's sheets in about 40 s; a slow one is usually stuck. */
   askLimitMs: 240_000,
@@ -555,65 +549,6 @@ async function cutAt(source: string, preview: [string, string] | null, window: W
   });
 }
 
-/**
- * Where the watcher's model calls go, and the bearer they carry: straight to
- * the gateway with this machine's AI_GATEWAY_API_KEY, else through Edit's
- * relay (which holds the key) with the cloud token. Throws when neither is set.
- */
-function route(): { url: string; bearer: string } {
-  const key = trim(process.env.AI_GATEWAY_API_KEY ?? "");
-  if (key !== "") {
-    if (/["\\\n\r]/.test(key)) throw new Error("AI_GATEWAY_API_KEY isn't a key");
-    return { url: gateway(), bearer: key };
-  }
-  const cloud = relay.token();
-  if (cloud !== null) return { url: `${relay.url()}/v1/cloud/ai/chat`, bearer: cloud };
-  throw new Error("the watcher needs the cloud token (built into releases) or AI_GATEWAY_API_KEY");
-}
-
-/** The AI Gateway's chat completions URL (`EDIT_AI_GATEWAY_URL` names a stand-in's base). */
-export function gateway(): string {
-  const base = trim(process.env.EDIT_AI_GATEWAY_URL ?? "").replace(/\/+$/u, "");
-  return `${base === "" ? "https://ai-gateway.vercel.sh" : base}/v1/chat/completions`;
-}
-
-/** Posts `body` (a file) to the gateway. */
-export async function post(body: string): Promise<unknown> {
-  let bytes: Uint8Array;
-  try {
-    bytes = fs.readFileSync(body);
-  } catch (error) {
-    throw new Error(`couldn't reach the AI gateway: ${ioMessage(error)}`);
-  }
-  if (trim(process.env.EDIT_AI_PROVIDER ?? "") === "gemini") return gemini.post(bytes);
-  const { url, bearer } = route();
-  let status: number;
-  let text: string;
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
-      body: bytes,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    status = response.status;
-    text = await response.text();
-  } catch (error) {
-    throw new Error(`couldn't reach the AI gateway: ${diag.messageOf(error)}`);
-  }
-  let value: unknown = null;
-  try {
-    value = serdeParse(text);
-  } catch {
-    value = null;
-  }
-  if (status !== 200) {
-    const message = (value as { error?: { message?: unknown } } | null)?.error?.message;
-    throw new Error(`the AI gateway answered ${status}: ${typeof message === "string" ? message : "request failed"}`);
-  }
-  return value;
-}
-
 /** The JSON in a model's answer, without Markdown fences. */
 export function unfence(given: string): string {
   let text = trim(given);
@@ -624,11 +559,11 @@ export function unfence(given: string): string {
 }
 
 /**
- * The window asked of the AI gateway (OpenAI-style, the clip as a video file):
- * the tests' stand-in for Claude (ai_claude.viaGateway), as they stood in for
- * Gemini. Never Edit's own path since Oct 30.
+ * The window asked of the tests' stand-in for Claude (ai_claude.standIn:
+ * OpenAI-style, the clip as a video file), as the tests stood in for Gemini.
+ * Never Edit's own path since Oct 30.
  */
-async function askGateway(clip: string, text: string, lines: number, scratch: string, effort: string | null = "low"): Promise<[Answer, number]> {
+async function askStandIn(clip: string, text: string, lines: number, scratch: string, effort: string | null = "low"): Promise<[Answer, number]> {
   let data: string;
   try {
     data = fs.readFileSync(clip).toString("base64");
@@ -660,7 +595,7 @@ async function askGateway(clip: string, text: string, lines: number, scratch: st
   }
   let response: unknown;
   try {
-    response = await post(scratch);
+    response = await aiClaude.post(scratch);
   } finally {
     fs.rmSync(scratch, { force: true });
   }
@@ -781,8 +716,8 @@ export async function watchWindow(
   let last = "";
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
-      const [answer, cost] = aiClaude.viaGateway.on
-        ? await within(timing.askLimitMs, askGateway(clip, text, lines.length, join(dir, `${key}.request.json`)))
+      const [answer, cost] = aiClaude.standIn.post !== null
+        ? await within(timing.askLimitMs, askStandIn(clip, text, lines.length, join(dir, `${key}.request.json`)))
         : [await within(timing.askLimitMs, askClaude(clip, text, lines.length, MODEL, "Claude opus watching footage")), 0.0];
       spent += cost;
       fs.rmSync(clip, { force: true });
@@ -1440,7 +1375,7 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
       const cache = parent(dir);
       return bridges.settle(disputed, part.lines, candidates, dir, {
         cut: (start, end, out) => (cache !== null ? cut(part.source, cache, { lines: [0, 0], start, end }, out) : cutAt(part.source, null, { lines: [0, 0], start, end }, out, 1)),
-        post,
+        post: (body) => aiClaude.post(body, MODEL, "Claude opus taking a second look at a turn"),
         unfence,
         model: MODEL,
       });

@@ -28,11 +28,11 @@ import { ROLES, roleTitle } from "./speakers.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
 import type { Word } from "./transcribe.ts";
 
-/** The pause before asking a busy gateway again (tests make it instant). */
+/** The pause before asking a busy model again (tests make it instant). */
 export const busyTiming = { waitMs: 15_000 };
 
 /**
- * Whether the gateway said it's busy (too many calls at once, or its own
+ * Whether the model said it's busy (too many calls at once, or its own
  * trouble), which passes in a minute: the next try waits for it. Asked again
  * at once, the windows of a full run-through all failed in the same second
  * (Oct 28). A used-up day or credit isn't busy: waiting won't help today.

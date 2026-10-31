@@ -28,9 +28,9 @@ start() {
   mkdir -p "$HOME_DIR/logs"
   (
     cd "$APP" || exit 1
-    # The dev server's keys (`just dev`): Drive and Docs, the AI Gateway, the YouTube proxy.
+    # The dev server's keys (`just dev`): Drive and Docs, the YouTube proxy.
     if command -v infisical >/dev/null; then
-      for name in GOOGLE_DRIVE_CLIENT_ID GOOGLE_DRIVE_CLIENT_SECRET GOOGLE_DOCS_REFRESH_TOKEN AI_GATEWAY_API_KEY PROXY_URL; do
+      for name in GOOGLE_DRIVE_CLIENT_ID GOOGLE_DRIVE_CLIENT_SECRET GOOGLE_DOCS_REFRESH_TOKEN PROXY_URL; do
         if [ -z "${!name:-}" ] && value="$(infisical secrets get "$name" --projectId=979fe56c-c4d0-4809-b64f-5ebc75eeaf05 --env=dev --path=/edit-relay --plain --silent 2>/dev/null)"; then
           export "$name=$value"
         fi

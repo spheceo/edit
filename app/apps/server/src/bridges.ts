@@ -139,7 +139,7 @@ export function promptText(candidates: Candidate[], lines: Line[], start: number
 export interface Asker {
   /** Cuts the clip (the file's seconds) with its sound to `out`. */
   cut: (start: number, end: number, out: string) => Promise<void>;
-  /** Posts a request file to the gateway. */
+  /** Asks the request in a file of Claude (ai_claude.ts), answering `{choices: [{message: {content}}]}`. */
   post: (body: string) => Promise<unknown>;
   unfence: (text: string) => string;
   model: string;

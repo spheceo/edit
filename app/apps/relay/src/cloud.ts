@@ -23,10 +23,8 @@
  *   /v1/cloud/google/token          {}           → {access_token, expires_in}: the team's Google sign-in
  *                                   (Drive and Docs: the sound library, script imports, Drive links and uploads)
  *   /v1/cloud/writer/…              Script mode's scripts, their reviews and lessons, under Writer's rules (writer_cloud.ts)
- *   /v1/cloud/ai/chat               an AI Gateway chat completion, passed through with the relay's
- *                                   AI_GATEWAY_API_KEY (the footage watcher); the gateway's answer as it is
  */
-import { allow, budgetKey, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
+import { allow, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
 import { EDIT_CALLS, grantedTo, ideaRefused, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
 import { cancelJob, driveJob, googleSignIn, jobStatus, proxyJob, type JobsEnv } from "./jobs";
 import { exportRoute, v3Route, type ModalEnv } from "./exports";
@@ -45,18 +43,8 @@ export interface CloudEnv extends JobsEnv, ModalEnv {
   CONVEX_PAUSED?: string;
   /** Passed as `args.token` to every `edit:` function, which checks it. */
   CONVEX_SERVICE_TOKEN?: string;
-  /** Vercel's AI Gateway, for the footage watcher (/v1/cloud/ai/chat). */
-  AI_GATEWAY_API_KEY?: string;
-  /** The models /v1/cloud/ai/chat may ask for (comma-separated; default the watcher's). */
-  AI_MODELS?: string;
-  /** What the AI Gateway may cost a day (USD, its own usage.cost): per person, and across everyone. */
-  DAILY_AI_USD_PER_IP?: string;
-  DAILY_AI_USD_TOTAL?: string;
-  /** Held for each AI call while it runs (USD), settled at its real cost. */
-  AI_RESERVE_USD?: string;
-  /** The day's budgets (index.ts's TranscriptionBudget) and the burst limiter. */
+  /** The day's budgets (index.ts's TranscriptionBudget). */
   BUDGET?: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
-  BURST?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   /** Script mode's cloud calls (1200 a minute per person, wrangler.toml). */
   CLOUD_BURST?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   /** "1": a project's first commit carries who started it (`actor`, from the token); Repack's `edit:commitProject` keeps it as `createdBy`. */
@@ -70,11 +58,6 @@ const MAX_DELETE = 40;
 const MAX_PART_URLS = 1000;
 const MAX_BODY = 8 * 1024 * 1024;
 const CONVEX_KINDS = new Set(["query", "mutation", "action"]);
-/** A watch window's request: a few minutes of 360p video, base64 (Edit caps the clip at 15 MiB). */
-const MAX_AI_BODY = 32 * 1024 * 1024;
-const AI_GATEWAY = "https://ai-gateway.vercel.sh/v1/chat/completions";
-/** The longest answer a call may ask for (Flash: ~$0.08 of output; a watch window's answer is a few thousand). */
-const MAX_AI_TOKENS = 32768;
 /** Repack's reviews (always as Edit) and Writer's scripts, read only (the handoff). */
 const REVIEWS_PATH = /^reviews:[A-Za-z_][A-Za-z0-9_]*$/;
 const WRITER_READS = new Set(["writer:listScripts", "writer:getScript"]);
@@ -93,7 +76,7 @@ const callable = (path: string, kind: string) =>
 
 /** Each cloud route's permission: `use` for all of them (accounts' contract v2); null for a route that isn't one. */
 function permissionOf(route: string): Permission | null {
-  if (route === "ai/chat" || route === "google/token" || route === "convex" || route === "support-config" || route.startsWith("r2/") || route.startsWith("jobs/")) return "use";
+  if (route === "google/token" || route === "convex" || route === "support-config" || route.startsWith("r2/") || route.startsWith("jobs/")) return "use";
   return null;
 }
 
@@ -112,7 +95,6 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
   const found = await allow(request, env, permission, url.pathname.slice("/v1/".length));
   if (found instanceof Response) return found;
   if (request.method !== "POST") return json(405, { error: `POST JSON to ${url.pathname}` });
-  if (url.pathname === "/v1/cloud/ai/chat") return aiChat(request, env, found);
   if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY) return json(413, { error: "Request too large." });
   let body: Record<string, unknown>;
   try {
@@ -178,75 +160,6 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
 }
 
 /** `Bearer <CLOUD_TOKEN>` (now only Modal's worker token, passed as CLOUD_TOKEN), compared in constant time; refused when unset. */
-/** A chat completion through the AI Gateway with the relay's key; the body and the answer pass through untouched. */
-/** The models Edit's watcher, cameras, names and seats ask the gateway for. */
-const AI_MODELS = ["google/gemini-3.8-flash"];
-
-/**
- * The AI Gateway, for Edit's own model calls (the audit, Oct 23: any model, any
- * body, no limit): only the allowed models, no streaming, a burst limit per
- * person, and a daily budget per person and in all, counted from the gateway's
- * own usage.cost after each answer.
- */
-async function aiChat(request: Request, env: CloudEnv, found: Caller): Promise<Response> {
-  if (!env.AI_GATEWAY_API_KEY) return json(503, { error: { message: "The AI Gateway is not configured on the relay yet." } });
-  const length = Number(request.headers.get("content-length") ?? 0);
-  if (!(length > 0)) return json(411, { error: { message: "Send the request's length." } });
-  if (length > MAX_AI_BODY) return json(413, { error: { message: "Request too large." } });
-  let body: Record<string, unknown>;
-  try {
-    const parsed: unknown = await request.json();
-    if (!isObject(parsed)) throw new Error("not an object");
-    body = parsed;
-  } catch {
-    return json(400, { error: { message: "Send a JSON chat request." } });
-  }
-  const allowed = (env.AI_MODELS ?? "").split(",").map((one) => one.trim()).filter(Boolean);
-  if (typeof body.model !== "string" || !(allowed.length > 0 ? allowed : AI_MODELS).includes(body.model)) {
-    return json(403, { error: { message: `Only ${(allowed.length > 0 ? allowed : AI_MODELS).join(", ")} can be asked through Edit's relay.` } });
-  }
-  if (body.stream === true) return json(400, { error: { message: "Streaming isn't supported here." } });
-  // An answer's length is bounded, so one call's cost is (about the hold below).
-  if (!(typeof body.max_tokens === "number" && body.max_tokens > 0 && body.max_tokens <= MAX_AI_TOKENS)) body.max_tokens = MAX_AI_TOKENS;
-  if (env.BURST !== undefined && !(await env.BURST.limit({ key: `ai:${burstKey(request, found)}` })).success) {
-    return json(429, { error: { message: "Too many model calls at once; try again in a minute." } });
-  }
-  const client = await budgetKey(request, found);
-  const budget = env.BUDGET === undefined ? null : env.BUDGET.get(env.BUDGET.idFromName(new Date().toISOString().slice(0, 10)));
-  const reserve = Number(env.AI_RESERVE_USD ?? 0.1);
-  const ask = (phase: "check" | "spend", cost = 0) =>
-    budget!.fetch(new Request("https://budget/ai", { method: "POST", body: JSON.stringify({ client, phase, cost, reserve, perIp: Number(env.DAILY_AI_USD_PER_IP ?? 5), total: Number(env.DAILY_AI_USD_TOTAL ?? 25) }) }));
-  if (budget !== null) {
-    const checked = await ask("check");
-    if (!checked.ok) return new Response(checked.body, { status: checked.status, headers: { "content-type": "application/json" } });
-  }
-  let answer: Response;
-  try {
-    answer = await fetch(AI_GATEWAY, {
-      method: "POST",
-      headers: { authorization: `Bearer ${env.AI_GATEWAY_API_KEY}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    // Nothing was spent: the call's hold is given back.
-    if (budget !== null) await ask("spend", 0).catch(() => undefined);
-    return json(502, { error: { message: "Couldn't reach the AI Gateway." } });
-  }
-  const text = await answer.text();
-  if (budget !== null) {
-    let cost = 0;
-    try {
-      const usage = (JSON.parse(text) as { usage?: { cost?: unknown } }).usage;
-      cost = typeof usage?.cost === "number" && Number.isFinite(usage.cost) && usage.cost > 0 ? usage.cost : 0;
-    } catch {
-      cost = 0;
-    }
-    // Settled at its real cost (its hold given back when it cost nothing).
-    await ask("spend", cost).catch(() => undefined);
-  }
-  return new Response(text, { status: answer.status, headers: { "content-type": answer.headers.get("content-type") ?? "application/json" } });
-}
-
 export async function cloudAuthorized(request: Request, env: CloudEnv): Promise<boolean> {
   if (!env.CLOUD_TOKEN) return false;
   const sent = request.headers.get("authorization") ?? "";

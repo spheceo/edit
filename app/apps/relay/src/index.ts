@@ -81,7 +81,7 @@ export default {
     if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
       return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
     }
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), ai: Boolean(env.AI_GATEWAY_API_KEY), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);
@@ -457,7 +457,6 @@ export class TranscriptionBudget {
     if (new URL(request.url).pathname === "/lookups") return this.lookup(request);
     if (new URL(request.url).pathname === "/owner") return this.owner(request);
     if (new URL(request.url).pathname === "/speech") return this.speech(request);
-    if (new URL(request.url).pathname === "/ai") return this.ai(request);
     if (new URL(request.url).pathname === "/usage") {
       const { client } = await request.json() as { client: string };
       return json(200, { connection: await this.state.storage.get<number>(`ip:${client}`) ?? 0, total: await this.state.storage.get<number>("all") ?? 0, again: await this.state.storage.get<number>("again") ?? 0 });
@@ -566,35 +565,6 @@ export class TranscriptionBudget {
       if (allUsed + chars > total) return json(429, { error: "Edit's shared voice budget for today is used up; it resets at midnight UTC." });
       await storage.put(ipKey, ipUsed + chars);
       await storage.put("speech", allUsed + chars);
-      return json(200, { ok: true });
-    });
-    await this.state.storage.setAlarm(Date.now() + 2 * 86400_000);
-    return answer;
-  }
-
-  /**
-   * The AI Gateway's spend today (USD, its usage.cost): `check` holds
-   * `reserve` for the call before it's made (so calls at once can't all pass
-   * a nearly spent budget: the audit, Oct 23), `spend` settles it at the
-   * call's real cost (0 for a call that failed).
-   */
-  async ai(request: Request): Promise<Response> {
-    const { client, phase, cost, perIp, total, reserve: held } = await request.json() as { client: string; phase: "check" | "spend"; cost: number; perIp: number; total: number; reserve?: number };
-    const reserve = typeof held === "number" && Number.isFinite(held) && held >= 0 ? held : 0;
-    if (!/^[a-f0-9]{64}$/.test(client) || !Number.isFinite(cost) || cost < 0 || !(perIp > 0) || !(total > 0)) return json(400, { error: { message: "Invalid AI budget call." } });
-    const answer = await this.state.storage.transaction(async storage => {
-      const ipKey = `ai:${client}`;
-      const ipUsed = await storage.get<number>(ipKey) ?? 0;
-      const allUsed = await storage.get<number>("ai") ?? 0;
-      if (phase === "check") {
-        if (ipUsed + reserve > perIp || ipUsed >= perIp) return json(429, { error: { message: `Today's AI allowance for this account is used up ($${perIp}); it resets at midnight UTC.` } });
-        if (allUsed + reserve > total || allUsed >= total) return json(429, { error: { message: "Edit's shared AI budget for today is used up; it resets at midnight UTC." } });
-        await storage.put(ipKey, ipUsed + reserve);
-        await storage.put("ai", allUsed + reserve);
-        return json(200, { ok: true });
-      }
-      await storage.put(ipKey, Math.max(ipUsed + cost - reserve, 0));
-      await storage.put("ai", Math.max(allUsed + cost - reserve, 0));
       return json(200, { ok: true });
     });
     await this.state.storage.setAlarm(Date.now() + 2 * 86400_000);

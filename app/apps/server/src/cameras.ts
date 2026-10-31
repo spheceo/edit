@@ -176,14 +176,7 @@ export async function read(source: string, seconds: number): Promise<Reading | n
       if (count <= 0) break;
       const body = `${dir}/ask-${index}.json`;
       fs.writeFileSync(body, JSON.stringify(question(fs.readFileSync(`${dir}/${name}`).toString("base64"), count)));
-      let answer: unknown;
-      try {
-        answer = await aiClaude.post(body, undefined, "Claude opus reading the bodycams' IDs");
-      } catch (error) {
-        // No cloud token or gateway key: no cameras, not a failed transcript.
-        if (/needs the cloud token/.test(diag.messageOf(error))) return null;
-        throw error;
-      }
+      const answer = await aiClaude.post(body, undefined, "Claude opus reading the bodycams' IDs");
       const usage = (answer as { usage?: { cost?: unknown } } | null)?.usage?.cost;
       if (typeof usage === "number") cost += usage;
       for (const [at, id] of tiles(answer, count)) ids[first + at] = id;

@@ -59,7 +59,7 @@ describe("relay atomic spend reservations", () => {
     await budget.alarm(); expect(values.size).toBe(0);
   });
 
-  it("holds each AI call's reserve before it runs, so calls at once can't pass the budget together, and settles it at the real cost", async () => {
+  it("counts map lookups per account and across everyone", async () => {
     const values = new Map<string, number>();
     let chain = Promise.resolve();
     type Storage = ConstructorParameters<typeof TranscriptionBudget>[0]["storage"];
@@ -73,14 +73,6 @@ describe("relay atomic spend reservations", () => {
       setAlarm: async () => {}, deleteAll: async () => { values.clear(); },
     };
     const budget = new TranscriptionBudget({ storage }, { DAILY_LOOKUPS_PER_IP: "2", DAILY_LOOKUPS_TOTAL: "3" } as Env);
-    const ai = (phase: string, cost = 0) => budget.fetch(new Request("https://budget/ai", { method: "POST", body: JSON.stringify({ client: "a".repeat(64), phase, cost, reserve: 0.1, perIp: 0.25, total: 10 }) }));
-    expect((await Promise.all([ai("check"), ai("check"), ai("check")])).map((answer) => answer.status)).toEqual([200, 200, 429]);
-    expect(values.get("ai")).toBeCloseTo(0.2);
-    // One cost 0.01, one failed (0): both holds given back but the cost.
-    await ai("spend", 0.01);
-    await ai("spend", 0);
-    expect(values.get("ai")).toBeCloseTo(0.01);
-    expect((await ai("check")).status).toBe(200);
     // Map lookups: two a day for this account, three for everyone.
     const lookup = (client: string) => budget.fetch(new Request("https://budget/lookups", { method: "POST", body: JSON.stringify({ client: client.repeat(64) }) }));
     expect([(await lookup("a")).status, (await lookup("a")).status, (await lookup("a")).status, (await lookup("b")).status, (await lookup("c")).status]).toEqual([200, 200, 429, 200, 429]);
@@ -515,8 +507,8 @@ describe("relay cloud jobs: Drive → R2", () => {
   });
 });
 
-describe("relay cloud: Google sign-in and the AI Gateway", () => {
-  const env = { CLOUD_TOKEN: "cloud-secret", GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r", AI_GATEWAY_API_KEY: "gw-key" } as Env;
+describe("relay cloud: Google sign-in", () => {
+  const env = { CLOUD_TOKEN: "cloud-secret", GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r" } as Env;
   const post = (route: string, body: string, token = "", given: Env = env) =>
     relay.fetch(new Request(`https://relay.test/v1/cloud/${route}`, { method: "POST", headers: { authorization: `Bearer ${token || PERSON}`, "content-type": "application/json", "content-length": String(body.length) }, body }), given);
   afterEach(() => { vi.unstubAllGlobals(); });
@@ -530,54 +522,6 @@ describe("relay cloud: Google sign-in and the AI Gateway", () => {
     expect(answer.status).toBe(200);
     expect(await answer.json()).toEqual({ access_token: "ya29.x", expires_in: 3599 });
     expect((await post("google/token", "{}", "", { ...env, GOOGLE_DOCS_REFRESH_TOKEN: undefined })).status).toBe(502);
-  });
-
-  it("passes a chat completion through with the relay's key and returns the gateway's answer as it is", async () => {
-    let sent: { url: string; auth: string | null; body: string } | null = null;
-    vi.stubGlobal("fetch", async (input: string | URL | Request, init: RequestInit = {}) => {
-      sent = { url: String(input), auth: new Headers(init.headers).get("authorization"), body: await new Response(init.body).text() };
-      return Response.json({ error: { message: "slow down" } }, { status: 429 });
-    });
-    const asked = '{"model":"google/gemini-3.8-flash"}';
-    expect((await post("ai/chat", asked, "wrong")).status).toBe(401);
-    expect(sent).toBeNull();
-    const answer = await post("ai/chat", asked);
-    expect(answer.status).toBe(429);
-    expect(await answer.json()).toEqual({ error: { message: "slow down" } });
-    // The body as sent, with the answer's length bounded (the audit, Oct 23).
-    expect(sent).toEqual({ url: "https://ai-gateway.vercel.sh/v1/chat/completions", auth: "Bearer gw-key", body: '{"model":"google/gemini-3.8-flash","max_tokens":32768}' });
-    expect((await post("ai/chat", "{}", "", { ...env, AI_GATEWAY_API_KEY: undefined })).status).toBe(503);
-  });
-
-  it("asks the gateway only for Edit's models, never streaming, within a burst limit and the day's budget counted from its usage.cost", async () => {
-    // The audit, Oct 23: any model, any body, no limit.
-    const spent: number[] = [];
-    let allowance = true;
-    const budget = {
-      idFromName: (name: string) => name,
-      get: () => ({
-        fetch: async (request: Request) => {
-          const asked = (await request.json()) as { phase: string; cost: number };
-          if (asked.phase === "spend") spent.push(asked.cost);
-          return asked.phase === "check" && !allowance ? Response.json({ error: { message: "used up" } }, { status: 429 }) : Response.json({ ok: true });
-        },
-      }),
-    };
-    let burst = true;
-    const limited = { ...env, BUDGET: budget, BURST: { limit: async () => ({ success: burst }) } } as unknown as Env;
-    const upstream = vi.fn(async () => Response.json({ choices: [], usage: { cost: 0.0123 } }));
-    vi.stubGlobal("fetch", upstream);
-    expect((await post("ai/chat", '{"model":"openai/gpt-7"}', undefined, limited)).status).toBe(403);
-    expect((await post("ai/chat", '{"model":"google/gemini-3.8-flash","stream":true}', undefined, limited)).status).toBe(400);
-    expect(upstream).not.toHaveBeenCalled();
-    expect((await post("ai/chat", '{"model":"google/gemini-3.8-flash"}', undefined, limited)).status).toBe(200);
-    expect(spent).toEqual([0.0123]);
-    allowance = false;
-    expect((await post("ai/chat", '{"model":"google/gemini-3.8-flash"}', undefined, limited)).status).toBe(429);
-    allowance = true;
-    burst = false;
-    expect((await post("ai/chat", '{"model":"google/gemini-3.8-flash"}', undefined, limited)).status).toBe(429);
-    expect(upstream).toHaveBeenCalledTimes(1);
   });
 });
 

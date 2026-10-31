@@ -1,5 +1,5 @@
 // watch.ts's tests (the paid ones stay behind their env gates),
-// and a whole watch against the gateway mock.
+// and a whole watch against the stand-in model.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
@@ -23,7 +23,6 @@ import {
   unfence,
   voicesFor,
   watchWindow,
-  post,
   windows,
   LONGEST,
   type Answer,
@@ -214,7 +213,7 @@ test.skipIf(process.env.EDIT_WATCH_SOURCE === undefined)("watches_one_real_windo
   }
 }, 600_000);
 
-/** Watches one real window both ways (paid): EDIT_WATCH_BENCH="<source path>,<start s>,<end s>" with AI_GATEWAY_API_KEY. */
+/** Watches one real window both ways (paid): EDIT_WATCH_BENCH="<source path>,<start s>,<end s>" (a model call a window). */
 test.skipIf(process.env.EDIT_WATCH_BENCH === undefined)("old_and_new_settings_on_one_window", () => {
   // The bench compared 3 fps with default thinking against 1 fps with low
   // thinking; only the second is kept (cut, ask). Run the Rust bench.
@@ -280,13 +279,13 @@ test("a model's answer comes out of its Markdown fences, and a window's text nam
 });
 
 // ---------------------------------------------------------------------------
-// A whole watch, against the gateway mock
+// A whole watch, against the stand-in model
 
 let mock: MockServer;
 let restore: () => void;
 beforeAll(() => {
   mock = MockServer.start();
-  restore = mock.useEnv({ AI_GATEWAY_API_KEY: "test-key" });
+  restore = mock.useEnv();
 });
 afterAll(() => {
   restore();
@@ -323,7 +322,7 @@ async function subtitled(app: App, dir: string): Promise<string> {
   return project.id;
 }
 
-test("watch_footage asks the gateway once per window, corrects the transcript, sets the segments and reads its receipt next time", async () => {
+test("watch_footage asks the model once per window, corrects the transcript, sets the segments and reads its receipt next time", async () => {
   const { app, dir, store, cleanup } = fixtureHome("watch");
   // An FFmpeg that "cuts" a window (writes a byte to its output).
   const bin = `${dir}/bin`;
@@ -334,7 +333,7 @@ test("watch_footage asks the gateway once per window, corrects the transcript, s
   tools.forget();
   try {
     const id = await subtitled(app, dir);
-    mock.gatewayAnswer = JSON.stringify({
+    mock.modelAnswer = JSON.stringify({
       people: [
         { id: "A", look: "grey suit", where: "left", on_screen: true, name: "", role: "leader" },
         { id: "B", look: "hoodie", where: "right", on_screen: true, name: "Tyler", role: "suspect" },
@@ -372,7 +371,6 @@ test("watch_footage asks the gateway once per window, corrects the transcript, s
       { name: "Tyler", title: "Suspect", role: "suspect", voices: ["speaker_1"] },
     ]);
     const request = mock.calls("/v1/chat/completions").at(-2)!;
-    expect(request.headers.get("authorization")).toBe("Bearer test-key");
     const body = request.json<{ model: string; reasoning: { effort: string }; messages: { content: unknown }[] }>();
     expect([body.model, body.reasoning.effort]).toEqual(["google/gemini-3.8-flash", "low"]);
     // Keys sorted, as serde_json wrote the request.
@@ -425,7 +423,7 @@ test("a turn two windows give to two people is watched again, and that answer de
       { id: "a", track: "a4", start: 0, duration: 14400, color: "blue", fade_in: 0, fade_out: 0, type: "audio", media: "m", source_in: 0, speed: 1, volume_db: 0, link: "l" },
     ];
     await app.store.replace(project.id, null, project, "test");
-    mock.gatewayAnswer = JSON.stringify({
+    mock.modelAnswer = JSON.stringify({
       people: [{ id: "A", look: "detective", where: "at the table", on_screen: true, name: "", role: "leader" }],
       lines: Array.from({ length: 200 }, (_, n) => ({ n, who: "A", sure: "high", or: null })),
       segments: [{ start: 0, end: 480, kind: "footage", note: "" }],
@@ -474,7 +472,7 @@ test("a cast that can't be had is asked twice, said in the report, and leaves no
   tools.forget();
   try {
     const id = await subtitled(app, dir);
-    mock.gatewayAnswer = JSON.stringify({
+    mock.modelAnswer = JSON.stringify({
       people: [
         { id: "A", look: "grey suit", where: "left", on_screen: true, name: "", role: "leader" },
         { id: "B", look: "hoodie", where: "right", on_screen: true, name: "Tyler", role: "suspect" },
@@ -500,7 +498,7 @@ test("a cast that can't be had is asked twice, said in the report, and leaves no
   }
 });
 
-test("a gateway that refuses says why, and the window's failure is the watch's error", async () => {
+test("a model that refuses says why, and the window's failure is the watch's error", async () => {
   const { app, dir, cleanup } = fixtureHome("watch-refused");
   const bin = `${dir}/bin`;
   write(`${bin}/ffmpeg`, '#!/bin/sh\nfor a; do out="$a"; done\nprintf x > "$out"\n');
@@ -512,7 +510,7 @@ test("a gateway that refuses says why, and the window's failure is the watch's e
   try {
     const id = await subtitled(app, dir);
     await expect(seams.watch.watchFootage(app, id, { force: true, segments: null })).rejects.toThrow(
-      `${dir}/interview.mp4 0:00–0:10: the AI gateway answered 402: no credits`,
+      `${dir}/interview.mp4 0:00–0:10: the model answered 402: no credits`,
     );
   } finally {
     if (before === undefined) delete process.env.EDIT_FFMPEG;
@@ -554,24 +552,6 @@ test("segments are held to who is heard: talk marked narration is footage, a nar
   expect(voicedSegments(given.slice(0, 1), lumped, s(41), fps).filter((segment) => segment.kind === "narration")).toEqual([]);
 });
 
-test("without a gateway key of its own, the watcher asks through the relay with the cloud token", async () => {
-  const put = mock.useEnv({ AI_GATEWAY_API_KEY: undefined, EDIT_RELAY_TOKEN: "cloud-tok" });
-  const { dir, cleanup } = scratch("watch-relay");
-  try {
-    mock.on("POST", "/v1/cloud/ai/chat", () => Response.json({ choices: [{ message: { content: "hi" } }] }));
-    const body = `${dir}/body.json`;
-    write(body, '{"model":"m"}');
-    expect(await post(body)).toEqual({ choices: [{ message: { content: "hi" } }] });
-    const sent = mock.calls("/v1/cloud/ai/chat", "POST");
-    expect(sent.length).toBe(1);
-    expect(sent[0]!.headers.get("authorization")).toBe("Bearer cloud-tok");
-    expect(sent[0]!.text()).toBe('{"model":"m"}');
-  } finally {
-    cleanup();
-    put();
-  }
-});
-
 test("caption turns go through the normal visual speaker/cast verification and reuse its completed receipt", async () => {
   const { app, dir, cleanup } = fixtureHome("watch-captions");
   write(`${dir}/ffmpeg`, '#!/bin/sh\nfor a; do out="$a"; done\nprintf x > "$out"\n');
@@ -584,7 +564,7 @@ test("caption turns go through the normal visual speaker/cast verification and r
     const transcript: Transcript = { model: "youtube-captions", language: "en", words: TRANSCRIPT.words.map((word, index) => ({ ...word, speaker: index < 3 ? "caption_turn_1" : "caption_turn_2" })) };
     const path = app.media.paths(`${dir}/interview.mp4`).transcript;
     write(path, serialize(transcript));
-    mock.gatewayAnswer = JSON.stringify({
+    mock.modelAnswer = JSON.stringify({
       people: [{ id: "A", look: "grey suit", where: "left", on_screen: true, name: "", role: "leader" }, { id: "B", look: "hoodie", where: "right", on_screen: true, name: "Tyler", role: "suspect" }],
       lines: [{ n: 0, who: "A", sure: "high", or: null }, { n: 1, who: "B", sure: "high", or: null }], segments: [], background: [],
     });

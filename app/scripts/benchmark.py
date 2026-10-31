@@ -263,7 +263,7 @@ def run(binary, label, root, project, revision_count):
     with (home / "server.out").open("w") as log:
         # Independent homes, no credentials and no inherited compatibility override.
         env = {key: value for key, value in os.environ.items()
-               if not key.startswith(("GOOGLE_", "AI_GATEWAY_", "EDIT_FFMPEG_VIDEO"))}
+               if not key.startswith(("GOOGLE_", "EDIT_FFMPEG_VIDEO"))}
         server = subprocess.Popen([str(binary), "serve", "--home", str(home), "--host", "127.0.0.1",
                                    "--port", str(port)], stdout=log, stderr=log, env=env)
         try:

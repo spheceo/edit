@@ -20,8 +20,11 @@ import { cx } from "./ui";
 /** A row takes up the table's columns (subgrid), so they line up row to row. */
 export const COLUMNS = "col-span-full grid grid-cols-subgrid items-center";
 
-/** A row: rounded, the hover its only edge (the portal's rows). */
-export const ROW = "group min-h-11 cursor-pointer rounded-xl px-3 py-1.5 transition-colors hover:bg-white/[0.035]";
+/** A row: rounded, the hover its only edge (the portal's rows); lit too while its menu is open. */
+export const ROW = "group min-h-11 cursor-pointer rounded-xl px-3 py-1.5 transition-colors hover:bg-white/[0.035] data-[menu-open]:bg-white/[0.035] has-[[data-menu-open]]:bg-white/[0.035]";
+
+/** A row's hover button: shown on hover, and kept while its row's menu is open (the user, Oct 31: "when i click on thrree dots then a dropdown the three dots dissaper"). */
+const HOVER_BUTTON = "opacity-0 group-hover:opacity-100 group-data-[menu-open]:opacity-100 group-has-[[data-menu-open]]:opacity-100 data-[menu-open]:bg-hover data-[menu-open]:text-fg";
 
 /** A row's name. */
 export const NAME = "truncate text-[13.5px] font-medium text-fg/90 group-hover:text-fg";
@@ -139,7 +142,7 @@ export function useAside(key: LaterKey | null, title: string) {
         event.stopPropagation();
         later.back(key, title);
       }}
-      className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-white/[0.09] px-2 text-[12px] font-medium text-secondary opacity-0 transition-[opacity,color,border-color] group-hover:opacity-100 hover:border-white/[0.16] hover:text-fg"
+      className={cx("flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-white/[0.09] px-2 text-[12px] font-medium text-secondary transition-[opacity,color,border-color] hover:border-white/[0.16] hover:text-fg", HOVER_BUTTON)}
     >
       <Undo2 size={13} /> Bring back
     </button>
@@ -151,7 +154,7 @@ export function useAside(key: LaterKey | null, title: string) {
         event.stopPropagation();
         toggleMenu(event.currentTarget, [{ heading: "Set aside until" }, ...choices()], { width: 230 });
       }}
-      className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
+      className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-hover hover:text-fg", HOVER_BUTTON)}
     >
       <Clock size={14} />
     </button>
@@ -174,7 +177,7 @@ export function contextMenu(items: MenuItem[], width = 200) {
   return (event: React.MouseEvent) => {
     if (items.length === 0) return;
     event.stopPropagation();
-    openMenu(event, items, { width });
+    openMenu(event, items, { width, owner: event.currentTarget });
   };
 }
 
@@ -189,7 +192,7 @@ export function RowButtons({ aside, items, width = 200 }: { aside: ReactNode; it
           event.stopPropagation();
           toggleMenu(event.currentTarget, items, { width });
         }}
-        className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
+        className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-hover hover:text-fg", HOVER_BUTTON)}
       >
         <Ellipsis size={15} />
       </button>

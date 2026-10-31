@@ -75,7 +75,8 @@ export function ContextMenuHost() {
     if (!menu) return;
     const close = (event: Event) => {
       const target = event.target as Element | null;
-      if (event.type === "pointerdown" && target?.closest?.("[data-menu]")) return;
+      // A press or a scroll in the menu is the menu's.
+      if ((event.type === "pointerdown" || event.type === "wheel") && target?.closest?.("[data-menu]")) return;
       closedFrom = event.type === "pointerdown" && menu.owner && target && menu.owner.contains(target) ? menu.owner : null;
       closeMenu();
     };
@@ -90,6 +91,14 @@ export function ContextMenuHost() {
       window.removeEventListener("resize", close);
     };
   }, [menu]);
+  // What opened the menu says so while it's open (data-menu-open), so a button
+  // shown on hover stays, with its row, while the pointer is in its menu.
+  useEffect(() => {
+    const owner = menu?.owner;
+    if (!owner) return;
+    owner.setAttribute("data-menu-open", "");
+    return () => owner.removeAttribute("data-menu-open");
+  }, [menu]);
   return (
     <AnimatePresence>
       {menu && <Panel key={menu.key} x={menu.x} y={menu.y} items={menu.items} width={menu.width} root />}
@@ -97,12 +106,29 @@ export function ContextMenuHost() {
   );
 }
 
-/** `back`: where a submenu goes when there's no room on the right (its parent's left edge), so it sits beside its parent, never over it. */
-function Panel({ x, y, back, items, root, onLeave, width }: { x: number; y: number; back?: number; items: MenuItem[]; root?: boolean; onLeave?: () => void; width?: number }) {
+/**
+ * `back`: where a submenu goes when there's no room on the right (its parent's
+ * left edge), so it sits beside its parent, never over it. `onEnter`: the
+ * pointer reached this submenu (its parent keeps it open).
+ */
+function Panel({ x, y, back, items, root, onEnter, width }: { x: number; y: number; back?: number; items: MenuItem[]; root?: boolean; onEnter?: () => void; width?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y, origin: "top left" });
   const [active, setActive] = useState(-1);
   const [open, setOpen] = useState<{ index: number; x: number; y: number; back: number } | null>(null);
+  // A submenu stays open while the pointer crosses other items on its way there
+  // (the user, Oct 31: "when i move away from them they close"): another item
+  // takes over only once the pointer rests on it.
+  const switching = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopSwitching = () => {
+    if (switching.current !== null) clearTimeout(switching.current);
+    switching.current = null;
+  };
+  useEffect(() => stopSwitching, []);
+  const openAt = (index: number, button: Element) => {
+    const box = button.getBoundingClientRect();
+    setOpen({ index, x: box.right + 7, y: box.top - 5, back: box.left - 7 });
+  };
   const actions = items.map((item, index) => (isAction(item) && !item.disabled ? index : -1)).filter((index) => index >= 0);
   // Keep labels aligned when only some items have icons.
   const iconColumn = items.some((item) => isAction(item) && item.icon !== undefined);
@@ -158,7 +184,7 @@ function Panel({ x, y, back, items, root, onLeave, width }: { x: number; y: numb
       exit={{ opacity: 0, transition: { duration: 0.08 } }}
       transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
       style={{ left: position.left, top: position.top, transformOrigin: position.origin, minWidth: width }}
-      onPointerLeave={onLeave}
+      onPointerEnter={onEnter}
       onContextMenu={(event) => event.preventDefault()}
       className={cx(
         // The kit’s menu (design/kit/components.css .sp-menu).
@@ -213,13 +239,19 @@ function Panel({ x, y, back, items, root, onLeave, width }: { x: number; y: numb
             disabled={item.disabled}
             onPointerEnter={(event) => {
               setActive(index);
-              if (item.submenu) {
-                const box = event.currentTarget.getBoundingClientRect();
-                setOpen({ index, x: box.right + 7, y: box.top - 5, back: box.left - 7 });
-              } else setOpen(null);
+              stopSwitching();
+              const button = event.currentTarget;
+              const change = () => (item.submenu ? openAt(index, button) : setOpen(null));
+              if (open === null || open.index === index) change();
+              else switching.current = setTimeout(change, 350);
             }}
-            onClick={() => {
-              if (item.submenu || !item.onSelect) return;
+            onClick={(event) => {
+              if (item.submenu) {
+                stopSwitching();
+                openAt(index, event.currentTarget);
+                return;
+              }
+              if (!item.onSelect) return;
               closeMenu();
               item.onSelect();
             }}
@@ -247,7 +279,7 @@ function Panel({ x, y, back, items, root, onLeave, width }: { x: number; y: numb
       {createPortal(
         <AnimatePresence>
           {open && "submenu" in items[open.index] && (
-            <Panel key={open.index} x={open.x} y={open.y} back={open.back} items={(items[open.index] as { submenu: MenuItem[] }).submenu} />
+            <Panel key={open.index} x={open.x} y={open.y} back={open.back} items={(items[open.index] as { submenu: MenuItem[] }).submenu} onEnter={stopSwitching} />
           )}
         </AnimatePresence>,
         document.body,

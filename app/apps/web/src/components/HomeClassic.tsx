@@ -1,5 +1,5 @@
 // Home as everyone has it (until Oct 31 2026, b217d6be): one list of every
-// project with its tabs (Needs you, All, Subtitled, Ideas), the imports at the
+// project with its tabs (Your projects, All, Subtitled, Ideas), the imports at the
 // top. The sidebar Home (Home.tsx) is a beta, on for a Mac in Settings → Beta
 // (the user, Oct 31: "put the new Home … behind a beta option in Settings that
 // can easily be toggled on and off"); off, this. What both have alike (New
@@ -36,8 +36,6 @@ import { DoneContext, doneAt, rowKey, useDoneItems } from "./HomeDone";
 import { laterKey, useLater } from "../lib/later";
 import { type CardProps, ImportDialog, type Importing, importShare, importStuck, type Listed, MoveToCloud, NewProject, type NewProjectStart, Notice, type NoticeProps, Place, type ScriptIssueRow, type Stage, stageName, stageOf, stageWords, useIssueDialogs, VIEW, type Writing } from "./Home";
 
-/** How long a project someone started stays in their Needs you before it goes to review. */
-const NEW_FOR_MS = 3 * 24 * 3600_000;
 
 export function HomeClassic() {
   // What Home showed last, at once; the fresh answers take its place as they come.
@@ -90,7 +88,7 @@ export function HomeClassic() {
     // /ideas is Home on its Ideas tab (the idea page's way back).
     if (window.location.pathname === "/ideas") return "ideas";
     const saved = localStorage.getItem(VIEW);
-    return saved === "all" || saved === "subtitled" || saved === "ideas" || saved === "done" ? saved : "needs";
+    return saved === "all" || saved === "subtitled" || saved === "ideas" || saved === "done" ? saved : "mine";
   });
   // Ideas (Oct 31): the team's repackaging, a tab of Home's for those who work on them.
   const ideasAllowed = makesIdeas(account);
@@ -219,34 +217,27 @@ export function HomeClassic() {
   const subtitledRows = everySubtitledRow.filter((row) => !isDone(row));
   // The latest marked done first.
   const doneRows = [...everyProjectRow, ...everySubtitledRow].filter(isDone).sort((a, b) => (doneAt(later, rowKey(b)) ?? 0) - (doneAt(later, rowKey(a)) ?? 0));
-  // What needs someone: edits on a review link not approved yet, and edits
-  // whose import stopped; scripts whose import stopped are the box above the
-  // list, with their answers. Ordinary scripts and the edits being worked on
-  // wait in All projects (the user, Oct 30: "we shouldn't show just normal
-  // scripts in the main view").
-  // A project the signed-in person started in the last three days is in front
-  // of them until it goes to review (the user, Oct 30: "it's confusing to add a
-  // new project and not have it right in front of you"): importing, being
-  // drafted, or the first draft waiting for a look.
+  // Imports that stopped stay the box above the list, whoever's they are.
   const me = account?.person?.name.trim().toLowerCase() ?? null;
-  const startedMs = (row: Listed): number => {
-    const id = row.local?.id ?? row.cloud?.id ?? null;
-    const at = id === null ? NaN : Number(/^p(\d{12,})-/u.exec(id)?.[1] ?? NaN);
-    return Number.isFinite(at) ? at : (localScripts.find((one) => one.id === row.script?.id)?.createdAt ?? row.script?.updatedAt ?? 0);
-  };
   const starter = (row: Listed) => (row.local !== null ? (remote.get(row.local.id)?.created_by ?? row.local.created_by) : row.cloud !== null ? row.cloud.created_by : row.script.createdBy);
-  const justStarted = (row: Listed) => me !== null && starter(row)?.name.trim().toLowerCase() === me && Date.now() - startedMs(row) < NEW_FOR_MS;
-  const needsYou = projectRows.filter((row) => {
-    // A script whose Claude run failed (the user, Oct 30: "projects that have failed like this deserve a needs you").
-    if (row.local === null && row.cloud === null) return (Boolean(row.script.runFailed) && !row.writing && !row.importing) || justStarted(row);
-    const state = statuses[row.local?.id ?? row.cloud?.id ?? ""];
-    const stage = stageOf(row, state);
-    return stage === "review" || Boolean(state?.importing?.error) || (justStarted(row) && stage !== "done");
+  // Your projects (Sphe, Oct 31: "instead of having Needs you, let's just try having your projects there; and
+  // if your projects are done they wont show up there"): every project and script the signed-in person
+  // started, newest first; marked done (already out of projectRows) or finished (approved), it's gone from here.
+  const person = account?.person ?? null;
+  const isMine = (row: Listed) => {
+    const by = starter(row);
+    if (person === null || by === null || by === undefined) return false;
+    if (person.sub && by.sub) return person.sub === by.sub;
+    return by.name.trim().toLowerCase() === me;
+  };
+  const mineRows = projectRows.filter((row) => {
+    if (!isMine(row)) return false;
+    if (row.local === null && row.cloud === null) return true;
+    return stageOf(row, statuses[row.local?.id ?? row.cloud?.id ?? ""]) !== "done";
   });
-  const stoppedScripts = issues.filter((issue) => !writing.some((one) => one.id === issue.id)).length;
   // A search looks through every project; otherwise the tab's.
   const searching = words !== "" && !ideasShown;
-  const rows = view === "done" && !searching ? doneRows : !showEdits ? subtitledRows : searching || view === "all" ? projectRows : needsYou;
+  const rows = view === "done" && !searching ? doneRows : !showEdits ? subtitledRows : searching || view === "all" ? projectRows : mineRows;
   const cardProps = (project: ProjectSummary) => ({
     project,
     onChanged: refresh,
@@ -332,7 +323,7 @@ export function HomeClassic() {
                 {(
                   [
                     // What needs someone first; the rest a tab away (the user, Oct 30: "you mainly see projects that need you").
-                    ["needs", "Needs you", needsYou.length + stoppedScripts] as [View, string, number],
+                    ["mine", "Your projects", mineRows.length] as [View, string, number],
                     ["all", "All projects", projectRows.length] as [View, string, number],
                     ["subtitled", "Subtitled", subtitledRows.length] as [View, string, number],
                     // Marked done by hand (the user, Oct 31: "so we dont have to see them").
@@ -388,12 +379,12 @@ export function HomeClassic() {
               </DoneContext.Provider>
             ) : searching ? (
               <p className="mt-16 text-center text-muted">Nothing matches “{query.trim()}”.</p>
-            ) : view === "needs" && stoppedScripts === 0 ? (
+            ) : view === "mine" ? (
               <div className="mt-6 rounded-xl border border-line px-4 py-10 text-center">
-                <div className="text-[14px] font-medium">Nothing needs you</div>
-                <p className="mt-1 text-[12px] text-muted">Stopped imports and edits waiting on review show up here.</p>
+                <div className="text-[14px] font-medium">No projects of yours</div>
+                <p className="mt-1 text-[12px] text-muted">The projects and scripts you start show up here until they’re done. Everyone’s are in All projects.</p>
               </div>
-            ) : view === "needs" ? null : view === "done" ? (
+            ) : view === "done" ? (
               <p className="mt-16 text-center text-muted">Nothing marked done. A project’s ⋯ has Mark as done.</p>
             ) : (
               <p className="mt-16 text-center text-muted">Nothing here.</p>
@@ -410,7 +401,7 @@ export function HomeClassic() {
 }
 
 /** What Home lists: what needs someone, every project, the subtitled videos, or the ideas. */
-type View = "needs" | "all" | "subtitled" | "ideas" | "done";
+type View = "mine" | "all" | "subtitled" | "ideas" | "done";
 
 const STAGES: { value: Stage; label: string }[] = [
   // The footage and its words in, the script not written yet (the user, Oct 30: "know which projects are ready to script").

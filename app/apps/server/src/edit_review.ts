@@ -429,12 +429,15 @@ export function textNotSaid(project: Project, transcripts: Map<string, Transcrip
     // "we need to sync the subtitles throughout the entire video"): a line
     // left where it was when its footage moved, or timed by a transcript off.
     if ((clip.name ?? "").startsWith("Subtitle") && shown.length >= 2) {
+      // The saying of its words nearest where it comes up: a phrase said twice
+      // (the Bookkeeper's "Office manager?" and its answer a second later) is
+      // late only if the nearest is.
       let said: number | null = null;
       for (let index = 0; index + 1 < begun.length; index++) {
         const [frame, word] = begun[index]!;
         if (frame < clip.start - second) continue;
-        if (frame > clip.start + edge) break;
-        if (word === shown[0] && begun[index + 1]![1] === shown[1]) said = frame;
+        if (frame > clip.start + second) break;
+        if (word === shown[0] && begun[index + 1]![1] === shown[1] && (said === null || Math.abs(frame - clip.start) < Math.abs(said - clip.start))) said = frame;
       }
       if (said !== null && clip.start - said > late) {
         issues.push({ kind: "subtitle_late", clip: clip.id, start: clip.start, said_at: said, start_by: Math.max(0, said - lead), text: clip.text, fix: "bring it up at start_by (a few frames before its first word), and the lines after it with it when they're late too (they moved with the footage, or the transcript was off: add_subtitles again over the span)" });

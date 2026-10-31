@@ -117,9 +117,31 @@ function present(app: App, id: string, done: Made | undefined): done is Made {
   return done !== undefined && (done.key !== undefined || isFile(file(app, id)));
 }
 
-/** Where a picture's render made on Modal lives in R2. */
+/** Where a picture's render made on Modal lives in R2 (under edit/exports/: the relay keeps an installed Edit's cloud exports there). */
 export function cloudKey(id: string, hash: string): string {
-  return `edit/playback/${id.replace(/[^A-Za-z0-9_-]/g, "_")}/${hash}.mp4`;
+  return `edit/exports/playback/${id.replace(/[^A-Za-z0-9_-]/g, "_")}/${hash}.mp4`;
+}
+
+/**
+ * Modal's render copied to this Mac behind the stream, so playback stops
+ * leaning on the network once it's down (580 MB for 26 minutes): played from
+ * the file when it's whole and still this picture's, streamed from R2 before.
+ */
+async function fetchLocal(app: App, id: string, key: string): Promise<void> {
+  const local = file(app, id).replace(/\.mp4$/u, `.${key.split("/").pop() ?? "cloud.mp4"}`);
+  try {
+    await cloud.download(key, local);
+  } catch (error) {
+    diag.warn("playback", `${id}: smooth playback stays streamed (${diag.messageOf(error)})`);
+    return;
+  }
+  if (made.get(id)?.key !== key) fs.rmSync(local, { force: true });
+}
+
+/** This Mac's copy of a render made on Modal, when it's whole. */
+function localCopy(app: App, id: string, key: string): string | null {
+  const local = file(app, id).replace(/\.mp4$/u, `.${key.split("/").pop() ?? "cloud.mp4"}`);
+  return isFile(local) ? local : null;
 }
 
 /** The export takes the Mac: a smooth playback render waits for local exports only. */
@@ -214,8 +236,12 @@ async function next(app: App): Promise<void> {
       const before = made.get(id);
       made.set(id, { rev: current.rev, hash: current.hash, stamp, ...(current.key !== undefined ? { key: current.key } : {}) });
       writeAtomic(file(app, id).replace(/\.mp4$/u, ".json"), JSON.stringify(made.get(id)));
-      if (current.key !== undefined) fs.rmSync(file(app, id), { force: true });
-      else keepRecent(app);
+      if (current.key !== undefined) {
+        fs.rmSync(file(app, id), { force: true });
+        const old = before?.key;
+        if (old !== undefined && old !== current.key) fs.rmSync(file(app, id).replace(/\.mp4$/u, `.${old.split("/").pop() ?? ""}`), { force: true });
+        void fetchLocal(app, id, current.key);
+      } else keepRecent(app);
       // The render it replaces, made on Modal, goes from R2 (another Mac's of this picture is the same key, kept).
       if (before?.key !== undefined && before.key !== current.key) void cloud.remove([before.key]).catch(() => {});
       const frames = duration(project);
@@ -349,6 +375,12 @@ export function routes(router: Router<App>): void {
       const done = record(app, id);
       if (!present(app, id, done)) throw notFound("no smooth playback yet");
       if (done.key !== undefined) {
+        const here = localCopy(app, id, done.key);
+        if (here !== null) {
+          const response = serveFile(given, here);
+          response.headers.set("cache-control", "private, max-age=86400");
+          return response;
+        }
         const streamed = await streamFromCloud(given, { proxy: done.key }, "proxy");
         if (streamed === null) throw new ApiError(503, "smooth playback needs Edit's cloud connection");
         return streamed;

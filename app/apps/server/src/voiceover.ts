@@ -26,6 +26,16 @@ import type { Word } from "./transcribe.ts";
 /** Lead-in kept before the first word and tail after the last (seconds). */
 const LEAD = 0.12;
 const TAIL = 0.3;
+/**
+ * The cut-in's picture before the narration starts and after it ends: where
+ * speech runs on, the footage's cut falls between two words and can't leave
+ * room (script.CUT_IN_PAD), and the narration came in on the next frame (JJ:
+ * "the voiceover starts before the real sound audio is finished… doesn't
+ * overlap at either end"); the transition into the cut-in lands before the
+ * voice too ("we start the voiceover before we have actually had our visual
+ * transition").
+ */
+export const NARRATION_ROOM = 0.25;
 /** Share of a cut-in's words that must be heard for a stretch to count as reading it. */
 const LEAST_MATCH = 0.5;
 
@@ -154,8 +164,10 @@ export async function place(app: App, id: string, given: string[] | null, only?:
       const length = Math.min(available, Math.trunc(Math.max(round((to - from) * fps), 1)));
       drop(index);
 
-      // The cut-in (and its words) takes the voice-over's length; what follows moves.
-      const delta = length - card.duration;
+      // The cut-in (and its words) takes the voice-over's length and a breath either side; what follows moves.
+      const room = Math.round(NARRATION_ROOM * fps);
+      const spans = length + 2 * room;
+      const delta = spans - card.duration;
       const oldEnd = clipEnd(card);
       if (only) {
         for (const marker of project.markers ?? []) if (marker.frame >= oldEnd) marker.frame += delta;
@@ -168,7 +180,7 @@ export async function place(app: App, id: string, given: string[] | null, only?:
       }
       for (const other of project.clips) {
         const partner = other.id === card.id || (card.link !== undefined && card.link !== null && other.link === card.link);
-        if (partner) other.duration = length;
+        if (partner) other.duration = spans;
         else if (other.start >= oldEnd || (other.start > card.start && marksCut(other, oldEnd))) other.start += delta;
       }
       const clipId = freshId(project, "c");
@@ -176,7 +188,7 @@ export async function place(app: App, id: string, given: string[] | null, only?:
         clipFrom({
           id: clipId,
           track,
-          start: card.start,
+          start: card.start + room,
           duration: length,
           color: "green",
           name: "Voice-over",

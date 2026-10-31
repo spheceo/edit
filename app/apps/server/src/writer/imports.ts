@@ -180,6 +180,17 @@ export const compilationLines = (given: string[]): [string[], Reuse[]] => linesF
 
 /** The same lines for one Courtroom case across several videos: no reuses, and two videos are enough. */
 export function linesFor(given: string[], oneCase: boolean): [string[], Reuse[]] {
+  const [urls, reuses] = linesIn(given);
+  if (oneCase && reuses.length > 0) throw new Error("A reused case belongs in a compilation, not one Courtroom case.");
+  if (urls.length === 0 || urls.length > 20 || urls.length + reuses.length < 2) {
+    throw new Error(oneCase ? "A Courtroom case across videos takes 2 to 20 links; for one video, use YouTube." : "A compilation takes at least two cases, including at least one new footage source (up to 20 new and 20 reused).");
+  }
+  if (reuses.length > 20) throw new Error("A compilation takes at most 20 reused cases.");
+  return [urls, reuses];
+}
+
+/** The lines' videos and reused cases, however many: what New project checks, one video or twenty. */
+function linesIn(given: string[]): [string[], Reuse[]] {
   const urls: string[] = [];
   const reuses: Reuse[] = [];
   const text = given.join("\n");
@@ -191,17 +202,16 @@ export function linesFor(given: string[], oneCase: boolean): [string[], Reuse[]]
     if (link.reuse) reuses.push({ url: link.url, title: "", after: urls.length, ...(link.earlier ? { earlier: link.earlier } : {}) });
     else urls.push(link.url);
   }
-  if (oneCase && reuses.length > 0) throw new Error("A reused case belongs in a compilation, not one Courtroom case.");
-  if (urls.length === 0 || urls.length > 20 || urls.length + reuses.length < 2) {
-    throw new Error(oneCase ? "A Courtroom case across videos takes 2 to 20 links; for one video, use YouTube." : "A compilation takes at least two cases, including at least one new footage source (up to 20 new and 20 reused).");
-  }
-  if (reuses.length > 20) throw new Error("A compilation takes at most 20 reused cases.");
   return [urls, reuses];
 }
 
-/** Each compilation line checked before anything downloads: what the video is, or why it can't be imported. Four are asked about at once. */
+/**
+ * Each line checked before anything downloads: what the video is, or why it can't be imported. Four are asked about at once.
+ * One video is checked as well as a compilation's twenty: New project checks whatever is pasted (Oct 31, the scripting
+ * run-through: a single YouTube video was refused with "A compilation takes at least two cases", so no script could start).
+ */
 export async function checkVideos(app: App, given: string[]): Promise<VideoCheck[]> {
-  const [urls, reuses] = compilationLines(given);
+  const [urls, reuses] = linesIn(given);
   const wanted: [string, boolean, string | null][] = [];
   let next = 0;
   for (const [index, url] of urls.entries()) {

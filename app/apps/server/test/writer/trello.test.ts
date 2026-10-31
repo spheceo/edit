@@ -105,3 +105,19 @@ test("a new case and a script are enough, and invalid sources aren't dropped", (
   expect([urls.length, reuses.length, reuses[0]!.after]).toEqual([1, 1, 1]);
   expect(() => compilationLines([given[0]!, "https://example.com/wrong"])).toThrow();
 });
+
+test("New project checks a single video as it checks a compilation's (no two-case rule)", async () => {
+  const { checkVideos } = await import("../../src/writer/imports.ts");
+  const drive = await import("../../src/writer/drive.ts");
+  const before = drive.hooks.accessToken;
+  drive.hooks.accessToken = () => Promise.reject(new Error("no Drive here"));
+  try {
+    const checks = await checkVideos({} as never, ["https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz"]);
+    expect(checks).toHaveLength(1);
+    expect(checks[0]!.reuse).toBe(false);
+    expect(checks[0]!.problem).toContain("no Drive here");
+  } finally {
+    drive.hooks.accessToken = before;
+  }
+  expect(() => compilationLines(["https://www.youtube.com/watch?v=OVITtAlFG6M"])).toThrow("at least two cases");
+});

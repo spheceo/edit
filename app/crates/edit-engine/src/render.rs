@@ -1576,12 +1576,15 @@ fn join_chunks(
     if sound.is_some() {
         command.args(["-map", "1:a:0"]);
     }
+    // The chapters file's metadata, not none: `-map_metadata -1` also drops
+    // the chapters' titles, so every chapter came out unnamed (Oct 31). The
+    // file holds no tags of its own, so the export still carries none.
     if chapters.is_some() {
-        command.args(["-map_chapters", &inputs.to_string()]);
+        command.args(["-map_chapters", &inputs.to_string(), "-map_metadata", &inputs.to_string()]);
     } else {
-        command.args(["-map_chapters", "-1"]);
+        command.args(["-map_chapters", "-1", "-map_metadata", "-1"]);
     }
-    command.args(["-map_metadata", "-1", "-c", "copy"]);
+    command.args(["-c", "copy"]);
     if options.format == Format::Hevc {
         command.args(["-tag:v", "hvc1"]);
     }

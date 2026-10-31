@@ -179,8 +179,9 @@ export function ids(data: string): string[] {
   }
 }
 
-/** An import that died with the server is not still running. */
-export function markInterrupted(data: string): void {
+/** An import that died with the server is not still running: marked so, and its id answered (each started again). */
+export function markInterrupted(data: string): string[] {
+  const cut: string[] = [];
   for (const id of ids(data)) {
     const dir = join(scriptsRoot(data), id);
     let script: Script;
@@ -194,7 +195,9 @@ export function markInterrupted(data: string): void {
     script.error = "The import stopped when Edit closed. Retry: what finished is kept.";
     script.updatedAt = Date.now();
     write(dir, script);
+    cut.push(id);
   }
+  return cut;
 }
 
 export function remove(data: string, id: string): void {

@@ -33,7 +33,7 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
   // acted on (Oct 31: with Script mode off there, a script's builds called the tools on :7700
   // and its Drive reads had no token).
   if (options.trials === true) {
-    store.markInterrupted(data);
+    carryOn(app, data, store.markInterrupted(data));
     for (const id of store.ids(data)) jobs.markInterrupted(data, id);
     cloud.start(data);
     storage.start(data);
@@ -50,7 +50,7 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
   } catch (error) {
     diag.warn("writer", `noting Writer's folder as read: ${diag.messageOf(error)}`);
   }
-  store.markInterrupted(data);
+  carryOn(app, data, store.markInterrupted(data));
   for (const id of store.ids(data)) jobs.markInterrupted(data, id);
   cloud.start(data);
   reviews.start(app, data);
@@ -67,6 +67,33 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
       diag.warn("writer", diag.messageOf(error));
     }
   }
+}
+
+/** How long after a start the imports a restart cut off are started again (the cloud and sign-in up first). */
+export const CARRY_ON_MS = 15_000;
+
+/**
+ * Imports a restart or an update cut off carry on by themselves, from what
+ * they kept, as Retry would: they waited for someone to press it, and a dev
+ * server reloaded by a saved file left the Kroger import stopped at its
+ * transcription (Oct 31). A failure after that stops it as any other would.
+ */
+function carryOn(app: App, data: string, cut: string[]): void {
+  if (cut.length === 0) return;
+  setTimeout(() => {
+    void (async () => {
+      const imports = await import("./imports.ts");
+      // Side by side, as they were running: each resume lasts its whole import.
+      await Promise.all(cut.map(async (id) => {
+        try {
+          diag.info("writer", `${id}: carrying on the import a restart cut off`);
+          await imports.resume(app, data, id, { kind: "retry" });
+        } catch (error) {
+          diag.warn("writer", `${id}: the import a restart cut off didn't carry on: ${diag.messageOf(error)}`);
+        }
+      }));
+    })();
+  }, CARRY_ON_MS);
 }
 
 /** Writer's scripts, its cloud record and its review notes, taken into Script mode. */

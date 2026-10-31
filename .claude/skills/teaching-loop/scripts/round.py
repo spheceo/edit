@@ -10,7 +10,8 @@ import json, os, sys, time, shutil, glob, urllib.request, re
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOOP_DIR = os.path.expanduser(os.environ.get('LOOP', '~/edit-experiments/loop'))
 
-HOME = os.path.expanduser('~/.edit')
+# The server's data folder (EDIT_HOME: ~/.edit-trials for the trial server), where a base's research and watch cache are copied.
+HOME = os.path.expanduser(os.environ.get('EDIT_HOME', '~/.edit'))
 LOOP = LOOP_DIR
 BASES = json.load(open(f'{LOOP}/base/bases.json'))  # {key: {"id":…, "name":…}}
 # The Edit server trials run on: EDIT_URL (the trial server, app/scripts/trial-server.sh: http://127.0.0.1:7710), else the dev server.

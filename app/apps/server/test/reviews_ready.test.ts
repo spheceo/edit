@@ -6,7 +6,9 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
+import { optionsKey, timelineHash } from "../src/exports.ts";
 import * as machine from "../src/machine.ts";
+import { native } from "../src/native/index.ts";
 import * as reviews from "../src/reviews.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
@@ -121,6 +123,56 @@ test("a fix goes up in place of the latest version unless it has a reviewer's co
     // A comment on v2: the fix is v3.
     fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: { ...notes, d: note("d", 2) }, shared: { p: { reviewId: "r1", url: "u", versions } } }));
     expect(reviews.onLatest(home, "p").map((one) => one.id)).toEqual(["d"]);
+  } finally {
+    cleanup();
+  }
+});
+
+// Oct 31, the "Helpful" Son: a restart carried the share's export on by
+// itself, then the followed fix asked for its own and was refused ("this
+// project already has an export running"); the export finished 90 s later and
+// v3 was never shared.
+test("a share follows the export already running for the same picture, and waits out a different one", async () => {
+  const { app, cleanup } = fixtureHome("ready-busy-export");
+  const live = app.store.createAs("Helpful Son", "bodycam", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  const house = native().exportDefaults();
+  let busy: { output: string; timeline: string; options: string } | null = null;
+  const started: string[] = [];
+  (app as unknown as { exports: unknown }).exports = {
+    runningFor: () => busy,
+    running: () => busy !== null,
+    cancel: () => false,
+    exported: () => false,
+    start: async (_store: unknown, _library: unknown, _project: unknown, _options: unknown, path: string) => {
+      if (busy !== null) throw new Error("this project already has an export running");
+      started.push(path);
+      busy = { output: path, timeline: timelineHash(live.project), options: optionsKey(house) };
+      setTimeout(() => {
+        busy = null;
+        app.store.emit({ type: "export", id, state: "done", progress: 1, path });
+      }, 30);
+      return path;
+    },
+  };
+  const finish = (path: string) => {
+    busy = null;
+    app.store.emit({ type: "export", id, state: "done", progress: 1, path });
+  };
+  try {
+    // The same picture and settings: followed to its file, no second export.
+    busy = { output: "/out/resumed.mp4", timeline: timelineHash(live.project), options: optionsKey(house) };
+    const same = reviews.exportAndShare(app, id, {});
+    setTimeout(() => finish("/out/resumed.mp4"), 50);
+    // No such export on record in the fixture, so the share itself stops after: past the export is what's tested.
+    expect(await same.catch((error: Error) => error.message)).toContain("isn't one of this project's whole exports");
+    expect(started).toEqual([]);
+    // A different export (another format): waited out, then this one starts.
+    busy = { output: "/out/agent.mov", timeline: timelineHash(live.project), options: optionsKey({ ...house, format: "prores" }) };
+    const other = reviews.exportAndShare(app, id, {});
+    setTimeout(() => finish("/out/agent.mov"), 50);
+    expect(await other.catch((error: Error) => error.message)).toContain("isn't one of this project's whole exports");
+    expect(started).toHaveLength(1);
   } finally {
     cleanup();
   }

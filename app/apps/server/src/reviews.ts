@@ -27,7 +27,7 @@ import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
-import { chunkFolder, clipMap, deleteExport, holdExport, lastChunks, listExports, mapFile, timelineHash } from "./exports.ts";
+import { chunkFolder, clipMap, deleteExport, holdExport, lastChunks, listExports, mapFile, optionsKey, timelineHash } from "./exports.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Project, ScriptJob } from "./model.ts";
@@ -114,6 +114,8 @@ interface State {
   notes: Record<string, Note>;
   /** Each project's last Share settings (not its range or chapters), for the share after a Ready for changes. */
   shareOptions?: Record<string, Partial<ExportOptions>>;
+  /** Projects whose Ready for changes made fixes but couldn't share them: the next one shares them, changed or not. */
+  unshared?: Record<string, true>;
 }
 
 function empty(): State {
@@ -278,6 +280,7 @@ export async function share(app: App, projectId: string, path: string | null, re
       })) as { reviewId: string; url: string; version: number; removed: number[] };
       update(home, (state) => {
         state.shared[projectId] = { reviewId: answer.reviewId, url: answer.url, versions: [{ n: 1, timeline, path: chosen.path, fps, durationMs, clips }] };
+        if (state.unshared !== undefined) delete state.unshared[projectId];
       });
       fs.rmSync(copy, { force: true });
       diag.info("review", `${live.project.name}: compressed to v1 (removed v${answer.removed.join(", v")}) at ${answer.url}`);
@@ -299,6 +302,7 @@ export async function share(app: App, projectId: string, path: string | null, re
       const versions = (was?.reviewId === answer.reviewId ? was.versions : []).filter((one) => one.n !== answer.version);
       versions.push({ n: answer.version, timeline, path: chosen.path, fps, durationMs, clips });
       state.shared[projectId] = { reviewId: answer.reviewId, url: answer.url, versions };
+      if (state.unshared !== undefined) delete state.unshared[projectId];
     });
     fs.rmSync(copy, { force: true });
     diag.info("review", `${live.project.name}: shared v${answer.version} at ${answer.url}`);
@@ -346,30 +350,77 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
     sharing.set(projectId, "exporting");
     const live = app.store.get(projectId);
     if (live === null) throw new Error("no such project");
-    const finished = new Promise<string>((resolve, reject) => {
-      const stop = app.store.subscribe((event) => {
-        const one = event as { type?: string; id?: string; state?: string; progress?: number; path?: string; error?: string };
-        if (one.type !== "export" || one.id !== projectId) return;
-        if (one.state === "queued") sharing.set(projectId, "queued for export");
-        else if (one.state === "running") sharing.set(projectId, `exporting ${Math.round((one.progress ?? 0) * 100)}%`);
-        else if (one.state === "done" && one.path !== undefined) {
-          stop();
-          resolve(one.path);
-        } else if (one.state === "failed" || one.state === "cancelled") {
-          stop();
-          reject(new Error(one.state === "cancelled" ? "the export was cancelled" : `the export failed: ${one.error ?? "see the log"}`));
-        }
-      });
-    });
-    // On Modal the export stays in the cloud and the share is made there; on
-    // this Mac the share holds the file while it reads it (holdExport), so
-    // the archive never takes it away underneath.
-    await app.exports.start(app.store, app.library, structuredClone(live.project) as Project, { ...native().exportDefaults(), ...options }, defaultExportPath(app.store, live.project), {});
-    path = await finished;
+    const asked = { ...native().exportDefaults(), ...options } as ExportOptions;
+    path = await exportOnce(app, projectId, live.project, asked);
   } finally {
     sharing.delete(projectId);
   }
   return share(app, projectId, path, replace);
+}
+
+/** How long a share waits on an export already running for its project (a different one) before it gives up. */
+const BUSY_EXPORT_MS = 3 * 60 * 60_000;
+
+/**
+ * Exports `project` for a share; the file it made. An export of the same
+ * picture with the same settings already running (one a restart carried on,
+ * Oct 31: the "Helpful" Son's v3 was refused as "this project already has an
+ * export running" while that export finished 90 s later, and was never
+ * shared) is followed to its file; a different one is waited out, then this
+ * one starts.
+ */
+async function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions): Promise<string> {
+  const timeline = timelineHash(project);
+  const wanted = optionsKey(options);
+  const began = Date.now();
+  let followed = false;
+  for (;;) {
+    // Listening before looking, so its end can't be missed.
+    let stop = () => {};
+    const ended = new Promise<string>((resolve, reject) => {
+      stop = app.store.subscribe((event) => {
+        const one = event as { type?: string; id?: string; state?: string; progress?: number; path?: string; error?: string };
+        if (one.type !== "export" || one.id !== projectId) return;
+        if (one.state === "queued") sharing.set(projectId, "queued for export");
+        else if (one.state === "running") sharing.set(projectId, `exporting ${Math.round((one.progress ?? 0) * 100)}%`);
+        else if (one.state === "done" && one.path !== undefined) resolve(one.path);
+        else if (one.state === "failed" || one.state === "cancelled") reject(new Error(one.state === "cancelled" ? "the export was cancelled" : `the export failed: ${one.error ?? "see the log"}`));
+      });
+    });
+    try {
+      const busy = app.exports.runningFor?.(projectId) ?? null;
+      if (busy !== null) {
+        const same = !followed && busy.timeline === timeline && busy.options === wanted;
+        if (same) {
+          followed = true;
+          diag.info("review", `${project.name}: sharing the export already running for this picture`);
+          try {
+            return await ended;
+          } catch (error) {
+            diag.warn("review", `${project.name}: the export it followed ended without a file (${diag.messageOf(error)}); exporting again`);
+            continue;
+          }
+        }
+        if (Date.now() - began > BUSY_EXPORT_MS) throw new Error("this project's other export ran for three hours without ending");
+        sharing.set(projectId, "waiting for this project's other export");
+        await ended.catch(() => undefined);
+        continue;
+      }
+      try {
+        // On Modal the export stays in the cloud and the share is made there; on
+        // this Mac the share holds the file while it reads it (holdExport), so
+        // the archive never takes it away underneath.
+        await app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), {});
+      } catch (error) {
+        // Another export began between the look and the start: wait for it, as above.
+        if (app.exports.runningFor?.(projectId) != null) continue;
+        throw error;
+      }
+      return await ended;
+    } finally {
+      stop();
+    }
+  }
 }
 
 /**
@@ -1364,7 +1415,8 @@ async function followFix(app: App, project: string, reviewId: string, noteIds: s
       return;
     }
   }
-  if (timelineHash(after.project) === before) {
+  // Fixes an earlier share failed on go out now, even when this round changed nothing.
+  if (timelineHash(after.project) === before && read(home).unshared?.[project] !== true) {
     await progress(reviewId, { state: "done", stage: "Answered: nothing in the edit changed" });
     return;
   }
@@ -1386,6 +1438,9 @@ async function followFix(app: App, project: string, reviewId: string, noteIds: s
     const shared = await exportAndShare(app, project, read(home).shareOptions?.[project] ?? {}, replace);
     diag.info("review", `${after.project.name}: Ready for changes: shared v${shared.version}${replace ? " in its place" : ""}`);
   } catch (error) {
+    update(home, (state) => {
+      state.unshared = { ...state.unshared, [project]: true };
+    });
     await progress(reviewId, { state: "failed", error: `The fixes are in, but sharing v${next} failed: ${diag.messageOf(error)}` });
   } finally {
     clearInterval(ticker);

@@ -53,6 +53,8 @@ interface Running {
   snapshot: string | null;
   /** What it exports, as `timelineHash`. */
   timeline: string;
+  /** The options it exports with, as JSON with sorted keys. */
+  options: string;
   keepLocal: boolean;
   queued: boolean;
   /** Rendered on Modal and kept in the cloud there (never copied here): its key and size. */
@@ -371,6 +373,13 @@ export function deleteExport(home: string, id: string, path: string): void {
   diag.info("export", `${id}: deleted the export ${path}`);
 }
 
+/** Export options as JSON with sorted keys: two asks for the same export compare equal. */
+export function optionsKey(options: ExportOptions): string {
+  const sorted = (value: unknown): unknown =>
+    Array.isArray(value) ? value.map(sorted) : value !== null && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, one]) => [key, sorted(one)])) : value;
+  return JSON.stringify(sorted(options));
+}
+
 export class ExportRegistry implements seams.Exports {
   private jobs = new Map<string, Running>();
   private localActive = false;
@@ -389,6 +398,12 @@ export class ExportRegistry implements seams.Exports {
 
   running(): boolean {
     return this.jobs.size > 0;
+  }
+
+  /** Project `id`'s export under way: what it writes, its timeline (`timelineHash`) and options (`optionsKey`). */
+  runningFor(id: string): { output: string; timeline: string; options: string } | null {
+    const running = this.jobs.get(id);
+    return running === undefined || running.cancelled ? null : { output: running.output, timeline: running.timeline, options: running.options };
   }
 
   localRunning(): boolean {
@@ -513,7 +528,7 @@ export class ExportRegistry implements seams.Exports {
     // after enqueueing must never change the export that was accepted.
     project = structuredClone(project);
     options = structuredClone(options);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project), keepLocal: extra.keepLocal === true, queued: !remote };
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project), options: optionsKey(options), keepLocal: extra.keepLocal === true, queued: !remote };
     this.jobs.set(project.id, running);
     let upload = false;
     try {

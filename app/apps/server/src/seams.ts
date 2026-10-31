@@ -108,6 +108,8 @@ export interface Exports {
   cancel(id: string): boolean;
   /** Whether any export is running (an update waits for it). */
   running(): boolean;
+  /** Project `id`'s export under way, if any: what it writes, its timeline hash and options key. */
+  runningFor?(id: string): { output: string; timeline: string; options: string } | null;
   /** Local hardware contention only: cloud renders leave imports/analysis running. */
   localRunning?(): boolean;
   /** Whether `path` is a file exported since the server started (only those are handed out). */

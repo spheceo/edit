@@ -218,6 +218,8 @@ dev: wasm web-install (native "debug")
             fi
         done
     fi
+    # Dev talks to dev: its own relay (edit-relay-dev: Infisical dev's keys, Modal's dev environment, dev's Convex and R2). Installed builds use the live one.
+    export EDIT_RELAY_URL="${EDIT_RELAY_URL:-https://edit-relay-dev.sphe-g-personal.workers.dev}"
     # Whole cloud edits export on Modal when this Mac is busy or it's long (modal_exports.ts).
     export EDIT_MODAL_EXPORTS="${EDIT_MODAL_EXPORTS:-1}" EDIT_WORKER_ROOT="${EDIT_WORKER_ROOT:-$PWD}"
     # bun --watch restarts the server on its own files and on the addon it loads.

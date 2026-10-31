@@ -134,3 +134,80 @@ class_name = "ExportJobs"
 [[migrations]]
 tag = "v2-export-jobs"
 new_sqlite_classes = ["ExportJobs"]
+
+# ── dev: edit-relay-dev (Oct 31) ──────────────────────────────────────────
+# What `just dev` and agents call (EDIT_RELAY_URL), with Infisical dev's
+# secrets (`bun scripts/push-secrets.ts --yes`) and Modal's `dev` environment
+# (and dev's own Convex and R2). Deploy: `npx wrangler deploy --env dev`.
+# The live relay above is deployed only from a nightly's tag (release.yml).
+# Wrangler doesn't carry bindings into an environment: each is repeated here.
+[env.dev]
+name = "edit-relay-dev"
+workers_dev = true
+preview_urls = false
+
+[env.dev.vars]
+ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
+ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
+MODAL_PROXY_URL = "https://sphealt-dev--edit-proxies-endpoint.us-east.modal.run"
+OPEN_MAPS = "0"
+STAMP_CREATOR = "1"
+DAILY_BYTES_PER_IP = "2160000000"
+DAILY_BYTES_TOTAL = "4320000000"
+DAILY_REHEAR_BYTES = "720000000"
+MAX_UPLOAD_BYTES = "45000000"
+DAILY_MAP_SESSIONS_PER_IP = "200"
+DAILY_MAP_SESSIONS_TOTAL = "600"
+DAILY_LOOKUPS_PER_IP = "1000"
+DAILY_LOOKUPS_TOTAL = "3000"
+MAX_SPEECH_CHARS = "5000"
+DAILY_SPEECH_CHARS_PER_IP = "300000"
+DAILY_SPEECH_CHARS_TOTAL = "1000000"
+
+[[env.dev.ratelimits]]
+name = "BURST"
+namespace_id = "8701"
+[env.dev.ratelimits.simple]
+limit = 4
+period = 60
+
+[[env.dev.ratelimits]]
+name = "CLOUD_BURST"
+namespace_id = "8710"
+[env.dev.ratelimits.simple]
+limit = 1200
+period = 60
+
+[[env.dev.ratelimits]]
+name = "TRANSCRIBE_BURST"
+namespace_id = "8703"
+[env.dev.ratelimits.simple]
+limit = 60
+period = 60
+
+[[env.dev.ratelimits]]
+name = "SPEECH_BURST"
+namespace_id = "8702"
+[env.dev.ratelimits.simple]
+limit = 30
+period = 60
+
+[[env.dev.ratelimits]]
+name = "DOCS_BURST"
+namespace_id = "8711"
+[env.dev.ratelimits.simple]
+limit = 20
+period = 60
+
+[[env.dev.durable_objects.bindings]]
+name = "BUDGET"
+class_name = "TranscriptionBudget"
+
+[[env.dev.durable_objects.bindings]]
+name = "EXPORT_JOBS"
+class_name = "ExportJobs"
+
+[[env.dev.workflows]]
+name = "edit-drive-to-r2-dev"
+binding = "DRIVE_TO_R2"
+class_name = "DriveToR2"

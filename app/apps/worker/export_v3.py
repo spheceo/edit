@@ -45,7 +45,9 @@ from sections_runtime import LocalControl  # noqa: E402
 
 APP = "edit-exports-v3"
 VOLUME = "edit-exports-sections-v3-live"
-ENVIRONMENT = "dev"
+# Modal environment: `dev` for every checkout; `main` is production, deployed
+# only from a nightly's tag (apps/worker/deploy_cloud.py in release.yml).
+ENVIRONMENT = os.environ.get("EDIT_MODAL_ENV", "dev")
 SECTIONS = 8
 PARTS = 512  # 32 MiB each: the 16 GiB output limit (sections_runtime.MAX_OUTPUT).
 STATE = Path.home() / ".edit" / "modal"
@@ -278,7 +280,7 @@ def deploy(build, check, progress):
     """Deploys the app's Modal functions when this checkout's worker build
     isn't the deployed one; one export at a time does (the others wait)."""
     STATE.mkdir(parents=True, exist_ok=True)
-    record = STATE / f"{APP}.json"
+    record = STATE / (f"{APP}.json" if ENVIRONMENT == "dev" else f"{APP}-{ENVIRONMENT}.json")
     with (STATE / f"{APP}.lock").open("w") as lock:
         while True:
             try:

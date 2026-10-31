@@ -279,3 +279,41 @@ jobs:
           else
             gh release edit "$TAG" --draft=false --latest
           fi
+
+  # Production's cloud follows the builds (Oct 31: dev and prod split). A
+  # nightly or a release deploys, from its own tag, the live relay
+  # (edit-relay; `just dev` and agents use edit-relay-dev) and everything of
+  # Edit's in Modal's `main` environment (the `sphealt` workspace; dev is its
+  # `dev`). Its secrets stay in Infisical prod `/edit-relay` and reach the
+  # Worker by hand (`bun scripts/push-secrets.ts --env prod --yes`).
+  cloud:
+    needs: publish
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Deploy production's Modal (main)
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          EDIT_MODAL_ENV: main
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install -q -r apps/worker/requirements.txt boto3==1.40.31
+          /tmp/venv/bin/python apps/worker/deploy_cloud.py
+      - name: Deploy the live relay
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::No CLOUDFLARE_API_TOKEN secret: the live relay wasn't deployed with $TAG"
+            exit 1
+          fi
+          bun install --frozen-lockfile
+          cd apps/relay && npx wrangler deploy

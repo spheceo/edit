@@ -49,4 +49,9 @@ test("set aside until a time or for good, brought back, and back by itself on it
   // Its day come: still listed (the apps show it Back until someone opens it), and gone after two weeks unopened.
   expect((await later.list(monday + 1)).map((entry) => entry.key)).toEqual(["edit:p1793450000000-abc"]);
   expect(await later.list(monday + 15 * 86_400_000)).toEqual([]);
+  // Marked done: listed as done until moved back.
+  expect((await ask("POST", { key: "script:s1793450000000", done: true })).body).toEqual({ key: "script:s1793450000000", done: true });
+  expect((await later.list()).find((entry) => entry.key === "script:s1793450000000")).toMatchObject({ done: true, until: null });
+  await ask("POST", { key: "script:s1793450000000", back: true });
+  expect((await later.list()).some((entry) => entry.key === "script:s1793450000000")).toBe(false);
 });

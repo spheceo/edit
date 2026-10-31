@@ -15,8 +15,9 @@ import { laterKey } from "../lib/later";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 
-/** Where an idea is on Home: a draft (repackaging, ready, stopped) or its card on the board. */
-export function ideaStage(row: IdeaRow): "drafts" | "board" {
+/** Where an idea is on Home: a draft (repackaging, ready, stopped), its card on the board, or done once the card is approved. */
+export function ideaStage(row: IdeaRow): "drafts" | "board" | "done" {
+  if (row.summary.status === "sent" && row.place?.approved === true) return "done";
   return row.summary.status === "sent" ? "board" : "drafts";
 }
 

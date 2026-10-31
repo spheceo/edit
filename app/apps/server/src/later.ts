@@ -10,7 +10,8 @@
 //
 //   GET  /api/later                     {entries}: what's set aside, and what's back and not opened yet
 //   POST /api/later {key, until?}       set aside until then (none: until brought back)
-//   POST /api/later {key, back: true}   brought back, or opened once back
+//   POST /api/later {key, back: true}   brought back, or opened once back, or moved back from Done
+//   POST /api/later {key, done: true}   marked done (in Done until moved back)
 
 import type { LaterEntry, LaterKey } from "@edit/types/later";
 
@@ -34,18 +35,23 @@ export async function list(now = Date.now()): Promise<LaterEntry[]> {
   if (!Array.isArray(rows)) return [];
   return rows.flatMap((row: unknown): LaterEntry[] => {
     if (typeof row !== "object" || row === null) return [];
-    const { key, until, at, by } = row as Record<string, unknown>;
+    const { key, until, at, by, done } = row as Record<string, unknown>;
     if (!isKey(key) || typeof at !== "number") return [];
     const back = typeof until === "number" ? until : null;
     if (back !== null && back <= now - BACK_FOR_MS) return [];
     const who = typeof by === "object" && by !== null ? (by as Record<string, unknown>) : null;
-    return [{ key, until: back, at, by: who && typeof who.name === "string" ? { sub: String(who.sub ?? ""), name: who.name, picture: typeof who.picture === "string" ? who.picture : null } : null }];
+    return [{ key, until: back, ...(done === true ? { done: true } : {}), at, by: who && typeof who.name === "string" ? { sub: String(who.sub ?? ""), name: who.name, picture: typeof who.picture === "string" ? who.picture : null } : null }];
   });
 }
 
 /** Sets `key` aside until `until` (null: until someone brings it back). */
 export async function setAside(key: LaterKey, until: number | null): Promise<void> {
   await cloud.mutation("edit:setLater", until === null ? { key } : { key, until });
+}
+
+/** Marks `key` done: in Done until someone moves it back. */
+export async function markDone(key: LaterKey): Promise<void> {
+  await cloud.mutation("edit:setLater", { key, done: true });
 }
 
 /** Brings `key` back. */
@@ -69,17 +75,18 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/later", async (context: RouteContext<App>) => {
       needsCloud();
-      const body = await readJson<{ key?: unknown; until?: unknown; back?: unknown }>(context);
+      const body = await readJson<{ key?: unknown; until?: unknown; back?: unknown; done?: unknown }>(context);
       if (!isKey(body.key)) throw bad("key is edit:, script:, idea: or card: and an id.");
-      const until = body.back === true || body.until === undefined || body.until === null ? null : Number(body.until);
+      const until = body.back === true || body.done === true || body.until === undefined || body.until === null ? null : Number(body.until);
       if (until !== null && (!Number.isFinite(until) || until <= Date.now())) throw bad("until must be a time in the future.");
       try {
         if (body.back === true) await bringBack(body.key);
+        else if (body.done === true) await markDone(body.key);
         else await setAside(body.key, until);
       } catch (error) {
-        diag.warn("later", `later: ${body.back === true ? "bring back" : "set aside"} ${body.key}: ${error instanceof Error ? error.message : String(error)}`);
+        diag.warn("later", `later: ${body.back === true ? "bring back" : body.done === true ? "mark done" : "set aside"} ${body.key}: ${error instanceof Error ? error.message : String(error)}`);
         throw new ApiError(502, `Later didn't take it: ${error instanceof Error ? error.message : String(error)}`);
       }
-      return json(body.back === true ? { key: body.key, back: true } : { key: body.key, until });
+      return json(body.back === true ? { key: body.key, back: true } : body.done === true ? { key: body.key, done: true } : { key: body.key, until });
     });
 }

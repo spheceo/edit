@@ -34,4 +34,4 @@ export function backLabel(until: number | null, now = new Date()): string {
 }
 
 /** Set aside still (not back yet). */
-export const asleep = (entry: LaterEntry, now = Date.now()) => entry.until === null || entry.until > now;
+export const asleep = (entry: LaterEntry, now = Date.now()) => entry.done !== true && (entry.until === null || entry.until > now);

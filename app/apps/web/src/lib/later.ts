@@ -44,6 +44,10 @@ export interface Later {
   back: (key: LaterKey, title: string) => void;
   /** `key` was opened once back: its Back mark goes, for everyone. */
   seen: (key: LaterKey) => void;
+  /** Marks `key` done (in Done until moved back), with Undo. */
+  done: (key: LaterKey, title: string) => void;
+  /** Moves `key` back out of Done, with Undo. */
+  moveBack: (key: LaterKey, title: string) => void;
 }
 
 /** Later, polled now and then (another Mac sets something aside), changed here at once. */
@@ -66,7 +70,7 @@ export function useLater(): Later {
   const change = (key: LaterKey, entry: LaterEntry | null) => setEntries((all) => [...all.filter((one) => one.key !== key), ...(entry ? [entry] : [])]);
   const save = (key: LaterKey, entry: LaterEntry | null, before: LaterEntry | null, doing: string) => {
     change(key, entry);
-    void call(entry === null ? { key, back: true } : { key, until: entry.until })
+    void call(entry === null ? { key, back: true } : entry.done === true ? { key, done: true } : { key, until: entry.until })
       .then(refresh)
       .catch((error: unknown) => {
         change(key, before);
@@ -96,9 +100,23 @@ export function useLater(): Later {
   };
   const seen = (key: LaterKey) => {
     const before = entries.find((one) => one.key === key) ?? null;
-    if (before === null || asleep(before)) return;
+    if (before === null || asleep(before) || before.done === true) return;
     change(key, null);
     void call({ key, back: true }).catch(() => change(key, before));
   };
-  return { entries: new Map(entries.map((entry) => [entry.key, entry])), on, set, back, seen };
+  const done = (key: LaterKey, title: string) => {
+    // Set aside before: Undo sets it aside again; back (or nothing): Undo takes it out of Done.
+    const had = entries.find((one) => one.key === key) ?? null;
+    const before = had !== null && asleep(had) ? had : null;
+    const entry: LaterEntry = { key, until: null, done: true, at: Date.now(), by: mine() };
+    save(key, entry, before, `mark “${title}” done`);
+    useEditor.getState().toast(`“${title}” is in Done`, "info", { label: "Undo", run: () => save(key, before, entry, `move “${title}” back`) });
+  };
+  const moveBack = (key: LaterKey, title: string) => {
+    const before = entries.find((one) => one.key === key) ?? null;
+    if (before === null || before.done !== true) return;
+    save(key, null, before, `move “${title}” back`);
+    useEditor.getState().toast(`“${title}” is back in its list`, "info", { label: "Undo", run: () => save(key, before, null, `mark “${title}” done`) });
+  };
+  return { entries: new Map(entries.map((entry) => [entry.key, entry])), on, set, back, seen, done, moveBack };
 }

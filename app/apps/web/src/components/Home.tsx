@@ -314,11 +314,14 @@ export function Home() {
   };
   const backAt = (item: Item) => {
     const entry = entryOf(item);
-    return entry !== undefined && !asleep(entry) ? entry.until! : null;
+    return entry !== undefined && entry.done !== true && !asleep(entry) ? entry.until! : null;
   };
+  // Marked done by hand: in Done, wherever it was.
+  const markedDone = (item: Item) => entryOf(item)?.done === true;
   const isIn = (item: Item, place: Where): boolean => {
     if (place === "later") return aside(item);
     if (aside(item)) return false;
+    if (markedDone(item)) return place === "done";
     if (place === "needs") return item.needs || backAt(item) !== null;
     if (place === "done") return item.stage === "done";
     const { section, stage } = placeOf(place);
@@ -333,7 +336,7 @@ export function Home() {
   let groups: { key: string; label: string | null; items: Item[] }[];
   if (searching) {
     const found = items.filter((item) => item.title.toLowerCase().includes(words)).sort(newest);
-    const placeName = (item: Item) => (aside(item) ? "later" : item.stage === "done" ? "done" : item.section);
+    const placeName = (item: Item) => (aside(item) ? "later" : item.stage === "done" || markedDone(item) ? "done" : item.section);
     groups = [...SECTIONS.map((section) => section.key), "later", "done"].map((key) => ({ key, label: key === "later" ? "Later" : key === "done" ? "Done" : SECTIONS.find((one) => one.key === key)!.label, items: found.filter((item) => placeName(item) === key) })).filter((group) => group.items.length > 0);
   } else {
     const here = ours.filter((item) => isIn(item, shownWhere));
@@ -348,7 +351,9 @@ export function Home() {
       const until = (item: Item) => later.entries.get(item.key!)?.until ?? Number.MAX_SAFE_INTEGER;
       groups = [{ key: "later", label: null, items: here.sort((a, b) => until(a) - until(b)) }];
     } else if (shownWhere === "done") {
-      const sorted = here.sort(newest);
+      // The latest done first: marked by hand when it was marked, else when it last changed.
+      const doneAt = (item: Item) => (markedDone(item) ? entryOf(item)!.at : item.at);
+      const sorted = here.sort((a, b) => doneAt(b) - doneAt(a));
       groups = [{ key: "done", label: null, items: allDone ? sorted : sorted.slice(0, DONE_SHOWN) }];
     } else {
       groups = [{ key: shownWhere, label: null, items: here.sort(newest) }];
@@ -384,7 +389,7 @@ export function Home() {
         ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back. On its day it’s back, at the top of Needs you." }
         : mine && others > 0
           ? { title: "Nothing of yours here", text: `Everyone shows the team’s ${others}.` }
-          : { title: "Nothing here", text: shownWhere === "done" ? "Approved edits move here by themselves." : "Nothing is at this stage now." };
+          : { title: "Nothing here", text: shownWhere === "done" ? "Approved edits and ideas move here by themselves, and anything marked done from its ⋯ menu." : "Nothing is at this stage now." };
 
   return (
     <LaterContext.Provider value={later}>

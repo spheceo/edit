@@ -9,7 +9,7 @@
 // it's brought back), the Later list's rows bring it back sooner, and on its
 // day a row is marked Back until someone opens it.
 
-import { AlarmClock, Captions, Check, Clock, Ellipsis, FileText, Film, Lightbulb, Undo2 } from "lucide-react";
+import { AlarmClock, Captions, Check, CircleCheck, Clock, Ellipsis, FileText, Film, Lightbulb, Undo2 } from "lucide-react";
 import { createContext, useContext, type ReactNode } from "react";
 
 import { asideChoices, asleep, backLabel, type Later, type LaterEntry, type LaterKey } from "../lib/later";
@@ -121,9 +121,16 @@ export function Updated({ at, title }: { at: number; title?: string }) {
   );
 }
 
-/** In Later: when it comes back, and who set it aside when. */
+/** In Later: when it comes back, and who set it aside when; in Done, who marked it done. */
 export function AsideStatus({ entry }: { entry: LaterEntry }) {
   const who = entry.by?.name.split(/\s+/u)[0] ?? "Someone";
+  if (entry.done === true)
+    return (
+      <span className={cx(CHIP_SHAPE, "bg-success-soft text-success")} title={`${who} marked it done ${ago(entry.at)}`}>
+        <Check size={12} />
+        Done
+      </span>
+    );
   return (
     <span className={cx(CHIP, "text-secondary")} title={`Set aside by ${who} ${ago(entry.at)}${entry.until === null ? ", until someone brings it back" : `, until ${backLabel(entry.until)}`}`}>
       <Clock size={12} />
@@ -154,25 +161,33 @@ export function BackMark({ entry }: { entry: LaterEntry }) {
 export function useAside(key: LaterKey | null, title: string) {
   const later = useContext(LaterContext);
   const found = key !== null && later !== null ? (later.entries.get(key) ?? null) : null;
-  const entry = found !== null && asleep(found) ? found : null;
+  const done = found?.done === true;
+  // Set aside, or marked done: its status says so.
+  const entry = found !== null && (done || asleep(found)) ? found : null;
   const woke = found !== null && entry === null ? found : null;
   const usable = key !== null && later !== null && later.on;
   const choices = (): MenuItem[] => asideChoices().map((choice) => ({ label: choice.label, ...(choice.day ? { detail: choice.day } : {}), onSelect: () => later!.set(key!, choice.until, title) }));
+  // Done by hand (the user, Oct 31: "how do i move content to done"): its menu marks it, Done's moves it back.
+  const markDone: MenuItem[] = [{ label: "Mark as done", icon: <CircleCheck size={14} />, onSelect: () => later!.done(key!, title) }];
   const items: MenuItem[] = !usable
     ? []
-    : entry !== null
-      ? [{ label: "Bring back now", icon: <Undo2 size={14} />, onSelect: () => later.back(key, title) }]
-      : [
-          { label: woke !== null ? "Set aside again" : "Set aside", icon: <Clock size={14} />, submenu: choices() },
-          ...(woke !== null ? [{ label: "Clear the Back mark", icon: <Check size={14} />, onSelect: () => later.seen(key) }] : []),
-        ];
+    : done
+      ? [{ label: "Move back", icon: <Undo2 size={14} />, onSelect: () => later.moveBack(key, title) }]
+      : entry !== null
+        ? [{ label: "Bring back now", icon: <Undo2 size={14} />, onSelect: () => later.back(key, title) }, ...markDone]
+        : [
+            { label: woke !== null ? "Set aside again" : "Set aside", icon: <Clock size={14} />, submenu: choices() },
+            ...(woke !== null ? [{ label: "Clear the Back mark", icon: <Check size={14} />, onSelect: () => later.seen(key) }] : []),
+            ...markDone,
+          ];
   const button = !usable ? null : entry !== null ? (
     <button
-      title="Bring back now"
-      aria-label={`Bring “${title}” back now`}
+      title={done ? "Move back" : "Bring back now"}
+      aria-label={done ? `Move “${title}” back` : `Bring “${title}” back now`}
       onClick={(event) => {
         event.stopPropagation();
-        later.back(key, title);
+        if (done) later.moveBack(key, title);
+        else later.back(key, title);
       }}
       className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-active hover:text-fg", HOVER_BUTTON)}
     >

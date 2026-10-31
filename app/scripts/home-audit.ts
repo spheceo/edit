@@ -5,8 +5,8 @@
 // cell over the next, nothing outside its cell, a name at least 240 px; the
 // sidebar's items, the header and the toolbar; a row's menus and Set aside's
 // submenu inside the window and beside each other. A few things are set aside
-// first (one coming back after 15 s, so a Back mark is measured too) and
-// brought back at the end. Screenshots go to OUT.
+// first (one coming back after 15 s, so a Back mark is measured too) and one
+// marked done, all brought back at the end. Screenshots go to OUT.
 //
 //   bun scripts/home-audit.ts            (HOME_UI=https://localhost:5173 HOME_API=http://localhost:7700 OUT=/tmp/home-audit)
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -46,7 +46,9 @@ const scripts = (await (await fetch(`${API}/api/writer/scripts`, { headers: { ho
 const ideas = (await (await fetch(`${API}/api/ideas`, { headers: { host: "localhost:7700" } })).json()) as { ideas: { id: string; summary: { title: string } }[] };
 const keys = [`edit:${projects.projects.find((p) => p.name.startsWith("(DRAFT) Cop Beats"))!.id}`, `script:${scripts[0]!.id}`, `idea:${ideas.ideas.find((i) => i.summary.title.startsWith("Entitled"))!.id}`];
 const backKey = `edit:${projects.projects.find((p) => p.name.startsWith("Off-Duty"))!.id}`;
+const doneKey = `edit:${projects.projects.find((p) => p.name.startsWith("R3:"))!.id}`;
 for (const key of keys) console.log("aside", key, (await post({ key })).status);
+console.log("done", doneKey, (await post({ key: doneKey, done: true })).status);
 console.log("back soon", backKey, (await post({ key: backKey, until: Date.now() + 15_000 })).status);
 await sleep(16_000);
 
@@ -118,7 +120,7 @@ try {
         await sleep(350);
         report(`${width} ${mode} ${view}`, await js(AUDIT));
         checked++;
-        if ((width === 1440 || width === 960) && ["Needs you", "Later", "Ideas", "Edits", "Subtitled"].includes(view)) await shot(`${width}-${mode}-${view.replace(/ /g, "-")}`);
+        if ((width === 1440 || width === 960) && ["Needs you", "Later", "Ideas", "Edits", "Subtitled", "Done"].includes(view)) await shot(`${width}-${mode}-${view.replace(/ /g, "-")}`);
         if ((width === 1440 || width === 960) && view === "Later") {
           const at = await js(`(() => { const row = document.querySelectorAll('main [role="table"] [role="row"]')[1]; if (!row) return null; const b = row.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()`);
           if (at) { await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1] }); await shot(`${width}-${mode}-Later-hover`); await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5 }); }
@@ -161,7 +163,7 @@ try {
 } catch (error) {
   console.log("FAIL", (error as Error).message);
 } finally {
-  for (const key of [...keys, backKey]) await post({ key, back: true });
+  for (const key of [...keys, backKey, doneKey]) await post({ key, back: true });
   console.log("left in Later:", JSON.stringify(((await (await fetch(`${API}/api/later`, { headers: { host: "localhost:7700" } })).json()) as { entries: { key: string }[] }).entries.map((e) => e.key)));
   if (pageErrors.length) console.log("page errors:\n" + pageErrors.join("\n"));
   chrome.kill();

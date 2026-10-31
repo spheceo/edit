@@ -1,13 +1,13 @@
 // The idea page (/ideas/<id>, Oct 31 2026). The user: "on this side of the
 // screen, please try to copy as much of the sphe research ui. it was nice.
 // and then here copy the video editor's chat that we have." So the left is
-// Sphe Research's Threads (its list of drafts, its case header and its
-// Titles / Thumbnail guide / Case form, Edit and Done per section, the main
-// title in amber), and the right is the editor's own chat (AgentPanel's turns
-// and composer, the same components). One main action: send the idea to the
+// Sphe Research's case (its header and its Titles / Thumbnail guide / Case
+// form, Edit and Done per section, the main title in amber; not its list of
+// threads: "No need for the threads view on the side here"), and the right is
+// the editor's own chat (AgentPanel's turns and composer, the same components). One main action: send the idea to the
 // board, or update its card once the reviewers' changes are made.
 
-import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, Image as ImageIcon, Lightbulb, Loader, MoreHorizontal, Plus, RotateCw, Search, Send, Trash2, TriangleAlert, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, Image as ImageIcon, Loader, MoreHorizontal, Plus, RotateCw, Send, Trash2, TriangleAlert } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer, ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
@@ -16,10 +16,9 @@ import { StartedBy } from "../components/StartedBy";
 import { Button, cx, Modal, Spinner } from "../components/ui";
 import type { AgentEntry } from "../lib/agent";
 import { buildTurns } from "../lib/agentTurns";
-import { ideasApi, imageUrl, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page, type IdeaRow, type IdeasHome, type Niche } from "../lib/ideas";
+import { ideasApi, imageUrl, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page, type Niche } from "../lib/ideas";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
-import { NewIdea } from "./home";
 
 /** Home, on its Ideas tab. */
 export function backToIdeas(): void {
@@ -39,15 +38,6 @@ const NICHE: Record<Niche, { label: string; dot: string }> = {
   karen: { label: "Karen", dot: "bg-fuchsia-300/80" },
   other: { label: "Other", dot: "bg-white/30" },
 };
-
-/** "2m", "3h", "4d": Sphe Research's compact time. */
-function compactAgo(at: number): string {
-  const seconds = Math.max(0, (Date.now() - at) / 1000);
-  if (seconds < 60) return "now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
-  return `${Math.floor(seconds / 86_400)}d`;
-}
 
 function saveOnEnter(event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>, save: () => void) {
   if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
@@ -81,7 +71,6 @@ export function IdeaScreen({ id }: { id: string }) {
   const [missing, setMissing] = useState<string | null>(null);
   const [saving, setSaving] = useState<"saving" | "saved" | "error" | null>(null);
   const [sending, setSending] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const toastError = useEditor((state) => state.toastError);
   const toast = useEditor((state) => state.toast);
@@ -138,9 +127,6 @@ export function IdeaScreen({ id }: { id: string }) {
       <Header page={page} saving={saving} busy={busy} onChange={change} onAct={act} onSend={() => setSending(true)} onDeleted={backToIdeas} toast={toast} />
       {/* The editor's gutters: 8 px round the chat's panel. */}
       <div className="flex min-h-0 flex-1 pb-2">
-        <div className="hidden w-[19rem] shrink-0 border-r border-white/[0.06] xl:block">
-          <ThreadList selected={id} onCreate={() => setCreating(true)} />
-        </div>
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-auto">
           {page === null ? (
             <div className="flex h-full items-center justify-center text-[13px] text-white/40">{missing ?? <Spinner size={20} />}</div>
@@ -163,7 +149,6 @@ export function IdeaScreen({ id }: { id: string }) {
         <aside className="w-[400px] shrink-0 pt-2 pr-2 pl-2">{page === null ? <ChatShell loading /> : <Chat id={id} idea={page.idea} onAsked={() => void load()} />}</aside>
       </div>
       {page !== null && <SendDialog open={sending} idea={page.idea} onClose={() => setSending(false)} onSent={() => void load()} />}
-      <NewIdea open={creating} onClose={() => setCreating(false)} onMade={() => {}} />
     </div>
   );
 }
@@ -339,170 +324,6 @@ function MenuItem({ icon, children, onClick, danger, disabled }: { icon: ReactNo
       {icon}
       {children}
     </button>
-  );
-}
-
-// ---------------------------------------------------------------- the list (Sphe Research's Threads)
-
-function ThreadList({ selected, onCreate }: { selected: string; onCreate: () => void }) {
-  const [home, setHome] = useState<IdeasHome | null>(null);
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<{ ready: boolean; sent: boolean }>({ ready: false, sent: false });
-  const busy = home?.ideas.some((row) => row.summary.run === "running" || row.summary.run === "queued") ?? false;
-  useEffect(() => {
-    const look = () => void ideasApi.home().then(setHome, () => {});
-    look();
-    const timer = setInterval(() => !document.hidden && look(), busy ? 3_000 : 15_000);
-    return () => clearInterval(timer);
-  }, [busy]);
-  const words = query.trim().toLowerCase();
-  const kept = (row: IdeaRow) => words === "" || `${row.summary.title} ${row.summary.source ?? ""}`.toLowerCase().includes(words);
-  const rows = (home?.ideas ?? []).filter(kept);
-  const drafts = rows.filter((row) => row.summary.status === "draft");
-  const ready = rows.filter((row) => row.summary.status === "ready");
-  const sent = rows.filter((row) => row.summary.status === "sent");
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 px-3.5 pt-4 pb-3">
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-[15px] font-medium tracking-[-0.02em] text-white/90">Ideas</h1>
-            <p className="mt-0.5 text-[12px] text-white/35">{home === null ? "Loading…" : `${drafts.length} draft${drafts.length === 1 ? "" : "s"} · ${ready.length} ready`}</p>
-          </div>
-          <button type="button" onClick={onCreate} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-[12px] font-medium text-black transition-colors hover:bg-white/85">
-            <Plus size={13} strokeWidth={2} /> New
-          </button>
-        </div>
-        <label className="mt-3 flex items-center gap-2 rounded-lg bg-white/[0.04] px-2.5 py-2 transition-colors focus-within:bg-white/[0.07]">
-          <Search size={13} strokeWidth={1.9} className="shrink-0 text-white/25" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => event.key === "Escape" && setQuery("")}
-            placeholder="Search"
-            aria-label="Search ideas"
-            className="w-full bg-transparent text-[12.5px] text-white/80 outline-none placeholder:text-white/25"
-          />
-          {query && (
-            <button type="button" onClick={() => setQuery("")} aria-label="Clear search" className="shrink-0 rounded-md p-0.5 text-white/30 hover:bg-white/[0.08] hover:text-white/75">
-              <X size={13} strokeWidth={2} />
-            </button>
-          )}
-        </label>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-auto px-1.5 pb-4">
-        {home === null ? (
-          <ListSkeleton />
-        ) : rows.length === 0 ? (
-          <div className="flex flex-col items-center px-4 py-16 text-center">
-            <span className="grid size-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.02] text-white/40">
-              <Lightbulb size={16} strokeWidth={1.6} />
-            </span>
-            <p className="mt-4 text-[13.5px] text-white/55">{words ? "Nothing matches that." : "No ideas yet."}</p>
-          </div>
-        ) : (
-          <>
-            <ul className="flex flex-col">
-              {drafts.map((row) => (
-                <li key={row.id}>
-                  <Card row={row} selected={row.id === selected} />
-                </li>
-              ))}
-            </ul>
-            <Fold label="Ready" rows={ready} open={open.ready} onToggle={() => setOpen((last) => ({ ...last, ready: !last.ready }))} selected={selected} />
-            <Fold label="On the board" rows={sent} open={open.sent} onToggle={() => setOpen((last) => ({ ...last, sent: !last.sent }))} selected={selected} />
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Card({ row, selected, compact = false }: { row: IdeaRow; selected: boolean; compact?: boolean }) {
-  const { summary } = row;
-  const niche = summary.niche ? NICHE[summary.niche] : null;
-  const repackaging = summary.run === "running" || summary.run === "queued";
-  const stopped = summary.status !== "sent" && (summary.run === "failed" || summary.run === "stopped" || summary.skipped !== null || summary.duplicate !== null);
-  const open = () => navigate(`/ideas/${row.id}`);
-  return compact ? (
-    <button type="button" onClick={open} className={cx("flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition-colors", selected ? "bg-white/[0.07]" : "hover:bg-white/[0.04]")}>
-      <span className={cx("size-1.5 shrink-0 rounded-full", niche?.dot ?? "bg-white/20")} />
-      <span className={cx("min-w-0 flex-1 truncate text-[12.5px]", selected ? "text-white/70" : "text-white/30")} title={summary.title}>
-        {summary.title}
-      </span>
-      {row.place?.changes && <span className="shrink-0 text-[11px] text-amber-200/70">Changes</span>}
-      <span className="shrink-0 text-[11px] text-white/20 tabular-nums">{compactAgo(row.updatedAt)}</span>
-    </button>
-  ) : (
-    <button type="button" onClick={open} className={cx("flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition-colors", selected ? "bg-white/[0.07]" : "hover:bg-white/[0.04]")}>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className={cx("size-1.5 shrink-0 rounded-full", niche?.dot ?? "bg-white/20")} />
-          <span className={cx("min-w-0 flex-1 truncate text-[11.5px]", repackaging ? "shimmer" : stopped ? "text-amber-200/60" : "text-white/35")}>
-            {repackaging ? (summary.step ?? "Repackaging") : summary.duplicate !== null ? "On the board already" : summary.skipped !== null ? "Skipped" : stopped ? "Stopped" : (niche?.label ?? "No niche yet")}
-          </span>
-          <span className="shrink-0 text-[11px] text-white/25 tabular-nums">{compactAgo(row.updatedAt)}</span>
-        </span>
-        <span className={cx("mt-1 line-clamp-2 text-[13px] leading-snug", selected ? "text-white/90" : "text-white/70")} title={summary.title}>
-          {summary.title}
-        </span>
-        {summary.source && summary.source !== summary.title && (
-          <span className="mt-1 line-clamp-1 text-[11.5px] text-white/25" title={summary.source}>
-            {summary.source}
-          </span>
-        )}
-      </span>
-      {summary.thumbnail !== null ? (
-        <img src={summary.thumbnail} alt="" loading="lazy" className="mt-0.5 size-11 shrink-0 rounded-lg bg-white/[0.04] object-cover" />
-      ) : (
-        <span className="mt-0.5 grid size-11 shrink-0 place-items-center rounded-lg bg-white/[0.04] text-white/30">
-          <ImageIcon size={15} strokeWidth={1.9} />
-        </span>
-      )}
-    </button>
-  );
-}
-
-function Fold({ label, rows, open, onToggle, selected }: { label: string; rows: IdeaRow[]; open: boolean; onToggle: () => void; selected: string }) {
-  if (rows.length === 0) return null;
-  // The open idea's own section stays open.
-  const shown = open || rows.some((row) => row.id === selected);
-  return (
-    <div className="mt-2">
-      <button type="button" onClick={onToggle} aria-expanded={shown} className="group flex w-full items-center gap-2 px-2.5 py-2 text-left text-[12px] text-white/35 hover:text-white/60">
-        <span>{label}</span>
-        <span className="text-white/20 tabular-nums">{rows.length}</span>
-        <span className="h-px min-w-0 flex-1 bg-white/[0.06]" />
-        <ArrowDown size={12} strokeWidth={1.9} className={cx("text-white/20 transition-transform group-hover:text-white/45", shown && "rotate-180")} />
-      </button>
-      {shown && (
-        <ul className="flex flex-col">
-          {rows.map((row) => (
-            <li key={row.id}>
-              <Card row={row} selected={row.id === selected} compact />
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function ListSkeleton() {
-  const bone = "block animate-pulse rounded bg-white/[0.06]";
-  return (
-    <ul role="status" aria-label="Loading ideas" className="flex flex-col">
-      {["w-[92%]", "w-[84%]", "w-[94%]", "w-[78%]"].map((width, index) => (
-        <li key={width} className={cx("rounded-xl px-2.5 py-2.5", index === 0 && "bg-white/[0.04]")}>
-          <span className="flex items-center gap-2">
-            <span className={cx(bone, "size-1.5 shrink-0 rounded-full")} />
-            <span className={cx(bone, "h-2 w-16")} />
-          </span>
-          <span className={cx(bone, "mt-2 h-3", width)} />
-          <span className={cx(bone, "mt-1.5 h-3 w-[60%]")} />
-        </li>
-      ))}
-    </ul>
   );
 }
 
